@@ -6,6 +6,7 @@ import type { AdvisorProcedureProtection, LintContext } from "../src";
 import { fromServerSchema } from "../src";
 import actionWithoutErrorHandling from "../src/lints/static/action-without-error-handling";
 import adminRouteWithoutGuard from "../src/lints/static/admin-route-without-guard";
+import aiRunWithoutLogging from "../src/lints/static/ai-run-without-logging";
 import aiUnboundedGenerationPublic from "../src/lints/static/ai-unbounded-generation-public";
 import containerLongSleepAfter from "../src/lints/static/container-long-sleep-after";
 import containerOversizedInstance from "../src/lints/static/container-oversized-instance";
@@ -13,10 +14,13 @@ import containerPublicInternet from "../src/lints/static/container-public-intern
 import cronEveryMinute from "../src/lints/static/cron-every-minute";
 import errorWithoutCatalog from "../src/lints/static/error-without-catalog";
 import insertManyUnsafeUserData from "../src/lints/static/insert-many-unsafe-user-data";
+import maskUncoveredPiiColumn from "../src/lints/static/mask-uncovered-pii-column";
 import policyReferencesUnknownTable from "../src/lints/static/policy-references-unknown-table";
 import privilegedFanoutFromPublicProcedure from "../src/lints/static/privileged-fanout-from-public-procedure";
+import procedureWithoutStructuredEvent from "../src/lints/static/procedure-without-structured-event";
 import publicMutationWithoutRatelimit from "../src/lints/static/public-mutation-without-ratelimit";
 import queueWithoutDlq from "../src/lints/static/queue-without-dlq";
+import rlsUncoveredTable from "../src/lints/static/rls-uncovered-table";
 import shapeTargetsGlobalTable from "../src/lints/static/shape-targets-global-table";
 import shapeUnknownTable from "../src/lints/static/shape-unknown-table";
 import signupMutationWithoutDisposableGating from "../src/lints/static/signup-mutation-without-disposable-gating";
@@ -279,6 +283,94 @@ const cases: ReadonlyArray<[string, Case]> = [
             },
             lint: policyReferencesUnknownTable,
             site: { file: "documents", line: 16 },
+        },
+    ],
+    [
+        "ai_run_without_logging",
+        {
+            context: {
+                procedureProtections: [
+                    procedure({ emitsEvent: false, exportName: "summarize", file: "ai", line: 17, runsAiGeneration: true, visibility: "internal" }),
+                ],
+                schema,
+            },
+            lint: aiRunWithoutLogging,
+            site: { file: "ai", line: 17 },
+        },
+    ],
+    [
+        "procedure_without_structured_event",
+        {
+            context: {
+                procedureProtections: [procedure({ emitsEvent: false, exportName: "post", file: "posts", line: 18 })],
+                schema,
+            },
+            lint: procedureWithoutStructuredEvent,
+            site: { file: "posts", line: 18 },
+        },
+    ],
+    [
+        "rls_uncovered_table",
+        {
+            context: {
+                rlsProcedures: [
+                    {
+                        exportName: "listDocuments",
+                        file: "documents",
+                        line: 16,
+                        rlsTables: ["documents"],
+                        tablesRead: ["documents"],
+                        tablesWritten: [],
+                        usesRls: true,
+                        visibility: "public",
+                    },
+                    {
+                        exportName: "dumpDocuments",
+                        file: "export",
+                        line: 19,
+                        rlsTables: [],
+                        tablesRead: ["documents"],
+                        tablesWritten: [],
+                        usesRls: false,
+                        visibility: "public",
+                    },
+                ],
+                schema,
+            },
+            lint: rlsUncoveredTable,
+            site: { file: "export", line: 19 },
+        },
+    ],
+    [
+        "mask_uncovered_pii_column",
+        {
+            context: {
+                maskProcedures: [
+                    {
+                        exportName: "listUsers",
+                        file: "users",
+                        line: 20,
+                        maskColumns: [{ column: "email", table: "users" }],
+                        tablesRead: ["users"],
+                        tablesWritten: [],
+                        usesMask: true,
+                        visibility: "public",
+                    },
+                    {
+                        exportName: "exportUsers",
+                        file: "export",
+                        line: 21,
+                        maskColumns: [],
+                        tablesRead: ["users"],
+                        tablesWritten: [],
+                        usesMask: false,
+                        visibility: "public",
+                    },
+                ],
+                schema,
+            },
+            lint: maskUncoveredPiiColumn,
+            site: { file: "export", line: 21 },
         },
     ],
 ];

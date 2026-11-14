@@ -444,6 +444,7 @@ interface AdvisorMap {
 interface AdvisorMaskProcedure {
     exportName: string;
     file: string;
+    line?: number;
     maskColumns: ReadonlyArray<{
         column: string;
         table: string;

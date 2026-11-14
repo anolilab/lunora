@@ -11,6 +11,8 @@ export interface AdvisorMaskProcedure {
     exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
+    /** 1-based start line of the declaring statement, when the feeder recorded it. */
+    line?: number;
 
     /**
      * The `(table, column)` pairs declared by the `mask(policies)` object passed

@@ -250,6 +250,105 @@ export const scoped = mutation({ args: {}, handler: async () => { throw new Erro
         expect(other?.suppressed).toBeUndefined();
         expect(named(advisories, "advisor_suppression_unused")).toHaveLength(0);
     });
+    it("attaches a wrangler directive only to the first key of a line holding two", () => {
+        expect.assertions(2);
+
+        const advisories = advisoriesFor(OPEN_APP, {
+            keys: ["STRIPE_SECRET", "OTHER_SECRET"],
+            text: `{
+  "vars": {
+    // lunora-advisor-exempt plaintext_secret_in_wrangler_vars -- rotated and read by the test harness only
+    "STRIPE_SECRET": "sk_live_0000000000000000", "OTHER_SECRET": "sk_live_1111111111111111"
+  }
+}
+`,
+        });
+        const secrets = named(advisories, "plaintext_secret_in_wrangler_vars");
+
+        expect(secrets.find((entry) => entry.metadata["key"] === "STRIPE_SECRET")?.suppressed).toBeDefined();
+        expect(secrets.find((entry) => entry.metadata["key"] === "OTHER_SECRET")?.suppressed).toBeUndefined();
+    });
+
+    it("reads directives from wrangler.json when the project has no wrangler.jsonc", () => {
+        expect.assertions(1);
+
+        const text = `{
+  "vars": {
+    // lunora-advisor-exempt plaintext_secret_in_wrangler_vars -- rotated and read by the test harness only
+    "STRIPE_SECRET": "sk_live_0000000000000000"
+  }
+}
+`;
+
+        writeFileSync(join(workdir, "lunora", "server.ts"), OPEN_APP, "utf8");
+        writeFileSync(join(workdir, "wrangler.json"), text, "utf8");
+
+        const { advisories } = runCodegen({
+            projectRoot: workdir,
+            wranglerQueueProducers: [],
+            wranglerVariables: [{ file: "wrangler.json", key: "STRIPE_SECRET", kind: "secret_named_var", line: 4, preview: "sk_live…" }],
+        });
+
+        expect(named(advisories, "plaintext_secret_in_wrangler_vars")[0]?.suppressed?.file).toBe("wrangler.json");
+    });
+
+    it("suppresses a finding in a worker entry outside lunora/", () => {
+        expect.assertions(2);
+
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "server.ts"), `export const unrelated = 1;\n`, "utf8");
+        writeFileSync(
+            join(workdir, "src", "worker.ts"),
+            `import { defineApp } from "@lunora/runtime";
+// lunora-advisor-exempt ${SECRET_RULE} -- single-tenant demo
+export const app = defineApp().extend(() => ({ allowUnauthenticatedShardAccess: true })).build();
+`,
+            "utf8",
+        );
+
+        const { advisories } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(named(advisories, SECRET_RULE)[0]?.suppressed?.file).toBe("src/worker.ts");
+        expect(named(advisories, "advisor_suppression_unused")).toHaveLength(0);
+    });
+
+    it("matches a directive for a finding below the severity floor and hides its own warnings below the floor", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { advisor: { minSeverity: "error" } };\n`, "utf8");
+        writeFileSync(
+            join(workdir, "lunora", "posts.ts"),
+            `import { mutation } from "@lunora/server";
+// lunora-advisor-exempt procedure_without_structured_event -- logged by the caller
+export const post = mutation({ args: {}, handler: async () => undefined });
+// lunora-advisor-exempt hardcoded_secret
+export const other = 1;
+`,
+            "utf8",
+        );
+
+        const advisories = advisoriesFor(OPEN_APP);
+
+        expect(named(advisories, "advisor_suppression_unused")).toHaveLength(0);
+        expect(named(advisories, "advisor_suppression_invalid")).toHaveLength(0);
+    });
+
+    it("keeps a block-comment directive whose first word is prose as a whole-procedure exemption", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "hook.ts"),
+            `import { mutation } from "@lunora/server";
+/** lunora-advisor-exempt public webhook -- signed by the provider */
+export const hook = mutation({ args: {}, handler: async () => undefined });
+`,
+            "utf8",
+        );
+
+        const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(result.advisorContext?.procedureProtections?.find((entry) => entry.exportName === "hook")?.exempt).toBe(true);
+    });
 });
 
 describe("applySuppressions on an in-memory project", () => {
@@ -320,6 +419,46 @@ const secret = "xxxxxxxx";
 
         expect(onLink?.suppressed?.line).toBe(2);
         expect(onBuild?.suppressed).toBeUndefined();
+    });
+
+    it("ignores a directive-looking line inside a block comment or a template string", () => {
+        expect.assertions(3);
+
+        const project = projectWith(
+            `${lunoraDirectory}/blocked.ts`,
+            `/*
+// lunora-advisor-exempt hardcoded_secret -- commented out
+*/
+const secret = "xxxxxxxx";
+const text = \`
+// lunora-advisor-exempt hardcoded_secret -- inside a string
+\`;
+const other = "yyyyyyyy";
+`,
+        );
+        const advisories = applySuppressions(project, projectRoot, lunoraDirectory, [
+            finding("hardcoded_secret", "blocked", 4),
+            finding("hardcoded_secret", "blocked", 8),
+        ]);
+
+        expect(advisories[0]?.suppressed).toBeUndefined();
+        expect(advisories[1]?.suppressed).toBeUndefined();
+        expect(advisories).toHaveLength(2);
+    });
+
+    it("attaches to a code line that opens with a closed block comment", () => {
+        expect.assertions(1);
+
+        const project = projectWith(
+            `${lunoraDirectory}/inline.ts`,
+            `// lunora-advisor-exempt hardcoded_secret -- fixture value
+/* note */ const secret = "xxxxxxxx";
+const later = "yyyyyyyy";
+`,
+        );
+        const [hit] = applySuppressions(project, projectRoot, lunoraDirectory, [finding("hardcoded_secret", "inline", 2)]);
+
+        expect(hit?.suppressed?.reason).toBe("fixture value");
     });
 
     it("reports a directive that sits at end of file as unused", () => {

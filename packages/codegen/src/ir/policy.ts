@@ -46,6 +46,8 @@ export interface MaskProcedureIR {
     exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
+    /** 1-based start line of the declaring statement (the `export const`), without leading comments. */
+    line?: number;
 
     /**
      * `(table, column)` pairs this procedure's `mask(policies)` object literal
