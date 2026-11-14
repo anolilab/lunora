@@ -1,3 +1,21 @@
+## @lunora/codegen [1.0.0-alpha.413](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.412...@lunora/codegen@1.0.0-alpha.413) (2026-11-14)
+
+- feat(advisor): report declaration file and line on declaration findings (#1584)
+
+## @lunora/codegen [1.0.0-alpha.412](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.411...@lunora/codegen@1.0.0-alpha.412) (2026-11-14)
+
+- fix(codegen): follow body destructures and composed locals in the args taint (#1569)
+- fix(codegen): follow sql text through consts and casts for sql_injection_risk (#1565)
+- fix(codegen): see aliased rls() middleware, definePolicies tables and const base builders (#1572)
+- fix(codegen): see ctx.db facade writes in the identity and insert feeders (#1566)
+- fix(codegen): resolve tables defined outside the defineSchema literal (#1589)
+- fix(codegen): follow more handler shapes for privileged dispatches (#1574)
+- fix(codegen): fold numeric duration arithmetic for expiry and tolerance lints (#1577)
+
+## @lunora/codegen [1.0.0-alpha.411](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.410...@lunora/codegen@1.0.0-alpha.411) (2026-11-14)
+
+- security(storage): add authorizeSignedGet for serveStorageObject (#1542)
+
 ## @lunora/codegen [1.0.0-alpha.410](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.409...@lunora/codegen@1.0.0-alpha.410) (2026-11-13)
 
 - feat(codegen): emit a watch stream form for every query (#1598)

@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags an RLS policy whose `table` names a table that does not exist in the
@@ -59,7 +60,7 @@ const policyReferencesUnknownTable: Lint = {
                     emit(policyReferencesUnknownTable, {
                         cacheKey: `policy_references_unknown_table:${table}`,
                         detail: `An RLS policy in \`${procedure.exportName}\` (${procedure.file}) is bound to table \`${table}\`, which is not declared in the schema. The policy never matches, so \`${table}\` — if it exists under another name — is left ungated.`,
-                        metadata: { exportName: procedure.exportName, file: procedure.file, table },
+                        metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), table },
                     }),
                 );
             }

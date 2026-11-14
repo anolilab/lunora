@@ -2,13 +2,17 @@ import { isReachableSite } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
 
+/** The `tableWrites` methods that create rows, so they count as an insert path. Updates and deletes do not. */
+const INSERT_PATH_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "insertManyUnsafe", "upsert", "upsertMany"]);
+
 /**
  * Flags a declared table that no function inserts into.
  *
  * Using `@lunora/codegen`'s write-side discovery (the analog of the read
  * discovery that feeds `filter_without_index`), this lint cross-references every
- * schema table against the set of tables some exported function writes via
- * `ctx.db.insert("<table>", …)`. A table with no such write either is dead schema
+ * schema table against the set of tables some exported function inserts into, by
+ * `ctx.db.insert("<table>", …)`, the `ctx.db.<table>` facade (`insert`, `insertMany`,
+ * `upsert`, `upsertMany`), or `insertMany`. A table with no such write either is dead schema
  * or is populated through a path the static analysis can't see — a migration/seed,
  * cross-region replication, the `ctx.orm.insert(...)` builder, or a trusted
  * snapshot import. Hence `INFO`/`INTERNAL`: a nudge to confirm intent, not an error.
@@ -24,12 +28,12 @@ import type { Lint } from "../../types";
 const tableWithoutInsert: Lint = {
     categories: ["SCHEMA"],
     description:
-        'No function inserts into this table via `ctx.db.insert("<table>", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can\'t see) — or it may be dead schema.',
+        'No function inserts into this table via `ctx.db.insert("<table>", …)`, the `ctx.db.<table>` facade, or `insertMany`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can\'t see) — or it may be dead schema.',
     facing: "INTERNAL",
     level: "INFO",
     name: "table_without_insert",
     remediation:
-        'If the table should be writable, add a mutation that calls `ctx.db.insert("<table>", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.',
+        'If the table should be writable, add a mutation that inserts into it with `ctx.db.insert("<table>", …)` or `ctx.db.<table>.insert(…)`. If it is read-only or seeded elsewhere, this advisory can be ignored.',
     run: (context) => {
         // No write evidence supplied → nothing to assert (mirrors the query lints).
         if (context.inserts === undefined) {
@@ -37,8 +41,14 @@ const tableWithoutInsert: Lint = {
         }
 
         // An insert in dead code — a helper no export calls, or module scope — is
-        // not an insert path, so it does not silence the lint.
-        const insertedTables = new Set(context.inserts.filter((write) => write.table !== "" && isReachableSite(write.scope)).map((write) => write.table));
+        // not an insert path, so it does not silence the lint. The facade and batch
+        // inserts come from `tableWrites`: `inserts` only sees the by-name single write.
+        const insertedTables = new Set(
+            [
+                ...context.inserts.filter((write) => write.table !== "" && isReachableSite(write.scope)),
+                ...(context.tableWrites ?? []).filter((write) => INSERT_PATH_METHODS.has(write.method) && write.table !== "" && isReachableSite(write.scope)),
+            ].map((write) => write.table),
+        );
 
         // Skip tables that already insert, and those explicitly acknowledged
         // as written outside Lunora via `.externallyManaged()`.
@@ -47,7 +57,7 @@ const tableWithoutInsert: Lint = {
             .map((table) =>
                 emit(tableWithoutInsert, {
                     cacheKey: `table_without_insert:${table.name}`,
-                    detail: `No function calls \`ctx.db.insert("${table.name}", …)\` — table "${table.name}" has no discovered insert path.`,
+                    detail: `No function inserts into "${table.name}" via \`ctx.db.insert("${table.name}", …)\`, \`ctx.db.${table.name}.insert\`, \`ctx.db.${table.name}.upsert\` or \`insertMany\` — table "${table.name}" has no discovered insert path.`,
                     metadata: { table: table.name },
                 }),
             );

@@ -39,6 +39,9 @@ export interface AdvisorQueue {
      * lunora file. The handler's call sites then belong to this queue, under that export.
      */
     handlerSite?: { exportName: string; file: string };
+    /** 1-based start line of the declaring statement, when the feeder recorded it. */
+    line?: number;
+
     /** How the queue is consumed: `"push"` (a worker `queue()` handler) or `"pull"` (external HTTP). */
     mode: "pull" | "push";
 

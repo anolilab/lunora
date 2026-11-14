@@ -88,6 +88,20 @@ describe("discoverRawRowReturns", () => {
         expect(rowFor("listHopped")).toMatchObject({ table: "users" });
     });
 
+    it("does not record a field destructured out of a read", () => {
+        expect.assertions(1);
+
+        write(
+            "projected.ts",
+            `export const emailOf = query(async ({ ctx }) => {
+                const { email } = await ctx.db.users.findFirstOrThrow();
+                return email;
+            });`,
+        );
+
+        expect(rowFor("emailOf")).toBeUndefined();
+    });
+
     it("records the object-form query({ handler }) surface", () => {
         expect.assertions(1);
 

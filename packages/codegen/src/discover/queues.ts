@@ -8,7 +8,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { QueueIR, TopicIR } from "../ir";
-import { findObjectProperty, lunoraRelativePath, stringPropertyFor } from "./ast";
+import { declarationLineOf, findObjectProperty, lunoraRelativePath, stringPropertyFor } from "./ast";
 import { addressableExportNameOf } from "./attribution";
 import { resolveHandlerReference } from "./handler-reference";
 import { discoverModules } from "./modules";
@@ -139,6 +139,7 @@ const queueFromConfig = (argument: ObjectLiteralExpression, exportName: string, 
         bindingName: queueBindingName(exportName),
         exportName,
         filePath: lunoraRelativePath(lunoraDirectory, argument.getSourceFile().getFilePath()),
+        line: declarationLineOf(argument),
         mode: "push",
         name: queueNameOverride(argument, exportName) ?? queueDefaultName(exportName),
         ...(topic === undefined ? {} : { topic }),

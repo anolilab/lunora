@@ -75,28 +75,85 @@ interface SchedulerDispatchCredentials {
     adminToken: string | undefined;
     /** The scheduler HMAC secret. When set, a request carrying a signature is verified against it. */
     schedulerSecret: string | undefined;
+    /** Epoch-millisecond clock for the signature window. Defaults to `Date.now`. */
+    now?: () => number;
 }
+
+/** The HMAC over {@link schedulerDispatchCanonical}, sent by the scheduler. */
+const SCHEDULER_SIGNATURE_HEADER = "x-lunora-scheduler-signature";
+
+/** The epoch-millisecond timestamp the signature was computed at, as a base-10 integer. */
+const SCHEDULER_TIMESTAMP_HEADER = "x-lunora-scheduler-timestamp";
+
+/**
+ * How far a signature's timestamp may sit from the receiver's clock. Wide enough for
+ * clock skew between the scheduler and the worker, narrow enough that a captured
+ * request stops working within minutes.
+ */
+const SCHEDULER_SIGNATURE_TOLERANCE_MS = 5 * 60_000;
+
+interface SchedulerDispatchSignatureInput {
+    body: string;
+    /** The `x-lunora-identity` header value as the receiver sees it. Absent counts as empty. */
+    identity?: string;
+    timestamp: number;
+    /** The `x-lunora-userid` header value as the receiver sees it. Absent counts as empty. */
+    userId?: string;
+}
+
+/**
+ * The exact string the HMAC covers. The forwarded identity headers are part of it because
+ * the receiver hands them to the shard with system privileges; a signature that leaves them
+ * out would let anyone holding one signed request attach any identity to it. The body is
+ * last so no field can be shifted into it.
+ */
+const schedulerDispatchCanonical = (input: SchedulerDispatchSignatureInput): string =>
+    ["v1", String(input.timestamp), input.userId ?? "", input.identity ?? "", input.body].join("\n");
+
+/** Sign a scheduler dispatch: the HMAC of {@link schedulerDispatchCanonical}. */
+const signSchedulerDispatch = (secret: string, input: SchedulerDispatchSignatureInput): Promise<string> =>
+    signCanonical(secret, schedulerDispatchCanonical(input));
 
 /**
  * Authenticate a scheduler dispatch request.
  *
- * A signature the scheduler computed over the exact `rawBody` wins when both the
- * header and the secret are present. Otherwise the admin bearer is the credential.
- * The HMAC covers the raw bytes, so the caller must pass the body text before any
+ * A signature the scheduler computed when both the header and the secret are present
+ * wins. It covers the timestamp header, the forwarded identity headers and the raw
+ * body, and it is refused outside {@link SCHEDULER_SIGNATURE_TOLERANCE_MS}. Otherwise
+ * the admin bearer is the credential. The caller must pass the body text before any
  * parsing. Returns `false` (never throws) so the caller picks its own error code.
  */
 const verifySchedulerDispatch = async (request: Request, rawBody: string, credentials: SchedulerDispatchCredentials): Promise<boolean> => {
-    const signature = request.headers.get("x-lunora-scheduler-signature");
+    const signature = request.headers.get(SCHEDULER_SIGNATURE_HEADER);
     const { schedulerSecret } = credentials;
 
     if (signature !== null && signature.length > 0 && schedulerSecret !== undefined && schedulerSecret.length > 0) {
-        return constantTimeEqual(await signCanonical(schedulerSecret, rawBody), signature);
+        const timestampHeader = request.headers.get(SCHEDULER_TIMESTAMP_HEADER);
+
+        if (timestampHeader === null || !/^\d+$/u.test(timestampHeader)) {
+            return false;
+        }
+
+        const timestamp = Number(timestampHeader);
+
+        if (!Number.isSafeInteger(timestamp) || Math.abs((credentials.now ?? Date.now)() - timestamp) > SCHEDULER_SIGNATURE_TOLERANCE_MS) {
+            return false;
+        }
+
+        const expected = await signSchedulerDispatch(schedulerSecret, {
+            body: rawBody,
+            identity: request.headers.get("x-lunora-identity") ?? undefined,
+            timestamp,
+            userId: request.headers.get("x-lunora-userid") ?? undefined,
+        });
+
+        return constantTimeEqual(expected, signature);
     }
 
     return checkBearerToken(request, credentials.adminToken);
 };
 
-export type { SchedulerDispatchCredentials };
+export type { SchedulerDispatchCredentials, SchedulerDispatchSignatureInput };
 export {
     AGENT_RUN_FUNCTION_PATH,
     AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE,
@@ -105,5 +162,10 @@ export {
     isReservedRelationFunctionPath,
     RELATION_FUNCTION_PREFIX,
     SCHEDULER_DISPATCH_PATH,
+    SCHEDULER_SIGNATURE_HEADER,
+    SCHEDULER_SIGNATURE_TOLERANCE_MS,
+    SCHEDULER_TIMESTAMP_HEADER,
+    schedulerDispatchCanonical,
+    signSchedulerDispatch,
     verifySchedulerDispatch,
 };

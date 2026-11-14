@@ -34,6 +34,7 @@ vi.mock(import("../src/email-guard"), () => {
 // public `BetterAuthOptions` shape so a better-auth rename fails to compile here too.
 type DatabaseHooks = NonNullable<BetterAuthOptions["databaseHooks"]>;
 type UserCreateBefore = NonNullable<NonNullable<NonNullable<DatabaseHooks["user"]>["create"]>["before"]>;
+type UserUpdateBefore = NonNullable<NonNullable<NonNullable<DatabaseHooks["user"]>["update"]>["before"]>;
 type OnClassify = NonNullable<EmailGateHookConfig["onClassify"]>;
 
 /** Pull the `user.create.before` hook out of a `databaseHooks` fragment, failing loudly if it's missing. */
@@ -42,6 +43,17 @@ const getBefore = (hooks: DatabaseHooks): UserCreateBefore => {
 
     if (!before) {
         throw new Error("expected a user.create.before hook");
+    }
+
+    return before;
+};
+
+/** Pull the `user.update.before` hook out of a `databaseHooks` fragment, failing loudly if it's missing. */
+const getUpdateBefore = (hooks: DatabaseHooks): UserUpdateBefore => {
+    const before = hooks.user?.update?.before;
+
+    if (!before) {
+        throw new Error("expected a user.update.before hook");
     }
 
     return before;
@@ -154,6 +166,56 @@ describe("email-gate", () => {
         });
     });
 
+    describe("emailGateDatabaseHooks — address changes", () => {
+        it("rejects a change to a blocked domain with the same coded APIError", async () => {
+            expect.assertions(3);
+
+            assertEmailAllowed.mockRejectedValueOnce(new LunoraError("EMAIL_DOMAIN_BLOCKED", "blocked"));
+
+            const update = getUpdateBefore(emailGateDatabaseHooks({}));
+            const rejection = update({ email: "x@mailinator.com" }, null);
+
+            await expect(rejection).rejects.toBeInstanceOf(APIError);
+            await expect(rejection).rejects.toMatchObject({ status: "BAD_REQUEST", statusCode: 400 });
+            await expect(rejection).rejects.toMatchObject({ body: { code: "EMAIL_DOMAIN_BLOCKED" } });
+        });
+
+        it("ignores a patch that does not change the address", async () => {
+            expect.assertions(2);
+
+            const update = getUpdateBefore(emailGateDatabaseHooks({}));
+
+            await expect(update({ name: "Ada" }, null)).resolves.toBeUndefined();
+            expect(assertEmailAllowed).not.toHaveBeenCalled();
+        });
+
+        it.each([[""], [42], [null]])("rejects a supplied address that is not a non-empty string (%j) without consulting the policy", async (email) => {
+            expect.assertions(3);
+
+            const update = getUpdateBefore(emailGateDatabaseHooks({}));
+            const rejection = update({ email } as unknown as Parameters<UserUpdateBefore>[0], null);
+
+            await expect(rejection).rejects.toBeInstanceOf(APIError);
+            await expect(rejection).rejects.toMatchObject({ body: { code: "VALIDATION_ERROR" } });
+            expect(assertEmailAllowed).not.toHaveBeenCalled();
+        });
+
+        it("never calls onClassify on an address change, and loads only the lists the policy needs", async () => {
+            expect.assertions(3);
+
+            assertEmailAllowed.mockResolvedValueOnce(businessClassification);
+
+            const onClassify = vi.fn<OnClassify>();
+            const update = getUpdateBefore(emailGateDatabaseHooks({ onClassify }));
+
+            await update({ email: "cto@acme-corp.example" }, null);
+
+            expect(onClassify).not.toHaveBeenCalled();
+            expect(assertEmailAllowed).toHaveBeenCalledTimes(1);
+            expect(assertEmailAllowed).toHaveBeenCalledWith("cto@acme-corp.example", expect.objectContaining({ lists: { disposable: true, free: false } }));
+        });
+    });
+
     describe("withEmailGate — composition ordering", () => {
         it("uses the gate directly when the caller declared no existing before hook", async () => {
             expect.assertions(2);
@@ -203,6 +265,143 @@ describe("email-gate", () => {
 
             await expect(getBefore(merged.databaseHooks!)(fakeUser({ email: "spammer@mailinator.com" }), null)).rejects.toBeInstanceOf(APIError);
             expect(existingBefore).not.toHaveBeenCalled();
+        });
+
+        it("gates an address change before an existing user.update.before, and keeps that hook", async () => {
+            expect.assertions(3);
+
+            const order: string[] = [];
+
+            assertEmailAllowed.mockImplementationOnce(async () => {
+                order.push("gate");
+
+                return businessClassification;
+            });
+
+            const existingUpdate = vi.fn<UserUpdateBefore>(async () => {
+                order.push("existing");
+            });
+
+            const options: BetterAuthOptions = { databaseHooks: { user: { update: { before: existingUpdate } } } };
+            const merged = withEmailGate(options, {});
+
+            await getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null);
+
+            expect(order).toStrictEqual(["gate", "existing"]);
+            expect(getBefore(merged.databaseHooks!)).toBeTypeOf("function");
+            expect(merged.databaseHooks?.user?.create?.before).toBeTypeOf("function");
+        });
+
+        it("classifies an address once when the existing user.update.before leaves it unchanged", async () => {
+            expect.assertions(2);
+
+            assertEmailAllowed.mockResolvedValueOnce(businessClassification);
+
+            const existingUpdate = vi.fn<UserUpdateBefore>(async () => {});
+            const merged = withEmailGate({ databaseHooks: { user: { update: { before: existingUpdate } } } }, {});
+
+            await getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null);
+
+            expect(assertEmailAllowed).toHaveBeenCalledTimes(1);
+            expect(existingUpdate).toHaveBeenCalledTimes(1);
+        });
+
+        it("gates the address an existing hook leaves on the patch when it returns data without an email", async () => {
+            expect.assertions(2);
+
+            assertEmailAllowed.mockResolvedValueOnce(businessClassification).mockRejectedValueOnce(new LunoraError("EMAIL_DOMAIN_BLOCKED", "blocked"));
+
+            const existingUpdate = vi.fn<UserUpdateBefore>(async (patch) => {
+                Object.assign(patch, { email: "spammer@mailinator.com" });
+
+                return { data: { name: "Updated" } };
+            });
+            const merged = withEmailGate({ databaseHooks: { user: { update: { before: existingUpdate } } } }, {});
+
+            await expect(getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).rejects.toMatchObject({
+                body: { code: "EMAIL_DOMAIN_BLOCKED" },
+            });
+            expect(assertEmailAllowed).toHaveBeenLastCalledWith("spammer@mailinator.com", expect.anything());
+        });
+
+        it("passes an update through an existing hook that returns { data: undefined }", async () => {
+            expect.assertions(1);
+
+            assertEmailAllowed.mockResolvedValueOnce(businessClassification);
+
+            const existingUpdate = vi.fn<UserUpdateBefore>(async () => ({ data: undefined }) as unknown as Awaited<ReturnType<UserUpdateBefore>>);
+            const merged = withEmailGate({ databaseHooks: { user: { update: { before: existingUpdate } } } }, {});
+
+            await expect(getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).resolves.toStrictEqual({ data: undefined });
+        });
+
+        it("passes an update through an existing hook that returns null", async () => {
+            expect.assertions(1);
+
+            assertEmailAllowed.mockResolvedValueOnce(businessClassification);
+
+            const existingUpdate = vi.fn<UserUpdateBefore>(async () => null as unknown as Awaited<ReturnType<UserUpdateBefore>>);
+            const merged = withEmailGate({ databaseHooks: { user: { update: { before: existingUpdate } } } }, {});
+
+            await expect(getUpdateBefore(merged.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).resolves.toBeNull();
+        });
+
+        it("gates the address an existing user.update.before rewrites to, by mutation or by returned data", async () => {
+            expect.assertions(4);
+
+            assertEmailAllowed
+                .mockResolvedValueOnce(businessClassification)
+                .mockRejectedValueOnce(new LunoraError("EMAIL_DOMAIN_BLOCKED", "blocked"))
+                .mockResolvedValueOnce(businessClassification)
+                .mockRejectedValueOnce(new LunoraError("EMAIL_DOMAIN_BLOCKED", "blocked"));
+
+            const mutating = withEmailGate(
+                {
+                    databaseHooks: {
+                        user: {
+                            update: {
+                                before: async (patch) => {
+                                    Object.assign(patch, { email: "spammer@mailinator.com" });
+                                },
+                            },
+                        },
+                    },
+                },
+                {},
+            );
+            const returning = withEmailGate(
+                {
+                    databaseHooks: {
+                        user: {
+                            update: {
+                                before: async () => {
+                                    return { data: { email: "spammer@mailinator.com" } };
+                                },
+                            },
+                        },
+                    },
+                },
+                {},
+            );
+
+            await expect(getUpdateBefore(mutating.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).rejects.toMatchObject({
+                body: { code: "EMAIL_DOMAIN_BLOCKED" },
+            });
+            await expect(getUpdateBefore(returning.databaseHooks!)({ email: "cto@acme-corp.example" }, null)).rejects.toMatchObject({
+                body: { code: "EMAIL_DOMAIN_BLOCKED" },
+            });
+            expect(assertEmailAllowed).toHaveBeenNthCalledWith(2, "spammer@mailinator.com", expect.anything());
+            expect(assertEmailAllowed).toHaveBeenNthCalledWith(4, "spammer@mailinator.com", expect.anything());
+        });
+
+        it("keeps an existing user.update.after untouched", () => {
+            expect.assertions(1);
+
+            const existingAfter = vi.fn<NonNullable<NonNullable<NonNullable<DatabaseHooks["user"]>["update"]>["after"]>>();
+            const options: BetterAuthOptions = { databaseHooks: { user: { update: { after: existingAfter } } } };
+            const merged = withEmailGate(options, {});
+
+            expect(merged.databaseHooks?.user?.update?.after).toBe(existingAfter);
         });
     });
 });

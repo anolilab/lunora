@@ -226,7 +226,9 @@ interface ContextPropertyCallIR {
 interface CronJobIR {
     args: Record<string, unknown>;
     cron: string;
+    file?: string;
     functionPath?: string;
+    line?: number;
     name: string;
     workflow?: {
         className: string;
@@ -828,6 +830,7 @@ interface QueueIR {
     exportName: string;
     filePath: string;
     handlerSite?: HandlerSiteIR;
+    line?: number;
     mode: "pull" | "push";
     name: string;
     topic?: string;
@@ -888,6 +891,7 @@ interface RlsPolicyIR {
 interface RlsProcedureIR {
     exportName: string;
     file: string;
+    line?: number;
     rlsTables: string[];
     tablesRead: string[];
     tablesWritten: string[];
@@ -1055,6 +1059,7 @@ interface ShapeIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
     filePath: string;
+    line?: number;
     readsIp?: true;
     table?: string;
 }
@@ -1215,11 +1220,13 @@ interface WorkflowIR {
         successRetention?: string;
     };
     exportName: string;
+    file?: string;
     handlerFile?: string;
     handlerSite?: HandlerSiteIR;
     limits?: {
         steps?: number;
     };
+    line?: number;
     name: string;
     schedules?: ReadonlyArray<string>;
     steps: ReadonlyArray<WorkflowStepIR>;
@@ -2025,6 +2032,7 @@ interface AcceptedFinding {
 interface AdminRouteIR {
     exportName: string;
     file: string;
+    line?: number;
     method: string;
     path: string;
     usesGuard: boolean;
@@ -2549,6 +2557,7 @@ const CAPABILITY_ROWS: readonly [
     },
     {
         readonly bindingFreeExports: readonly [
+            "authorizeSignedGet",
             "buildPresignedUrl",
             "buildSignedUrl",
             "scopeKey",
@@ -2629,12 +2638,14 @@ interface ContainerIRBase {
     className: string;
     enableInternet?: boolean;
     exportName: string;
+    file?: string;
     hardTimeout?: number | string;
     instanceType?: string | {
         diskMb?: number;
         memoryMib?: number;
         vcpu?: number;
     };
+    line?: number;
     name?: string;
     sandbox?: boolean;
     sleepAfter?: number | string;
@@ -3146,6 +3157,7 @@ interface ProcedureMiddlewareIR {
     handlesErrors?: boolean;
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    line?: number;
     reachesOutbound?: boolean;
     runsAiGeneration?: boolean;
     throwsBareError?: boolean;
