@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.415](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.414...@lunora/codegen@1.0.0-alpha.415) (2026-11-14)
+
+- feat(advisor): suppress one finding at one site with an inline directive (#1587)
+
 ## @lunora/codegen [1.0.0-alpha.414](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.413...@lunora/codegen@1.0.0-alpha.414) (2026-11-14)
 
 - feat(advisor): report source locations on schema and config findings (#1586)

@@ -1,3 +1,7 @@
+## @lunora/advisor [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.293...@lunora/advisor@1.0.0-alpha.294) (2026-11-14)
+
+- feat(advisor): suppress one finding at one site with an inline directive (#1587)
+
 ## @lunora/advisor [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.292...@lunora/advisor@1.0.0-alpha.293) (2026-11-14)
 
 - feat(advisor): report source locations on schema and config findings (#1586)
