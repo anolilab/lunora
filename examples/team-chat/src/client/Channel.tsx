@@ -148,7 +148,7 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
      * optimization entirely.
      */
     const upload = async (file: File): Promise<{ key: string; name: string }> => {
-        const { key, url } = await client.action(api.messages.requestAttachmentUpload, { channelId, contentType: file.type });
+        const { key, url } = await client.action(api.messages.requestAttachmentUpload, { channelId, contentType: file.type }, { shardKey: channelId });
         const response = await fetch(url, { body: file, headers: { "content-type": file.type }, method: "PUT" });
 
         if (!response.ok) {

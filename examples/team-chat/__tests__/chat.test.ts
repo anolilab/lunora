@@ -272,6 +272,22 @@ describe("team chat membership", () => {
         await expect(ada.query(listPresence, { channelId: "general" })).resolves.toStrictEqual([]);
     });
 
+    it("removes a member's presence when they leave the channel", async () => {
+        expect.assertions(1);
+
+        const grace = t.withIdentity({ userId: "u-grace" });
+
+        await joined(ada, "general");
+        await joined(grace, "general");
+        await ada.mutation(heartbeat, { channelId: "general", name: "Ada", sessionId: "ada-tab" });
+        await grace.mutation(heartbeat, { channelId: "general", name: "Grace", sessionId: "grace-tab" });
+        await ada.mutation(leaveChannel, { channelId: "general" });
+
+        const online = await grace.query(listPresence, { channelId: "general" });
+
+        expect(online.map((row) => row.name)).toStrictEqual(["Grace"]);
+    });
+
     it("keeps one member from renaming or removing another member's presence", async () => {
         expect.assertions(4);
 

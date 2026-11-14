@@ -119,6 +119,15 @@ export const leave = mutation
             await ctx.db.delete("members", existing._id);
         }
 
+        // Without this the other members keep seeing the leaver online until the client-side TTL lapses,
+        // and the leaver's own heartbeats now stop at the membership guard.
+        const presence = await ctx.db
+            .query("presence")
+            .withIndex("by_channel_session", (q) => q.eq("channelId", channelId))
+            .collect();
+
+        await Promise.all(presence.filter((row) => row.userId === userId).map(async (row) => ctx.db.delete("presence", row._id)));
+
         ctx.log.info("channel left", { channelId });
     });
 

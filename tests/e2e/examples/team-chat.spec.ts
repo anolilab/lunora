@@ -48,6 +48,8 @@ test("signs up, creates a channel, and delivers a message and an attachment to a
 
     await signUp(grace, `Grace${unique()}`);
     await grace.getByRole("button", { exact: true, name: `#${channel}` }).click();
+    // Channels are member-only: Grace joins before she can read it.
+    await grace.getByRole("button", { name: `Join #${channel}` }).click();
 
     const body = `hello-${unique()}`;
 
