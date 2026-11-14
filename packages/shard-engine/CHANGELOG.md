@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.195...@lunora/shard-engine@1.0.0-alpha.196) (2026-11-14)
+
+- fix(shard-engine): erase soft-deleted rows in a hard deleteAll (#1540)
+
 ## @lunora/shard-engine [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.194...@lunora/shard-engine@1.0.0-alpha.195) (2026-11-13)
 
 - fix(do): name a delta's table only for a single-table query (#1595)
