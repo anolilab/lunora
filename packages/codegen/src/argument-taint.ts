@@ -280,6 +280,18 @@ const isDatabaseReadCall = (call: CallExpression): boolean => {
     return Node.isPropertyAccessExpression(callee) && DB_READ_METHODS.has(callee.getName()) && contextTrustPathOf(callee)?.[0] === "db";
 };
 
+/** Whether `argument` names the caller's identity, directly or through a local whose initializer does. */
+const readsCallerIdentity = (argument: TsNode): boolean =>
+    valueIdentifiersOf(argument).some((identifier) => {
+        if (contextTrustPathOf(outermostChainOf(identifier))?.[0] === "auth") {
+            return true;
+        }
+
+        const initializer = trustedInitializerOf(identifier);
+
+        return initializer !== undefined && valueIdentifiersOf(initializer).some((inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth");
+    });
+
 /**
  * Whether a database read is bound to the caller: one of its arguments names the
  * caller's identity, directly or through a local whose initializer does
@@ -289,18 +301,7 @@ const isDatabaseReadCall = (call: CallExpression): boolean => {
  * caller-chosen.
  */
 const isIdentityBoundRead = (call: CallExpression): boolean =>
-    isDatabaseReadCall(call) &&
-    call.getArguments().some((argument) =>
-        valueIdentifiersOf(argument).some((identifier) => {
-            if (contextTrustPathOf(outermostChainOf(identifier))?.[0] === "auth") {
-                return true;
-            }
-
-            const initializer = trustedInitializerOf(identifier);
-
-            return initializer !== undefined && valueIdentifiersOf(initializer).some((inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth");
-        }),
-    );
+    isDatabaseReadCall(call) && call.getArguments().some((argument) => readsCallerIdentity(argument));
 
 /**
  * Whether `identifier` reaches the value of `within` only on some paths: the fallback of a `??` or
@@ -437,9 +438,10 @@ const appFunctionOf = (callee: TsNode | undefined): FunctionNode | undefined => 
         return undefined;
     }
 
-    // A reassigned function declaration may not run the body inspected here.
+    // A reassigned function declaration may not run the body inspected here, and calling a generator
+    // runs none of its body: awaiting the generator object it returns checks nothing.
     if (Node.isFunctionDeclaration(declaration)) {
-        return declaration.getBody() === undefined || isReassignedBinding(declaration) ? undefined : declaration;
+        return declaration.getBody() === undefined || declaration.isGenerator() || isReassignedBinding(declaration) ? undefined : declaration;
     }
 
     if (!isConstDeclaration(declaration)) {
@@ -448,7 +450,7 @@ const appFunctionOf = (callee: TsNode | undefined): FunctionNode | undefined => 
 
     const initializer = unwrapExpression(declaration.getInitializer());
 
-    return Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer) ? initializer : undefined;
+    return Node.isArrowFunction(initializer) || (Node.isFunctionExpression(initializer) && !initializer.isGenerator()) ? initializer : undefined;
 };
 
 const isAssignmentOperator = (kind: SyntaxKind): boolean => kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
@@ -735,7 +737,9 @@ const inlineGuardOf = (statement: TsNode, row: VariableDeclaration): { declarati
         return undefined;
     }
 
-    const identityBound = chain.calls.some((call) => isIdentityBoundRead(call));
+    // The chain is already a `ctx.db` single-row read, so any of its calls may carry the identity: a fluent
+    // `query(…).withIndex(…).first()` names it in `withIndex`, which `isIdentityBoundRead` cannot trace to `ctx.db`.
+    const identityBound = chain.calls.some((call) => call.getArguments().some((argument) => readsCallerIdentity(argument)));
     const tied = chainArgumentNodes(chain).some((node) => Node.isIdentifier(node) && bindsTo(node, row));
 
     return identityBound && tied ? { declaration, selfEnforcing: single.selfEnforcing } : undefined;
