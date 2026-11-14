@@ -86,6 +86,32 @@ describe("lunora analyze", () => {
             expect(recorded.warnings).toHaveLength(1);
         });
 
+        it("leaves wrangler's README out of the bundle totals", async () => {
+            expect.hasAssertions();
+
+            // `wrangler deploy --outdir` writes a README beside the bundle; it is never uploaded.
+            writeFileSync(join(buildOut, "README.md"), "x".repeat(400));
+            const { logger } = recordingLogger();
+
+            const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, logger });
+
+            expect(result.report?.totalFiles).toBe(1);
+            expect(result.report?.totalBytes).toBe(3000);
+        });
+
+        it("falls back to the output files when the metafile sizes no module", async () => {
+            expect.hasAssertions();
+
+            writeFileSync(join(buildOut, "bundle-meta.json"), JSON.stringify({ outputs: {} }), "utf8");
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runAnalyzeCommand({ cwd: workdir, inspectOnly: buildOut, logger });
+
+            expect(result.report?.breakdown).toBe("output-files");
+            expect(result.report?.topModules).toStrictEqual([{ path: "index.js", sizeBytes: 3000 }]);
+            expect(recorded.warnings).toHaveLength(1);
+        });
+
         it("does not count a path that merely contains _generated as generated", async () => {
             expect.hasAssertions();
 

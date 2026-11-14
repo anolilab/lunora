@@ -91,8 +91,11 @@ const GENERATED_SEGMENT = /(?:^|[\\/])_generated[\\/]/u;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** Maps are a debugging aid and metafile is wrangler's own bookkeeping; neither is bundle size. */
-const isBundleOutput = (entry: AnalyzeFileEntry): boolean => !entry.path.endsWith(".map") && entry.path !== METAFILE_NAME;
+/** wrangler writes this beside the bundle in `--outdir` to explain the folder; it is not uploaded. */
+const WRANGLER_README = "README.md";
+
+/** Maps are a debugging aid and metafile and README are wrangler's own bookkeeping; none is bundle size. */
+const isBundleOutput = (entry: AnalyzeFileEntry): boolean => !entry.path.endsWith(".map") && entry.path !== METAFILE_NAME && entry.path !== WRANGLER_README;
 
 const largestFirst = (entries: ReadonlyArray<AnalyzeFileEntry>): AnalyzeFileEntry[] => entries.toSorted((a, b) => b.sizeBytes - a.sizeBytes);
 
@@ -137,7 +140,10 @@ const readInputSizes = (outdir: string): Map<string, number> | undefined => {
 
     const outputs = isRecord(parsed) ? parsed["outputs"] : undefined;
 
-    return isRecord(outputs) ? sumInputBytes(outputs) : undefined;
+    const sizes = isRecord(outputs) ? sumInputBytes(outputs) : undefined;
+
+    // A metafile that sizes no module would print an empty breakdown and skip the fallback.
+    return sizes !== undefined && sizes.size > 0 ? sizes : undefined;
 };
 
 const reportFromMetafile = (outdir: string, outputs: ReadonlyArray<AnalyzeFileEntry>, inputSizes: Map<string, number>): AnalyzeReport => {
@@ -261,7 +267,7 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
         const report = buildReport(outdir);
 
         if (report.breakdown === "output-files") {
-            logger.warn("analyze: wrangler wrote no esbuild metafile (pre-bundled entry), so per-module sizes are unavailable");
+            logger.warn("analyze: no readable esbuild metafile with module sizes (a pre-bundled entry writes none), so per-module sizes are unavailable");
         }
 
         if (!json) {
