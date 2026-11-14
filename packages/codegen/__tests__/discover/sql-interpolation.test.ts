@@ -101,6 +101,23 @@ const ARG_CONCAT = `
     };
 `;
 
+/** Request text passed through two \`const\` aliases. */
+const TWO_HOP_ARG = `
+    export const run = async (ctx, args) => {
+        const first = args.sql;
+        const second = first;
+        return ctx.sql.query(second);
+    };
+`;
+
+/** Request text destructured from the handler's \`args\`. */
+const DESTRUCTURED_ARG = `
+    export const run = async (ctx, args) => {
+        const { sql } = args;
+        return ctx.sql.query(sql);
+    };
+`;
+
 /** A plain parameter passed straight through: the caller is not visible here, so it is left alone. */
 const PARAM_PASSTHROUGH = `
     export const run = async (ctx, q) => ctx.sql.query(q);
@@ -223,6 +240,17 @@ describe("discoverSqlInterpolation", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "arg-concat.ts"), ARG_CONCAT, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["two const aliases", TWO_HOP_ARG],
+        ["a destructure of args", DESTRUCTURED_ARG],
+    ])("flags request text reached through %s", (_label, source) => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "hop.ts"), source, "utf8");
 
         expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
     });

@@ -44,6 +44,23 @@ const constInitializerOf = (node: TsNode): TsNode | undefined => {
 };
 
 /**
+ * What a `const` name was bound from: the initializer of `const x = …`, or, for `const { x } = source`, the
+ * `source` it was destructured from. `undefined` for anything else.
+ */
+const boundSourceOf = (node: TsNode): TsNode | undefined => {
+    const direct = constInitializerOf(node);
+
+    if (direct !== undefined || !Node.isIdentifier(node)) {
+        return direct;
+    }
+
+    const declaration = node.getSymbol()?.getDeclarations()[0];
+    const holder = Node.isBindingElement(declaration) ? declaration.getParent().getParent() : undefined;
+
+    return isConstDeclaration(holder) ? holder.getInitializer() : undefined;
+};
+
+/**
  * True when `node` is a `left + right` concatenation or a `X.join(...)` call, the two
  * ways a `.join`-style builder assembles text. A substitution template is handled
  * separately because it is a distinct syntax node.
@@ -147,17 +164,19 @@ const isRiskyText = (text: TsNode): boolean => {
         return false;
     }
 
-    if (isBuiltText(value)) {
-        return true;
+    // Follow the `const` chain the text came through, so an alias of an alias, or a field destructured from a
+    // request object, is judged by its source rather than by the last name it was given.
+    let current: TsNode | undefined = value;
+
+    for (let hop = 0; current !== undefined && hop <= CONST_HOP_LIMIT; hop += 1) {
+        if (isBuiltText(current) || isArgumentDerived(current)) {
+            return true;
+        }
+
+        current = boundSourceOf(current);
     }
 
-    const initializer = constInitializerOf(value);
-
-    if (initializer && isBuiltText(initializer)) {
-        return true;
-    }
-
-    return isArgumentDerived(value);
+    return false;
 };
 
 /** The IR row for a `ctx.sql.query(text, …)` / `.unsafe(text, …)` call whose `text` is risky, or `undefined`. */
