@@ -24,7 +24,7 @@ interface AdapterRegistry {
 ```ts
 interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
+    readonly reason?: "duplicate" | "duplicate_subscription" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
 }
 ```
 
@@ -119,6 +119,7 @@ interface CreatePaymentOptions {
     readonly authorize: AuthorizeReference;
     readonly entitlements?: EntitlementsConfig;
     readonly observability?: PaymentObserver;
+    readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
 }
 ```
@@ -212,7 +213,6 @@ interface LunoraDatabaseLike {
 
 ```ts
 interface LunoraPayment {
-    readonly adapter: PaymentAdapter;
     attach: (input: AttachInput) => Promise<CheckoutResult>;
     cancelPayment: (sessionId: string, options?: {
         idempotencyKey?: string;
@@ -227,9 +227,17 @@ interface LunoraPayment {
     handleWebhook: (request: Request) => Promise<Response>;
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
+    readonly provider: {
+        readonly capabilities: ProviderCapabilities;
+        readonly identifier: ProviderId;
+    };
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
+    resumeSubscription: (subscriptionId: string, options?: {
+        idempotencyKey?: string;
+    }) => Promise<Subscription>;
     readonly store: PaymentStore;
     track: (input: TrackInput) => Promise<TrackResult>;
+    updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
 }
 ```
 
@@ -238,7 +246,9 @@ interface LunoraPayment {
 ```ts
 class LunoraPaymentError extends LunoraError {
     readonly code: PaymentErrorCode;
-    constructor(code: PaymentErrorCode, message: string);
+    constructor(code: PaymentErrorCode, message: string, options?: {
+        cause?: unknown;
+    });
 }
 ```
 
@@ -258,6 +268,8 @@ class MemoryPaymentStore implements PaymentStore {
     getSubscription(provider: ProviderId, id: string): Promise<Subscription | undefined>;
     listSubscriptionsByReference(referenceId: string): Promise<Subscription[]>;
     listUnreportedUsage(provider: ProviderId, limit: number): Promise<UsageEvent[]>;
+    getReferenceRevision(referenceId: string): Promise<number>;
+    bumpReferenceRevision(referenceId: string, ifRevision: number): Promise<boolean>;
     markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean>;
     releaseEvent(provider: ProviderId, eventId: string): Promise<void>;
     markUsageReported(provider: ProviderId, idempotencyKey: string): Promise<void>;
@@ -374,6 +386,10 @@ type PaymentEvent = {
     provider: ProviderId;
     type: "webhook.duplicate";
 } | {
+    provider: ProviderId;
+    subscriptionId: string;
+    type: "subscription.duplicate";
+} | {
     error: unknown;
     id: string;
     kind: "payment" | "subscription";
@@ -470,9 +486,11 @@ type PaymentState = "authorized" | "canceled" | "captured" | "failed" | "initiat
 
 ```ts
 interface PaymentStore {
+    bumpReferenceRevision: (referenceId: string, ifRevision: number) => Promise<boolean>;
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
     getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
+    getReferenceRevision: (referenceId: string) => Promise<number>;
     getSubscription: (provider: ProviderId, id: string) => Promise<Subscription | undefined>;
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
     listUnreportedUsage: (provider: ProviderId, limit: number) => Promise<UsageEvent[]>;
@@ -496,6 +514,7 @@ interface PaymentsFromContextOptions {
     readonly authorize?: AuthorizeContextReference;
     readonly entitlements?: EntitlementsConfig;
     readonly observability?: PaymentObserver;
+    readonly singleSubscriptionPerReference?: boolean;
 }
 ```
 
@@ -543,6 +562,7 @@ interface ReconcileInput {
     readonly adapter: PaymentAdapter;
     readonly observability?: PaymentObserver;
     readonly paymentSessionIds?: ReadonlyArray<string>;
+    readonly singleSubscriptionPerReference: boolean;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
     readonly usageReportLimit?: number;
@@ -790,7 +810,7 @@ const allocateMoney: (amount: Money, ratios: ReadonlyArray<bigint>) => Money[];
 ### `applyWebhookAction` (const)
 
 ```ts
-const applyWebhookAction: (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver) => Promise<ApplyResult>;
+const applyWebhookAction: (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver, singleSubscriptionPerReference?: boolean) => Promise<ApplyResult>;
 ```
 
 ### `canTransitionPayment` (const)
@@ -922,7 +942,7 @@ const nextSubscriptionState: (from: SubscriptionState, action: SubscriptionActio
 ### `paymentExtension` (const)
 
 ```ts
-const paymentExtension: SchemaExtension<Record<"customers" | "events" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>, "payment">;
+const paymentExtension: SchemaExtension<Record<"customers" | "events" | "referenceRevisions" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>, "payment">;
 ```
 
 ### `paymentsFromContext` (const)

@@ -53,6 +53,10 @@ const ERROR_CATALOG: {
         readonly status: 404;
         readonly title: "Not found";
     };
+    readonly INVALID_TRANSITION: {
+        readonly status: 409;
+        readonly title: "Invalid state transition";
+    };
     readonly DELIVERY_FENCED: {
         readonly status: 409;
         readonly title: "Delivery authorization changed";
@@ -149,6 +153,18 @@ const ERROR_CATALOG: {
         readonly status: 409;
         readonly title: "Migration drift";
     };
+    readonly MIGRATION_DESTRUCTIVE: {
+        readonly status: 409;
+        readonly title: "Destructive migration not confirmed";
+    };
+    readonly MIGRATION_ROOT_REQUIRED: {
+        readonly status: 403;
+        readonly title: "Root admin token required for this migration";
+    };
+    readonly SQL_MIGRATIONS_NOT_CONFIGURED: {
+        readonly status: 400;
+        readonly title: "SQL migrations not configured";
+    };
     readonly UNIQUE_INDEX_DUPLICATES: {
         readonly status: 503;
         readonly title: "Unique index blocked by duplicate rows";
@@ -216,6 +232,10 @@ const ERROR_CATALOG: {
     readonly CODEGEN_DIAGNOSTIC: {
         readonly status: 500;
         readonly title: "Codegen diagnostic";
+    };
+    readonly PROJECT_CONFIG_INVALID: {
+        readonly status: 500;
+        readonly title: "lunora.config has an unknown key, a mistyped value or no default export";
     };
     readonly JURISDICTION_MOVE: {
         readonly status: 422;
@@ -316,6 +336,10 @@ const ERROR_CATALOG: {
     readonly ADMIN_ROOT_REQUIRED: {
         readonly status: 403;
         readonly title: "Root admin token required";
+    };
+    readonly ADMIN_SCOPE_REQUIRED: {
+        readonly status: 403;
+        readonly title: "Migrations scope required";
     };
     readonly ADMIN_TOKEN_EXISTS: {
         readonly status: 409;

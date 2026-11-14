@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.402",
+    "version": "1.0.0-alpha.410",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -63,7 +63,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/advisor": "^1.0.0-alpha.288",
+        "@lunora/advisor": "^1.0.0-alpha.290",
         "@lunora/agent": "^1.0.0-alpha.281",
         "@lunora/container": "1.0.0-alpha.108",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
@@ -80,11 +80,11 @@
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/bindings": "1.0.0-alpha.151",
-        "@lunora/client": "^1.0.0-alpha.288",
-        "@lunora/do": "^1.0.0-alpha.282",
-        "@lunora/payment": "^1.0.0-alpha.269",
-        "@lunora/server": "^1.0.0-alpha.271",
-        "@lunora/shard-engine": "^1.0.0-alpha.192",
+        "@lunora/client": "^1.0.0-alpha.295",
+        "@lunora/do": "^1.0.0-alpha.284",
+        "@lunora/payment": "^1.0.0-alpha.272",
+        "@lunora/server": "^1.0.0-alpha.273",
+        "@lunora/shard-engine": "^1.0.0-alpha.194",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

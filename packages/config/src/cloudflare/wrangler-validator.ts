@@ -33,6 +33,7 @@ import {
     validateWorkflowSettings,
     WORKFLOWS_RULE,
 } from "./validate-bindings";
+import validateEnvironmentQueueNames from "./validate-environment-queues";
 import validateJurisdiction from "./validate-jurisdiction";
 import {
     validateAssets,
@@ -206,6 +207,7 @@ const validateWranglerConfig = (wranglerInput: WranglerConfig | undefined, schem
     validateRequiredFieldEntries(wrangler.workflows, "workflows", WORKFLOWS_RULE, errors);
     validateWorkflowSettings(wrangler, errors);
     validateQueues(wrangler, errors);
+    validateEnvironmentQueueNames(wranglerInput, environment, warnings);
     validateRequiredFieldEntries(wrangler.secrets_store_secrets, "secrets_store_secrets", SECRETS_STORE_RULE, errors);
 
     // Cloudflare-coverage bindings (plans 027-043), driven by descriptor tables.

@@ -1,3 +1,19 @@
+## @lunora/react [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.300...@lunora/react@1.0.0-alpha.301) (2026-11-12)
+
+- fix(react): depend on the workspace client so the release pins the matching one (#1555)
+
+## @lunora/react [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.299...@lunora/react@1.0.0-alpha.300) (2026-11-11)
+
+- feat(client): move admin auth hook logic into @lunora/client (#1552)
+
+## @lunora/react [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.298...@lunora/react@1.0.0-alpha.299) (2026-11-10)
+
+- fix(react): pass the provider's query client to TanStack; extend the cross-copy fix to other frameworks (#1524)
+
+## @lunora/react [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.297...@lunora/react@1.0.0-alpha.298) (2026-11-10)
+
+- fix(react): share the provider contexts across copies of the package (#1523)
+
 ## @lunora/react [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.296...@lunora/react@1.0.0-alpha.297) (2026-11-05)
 
 - fix(client): restart a paginated feed when the server refuses its cursor (#1496)

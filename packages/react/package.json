@@ -1,6 +1,6 @@
 {
     "name": "@lunora/react",
-    "version": "1.0.0-alpha.297",
+    "version": "1.0.0-alpha.301",
     "description": "React hooks for Lunora: useQuery, useMutation, useSubscription, and useAuth",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -71,7 +71,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "^1.0.0-alpha.288",
+        "@lunora/client": "workspace:*",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/ratelimit": "1.0.0-alpha.196",
         "@lunora/wire": "1.0.0-alpha.6",

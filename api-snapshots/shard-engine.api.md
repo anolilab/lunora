@@ -118,6 +118,12 @@ const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 const ADMIN_TOKEN_TABLE = "__lunora_admin_tokens__";
 ```
 
+### `ADMIN_WILDCARD` (const)
+
+```ts
+const ADMIN_WILDCARD = "*";
+```
+
 ### `AGGREGATE_SQL_FUNCTION` (const)
 
 ```ts
@@ -156,6 +162,7 @@ interface AdminTokenSummary {
     expiresAt?: number;
     lastUsedAt?: number;
     name: string;
+    scopes: AdminTokenScope[];
 }
 ```
 
@@ -628,6 +635,12 @@ const DEFAULT_PROMOTION_THRESHOLDS: PromotionThresholds;
 
 ```ts
 const DEFAULT_TRANSACTION_LIMITS: TransactionLimits;
+```
+
+### `DELTA_PLACEHOLDER_TABLE` (const)
+
+```ts
+const DELTA_PLACEHOLDER_TABLE = "__lunora__";
 ```
 
 ### `DOC_COLUMN` (const)
@@ -4119,6 +4132,7 @@ const createAdminTokenRecord: (sql: SqlExec, record: {
     digest: string;
     expiresAt?: number;
     name: string;
+    scopes?: ReadonlyArray<AdminTokenScope>;
 }) => boolean;
 ```
 
@@ -4264,6 +4278,12 @@ const deleteShapePokeCursorsForConnection: (sql: SqlExec, connectionId: string) 
 
 ```ts
 const deleteStreamRun: (sql: SqlExec, runKey: string) => void;
+```
+
+### `deltaTableFor` (const)
+
+```ts
+const deltaTableFor: (tables: Iterable<string>) => string;
 ```
 
 ### `depKey` (const)
@@ -5664,6 +5684,7 @@ const validateImportRow: (schema: SchemaLike, table: string, record: Record<stri
 const verifyAdminTokenDigest: (sql: SqlExec, name: string, digest: string, now: number) => undefined | {
     createdAt: number;
     expiresAt?: number;
+    scopes: AdminTokenScope[];
 };
 ```
 
@@ -5783,6 +5804,20 @@ const defineEngineContractSuite: (name: string, factory: EngineHostFactory, vite
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `ADMIN_TOKEN_SCOPES` (const)
+
+```ts
+const ADMIN_TOKEN_SCOPES: readonly [
+    "migrations"
+];
+```
+
+### `AdminTokenScope` (type)
+
+```ts
+type AdminTokenScope = (typeof ADMIN_TOKEN_SCOPES)[number];
+```
 
 ### `BackfillState` (interface)
 

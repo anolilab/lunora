@@ -1,3 +1,7 @@
+## @lunora/advisor [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.289...@lunora/advisor@1.0.0-alpha.290) (2026-11-07)
+
+- feat(notify): forward FCM platform fields, add topic sends (#1505)
+
 ## @lunora/advisor [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.288...@lunora/advisor@1.0.0-alpha.289) (2026-11-04)
 
 - fix(notify): mint FCM access tokens from a service-account key (#1471)

@@ -35,6 +35,32 @@ describe("logBuffer", () => {
         expect(buffer.entries().map((event) => event.message)).toEqual(["c", "b"]);
     });
 
+    it("gives each line an id no other line has, across identical lines, a clear and another buffer", () => {
+        expect.assertions(3);
+
+        const buffer = new LogBuffer(2);
+        const seen = new Set<string | undefined>();
+
+        for (const event of [entry("same", 1), entry("same", 1), entry("same", 1)]) {
+            buffer.push(event);
+            seen.add(buffer.entries()[0]?.id);
+        }
+
+        buffer.clear();
+        buffer.push(entry("after clear", 2));
+        seen.add(buffer.entries()[0]?.id);
+
+        // A restarted Durable Object builds a new buffer, which numbers from 0 again.
+        const restarted = new LogBuffer(2);
+
+        restarted.push(entry("same", 1));
+        seen.add(restarted.entries()[0]?.id);
+
+        expect(seen.size).toBe(5);
+        expect(seen.has(undefined)).toBe(false);
+        expect(buffer.entries()[0]?.id).toMatch(/:3$/u);
+    });
+
     it("clear() empties the buffer", () => {
         expect.assertions(2);
 

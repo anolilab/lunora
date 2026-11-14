@@ -299,6 +299,8 @@ interface EnsureDevVariablesDeps {
     info: (message: string) => void;
     /** Injectable for tests; defaults to `crypto.randomBytes` hex. */
     randomHex?: (bytes: number) => string;
+    /** Emit a warning; defaults to {@link EnsureDevVariablesDeps.info}. */
+    warn?: (message: string) => void;
     /** Generate without prompting (e.g. a `--yes` flag). */
     yes?: boolean;
 }
@@ -308,7 +310,8 @@ interface EnsureDevVariablesDeps {
 // topped up an existing one, `declined` = user said no.
 // `skipped-exists` = another process created `.dev.vars` between our existence
 // check and the atomic rename (a create-race), so we left its file untouched.
-type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists";
+// `unreadable` = `.dev.vars` or its example exists but is not a readable file.
+type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists" | "unreadable";
 
 interface EnsureDevVariablesResult {
     /** Keys appended to an existing file, when `status` is `"augmented"`. */
@@ -520,12 +523,43 @@ const appendDevVariables = (path: string, buildAdditions: (existing: string) => 
     throw new LunoraError("INTERNAL", `Failed to append to ${path} after ${String(APPEND_MAX_ATTEMPTS)} attempts — a concurrent writer kept winning the race.`);
 };
 
+/** Read failures meaning the path exists but is not a file this process can read. */
+const UNREADABLE_FILE_CODES: ReadonlySet<string> = new Set(["EACCES", "EISDIR", "EPERM"]);
+
+type DevFileRead = { code: string; kind: "unreadable" } | { content: string; kind: "read" } | { kind: "missing" };
+
+/**
+ * A dev env file's content, or why there is none. A directory or a file this
+ * process may not read is the user's to fix, and wrangler reports it when it
+ * loads `.dev.vars`, so dev startup reports it rather than throwing. Any other
+ * failure still throws.
+ */
+const readDevFile = (path: string): DevFileRead => {
+    try {
+        return { content: readFileSync(path, "utf8"), kind: "read" };
+    } catch (error: unknown) {
+        const { code } = error as NodeJS.ErrnoException;
+
+        if (code === "ENOENT") {
+            return { kind: "missing" };
+        }
+
+        if (code !== undefined && UNREADABLE_FILE_CODES.has(code)) {
+            return { code, kind: "unreadable" };
+        }
+
+        throw error;
+    }
+};
+
 /**
  * Reconcile the project's `.dev.vars` with its `.dev.vars.example`:
  *
  * - file missing → offer to generate it (secret placeholders auto-filled);
  * - file present but missing keys the example lists → offer to append them;
- * - file present and complete → nothing to do.
+ * - file present and complete → nothing to do;
+ * - either one not a readable file (a directory, no permission) → one warning,
+ * status `"unreadable"`, nothing written.
  *
  * Prompts via `confirm` (skipped when `yes`); never overwrites existing values.
  * Returns what happened so the caller can tailor any follow-up. Shared by
@@ -534,16 +568,30 @@ const appendDevVariables = (path: string, buildAdditions: (existing: string) => 
  */
 const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureDevVariablesResult> => {
     const devVariablesPath = join(deps.cwd, DEV_VARS_FILE);
-    const examplePath = join(deps.cwd, DEV_VARS_EXAMPLE_FILE);
+    const devVariables = readDevFile(devVariablesPath);
+    const example = readDevFile(join(deps.cwd, DEV_VARS_EXAMPLE_FILE));
 
-    if (!existsSync(examplePath)) {
+    // `.dev.vars` is checked even without an example, so that `fillDevSecrets`,
+    // which skips an unreadable one silently, never leaves it unreported.
+    for (const [file, read] of [
+        [DEV_VARS_FILE, devVariables],
+        [DEV_VARS_EXAMPLE_FILE, example],
+    ] as const) {
+        if (read.kind === "unreadable") {
+            (deps.warn ?? deps.info)(`skipped the ${DEV_VARS_FILE} scaffold: ${file} is not a readable file (${read.code})`);
+
+            return { addedKeys: [], generatedKeys: [], status: "unreadable" };
+        }
+    }
+
+    if (example.kind !== "read") {
         return { addedKeys: [], generatedKeys: [], status: "no-example" };
     }
 
-    const exampleContent = readFileSync(examplePath, "utf8");
+    const exampleContent = example.content;
 
     // File missing entirely → offer to generate the whole thing.
-    if (!existsSync(devVariablesPath)) {
+    if (devVariables.kind !== "read") {
         const plan = planDevVariablesScaffold({ devVarsExists: false, exampleContent, randomHex: deps.randomHex });
 
         if (plan.status !== "generate") {
@@ -571,7 +619,7 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
     }
 
     // File present → top up any keys the example lists but the file lacks.
-    const augment = planDevVariablesAugment({ existingContent: readFileSync(devVariablesPath, "utf8"), exampleContent, randomHex: deps.randomHex });
+    const augment = planDevVariablesAugment({ existingContent: devVariables.content, exampleContent, randomHex: deps.randomHex });
 
     if (augment.missingKeys.length === 0) {
         return { addedKeys: [], generatedKeys: [], status: "exists" };
@@ -781,8 +829,15 @@ const fillDevSecrets = (deps: {
     secretSources?: ReadonlyArray<string>;
 }): FillDevSecretsResult => {
     const devVariablesPath = join(deps.cwd, DEV_VARS_FILE);
-    const exists = existsSync(devVariablesPath);
-    const existingContent = exists ? readFileSync(devVariablesPath, "utf8") : "";
+    const read = readDevFile(devVariablesPath);
+
+    // Reported once, by `ensureDevVariables`, which every dev host runs first.
+    if (read.kind === "unreadable") {
+        return { addedKeys: [], filledKeys: [], status: "unchanged" };
+    }
+
+    const exists = read.kind === "read";
+    const existingContent = exists ? read.content : "";
 
     const mintable = deps.secretSources === undefined ? undefined : mintableSecretKeysFor(deps.secretSources);
     const plan = planDevSecretsFill({ existingContent, mintable, randomHex: deps.randomHex });

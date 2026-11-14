@@ -1,6 +1,6 @@
 {
     "name": "@lunora/config",
-    "version": "1.0.0-alpha.458",
+    "version": "1.0.0-alpha.460",
     "description": "Internal shared CLI + Vite config layer for Lunora: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding",
     "keywords": [
         "bindings",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -70,7 +70,7 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/codegen": "^1.0.0-alpha.402",
+        "@lunora/codegen": "^1.0.0-alpha.404",
         "@lunora/container": "1.0.0-alpha.108",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
         "@lunora/seed": "^1.0.0-alpha.282",
@@ -80,7 +80,9 @@
         "@visulima/package": "catalog:cli",
         "dockerode": "catalog:tooling",
         "dotenv": "catalog:node",
+        "dotenv-expand": "catalog:node",
         "es-module-lexer": "catalog:vite",
+        "jiti": "catalog:tooling",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"
     },

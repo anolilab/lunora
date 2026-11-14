@@ -108,12 +108,30 @@ const renderSubscribe = (namespaceType: string, method: SdkMethod): string => {
     ].join("\n");
 };
 
+/**
+ * A query's stream form: the live query as a channel. The returned Unsubscribe closes it.
+ */
+const renderWatch = (namespaceType: string, method: SdkMethod): string => {
+    const argument = argsChoice(method, { none: "", typed: (type) => `args ${type}, `, untyped: "args any, " });
+    const payload = argsChoice(method, { none: "nil", typed: () => "args", untyped: "args" });
+    const name = `Watch${memberName(method.functionName)}`;
+
+    return [
+        `// ${name} opens a live ${commentText(method.functionPath)} as a channel; the returned Unsubscribe closes it.`,
+        `func (a *${namespaceType}) ${name}(${argument}shardKey string) (<-chan lunora.WatchEvent, lunora.Unsubscribe) {`,
+        `\treturn a.client.Watch("${stringLiteral(method.functionPath)}", ${payload}, shardKey)`,
+        `}`,
+    ].join("\n");
+};
+
 const renderNamespace = (namespace: SdkNamespace): string => {
     const namespaceType = `${toPascalCase(namespace.name)}API`;
 
     const body = namespace.methods
         .map((method) =>
-            method.verb === "query" ? `${renderCall(namespaceType, method)}\n\n${renderSubscribe(namespaceType, method)}` : renderCall(namespaceType, method),
+            method.verb === "query"
+                ? `${renderCall(namespaceType, method)}\n\n${renderSubscribe(namespaceType, method)}\n\n${renderWatch(namespaceType, method)}`
+                : renderCall(namespaceType, method),
         )
         .join("\n\n");
 

@@ -14,6 +14,13 @@ interface EmitAppOptions {
     agentWorkflows?: ReadonlyArray<string>;
 
     /**
+     * App-declared user columns the session forwards as identity claims (`user.additionalFields`
+     * of `.auth()`). Passed to both the D1 resolver and the object route. Empty/absent ⇒ the
+     * calls keep their no-claims form, byte-identical output for apps that declare none.
+     */
+    authClaims?: ReadonlyArray<string>;
+
+    /**
      * The package-backed capabilities the app uses (post platform gate). Every
      * used row of the `CAPABILITIES` table with an `appMethod` gets its fluent
      * `defineApp` method (`.ai()`, `.kv()`, `.payment()`, …), which sets the

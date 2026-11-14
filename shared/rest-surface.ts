@@ -29,7 +29,8 @@ type RestFunctionKind = "action" | "mutation" | "query";
  * This list is not, and cannot be, exhaustive: `resolveIdentity` receives the
  * whole `Request` and an app may authenticate on anything (`x-api-key`, a signed
  * query parameter, …). An app doing that must declare its own header names via
- * {@link RestCachePolicy.credentialHeaders}, or not mark the endpoint
+ * {@link RestCachePolicy.credentialHeaders} (or, on an `httpRoute`, the
+ * `credentialHeaders` option of `.cacheControl()`), or not mark the endpoint
  * `scope: "public"`.
  *
  * The x402 payment headers are here for a reason worth stating: an x402-tagged
@@ -44,8 +45,8 @@ type RestFunctionKind = "action" | "mutation" | "query";
  *
  * One credential is deliberately absent because it is not a header at all: under
  * a Cloudflare Access policy attached to the Worker, the caller's identity
- * arrives on the `ExecutionContext`. `@lunora/runtime`'s `requestCarriesCredentials`
- * checks for that separately.
+ * arrives on the `ExecutionContext`. {@link carriesCredential} checks for that
+ * separately.
  */
 const CREDENTIAL_HEADERS = ["authorization", "cf-access-jwt-assertion", "cookie", "payment-signature", "x-payment"] as const;
 
@@ -87,6 +88,94 @@ const credentialHeadersFor = (policy: RestCachePolicy): string[] => [
     ...CREDENTIAL_HEADERS,
     ...(policy.credentialHeaders ?? []).map((name) => name.toLowerCase()),
 ];
+
+/** An RFC 9110 header name (`token`). `Headers.has` throws on anything else, so a name is checked before it is asked about. */
+const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u;
+
+const isHeaderName = (name: string): boolean => HEADER_NAME.test(name);
+
+/**
+ * True when a request presented a credential, so its response must be treated as
+ * caller-specific: one of {@link CREDENTIAL_HEADERS}, one of the app's
+ * `extraHeaders`, or a Cloudflare Access identity. Under an Access policy attached
+ * to the Worker, the edge authenticates the caller and the identity arrives on
+ * the `ExecutionContext` as `access`, with no header to see.
+ *
+ * The one predicate both cache surfaces ask: the REST cache (`@lunora/runtime`)
+ * and `httpRoute(...).cacheControl()` (`@lunora/server`). A second copy could
+ * miss a credential source this one has and label a per-caller body `public`.
+ */
+const carriesCredential = (headers: Headers, context: { readonly access?: unknown } | undefined, extraHeaders: ReadonlyArray<string> = []): boolean =>
+    context?.access !== undefined ||
+    CREDENTIAL_HEADERS.some((name) => headers.has(name)) ||
+    // A name no header can have (`"X Api Key"`) is a misspelling of the header the app does authenticate on, which this
+    // check cannot see, so it fails closed: every request counts as credentialed and is answered `private`. Asking
+    // `Headers.has` about it would throw on every request instead.
+    extraHeaders.some((name) => !isHeaderName(name) || headers.has(name));
+
+/**
+ * Split a `Cache-Control` value into its directives. Commas inside a quoted
+ * argument (`private="set-cookie, x-trace"`) belong to that argument; a
+ * backslash escapes the next character inside quotes (RFC 9110 `quoted-pair`).
+ */
+const cacheDirectives = (value: string): string[] => {
+    const directives: string[] = [];
+    let current = "";
+    let quoted = false;
+    let escaped = false;
+
+    for (const char of value) {
+        if (escaped) {
+            escaped = false;
+        } else if (quoted && char === "\\") {
+            escaped = true;
+        } else if (char === '"') {
+            quoted = !quoted;
+        } else if (char === "," && !quoted) {
+            directives.push(current.trim());
+            current = "";
+            continue;
+        }
+
+        current += char;
+    }
+
+    directives.push(current.trim());
+
+    return directives.filter((directive) => directive !== "");
+};
+
+/** Directives addressed to shared caches, which a response narrowed to `private` must not keep. */
+const SHARED_CACHE_DIRECTIVES = new Set(["proxy-revalidate", "public", "s-maxage"]);
+
+/**
+ * Narrow a declared `Cache-Control` to `private`, for a response to a credentialed
+ * request.
+ *
+ * Returned unchanged when it already holds a bare `private` or `no-store`. A
+ * qualified `private="set-cookie"` does not count: under RFC 9111 it marks only
+ * the named header fields private, and a shared cache may still store the rest
+ * of the response. Otherwise the shared-cache directives (`public`, `s-maxage`,
+ * `proxy-revalidate`) and any qualified `private` are dropped and a bare
+ * `private` leads. That also covers a bare `max-age=300`, which a shared cache
+ * would store by default.
+ */
+const privateCacheControl = (value: string): string => {
+    const directives = cacheDirectives(value);
+    const lowered = directives.map((directive) => directive.toLowerCase());
+
+    if (lowered.includes("private") || lowered.includes("no-store")) {
+        return value;
+    }
+
+    const kept = directives.filter((_, index) => {
+        const name = (lowered[index]?.split("=", 1)[0] ?? "").trim();
+
+        return !SHARED_CACHE_DIRECTIVES.has(name) && name !== "private";
+    });
+
+    return ["private", ...kept].join(", ");
+};
 
 /**
  * The `.expose({ rest: true })` tag stamped onto a registered procedure (runtime,
@@ -249,11 +338,14 @@ export {
     cacheControlValue,
     cacheSeconds,
     cacheVaryValue,
+    carriesCredential,
     CREDENTIAL_HEADERS,
     credentialHeadersFor,
     DATA_SELECTING_HEADERS,
     describeRestSurface,
+    isHeaderName,
     mergeVary,
+    privateCacheControl,
     REST_PATH_PREFIX,
     restMethodForKind,
     restPathForFunction,

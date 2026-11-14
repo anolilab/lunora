@@ -5,24 +5,29 @@
  *
  * ## How the emitted file is applied
  *
- * With `wrangler d1 execute <database> --file lunora/migrations/<file>.sql`,
- * the same way `@lunora/auth`'s compiled schema is applied. It is a
- * multi-statement file — one `CREATE TABLE` plus a `CREATE INDEX` per index,
- * per table — so it is NOT a `@lunora/d1` `Migration`: `MigrationRunner`
- * rejects anything past the first statement (`assertSingleStatement`), which
- * is why feeding it a generated file throws. Split the file by hand if you
- * want the runner's hash-tracked, batched application.
+ * `lunora migrate apply` sends each file to the Worker's admin endpoint, which
+ * runs its statements in one atomic batch and records the file's name and
+ * SHA-256 in `__lunora_sql_migrations`. A file runs once per stage. A second
+ * run is a no-op, and a file whose text changed after it ran is refused rather
+ * than run again. `lunora deploy --migrate` runs the same step before the data
+ * migrations, so a file applies from any deploy tool that calls it.
+ *
+ * It is a multi-statement file, so it is NOT a `@lunora/d1` `Migration`:
+ * `MigrationRunner` rejects a migration holding more than one statement. The
+ * endpoint splits the file itself, one statement at a time.
  *
  * ## What the file is worth applying for
  *
  * Not the creates: the runtime already provisions every `.global()` table on
  * first use (`runSqlGlobalTableMigrations`), idempotently and additively, so
  * `CREATE TABLE IF NOT EXISTS` / `ADD COLUMN` / `CREATE INDEX IF NOT EXISTS`
- * only restate what the worker does for itself. The statements the runtime
- * will never issue are the destructive ones — `DROP TABLE`, `DROP INDEX`, and
- * everything under the file's "NOT auto-generated" comment block — and those
- * are the reason to run it. The snapshot it writes alongside is what makes the
- * next diff see a dropped table at all.
+ * only restate what the worker does for itself. An `ADD COLUMN` the runtime
+ * already provisioned is skipped, since SQLite has no `IF NOT EXISTS` for it.
+ * The statements the runtime will never issue are the destructive ones —
+ * `DROP TABLE`, `DROP INDEX`, and everything under the file's "NOT
+ * auto-generated" comment block — and those are the reason to run it. The
+ * snapshot it writes alongside is what makes the next diff see a dropped table
+ * at all.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

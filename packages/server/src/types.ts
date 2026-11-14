@@ -563,19 +563,26 @@ interface X402ProcedureConfig {
  * turns this into `Cache-Control` / `Cache-Tag` / `Vary` response headers, and a
  * `cache.tag` is purgeable through `ctx.cache.purge({ tags: [...] })`.
  *
- * This is NOT equivalent to `httpRoute(...).cacheControl()`, which writes whatever
- * value the author passes with no credential downgrade. That is the unguarded
- * escape hatch; this is the guarded surface.
+ * `httpRoute(...).cacheControl()` applies the same credential downgrade to a
+ * free-form value, but is NOT equivalent: it does not fold credential headers
+ * into `Vary`, refuse a non-`GET` exchange, or keep a credentialed response out
+ * of the edge store. This is the guarded surface.
  *
  * Caching a procedure whose result depends on the caller is how a REST cache
  * turns into a data leak, so `scope` is enforced at runtime rather than trusted:
- * a request that carries credentials (an `Authorization` header or any `Cookie`)
- * is ALWAYS answered `private`, even under `scope: "public"` — see
+ * a request that carries credentials (`Authorization`, any `Cookie`,
+ * `Cf-Access-Jwt-Assertion`, an x402 payment header, a Cloudflare Access
+ * identity, or a declared `credentialHeaders` name) is ALWAYS answered
+ * `private`, even under `scope: "public"` — see
  * {@link https://developer.mozilla.org/docs/Web/HTTP/Headers/Cache-Control MDN}
- * for what `private` forbids. So a per-user response can never be stored in a
- * shared/edge cache, and the worst a mis-declared `scope` can cost is a missed
- * cache hit. `scope: "public"` additionally emits `Vary: authorization, cookie`
- * so an intermediary can't hand a stored anonymous variant to a signed-in caller.
+ * for what `private` forbids. So a per-user response is never stored by a
+ * shared cache that honours `Cache-Control` (the runtime's own edge cache skips
+ * credentialed requests outright), and the worst a mis-declared `scope` costs
+ * there is a missed hit; a browser's private cache may still keep it, which is
+ * what `private` allows. `scope: "public"` additionally lists those credential
+ * headers in `Vary`, so an intermediary that honours `Vary` won't hand a stored
+ * anonymous variant to a signed-in caller. A cache that ignores `Vary` or
+ * `Cache-Control` is outside what response headers can govern.
  *
  * Only ever applied to a cacheable exchange: a `GET` (so `query` procedures — a
  * `mutation` / `action` is `POST`-only) that produced a 2xx.
@@ -1701,6 +1708,12 @@ type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown>
 interface ScheduleRunOptions {
     /** Retry policy for this job; the scheduler's defaults apply when omitted. */
     retry?: RetryPolicy;
+
+    /**
+     * The shard the job runs on when it fires. Omitted, the job runs on the default
+     * shard, which holds none of a tenant's `.shardBy()` rows.
+     */
+    shardKey?: string;
 }
 
 interface Scheduler {

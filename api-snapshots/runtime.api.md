@@ -47,6 +47,7 @@ interface AdminTokenSummary {
     lastUsedAt?: number;
     name: string;
     revoked?: boolean;
+    scopes: AdminTokenScope[];
 }
 ```
 
@@ -163,6 +164,9 @@ interface AuthAdmin {
         password?: string;
         role?: string | string[];
     }) => Promise<AuthUser>;
+    deleteApiKey?: (input: {
+        apiKeyId: string;
+    }) => Promise<void>;
     deleteOrganization?: (input: {
         organizationId: string;
     }) => Promise<void>;
@@ -185,6 +189,9 @@ interface AuthAdmin {
         role?: string;
     }) => Promise<Record<string, unknown>>;
     listAccounts?: (input: {
+        userId: string;
+    }) => Promise<Record<string, unknown>[]>;
+    listApiKeys?: (input: {
         userId: string;
     }) => Promise<Record<string, unknown>[]>;
     listInvitations?: (options: {
@@ -297,6 +304,7 @@ interface AuthAdmin {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    apiKey: boolean;
     inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
@@ -1960,6 +1968,7 @@ type ShardCallReturn<F> = F extends ShardFunctionReference<infer _A, infer R> ? 
 
 ```ts
 interface ShardCaller {
+    functionPath?: string;
     identity: ResolvedIdentity | null;
     shardKey: string;
 }
@@ -2387,6 +2396,7 @@ interface WorkerOptions {
     aiOptInLevel?: AiOptInLevel;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
+    applySqlMigrations?: SqlMigrationApplier;
     architecture?: () => Promise<unknown>;
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
@@ -2871,6 +2881,20 @@ const withFrameworkWorker: (host: FrameworkHostHandler, optionsInput: FrameworkW
 Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
+
+### `ADMIN_TOKEN_SCOPES` (const)
+
+```ts
+const ADMIN_TOKEN_SCOPES: readonly [
+    "migrations"
+];
+```
+
+### `AdminTokenScope` (type)
+
+```ts
+type AdminTokenScope = (typeof ADMIN_TOKEN_SCOPES)[number];
+```
 
 ### `AiOptInLevel` (type)
 
@@ -3386,6 +3410,7 @@ interface SchedulerRunOptions {
         maxAttempts?: number;
         maxMs?: number;
     };
+    shardKey?: string;
 }
 ```
 
@@ -3430,6 +3455,50 @@ interface SpanLink {
     attributes?: LogFields;
     spanId: string;
     traceId: string;
+}
+```
+
+### `SqlMigrationApplier` (type)
+
+```ts
+type SqlMigrationApplier = (request: SqlMigrationApplyRequest) => Promise<SqlMigrationApplyResult>;
+```
+
+### `SqlMigrationApplyRequest` (interface)
+
+```ts
+interface SqlMigrationApplyRequest {
+    additiveOnly: boolean;
+    baseline: boolean;
+    baselineThrough?: string;
+    confirmDestructive: boolean;
+    dryRun: boolean;
+    files: ReadonlyArray<SqlMigrationFileRequest>;
+}
+```
+
+### `SqlMigrationApplyResult` (interface)
+
+```ts
+interface SqlMigrationApplyResult {
+    files: ReadonlyArray<{
+        destructive: ReadonlyArray<string>;
+        name: string;
+        rootOnly: ReadonlyArray<string>;
+        skipped: ReadonlyArray<string>;
+        state: "applied" | "baselined" | "changed" | "pending" | "ran";
+        statements: ReadonlyArray<string>;
+    }>;
+    refused?: ReadonlyArray<string>;
+}
+```
+
+### `SqlMigrationFileRequest` (interface)
+
+```ts
+interface SqlMigrationFileRequest {
+    name: string;
+    sql: string;
 }
 ```
 

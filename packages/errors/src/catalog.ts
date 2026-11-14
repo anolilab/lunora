@@ -45,6 +45,8 @@ export const ERROR_CATALOG = {
     UNAUTHORIZED: { status: 401, title: "Unauthorized" },
     FORBIDDEN: { status: 403, title: "Forbidden" },
     NOT_FOUND: { status: 404, title: "Not found" },
+    /** A payment state change that the subscription's current state does not allow. */
+    INVALID_TRANSITION: { status: 409, title: "Invalid state transition" },
     DELIVERY_FENCED: {
         status: 409,
         title: "Delivery authorization changed",
@@ -111,6 +113,19 @@ export const ERROR_CATALOG = {
         status: 409,
         title: "Migration drift",
     },
+    /** `@lunora/d1`'s `MigrationRunner` refused a pending migration that drops, renames, truncates or replaces without the opt-in comment. */
+    MIGRATION_DESTRUCTIVE: {
+        status: 409,
+        title: "Destructive migration not confirmed",
+    },
+    /** A migration file holds a statement that only the root admin token may run (a DROP, a row write, or a trigger, for a scoped caller). */
+    MIGRATION_ROOT_REQUIRED: { status: 403, title: "Root admin token required for this migration" },
+
+    /**
+     * The SQL migration route has no D1 binding to run files against, so the CLI skips the files. A worker that has a D1
+     * binding but no `applySqlMigrations` option answers `MISCONFIGURED` instead, since skipping would hide the unapplied files.
+     */
+    SQL_MIGRATIONS_NOT_CONFIGURED: { status: 400, title: "SQL migrations not configured" },
 
     /**
      * A UNIQUE index cannot be built because existing rows already share its key. The shard refuses user traffic until a later
@@ -161,6 +176,8 @@ export const ERROR_CATALOG = {
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
     CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
+    /** Build-time-only (codegen): `lunora.config` would be read as something other than what it says. */
+    PROJECT_CONFIG_INVALID: { status: 500, title: "lunora.config has an unknown key, a mistyped value or no default export" },
     /** Build-time-only (codegen): `.jurisdiction()` would move DO-backed auth to a new, empty object without `{ pinAuth: true }`. */
     JURISDICTION_MOVE: {
         status: 422,
@@ -281,6 +298,8 @@ export const ERROR_CATALOG = {
      */
     ADMIN_FORBIDDEN: { status: 403, title: "Admin access forbidden" },
     ADMIN_ROOT_REQUIRED: { status: 403, title: "Root admin token required" },
+    /** A named admin token without the `migrations` scope asked for the SQL migration route. */
+    ADMIN_SCOPE_REQUIRED: { status: 403, title: "Migrations scope required" },
     ADMIN_TOKEN_EXISTS: { status: 409, title: "Admin token name already in use" },
     ADMIN_TOKEN_NOT_CONFIGURED: { status: 400, title: "Admin token not configured" },
 

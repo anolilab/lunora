@@ -99,12 +99,13 @@ export const ShardDO = createShardDO({
 
 The thunk returns `PaymentsFromContextOptions`:
 
-| Option          | Type                        | Notes                                                                                                                                                       |
-| --------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `adapter`       | `PaymentAdapter`            | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required.             |
-| `authorize`     | `AuthorizeContextReference` | `(referenceId, { db, userId }) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                        |
-| `entitlements`  | `EntitlementsConfig`        | Plan → features/limits map. Required for a `featureId` check and for `listBalances` on providers without native entitlements; a `priceId` check needs none. |
-| `observability` | `PaymentObserver`           | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                                |
+| Option                           | Type                        | Notes                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `adapter`                        | `PaymentAdapter`            | Built with `createStripeAdapter` / `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter` / `createCreemAdapter`. Required.                                                                                                                                                                                                                                                                                                                        |
+| `authorize`                      | `AuthorizeContextReference` | `(referenceId, { db, userId }) => boolean \| Promise<boolean>`. Defaults to "caller owns reference".                                                                                                                                                                                                                                                                                                                                                                   |
+| `entitlements`                   | `EntitlementsConfig`        | Plan → features/limits map. Required for a `featureId` check and for `listBalances` on providers without native entitlements; a `priceId` check needs none.                                                                                                                                                                                                                                                                                                            |
+| `observability`                  | `PaymentObserver`           | Telemetry sink for webhook applies, failed payments, past-due subscriptions.                                                                                                                                                                                                                                                                                                                                                                                           |
+| `singleSubscriptionPerReference` | `boolean`                   | Off by default. When on, a second subscription that would grant access on one reference is refused and recorded in a state that grants nothing. The operator is alerted with `subscription.duplicate` and must cancel it at the provider, which still bills it. Two grants that race are ordered by a per-reference counter, so one keeps its access and the other is refused; for the moment between the loser's write and its step back, both rows read as granting. |
 
 ### Provider adapters
 
@@ -262,6 +263,8 @@ Call the facade from an action. Every method authorizes the caller against the
 | `attach(input)`                                | `CheckoutResult`   | Plan alias of `createCheckout` with `mode` defaulting to `"subscription"`.                                      |
 | `createPortalSession(referenceId, returnUrl)`  | `{ url }`          | Open the provider billing portal; customer derived from the store (no insecure direct object reference (IDOR)). |
 | `cancelSubscription(subscriptionId, options?)` | `Subscription`     | Cancel now or `atPeriodEnd`; persists the result.                                                               |
+| `updateSubscription(subscriptionId, patch)`    | `Subscription`     | Change the plan (`priceId`) or seats (`quantity`) of the caller's own subscription; persists the result.        |
+| `resumeSubscription(subscriptionId, options?)` | `Subscription`     | Undo a period-end cancel (Creem: resume a paused subscription); persists the result.                            |
 | `refundPayment(input)`                         | `PaymentSession`   | Refund the caller's own captured payment, in full or in part; persists the result.                              |
 | `capturePayment(input)`                        | `PaymentSession`   | Capture the caller's own authorized payment; persists the result.                                               |
 | `cancelPayment(sessionId, options?)`           | `PaymentSession`   | Cancel the caller's own uncaptured payment; persists the result.                                                |
@@ -272,10 +275,9 @@ Call the facade from an action. Every method authorizes the caller against the
 | `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                                                  |
 
 <Callout type="warn">
-    `ctx.payments.adapter` is the provider adapter, exposed for the surfaces the facade does not wrap (`updateSubscription`, `resumeSubscription`,
-    provider-specific extras). **Do not move money through it.** `adapter.refundPayment` / `capturePayment` / `cancelPayment` skip everything the facade methods
-    above do first: the caller authorization, the over-refund guard, the local refund ledger (the only thing stopping a retry from issuing a second real refund
-    on a provider whose API takes no idempotency key), the derived idempotency key, and the store write. The facade ends in the same provider call.
+    The provider adapter is not reachable from `ctx.payments`. Every money and subscription operation goes through the facade methods above, which authorize the
+    caller and write the store. `ctx.payments.provider` gives the provider's `identifier` and `capabilities` (read-only) for checks an app makes before it
+    starts an operation, for example `if (!ctx.payments.provider.capabilities.checkoutExpiry) throw new Error("this provider cannot expire a checkout");`.
 </Callout>
 
 ```ts
@@ -468,13 +470,14 @@ namespaces them with the `payment` key, and codegen reads them from the
 installed package, so a new column or index reaches your app when you upgrade
 `@lunora/payment`: there is nothing to copy into your schema.
 
-| Table                   | Holds                                                                                   |
-| ----------------------- | --------------------------------------------------------------------------------------- |
-| `payment_customers`     | one row per `(provider, referenceId)`, carrying the provider's customer id              |
-| `payment_subscriptions` | one row per provider subscription: price, quantity, state, current period               |
-| `payment_sessions`      | one row per payment: `amountMinor`, `capturedMinor`, `refundedMinor`, `currency`, state |
-| `payment_events`        | the append-only webhook log — inbound idempotency, audit, debugging                     |
-| `payment_usageEvents`   | the append-only metered-usage ledger `check` folds over                                 |
+| Table                        | Holds                                                                                   |
+| ---------------------------- | --------------------------------------------------------------------------------------- |
+| `payment_customers`          | one row per `(provider, referenceId)`, carrying the provider's customer id              |
+| `payment_subscriptions`      | one row per provider subscription: price, quantity, state, current period               |
+| `payment_sessions`           | one row per payment: `amountMinor`, `capturedMinor`, `refundedMinor`, `currency`, state |
+| `payment_events`             | the append-only webhook log — inbound idempotency, audit, debugging                     |
+| `payment_referenceRevisions` | one counter per reference that orders grants under `singleSubscriptionPerReference`     |
+| `payment_usageEvents`        | the append-only metered-usage ledger `check` folds over                                 |
 
 Money is stored as `(amountMinor: number, currency: string)` columns. A number
 holds every integer up to 2^53 exactly (about 90 trillion dollars in cents), and
@@ -506,6 +509,8 @@ These public exports are not covered by the sections above. Import them from `@l
 Re-fetches the provider's current state for the given `paymentSessionIds` and `subscriptionIds`, and overwrites any store row that has drifted. It also re-sends usage events the provider never accepted. The usage retry is skipped for an adapter that does not meter usage and for one whose forward is not idempotent (Autumn). `ReconcileResult` reports `checked*`, `updated*` and `failed*` counts for payments, subscriptions and usage.
 
 **Default:** `usageReportLimit` is `100`.
+
+`singleSubscriptionPerReference` is required, and it must match the value given to `createPayment`. A sweep that omits it can re-grant access the policy refused. A refused subscription is recorded in a state that grants nothing (`paused`, or the state the row already had when that grants nothing too), under the owner it was refused for, and reported as `reconcile.drift`, with a `subscription.duplicate` event naming the subscription.
 
 ### `LunoraPaymentError`
 
@@ -544,7 +549,7 @@ Builds a `Money` value, `{ currency, minorUnits: bigint }`, from integer minor u
 
 **Type:** `(event: PaymentEvent) => void`
 
-The type of the `observability` option. `PaymentEvent.type` is one of `webhook.applied`, `webhook.duplicate`, `payment.failed`, `subscription.past_due`, `usage.report_failed`, `reconcile.drift`, `reconcile.completed` or `reconcile.error`.
+The type of the `observability` option. `PaymentEvent.type` is one of `webhook.applied`, `webhook.duplicate`, `subscription.duplicate`, `payment.failed`, `subscription.past_due`, `usage.report_failed`, `reconcile.drift`, `reconcile.completed` or `reconcile.error`.
 
 ### `PaymentAdapter`
 

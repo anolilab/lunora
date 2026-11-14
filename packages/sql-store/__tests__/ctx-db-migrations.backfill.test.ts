@@ -117,7 +117,7 @@ describe("adding a required field to a populated .global() table", () => {
     it("reports the statement and keeps the column when the backfill fails, instead of dropping it", async () => {
         expect.assertions(3);
 
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
         // The ALTER passes through; only the backfill UPDATE fails.
         const failing = {
             ...harness.exec,
@@ -132,6 +132,6 @@ describe("adding a required field to a populated .global() table", () => {
 
         await expect(runSqlGlobalTableMigrations(failing, withFields({ priority: col("number", { defaultValue: 3 }) }), dialect)).resolves.toBeUndefined();
         await expect(pick("priority")).resolves.toStrictEqual([[null], [null]]);
-        expect(String(warn.mock.calls[0]?.[0])).toContain("could not backfill");
+        expect(String(errorLog.mock.calls[0]?.[0])).toContain("could not backfill");
     });
 });

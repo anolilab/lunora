@@ -103,6 +103,18 @@ export const getVitestConfig = (options: ViteUserConfig = {}, coverageThresholds
                 },
             },
             environment: "node",
+            // Node 25+ ships Web Storage on by default: `globalThis.localStorage`
+            // and `sessionStorage` exist as getters that return `undefined` unless
+            // `--localstorage-file` is given. Vitest's jsdom environment only
+            // installs a window property the Node global does not already have, so
+            // jsdom's Storage is never wired in and every `localStorage.*` call
+            // throws. In a component suite that throw lands in an `afterEach`,
+            // which skips Testing Library's cleanup: trees pile up across tests
+            // ("Found multiple elements") and roots left mounted can run React
+            // work after jsdom is torn down ("window is not defined"). Turning the
+            // Node implementation off restores jsdom's; the flag is accepted (and
+            // a no-op) on every Node the `engines` range allows.
+            execArgv: ["--no-experimental-webstorage"],
             hideSkippedTests: true,
             // vis runs many projects concurrently; under that contention (v8
             // instrumentation + oversubscribed cores) a test that finishes in

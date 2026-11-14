@@ -31,6 +31,7 @@ export { isTestPath, listLunoraSourceFiles } from "./discover/ast";
 export { default as discoverAuthApiCalls } from "./discover/authapi-calls";
 export { CONTAINERS_FILENAME, discoverContainers } from "./discover/containers";
 export { default as discoverCrons } from "./discover/crons";
+export { ENV_FILENAME } from "./discover/env";
 // The capability probe's per-file reading (value imports and re-exports, dynamic
 // imports, sandbox tools, `ctx.<property>` reads), its fold across files and the
 // one "is it used" matcher — exported so `@lunora/config`'s binding inference

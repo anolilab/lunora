@@ -1216,13 +1216,18 @@ const isLogFields = (value: unknown): value is LogFields => {
  * `console`-shaped calls are unchanged). Bound `.with(...)` fields merge under
  * the per-call fields (per-call wins); the result is normalized to a fresh bag
  * of JSON-safe primitives, or `undefined` when empty (see `normalizeLogFields`).
+ * An `Error` in the fields keeps its stack and `cause` chain: a log line is where
+ * a caller logs an error to read it later. Its own fields are copied too (an HTTP
+ * client error's `config.headers`), which the caller never chose to log, so each
+ * logged Error's record has its credentials masked by key before it is written:
+ * the fields reach the Studio buffer, `sink.onLog` and the archive as they are.
  */
 const parseLogArgs = (args: unknown[], boundFields?: LogFields): { fields?: LogFields; message: string } => {
     if (args.length === 2 && typeof args[0] === "string" && isLogFields(args[1])) {
-        return { fields: normalizeLogFields(args[1], boundFields), message: args[0] };
+        return { fields: normalizeLogFields(args[1], boundFields, "full", maskCredentials), message: args[0] };
     }
 
-    return { fields: normalizeLogFields(undefined, boundFields), message: renderLogMessage(args) };
+    return { fields: normalizeLogFields(undefined, boundFields, "full", maskCredentials), message: renderLogMessage(args) };
 };
 
 /**

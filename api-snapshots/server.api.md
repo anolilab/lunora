@@ -787,7 +787,7 @@ interface HttpRoute {
 ```ts
 interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator, Output = undefined> {
     body: <B extends ArgsValidator>(validators: B) => HttpRouteBuilder<SearchParams, B & Body, Params, Output>;
-    cacheControl: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
+    cacheControl: (value: string, options?: HttpRouteCacheOptions) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
     cacheTag: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
     handler: [
         Output
@@ -803,6 +803,14 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
         undefined
     ] ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R | SseEvent<R>, void, void> | AsyncIterable<R | SseEvent<R>>) => LunoraRouteHandler : (handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output | SseEvent<Output>, void, void> | AsyncIterable<Output | SseEvent<Output>>) => LunoraRouteHandler;
     vary: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
+}
+```
+
+### `HttpRouteCacheOptions` (interface)
+
+```ts
+interface HttpRouteCacheOptions {
+    readonly credentialHeaders?: ReadonlyArray<string>;
 }
 ```
 
@@ -2311,6 +2319,7 @@ interface RunQueryOptions {
 ```ts
 interface ScheduleRunOptions {
     retry?: RetryPolicy;
+    shardKey?: string;
 }
 ```
 

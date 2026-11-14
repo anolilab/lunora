@@ -3,13 +3,14 @@ import type { Middleware, Notification, NotificationProviders, NotificationResul
 import { createNotification } from "@visulima/notification";
 import { retryMiddleware } from "@visulima/notification/middleware";
 import type { FcmConfig } from "@visulima/notification/providers/fcm";
-import { createFcmProvider } from "@visulima/notification/providers/fcm";
 import type { WebPushConfig } from "@visulima/notification/providers/web-push";
 import { createWebPushProvider } from "@visulima/notification/providers/web-push";
 
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { SsrfResolution } from "../../../shared/ssrf-resolve";
 import { resolveHostSsrf } from "../../../shared/ssrf-resolve";
+import type { FcmTransport } from "./fcm-transport";
+import { createFcmTransport, isFcmFinalFailure } from "./fcm-transport";
 import { assertPushPayloadFits } from "./payload-size";
 import { isGoneError } from "./subscriptions/normalize";
 
@@ -278,11 +279,13 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
     return data === undefined ? { success: true } : { data, success: true };
 };
 
+/** FCM answers that re-sending cannot fix: a bad request (400), auth (401/403), not found (404), too large (413), or a refusal with a long Retry-After. */
+
 /**
- * Whether a failed send can never succeed for this recipient — the device
- * unsubscribed or its token was revoked. The facade is about to DELETE the
- * subscription for exactly this signal (see `isGoneError`), so it is the one
- * failure class that is provably not worth a second attempt.
+ * Whether a retry cannot change this failure. Two classes qualify: a recipient that
+ * unsubscribed or had its token revoked (`isGoneError`, the signal the facade DELETES the
+ * subscription on), and FCM's final answers for one request (see below). Neither is worth
+ * another attempt.
  *
  * Deliberately kind-less: a middleware sees a provider id, not the stored
  * subscription, so the FCM-specific patterns are tested against a web-push failure
@@ -299,8 +302,31 @@ const mergeGroupResults = (webPush: Result<NotificationResult>, fcm: Result<Noti
  * bring back. The cost of a false positive stays one skipped retry, never a
  * dropped row; the cost of the alternative was every dead device spending four
  * POSTs and ~2.2 s before the very next line deleted it.
+ *
+ * It also returns true for FCM's final answers (a 400, 401, 403, 404 or 413, and a 429 whose
+ * `Retry-After` is over the wait limit): re-sending cannot change those, so no retry is spent on them.
+ * Those are not unsubscribe signals, so they do not prune; `deliver` decides pruning by `kind` alone.
  */
-const isPermanentFailure = (error: unknown): boolean => isGoneError(failureText(error));
+const isPermanentFailure = (error: unknown): boolean => {
+    const text = failureText(error);
+
+    // FCM's own final answers: a malformed or unauthorised request, or a 429 whose Retry-After we will not hold open.
+    // The transport reports them as text, so the match is on the message, which the engine keeps.
+    return isGoneError(text) || (text !== undefined && isFcmFinalFailure(text));
+};
+
+/** FCM refusals of one request: the token is bad or gone, or the payload is too large. Not a service outage. */
+// `SENDER_ID_MISMATCH` (403) is one token's sender, not a fault of the whole service; it is excluded with the per-request refusals.
+// A bare 404 NOT_FOUND is not here: FCM answers a wrong project id with it too, so it is a service-level failure the circuit must count.
+// The dead-token 404 (UNREGISTERED) is caught by isGoneError; the 400, 413 and one-token SENDER_ID_MISMATCH refusals are listed here.
+const FCM_REQUEST_REFUSAL = /^(?:\[[^\]]*\]\s*)*FCM (?:400 |413 |403 SENDER_ID_MISMATCH\b)/u;
+
+/** Whether a failure is about this one request, so the circuit should not count it. */
+const isRequestRefusal = (error: unknown): boolean => {
+    const text = failureText(error);
+
+    return isGoneError(text) || (text !== undefined && FCM_REQUEST_REFUSAL.test(text));
+};
 
 /** Consecutive non-permanent failures on one transport before its circuit opens. */
 const CIRCUIT_THRESHOLD = 5;
@@ -450,7 +476,9 @@ const perTransportCircuitBreaker = (): Middleware => {
             for (const state of entries) {
                 state.failures = 0;
             }
-        } else if (!isPermanentFailure(result.error)) {
+        } else if (!isRequestRefusal(result.error)) {
+            // A refusal of this one request (a bad or gone token) says nothing about the service. Throttling,
+            // revoked credentials and a wrong project do, so those still count toward the circuit.
             chargeFailure(result.error, keys, entries);
         }
 
@@ -476,10 +504,9 @@ const perTransportCircuitBreaker = (): Middleware => {
  * on both transports (neither exposes a collapse/topic key here) and is the same
  * one the engine's retry already accepts for every single-kind send.
  *
- * Total HTTP requests differ per transport and deliberately are not evened out:
- * the FCM provider retries each POST itself (up to 3, same curve), the web-push
- * provider does not. So four router attempts are up to sixteen POSTs on FCM and
- * exactly four on web push — which is what an FCM-only send has always cost.
+ * Each transport makes one POST per attempt: the FCM provider does not retry a
+ * POST itself, so four router attempts are four POSTs on FCM and four on web push.
+ * Retrying inside the provider as well would have multiplied the two to sixteen.
  */
 const GROUP_RETRIES = 2;
 
@@ -637,7 +664,7 @@ export const routingPushProvider = (options: RoutingPushOptions): Provider<unkno
             // Before any group is sent: a mixed `to` must not deliver one transport and then
             // reject the other for an oversize body. Applies to every target, Web Push included,
             // so `notify.send()` cannot skip the guard that `push.send` and `broadcast` enforce.
-            assertPushPayloadFits(payload);
+            assertPushPayloadFits(payload, { fcm: targets.some((entry) => webPushEndpoint(entry) === undefined) });
 
             const endpoints = targets.map((entry) => webPushEndpoint(entry));
 
@@ -774,9 +801,9 @@ export const attachResilience = (engine: Notification, options: ResilienceOption
  * are wired (Web Push, FCM, chat, in-app, webhook); APNs and SMS are excluded
  * from the edge facade by construction.
  */
-export const buildEngine = (resolved: ResolvedProviders): Notification => {
+export const buildEngine = (resolved: ResolvedProviders, fcmTransport?: FcmTransport): Notification => {
     const webPush = resolved.webPush === undefined ? undefined : createWebPushProvider(resolved.webPush);
-    const fcm = resolved.fcm === undefined ? undefined : createFcmProvider(resolved.fcm);
+    const fcm = fcmTransport?.provider ?? (resolved.fcm === undefined ? undefined : createFcmTransport(resolved.fcm).provider);
 
     const providers: NotificationProviders = {};
 

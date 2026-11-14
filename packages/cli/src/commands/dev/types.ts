@@ -1,6 +1,6 @@
 /** The options `lunora dev` takes and the plan it builds — shared by the planner, the supervisor and the package API. */
 import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession, writeCelldDevProjection } from "@lunora/config";
-import type { materializeDevWranglerConfig, materializeServiceDevConfigs, startLocalHyperdrive, WithheldBinding } from "@lunora/config/cloudflare";
+import type { materializeDevWranglerConfig, materializeServiceDevConfigs, RemotePlan, startLocalHyperdrive } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
 import type { startCodegenWatch } from "../../util/codegen-watch";
@@ -135,24 +135,6 @@ interface DevCommandOptions {
     writeCelldProjection?: typeof writeCelldDevProjection;
 }
 
-interface DevRemotePlan {
-    /** Short binding labels remoted (e.g. `"DB (D1)"`), for the banner. */
-    bindings: string[];
-
-    /**
-     * Removes the generated temp wrangler config when dev exits. Always present
-     * and idempotent — a no-op when remote mode is off or nothing was
-     * materialized. The dev loop calls it on every shutdown path.
-     */
-    cleanup: () => void;
-    /** Whether remote mode was requested. */
-    enabled: boolean;
-    /** Why remote mode didn't take effect despite being requested, for logging. */
-    reason?: string;
-    /** Remote-only bindings (`ai`, `artifacts`) a session left out for lack of Cloudflare credentials, for the banner warning. */
-    withheld: WithheldBinding[];
-}
-
 interface DevCommandPlan {
     /**
      * `true` when the worker is a celld dev session (a target running its own
@@ -183,7 +165,7 @@ interface DevCommandPlan {
     ipv4LoopbackForced: boolean;
 
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
-    remote: DevRemotePlan;
+    remote: RemotePlan;
     runsCodegenWatch: boolean;
 
     /**
@@ -223,4 +205,4 @@ interface DevCommandPlan {
     wrangler: SpawnDescriptor & { tag: string };
 }
 
-export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, DevTunnelRequest, LongLivedDescriptor, LongLivedSpawner, WorkerProcess, WorkerSpawner };
+export type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, LongLivedDescriptor, LongLivedSpawner, WorkerProcess, WorkerSpawner };

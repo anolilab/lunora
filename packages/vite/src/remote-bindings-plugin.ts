@@ -16,8 +16,8 @@
  * `buildEnd`/`closeBundle` hooks), so it never leaks past the dev session.
  */
 import { lunoraLine, readProjectRemotePreference } from "@lunora/config";
-import type { WithheldBinding } from "@lunora/config/cloudflare";
-import { describeWithheld, materializeDevWranglerConfig, resolveRemoteEnabled } from "@lunora/config/cloudflare";
+import type { RemotePlan } from "@lunora/config/cloudflare";
+import { describeWithheld, materializeDevWranglerConfig, resolveRemoteEnabled, toRemotePlan } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
 import type { CloudflarePluginOptions } from "./types";
@@ -25,25 +25,6 @@ import type { CloudflarePluginOptions } from "./types";
 /** The cloudflare-plugin option Lunora sets to point the worker at our temp config. */
 interface RemoteCloudflareOptions {
     configPath?: string;
-}
-
-/** The decision a {@link planViteRemoteBindings} call returns. */
-interface ViteRemotePlan {
-    /** Idempotent disposer for the temp config; always present + safe to call. */
-    cleanup: () => void;
-
-    /**
-     * Absolute path to the materialized temp wrangler config to hand the
-     * cloudflare plugin's `configPath`, or `undefined` when remote mode is off
-     * or nothing was materialized (no eligible binding, no wrangler file, …).
-     */
-    configPath?: string;
-    /** Whether remote mode was requested for this dev session. */
-    enabled: boolean;
-    /** Why remote mode didn't take effect despite being requested, for logging. */
-    reason?: string;
-    /** Remote-only bindings (`ai`, `artifacts`) left out for lack of Cloudflare credentials, for the dev warning. */
-    withheld: WithheldBinding[];
 }
 
 /** Inputs to the Vite remote-binding decision — injectable so tests don't touch the env/fs. */
@@ -71,7 +52,7 @@ const noopCleanup = (): void => {};
  * Call this from a `config` hook, never at plugin-factory time — see
  * {@link remoteBindingsPlugin} for the two defects that timing caused.
  */
-const planViteRemoteBindings = (options: PlanViteRemoteOptions): ViteRemotePlan => {
+const planViteRemoteBindings = (options: PlanViteRemoteOptions): RemotePlan => {
     const readPreference = options.readPreference ?? readProjectRemotePreference;
     const enabled = resolveRemoteEnabled({
         configPreference: readPreference(options.projectRoot),
@@ -79,20 +60,12 @@ const planViteRemoteBindings = (options: PlanViteRemoteOptions): ViteRemotePlan 
     });
 
     if (!enabled) {
-        return { cleanup: noopCleanup, enabled: false, withheld: [] };
+        return { bindings: [], cleanup: noopCleanup, enabled: false, withheld: [] };
     }
 
     const materialize = options.materialize ?? materializeDevWranglerConfig;
-    const result = materialize({ projectRoot: options.projectRoot, remote: true });
 
-    return {
-        // The materializer always returns an idempotent, never-throwing `cleanup`.
-        cleanup: result.cleanup,
-        configPath: result.configPath,
-        enabled: true,
-        reason: result.reason,
-        withheld: result.withheld,
-    };
+    return toRemotePlan(materialize({ projectRoot: options.projectRoot, remote: true }), true);
 };
 
 /**
@@ -106,7 +79,7 @@ const planViteRemoteBindings = (options: PlanViteRemoteOptions): ViteRemotePlan 
  * `command` is unknown at plugin-factory time. An eager serve check there would
  * always read `command` as undefined and strip `configPath`.
  */
-const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePlan): CloudflarePluginOptions => {
+const withRemoteBindings = (options: CloudflarePluginOptions, plan: RemotePlan): CloudflarePluginOptions => {
     if (!plan.enabled || plan.configPath === undefined) {
         return options;
     }
@@ -119,6 +92,26 @@ const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePl
     }
 
     return { ...options, configPath: plan.configPath };
+};
+
+/**
+ * On the BYO path (`cloudflare: false`) Lunora has no options object to inject
+ * into, so print the materialized path with what to do with it, rather than
+ * leaving `LUNORA_REMOTE` looking like it took effect.
+ */
+const announceUnwired = (plan: RemotePlan): void => {
+    if (!plan.enabled || plan.configPath === undefined) {
+        return;
+    }
+
+    const flipped = plan.bindings.length > 0 ? ` (${plan.bindings.join(", ")})` : "";
+
+    // eslint-disable-next-line no-console -- surface the degradation; the dev server's logger isn't available in the `config` hook.
+    console.info(
+        lunoraLine(
+            `remote bindings${flipped} are materialized at ${plan.configPath} — this project adds @cloudflare/vite-plugin itself (\`cloudflare: false\`), so pass that path as its \`configPath\` to use them.`,
+        ),
+    );
 };
 
 /**
@@ -165,8 +158,13 @@ const withRemoteBindings = (options: CloudflarePluginOptions, plan: ViteRemotePl
  * inject into: the materialized path is printed with what to do with it, rather
  * than leaving `LUNORA_REMOTE` looking like it took effect.
  */
-const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions): Plugin => {
-    let plan: ViteRemotePlan = { cleanup: noopCleanup, enabled: false, withheld: [] };
+const remoteBindingsPlugin = (
+    options: CloudflarePluginOptions | undefined,
+    planOptions: PlanViteRemoteOptions,
+    /** Told each plan as it is made, for a plugin that must know what this session withholds. */
+    onPlan?: (plan: RemotePlan) => void,
+): Plugin => {
+    let plan: RemotePlan = { bindings: [], cleanup: noopCleanup, enabled: false, withheld: [] };
     /** The path THIS plugin injected, so a re-entrant `config` can tell it from a user-supplied one. */
     let injected: string | undefined;
 
@@ -188,20 +186,20 @@ const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, plan
             plan.cleanup();
             plan = planViteRemoteBindings(planOptions);
 
-            for (const binding of plan.withheld) {
-                // eslint-disable-next-line no-console -- surface the withholding; the dev server's logger isn't available in the `config` hook.
-                console.warn(lunoraLine(describeWithheld(binding)));
-            }
+            /** Report what the plan withholds — only when its temp config is what the worker runs. */
+            const report = (runs: boolean): void => {
+                onPlan?.(runs ? plan : { ...plan, withheld: [] });
+
+                for (const binding of runs ? plan.withheld : []) {
+                    // eslint-disable-next-line no-console -- surface the withholding; the dev server's logger isn't available in the `config` hook.
+                    console.warn(lunoraLine(describeWithheld(binding)));
+                }
+            };
 
             if (options === undefined) {
-                if (plan.enabled && plan.configPath !== undefined) {
-                    // eslint-disable-next-line no-console -- surface the degradation; the dev server's logger isn't available in the `config` hook.
-                    console.info(
-                        lunoraLine(
-                            `remote bindings are materialized at ${plan.configPath} — this project adds @cloudflare/vite-plugin itself (\`cloudflare: false\`), so pass that path as its \`configPath\` to use them.`,
-                        ),
-                    );
-                }
+                // The project wires the printed path into its own plugin, so the plan is what it runs.
+                report(true);
+                announceUnwired(plan);
 
                 return;
             }
@@ -218,10 +216,20 @@ const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, plan
             }
 
             const merged = withRemoteBindings(options, plan) as RemoteCloudflareOptions;
+            const injecting = merged.configPath !== undefined && target.configPath === undefined;
 
-            if (merged.configPath !== undefined && target.configPath === undefined) {
+            // A user-supplied `configPath` runs their file, which withholds nothing of the plan's.
+            report(injecting);
+
+            if (injecting) {
                 target.configPath = merged.configPath;
                 injected = merged.configPath;
+
+                // Only on our own injection: a user-supplied `configPath` runs their file, not the flipped copy.
+                if (plan.bindings.length > 0) {
+                    // eslint-disable-next-line no-console -- the dev server's logger isn't available in the `config` hook.
+                    console.info(lunoraLine(`remote bindings: ${plan.bindings.join(", ")} → deployed resources`));
+                }
             } else if (plan.enabled && plan.configPath === undefined && plan.reason !== undefined) {
                 // eslint-disable-next-line no-console -- surface the silent degradation; the dev server's logger isn't available in the `config` hook.
                 console.info(lunoraLine(`remote bindings requested but not applied: ${plan.reason}`));
@@ -232,5 +240,5 @@ const remoteBindingsPlugin = (options: CloudflarePluginOptions | undefined, plan
     };
 };
 
-export type { PlanViteRemoteOptions, ViteRemotePlan };
+export type { PlanViteRemoteOptions };
 export { planViteRemoteBindings, remoteBindingsPlugin, withRemoteBindings };

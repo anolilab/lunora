@@ -138,6 +138,7 @@ interface DeployCommandOptions {
     lazyFunctions?: boolean;
     logger: Logger;
     migrate?: boolean;
+    migrateAllowDestructive?: boolean;
     migrateToken?: string;
     migrateUrl?: string;
     migrateYes?: boolean;
@@ -245,7 +246,7 @@ interface DevCommandPlan {
     flavor: DevFlavor;
     frameworkHint?: string;
     ipv4LoopbackForced: boolean;
-    remote: DevRemotePlan;
+    remote: RemotePlan;
     runsCodegenWatch: boolean;
     serviceConfigCleanup?: () => void;
     sidecar?: SpawnDescriptor & {
@@ -1061,18 +1062,6 @@ interface CommandResult<TData> {
 type DevFlavor = "framework-worker" | "vite" | "wrangler";
 ```
 
-### `DevRemotePlan` (interface)
-
-```ts
-interface DevRemotePlan {
-    bindings: string[];
-    cleanup: () => void;
-    enabled: boolean;
-    reason?: string;
-    withheld: WithheldBinding[];
-}
-```
-
 ### `DevTunnelRequest` (interface)
 
 ```ts
@@ -1135,7 +1124,13 @@ type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | AuthUiItem | "mail";
 ### `HealthFetch` (type)
 
 ```ts
-type HealthFetch = (url: string) => Promise<{
+type HealthFetch = (url: string, init: {
+    headers: Record<string, string>;
+    redirect: RequestRedirect;
+}) => Promise<{
+    headers: {
+        get: (name: string) => string | null;
+    };
     ok: boolean;
     status: number;
 }>;

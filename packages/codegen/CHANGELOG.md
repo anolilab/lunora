@@ -1,3 +1,36 @@
+## @lunora/codegen [1.0.0-alpha.410](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.409...@lunora/codegen@1.0.0-alpha.410) (2026-11-13)
+
+- feat(codegen): emit a watch stream form for every query (#1598)
+
+## @lunora/codegen [1.0.0-alpha.409](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.408...@lunora/codegen@1.0.0-alpha.409) (2026-11-13)
+
+- security(payment)!: owner-checked subscription changes, replace the raw adapter with provider (#1544)
+
+## @lunora/codegen [1.0.0-alpha.408](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.407...@lunora/codegen@1.0.0-alpha.408) (2026-11-11)
+
+- feat(auth): add API keys via the apiKey() plugin (#1526)
+
+## @lunora/codegen [1.0.0-alpha.407](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.406...@lunora/codegen@1.0.0-alpha.407) (2026-11-10)
+
+- feat(codegen): type user-column claims on ctx.auth from the auth config (#1525)
+
+## @lunora/codegen [1.0.0-alpha.406](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.405...@lunora/codegen@1.0.0-alpha.406) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
+## @lunora/codegen [1.0.0-alpha.405](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.404...@lunora/codegen@1.0.0-alpha.405) (2026-11-07)
+
+- feat(notify): forward FCM platform fields, add topic sends (#1505)
+
+## @lunora/codegen [1.0.0-alpha.404](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.403...@lunora/codegen@1.0.0-alpha.404) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
+## @lunora/codegen [1.0.0-alpha.403](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.402...@lunora/codegen@1.0.0-alpha.403) (2026-11-05)
+
+- fix(codegen): read the lunora.config booleans the validator accepts (#1500)
+- feat(codegen): validate lunora.config; Access-aware health probe; env queue warning (#1492)
+
 ## @lunora/codegen [1.0.0-alpha.402](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.401...@lunora/codegen@1.0.0-alpha.402) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

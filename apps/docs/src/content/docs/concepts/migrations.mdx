@@ -54,7 +54,7 @@ To fix:
 
   • If the stored rows already fit the new schema, `lunora deploy` goes ahead on its own: it reads the rows of each affected table from the deployed worker (`--migrate-url` or the project link, plus `LUNORA_ADMIN_TOKEN`) and names any row that does not fit.
   • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.
-Docs: https://lunora.dev/docs/migrations
+Docs: https://lunora.sh/docs/concepts/migrations
 ```
 
 The scaffolded `up` is `(document) => document`, an identity transform. A
@@ -217,7 +217,9 @@ itself from the schema the worker is running:
   (`ALTER TABLE … ADD COLUMN`), so rows written before the deploy stay readable
   and read the new field as absent.
 - **`.global()` tables** are provisioned on the first request that touches them,
-  with the same additive rules.
+  with the same additive rules. Several isolates cold-starting at once may all
+  try to add the same column; the ones that lose see it already there and carry
+  on, so no request fails on it.
 
 ### Adding a required field to a table that has rows
 
@@ -226,8 +228,10 @@ An added column is always created nullable, because SQLite and D1 reject
 field as required, so rows written before it need a value:
 
 - **A required field with a default** (`.default(v)`, `.defaultNow()`,
-  `.$defaultFn(fn)`) is backfilled on a `.global()` table when the runtime adds
-  the column: every row without a value gets the default, evaluated once. That
+  `.$defaultFn(fn)`) is backfilled on a `.global()` table when the column is
+  added, whether the runtime adds it or a generated SQL file does through
+  `lunora migrate apply`, which fills it in the same batch. Every row without a
+  value gets the default, evaluated once. That
   includes the `updatedAt` column `.timestamps()` adds, which starts at the time
   of the deploy. A column under a unique constraint (`.unique()`, or part of any unique index) is the
   exception, whatever its default: one value written to every row would collide
@@ -248,23 +252,94 @@ So a deploy that only adds tables, optional fields or non-unique indexes needs
 nothing beyond the deploy itself. Two things still need a person before it:
 the hand-written SQL described below, and a data migration that backfills rows.
 
-### Nothing applies the generated file
+### Applying the generated file
 
-The `.sql` file is a record of the diff, not a step in any pipeline. What
-actually provisions a global table is the runtime: on the first request that
-touches one it runs `CREATE TABLE IF NOT EXISTS` for the declared columns and
-indexes, and `ALTER TABLE … ADD COLUMN` for fields the table lacks. That covers
-every additive change, which is most of them, with the schema as the single
-source of truth.
+The runtime provisions a global table on the first request that touches one: it
+runs `CREATE TABLE IF NOT EXISTS` for the declared columns and indexes, and
+`ALTER TABLE … ADD COLUMN` for fields the table lacks. That covers every additive
+change, which is most of them, with the schema as the single source of truth.
 
-It does **not** cover anything the generator flags as `unsupported`, or SQL you
-add by hand: a backfilling `UPDATE`, a column rename written as add/copy/drop,
-an index the schema does not declare, a `DROP TABLE`. Apply those yourself, once
-per environment, before the deploy that depends on them:
+What it never runs is the rest: a `DROP TABLE`, a `DROP INDEX`, anything the
+generator flags as `unsupported`, and SQL you add by hand, such as a backfilling
+`UPDATE` or a column rename written as add/copy/drop. Apply those with
+`lunora migrate apply`:
 
 ```bash
-wrangler d1 execute <DB> --remote --file=lunora/migrations/<timestamp>_<slug>.sql
+lunora migrate status --sql --url https://your-worker.example.workers.dev   # what has run, what is pending
+lunora migrate apply --url https://your-worker.example.workers.dev --yes    # run the pending files
 ```
+
+`apply` sends each `lunora/migrations/*.sql` file to the Worker in name order.
+The Worker runs a file's statements and records its name and SHA-256 in one
+atomic batch, so a file runs once per environment. A second run is a no-op. A
+file whose text changed after it ran is refused rather than run again: put the
+change in a new file. Renaming an applied file counts as a change, so it is
+refused too. A `DROP` or a replacing write is refused unless you pass
+`--allow-destructive`, and the refusal lists the statements. `--yes` only
+confirms the target, so a remote run needs both flags for such a file. `--dry-run` prints the statements without
+running them. A file cannot contain `BEGIN`, `COMMIT` or `ROLLBACK`, because each
+file already runs as one batch. `lunora deploy --migrate` runs `apply` before the
+data migrations, so a deploy applies its SQL with the rest. Any other deploy tool
+can call the same command as a step before its deploy.
+
+Who may run `apply` is set by the token. The root admin token runs any file. A
+named token minted with `lunora admin-token create <name> --scope migrations` runs
+only additive statements: `CREATE TABLE`, a `CREATE INDEX` that is not `UNIQUE`, and
+`ADD COLUMN` with no default, constraint or generated value. A file with any other statement, such as a `DROP`,
+an `UPDATE`, a trigger or a `CREATE UNIQUE INDEX`, is refused before anything in the
+run executes, and the refusal says which token it needs. A `.unique()` field or index
+generates a `CREATE UNIQUE INDEX`, so a deploy that adds one needs the root token. A
+dry run shows which statements those are.
+
+**Upgrading an existing project.** Files committed before `migrate apply` existed were never recorded, so the first run would treat every one of them as pending. A file that drops a table could then run again over rows written since it last ran. Record the files that already ran on each environment, without running them, before its first `deploy --migrate`:
+
+```bash
+# Every file in lunora/migrations/ has already run on this environment:
+lunora migrate apply --baseline --url https://your-worker.example.workers.dev --yes
+
+# Only the files up to the last one that ran. Later files, such as a DROP that has not run yet, stay pending:
+lunora migrate apply --baseline-through <last-file-that-ran>.sql --url https://your-worker.example.workers.dev --yes
+```
+
+After a `--baseline-through`, `lunora migrate apply --url … --yes` runs the files
+that are left, including a `DROP`. Baseline only the files that ran: a recorded
+file is never executed.
+
+If the file that drops a table is the first `.sql` file on a stage, nothing ran
+before it there, so there is no earlier file to name. Run that file's statements
+by hand on the stage first, then record it. Do not run the whole file as it is: an
+`ADD COLUMN` the runtime already provisioned makes the duplicate column stop the
+run before the `DROP`. Copy the file, delete the `ADD COLUMN` lines for columns the
+stage already has, and run the copy:
+
+```bash
+cp lunora/migrations/<file>.sql /tmp/<file>.sql
+# Remove the ADD COLUMN lines for columns the stage already has from /tmp/<file>.sql
+wrangler d1 execute <database-name> --remote --file /tmp/<file>.sql
+lunora migrate apply --baseline-through <file>.sql --url https://your-worker.example.workers.dev --yes
+```
+
+Record the file only once every statement in it has run.
+
+Name the file you ran by hand, so `--baseline-through` records it and nothing
+after it. A later file on the same stage stays pending, and a normal
+`lunora migrate apply --url … --yes` runs it, with `--allow-destructive` too if it drops or replaces data. Plain `--baseline` would record
+every pending file as applied, later ones included, so a later file would never
+run.
+
+Run it by hand before the baseline, never after or instead of it: a recorded file
+is never executed, so a baseline of a DROP that has not run leaves the table in
+place for good. The same applies to a seed `INSERT` on a database that is new to
+tracking.
+
+A database with no recorded file refuses any file that drops, replaces or writes
+rows, whatever `--allow-destructive` says, and the refusal points here. Once a file is
+recorded, a later run applies only what is new.
+
+An `ADD COLUMN` that the runtime already added is skipped, since SQLite has no
+`IF NOT EXISTS` for it. The generator's `-- lunora:allow-destructive` comment
+before each `DROP` is what `@lunora/d1`'s `MigrationRunner` reads, and `apply`
+does not need it.
 
 ### Relaxing NOT NULL on a D1 table
 
@@ -392,15 +467,16 @@ lunora migrate down backfill-read-by           # apply the down transform
 lunora migrate status backfill-read-by         # per-shard run-state
 ```
 
-| Flag           | Description                                                                                    |
-| -------------- | ---------------------------------------------------------------------------------------------- |
-| `--dry-run`    | Scan and count without rewriting rows or persisting run-state.                                 |
-| `--batch-size` | Rows per batch, overriding the migration's own `batchSize` and the default.                    |
-| `--steps`      | Cap on batches processed this invocation (the runner's `maxBatches`). The run stays resumable. |
-| `--url`        | Worker URL (defaults to `http://localhost:8787`).                                              |
-| `--token`      | Admin bearer token. Falls back to `LUNORA_ADMIN_TOKEN`.                                        |
-| `--prod`       | Target production. Requires an explicit `--url`.                                               |
-| `--yes`        | Required alongside `--prod` for `up`/`down`; confirms running against production.              |
+| Flag                  | Description                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `--dry-run`           | Scan and count without rewriting rows or persisting run-state.                                                    |
+| `--batch-size`        | Rows per batch, overriding the migration's own `batchSize` and the default.                                       |
+| `--steps`             | Cap on batches processed this invocation (the runner's `maxBatches`). The run stays resumable.                    |
+| `--url`               | Worker URL (defaults to `http://localhost:8787`).                                                                 |
+| `--token`             | Admin bearer token. Falls back to `LUNORA_ADMIN_TOKEN`.                                                           |
+| `--prod`              | Target production. Requires an explicit `--url`.                                                                  |
+| `--yes`               | Required alongside `--prod` for `up`/`down`, and for any `apply` against a non-local worker; confirms the target. |
+| `--allow-destructive` | `apply` only: confirms a file that drops, renames, truncates or replaces data. Separate from `--yes`.             |
 
 Every run is admin-gated: pass `--token` or set `LUNORA_ADMIN_TOKEN`. Against
 production, `--prod` requires an explicit `--url`, and `up`/`down` additionally

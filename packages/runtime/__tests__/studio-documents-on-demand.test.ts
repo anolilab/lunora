@@ -91,4 +91,29 @@ describe("createWorker — Studio documents load on their route only", () => {
         await expect(second.json()).resolves.toStrictEqual(document);
         await expect(third.json()).resolves.toStrictEqual(document);
     });
+
+    it.each(routes)("loads the $option document again after a failed load", async ({ document, option, path }) => {
+        expect.assertions(3);
+
+        const load = vi.fn<() => Promise<unknown>>().mockRejectedValueOnce(new Error("asset fetch failed")).mockResolvedValue(document);
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            [option]: load,
+            shardDO: {
+                get: () => {
+                    return { fetch: async () => new Response("not used") };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+
+        const failed = await worker.fetch(adminGet(path), {}, fakeContext);
+        const retried = await worker.fetch(adminGet(path), {}, fakeContext);
+
+        expect(failed.ok).toBe(false);
+        expect(load).toHaveBeenCalledTimes(2);
+        await expect(retried.json()).resolves.toStrictEqual(document);
+    });
 });

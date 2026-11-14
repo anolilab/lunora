@@ -1,5 +1,5 @@
 /* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain placeholder secret-like strings */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -330,6 +330,30 @@ describe("ensureDevVariables", () => {
 
     afterEach(() => {
         rmSync(dir, { force: true, recursive: true });
+    });
+
+    it.each([
+        [".dev.vars", [".dev.vars.example"]],
+        [".dev.vars", []],
+        [".dev.vars.example", []],
+    ])("warns once and writes nothing when %s is a directory (beside: %j)", async (directory, files) => {
+        expect.assertions(4);
+
+        // A directory, not a `chmod 000` file: EACCES does not reproduce under root in CI.
+        for (const file of files) {
+            writeFileSync(join(dir, file), EXAMPLE, "utf8");
+        }
+
+        mkdirSync(join(dir, directory));
+
+        const info = vi.fn<(message: string) => void>();
+        const warn = vi.fn<(message: string) => void>();
+        const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info, randomHex: fixedHex, warn });
+
+        expect(result.status).toBe("unreadable");
+        expect(warn).toHaveBeenCalledExactlyOnceWith(`skipped the .dev.vars scaffold: ${directory} is not a readable file (EISDIR)`);
+        expect(info).not.toHaveBeenCalled();
+        expect(readdirSync(dir).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([directory, ...files].toSorted((a, b) => a.localeCompare(b)));
     });
 
     it("does nothing when .dev.vars already has every example key", async () => {
@@ -758,6 +782,18 @@ describe("fillDevSecrets", () => {
 
     afterEach(() => {
         rmSync(dir, { force: true, recursive: true });
+    });
+
+    it("leaves a .dev.vars that is a directory alone instead of throwing", () => {
+        expect.assertions(2);
+
+        // `ensureDevVariables`, which every dev host runs first, is the one that warns.
+        mkdirSync(join(dir, ".dev.vars"));
+
+        const info = vi.fn<(message: string) => void>();
+
+        expect(fillDevSecrets({ cwd: dir, info, randomHex: fixedHex })).toStrictEqual({ addedKeys: [], filledKeys: [], status: "unchanged" });
+        expect(info).not.toHaveBeenCalled();
     });
 
     it("fills a feature-scaffolded .dev.vars (blank secrets, no admin token) so dev boots with real values", () => {

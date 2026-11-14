@@ -1,3 +1,7 @@
+## @lunora/rspack [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.150...@lunora/rspack@1.0.0-alpha.151) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
 ## @lunora/rspack [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.149...@lunora/rspack@1.0.0-alpha.150) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

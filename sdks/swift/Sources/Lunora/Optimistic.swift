@@ -195,6 +195,11 @@ public final class LunoraOptimisticState {
     /// while no layer is active, and is what the layers fold onto when one is.
     public var serverBase: Any
 
+    /// Whether a `data`/`delta` frame has set ``serverBase``. A row-change delta
+    /// before the first one cannot merge, so it is held rather than merged into the
+    /// initial null.
+    public var hasServerBase = false
+
     /// The CDC high-watermark ``lastValue`` reflects, from the last cursor-stamped
     /// frame.
     public var serverCursor: Int?

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/runtime",
-    "version": "1.0.0-alpha.279",
+    "version": "1.0.0-alpha.286",
     "description": "Lunora Worker runtime: the RPC router, shard resolver, and query coordinator",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -61,7 +61,7 @@
     "dependencies": {
         "@lunora/bindings": "1.0.0-alpha.151",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/observability": "^1.0.0-alpha.201",
+        "@lunora/observability": "^1.0.0-alpha.203",
         "@lunora/platform": "1.0.0-alpha.80",
         "@lunora/wire": "1.0.0-alpha.6"
     },
@@ -69,8 +69,8 @@
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "^1.0.0-alpha.282",
-        "@lunora/shard-engine": "^1.0.0-alpha.190",
+        "@lunora/do": "^1.0.0-alpha.284",
+        "@lunora/shard-engine": "^1.0.0-alpha.194",
         "@lunora/workflow": "^1.0.0-alpha.111",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

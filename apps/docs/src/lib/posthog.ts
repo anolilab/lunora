@@ -19,13 +19,13 @@ if (!import.meta.env.SSR) {
             // Both must carry the rule or captures are silently dropped.
             api_host: "/pr/posthog",
             capture_exceptions: true,
-            // Cookieless until the visitor says otherwise: pre-consent and after
-            // "Reject", nothing is stored on the device and visitors are counted
-            // via PostHog's server-side daily-salted hash instead (requires
-            // "Cookieless server hash mode" in the project settings, or those
-            // events are dropped). `applyMeasurementConsent` lifts this once
-            // c15t reports an explicit "Accept".
-            cookieless_mode: "on_reject",
+            // Events are only identified people with a profile when we call identify(),
+            // which the site never does. Stated here so the personless design is explicit.
+            person_profiles: "identified_only",
+            // A visitor who sends Do Not Track gets no capture at all, on top of the choice.
+            respect_dnt: true,
+            // No cookieless counting: before an accept nothing is sent and nothing is stored,
+            // after a reject nothing is sent. Matches what the privacy policy says.
             // `init` runs from a root-route side effect, before hydration. The
             // SDK's default target is `body`, and a script appended there ahead
             // of hydration is a DOM node React did not render — a mismatch.

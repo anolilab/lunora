@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
@@ -22,7 +22,7 @@ interface GeneratedShard {
 }
 
 const makeGeneratedShard = async (
-    root: string,
+    rootPath: string,
     lazyFunctions: boolean,
     config: Record<string, unknown> = {},
     entryKind: "action" | "mutation" = "action",
@@ -31,6 +31,9 @@ const makeGeneratedShard = async (
     schema?: SchemaIR,
     capabilities: NonNullable<Parameters<typeof emitShard>[0]["capabilities"]> = new Set(),
 ): Promise<new (state: unknown, env: unknown) => GeneratedShard> => {
+    // esbuild rewrites the absolute externals below relative to `outdir`, but Node resolves them
+    // from the importer's real path; a symlinked tmp dir (macOS /var -> /private/var) breaks that.
+    const root = realpathSync(rootPath);
     const shardSchema = schema ?? { tables: [], vectorIndexes: [] };
     const generated = join(root, "lunora", "_generated");
     mkdirSync(join(generated, "fn"), { recursive: true });

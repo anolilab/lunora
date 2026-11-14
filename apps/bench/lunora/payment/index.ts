@@ -1,0 +1,775 @@
+/**
+ * Payment functions — added by `lunora add payment`.
+ *
+ * This file is YOURS: it's a normal Lunora module, copied into your project so
+ * you own and edit it. Re-export the functions you want from your `lunora/`
+ * entry so codegen picks them up — they surface in the generated `api` as
+ * `payment/checkout`, `payment/check`, `payment/portal` and
+ * `payment/mySubscriptions` — plus `payment/adminSubscriptions` and
+ * `payment/adminPastDueSubscriptions`, which this kit adds for its platform
+ * admin — and `payment/track` in `internal`, for server code only.
+ *
+ * The functions are provider-agnostic: they call `ctx.payments.*` which is
+ * wired in `createShardDO({ payment: (env) => ({ adapter: ..., ... }) })`.
+ *
+ * Stripe is the first-class adapter (via `@lunora/payment/stripe`) — see that
+ * subpath for `createStripeAdapter({ client, webhookSecret })`, which takes a
+ * single options object; Polar and other providers are supported via the
+ * `PaymentAdapter` contract.
+ *
+ * **Post-add wiring** (see `docs` in registry.json):
+ *   0. **Merge the payment tables into your `lunora/schema.ts`**:
+ *      `defineSchema({ … }).extend(paymentExtension)`, with `paymentExtension`
+ *      imported from `@lunora/payment`. Skip this and the first `ctx.payments.*`
+ *      call fails with `UNKNOWN_TABLE`.
+ *   1. Wire `payment: (env) => ({ adapter: ..., ... })` in your worker entry
+ *      `createShardDO({ ... })` call — the adapter reads `STRIPE_SECRET_KEY`
+ *      and `STRIPE_WEBHOOK_SECRET` from env.
+ *   2. Add the webhook HTTP route via `httpRouter()`. Answer with
+ *      `webhookResponse(result)` — NOT `Response.json(result)`: only the JSON
+ *      payload crosses the `runAction` boundary, so the status has to be
+ *      re-applied at the edge. Otherwise an orphaned (out-of-order) event's
+ *      deliberate 500 becomes a 200, the provider never retries it, and the
+ *      update is lost for good.
+ *      ```ts
+ *      import { readWebhookBody, webhookResponse } from "@lunora/payment";
+ *
+ *      // Every header an adapter verifies with; add yours if it signs with another.
+ *      const SIGNATURE_HEADERS = ["creem-signature", "stripe-signature", "svix-id", "svix-signature",
+ *          "svix-timestamp", "webhook-id", "webhook-signature", "webhook-timestamp"];
+ *
+ *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
+ *          // Capped (413 past 1 MiB): the body is read before its signature can be checked.
+ *          const body = await readWebhookBody(request);
+ *          const present = SIGNATURE_HEADERS.flatMap((name) => {
+ *              const value = request.headers.get(name);
+ *              return value === null ? [] : [[name, value]];
+ *          });
+ *          const headers = Object.fromEntries(present);
+ *          return webhookResponse(await ctx.runAction(processWebhook, { body, headers }));
+ *      }));
+ *      ```
+ *   3. Run `lunora codegen` to wire `ctx.payments` onto ActionCtx.
+ *   4. Set `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, and `APP_BASE_URL` in
+ *      `.dev.vars` (locally) and push the secrets to production with
+ *      `wrangler secret put`.
+ */
+import { LunoraError } from "@lunora/errors";
+import type { SubscriptionState } from "@lunora/payment";
+import { resolveEntitlements } from "@lunora/payment";
+import { env as workerEnv } from "cloudflare:workers";
+import type { PaginationResult } from "lunorash/server";
+
+import { internal } from "#lunora/_generated/internal.js";
+import type { CloudflareBindings, Doc, Id, QueryCtx } from "#lunora/_generated/server.js";
+import { action, internalAction, internalMutation, internalQuery, query, v } from "#lunora/_generated/server.js";
+
+import { API_CALLS, entitlementsFromPlans, PLANS } from "../plans";
+
+/**
+ * The Worker's bindings, narrowed so they can be looked up by name.
+ *
+ * `cloudflare:workers` types `env` as `Cloudflare.Env`, which
+ * `@cloudflare/workers-types` declares EMPTY until the project runs
+ * `wrangler types` — so indexing it is a `tsc` error in a fresh scaffold. The
+ * generated `CloudflareBindings` is the open index signature this needs; the
+ * value stays `unknown`, so `appOrigin` still has to narrow it.
+ */
+const env = workerEnv as CloudflareBindings;
+
+/**
+ * Public origin of this deployment, used to build the checkout return URLs and
+ * the billing-portal return URL. Read from env rather than the request: a Lunora
+ * context carries no `Request` (a mutation can be replayed, a query re-run from
+ * a live subscription), so there is nothing to derive an origin from at handler
+ * time.
+ *
+ * `APP_BASE_URL` is declared BOTH as a wrangler `vars` entry (by this item's
+ * manifest) and in `.dev.vars`. That is a RUNTIME split, not a typing one:
+ * `.dev.vars` is read locally and never deployed, so a var declared only there
+ * is absent from the deployed Worker; the `vars` entry is what carries it to
+ * production, and `.dev.vars` wins over it under `wrangler dev`. Neither affects
+ * the type — `env` above is the `cloudflare:workers` export narrowed to the
+ * generated `CloudflareBindings`. Unnarrowed it is `Cloudflare.Env`, which only
+ * `wrangler types` populates, so that narrowing is what makes this read compile
+ * at all, and what it yields is `unknown` — hence the check below.
+ *
+ * The manifest ships the `vars` entry EMPTY. `vars` is deployed configuration,
+ * so a committed `http://localhost:…` placeholder is read only in production —
+ * where it is wrong — and the throw below could never fire: `checkout` would
+ * succeed and hand Stripe a `success_url` on the customer's own machine. Empty
+ * keeps the failure loud and local to the deploy, not to a paying customer's
+ * browser.
+ */
+const appOrigin = (): string => {
+    const value = env["APP_BASE_URL"];
+
+    if (typeof value !== "string" || value === "") {
+        throw new Error(
+            "@lunora/payment registry item: missing env var `APP_BASE_URL` — set it in .dev.vars (and for production) so checkout/portal return URLs can be built.",
+        );
+    }
+
+    return new URL(value).origin;
+};
+
+/** The shard a call that names none runs on, and the one the provider webhook reaches. */
+const ROOT_SHARD = "__root__";
+
+/** The catalog as payment entitlements, and its free plan: the one without a price. */
+const CATALOG_ENTITLEMENTS = entitlementsFromPlans(PLANS);
+const FREE_PLAN = PLANS.find((plan) => plan.priceId === undefined);
+
+/**
+ * `referenceId`'s entitlements and the catalog plans they come from; no plan
+ * when no priced subscription is active, which is the free plan.
+ */
+const currentPlans = async (
+    ctx: { payments: { listSubscriptions: (referenceId: string) => Promise<Parameters<typeof resolveEntitlements>[1]> } },
+    referenceId: string,
+): Promise<{ asOf: number; entitlements: ReturnType<typeof resolveEntitlements>; plans: ReadonlyArray<(typeof PLANS)[number]> }> => {
+    const subscriptions = await ctx.payments.listSubscriptions(referenceId);
+    const entitlements = resolveEntitlements(CATALOG_ENTITLEMENTS, subscriptions);
+
+    return {
+        // The billing version these plans were read at: the root shard stamps a subscription's
+        // `updatedAt` on every write, so a later change always carries a later version.
+        asOf: Math.max(0, ...subscriptions.map((subscription) => subscription.updatedAt)),
+        entitlements,
+        plans: PLANS.filter((plan) => entitlements.plans.includes(plan.id)),
+    };
+};
+
+/**
+ * The members `referenceId`'s plan allows, or `null` when it is unmetered — the
+ * limit better-auth's `membershipLimit` enforces in `lunora/auth/index.ts`.
+ *
+ * Read from the organisation's active subscriptions, the same source the billing
+ * entitlements resolve against. With no active priced plan the organisation is on
+ * the free plan. Several active plans take the most generous cap, and one without
+ * a cap makes the whole allowance unmetered.
+ */
+export const seatAllowance = internalAction.input({ referenceId: v.string() }).action(async ({ args: { referenceId }, ctx }): Promise<number | null> => {
+    const { entitlements, plans } = await currentPlans(ctx, referenceId);
+
+    if (plans.length === 0) {
+        // Without a free plan there is no allowance to fall back on. Refused rather than read as
+        // unmetered, so a catalog edit cannot quietly lift the cap: the membership check fails closed.
+        if (FREE_PLAN === undefined) {
+            throw new LunoraError(
+                "INTERNAL",
+                "seatAllowance: the plan catalog has no free plan (one without a priceId) for organisations without a subscription",
+            );
+        }
+
+        // `null` is the unmetered marker on the seatAllowance RPC result, not an absent value.
+        // eslint-disable-next-line unicorn/no-null -- seatAllowance's `number | null` return is a shard RPC wire value
+        return FREE_PLAN.seats ?? null;
+    }
+
+    // eslint-disable-next-line unicorn/no-null -- seatAllowance's `number | null` return is a shard RPC wire value (null = unmetered)
+    return plans.some((plan) => plan.seats === undefined) ? null : (entitlements.limit("seats") ?? null);
+});
+
+/**
+ * Cancel now every subscription `referenceId` still holds. The organisation deletion hook in
+ * `lunora/auth/index.ts` calls it: once the organisation is gone its admins can no longer open
+ * the billing portal, so the subscription would run with nothing in the app able to end it.
+ * Internal, so only server code can cancel another organisation's billing.
+ */
+export const cancelOrganizationSubscriptions = internalAction
+    .input({ referenceId: v.string() })
+    .action(async ({ args: { referenceId }, ctx }): Promise<{ canceled: number }> => {
+        const subscriptions = await ctx.payments.listSubscriptions(referenceId);
+        const live = subscriptions.filter((subscription) => subscription.state !== "canceled");
+
+        await Promise.all(live.map((subscription) => ctx.payments.cancelSubscription(subscription.id)));
+
+        // Cleared only once every live subscription was cancelled: a throw above leaves the row for the sweep.
+        await ctx.runMutation(internal.payment.clearPendingCancel, { referenceId });
+
+        return { canceled: live.length };
+    });
+
+/** Queued before the first attempt, so an attempt that fails is still owed. */
+export const recordPendingCancel = internalMutation.input({ referenceId: v.string() }).mutation(async ({ args: { referenceId }, ctx }): Promise<void> => {
+    const existing = await ctx.db
+        .query("billing_pending")
+        .withIndex("byOrganization", (q) => q.eq("organizationId", referenceId))
+        .first();
+
+    if (existing === null) {
+        await ctx.db.insert("billing_pending", { organizationId: referenceId, tried: 0 });
+    }
+});
+
+export const clearPendingCancel = internalMutation.input({ referenceId: v.string() }).mutation(async ({ args: { referenceId }, ctx }): Promise<void> => {
+    const rows = await ctx.db
+        .query("billing_pending")
+        .withIndex("byOrganization", (q) => q.eq("organizationId", referenceId))
+        .collect();
+
+    await Promise.all(rows.map(async (row) => ctx.db.delete("billing_pending", row._id)));
+});
+
+export const touchPendingCancel = internalMutation.input({ referenceId: v.string() }).mutation(async ({ args: { referenceId }, ctx }): Promise<void> => {
+    const rows = await ctx.db
+        .query("billing_pending")
+        .withIndex("byOrganization", (q) => q.eq("organizationId", referenceId))
+        .collect();
+
+    await Promise.all(rows.map(async (row) => ctx.db.patch("billing_pending", row._id, { tried: ctx.now })));
+});
+
+export const pendingCancels = internalQuery.input({ limit: v.number() }).query(async ({ args: { limit }, ctx }): Promise<string[]> => {
+    // Least recently tried first: rows that failed in an earlier run wait behind the ones not yet tried.
+    const rows = await ctx.db
+        .query("billing_pending")
+        .withIndex("byTried", (q) => q.gte("tried", 0))
+        .take(limit);
+
+    return rows.map((row) => row.organizationId);
+});
+
+/** The hourly retry for cancellations a deletion could not finish. Bounded per run; the rest wait for the next one. */
+export const sweepPendingCancels = internalAction.action(async ({ ctx }): Promise<{ failed: number; swept: number }> => {
+    const pending = await ctx.runQuery(internal.payment.pendingCancels, { limit: 20 });
+    const results = await Promise.allSettled(
+        pending.map(async (referenceId) => ctx.runAction(internal.payment.cancelOrganizationSubscriptions, { referenceId })),
+    );
+    const failedIds = pending.filter((_, index) => results[index]?.status === "rejected");
+
+    // A failed row is marked tried now, so it moves behind the rows not yet tried.
+    await Promise.all(failedIds.map(async (referenceId) => ctx.runMutation(internal.payment.touchPendingCancel, { referenceId })));
+
+    return { failed: failedIds.length, swept: results.length - failedIds.length };
+});
+
+/** The org roles allowed to start a subscription or open the billing portal — the same pair `lunora/saas` lets write projects. */
+const BILLING_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin", "owner"]);
+
+/**
+ * Who the subscription belongs to.
+ *
+ * The ORGANISATION, not the person who happened to buy it. A user-scoped
+ * reference — which is what this item ships by default, and what is right for a
+ * single-player app — would let an admin's subscription follow them out of the
+ * organisation and leave everyone else unable to see the plan they are on.
+ *
+ * Derived server-side from the verified claim and never taken as an argument,
+ * for the same reason nothing else in this app takes an `organizationId`. That
+ * is also why `lunora/server.ts` relaxes `.payment()`'s default authorizer,
+ * which would only admit a reference equal to the caller's user id.
+ */
+const billingReference = async (
+    ctx: { auth: { getIdentity: () => Promise<{ activeOrganizationId?: string; email?: string; orgRole?: string } | null> }; shardKey: string },
+    { adminOnly = false }: { adminOnly?: boolean } = {},
+): Promise<string> => {
+    const identity = await ctx.auth.getIdentity();
+
+    if (!identity) {
+        // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
+        // 500, so the caller sees a server fault instead of "sign in first".
+        throw new LunoraError("UNAUTHORIZED", "billing requires an authenticated user");
+    }
+
+    if (!identity.activeOrganizationId) {
+        throw new LunoraError("UNPROCESSABLE", "billing is per-organization — create or switch to one first");
+    }
+
+    // The billing tables, the checkout hold and the webhook all live on the root
+    // shard. A caller may also enter its own organisation's shard, which holds
+    // empty copies of them, so a check run there would see no subscription.
+    if (ctx.shardKey !== ROOT_SHARD) {
+        throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
+    }
+
+    // better-auth joins several roles with commas (`"admin,owner"`), so test
+    // membership rather than equality.
+    if (adminOnly && !(identity.orgRole?.split(",").some((role) => BILLING_ADMIN_ROLES.has(role.trim())) ?? false)) {
+        throw new LunoraError("FORBIDDEN", "only an organization admin or owner can change billing");
+    }
+
+    return identity.activeOrganizationId;
+};
+
+/**
+ * Where the provider sends the customer back to: the billing page, told how the
+ * checkout ended so it can say so.
+ */
+const billingPage = (outcome?: "cancel" | "success"): string => `${appOrigin()}/settings/billing${outcome === undefined ? "" : `?checkout=${outcome}`}`;
+
+/**
+ * The prices the catalog sells. `priceId` arrives from the client, and a price the
+ * provider accepts but `PLANS` does not list would charge the organisation for a
+ * subscription that unlocks no plan — the pricing page only ever offers these.
+ */
+const PURCHASABLE_PRICE_IDS: ReadonlySet<string> = new Set(PLANS.flatMap((plan) => (plan.priceId === undefined ? [] : [plan.priceId])));
+
+/**
+ * How long a started checkout session stays payable. The provider is told to
+ * expire it then, so an abandoned session cannot be paid after a later one.
+ * Stripe accepts 30 minutes to 24 hours from creation; the extra five cover the
+ * time between taking the hold and the provider call.
+ */
+const CHECKOUT_SESSION_MS = 35 * 60_000;
+
+/**
+ * The hold outlives the session it guards by this much, for clock skew between
+ * the Worker and the provider. It is never released early: coming back through
+ * the cancel URL leaves the provider's session payable until it expires.
+ */
+const CHECKOUT_HOLD_MARGIN_MS = 60_000;
+
+/** The provider refuses a session whose expires_at is less than 30 minutes away. */
+const CHECKOUT_MIN_SESSION_MS = 30 * 60_000;
+
+/**
+ * Reserve the organisation's one in-flight checkout. The subscription check in
+ * `checkout` cannot see a purchase whose webhook has not landed yet, so two
+ * admins picking two plans at once would both pass it and be billed twice; this
+ * mutation is the serialisation point. A repeat for the same price gets the
+ * session already started back; a different price is refused until the hold
+ * expires, by when the provider has expired the session too.
+ */
+export const holdCheckout = internalMutation
+    .input({ priceId: v.string(), referenceId: v.string() })
+    .mutation(async ({ args: { priceId, referenceId }, ctx }): Promise<{ holdId: Id<"checkout_holds">; sessionExpiresAt: number } | { url: string }> => {
+        const hold = await ctx.db
+            .query("checkout_holds")
+            .withIndex("byReference", (q) => q.eq("referenceId", referenceId))
+            .first();
+        const sessionExpiresAt = ctx.now + CHECKOUT_SESSION_MS;
+
+        if (hold && hold["expiresAt"] > ctx.now) {
+            if (hold["priceId"] !== priceId) {
+                throw new LunoraError("CONFLICT", "a checkout for this organization is already in progress — finish it, or pick another plan once it expires");
+            }
+
+            const { url } = hold;
+            // The session's own deadline is the hold less its margin, and it is stable: a retry reuses it as the
+            // provider's expires_at rather than extending it.
+            const sessionEnds = hold["expiresAt"] - CHECKOUT_HOLD_MARGIN_MS;
+
+            if (url !== undefined && sessionEnds > ctx.now) {
+                return { url };
+            }
+
+            if (url === undefined && sessionEnds > ctx.now) {
+                // Not started, or not known to be: the provider may already hold a session under this hold, still payable
+                // until `sessionEnds`. Retry under the same hold with the same deadline, or wait for it to lapse; never open
+                // a second session beside a payable one.
+                if (sessionEnds - ctx.now >= CHECKOUT_MIN_SESSION_MS) {
+                    return { holdId: hold["_id"], sessionExpiresAt: sessionEnds };
+                }
+
+                throw new LunoraError("CONFLICT", "a checkout for this organization is still settling — retry once it has lapsed");
+            }
+
+            // A started session past its deadline is expired at the provider, so a fresh hold below is safe.
+        }
+
+        // A fresh row rather than a patch: an expired session's `url` must not be handed to the next caller.
+        if (hold) {
+            await ctx.db.delete("checkout_holds", hold["_id"]);
+        }
+
+        const holdId = await ctx.db.insert("checkout_holds", { expiresAt: sessionExpiresAt + CHECKOUT_HOLD_MARGIN_MS, priceId, referenceId });
+
+        return { holdId, sessionExpiresAt };
+    });
+
+/**
+ * Record the started session on the hold. By id, not by organisation: a provider
+ * call that outlived its hold must not settle the newer one a later checkout took
+ * in its place.
+ */
+export const settleCheckoutHold = internalMutation
+    .input({ holdId: v.id("checkout_holds"), url: v.string() })
+    .mutation(async ({ args: { holdId, url }, ctx }): Promise<void> => {
+        if (await ctx.db.get("checkout_holds", holdId)) {
+            await ctx.db.patch("checkout_holds", holdId, { url });
+        }
+    });
+
+/**
+ * Refuse while `referenceId` still holds a subscription the provider is billing:
+ * `past_due` and `paused` count, not just `active`.
+ */
+const requireNoLiveSubscription = async (
+    ctx: { payments: { listSubscriptions: (referenceId: string) => Promise<ReadonlyArray<{ state: SubscriptionState }>> } },
+    referenceId: string,
+): Promise<void> => {
+    const existing = await ctx.payments.listSubscriptions(referenceId);
+
+    if (existing.some((subscription) => subscription.state !== "canceled")) {
+        throw new LunoraError("CONFLICT", "this organization already has a subscription — change the plan from the billing portal");
+    }
+};
+
+/**
+ * Start a checkout session and hand the client the redirect URL. The reference
+ * is the caller's active organisation — see {@link billingReference}. Admins and
+ * owners only: a subscription bills the whole organisation. Refused while the
+ * organisation already has a subscription that is not canceled, or another
+ * checkout in flight — see {@link holdCheckout}.
+ */
+export const checkout = action.input({ priceId: v.string().max(512) }).action(async ({ args: { priceId }, ctx }): Promise<{ url: string }> => {
+    const referenceId = await billingReference(ctx, { adminOnly: true });
+
+    if (!PURCHASABLE_PRICE_IDS.has(priceId)) {
+        throw new LunoraError("UNPROCESSABLE", "unknown price — pick a plan from the catalog in lunora/plans.ts");
+    }
+
+    // The hold below stops a second purchase only because the provider expires
+    // the first session when the hold ends. A provider that cannot is refused
+    // here, before a hold is taken, rather than by the facade after it.
+    if (!ctx.payments.provider.capabilities.checkoutExpiry) {
+        throw new LunoraError(
+            "NOT_IMPLEMENTED",
+            `checkout needs a payment provider that can expire a session (capabilities.checkoutExpiry); ${ctx.payments.provider.identifier} cannot`,
+        );
+    }
+
+    // A checkout opens a NEW subscription. Started on top of one the provider is
+    // still billing — `past_due` and `paused` included, not just `active` — it
+    // bills the organisation for both. A plan change goes through the portal.
+    await requireNoLiveSubscription(ctx, referenceId);
+
+    const pending = await ctx.runMutation(internal.payment.holdCheckout, { priceId, referenceId });
+
+    // Read again now the hold is ours: a purchase whose webhook landed during the gap above is visible here. The hold
+    // does not serialise webhook writes, so one that lands after this read is not caught.
+    await requireNoLiveSubscription(ctx, referenceId);
+
+    if ("url" in pending) {
+        return { url: pending.url };
+    }
+
+    // A failure here keeps the hold: a timeout or a dropped response can follow a
+    // session the provider did create. The hold's id is the idempotency key, so a
+    // retry for the same plan gets that session back rather than a second one.
+    // A provider that mints a customer from an email needs it on the first
+    // checkout; the claim is verified at sign-in, never taken from the client.
+    const identity = await ctx.auth.getIdentity();
+    const { url } = await ctx.payments.createCheckout({
+        cancelUrl: billingPage("cancel"),
+        email: identity?.email,
+        expiresAt: pending.sessionExpiresAt,
+        idempotencyKey: String(pending.holdId),
+        mode: "subscription",
+        priceId,
+        referenceId,
+        successUrl: billingPage("success"),
+    });
+
+    await ctx.runMutation(internal.payment.settleCheckoutHold, { holdId: pending.holdId, url });
+
+    return { url };
+});
+
+/**
+ * Record one metered usage event for an organisation. `track` writes the durable
+ * ledger (exactly-once by idempotency key) and, when the provider supports it,
+ * forwards a meter event — best-effort.
+ *
+ * Internal, not client-callable: usage is billed, so only the server code that
+ * did the billable work may record it, once it succeeded. Call it with
+ * \`ctx.runAction(internal.payment.track, { idempotencyKey, referenceId })\`, where
+ * the key names that piece of work, so a retried operation is counted once.
+ */
+export const track = internalAction
+    .input({ idempotencyKey: v.string().max(255), referenceId: v.string() })
+    .action(async ({ args: { idempotencyKey, referenceId }, ctx }): Promise<{ recorded: boolean }> => {
+        const result = await ctx.payments.track({ featureId: API_CALLS, idempotencyKey, referenceId });
+
+        return { recorded: result.recorded };
+    });
+
+/**
+ * Check whether the caller's organisation is still under its metered allowance
+ * for the current billing period. Returns the allowance balance when available.
+ */
+export const check = action.action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
+    const referenceId = await billingReference(ctx);
+
+    const result = await ctx.payments.check({ featureId: API_CALLS, referenceId });
+
+    return { allowed: result.allowed, balance: result.balance };
+});
+
+/**
+ * Open the billing portal for the caller's organisation (customer derived from
+ * the payment store). The portal sends the customer back to the billing page.
+ * Admins and owners only: it can change the plan, the payment method or cancel.
+ */
+export const portal = action.action(async ({ ctx }): Promise<{ url: string }> => {
+    const referenceId = await billingReference(ctx, { adminOnly: true });
+
+    return ctx.payments.createPortalSession(referenceId, billingPage());
+});
+
+/*
+ * Column readers for the raw `subscriptions` row. `ctx.db` hands back
+ * `Record<string, unknown>`, and a bare `row["x"] as string` types a MISSING
+ * column as `string` while handing the client `undefined` — so a row written
+ * before a column existed reaches a screen as a non-string claiming to be one.
+ * These narrow instead of asserting, and an absent optional column reads back as
+ * `null` (not `undefined`) through the shard, which the `typeof` tests handle.
+ */
+const readString = (row: Record<string, unknown>, column: string): string => (typeof row[column] === "string" ? row[column] : "");
+
+const readOptionalNumber = (row: Record<string, unknown>, column: string): number | undefined => (typeof row[column] === "number" ? row[column] : undefined);
+
+const readOptionalStringArray = (row: Record<string, unknown>, column: string): string[] | undefined => {
+    const value = row[column];
+
+    return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : undefined;
+};
+
+/**
+ * What a billing screen reads. A hand-rolled projection rather than
+ * `@lunora/payment`'s `Subscription` because this is a `query` and the canonical
+ * decoder sits behind `ctx.payments`, which is ActionCtx-only — so the field set
+ * here has to be kept in step with `@lunora/payment`'s `paymentExtension` by hand.
+ */
+interface SubscriptionRow {
+    /** Outranks `state` in the UI: a subscription can be `active` AND ending. */
+    cancelAtPeriodEnd: boolean;
+    currentPeriodEnd?: number;
+    /** Start of the billing period metered usage is summed over. Without it a client falls back to `createdAt` and shows LIFETIME usage against a per-period limit. */
+    currentPeriodStart?: number;
+    /** The PRIMARY price id — `priceIds[0]`. For display; match plans against `priceIds`. */
+    priceId: string;
+
+    /**
+     * EVERY price id the subscription bills. This — not `priceId` — is what a plan
+     * lookup tests membership in, mirroring `hasActivePrice`: a Stripe subscription
+     * is a list of items, so a base plan alongside an add-on or a metered price has
+     * a `priceId` naming only one of them.
+     *
+     * Absent on rows written by the webhook path (which carries one price id);
+     * read it as `priceIds ?? [priceId]`.
+     */
+    priceIds?: string[];
+    /** Which provider's row this is. Load-bearing while two providers coexist during a migration. */
+    provider: string;
+    providerSubscriptionId: string;
+    /** Seats BILLED — which lags an invite by however long a webhook takes. Count members for display. */
+    quantity: number;
+    referenceId: string;
+    state: SubscriptionState;
+}
+
+/** Project one stored subscription row onto {@link SubscriptionRow}. */
+const toSubscriptionRow = (document: object): SubscriptionRow => {
+    // A spread, not the document itself: in a codegen'd app the row is the
+    // typed document interface of the payment_subscriptions table, which has no index signature,
+    // while its object-literal copy satisfies the readers' record type.
+    const row: Record<string, unknown> = { ...document };
+
+    return {
+        cancelAtPeriodEnd: row["cancelAtPeriodEnd"] === true,
+        currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
+        currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
+        priceId: readString(row, "priceId"),
+        priceIds: readOptionalStringArray(row, "priceIds"),
+        provider: readString(row, "provider"),
+        providerSubscriptionId: readString(row, "providerSubscriptionId"),
+        quantity: typeof row["quantity"] === "number" ? row["quantity"] : 0,
+        referenceId: readString(row, "referenceId"),
+        state: readString(row, "state") as SubscriptionState,
+    };
+};
+
+/**
+ * Reactive read of the webhook-synced subscriptions for the caller's organisation.
+ *
+ * A `query` rather than an action because this is the one payment read that
+ * should stay live — `ctx.payments` is ActionCtx-only, so it reads the
+ * `payment_subscriptions` table directly. That table exists once your
+ * `lunora/schema.ts` merges `paymentExtension` (see the file header).
+ *
+ * The `by_reference` index is given its `.eq()` predicate, so the scan is bounded
+ * to this caller's rows. Without it `withIndex("by_reference")` collects EVERY
+ * subscription row in the shard and filters in JS — a full-table read that grows
+ * with the customer base, on a path every signed-in page subscribes to.
+ */
+export const mySubscriptions = query.query(async ({ ctx }): Promise<SubscriptionRow[]> => {
+    const referenceId = await billingReference(ctx);
+
+    const rows = await ctx.db
+        .query("payment_subscriptions")
+        .withIndex("by_reference", (q) => q.eq("referenceId", referenceId))
+        .collect();
+
+    return rows.map((document) => toSubscriptionRow(document));
+});
+
+/** The platform-wide roles that may read every tenant's billing — `PLATFORM_ADMIN_ROLES` in `lunora/saas`. */
+const PLATFORM_ADMIN_ROLES: ReadonlySet<string> = new Set(["admin"]);
+
+/**
+ * The platform admin's cross-tenant billing reads: a platform admin — the
+ * `appRole` claim `lunora/server.ts` resolves from better-auth's `user.role` — on
+ * the root shard. A tenant shard holds an empty copy of the billing tables, so a
+ * read there would show "no subscriptions" rather than fail — refuse it as
+ * `billingReference` does.
+ */
+const requireBillingAdmin = async (ctx: { auth: { getIdentity: () => Promise<{ appRole?: string } | null> }; shardKey: string }): Promise<void> => {
+    const identity = await ctx.auth.getIdentity();
+
+    if (!identity) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+
+    // Comma-joined like every better-auth role (`"admin,user"`).
+    if (!(identity.appRole?.split(",").some((role) => PLATFORM_ADMIN_ROLES.has(role.trim())) ?? false)) {
+        throw new LunoraError("FORBIDDEN", "requires the platform admin role");
+    }
+
+    if (ctx.shardKey !== ROOT_SHARD) {
+        throw new LunoraError("FORBIDDEN", "billing runs on the root shard — call it without a shardKey");
+    }
+};
+
+/** The most rows one admin subscription page may ask for, whatever `numItems` says. */
+const ADMIN_SUBSCRIPTIONS_PAGE_MAX = 100;
+
+/** A subscription row for the admin, with the organisation it bills from the cross-tenant projection. */
+type BilledSubscriptionRow = SubscriptionRow & { organization?: Doc<"saas_organizations"> };
+
+/**
+ * Attach each row's organisation, so the admin table names every subscription it
+ * shows however many it has loaded. One read per page, over that page's ids; a
+ * deleted organisation is left off and the table shows its id.
+ */
+const withOrganizations = async (ctx: QueryCtx, rows: ReadonlyArray<SubscriptionRow>): Promise<BilledSubscriptionRow[]> => {
+    const ids = [...new Set(rows.map((row) => row.referenceId))];
+
+    if (ids.length === 0) {
+        return [];
+    }
+
+    const { page } = await ctx.db.saas_organizations.findMany({ where: { organizationId: { in: ids }, status: { ne: "deleted" } } });
+    const byId = new Map(page.map((organization) => [organization.organizationId, organization]));
+
+    return rows.map((row) => {
+        const organization = byId.get(row.referenceId);
+
+        return organization === undefined ? row : { ...row, organization };
+    });
+};
+
+const pageCursor = v.optional(v.union(v.string(), v.null()));
+
+/**
+ * Every tenant's subscriptions, newest first, a page at a time — for the
+ * platform admin's subscription table, which reads it with `usePaginatedQuery`.
+ *
+ * One root-shard read, not a fan-out: the billing tables are root-scoped (see
+ * `lunora/schema.ts`), so every subscription the webhooks have written is here.
+ * It lives beside the payment functions rather than in `lunora/saas` because a
+ * kit without billing is a supported shape, and there `payment_subscriptions`
+ * does not exist. Each row carries its organisation from the `saas_organizations`
+ * projection (see {@link withOrganizations}), so the admin table can name it.
+ *
+ * Paged because this table only grows: one response holding every subscription
+ * ever written would be re-sent to the admin on each webhook. `numItems` is
+ * capped here rather than trusted, so a caller cannot ask for the whole table in
+ * one page. `endCursor` is declared because `usePaginatedQuery` sends it, and
+ * input validation would otherwise strip it.
+ */
+export const adminSubscriptions = query
+    .input({ paginationOpts: v.object({ cursor: pageCursor, endCursor: pageCursor, numItems: v.number() }) })
+    .query(async ({ args: { paginationOpts }, ctx }): Promise<PaginationResult<BilledSubscriptionRow>> => {
+        await requireBillingAdmin(ctx);
+
+        const numberItems = Math.min(Math.max(Math.floor(paginationOpts.numItems), 1), ADMIN_SUBSCRIPTIONS_PAGE_MAX);
+        const result = await ctx.db
+            .query("payment_subscriptions")
+            .order("desc")
+            .paginate({ ...paginationOpts, numItems: numberItems });
+
+        return {
+            ...result,
+            page: await withOrganizations(
+                ctx,
+                result.page.map((document) => toSubscriptionRow(document)),
+            ),
+        };
+    });
+
+/** The most past-due subscriptions the dunning read returns. */
+const PAST_DUE_MAX = 100;
+
+/**
+ * Every `past_due` subscription, whatever page it would fall on — the dunning
+ * list the admin table puts first. `adminSubscriptions` pages newest first, so an
+ * older tenant in dunning would otherwise only appear once the admin had paged
+ * back to it; this reads them through the `by_state` index instead, a bounded
+ * read however large the table is. `more` says the cap was hit.
+ */
+export const adminPastDueSubscriptions = query.query(async ({ ctx }): Promise<{ more: boolean; rows: BilledSubscriptionRow[] }> => {
+    await requireBillingAdmin(ctx);
+
+    const rows = await ctx.db
+        .query("payment_subscriptions")
+        .withIndex("by_state", (q) => q.eq("state", "past_due"))
+        .take(PAST_DUE_MAX + 1);
+
+    return {
+        more: rows.length > PAST_DUE_MAX,
+        rows: await withOrganizations(
+            ctx,
+            rows.slice(0, PAST_DUE_MAX).map((document) => toSubscriptionRow(document)),
+        ),
+    };
+});
+
+/**
+ * Apply a verified provider webhook. Called by the `POST /payment/webhook` HTTP
+ * action (which runs at the Worker edge with no `ctx.db`) so the work happens
+ * inside the shard, where `ctx.payments` — and its store — exist.
+ *
+ * The HTTP route must forward the raw body and every header an adapter can verify
+ * with here via `ctx.runAction` — not one named signature header, because which
+ * one carries the signature is the provider's choice and these functions are
+ * provider-agnostic: Stripe signs with `stripe-signature`, Creem with
+ * `creem-signature`, Polar and Dodo Payments with the Standard-Webhooks trio
+ * (`webhook-id` / `webhook-timestamp` / `webhook-signature`), Autumn with `svix-*`.
+ * Forwarding only `stripe-signature` verified Stripe and failed everything else.
+ *
+ * An allowlist of those, not the whole `request.headers`: nothing downstream needs
+ * a hostile POST's `cookie` / `authorization`, and the entity headers
+ * (`content-encoding`, `content-length`) would describe a body that the `text()`
+ * below has already decoded.
+ */
+export const processWebhook = internalAction
+    .input({ body: v.string(), headers: v.record(v.string(), v.string()) })
+    .action(async ({ args: { body, headers }, ctx }): Promise<{ applied: boolean; status: number }> => {
+        // `handleWebhook` reads whichever header the configured adapter verifies with,
+        // off the reconstructed request.
+        const request = new Request("https://internal/payment/webhook", {
+            body,
+            headers,
+            method: "POST",
+        });
+        const response = await ctx.payments.handleWebhook(request);
+        const result = await response.json<{ applied?: boolean; referenceId?: string }>();
+
+        // A subscription change moves the organisation's plan, which the admin list
+        // shows and filters on. Re-derived from every active subscription rather than
+        // this event, so a cancellation lands back on the free plan. Every verified
+        // subscription event names its organisation, duplicates included: if this
+        // write fails, the route answers 5xx and the provider's retry finishes it.
+        if (result.referenceId !== undefined) {
+            const { asOf, plans } = await currentPlans(ctx, result.referenceId);
+            // `.at` types the head as possibly absent: `plans` is empty when no priced plan is active.
+            const plan = plans.toSorted((a, b) => b.priceMinor - a.priceMinor).at(0);
+
+            await ctx.runMutation(internal.saas.syncOrganizationPlan, { asOf, organizationId: result.referenceId, plan: (plan ?? FREE_PLAN)?.id ?? "free" });
+        }
+
+        return { applied: result.applied ?? false, status: response.status };
+    });

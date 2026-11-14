@@ -49,6 +49,21 @@ describe("localAiBinding", () => {
         expect(warnings[0]).toContain("wrangler login");
     });
 
+    it("tells onWithheld the binding it drops, so the dev env check does not count it as present", () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const options = {};
+        const onWithheld = vi.fn<(bindings: ReadonlyArray<string>) => void>();
+        const plugin = localAiBinding(options, { hasCredentials: () => false, onWithheld });
+
+        runConfigHook(plugin, "serve");
+        resolveWorker(options, { ai: { binding: "AI" }, name: "app" });
+
+        expect(onWithheld).toHaveBeenLastCalledWith(["AI"]);
+    });
+
     it("drops the artifacts binding from a dev worker when Cloudflare is logged out, and says what stops working", () => {
         expect.assertions(3);
 

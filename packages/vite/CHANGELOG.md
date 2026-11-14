@@ -1,3 +1,7 @@
+## @lunora/vite [1.0.0-alpha.429](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.428...@lunora/vite@1.0.0-alpha.429) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
 ## @lunora/vite [1.0.0-alpha.428](https://github.com/anolilab/lunora/compare/@lunora/vite@1.0.0-alpha.427...@lunora/vite@1.0.0-alpha.428) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

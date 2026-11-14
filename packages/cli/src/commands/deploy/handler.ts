@@ -47,7 +47,7 @@ import { detectPackageManager, toolchainExecArgs } from "../../util/detect-packa
 import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
-import runSmokeLoad from "../../util/lazy-smoke-load";
+import { runLazySmokeLoad } from "../../util/lazy-smoke-load";
 import type { Logger } from "../../util/logger";
 import reportPlatformDiagnostics from "../../util/platform-diagnostics";
 import { runPostCodegenHook } from "../../util/post-codegen-hook";
@@ -1487,7 +1487,7 @@ const smokeLoadDeferredModules = async (
         return undefined;
     }
 
-    return runSmokeLoad({
+    return runLazySmokeLoad({
         composedEntry: resolveComposedWorkerEntry(cwd),
         configPath: wranglerPath,
         cwd,
@@ -1774,6 +1774,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         // production-linked checkout must not silently supply its URL to a
         // `--env staging --migrate` run (see resolveWorkerUrl's env guard).
         migrateUrl: resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
+        migrateAllowDestructive: options.migrateAllowDestructive === true,
         migrateYes: options.migrateYes === true,
         preview: options.preview === true,
         // `--prebuilt` trusts a prior `lunora build`/`prepare`: skip codegen (and

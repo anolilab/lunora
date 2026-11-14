@@ -9,6 +9,7 @@ import type { VerifyCommandData } from "../../src/commands/verify/handler";
 import { execute, runVerifyCommand } from "../../src/commands/verify/handler";
 import type { VerifyOptions } from "../../src/commands/verify/index";
 import { EXIT_CODE } from "../../src/util/exit-code";
+import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 import { runExecute } from "../helpers/execute";
@@ -397,8 +398,8 @@ describe("lunora verify", () => {
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 const { logger } = recordingLogger();
-                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
-                    return { ok: true, status: 200 };
+                const healthFetch = vi.fn<HealthFetch>(async () => {
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runVerifyCommand({ cwd: workdir, healthFetch, logger, typecheck: false });
@@ -414,8 +415,8 @@ describe("lunora verify", () => {
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 const { logger, recorded } = recordingLogger();
-                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
-                    return { ok: true, status: 200 };
+                const healthFetch = vi.fn<HealthFetch>(async () => {
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runVerifyCommand({
@@ -427,7 +428,7 @@ describe("lunora verify", () => {
                 });
 
                 expect(result.code).toBe(0);
-                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health");
+                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health", expect.objectContaining({ redirect: "manual" }));
                 expect(recorded.successes.join("\n")).toContain("health probe ok");
             });
 
@@ -436,8 +437,8 @@ describe("lunora verify", () => {
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 const { logger } = recordingLogger();
-                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
-                    return { ok: false, status: 503 };
+                const healthFetch = vi.fn<HealthFetch>(async () => {
+                    return { headers: new Headers(), ok: false, status: 503 };
                 });
 
                 const result = await runVerifyCommand({
@@ -451,7 +452,7 @@ describe("lunora verify", () => {
                 expect(result.code).toBe(1);
                 expect(result.errors.some((error) => error.includes("health probe failed"))).toBe(true);
                 // A trailing slash on the base URL doesn't double up in the probed URL.
-                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health");
+                expect(healthFetch).toHaveBeenCalledWith("https://my-app.workers.dev/_lunora/health", expect.objectContaining({ redirect: "manual" }));
             });
 
             it("fails red when the probe can't reach the deployment", async () => {
@@ -459,7 +460,7 @@ describe("lunora verify", () => {
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
                 const { logger } = recordingLogger();
-                const healthFetch = vi.fn<() => Promise<{ ok: boolean; status: number }>>(async () => {
+                const healthFetch = vi.fn<HealthFetch>(async () => {
                     throw new Error("ECONNREFUSED");
                 });
 

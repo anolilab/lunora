@@ -15,8 +15,8 @@
  */
 import { redactArgs, redactCredentials } from "@lunora/observability";
 
-import type { LogFields } from "../../../shared/log-fields";
-import { normalizeLogFields } from "../../../shared/log-fields";
+import type { ErrorEncoding, LogFields } from "../../../shared/log-fields";
+import { errorHeadlineOf, normalizeLogFields, toLoggedError } from "../../../shared/log-fields";
 import type { LogEvent, MetricEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext, SpanEvent } from "./observability";
 import { SINK_CONFIG_FIELDS } from "./observability-sinks";
 
@@ -165,16 +165,25 @@ const reportEnricherFailure = (error: unknown): void => {
     }
 };
 
-/** Bookkeeping for one copy: `ancestors` holds the objects on the current path, `copies` the finished ones. */
+/**
+ * Bookkeeping for one copy: `ancestors` holds the objects on the current path, `copies` the
+ * finished ones, and `errors` how an `Error` is written (see `ErrorEncoding`).
+ */
 interface CopyState {
     ancestors: WeakSet<object>;
     copies: WeakMap<object, unknown>;
+    errors: ErrorEncoding;
 }
 
 /** The copy of one object, given a function that copies its children. */
-const copyObject = (value: object, copyChild: (child: unknown) => unknown): unknown => {
+const copyObject = (value: object, copyChild: (child: unknown) => unknown, errors: ErrorEncoding): unknown => {
     if (value instanceof Error) {
-        return copyChild({ ...Object.fromEntries(Object.entries(value)), message: value.message, name: value.name });
+        // The same record, caps and stack fitting as a `ctx.log` field, built here because
+        // normalizing after redaction sees a plain record, not an Error. Own fields and a
+        // non-Error `cause` are copied like any child; redaction then walks the stack
+        // string, which repeats the message.
+        // A headline is built from `name` and `message`: the Error's own `toString()` can be overridden to add its stack.
+        return errors === "full" ? toLoggedError(value, copyChild) : errorHeadlineOf(value);
     }
 
     const toJson: unknown = Reflect.get(value, "toJSON");
@@ -203,13 +212,14 @@ const copyObject = (value: object, copyChild: (child: unknown) => unknown): unkn
     return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, copyChild(child)]));
 };
 
-const newCopyState = (): CopyState => {
-    return { ancestors: new WeakSet<object>(), copies: new WeakMap<object, unknown>() };
+const newCopyState = (errors: ErrorEncoding): CopyState => {
+    return { ancestors: new WeakSet<object>(), copies: new WeakMap<object, unknown>(), errors };
 };
 
 /**
  * A copy of a value in the shape normalizing will serialize, so redaction sees what is exported.
- * An `Error` at any depth becomes a plain record of its name, message and enumerable fields; an
+ * An `Error` at any depth becomes its `toLoggedError` record under `"full"`, or its
+ * `Name: message` string under `"headline"`; an
  * object with `toJSON()` becomes what that returns, or its own fields when that is the object itself.
  * Plain objects and arrays are rebuilt, and other class instances keep their value.
  *
@@ -217,9 +227,10 @@ const newCopyState = (): CopyState => {
  * the current path, so only a true cycle is cut. `copies` holds each finished copy, so a shared
  * reference is copied once and reused under every key it sits under, rather than re-expanded per path.
  */
-const plainCopy = (value: unknown, state: CopyState = newCopyState()): unknown => {
-    // A symbol or function is exported as its string form, so redaction must see that string.
-    if (typeof value === "symbol" || typeof value === "function") {
+const plainCopy = (value: unknown, state: CopyState): unknown => {
+    // A symbol, function or bigint is exported as its string form, so redaction must see that string; a bigint left in
+    // place would also make an Error record that holds it unwritable.
+    if (typeof value === "symbol" || typeof value === "function" || typeof value === "bigint") {
         return String(value);
     }
 
@@ -238,7 +249,7 @@ const plainCopy = (value: unknown, state: CopyState = newCopyState()): unknown =
     state.ancestors.add(value);
 
     try {
-        const copy = copyObject(value, (child) => plainCopy(child, state));
+        const copy = copyObject(value, (child) => plainCopy(child, state), state.errors);
 
         state.copies.set(value, copy);
 
@@ -259,13 +270,16 @@ const enrichmentFor = (enrich: SinkEnricher, event: SinkEvent, signal: SinkSigna
         // including in normalizing, leaves the event unchanged rather than dropped.
         // The enricher gets its own copy of the event: a mutation it makes, even before it throws,
         // cannot reach the sibling sinks or the shard's buffered copy of the same event.
-        const derived = enrich(plainCopy(event) as SinkEvent, signal);
+        const derived = enrich(plainCopy(event, newCopyState("full")) as SinkEvent, signal);
         // A key whose value is `undefined` is left out, not exported as the string "undefined".
         const present = derived === undefined ? undefined : Object.fromEntries(Object.entries(derived).filter(([, value]) => value !== undefined));
-        const flat = present === undefined ? undefined : (plainCopy(present) as LogFields);
+        // A stack rides a log line only. On a metric, span or RPC attribute an Error is its
+        // `Name: message`, as `ctx.trace` and `ctx.metrics` write one outside development.
+        const errors: ErrorEncoding = signal === "log" ? "full" : "headline";
+        const flat = present === undefined ? undefined : (plainCopy(present, newCopyState(errors)) as LogFields);
         const redacted = signal === "log" ? redactArgs(flat) : redactCredentials(flat);
 
-        return normalizeLogFields(redacted as LogFields | undefined);
+        return normalizeLogFields(redacted as LogFields | undefined, undefined, errors);
     } catch (error) {
         reportEnricherFailure(error);
 

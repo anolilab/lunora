@@ -7604,6 +7604,49 @@ class LunoraClient {
     }
 
     /**
+     * Discard a held delta run and ask for a full snapshot. The run's rows are lost, so the cursor
+     * and epoch stay where the committed base left them: the snapshot request omits them, but a
+     * reconnect before it lands still resumes from before the run. Deltas are refused until the
+     * snapshot lands (see `handleDataMessage`).
+     */
+    private resnapshotDiscardedRun(state: SubscriptionState): void {
+        const { serverCursor, serverEpoch } = state;
+
+        // Set whether or not the snapshot request went out: a base missing rows stays refused until a
+        // data frame commits, even if the send fails.
+        // eslint-disable-next-line no-param-reassign -- the flag is the subscription's own state, read by the frame handlers
+        state.baseIncomplete = true;
+
+        if (this.resnapshotSubscription(state)) {
+            // eslint-disable-next-line no-param-reassign -- the flag is the subscription's own state, read by handleDataMessage
+            state.awaitingSnapshot = true;
+        }
+
+        // The snapshot request drops the resume position; put it back so a reconnect still resumes before the run.
+        // eslint-disable-next-line no-param-reassign -- restores the cursor the snapshot request just dropped
+        state.serverCursor = serverCursor;
+        // eslint-disable-next-line no-param-reassign -- restores the epoch the snapshot request just dropped
+        state.serverEpoch = serverEpoch;
+    }
+
+    /** Report one `WIRE_DECODE_FAILED` for a frame `decodeWire` refused, and re-snapshot when it cut a held run short. */
+    private failUndecodableFrame(state: SubscriptionState, error: unknown, heldRun: boolean): void {
+        failSubscription(state, {
+            code: "WIRE_DECODE_FAILED",
+            message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
+        });
+
+        // The refused frame's rows never applied, so the rest of the run cannot either. The error
+        // callback may have removed the last listener; a removed subscription has nothing to recover.
+        if (heldRun && this.subscriptions.getById(state.id) === state) {
+            this.resnapshotDiscardedRun(state);
+        }
+
+        // The answer arrived and cannot be read: waiting longer only wedges the shard's writes.
+        this.settleAwaitedAnswer(state, false);
+    }
+
+    /**
      * Apply one `data` frame. `snapshotMark` is set only for a frame synthesized
      * by a poll, which carries no cursor: see {@link pollSubscriptions}.
      */
@@ -7617,6 +7660,11 @@ class LunoraClient {
 
         // The older of two seeds from a re-sent `subscribe`, arriving last: it would roll the value and the resume cursor back.
         if (message.type === "data" && isStaleDataFrame(state, message)) {
+            return;
+        }
+
+        // The base is known to be incomplete: a delta would merge onto it and advance the cursor past rows it lacks.
+        if (message.type === "delta" && state.baseIncomplete === true) {
             return;
         }
 
@@ -7634,15 +7682,11 @@ class LunoraClient {
             // value dies identically — the subscription frozen with the
             // indicator still reading `connected`. Surface it to the subscriber
             // instead and leave the cached value + cursor untouched.
-            // A run that was partly held can no longer complete on this base: drop it, so a later
-            // frame merges onto the committed value and not onto the abandoned partial one.
+            // A refused row change never reaches the base, so a later frame must not merge onto a base
+            // missing it: drop any held run and recover. A refused `data` frame is not a row change
+            // and stays a plain error.
             state.pendingDeltaRun = undefined;
-            failSubscription(state, {
-                code: "WIRE_DECODE_FAILED",
-                message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
-            });
-            // The answer arrived and cannot be read: waiting longer only wedges the shard's writes.
-            this.settleAwaitedAnswer(state, false);
+            this.failUndecodableFrame(state, error, message.type === "delta");
 
             return;
         }
@@ -7968,6 +8012,9 @@ class LunoraClient {
 
         // The cached value is current as of the cursor it resumed from, so a run cut off before it is void.
         state.pendingDeltaRun = undefined;
+        // A reconnect after a discarded run resumes from the cursor before it, which proves the base current.
+        state.awaitingSnapshot = false;
+        state.baseIncomplete = false;
         // A resume is only answered when the shard found these claims to be the ones the cursor was read under.
         state.serverClaims = this.frameClaims;
         this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
@@ -8003,6 +8050,20 @@ class LunoraClient {
         const state = this.subscriptions.getById(message.id);
 
         if (!state) {
+            return;
+        }
+
+        // A held run's rows, or a snapshot still on its way, mean this base is missing rows the server
+        // has already confirmed. The settled cursor and watermark would resume after those rows and
+        // confirm a write whose rows are absent, so they wait for the snapshot, which carries both.
+        const runHeld = state.pendingDeltaRun !== undefined;
+
+        if (runHeld) {
+            state.pendingDeltaRun = undefined;
+            this.resnapshotDiscardedRun(state);
+        }
+
+        if (runHeld || state.baseIncomplete === true) {
             return;
         }
 

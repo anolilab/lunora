@@ -1,6 +1,6 @@
 {
     "name": "@lunora/d1",
-    "version": "1.0.0-alpha.233",
+    "version": "1.0.0-alpha.236",
     "description": "D1 adapter for Lunora .global() tables, wrapping the Sessions API for read-your-writes",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -63,17 +63,17 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/errors": ">=1.0.0-alpha.89 <2.0.0-0",
         "@lunora/platform": "1.0.0-alpha.80",
-        "@lunora/shard-engine": "^1.0.0-alpha.187",
-        "@lunora/sql-store": "^1.0.0-alpha.234",
+        "@lunora/shard-engine": "^1.0.0-alpha.194",
+        "@lunora/sql-store": "^1.0.0-alpha.237",
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "^1.0.0-alpha.281",
+        "@lunora/do": "^1.0.0-alpha.284",
         "@lunora/search-core": "workspace:*",
         "@lunora/wire": "1.0.0-alpha.6",
         "@types/node": "catalog:types",

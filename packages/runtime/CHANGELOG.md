@@ -1,3 +1,31 @@
+## @lunora/runtime [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.285...@lunora/runtime@1.0.0-alpha.286) (2026-11-12)
+
+- feat(sdk): merge row-delta frames into list results in all eight ports (#1553)
+
+## @lunora/runtime [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.284...@lunora/runtime@1.0.0-alpha.285) (2026-11-11)
+
+- feat(auth): add API keys via the apiKey() plugin (#1526)
+
+## @lunora/runtime [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.283...@lunora/runtime@1.0.0-alpha.284) (2026-11-10)
+
+- feat(codegen): type user-column claims on ctx.auth from the auth config (#1525)
+
+## @lunora/runtime [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.282...@lunora/runtime@1.0.0-alpha.283) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
+## @lunora/runtime [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.281...@lunora/runtime@1.0.0-alpha.282) (2026-11-08)
+
+- feat(bench): add a realistic benchmark app built on the saas kit (#1420)
+
+## @lunora/runtime [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.280...@lunora/runtime@1.0.0-alpha.281) (2026-11-05)
+
+- fix(observability): bound logged Errors further and never call their toString (#1501)
+
+## @lunora/runtime [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.279...@lunora/runtime@1.0.0-alpha.280) (2026-11-05)
+
+- fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)
+
 ## @lunora/runtime [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.278...@lunora/runtime@1.0.0-alpha.279) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

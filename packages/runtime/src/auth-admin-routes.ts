@@ -55,6 +55,7 @@ interface AuthImpersonation {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    apiKey: boolean;
     inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
@@ -129,6 +130,7 @@ interface AuthAdmin {
     createSignUpInvitation?: (input: { email: string; expiresInSeconds?: number; invitedBy?: string }) => Promise<Record<string, unknown>>;
     createTeam?: (input: { name: string; organizationId: string }) => Promise<Record<string, unknown>>;
     createUser?: (input: { data?: Record<string, unknown>; email: string; name: string; password?: string; role?: string | string[] }) => Promise<AuthUser>;
+    deleteApiKey?: (input: { apiKeyId: string }) => Promise<void>;
     deleteOrganization?: (input: { organizationId: string }) => Promise<void>;
     deleteOrgRole?: (input: { roleId: string }) => Promise<void>;
     deletePasskey?: (input: { passkeyId: string }) => Promise<void>;
@@ -136,6 +138,7 @@ interface AuthAdmin {
     impersonateUser?: (input: { userId: string }) => Promise<AuthImpersonation>;
     inviteMember?: (input: { email: string; inviterId?: string; organizationId: string; role?: string }) => Promise<Record<string, unknown>>;
     listAccounts?: (input: { userId: string }) => Promise<Record<string, unknown>[]>;
+    listApiKeys?: (input: { userId: string }) => Promise<Record<string, unknown>[]>;
     listInvitations?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listMembers?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listOrganizations?: (options: { limit?: number; offset?: number }) => Promise<AuthPage<Record<string, unknown>>>;
@@ -219,7 +222,9 @@ const NAMED_TOKEN_AUTH_METHODS: ReadonlySet<keyof AuthAdmin> = new Set<keyof Aut
     "cancelInvitation",
     "capabilities",
     "config",
+    "deleteApiKey",
     "listAccounts",
+    "listApiKeys",
     "listInvitations",
     "listMembers",
     "listOrganizations",
@@ -379,6 +384,21 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         },
         http: "GET",
         method: "listPasskeys",
+    },
+    [`${AUTH_BASE}/api-keys`]: {
+        build: ({ query }) => {
+            return { userId: requireQuery(query, "userId") };
+        },
+        http: "GET",
+        method: "listApiKeys",
+    },
+    [`${AUTH_BASE}/api-keys/delete`]: {
+        build: ({ body }) => {
+            return { apiKeyId: requireBodyString(body, "apiKeyId") };
+        },
+        http: "POST",
+        method: "deleteApiKey",
+        returns: "void",
     },
     [`${AUTH_BASE}/organizations`]: {
         build: ({ paging }) => {

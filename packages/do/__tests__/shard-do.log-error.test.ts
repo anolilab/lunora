@@ -67,17 +67,35 @@ describe("shardDO ctx.log errors", () => {
         expect(event.error?.stack).toContain("TypeError: card declined");
     });
 
-    it("finds an Error passed as a field, and renders the field instead of `{}`", async () => {
-        expect.assertions(2);
+    it("finds an Error passed as a field, and keeps its stack and cause in the field instead of `{}`", async () => {
+        expect.assertions(5);
 
         vi.spyOn(console, "error").mockImplementation(() => {});
 
         const event = await run((log) => {
-            log.error("charge failed", { err: new RangeError("too large"), orderId: "o-1" });
+            log.error("charge failed", { err: new RangeError("too large", { cause: new Error("limit 100") }), orderId: "o-1" });
         });
 
         expect(event.error).toMatchObject({ message: "too large", name: "RangeError" });
-        expect(event.fields).toStrictEqual({ err: "RangeError: too large", orderId: "o-1" });
+        expect(event.fields?.orderId).toBe("o-1");
+
+        const field = JSON.parse(String(event.fields?.err)) as { cause: { message: string; stack: string }; message: string; name: string; stack: string };
+
+        expect(field).toMatchObject({ cause: { message: "limit 100", name: "Error" }, message: "too large", name: "RangeError" });
+        expect(field.stack).toContain("RangeError: too large");
+        expect(field.cause.stack).toContain("Error: limit 100");
+    });
+
+    it("keeps an Error nested inside a field object instead of writing `{}`", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const event = await run((log) => {
+            log.error("charge failed", { attempt: { err: new TypeError("card declined"), n: 2 } });
+        });
+
+        expect(JSON.parse(String(event.fields?.attempt))).toMatchObject({ err: { message: "card declined", name: "TypeError" }, n: 2 });
     });
 
     it("finds an Error in a `with()` bound field and in a structured `event()`", async () => {

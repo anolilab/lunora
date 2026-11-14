@@ -1,3 +1,31 @@
+## @lunora/cli [1.0.0-alpha.493](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.492...@lunora/cli@1.0.0-alpha.493) (2026-11-13)
+
+- security(cli): keep convex table reads inside the snapshot directory (#1543)
+
+## @lunora/cli [1.0.0-alpha.492](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.491...@lunora/cli@1.0.0-alpha.492) (2026-11-13)
+
+- security(payment)!: owner-checked subscription changes, replace the raw adapter with provider (#1544)
+
+## @lunora/cli [1.0.0-alpha.491](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.490...@lunora/cli@1.0.0-alpha.491) (2026-11-13)
+
+- fix(cli): loosen the jiti range and align versions across pnpm catalogs (#1590)
+
+## @lunora/cli [1.0.0-alpha.490](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.489...@lunora/cli@1.0.0-alpha.490) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
+## @lunora/cli [1.0.0-alpha.489](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.488...@lunora/cli@1.0.0-alpha.489) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
+## @lunora/cli [1.0.0-alpha.488](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.487...@lunora/cli@1.0.0-alpha.488) (2026-11-05)
+
+- feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)
+
+## @lunora/cli [1.0.0-alpha.487](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.486...@lunora/cli@1.0.0-alpha.487) (2026-11-05)
+
+- feat(codegen): validate lunora.config; Access-aware health probe; env queue warning (#1492)
+
 ## @lunora/cli [1.0.0-alpha.486](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.485...@lunora/cli@1.0.0-alpha.486) (2026-11-05)
 
 - fix(mail): bound sends, dedupe on idempotency keys, guard inbound size (#1483)

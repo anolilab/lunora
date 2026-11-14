@@ -105,6 +105,41 @@ const tableDdl = async (table: string): Promise<string> => {
     return row?.sql ?? "";
 };
 
+/**
+ * Execs for two isolates sharing the binding whose first `ADD COLUMN`s each wait until both have asked for one, so
+ * both are past their probe and the slower `ALTER` meets D1's "duplicate column name".
+ */
+const racingIsolates = (): (() => SqlCtxExec) => {
+    const waiting: (() => void)[] = [];
+    const arrive = async (): Promise<void> =>
+        new Promise<void>((resolve) => {
+            waiting.push(resolve);
+
+            if (waiting.length === 2) {
+                for (const release of waiting) {
+                    release();
+                }
+            }
+        });
+
+    return () => {
+        const { exec } = recordingExec();
+
+        return {
+            all: exec.all,
+            run: async (query, parameters) => {
+                const isFirstAlter = /add column/iu.test(query) && waiting.length < 2;
+
+                if (isFirstAlter) {
+                    await arrive();
+                }
+
+                await exec.run(query, parameters);
+            },
+        };
+    };
+};
+
 const addColumnStatements = (statements: ReadonlyArray<string>): string[] => statements.filter((statement) => /add column/iu.test(statement));
 
 describe("global table drift on D1 in workerd", () => {
@@ -149,6 +184,67 @@ describe("global table drift on D1 in workerd", () => {
         // `ADD COLUMN` on a column that exists fails, and the failure is not caught.
         expect(addColumnStatements(statements)).toStrictEqual([]);
         await expect(tableDdl(table)).resolves.toContain(`"slug" TEXT NOT NULL`);
+    });
+
+    it("adds a column once when two isolates both probed before either altered", async () => {
+        expect.assertions(2);
+
+        const table = "raced_notes";
+
+        await env.DB.prepare(
+            `CREATE TABLE "${table}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "${OCC_VERSION_COLUMN}" INTEGER, "body" TEXT NOT NULL)`,
+        ).run();
+
+        const isolate = racingIsolates();
+
+        const results = await Promise.allSettled([
+            runSqlGlobalTableMigrations(isolate(), schemaFor(table), sqliteDialect),
+            runSqlGlobalTableMigrations(isolate(), schemaFor(table), sqliteDialect),
+        ]);
+
+        expect(results.map((result) => result.status)).toStrictEqual(["fulfilled", "fulfilled"]);
+        await expect(tableDdl(table)).resolves.toContain(`"slug"`);
+    });
+
+    it("adds a defaulted column and fills its old rows in one D1 batch", async () => {
+        expect.assertions(2);
+
+        const table = "defaulted_notes";
+
+        await env.DB.prepare(
+            `CREATE TABLE "${table}" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "${OCC_VERSION_COLUMN}" INTEGER, "body" TEXT NOT NULL)`,
+        ).run();
+        await env.DB.prepare(`INSERT INTO "${table}" ("id", "_creationTime", "body") VALUES ('n1', 1, 'hello')`).run();
+
+        const { exec } = recordingExec();
+        const batches: string[][] = [];
+        const schema = {
+            tables: {
+                [table]: {
+                    indexes: [],
+                    shape: { body: col("string"), slug: { _meta: { column: { defaultValue: "untitled", notNull: true } }, kind: "string" } },
+                    shardMode: { kind: "global" },
+                },
+            },
+        } as never;
+
+        await runSqlGlobalTableMigrations(
+            {
+                ...exec,
+                batch: async (statements) => {
+                    batches.push(statements.map((statement) => statement.sql));
+                    await env.DB.batch(statements.map((statement) => env.DB.prepare(statement.sql).bind(...statement.params)));
+                },
+            },
+            schema,
+            sqliteDialect,
+        );
+
+        // The UPDATE names a column only the ALTER before it in the same batch creates.
+        expect(batches.some((statements) => statements.length === 2 && /add column/iu.test(statements[0] ?? "") && /^update/iu.test(statements[1] ?? ""))).toBe(
+            true,
+        );
+        await expect(env.DB.prepare(`SELECT "slug" FROM "${table}"`).first<{ slug: string }>()).resolves.toStrictEqual({ slug: "untitled" });
     });
 
     it("refuses a unique index over duplicate rows with the code that names the fix", async () => {

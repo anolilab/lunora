@@ -24,7 +24,7 @@ const FAQS = [
         q: "Where does my data live?",
     },
     {
-        a: "Yes, and self-hosting is the only mode. It is not a degraded tier of a paid product. The framework is FSL-1.1-Apache-2.0: source-available now, and each release converts to Apache-2.0 on a fixed schedule.",
+        a: "Yes, and self-hosting is the only mode. It is not a degraded tier of a paid product. The framework is Apache-2.0. The hosted Lunora Cloud is FSL-1.1-Apache-2.0: source-available now, and each release converts to Apache-2.0 on a fixed schedule.",
         q: "Can I self-host it?",
     },
     {

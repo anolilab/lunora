@@ -229,6 +229,7 @@ lunora build --emit-bindings .lunora/bindings.json
         { "type": "vectorize", "binding": "VECTORS", "resource": "acme-index" },
     ],
     "crons": ["*/5 * * * *"],
+    "malformed": [],
     "vars": ["API_BASE"],
     "unknown": [],
 }
@@ -236,7 +237,7 @@ lunora build --emit-bindings .lunora/bindings.json
 
 It is derived from `wrangler.jsonc` **after** the pre-deploy pipeline has
 reconciled it, so it describes what the bundle actually needs rather than what
-happened to be written down. Three things worth knowing:
+happened to be written down. Four things worth knowing:
 
 - **Every binding is listed, including the ones Lunora cannot provision.** A KV
   namespace id, a Hyperdrive id, a Vectorize index: Lunora warns about these and
@@ -247,6 +248,10 @@ happened to be written down. Three things worth knowing:
   not model lands there by name rather than being dropped, so an
   under-provisioned deploy is visible here instead of at runtime. A non-empty
   `unknown` is worth reading before you trust the rest.
+- **`malformed` names keys of the wrong shape.** `kv_namespaces` written as an
+  object, or a `null` entry in `queues.producers`, is left out of `bindings` and
+  named here instead of failing the build. Wrangler rejects the same config, so
+  fix it there.
 
 <Callout type="warn">
     **`wrangler.jsonc` is declaration-only under external IaC.** Lunora's validator reads it to check that every binding a schema needs is declared, but it

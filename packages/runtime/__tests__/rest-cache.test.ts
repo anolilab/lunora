@@ -95,6 +95,16 @@ describe("restCacheHeaders", () => {
         expect(restCacheHeaders(policy, get(), 200)?.vary).toContain("x-api-key");
     });
 
+    it("answers private, not a throw, when a declared credential header is no header name", () => {
+        expect.assertions(2);
+
+        // A misspelling of the header the app authenticates on: it cannot be looked for, so every request is treated as carrying it.
+        const policy: RestCachePolicy = { ...publicCache, credentialHeaders: ["X Api Key"] };
+
+        expect(restCacheHeaders(policy, get(), 200)?.["cache-control"]).toBe("private, max-age=60");
+        expect(restCacheHeaders(policy, get({ headers: { "x-api-key": "k" } }), 200)?.["cache-control"]).toBe("private, max-age=60");
+    });
+
     it("refuses to cache a non-GET exchange", () => {
         expect.assertions(1);
 

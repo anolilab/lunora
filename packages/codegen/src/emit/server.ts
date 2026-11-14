@@ -1,5 +1,6 @@
 import type { CapabilityKey, CapabilityTier } from "../capabilities";
 import { CAPABILITIES } from "../capabilities";
+import type { AuthClaim } from "../discover/auth-claims";
 import type { AgentIR, ContainerIR, EnvIR, IdentityIR, QueueIR, SchemaIR, ServiceBindingIR, TopicIR, WorkflowIR } from "../ir";
 import { plainQueues } from "../ir";
 import { serviceDeclarationSpecifier } from "./service-declarations";
@@ -62,6 +63,9 @@ interface EmitServerOptions {
     /** Agents declared via `defineAgent` exports — wires the typed `ctx.agents` producers onto Mutation/Action contexts. */
     agents?: ReadonlyArray<AgentIR>;
 
+    /** App-declared user columns (`user.additionalFields`) typed as claims on `ctx.auth`. Empty ⇒ no `AuthClaims` block. */
+    authClaims?: ReadonlyArray<AuthClaim>;
+
     /**
      * The package-backed capabilities the app uses (post platform gate). Each
      * used row of the `CAPABILITIES` table with a `serverCtxField` lands on the
@@ -111,6 +115,7 @@ interface EmitServerOptions {
 /* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each declaration-driven fragment behind its own flag/length check to assemble dense generated TS; the branching is the per-feature emission contract, not refactorable logic */
 const emitServer = ({
     agents = [],
+    authClaims = [],
     capabilities = new Set(),
     containers = [],
     env,
@@ -389,26 +394,59 @@ ${agents
     // the `authorizeShard`/`authorizeFanOut` identity to it. Every fragment is
     // gated on the contract existing, so with no `defineIdentity` the emitted
     // server.ts is byte-identical to before this feature.
-    const identityTypeImport = identity
+    // App-declared user columns (`user.additionalFields` of `.auth()`) reach the identity
+    // as claims, so they type `ctx.auth` too. Claims alone, with no contract, still narrow
+    // `getIdentity()`: the built-in claims come from `SessionIdentity`, the declared ones add to it.
+    const typedIdentity = identity !== undefined || authClaims.length > 0;
+    const contractImport = identity
         ? `import type { InferIdentity } from "${base.server}";\nimport type * as lunoraIdentityContract from "../identity.js";\n`
         : "";
-    const identityTypeBlock = identity
-        ? `
+    // A claims-only identity extends `SessionIdentity`; a declared contract already carries its own shape.
+    const sessionIdentityImport = identity === undefined && authClaims.length > 0 ? `import type { SessionIdentity } from "@lunora/auth";\n` : "";
+    const identityTypeImport = contractImport + sessionIdentityImport;
+    const authClaimsBlock =
+        authClaims.length === 0
+            ? ""
+            : `
 
-/** This app's declared identity claim contract (\`defineIdentity\` in \`lunora/identity.ts\`) — the typed shape of \`ctx.auth.getIdentity()\`, the RLS policy \`ctx.auth.identity\`, and the \`authorizeShard\`/\`authorizeFanOut\` identity argument. */
-export type Identity = InferIdentity<typeof lunoraIdentityContract.${identity.exportName}>;
+/** App-declared user columns the session forwards as claims (\`user.additionalFields\` of \`.auth()\`). Optional: a user whose column is unset never carries it. */
+export type AuthClaims = {
+${authClaims.map((claim) => `    ${claim.name}?: ${claim.type};`).join("\n")}
+};`;
+    let identityDeclaration: string;
 
-/** \`ctx.auth\` narrowed so \`getIdentity()\` resolves the declared {@link Identity} contract instead of the untyped claim bag. */
+    if (identity === undefined) {
+        // With no contract the identity is still an open claim bag at runtime (a JWT `sub`, a
+        // test harness claim, a column codegen refused), so keys outside the typed ones read as `unknown`.
+        identityDeclaration = "export type Identity = SessionIdentity & AuthClaims & Record<string, unknown>;";
+    } else if (authClaims.length === 0) {
+        identityDeclaration = `export type Identity = InferIdentity<typeof lunoraIdentityContract.${identity.exportName}>;`;
+    } else {
+        // The contract's keys win: a claim the contract declares is dropped from the claim type, so the two never intersect.
+        identityDeclaration = `type DeclaredIdentity = InferIdentity<typeof lunoraIdentityContract.${identity.exportName}>;\nexport type Identity = DeclaredIdentity & Omit<AuthClaims, keyof DeclaredIdentity>;`;
+    }
+
+    const identityDocument =
+        authClaims.length === 0
+            ? "/** This app's declared identity claim contract (\\`defineIdentity\\` in \\`lunora/identity.ts\\`) — the typed shape of \\`ctx.auth.getIdentity()\\`, the RLS policy \\`ctx.auth.identity\\`, and the \\`authorizeShard\\`/\\`authorizeFanOut\\` identity argument. */"
+            : "/** This app's identity: the declared claim contract (\\`defineIdentity\\` in \\`lunora/identity.ts\\`) and the user-column claims, the typed shape of \\`ctx.auth.getIdentity()\\`, the RLS policy \\`ctx.auth.identity\\`, and the \\`authorizeShard\\`/\\`authorizeFanOut\\` identity argument. */";
+    const identityTypeBlock = typedIdentity
+        ? `${authClaimsBlock}
+
+${identityDocument}
+${identityDeclaration}
+
+/** \`ctx.auth\` narrowed so \`getIdentity()\` resolves the declared {@link Identity} instead of the untyped claim bag. */
 type NarrowedAuth = Omit<QueryCtxBase["auth"], "getIdentity"> & { getIdentity: () => Promise<Identity | null> };`
         : "";
     // Appended to each ctx's `Omit<…Base, …>` key union and body so the narrowed
-    // `auth` replaces the base `AuthState`; empty when no contract is declared.
-    const authOmit = identity ? ` | "auth"` : "";
-    const authContextField = identity ? `\n    readonly auth: NarrowedAuth;` : "";
+    // `auth` replaces the base `AuthState`; empty when no identity type is declared.
+    const authOmit = typedIdentity ? ` | "auth"` : "";
+    const authContextField = typedIdentity ? `\n    readonly auth: NarrowedAuth;` : "";
     // Threads the declared claim type into the relation-aware RLS DSL, so a
     // policy's `ctx.auth.identity` narrows to {@link Identity}. Empty ⇒ the
     // untyped `Record<string, unknown>` default in `createPolicyDsl`.
-    const policyIdentityArgument = identity ? ", Identity" : "";
+    const policyIdentityArgument = typedIdentity ? ", Identity" : "";
 
     // `ctx.env` — the validated, typed environment declared by `defineEnv(...)` in
     // `lunora/env.ts`. Like the identity block, only the export binding is lifted;

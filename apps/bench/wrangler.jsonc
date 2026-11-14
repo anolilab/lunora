@@ -1,0 +1,114 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-bench",
+    "main": "lunora/server.ts",
+    "compatibility_date": "2026-10-01",
+    "compatibility_flags": ["nodejs_compat"],
+    // Production setting, and what the app behind #1166 shipped (an 11 MiB minified bundle).
+    "minify": true,
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+            { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+        ],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO", "SchedulerDO"] }],
+    "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+    },
+    // Deploy attribution and REST edge-cache scoping: the runtime stamps the
+    // version onto every request-log row, and keys stored REST responses by it so
+    // a deploy never serves the previous code's answers.
+    "version_metadata": { "binding": "CF_VERSION_METADATA" },
+    "d1_databases": [
+        {
+            "binding": "DB",
+            "database_name": "replace-me-db",
+            "database_id": "00000000-0000-4000-8000-000000000000",
+        },
+    ],
+    "vars": {
+        // The worker's public URL. Scheduled and agent dispatch call back to it, and the MCP endpoint 401s without it.
+        "APP_BASE_URL": "",
+        "LUNORA_ORIGIN_URL": "",
+        // Invitation links are built from this, so it must be the public origin the invitee can open.
+        "BETTER_AUTH_URL": "",
+    },
+    "ai": {
+        "binding": "AI",
+    },
+    "send_email": [
+        {
+            "name": "SEND_EMAIL",
+            "destination_address": "REPLACE_ME@example.com",
+        },
+    ],
+    "r2_buckets": [
+        {
+            "binding": "UPLOADS",
+            "bucket_name": "replace-me-uploads",
+        },
+    ],
+    "kv_namespaces": [
+        {
+            "binding": "KV",
+            "id": "<replace-with-kv-namespace-id>",
+        },
+    ],
+    "hyperdrive": [
+        {
+            "binding": "HYPERDRIVE",
+            "id": "<replace-with-hyperdrive-create-id>",
+        },
+    ],
+    "browser": {
+        "binding": "BROWSER",
+    },
+    "analytics_engine_datasets": [
+        {
+            "binding": "ANALYTICS",
+            "dataset": "ANALYTICS",
+        },
+    ],
+    "upload_source_maps": true,
+    "exports": {
+        "OnboardingWorkflow": {
+            "type": "workflow",
+            "name": "onboarding",
+        },
+        "SupportAgentWorkflow": {
+            "type": "workflow",
+            "name": "agent-support",
+        },
+    },
+    "queues": {
+        "consumers": [
+            // Failed deliveries land in a dead-letter queue instead of being dropped. The queues must exist.
+            {
+                "queue": "events",
+                "max_retries": 3,
+                "dead_letter_queue": "events-dlq",
+            },
+            {
+                "queue": "mail",
+                "max_retries": 5,
+                "dead_letter_queue": "mail-dlq",
+            },
+        ],
+        "producers": [
+            {
+                "binding": "QUEUE_EVENTS",
+                "queue": "events",
+            },
+            {
+                "binding": "QUEUE_MAIL",
+                "queue": "mail",
+            },
+        ],
+    },
+    "triggers": {
+        "crons": ["0 */1 * * *", "15 3 * * *"],
+    },
+}

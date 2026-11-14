@@ -4,6 +4,7 @@ export type {
     AuthAdmin,
     AuthAdminSession,
     AuthAdminUser,
+    AuthApiKey,
     AuthCapabilities,
     AuthConfigInfo,
     AuthInvitation,

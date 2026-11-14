@@ -39,6 +39,8 @@ import {
 } from "@lunora/d1/dialect";
 import { LunoraError } from "@lunora/errors";
 
+import { ALLOW_DESTRUCTIVE_MARKER } from "../../../../shared/allow-destructive-marker";
+
 /** Compact snapshot of a single global table — what we persist + diff. */
 interface TableSnapshot {
     columns: Record<string, ColumnSnapshot>;
@@ -148,7 +150,12 @@ const renderCreateTable = (table: TableSnapshot): string => {
     return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(table.name)} (\n${lines}\n);`;
 };
 
-const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
+/**
+ * `lunora migrate apply` gates a destructive file on `--yes`, not on this marker, so the marker matters only to
+ * `MigrationRunner`, when a user splits the file at each `;` into its entries by hand. On the line before the statement,
+ * so the split keeps it with its `DROP` rather than handing it to the next statement.
+ */
+const renderDropTable = (tableName: string): string => `${ALLOW_DESTRUCTIVE_MARKER}\nDROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
 
 /**
  * `ALTER TABLE … ADD COLUMN`, always nullable. SQLite rejects `ADD COLUMN … NOT NULL` without a default on a table
@@ -175,7 +182,9 @@ const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
     return `CREATE ${uniqueClause}INDEX IF NOT EXISTS ${physicalIndexName(tableName, index.name)} ON ${quoteIdentifier(tableName)} (${fields});`;
 };
 
-const renderDropIndex = (tableName: string, indexName: string): string => `DROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)};`;
+/** Confirmed for `MigrationRunner` the same way as {@link renderDropTable}. */
+const renderDropIndex = (tableName: string, indexName: string): string =>
+    `${ALLOW_DESTRUCTIVE_MARKER}\nDROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)};`;
 
 /**
  * The column's shape with `optional` stripped — that flag is the same fact as

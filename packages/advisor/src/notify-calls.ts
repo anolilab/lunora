@@ -38,6 +38,8 @@ export interface AdvisorNotifyConfig {
     hasFcm: boolean;
     /** Whether `defineNotify` wired the Web Push channel. */
     hasWebPush: boolean;
-    /** Whether any handler sends a push (`ctx.push.send` / `ctx.push.broadcast`). */
+    /** Whether any handler sends a push to FCM only (`ctx.push.sendToTopic` / `sendToCondition`). */
+    usesFcmOnlySend: boolean;
+    /** Whether any handler sends a push (`ctx.push.send` / `ctx.push.broadcast` / the FCM-only sends). */
     usesPush: boolean;
 }

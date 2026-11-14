@@ -2,23 +2,25 @@
 
 import type { AuthImpersonation, AuthPage, AuthSession, AuthUser, LunoraClient } from "@lunora/client";
 import type { LunoraAdminClient } from "@lunora/client/admin";
-import { isLunoraAdminClient } from "@lunora/client/admin";
+import { requireAdminAuthClient } from "@lunora/client/admin";
 import type { AdminAuthList, AuthUsersListFilter } from "@lunora/client/auth";
 import {
     ADMIN_AUTH_DEFAULT_PAGE_SIZE,
+    adminAuthImpersonateMutation,
     adminAuthListHasMore,
-    adminAuthListQueryKey,
+    adminAuthListPlaceholder,
+    adminAuthListQueryOptions,
     authOrganizationsList,
     authSessionsList,
     authSignUpInvitationsList,
     authUsersList,
+    nextAdminAuthLimit,
     subscribeAdminAuthIdentity,
 } from "@lunora/client/auth";
-import { LunoraError } from "@lunora/errors";
-import { keepPreviousData, useMutation as useTanStackMutation, useQuery as useTanStackQuery } from "@tanstack/react-query";
+import { useMutation as useTanStackMutation, useQuery as useTanStackQuery } from "@tanstack/react-query";
 import { useState, useSyncExternalStore } from "react";
 
-import { useLunora } from "./lunora-provider";
+import { useLunora, useLunoraQueryClient } from "./lunora-provider";
 
 // ── Prototype: reactive admin/organization auth hooks (plan 237) ──────────
 //
@@ -81,18 +83,7 @@ interface AdminAuthListResult<T> {
  * methods live on that subclass (`@lunora/client/admin`) so an app that never
  * administers auth does not ship them.
  */
-const useAdminClient = (): LunoraAdminClient => {
-    const client = useLunora();
-
-    if (!isLunoraAdminClient(client)) {
-        throw new LunoraError(
-            "INTERNAL",
-            "The admin auth hooks need a LunoraAdminClient: construct the provider's client with `new LunoraAdminClient(...)` from `@lunora/client/admin`.",
-        );
-    }
-
-    return client;
-};
+const useAdminClient = (): LunoraAdminClient => requireAdminAuthClient(useLunora());
 
 /**
  * Shared list-read primitive: fetch a growing `{ limit }` window through
@@ -105,6 +96,7 @@ const useAdminClient = (): LunoraAdminClient => {
 function useAdminAuthList<T>(client: LunoraClient, list: AdminAuthList<T>, options: { enabled?: boolean; pageSize?: number } = {}): AdminAuthListResult<T> {
     const { enabled = true, pageSize = ADMIN_AUTH_DEFAULT_PAGE_SIZE } = options;
     const [limit, setLimit] = useState(pageSize);
+    const queryClient = useLunoraQueryClient();
 
     // Re-render on every identity change so the key below re-partitions at
     // once, not on some unrelated later render (see `adminAuthListQueryKey`).
@@ -114,29 +106,20 @@ function useAdminAuthList<T>(client: LunoraClient, list: AdminAuthList<T>, optio
         () => client.currentIdentity(),
     );
 
-    const queryKey = adminAuthListQueryKey(identity, list, limit);
-
     // `list.fetchPage` is a fresh closure per render and deliberately not in the key — `list.key` already carries every input that should invalidate the cache, and a closure in the key would defeat TanStack's dedup.
-    const query = useTanStackQuery<AuthPage<T>>({
-        enabled,
-        // Keep the previously-resolved page visible (and `isLoading: false`)
-        // while a larger `{ limit }` window — a brand-new `queryKey`, since
-        // `limit` is part of it — is in flight. Without this, `loadMore()`
-        // flashes the whole list to `undefined`/loading on every page grow,
-        // because TanStack v5 has no cached entry for the new key yet.
-        //
-        // Only within one identity: the previous identity's rows must never
-        // stand in for the next one's while its first read is in flight.
-        placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[1] === queryKey[1] ? keepPreviousData(previous) : undefined),
-        queryFn: () => list.fetchPage(limit),
-        queryKey,
-        // `<LunoraProvider>`'s default QueryClient sets `staleTime: Infinity`
-        // globally (correct for `useQuery`'s WS-owned freshness) — override it
-        // here to `0` so a one-shot HTTP-only admin read re-fetches on remount
-        // / window refocus instead of serving a stale cached page indefinitely,
-        // matching Studio's `useClientQuery` default (`use-admin-query.ts`).
-        staleTime: 0,
-    });
+    const queryOptions = adminAuthListQueryOptions(list, identity, limit);
+
+    // Keeps the previous window visible while a larger `{ limit }` loads (a
+    // new key, since `limit` is part of it), so `loadMore()` never flashes the
+    // list to loading. The builder's identity check guards the cross-identity case.
+    const query = useTanStackQuery<AuthPage<T>>(
+        {
+            ...queryOptions,
+            enabled,
+            placeholderData: (previous, previousQuery) => adminAuthListPlaceholder(previous, previousQuery?.queryKey, queryOptions.queryKey),
+        },
+        queryClient,
+    );
 
     const rows = query.data?.rows;
     const total = query.data?.total;
@@ -146,12 +129,9 @@ function useAdminAuthList<T>(client: LunoraClient, list: AdminAuthList<T>, optio
     // — see packem.config.ts) stabilises both closures, matching the rest of
     // this package's hooks (e.g. use-query.ts, use-flag.ts).
     const loadMore = (): void => {
-        // No-op past the end (matches the docstring above) — otherwise a
-        // caller wired to infinite-scroll keeps growing `limit` past `total`,
-        // firing a fresh full-window refetch of the same rows on every call.
-        if (hasMore) {
-            setLimit((current) => current + pageSize);
-        }
+        // No-op past the end (see `nextAdminAuthLimit`) — otherwise a caller wired
+        // to infinite-scroll keeps growing `limit` past `total`, refetching the same rows.
+        setLimit((current) => nextAdminAuthLimit(current, pageSize, hasMore));
     };
 
     const refetch = (): void => {
@@ -310,11 +290,10 @@ interface UseImpersonateResult {
  */
 const useImpersonate = (): UseImpersonateResult => {
     const client = useAdminClient();
+    const queryClient = useLunoraQueryClient();
 
-    const mutation = useTanStackMutation<AuthImpersonation, Error, string>({
-        mutationFn: (userId: string) => client.impersonateAuthUser({ userId }),
-        // No `onSuccess` invalidation here — see the docstring above.
-    });
+    // No `onSuccess` invalidation here — see the docstring above.
+    const mutation = useTanStackMutation<AuthImpersonation, Error, string>(adminAuthImpersonateMutation(client), queryClient);
 
     const { mutateAsync, reset } = mutation;
 

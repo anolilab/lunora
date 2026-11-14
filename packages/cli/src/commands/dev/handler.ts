@@ -2,10 +2,12 @@ import { runCodegen } from "@lunora/codegen";
 import type { ContainerLogStreamHandle, DiscoveryCache } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
+    checkDevEnv,
     claimAgentRulesHint,
     claimDevServerState,
     clearDevServerState,
     createDiscoveryCache,
+    describeDevEnvCheck,
     detectAgentRules,
     detectAiAgent,
     DEV_BINDINGS_FILE,
@@ -15,9 +17,11 @@ import {
     DEV_STATE_FILE,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
+    devTriggerHints,
     ensureDevVariables,
     ensureDevVarsExample,
     fillDevSecrets,
+    formatDevBannerRow,
     inferLunoraBindings,
     isInteractive,
     readLiveDevServerState,
@@ -55,7 +59,7 @@ import { normalizeAllowMail, printPublicWarning, startTunnelForPlan } from "./tu
 import type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, WorkerProcess, WorkerSpawner } from "./types";
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
-const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined, manifestPath: string | undefined): void => {
+const printBanner = (logger: Logger, plan: DevCommandPlan, cwd: string, studioUrl: string | undefined, manifestPath: string | undefined): void => {
     logger.info("");
     logger.success("Lunora dev");
     logger.info(`  ➜  Worker:     ${plan.workerOrigin}`);
@@ -68,6 +72,12 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
 
     if (plan.runsCodegenWatch) {
         logger.info("  ➜  Codegen:    watching lunora/");
+    }
+
+    // Studio pointers only: `wrangler dev` already prints the `curl` for its
+    // `/cdn-cgi/local/scheduled` route when the config declares crons.
+    for (const { label, text } of devTriggerHints({ projectRoot: cwd, schemaDirectory: resolveSchemaDirectory(cwd), studioUrl })) {
+        logger.info(formatDevBannerRow(label, text, 12));
     }
 
     // The two files a task runner reads. The manifest is written whether or not
@@ -111,6 +121,37 @@ const printAgentRulesHint = (logger: Logger, cwd: string): void => {
 
     logger.info(`  ⓘ  ${AGENT_RULES_HINT}`);
     logger.info("");
+};
+
+/**
+ * Warn about keys the project's `defineEnv` contract needs and the dev env
+ * lacks, which `defineEnv` would otherwise report only as a 500 from the first
+ * request that reads one. Never fails the start. Only on the wrangler flavor:
+ * the vite and framework-worker flavors run `@lunora/vite`, whose plugin runs
+ * the same check and re-runs it on an `env.ts` edit.
+ */
+const reportDevEnv = async (logger: Logger, cwd: string, plan: DevCommandPlan): Promise<void> => {
+    if (plan.flavor !== "wrangler") {
+        return;
+    }
+
+    try {
+        const schemaDirectory = resolveSchemaDirectory(cwd);
+        // As the worker runs: `--var WORKER_ENV:development`, and without the bindings a logged-out session withholds.
+        const check = await checkDevEnv({
+            projectRoot: cwd,
+            schemaDirectory,
+            vars: { WORKER_ENV: "development" },
+            withheld: plan.remote.withheld.map((entry) => entry.binding),
+        });
+        const report = describeDevEnvCheck(check, schemaDirectory);
+
+        if (report !== undefined) {
+            logger[report.level](report.message);
+        }
+    } catch {
+        /* never fatal: the check only advises, like the scaffold offer before it */
+    }
 };
 
 /**
@@ -162,6 +203,9 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
         info: (message) => {
             options.logger.info(message);
         },
+        warn: (message) => {
+            options.logger.warn(message);
+        },
     });
 
     // In CI / non-TTY contexts the scaffolder declines silently. Emit an
@@ -174,6 +218,12 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
                 `Copy ${DEV_VARS_EXAMPLE_FILE} → ${DEV_VARS_FILE} and fill in secrets, ` +
                 `or run \`lunora dev\` in an interactive terminal to scaffold automatically.`,
         );
+    }
+
+    // The scaffold warned it wrote nothing because a dev-vars file is not readable;
+    // filling secrets now would write `.dev.vars` behind that warning.
+    if (result.status === "unreadable") {
+        return;
     }
 
     // Phase 3 — fill any empty/placeholder secret already in .dev.vars (a
@@ -229,7 +279,7 @@ const afterWorkerSpawn = (
         /* never fatal */
     }
 
-    printBanner(logger, plan, studioUrl, manifestPath);
+    printBanner(logger, plan, cwd, studioUrl, manifestPath);
 
     return containerLogs;
 };
@@ -305,10 +355,11 @@ const emitDevBindingManifest = (options: {
             ...(plan.flavor === "wrangler" ? { origin: plan.workerOrigin } : {}),
             statusFile: DEV_STATE_FILE,
         },
+        logger,
+        projectRoot: cwd,
         // The default write must not announce itself on every `lunora dev`; the
         // requested one should say where it put the file.
-        logger: requested ? logger : { ...logger, success: () => {}, warn: () => {} },
-        projectRoot: cwd,
+        quiet: !requested,
     });
 
     if (result.error !== undefined) {
@@ -605,6 +656,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         }
 
         await offerDevVariablesScaffold(options, cwd, discoveryCache);
+
+        await reportDevEnv(logger, cwd, plan);
 
         logger.info(startBanner(plan));
 

@@ -2448,6 +2448,108 @@ export const backfillNames = defineMigration({
             expect(infos.some((line) => line.includes("backfill-names"))).toBe(true);
         });
 
+        it("--migrate applies the generated SQL files before the data migrations", async () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "lunora", "migrations.ts"),
+                `import { defineMigration } from "@lunora/server";
+
+export const backfillNames = defineMigration({
+    id: "backfill-names",
+    table: "users",
+    up: (doc) => doc,
+});
+`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora", "migrations"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "migrations", "20261101090000_create_emails.sql"),
+                'CREATE TABLE IF NOT EXISTS "emails" ("_id" TEXT);\n',
+                "utf8",
+            );
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+            const urls: string[] = [];
+            const fetchStub: StreamingFetchLike = async (url) => {
+                urls.push(url);
+
+                const body = url.endsWith("/_lunora/admin/sql-migrations")
+                    ? { files: [{ destructive: [], name: "20261101090000_create_emails.sql", skipped: [], state: "ran", statements: [] }] }
+                    : { status: "ok" };
+
+                return { ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(body)) } as Response;
+            };
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                fetchImpl: fetchStub,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                spawner,
+            });
+
+            const sqlAt = urls.findIndex((url) => url.endsWith("/_lunora/admin/sql-migrations"));
+            const dataAt = urls.findIndex((url) => url.endsWith("/_lunora/migrate"));
+
+            expect(result.code).toBe(0);
+            expect(sqlAt).toBeGreaterThanOrEqual(0);
+            expect(dataAt).toBeGreaterThan(sqlAt);
+            expect(urls.filter((url) => url.endsWith("/_lunora/admin/sql-migrations"))).toHaveLength(1);
+        });
+
+        it("--migrate stops after a refused SQL file: no data migration runs, and the deploy fails", async () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(workdir, "lunora", "migrations.ts"),
+                `import { defineMigration } from "@lunora/server";
+
+export const backfillNames = defineMigration({
+    id: "backfill-names",
+    table: "users",
+    up: (doc) => doc,
+});
+`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora", "migrations"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "migrations", "20261107100000_drop_emails.sql"), 'DROP TABLE IF EXISTS "emails";\n', "utf8");
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+            const urls: string[] = [];
+            const fetchStub: StreamingFetchLike = async (url) => {
+                urls.push(url);
+
+                return { ok: false, status: 409, text: () => Promise.resolve(JSON.stringify({ code: "MIGRATION_DESTRUCTIVE" })) } as Response;
+            };
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                fetchImpl: fetchStub,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                spawner,
+            });
+
+            expect(result.code).not.toBe(0);
+            expect(urls.some((url) => url.endsWith("/_lunora/migrate"))).toBe(false);
+            expect(urls).toHaveLength(1);
+        });
+
         it("--migrate does not claim migrations were applied when none were", async () => {
             expect.assertions(3);
 
@@ -2669,7 +2771,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { logger } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: true, status: 200 };
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });
@@ -2677,7 +2779,10 @@ export const backfillNames = defineMigration({
                 expect(result.code).toBe(0);
                 expect(result.healthCheck?.ok).toBe(true);
                 // Probed at the URL THIS run published to, readiness gate first.
-                expect(healthFetch).toHaveBeenCalledWith("https://lunora-app.acme.workers.dev/_lunora/health/ready");
+                expect(healthFetch).toHaveBeenCalledWith(
+                    "https://lunora-app.acme.workers.dev/_lunora/health/ready",
+                    expect.objectContaining({ redirect: "manual" }),
+                );
                 expect(result.healthCheck?.error).toBeUndefined();
             });
 
@@ -2689,7 +2794,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { errors, logger } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: false, status: 503 };
+                    return { headers: new Headers(), ok: false, status: 503 };
                 });
 
                 const result = await runDeployCommand({
@@ -2718,7 +2823,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { logger, warns } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: true, status: 200 };
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runDeployCommand({
@@ -2746,7 +2851,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner("Total Upload: 1 KiB\nDeployed lunora-app triggers\n");
                 const { errors, logger } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: true, status: 200 };
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });

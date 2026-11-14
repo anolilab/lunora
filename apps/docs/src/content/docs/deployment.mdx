@@ -121,6 +121,27 @@ not forced into TypeScript for one file. `.cts` / `.cjs` are deliberately not:
 Vite's default `resolve.extensions` does not cover them, so the specifier the
 generated worker entry imports for the `app` hook would not resolve.
 
+Codegen checks the file before it reads it, on every `lunora dev`, `codegen`,
+`build` and `deploy` run and in the Vite and Rspack plugins. A key that is not
+one of `advisor`, `app`, `codegen`, `durableObjects`, `remote`, `security`,
+`services`, `studio` and `target` (or not one of a section's keys, down to an
+`advisor.accept` entry), a literal of the wrong type such as `remote: "true"`
+or `rpc: true`, and a file with only named exports and no `export default` each
+stop the run with a `PROJECT_CONFIG_INVALID` error that names the key and the
+closest valid spelling:
+
+```text
+lunora.config.ts is invalid:
+  - unknown key `remot`. Did you mean `remote`? Valid keys: advisor, app, codegen, durableObjects, remote, security, services, studio, target.
+```
+
+A computed value (`remote: process.env.REMOTE === "1"`) is not checked, because
+codegen reads the file without running it, and neither is a value in an object
+that also has a spread (`{ ...base, remote: true }`), which the spread may
+override; the key names around it still are. `LunoraConfig` types `remote` as
+a boolean, but a `remote: null` in a file that is not type-checked is read as no
+preference, the same as leaving `remote` out.
+
 Every template that declares a tsconfig `include` lists `lunora.config.ts` in it,
 which is what gets the file type-checked (nuxt declares none — it extends the
 config Nitro generates, which already covers the project root).
@@ -330,10 +351,18 @@ have not declared your own:
   `CLOUDFLARE_ACCOUNT_ID`. A dry run says what it would create and only warns when it cannot check,
   and `--temporary`, which deploys to a throwaway account, checks nothing and says so.
 
-No step applies the SQL that `lunora migrate generate` emits — see
-[Migrations](/docs/concepts/migrations). Data migrations run **after** the
-deploy, and only under `--migrate` (which also requires `--migrate-yes` and, on
-an unlinked checkout, `--migrate-url`).
+Under `--migrate`, the deploy applies the SQL that `lunora migrate generate` emits
+(`lunora migrate apply`) and then runs the data migrations, both **after** the
+deploy. Both require `--migrate-yes` for a production target and, on an unlinked
+checkout, `--migrate-url`. A committed file that drops or replaces data also needs
+`--migrate-allow-destructive`: `--migrate-yes` confirms the target and never a DROP
+by itself. The SQL step takes the root admin token, or a token
+minted with `--scope migrations`. The scoped token runs only additive files (a new
+table or index, an added column); a file with a DROP, a row write or a trigger is
+refused, and `deploy --migrate` then stops before the data migrations. A pipeline
+that needs those runs `deploy --migrate` with the root token. A deploy tool other
+than `lunora deploy` runs `lunora migrate apply --url <worker> --yes` as its own
+step; see [Migrations](/docs/concepts/migrations).
 
 CI should run one of these before the deploy job, so codegen drift and a stale
 `_generated/` are a build failure rather than a deploy that silently ships old

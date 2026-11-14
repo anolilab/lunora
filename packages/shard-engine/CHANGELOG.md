@@ -1,3 +1,15 @@
+## @lunora/shard-engine [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.194...@lunora/shard-engine@1.0.0-alpha.195) (2026-11-13)
+
+- fix(do): name a delta's table only for a single-table query (#1595)
+
+## @lunora/shard-engine [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.193...@lunora/shard-engine@1.0.0-alpha.194) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
+## @lunora/shard-engine [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.192...@lunora/shard-engine@1.0.0-alpha.193) (2026-11-05)
+
+- fix(deps): raise the @lunora/errors floor where new codes are thrown (#1502)
+
 ## @lunora/shard-engine [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.191...@lunora/shard-engine@1.0.0-alpha.192) (2026-11-05)
 
 - fix(client): restart a paginated feed when the server refuses its cursor (#1496)

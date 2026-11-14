@@ -81,6 +81,7 @@ import type { AgentIR, FunctionIR, HttpRouteIR, MaskMetadataIR, MigrationIR, Mut
 import { setStandardTypeResolver } from "./parse-validator";
 import { gateAdminTokenRevocation, platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
 import { readMergeDurableObjects, readProjectLazyFunctions, readProjectSecurityHeaders, readProjectStudioCompanion } from "./project-config-file";
+import assertValidProjectConfigs from "./project-config-validate";
 import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged, writeStudioAssets } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
@@ -394,6 +395,10 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const startedAt = timingEnabled ? performance.now() : 0;
 
     const lunoraDirectory = join(options.projectRoot, options.lunoraDirectory ?? "lunora");
+
+    // Before any reader: they look up the keys they know and skip the rest, so a typo would otherwise do nothing in silence.
+    assertValidProjectConfigs(options.projectRoot, lunoraDirectory);
+
     // Either opt-in enables the lazy registry, and `false` does not veto the
     // project's: the config is what keeps every entry point that regenerates
     // `_generated/` in agreement, so a caller that merely omits the flag must
@@ -435,6 +440,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // pass 1 infer against the previous run's declarations.
     const {
         agents,
+        authClaims,
         capabilities,
         containers,
         crons,
@@ -809,6 +815,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const authModuleContent = emitAuthModule(dependencies.has("@lunora/auth"));
     const appContent = emitApp({
         agentWorkflows: agents.map((agent) => agent.className),
+        // Forwarded to the object route and the D1 resolver, which pick the same
+        // columns out of the session. The types on `ctx.auth` come from the same list.
+        authClaims: authClaims.map((claim) => claim.name),
         // Usage-only, never a dependency signal: each long-tail method's
         // parameter type reads `ShardConfig[configKey]` (e.g. `.kv()` reads
         // `ShardConfig["kv"]`), and the shard emits that config field on the

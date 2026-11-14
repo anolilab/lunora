@@ -10,4 +10,7 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => type
 /** A non-empty string — the shape every binding's required fields must satisfy. */
 const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
 
-export { isNonEmptyString, isPlainObject };
+/** The plain-object members of a hand-written list, or `[]` when it is not a list: a `null` or a string entry is skipped, not thrown on. */
+const plainObjectEntries = (list: unknown): Record<string, unknown>[] => (Array.isArray(list) ? list.filter((entry) => isPlainObject(entry)) : []);
+
+export { isNonEmptyString, isPlainObject, plainObjectEntries };

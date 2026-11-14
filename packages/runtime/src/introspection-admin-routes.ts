@@ -116,7 +116,12 @@ const memoizeDocument = (load: DocumentLoader | undefined): DocumentLoader => {
     let loaded: Promise<unknown> | undefined;
 
     return async () => {
-        loaded ??= load?.();
+        // A failed load is not kept: the next request tries again instead of replaying the rejection for the isolate's life.
+        loaded ??= load?.().catch((error: unknown) => {
+            loaded = undefined;
+
+            throw error;
+        });
 
         return loaded;
     };
