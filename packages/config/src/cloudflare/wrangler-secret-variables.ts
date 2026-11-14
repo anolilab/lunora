@@ -20,7 +20,7 @@
  */
 import type { WranglerVariableIR } from "@lunora/codegen";
 import { redact, secretKindOf } from "@lunora/codegen";
-import { findNodeAtLocation, parseTree } from "jsonc-parser";
+import { parseTree } from "jsonc-parser";
 
 import { isPublicKeyName, isSecretKeyName } from "../../../../shared/secret-key";
 import { isPlaceholderValue } from "../scaffold-dev-variables";
@@ -86,15 +86,26 @@ const scanWranglerVariablesForSecrets = (
 };
 
 /**
- * The 1-based line of the top-level `vars` key `key` in the `wrangler.jsonc` text, or `undefined` when the key is not there.
- * Read from the JSONC tree, so a comment or a string that happens to contain the key cannot match.
+ * The 1-based line of each top-level `vars` key in the `wrangler.jsonc` text, read from the JSONC tree so a comment or a
+ * string that happens to contain a key cannot match. A repeated key (or a repeated `vars` object) maps to its last
+ * occurrence, the one whose value the parser keeps and the scan judges.
  */
-const variableKeyLine = (text: string, key: string): number | undefined => {
-    const tree = parseTree(text, [], { allowTrailingComma: true });
-    const entries = tree === undefined ? undefined : findNodeAtLocation(tree, ["vars"])?.children;
-    const keyNode = entries?.find((entry) => entry.children?.[0]?.value === key)?.children?.[0];
+const variableKeyLines = (text: string): ReadonlyMap<string, number> => {
+    const keyNodes = (parseTree(text, [], { allowTrailingComma: true })?.children ?? [])
+        .filter((property) => property.children?.[0]?.value === "vars")
+        .flatMap((property) => property.children?.[1]?.children ?? [])
+        .flatMap((entry) => (typeof entry.children?.[0]?.value === "string" ? [entry.children[0]] : []));
+    const lines = new Map<string, number>();
+    let line = 1;
+    let scanned = 0;
 
-    return keyNode === undefined ? undefined : text.slice(0, keyNode.offset).split("\n").length;
+    for (const keyNode of keyNodes) {
+        line += text.slice(scanned, keyNode.offset).split("\n").length - 1;
+        scanned = keyNode.offset;
+        lines.set(keyNode.value as string, line);
+    }
+
+    return lines;
 };
 
-export { scanWranglerVariablesForSecrets, variableKeyLine };
+export { scanWranglerVariablesForSecrets, variableKeyLines };

@@ -39,10 +39,10 @@ const accessInCall = (call: CallExpression, relativePath: string, config: Argume
 
     const key = call.getArguments()[config.argIndex];
 
-    // Arg-derived (directly or through one local `const` hop) *and* not scoped by
-    // a server-trusted `ctx.*` value — a value like `` `${ctx.auth.userId}:${args.id}` ``
-    // references `ctx` and is treated as scoped, so it is not flagged. An identity
-    // scope also accepts a row the handler checked against the caller before the sink.
+    // Arg-derived (directly or through one local `const` hop) *and* not scoped. `config.scope`
+    // decides what scopes: `"context"` accepts any server-trusted `ctx.*` value, `"identity"`
+    // only the caller's `ctx.auth` identity, a db read bound to it, or a row the handler
+    // checked against the caller before the sink, so an env prefix does not.
     const isScoped = (node: TsNode): boolean =>
         config.scope === "identity" ? isScopedByIdentity(node) || isGuardedByIdentityCheck(call, node) : isScopedByContext(node);
 

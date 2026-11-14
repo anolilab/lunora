@@ -228,6 +228,18 @@ describe("argument-taint", () => {
             ).toBe(true);
         });
 
+        it("rejects a key read off a database write, even one that stamps the caller's identity", () => {
+            expect.assertions(1);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.update({ where: { id: args.fileId }, data: { lastDownloadedBy: ctx.auth.userId } });\nSINK(row.key);`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
         it("rejects a key read off a database row the caller selected by id", () => {
             expect.assertions(1);
 

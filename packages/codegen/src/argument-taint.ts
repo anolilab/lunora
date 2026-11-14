@@ -262,7 +262,18 @@ const invokedBy = (chain: TsNode): CallExpression | undefined => {
  * row it returns is whichever one the caller pointed at, so a key read off it is
  * caller-chosen.
  */
+/** The `ctx.db` methods that read rows; a write returns whatever it wrote, so its arguments do not bind the row to anyone. */
+const DB_READ_METHODS: ReadonlySet<string> = new Set(["find", "findFirst", "findMany", "findUnique", "first", "get", "unique"]);
+
+/** Whether `call` invokes a `ctx.db` row read (`ctx.db.files.findFirst(…)`, `ctx.db.get(…)`), not a write. */
+const isDatabaseReadCall = (call: CallExpression): boolean => {
+    const callee = call.getExpression();
+
+    return Node.isPropertyAccessExpression(callee) && DB_READ_METHODS.has(callee.getName()) && contextTrustPathOf(callee)?.[0] === "db";
+};
+
 const isIdentityBoundRead = (call: CallExpression): boolean =>
+    isDatabaseReadCall(call) &&
     call.getArguments().some((argument) =>
         valueIdentifiersOf(argument).some((identifier) => {
             if (contextTrustPathOf(outermostChainOf(identifier))?.[0] === "auth") {
@@ -289,8 +300,9 @@ const referencesScopedKeySource = (node: TsNode): boolean =>
         const outermost = outermostChainOf(identifier);
         const root = contextTrustPathOf(outermost)?.[0];
 
+        // Inside a `ctx.db` call's arguments the identity only scopes the key through that call, judged below.
         if (root === "auth") {
-            return true;
+            return !identifier.getAncestors().some((ancestor) => Node.isCallExpression(ancestor) && contextTrustPathOf(ancestor.getExpression())?.[0] === "db");
         }
 
         const call = root === "db" ? invokedBy(outermost) : undefined;
@@ -392,30 +404,7 @@ const appFunctionOf = (callee: TsNode | undefined): FunctionNode | undefined => 
     return Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer) ? initializer : undefined;
 };
 
-/**
- * The row a sink key is read off: `K` (or the initializer of `K` when it is a bare identifier) is an
- * access chain with at least one level, rooted at a single-identifier `const` whose initializer is a
- * `ctx.db` read. `undefined` otherwise, which leaves the sink reported.
- */
-const rowDeclarationOf = (key: TsNode): VariableDeclaration | undefined => {
-    const unwrapped = unwrapExpression(key);
-    const chain = Node.isIdentifier(unwrapped) ? (unwrapExpression(trustedInitializerOf(unwrapped)) ?? unwrapped) : unwrapped;
-    const access = accessPathOf(chain);
-
-    if (access === undefined || access.path.length === 0) {
-        return undefined;
-    }
-
-    const declaration = declarationOf(access.root);
-
-    if (!isConstDeclaration(declaration) || !Node.isIdentifier(declaration.getNameNode())) {
-        return undefined;
-    }
-
-    const read = awaitedOperand(declaration.getInitializer());
-
-    return Node.isCallExpression(read) && contextTrustPathOf(read.getExpression())?.[0] === "db" ? declaration : undefined;
-};
+const isAssignmentOperator = (kind: SyntaxKind): boolean => kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
 
 /** A chain of calls and property reads, as a `db` read is written: every call in it, the names read along it, and its root. */
 interface DatabaseChain {
@@ -473,6 +462,33 @@ const singleRowReadOf = (chain: DatabaseChain): { selfEnforcing: boolean } | und
     const base = method.endsWith("OrThrow") ? method.slice(0, -"OrThrow".length) : undefined;
 
     return base !== undefined && SINGLE_ROW_READS.has(base) ? { selfEnforcing: true } : undefined;
+};
+
+/**
+ * The row a sink key is read off: `K` (or the initializer of `K` when it is a bare identifier) is an
+ * access chain with at least one level, rooted at a single-identifier `const` whose initializer is a
+ * `ctx.db` read. `undefined` otherwise, which leaves the sink reported.
+ */
+const rowDeclarationOf = (key: TsNode): VariableDeclaration | undefined => {
+    const unwrapped = unwrapExpression(key);
+    const chain = Node.isIdentifier(unwrapped) ? (unwrapExpression(trustedInitializerOf(unwrapped)) ?? unwrapped) : unwrapped;
+    const access = accessPathOf(chain);
+
+    if (access === undefined || access.path.length === 0) {
+        return undefined;
+    }
+
+    const declaration = declarationOf(access.root);
+
+    if (!isConstDeclaration(declaration) || !Node.isIdentifier(declaration.getNameNode())) {
+        return undefined;
+    }
+
+    // Only a single-row read: an insert or update returns the row as the caller wrote it.
+    const read = awaitedOperand(declaration.getInitializer());
+    const readChain = Node.isCallExpression(read) && contextTrustPathOf(read.getExpression())?.[0] === "db" ? databaseChainOf(read) : undefined;
+
+    return readChain !== undefined && singleRowReadOf(readChain) !== undefined ? declaration : undefined;
 };
 
 /** Every argument of the chain, and every node inside each argument (a callback's body included). */
@@ -602,7 +618,15 @@ const helperEnforcesRead = (helper: FunctionNode, parameter: ParameterDeclaratio
             return false;
         }
 
-        return single.selfEnforcing || statements.slice(index + 1).some((later) => isNullCheckExit(later, declaration, true));
+        const enforcing = single.selfEnforcing ? statement : statements.slice(index + 1).find((later) => isNullCheckExit(later, declaration, true));
+
+        // A `return` before the check is enforced lets a call complete without it.
+        return (
+            enforcing !== undefined &&
+            !helper
+                .getDescendantsOfKind(SyntaxKind.ReturnStatement)
+                .some((exit) => enclosingFunctionOf(exit)?.compilerNode === helper.compilerNode && exit.getStart() < enforcing.getEnd())
+        );
     });
 };
 
@@ -630,8 +654,9 @@ const isHelperGuardCall = (call: CallExpression, row: VariableDeclaration, await
     const tiedParameters: ParameterDeclaration[] = [];
 
     args.forEach((argument, index) => {
-        const tied =
-            index === contextIndex || !valueIdentifiersOf(argument).some((identifier) => bindsTo(identifier, row)) ? undefined : helper.getParameters()[index];
+        // The argument must be the row or a field read off it; `args.id || row.id` may pass the caller's value.
+        const access = accessPathOf(unwrapExpression(argument));
+        const tied = index === contextIndex || access === undefined || !bindsTo(access.root, row) ? undefined : helper.getParameters()[index];
 
         if (tied !== undefined && Node.isIdentifier(tied.getNameNode())) {
             tiedParameters.push(tied);
@@ -733,11 +758,11 @@ export const referencesArgs = (node: TsNode): boolean => referencesBinding(node,
 /**
  * When `node` is a bare identifier bound by a `const key = args.key` (or by a
  * destructure such as `const { key } = args`) in the enclosing handler, return that
- * initializer so a *single* extra hop of taint can be checked (`const key = args.key;
+ * declaration so a *single* extra hop of taint can be checked (`const key = args.key;
  * … key`); otherwise `undefined`. Only same-function declarations are followed — the
  * taint stays deliberately single-hop.
  */
-export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
+export const singleHopDeclaration = (node: TsNode): VariableDeclaration | undefined => {
     if (!Node.isIdentifier(node)) {
         return undefined;
     }
@@ -758,8 +783,10 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     // predicate report MORE, which fails open. The project does carry a type
     // checker, and a predicate that SILENCES on a match must use it instead, as
     // the owner-field feeder does for mutator impls (`implTaintOf`).
+    // A declaration inside a nested function is out of scope at this use, so it cannot be its source.
     const usePosition = node.getStart();
-    let nearest: TsNode | undefined;
+    const ancestors = new Set(node.getAncestors());
+    let nearest: VariableDeclaration | undefined;
     let nearestPosition = -1;
 
     for (const variable of descendantsOfKind(enclosingFunction, SyntaxKind.VariableDeclaration)) {
@@ -767,17 +794,27 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
             continue;
         }
 
-        const initializer = variable.getInitializer();
+        const scope = variable.getFirstAncestor(
+            (ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isFunctionDeclaration(ancestor),
+        );
         const declarationPosition = variable.getStart();
 
-        if (initializer !== undefined && declarationPosition < usePosition && declarationPosition > nearestPosition) {
-            nearest = initializer;
+        if (
+            variable.getInitializer() !== undefined &&
+            (scope === undefined || ancestors.has(scope)) &&
+            declarationPosition < usePosition &&
+            declarationPosition > nearestPosition
+        ) {
+            nearest = variable;
             nearestPosition = declarationPosition;
         }
     }
 
     return nearest;
 };
+
+/** The initializer of {@link singleHopDeclaration}, the value one hop back from `node`. */
+export const singleHopInitializer = (node: TsNode): TsNode | undefined => singleHopDeclaration(node)?.getInitializer();
 
 /**
  * True when `expression` is derived from the handler's `args` — directly (`args.x`,
@@ -990,6 +1027,17 @@ export const isGuardedByIdentityCheck = (sinkCall: CallExpression, key: TsNode):
     const row = rowDeclarationOf(key);
 
     if (enclosing === undefined || row === undefined || enclosingFunctionOf(row)?.compilerNode !== enclosing.compilerNode) {
+        return false;
+    }
+
+    // A `const` row's fields stay writable: `row.key = args.key` after the guard replaces what the guard vouched for.
+    const overwritten = enclosing.getDescendantsOfKind(SyntaxKind.BinaryExpression).some((expression) => {
+        const target = accessPathOf(expression.getLeft());
+
+        return isAssignmentOperator(expression.getOperatorToken().getKind()) && target !== undefined && bindsTo(target.root, row);
+    });
+
+    if (overwritten) {
         return false;
     }
 

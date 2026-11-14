@@ -74,6 +74,20 @@ describe("discoverRawRowReturns", () => {
         expect(rowFor("listFluent")).toMatchObject({ table: "users" });
     });
 
+    it("does not record a rest projection that drops columns from the row", () => {
+        expect.assertions(1);
+
+        write(
+            "redact.ts",
+            `export const me = query(async ({ ctx }) => {
+    const { passwordHash, ...safe } = await ctx.db.users.findFirst({ where: { id: ctx.auth.userId } });
+    return safe;
+});`,
+        );
+
+        expect(rowFor("me")).toBeUndefined();
+    });
+
     it("follows a single local const hop from the read to the return", () => {
         expect.assertions(1);
 

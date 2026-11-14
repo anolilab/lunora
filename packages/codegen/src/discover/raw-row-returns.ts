@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { singleHopInitializer } from "../argument-taint";
+import { singleHopDeclaration } from "../argument-taint";
 import type { RawRowReturnIR } from "../ir";
 import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
@@ -109,7 +109,9 @@ const rawRowReadTable = (expression: TsNode, hopped = false): string | undefined
             return undefined;
         }
 
-        const initializer = singleHopInitializer(node);
+        // Only a binding of the whole value is the row: a destructured name holds one field or a projection of it.
+        const declaration = singleHopDeclaration(node);
+        const initializer = declaration !== undefined && Node.isIdentifier(declaration.getNameNode()) ? declaration.getInitializer() : undefined;
 
         return initializer === undefined ? undefined : rawRowReadTable(initializer, true);
     }
