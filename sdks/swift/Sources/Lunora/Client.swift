@@ -222,6 +222,10 @@ public final class LunoraClient {
     /// type's internal members but not its private ones.
     var send: LunoraFrameSender?
     var subscriptions: [String: Subscription] = [:]
+
+    /// The `ProcessInfo.systemUptime` deadline of the one re-subscribe a retry hint
+    /// asked for, per query subscription id. Guarded by the lock.
+    var pendingRetries: [String: TimeInterval] = [:]
     private var shapes: [String: ShapeSubscription] = [:]
     private var pokes: [String: PokeBuffer] = [:]
 
@@ -475,6 +479,7 @@ public final class LunoraClient {
     public func attachSocket(_ sender: @escaping LunoraFrameSender, context: [String: Any]? = nil) {
         withLock {
             socketGeneration = credentialGeneration
+            pendingRetries.removeAll()
             // A run cut off by a dropped or failed socket will be replayed in full.
             discardRunsLocked()
             sender(
@@ -504,6 +509,7 @@ public final class LunoraClient {
     public func detachSocket(closeCode: Int? = nil, reason: String? = nil) {
         let expired = withLock { () -> Bool in
             send = nil
+            pendingRetries.removeAll()
             discardRunsLocked()
 
             return expiryNotifiedByCloseLocked(closeCode, reason)
@@ -580,6 +586,7 @@ public final class LunoraClient {
         let (queue, finishers) = withLock { () -> (LunoraOfflineQueue, [() -> Void]) in
             closed = true
             send = nil
+            pendingRetries.removeAll()
             discardRunsLocked()
 
             let finishers = Array(streamFinishers.values)
@@ -721,6 +728,18 @@ public final class LunoraClient {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
 
         return number.intValue
+    }
+
+    /// The server's retry hint on a subscription error, in seconds, or nil when it sent none this
+    /// client can honour. Booleans are excluded for the same reason as ``intValue(_:)``.
+    static func retryAfterSeconds(_ envelope: [String: Any]) -> TimeInterval? {
+        guard let number = envelope["retryAfterMs"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+
+        let delay = number.doubleValue
+
+        guard delay.isFinite, delay >= 0 else { return nil }
+
+        return min(delay, Double(lunoraMaxRetryAfterMs)) / 1000
     }
 
     /// An integer from a JSON value, rejecting the `Bool` that bridges to `NSNumber`.
@@ -1011,6 +1030,7 @@ public final class LunoraClient {
 
             let sender = self.withLock { () -> LunoraFrameSender? in
                 self.subscriptions.removeValue(forKey: id)
+                self.pendingRetries[id] = nil
 
                 return self.send
             }
@@ -1202,6 +1222,60 @@ public final class LunoraClient {
         }
     }
 
+    /// Re-subscribes every query whose retry hint has come due by `now`, on the
+    /// `ProcessInfo.systemUptime` clock, and returns how many frames it sent. Nothing is sent, and
+    /// nothing is dropped, while no socket is attached. The caller arms its own timer for
+    /// ``nextSubscriptionRetryAt``.
+    ///
+    /// Each re-subscribe is cold: the hint asks for a fresh snapshot, so the stored resume cursor
+    /// and epoch are cleared first.
+    @discardableResult
+    public func retryDueSubscriptions(now: TimeInterval = ProcessInfo.processInfo.systemUptime) -> Int {
+        let (sender, frames) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
+            guard let sender = send else { return (nil, []) }
+
+            var frames: [[String: Any]] = []
+
+            for id in pendingRetries.filter({ $0.value <= now }).keys {
+                pendingRetries[id] = nil
+
+                guard let entry = subscriptions[id] else { continue }
+
+                entry.cursor = nil
+                entry.epoch = nil
+
+                if let frame = try? LunoraClient.buildSubscribeFrame(id: id, functionPath: entry.functionPath, args: entry.args) {
+                    frames.append(frame)
+                }
+            }
+
+            return (sender, frames)
+        }
+
+        guard let sender else { return 0 }
+
+        for frame in frames {
+            sender(frame)
+        }
+
+        // The frames went out after the lock was released, so an unsubscribe on another thread
+        // may have reached the socket first; follow it with another, or the server keeps a
+        // subscription this client no longer holds.
+        let dropped = withLock { frames.compactMap { $0["id"] as? String }.filter { subscriptions[$0] == nil } }
+
+        for id in dropped {
+            sender(LunoraClient.buildUnsubscribeFrame(id: id))
+        }
+
+        return frames.count
+    }
+
+    /// The earliest pending retry deadline on the `ProcessInfo.systemUptime` clock, or nil when
+    /// none is pending. The caller calls ``retryDueSubscriptions(now:)`` at or after it.
+    public var nextSubscriptionRetryAt: TimeInterval? {
+        withLock { pendingRetries.values.min() }
+    }
+
     /// The layered value one live subscription displays.
     ///
     /// Internal: no consumer needs it — the conformance suite asserts layer counts
@@ -1291,6 +1365,11 @@ public final class LunoraClient {
     private func dispatch(_ frame: [String: Any]) -> String? {
         let kind = frame["type"] as? String
         let id = frame["id"] as? String
+
+        // The server answered this subscription, so a retry it was waiting on is moot.
+        if let id, let kind, ["ack", "data", "delta", "resume", "settled"].contains(kind) {
+            withLock { pendingRetries[id] = nil }
+        }
 
         // Every case below looks the subscription up UNDER the lock and hands the
         // callback back out, rather than resolving `entry` once up here: the app
@@ -1475,6 +1554,15 @@ public final class LunoraClient {
             )
             let handlers = withLock { () -> [(LunoraSubscriptionError) -> Void] in
                 guard let id else { return [] }
+
+                if subscriptions[id] != nil {
+                    if let delay = LunoraClient.retryAfterSeconds(envelope) {
+                        pendingRetries[id] = ProcessInfo.processInfo.systemUptime + delay
+                    } else {
+                        // A hint-less error ends the subscription: drop an earlier hint's retry.
+                        pendingRetries[id] = nil
+                    }
+                }
 
                 return [subscriptions[id]?.onError, shapes[id]?.onError].compactMap { $0 }
             }

@@ -10,6 +10,7 @@ import dev.lunora.Submit.SubmitOptions;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -220,6 +221,13 @@ public final class Client {
     private long attachGeneration;
 
     private final Map<String, Subscription> subscriptions = new LinkedHashMap<>();
+
+    /**
+     * The {@link System#nanoTime} deadline of the one re-subscribe a retry hint asked for, per
+     * query subscription id. Guarded by {@code lock}.
+     */
+    private final Map<String, Long> pendingRetries = new HashMap<>();
+
     private final Map<String, Shape> shapes = new LinkedHashMap<>();
     private final Map<String, PokeBuffer> pokes = new LinkedHashMap<>();
 
@@ -573,6 +581,7 @@ public final class Client {
             this.sender = null;
             discardRuns();
             generation = ++this.attachGeneration;
+            pendingRetries.clear();
             provider = wsTokenProvider;
             credential = credentialGeneration;
         }
@@ -636,6 +645,7 @@ public final class Client {
         synchronized (lock) {
             this.sender = null;
             this.attachGeneration++;
+            pendingRetries.clear();
             discardRuns();
 
             if (closeCode != null && closeCode == CLOSE_TOKEN_EXPIRED) {
@@ -888,6 +898,7 @@ public final class Client {
         synchronized (lock) {
             closed = true;
             sender = null;
+            pendingRetries.clear();
             discardRuns();
             discarded = offlineQueue.clear();
             open = new ArrayList<>(streams);
@@ -1327,6 +1338,7 @@ public final class Client {
 
             synchronized (lock) {
                 subscriptions.remove(id);
+                pendingRetries.remove(id);
                 current = sender;
             }
 
@@ -1558,6 +1570,136 @@ public final class Client {
     }
 
     /**
+     * Re-subscribes every query whose retry hint has come due at {@link System#nanoTime}, and
+     * returns how many frames it sent. Nothing is sent, and nothing is dropped, while no socket is
+     * attached. The caller arms its own timer for {@link #nextSubscriptionRetryAtNanos}.
+     */
+    public int retryDueSubscriptions() {
+        return retryDueSubscriptions(System.nanoTime());
+    }
+
+    /** {@link #retryDueSubscriptions()} at an explicit {@link System#nanoTime} reading. */
+    public int retryDueSubscriptions(long nowNanos) {
+        FrameSender socket;
+        List<Map<String, Object>> frames = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
+
+        // Built under the lock for the same reason as resendSubscriptions: each cold frame
+        // reads the entry the frame handler writes.
+        synchronized (lock) {
+            socket = sender;
+
+            if (socket == null) {
+                return 0;
+            }
+
+            Iterator<Map.Entry<String, Long>> pending = pendingRetries.entrySet().iterator();
+
+            while (pending.hasNext()) {
+                Map.Entry<String, Long> retry = pending.next();
+
+                if (retry.getValue() - nowNanos > 0) {
+                    continue;
+                }
+
+                pending.remove();
+
+                Subscription subscription = subscriptions.get(retry.getKey());
+
+                if (subscription == null) {
+                    continue;
+                }
+
+                subscription.cursor = null;
+                subscription.epoch = null;
+                ids.add(retry.getKey());
+                frames.add(
+                        buildSubscribeFrame(
+                                retry.getKey(),
+                                subscription.functionPath,
+                                subscription.args,
+                                null,
+                                null,
+                                null));
+            }
+        }
+
+        int sent = 0;
+
+        try {
+            for (; sent < frames.size(); sent++) {
+                socket.send(frames.get(sent));
+            }
+        } catch (RuntimeException failure) {
+            // The frames not written yet stay due, unless a newer hint, an unsubscribe or a new
+            // socket has decided their fate since.
+            synchronized (lock) {
+                if (sender == socket) {
+                    for (String id : ids.subList(sent, ids.size())) {
+                        if (subscriptions.containsKey(id)) {
+                            pendingRetries.putIfAbsent(id, nowNanos);
+                        }
+                    }
+                }
+            }
+
+            throw failure;
+        }
+
+        // The frames went out after the lock was released, so an unsubscribe on another thread
+        // may have reached the socket first; follow it with another, or the server keeps a
+        // subscription this client no longer holds.
+        List<String> dropped = new ArrayList<>();
+
+        synchronized (lock) {
+            for (String id : ids) {
+                if (!subscriptions.containsKey(id)) {
+                    dropped.add(id);
+                }
+            }
+        }
+
+        for (String id : dropped) {
+            socket.send(buildUnsubscribeFrame(id));
+        }
+
+        return frames.size();
+    }
+
+    /** The earliest pending retry deadline in {@link System#nanoTime} terms, or null if none. */
+    public Long nextSubscriptionRetryAtNanos() {
+        synchronized (lock) {
+            Long earliest = null;
+
+            for (long deadline : pendingRetries.values()) {
+                if (earliest == null || deadline - earliest < 0) {
+                    earliest = deadline;
+                }
+            }
+
+            return earliest;
+        }
+    }
+
+    /**
+     * The server's retry hint on a subscription error in nanoseconds, or null when it sent none
+     * this client can honour. Booleans and strings are not numbers, so they fall through.
+     */
+    private static Long retryAfterNanos(Map<String, Object> envelope) {
+        if (!(envelope.get("retryAfterMs") instanceof Number number)) {
+            return null;
+        }
+
+        double delay = number.doubleValue();
+
+        if (Double.isNaN(delay) || Double.isInfinite(delay) || delay < 0) {
+            return null;
+        }
+
+        return (long) (Math.min(delay, Offline.MAX_RETRY_AFTER_MS) * 1_000_000L);
+    }
+
+    /**
      * Applies one server frame and returns its type — {@code "error"} for a frame whose payload
      * would not decode, since that one was not delivered. Unknown types are ignored, per the
      * protocol's forward-compatibility rule.
@@ -1579,6 +1721,13 @@ public final class Client {
 
         String kind = frame.get("type") instanceof String text ? text : "";
         String id = frame.get("id") instanceof String text ? text : "";
+
+        // The server answered this subscription, so a retry it was waiting on is moot.
+        if (Set.of("ack", "data", "delta", "resume", "settled").contains(kind)) {
+            synchronized (lock) {
+                pendingRetries.remove(id);
+            }
+        }
 
         // Each case resolves the subscription UNDER the lock and hands the
         // callback back out, rather than looking `entry` up once up here: the app
@@ -1813,6 +1962,14 @@ public final class Client {
                 synchronized (lock) {
                     Subscription entry = subscriptions.get(id);
                     Shape shape = shapes.get(id);
+                    Long delay = retryAfterNanos(envelope);
+
+                    if (entry != null && delay != null) {
+                        pendingRetries.put(id, System.nanoTime() + delay);
+                    } else if (entry != null) {
+                        // A hint-less error ends the subscription: drop an earlier hint's retry.
+                        pendingRetries.remove(id);
+                    }
 
                     if (entry != null && entry.onError != null) {
                         handlers.add(entry.onError);
