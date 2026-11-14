@@ -120,6 +120,26 @@ public typealias LunoraFrameSender = ([String: Any]) -> Void
 /// Cancels a subscription and tells the server to stop.
 public typealias LunoraUnsubscribe = () -> Void
 
+/// Runs a release at most once. It takes the body out before running it, so a
+/// release that re-enters itself through the stream's termination is a no-op.
+private final class LunoraOnceRelease {
+    private let lock = NSLock()
+    private var body: (() -> Void)?
+
+    init(_ body: @escaping () -> Void) {
+        self.body = body
+    }
+
+    func run() {
+        lock.lock()
+        let work = body
+        body = nil
+        lock.unlock()
+
+        work?()
+    }
+}
+
 /// A Lunora deployment client.
 public final class LunoraClient {
     private let baseURL: String
@@ -213,7 +233,7 @@ public final class LunoraClient {
     private var nextShapeID = 0
     private var nextStreamID = 0
 
-    /// How ``close()`` ends each live ``stream(_:args:shardKey:)``, by stream.
+    /// How ``close()`` ends each live ``watch(_:args:shardKey:)``, by stream.
     private var streamFinishers: [Int: () -> Void] = [:]
 
     /// Serialises every mutable field above, and the `cursor`/`epoch`/row state
@@ -250,6 +270,22 @@ public final class LunoraClient {
         let onError: ((LunoraSubscriptionError) -> Void)?
         var cursor: Any?
         var epoch: Any?
+        /// Set by a row change that could not be merged into the held base. While
+        /// set, delta frames are ignored whole so a later frame's cursor cannot move
+        /// the resume position past the dropped change. A `data` frame or a
+        /// resubscribe clears it.
+        var poisoned = false
+        /// The merged payload of a delta run (`more: true` frames) held until its last
+        /// frame. The cursor only moves when a run commits, so a drop mid-run resumes
+        /// from before it and the server replays the whole run; each held frame merges
+        /// onto this, not onto the committed base.
+        var pendingRun: Any?
+        var hasPendingRun = false
+
+        func discardRun() {
+            pendingRun = nil
+            hasPendingRun = false
+        }
         /// The displayed value and its optimistic overlays. See ``LunoraOptimistic``.
         let state = LunoraOptimisticState()
 
@@ -385,12 +421,20 @@ public final class LunoraClient {
         }
     }
 
+    private func discardRunsLocked() {
+        for entry in subscriptions.values { entry.discardRun() }
+    }
+
     /// Drops every resume cursor and shape row; call with the lock held. Returns
     /// the shape callbacks for the caller to tell `[]` once it has released it.
     private func evictSessionLocked() -> [([Any]) -> Void] {
         for entry in subscriptions.values {
             entry.cursor = nil
             entry.epoch = nil
+            entry.poisoned = false
+            entry.discardRun()
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            entry.state.hasServerBase = false
         }
 
         for shape in shapes.values {
@@ -431,7 +475,13 @@ public final class LunoraClient {
     public func attachSocket(_ sender: @escaping LunoraFrameSender, context: [String: Any]? = nil) {
         withLock {
             socketGeneration = credentialGeneration
-            sender(LunoraClient.buildConnectFrame(clientID: storedClientID, context: context, token: storedSessionToken))
+            // A run cut off by a dropped or failed socket will be replayed in full.
+            discardRunsLocked()
+            sender(
+                LunoraClient.buildConnectFrame(
+                    clientID: storedClientID, context: context, token: storedSessionToken, caps: [LunoraRowDelta.pageDeltaCapability]
+                )
+            )
 
             for topic in whispers.keys.sorted() {
                 sender(LunoraClient.buildWhisperSubscribeFrame(topic: topic))
@@ -454,6 +504,7 @@ public final class LunoraClient {
     public func detachSocket(closeCode: Int? = nil, reason: String? = nil) {
         let expired = withLock { () -> Bool in
             send = nil
+            discardRunsLocked()
 
             return expiryNotifiedByCloseLocked(closeCode, reason)
         }
@@ -522,13 +573,14 @@ public final class LunoraClient {
     }
 
     /// Rejects every queued write so no caller waits on a dead client, and ENDS
-    /// every live ``stream(_:args:shardKey:)`` — a `for await` loop over one
+    /// every live ``watch(_:args:shardKey:)`` — a `for await` loop over one
     /// would otherwise wait forever on a client that will never deliver again.
     /// Durable storage is untouched: the next session restores those writes.
     public func close() {
         let (queue, finishers) = withLock { () -> (LunoraOfflineQueue, [() -> Void]) in
             closed = true
             send = nil
+            discardRunsLocked()
 
             let finishers = Array(streamFinishers.values)
 
@@ -863,8 +915,9 @@ public final class LunoraClient {
     /// The `connect` frame ``attachSocket(_:context:)`` sends first on every open.
     /// `token` is the session credential: it rides here, never in the socket URL,
     /// and is omitted when nil or empty.
-    public static func buildConnectFrame(clientID: String? = nil, context: [String: Any]? = nil, token: String? = nil) -> [String: Any] {
+    public static func buildConnectFrame(clientID: String? = nil, context: [String: Any]? = nil, token: String? = nil, caps: [String] = []) -> [String: Any] {
         var frame: [String: Any] = ["id": "connect", "type": "connect"]
+        if !caps.isEmpty { frame["caps"] = caps }
         if let clientID { frame["clientId"] = clientID }
         if let context { frame["context"] = context }
         // Empty is absent, matching `wsURL` and `buildRPCBody`.
@@ -966,31 +1019,32 @@ public final class LunoraClient {
         }
     }
 
-    /// One item delivered by ``stream(_:args:shardKey:)``: a value, or the
+    /// One item delivered by ``watch(_:args:shardKey:)``: a value, or the
     /// subscription error the server pushed.
     ///
     /// One sequence carrying both, rather than a value stream plus an error
     /// stream: a consumer awaiting two of them can read them out of order, and
     /// the whole point of a stream is that what arrived first is delivered first.
-    public enum LunoraStreamEvent {
+    public enum LunoraWatchEvent {
         case value(Any)
         case failure(LunoraSubscriptionError)
     }
 
-    /// A live query as an `AsyncStream`, for `for await event in stream`.
+    /// A live query as a sequence, for `for await event in watch`.
     ///
-    /// Each call opens its OWN subscription — at CALL time, so a frame arriving
-    /// before the loop starts is not lost — and it is torn down when the stream
-    /// terminates: breaking out of the loop, cancelling the task, or finishing
-    /// it. A consumer never holds an unsubscribe handle. Use
-    /// ``subscribe(_:args:onData:onError:shardKey:)`` directly when the value
-    /// outlives one loop.
+    /// Each call opens its OWN subscription at CALL time, so a frame arriving
+    /// before the loop starts is not lost. The subscription is released by
+    /// ``LunoraWatch/cancel()``, by the client closing, or when the stream
+    /// finishes. Leaving the loop does NOT release it: a retained stream keeps
+    /// running after a `break`, so a watch that is done must be cancelled.
     ///
     /// The buffer is UNBOUNDED, so the frame dispatcher never blocks on a slow
-    /// consumer; the trade is that one which stops reading without ending the
-    /// loop grows the buffer.
-    public func stream(_ functionPath: String, args: Any? = nil, shardKey: String? = nil) -> AsyncStream<LunoraStreamEvent> {
-        AsyncStream(LunoraStreamEvent.self, bufferingPolicy: .unbounded) { continuation in
+    /// consumer; the trade is that one which stops reading without cancelling
+    /// grows the buffer.
+    public func watch(_ functionPath: String, args: Any? = nil, shardKey: String? = nil) -> LunoraWatch {
+        var release: LunoraOnceRelease?
+
+        let stream = AsyncStream(LunoraWatchEvent.self, bufferingPolicy: .unbounded) { continuation in
             let unsubscribe = subscribe(
                 functionPath,
                 args: args,
@@ -1005,12 +1059,53 @@ public final class LunoraClient {
                 return (nextStreamID, closed)
             }
 
+            // Finishing the stream runs onTermination, which runs this again: the
+            // once-guard makes that second run a no-op rather than a second unsubscribe.
+            let once = LunoraOnceRelease {
+                unsubscribe()
+                continuation.finish()
+            }
+
+            release = once
+
             continuation.onTermination = { [weak self] _ in
                 _ = self?.withLock { self?.streamFinishers.removeValue(forKey: token) }
-                unsubscribe()
+                once.run()
             }
 
             if alreadyClosed { continuation.finish() }
+        }
+
+        // The builder runs synchronously inside AsyncStream's initializer, so `release` is set.
+        guard let release else { preconditionFailure("AsyncStream runs its builder synchronously") }
+
+        return LunoraWatch(stream: stream, release: release)
+    }
+
+    /// The sequence ``watch(_:args:shardKey:)`` returns.
+    ///
+    /// Iterating it yields each ``LunoraWatchEvent``. ``cancel()`` is the only
+    /// way to release the subscription early; it works before the first value and
+    /// after the loop has started.
+    public struct LunoraWatch: AsyncSequence {
+        public typealias Element = LunoraWatchEvent
+        public typealias AsyncIterator = AsyncStream<LunoraWatchEvent>.Iterator
+
+        private let stream: AsyncStream<LunoraWatchEvent>
+        private let release: LunoraOnceRelease
+
+        fileprivate init(stream: AsyncStream<LunoraWatchEvent>, release: LunoraOnceRelease) {
+            self.stream = stream
+            self.release = release
+        }
+
+        public func makeAsyncIterator() -> AsyncIterator {
+            stream.makeAsyncIterator()
+        }
+
+        /// Unsubscribes and ends the sequence. Calling it again does nothing.
+        public func cancel() {
+            release.run()
         }
     }
 
@@ -1064,14 +1159,27 @@ public final class LunoraClient {
         let (sender, frames) = withLock { () -> (LunoraFrameSender?, [[String: Any]]) in
             guard send != nil else { return (nil, []) }
 
-            var frames = subscriptions.compactMap { id, entry in
-                try? LunoraClient.buildSubscribeFrame(
+            var frames: [[String: Any]] = []
+
+            for (id, entry) in subscriptions {
+                let built = try? LunoraClient.buildSubscribeFrame(
                     id: id,
                     functionPath: entry.functionPath,
                     args: entry.args,
                     sinceSeq: entry.cursor,
                     sinceEpoch: entry.epoch
                 )
+
+                guard let frame = built else { continue }
+
+                // The replay re-sends the whole run from the cursor before it.
+                entry.discardRun()
+
+                // The resume cursor sits before the dropped change, so the replay re-applies
+                // it. Clear the poison only for a frame that is sent: a frame that failed to
+                // build leaves its subscription frozen.
+                entry.poisoned = false
+                frames.append(frame)
             }
 
             frames += shapes.compactMap { id, entry in
@@ -1201,14 +1309,29 @@ public final class LunoraClient {
                 // here ends the caller's read loop, and with it every OTHER
                 // subscription on this client — one peer's malformed payload
                 // silently taking the whole socket down.
-                let handlers = withLock { () -> [(LunoraSubscriptionError) -> Void] in
-                    guard let id, let onError = subscriptions[id]?.onError else { return [] }
+                let notices = withLock { () -> [(handler: (LunoraSubscriptionError) -> Void, code: String)] in
+                    guard let id, let entry = subscriptions[id] else { return [] }
 
-                    return [onError]
+                    // A refused row change never reaches the base, so the run is dropped and the
+                    // subscription frozen; a later frame must not commit past it.
+                    let isDeltaFrame = kind == "delta"
+
+                    entry.discardRun()
+
+                    if isDeltaFrame {
+                        // Already frozen: the delta is ignored, and the freeze was reported once.
+                        if entry.poisoned { return [] }
+
+                        entry.poisoned = true
+                    }
+
+                    guard let onError = entry.onError else { return [] }
+
+                    return [(onError, isDeltaFrame ? LunoraAPIError.wireDecodeFailed : "INVALID_FRAME")]
                 }
 
-                for handler in handlers {
-                    handler(LunoraSubscriptionError(code: "INVALID_FRAME", message: "frame payload could not be decoded: \(error)"))
+                for notice in notices {
+                    notice.handler(LunoraSubscriptionError(code: notice.code, message: "frame payload could not be decoded: \(error)"))
                 }
 
                 return "error"
@@ -1217,11 +1340,54 @@ public final class LunoraClient {
             let deferred = withLock { () -> LunoraOptimistic.Deferred in
                 guard let id, let entry = subscriptions[id] else { return [] }
 
+                // A snapshot is authoritative; a delta behind an unmergeable change
+                // is dropped whole, cursor included.
+                if kind == "data" {
+                    entry.poisoned = false
+                    entry.discardRun()
+                } else if entry.poisoned {
+                    return []
+                }
+
+                // A row-change delta merges into the SERVER base, not into what the
+                // user sees; the pending layers are re-folded onto the result below.
+                let resolution = LunoraRowDelta.resolve(
+                    kind: kind,
+                    payload: value,
+                    base: entry.hasPendingRun ? entry.pendingRun as Any : entry.state.serverBase,
+                    hasBase: entry.hasPendingRun || entry.state.hasServerBase
+                )
+                guard case .value(let merged) = resolution else {
+                    entry.poisoned = true
+                    entry.discardRun()
+
+                    // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                    guard let onError = entry.onError else { return [] }
+
+                    let notice = LunoraSubscriptionError(
+                        code: "delta_unmergeable",
+                        message: "row change could not be merged; subscription frozen until a snapshot or resubscribe"
+                    )
+
+                    return [{ onError(notice) }]
+                }
+
+                // Held, not published: neither the cursor nor the optimistic layers move until
+                // the run's last frame commits it.
+                if kind == "delta", frame["more"] as? Bool == true {
+                    entry.pendingRun = merged
+                    entry.hasPendingRun = true
+
+                    return []
+                }
+
+                entry.discardRun()
                 advance(entry, frame)
 
                 var queued: LunoraOptimistic.Deferred = []
 
-                entry.state.serverBase = value
+                entry.state.serverBase = merged
+                entry.state.hasServerBase = true
                 // Only when the frame CARRIES one: `cursor` is optional on
                 // data/delta frames, and nulling the tracked cursor strands every
                 // pending layer — a later `confirm(commitCursor)` has nothing to
@@ -1248,6 +1414,22 @@ public final class LunoraClient {
         case "resume", "settled":
             let deferred = withLock { () -> LunoraOptimistic.Deferred in
                 guard let id, let entry = subscriptions[id] else { return [] }
+
+                // A poisoned subscription ignores these frames too: their cursor would move
+                // the resume position past the dropped row change.
+                guard !entry.poisoned else { return [] }
+
+                if kind == "resume" { entry.discardRun() }
+
+                // A settled mid-run means the run was cut short, so the frames held so far
+                // are not a complete change: advancing would resume past the rest of it. The
+                // freeze keeps a later delta from committing past the dropped part.
+                if kind == "settled", entry.hasPendingRun {
+                    entry.discardRun()
+                    entry.poisoned = true
+
+                    return []
+                }
 
                 advance(entry, frame)
 

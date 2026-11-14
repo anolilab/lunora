@@ -1,7 +1,10 @@
+import { LunoraError } from "@lunora/errors";
+
 import {
     AUTH_ACCOUNTS_PATH,
     AUTH_ADD_MEMBER_PATH,
     AUTH_ADD_TEAM_MEMBER_PATH,
+    AUTH_API_KEYS_PATH,
     AUTH_BAN_PATH,
     AUTH_CANCEL_INVITATION_PATH,
     AUTH_CAPABILITIES_PATH,
@@ -11,6 +14,7 @@ import {
     AUTH_CREATE_SIGN_UP_INVITATION_PATH,
     AUTH_CREATE_TEAM_PATH,
     AUTH_CREATE_USER_PATH,
+    AUTH_DELETE_API_KEY_PATH,
     AUTH_DELETE_PASSKEY_PATH,
     AUTH_DISABLE_2FA_PATH,
     AUTH_IMPERSONATE_PATH,
@@ -736,6 +740,18 @@ class LunoraAdminClient extends LunoraClient {
         await this.adminHost.adminFetch(AUTH_UNLINK_ACCOUNT_PATH, "POST", input);
     }
 
+    /** List a user's API keys (requires the `apiKey` plugin). The hash is never returned. */
+    public async listAuthApiKeys(input: { userId: string }): Promise<Record<string, unknown>[]> {
+        this.adminHost.assertOpen();
+        return (await this.adminHost.adminFetch(withQuery(AUTH_API_KEYS_PATH, { userId: input.userId }), "GET")) as Record<string, unknown>[];
+    }
+
+    /** Revoke (delete) an API key by id (requires the `apiKey` plugin). */
+    public async deleteAuthApiKey(input: { apiKeyId: string }): Promise<void> {
+        this.adminHost.assertOpen();
+        await this.adminHost.adminFetch(AUTH_DELETE_API_KEY_PATH, "POST", input);
+    }
+
     /** List a user's registered passkeys (requires the passkey plugin). */
     public async listAuthPasskeys(input: { userId: string }): Promise<Record<string, unknown>[]> {
         this.adminHost.assertOpen();
@@ -954,4 +970,16 @@ class LunoraAdminClient extends LunoraClient {
  */
 const isLunoraAdminClient = (client: LunoraClient): client is LunoraAdminClient => "listAuthUsers" in client;
 
-export { isLunoraAdminClient, LunoraAdminClient };
+/** The provider's client as a `LunoraAdminClient`, or a throw naming the class the caller must construct. */
+const requireAdminAuthClient = (client: LunoraClient): LunoraAdminClient => {
+    if (!isLunoraAdminClient(client)) {
+        throw new LunoraError(
+            "INTERNAL",
+            "The admin auth hooks need a LunoraAdminClient: construct the provider's client with `new LunoraAdminClient(...)` from `@lunora/client/admin`.",
+        );
+    }
+
+    return client;
+};
+
+export { isLunoraAdminClient, LunoraAdminClient, requireAdminAuthClient };

@@ -134,5 +134,4 @@ const hydratePreloaded = function <T>(preloaded: Preloaded<T>, options: { onErro
     return usePreloadedQuery(preloaded, options);
 };
 
-export { hydratePreloaded };
-export default usePreloadedQuery;
+export { hydratePreloaded, usePreloadedQuery };

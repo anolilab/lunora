@@ -1,3 +1,15 @@
+## @lunora/auth [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.261...@lunora/auth@1.0.0-alpha.262) (2026-11-13)
+
+- security(auth)!: admit invited oauth and sso accounts only with a verified email (#1547)
+
+## @lunora/auth [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.260...@lunora/auth@1.0.0-alpha.261) (2026-11-11)
+
+- feat(auth): add API keys via the apiKey() plugin (#1526)
+
+## @lunora/auth [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.259...@lunora/auth@1.0.0-alpha.260) (2026-11-10)
+
+- feat(codegen): type user-column claims on ctx.auth from the auth config (#1525)
+
 ## @lunora/auth [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.258...@lunora/auth@1.0.0-alpha.259) (2026-11-10)
 
 - feat(auth): forward declared identity claims through the auth object route (#1521)

@@ -12,6 +12,14 @@ import 'harness.dart';
 
 Map<String, Object?> _frameGoldens() => fixture('ws-frames.json')['clientFrames']! as Map<String, Object?>;
 
+/// A connect golden as the client now writes it: this port merges row deltas, so
+/// every connect announces `pageDelta` (and never `refreshBatch`, which it does
+/// not handle).
+Map<String, Object?> _announcing(Object? golden) => <String, Object?>{
+      ...golden! as Map<String, Object?>,
+      'caps': <Object?>['pageDelta']
+    };
+
 // ─── Connect ─────────────────────────────────────────────────────────────────
 
 /// `connect` opens every socket, before any subscription or whisper join, and
@@ -24,12 +32,12 @@ void caseConnectFrameFirstAndCarriesSessionToken() {
 
   equals(
     canonical(LunoraClient.buildConnectFrame(clientId: 'client-test', token: 'session-token')),
-    canonical(frames['connect-with-token']),
+    canonical(_announcing(frames['connect-with-token'])),
     'the connect builder carries the session credential',
   );
   equals(
     canonical(LunoraClient.buildConnectFrame(clientId: 'client-test', context: <String, Object?>{'roomId': 'general'}, token: 'session-token')),
-    canonical(frames['connect-with-token-and-context']),
+    canonical(_announcing(frames['connect-with-token-and-context'])),
     'and with a context alongside it',
   );
 
@@ -41,14 +49,14 @@ void caseConnectFrameFirstAndCarriesSessionToken() {
   client.attachSocket(sent.add);
   client.resendSubscriptions();
 
-  equals(canonical(sent.first), canonical(frames['connect-with-token']), 'frame 0 is connect, carrying the session credential as token');
+  equals(canonical(sent.first), canonical(_announcing(frames['connect-with-token'])), 'frame 0 is connect, carrying the session credential as token');
   equals(sent[1]['type'], 'subscribe', 'the subscription goes out after connect');
 
   final anonymous = <Map<String, Object?>>[];
 
   LunoraClient(url: 'https://app.example', clientId: 'client-test').attachSocket(anonymous.add);
 
-  equals(canonical(anonymous.single), canonical(frames['connect']), 'with no session credential, connect is the plain frame');
+  equals(canonical(anonymous.single), canonical(frames['connect-with-page-delta-caps']), 'with no session credential, connect is the plain frame');
   check(!anonymous.single.containsKey('token'), 'and carries no token key at all');
 
   for (final url in <String>[client.wsUrl(), client.wsUrl(ticket: 'ticket-1')]) {
@@ -84,14 +92,14 @@ void caseAttachSocketCarriesConnectionContext() {
 
   LunoraClient(url: 'https://app.example', clientId: 'client-test').attachSocket(withContext.add, context: <String, Object?>{'roomId': 'general'});
 
-  equals(canonical(withContext.single), canonical(frames['connect-with-context']), 'the connect frame carries the context');
+  equals(canonical(withContext.single), canonical(_announcing(frames['connect-with-context'])), 'the connect frame carries the context');
 
   final bare = <Map<String, Object?>>[];
 
   LunoraClient(url: 'https://app.example', clientId: 'client-test').attachSocket(bare.add);
 
   check(!bare.single.containsKey('context'), 'without a context, connect omits it');
-  equals(canonical(bare.single), canonical(frames['connect']), 'and is otherwise the plain connect frame');
+  equals(canonical(bare.single), canonical(frames['connect-with-page-delta-caps']), 'and is otherwise the plain connect frame');
 }
 
 // ─── Token expiry ────────────────────────────────────────────────────────────

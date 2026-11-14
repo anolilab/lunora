@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import assertRequiredPackages, { requiredPackagesFor } from "../src/assert-required-packages";
+import { assertRequiredPackages, requiredPackagesFor } from "../src/assert-required-packages";
 import { CAPABILITIES } from "../src/capabilities";
 import type { FeatureUsage } from "../src/discover/feature-usage";
 import type { SchemaIR, TableIR } from "../src/ir";

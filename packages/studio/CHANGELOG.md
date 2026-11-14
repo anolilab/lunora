@@ -1,3 +1,11 @@
+## @lunora/studio [1.0.0-alpha.382](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.381...@lunora/studio@1.0.0-alpha.382) (2026-11-12)
+
+- fix(react): depend on the workspace client so the release pins the matching one (#1555)
+
+## @lunora/studio [1.0.0-alpha.381](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.380...@lunora/studio@1.0.0-alpha.381) (2026-11-11)
+
+- feat(auth): add API keys via the apiKey() plugin (#1526)
+
 ## @lunora/studio [1.0.0-alpha.380](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.379...@lunora/studio@1.0.0-alpha.380) (2026-11-09)
 
 - feat(cli): apply generated SQL migrations per stage (#1516)

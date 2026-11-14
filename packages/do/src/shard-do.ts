@@ -184,6 +184,7 @@ import {
     deleteGlobalShapeSnapshotsForConnection,
     deleteShapePokeCursor,
     deleteShapePokeCursorsForConnection,
+    deltaTableFor,
     diffGlobalMembership,
     dropScheduleOutbox,
     DurableStreamRunner,
@@ -17708,14 +17709,10 @@ abstract class ShardDO {
             previousJson: existing?.lastJson,
             snapshotJson: json,
             subId,
-            // First REAL dependency, never the unvouchable sentinel. `tables` is
-            // insertion-ordered, so a query that read `ctx.kv` before touching a
-            // table would otherwise put `UNVOUCHABLE_DEP` on the wire as this
-            // frame's `table` — an internal name leaking to every client and all
-            // eight SDK ports. The field is a structural guard rather than a
-            // routing key, so a wrong value is inert, but an internal marker is
-            // not something to publish and then rely on nobody reading.
-            table: [...outcome.tables].find((dep) => dep !== UNVOUCHABLE_DEP) ?? "",
+            // One table read → its name; several or none → a placeholder.
+            // A result row has no provenance, so naming the first of several
+            // tables would mislabel rows from the others (protocol §5.1.1).
+            table: deltaTableFor(outcome.tables),
         });
 
         // At-least-once delivery: advance the diff BASELINE (`lastJson`) only once

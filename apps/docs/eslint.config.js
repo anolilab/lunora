@@ -12,6 +12,10 @@ export default createConfig(
         typescript: { tsconfigPath: "./tsconfig.json" },
         // Prettier owns formatting; disable @stylistic to avoid the two-formatter ping-pong.
         stylistic: false,
+        // The preset reads Tailwind's major version from package.json, and `catalog:web` is
+        // not a version it can parse, so it would skip the CSS preset that the css overrides
+        // below depend on. Naming the major here enables it with Tailwind 4 syntax.
+        tailwindcss: "v4",
         ignores: [
             "**/dist/**",
             "**/node_modules/**",

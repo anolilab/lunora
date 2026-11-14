@@ -1,1 +1,1 @@
-export { isLunoraAdminClient, LunoraAdminClient } from "./admin-client";
+export { isLunoraAdminClient, LunoraAdminClient, requireAdminAuthClient } from "./admin-client";

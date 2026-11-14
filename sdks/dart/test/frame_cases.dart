@@ -17,7 +17,8 @@ void caseClientFrameBuilders() {
 
   final frames = fixture('ws-frames.json')['clientFrames'] as Map<String, Object?>;
 
-  equals(canonical(LunoraClient.buildConnectFrame(clientId: 'client-test')), canonical(frames['connect']), 'connect frame');
+  equals(canonical(LunoraClient.buildConnectFrame(clientId: 'client-test')), canonical(frames['connect-with-page-delta-caps']),
+      'connect frame announces pageDelta');
   // protocol/README.md 5.1: the session credential is sent in connect, and only when held.
   equals(
     LunoraClient.buildConnectFrame(clientId: 'client-test', token: 'sess-SECRET-1')['token'],
@@ -27,7 +28,10 @@ void caseClientFrameBuilders() {
   check(!LunoraClient.buildConnectFrame(clientId: 'client-test').containsKey('token'), 'connect omits token when no session credential is held');
   equals(
     canonical(LunoraClient.buildConnectFrame(clientId: 'client-test', context: <String, Object?>{'roomId': 'general'})),
-    canonical(frames['connect-with-context']),
+    canonical(<String, Object?>{
+      ...frames['connect-with-context']! as Map<String, Object?>,
+      'caps': <Object?>['pageDelta']
+    }),
     'connect frame with context',
   );
   equals(
@@ -103,12 +107,286 @@ void caseServerFrameConsumer() {
   equals(cancellations, 1, 'serverFrames must carry one cancelling case');
 }
 
+/// `pageDeltaFrames`: each case seeds the subscription with `baseWire` as a
+/// `data` frame, applies `frame`, and expects the published value to be the row
+/// change merged into the base, never the `{ key, op, table, row }` envelope.
+void casePageDeltaFramesMergeIntoTheBase() {
+  final cases = objectList(fixture('ws-frames.json')['pageDeltaFrames']);
+
+  equals(cases.length, 9, 'pageDeltaFrames must carry its nine cases');
+
+  for (final testCase in cases) {
+    final name = testCase['name'];
+    final frame = testCase['frame'] as Map<String, Object?>;
+    final expect = testCase['expect'] as Map<String, Object?>;
+    final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+    final seen = <Object?>[];
+
+    client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'}, onData: seen.add);
+    pushData(client, frame['id']! as String, testCase['baseWire']);
+    seen.clear();
+
+    equals(client.handleFrame(jsonEncode(frame)), expect['kind'], 'frame kind for $name');
+    equals(seen.length, 1, 'onData should fire once for $name');
+    equals(canonical(encodeWire(seen.isEmpty ? null : seen.first)), canonical(expect['valueWire']), 'merged value for $name');
+  }
+}
+
+/// A row change that cannot be merged is not published, and it poisons the
+/// subscription: later row changes wait for a snapshot.
+void caseUnmergeableRowDeltaKeepsThePreviousValue() {
+  final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
+  final seen = <Object?>[];
+  final change = <String, Object?>{'key': 'm1', 'op': 'update', 'table': 'messages'};
+
+  client.subscribe('messages:list', onData: seen.add);
+
+  // No base yet: the row change cannot merge into nothing, so it is held and not published.
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'delta', 'id': 'sub_1', 'delta': change}));
+  equals(seen.length, 0, 'a row change with no base is held, not published');
+
+  pushData(client, 'sub_1', <Object?>[
+    <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'one'},
+  ]);
+  seen.clear();
+
+  // An update with no `row` cannot be spliced in.
+  client.handleFrame(jsonEncode(<String, Object?>{'type': 'delta', 'id': 'sub_1', 'delta': change}));
+  equals(seen.length, 0, 'an unmergeable row change is not published over the base');
+
+  // The refused change poisons the subscription, so a later mergeable change is
+  // ignored rather than merged over the base.
+  client.handleFrame(
+    jsonEncode(<String, Object?>{
+      'type': 'delta',
+      'id': 'sub_1',
+      'delta': <String, Object?>{
+        ...change,
+        'row': <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+      },
+    }),
+  );
+  equals(seen.length, 0, 'a poisoned subscription ignores a later row change');
+
+  // A snapshot clears the poison and is published as it arrived.
+  pushData(client, 'sub_1', <Object?>[
+    <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+  ]);
+  equals(
+    canonical(seen),
+    canonical(<Object?>[
+      <Object?>[
+        <String, Object?>{'_id': 'm1', '_creationTime': 1, 'text': 'ONE'},
+      ],
+    ]),
+    'a snapshot clears the poison',
+  );
+}
+
+/// One subscription on a recording client, seeded with the case's `seedFrame`.
+/// [seen] and [errors] collect what the callbacks were told; both are emptied
+/// after the seed so a step only sees its own.
+class _FrameCase {
+  _FrameCase(Map<String, Object?> testCase, {String? authSubject}) : client = LunoraClient(url: 'https://app.example', authSubject: authSubject) {
+    attachRecording(client, sent);
+    client.subscribe('messages:list', args: <String, Object?>{'channel': 'general'}, onData: seen.add, onError: errors.add);
+    client.handleFrame(jsonEncode(testCase['seedFrame']));
+    seen.clear();
+    errors.clear();
+    sent.clear();
+  }
+
+  final LunoraClient client;
+  final sent = <Map<String, Object?>>[];
+  final seen = <Object?>[];
+  final errors = <LunoraSubscriptionError>[];
+
+  /// Feeds [frame] and returns the error codes it raised, with `seen` holding only what it published.
+  List<String?> feed(Object? frame) {
+    seen.clear();
+    errors.clear();
+    client.handleFrame(jsonEncode(frame));
+
+    return errors.map((error) => error.code).toList();
+  }
+}
+
+/// Plays a fixture's `steps`: a `frame` step asserts its publish count, its
+/// published value when given, and exactly the error codes it names when it
+/// names any; a `resume` step asserts the position the next resend asks for.
+void _playFrameSteps(_FrameCase run, Object? steps, Object? name) {
+  for (final step in objectList(steps)) {
+    final resume = step['resume'];
+
+    if (resume is Map<String, Object?>) {
+      run.sent.clear();
+      run.client.resendSubscriptions();
+
+      final subscribe = run.sent.singleWhere((frame) => frame['type'] == 'subscribe')['query']! as Map<String, Object?>;
+
+      equals(subscribe['sinceSeq'], resume['sinceSeq'], 'resent sinceSeq for $name');
+      equals(subscribe['sinceEpoch'], resume['sinceEpoch'], 'resent sinceEpoch for $name');
+      continue;
+    }
+
+    final codes = run.feed(step['frame']);
+
+    equals(run.seen.length, step['publishes'], 'publish count for $name');
+
+    if (step.containsKey('errors')) {
+      equals(jsonEncode(codes), jsonEncode(step['errors']), 'error codes for $name');
+    }
+
+    if (step.containsKey('valueWire')) {
+      equals(canonical(encodeWire(run.seen.single)), canonical(step['valueWire']), 'published value for $name');
+    }
+  }
+}
+
+/// Plays every case under the fixture key [key] through the shared step loop.
+void _playFrameCases(String key, int count) {
+  final cases = objectList(fixture('ws-frames.json')[key]);
+
+  equals(cases.length, count, '$key must carry its $count cases');
+
+  for (final testCase in cases) {
+    _playFrameSteps(_FrameCase(testCase), testCase['steps'], testCase['name']);
+  }
+}
+
+/// `pageDeltaPoisonCases`: an unmergeable row change poisons the subscription, so
+/// a later delta in the run neither publishes nor moves the resume position, a
+/// resend asks for the pre-change position, and a `data` frame clears the poison.
+/// The freezing frame raises `delta_unmergeable` once.
+void casePoisonedSubscriptionFreezesTheResumeCursor() => _playFrameCases('pageDeltaPoisonCases', 3);
+
+/// `pageDeltaRunCases`: a delta marked `more` is held, not published, and the run
+/// commits once on its last frame; a data frame or a resend discards what is held.
+void casePageDeltaRunIsHeldUntilItsLastFrame() => _playFrameCases('pageDeltaRunCases', 5);
+
+/// `undecodableDeltaRunCases`: a delta frame the decoder refuses discards the held run and
+/// freezes the subscription, reports `WIRE_DECODE_FAILED` once, and leaves the cursor and epoch put.
+void caseUndecodableRunFrameFreezesTheSubscription() => _playFrameCases('undecodableDeltaRunCases', 2);
+
+/// `identityChangeEvictionCases`: changing identity drops the cached base and the
+/// freeze with the cursor, so a row change cannot merge onto rows the new identity
+/// was never shown, and a frozen subscription resumes tracking its position.
+void caseIdentityChangeEvictsTheBaseAndThePoison() {
+  final cases = objectList(fixture('ws-frames.json')['identityChangeEvictionCases']);
+
+  equals(cases.length, 2, 'identityChangeEvictionCases must carry its two cases');
+
+  for (final testCase in cases) {
+    final name = testCase['name'];
+    final change = testCase['identityChange']! as Map<String, Object?>;
+    final run = _FrameCase(testCase, authSubject: change['from'] as String?);
+
+    if (testCase.containsKey('freezeFrame')) {
+      final codes = run.feed(testCase['freezeFrame']);
+
+      equals(jsonEncode(codes), jsonEncode(testCase['freezeErrors']), 'freeze error codes for $name');
+    }
+
+    run.client.authSubject = change['to'] as String?;
+    _playFrameSteps(run, testCase['steps'], name);
+  }
+}
+
+// ─── resend while detached ───────────────────────────────────────────────────
+
+/// A resend with no socket attached sends nothing, so it must not lift a freeze:
+/// the position it would have resumed from has not been asked for yet.
+void casePoisonedSubscriptionStaysFrozenWhenTheResendCannotRun() {
+  final testCase = objectList(fixture('ws-frames.json')['pageDeltaPoisonCases']).first;
+  final run = _FrameCase(testCase);
+
+  run.feed((testCase['steps']! as List<Object?>).cast<Map<String, Object?>>().first['frame']);
+  run.client.detachSocket();
+  run.client.resendSubscriptions();
+
+  final later = <String, Object?>{
+    'id': 'sub_1',
+    'type': 'delta',
+    'delta': <String, Object?>{
+      'key': 'm2',
+      'op': 'update',
+      'table': 'messages',
+      'row': <String, Object?>{'_id': 'm2', '_creationTime': 1002, 'text': 'TWO'},
+    },
+    'cursor': 9,
+    'epoch': 'e1',
+  };
+
+  run.feed(later);
+  equals(run.seen.length, 0, 'a subscription still frozen after a resend that could not run ignores a later delta');
+
+  attachRecording(run.client, run.sent);
+  run.client.resendSubscriptions();
+  equals(
+    (run.sent.singleWhere((frame) => frame['type'] == 'subscribe')['query']! as Map<String, Object?>)['sinceSeq'],
+    5,
+    'and the next resend still names the position before the frozen change',
+  );
+}
+
+/// A resend whose write throws did not reach the server, so the position it would
+/// have resumed from was never asked for: the subscription stays frozen.
+void casePoisonedSubscriptionStaysFrozenWhenTheResendThrows() {
+  final testCase = objectList(fixture('ws-frames.json')['pageDeltaPoisonCases']).first;
+  final run = _FrameCase(testCase);
+
+  run.feed((testCase['steps']! as List<Object?>).cast<Map<String, Object?>>().first['frame']);
+
+  // Swapping the socket for one that refuses every write; `attachSocket` itself writes `connect`.
+  var failing = false;
+  run.client.attachSocket((frame) {
+    if (failing) {
+      throw StateError('socket closed');
+    }
+  });
+  failing = true;
+
+  var threw = false;
+
+  try {
+    run.client.resendSubscriptions();
+  } on StateError {
+    threw = true;
+  }
+
+  equals(threw, true, 'the failed write reaches the caller');
+  failing = false;
+
+  run.feed(<String, Object?>{
+    'id': 'sub_1',
+    'type': 'delta',
+    'delta': <String, Object?>{
+      'key': 'm2',
+      'op': 'update',
+      'table': 'messages',
+      'row': <String, Object?>{'_id': 'm2', '_creationTime': 1002, 'text': 'TWO'},
+    },
+    'cursor': 9,
+    'epoch': 'e1',
+  });
+  equals(run.seen.length, 0, 'a subscription whose resend threw is still frozen and ignores a later delta');
+
+  run.client.attachSocket(run.sent.add);
+  run.sent.clear();
+  run.client.resendSubscriptions();
+  equals(
+    (run.sent.singleWhere((frame) => frame['type'] == 'subscribe')['query']! as Map<String, Object?>)['sinceSeq'],
+    5,
+    'and the next resend still names the position before the frozen change',
+  );
+}
+
 /// The `Stream` form of a live query: same subscription, same decode, same order
 /// as the callback form.
 Future<void> caseSubscriptionStreamYieldsFrameValuesInOrder() async {
   covers('subscription_stream_yields_frame_values_in_order');
 
-  final case_ = fixture('ws-frames.json')['stream']! as Map<String, Object?>;
+  final case_ = fixture('ws-frames.json')['watch']! as Map<String, Object?>;
   final client = LunoraClient(url: 'https://app.example')..attachSocket((_) {});
   // A queued iterator, not `await for`: the frames are fed from this same
   // isolate, so the loop has to be driven one `moveNext()` at a time.

@@ -65,5 +65,4 @@ const sharedContext = function <T>(name: string, defaultValue: T): Context<T> {
     return sharedContextFor(createContext, name, defaultValue);
 };
 
-export { sharedContextFor };
-export default sharedContext;
+export { sharedContext, sharedContextFor };
