@@ -16,6 +16,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from lunora.client import LunoraClient, SubscriptionError
+from lunora.wire import TAG
 from tests._fixtures import load
 
 RETRY = load("ws-frames.json")["subscriptionRetry"]
@@ -161,6 +162,49 @@ class TestSubscriptionRetry(unittest.TestCase):
         d = client.next_subscription_retry_at()
 
         self.assertLessEqual(d, t1 + 60)
+
+    def test_an_oversized_integer_hint_still_reports_the_error(self):
+        client, _sent, errors, _unsubscribe = _open()
+        frame = json.loads(json.dumps(RETRY["hintFrame"]))
+        frame["error"]["retryAfterMs"] = 10**400
+
+        client.handle_frame(frame)
+        t1 = time.monotonic()
+
+        self.assertEqual(len(errors), 1)
+        self.assertLessEqual(client.next_subscription_retry_at(), t1 + 60)
+
+    def test_a_data_frame_that_cannot_be_applied_keeps_the_retry(self):
+        client, _sent, _errors, _unsubscribe = _open()
+        client.handle_frame(RETRY["hintFrame"])
+
+        client.handle_frame({"id": RETRY["subscriptionId"], "type": "data", "cursor": 13, "data": [TAG, "bigint", "not-a-number"]})
+
+        self.assertIsNotNone(client.next_subscription_retry_at())
+
+    def test_an_unsubscribe_that_overtakes_the_retry_is_followed_by_another(self):
+        sent: list = []
+        client = LunoraClient("https://app.example", client_id="client-test")
+        unsubscribe_ref: list = []
+
+        def sender(frame: dict) -> None:
+            # Another thread unsubscribes after the retry was selected but before its frame is written.
+            if frame.get("type") == "subscribe" and unsubscribe_ref:
+                unsubscribe_ref.pop()()
+            sent.append(frame)
+
+        client.attach_socket(sender)
+        unsubscribe_ref.append(client.subscribe("messages:list", {"channel": "general"}, lambda _value: None))
+        client.handle_frame(RETRY["seedFrame"])
+        unsubscribe = unsubscribe_ref.pop()
+        client.handle_frame(RETRY["hintFrame"])
+        d = client.next_subscription_retry_at()
+        sent.clear()
+        unsubscribe_ref.append(unsubscribe)
+
+        client.retry_due_subscriptions(d)
+
+        self.assertEqual([frame["type"] for frame in sent], ["unsubscribe", "subscribe", "unsubscribe"])
 
 
 if __name__ == "__main__":
