@@ -632,6 +632,7 @@ const MUTATORS_FILENAME = "mutators.ts";
 interface MaskProcedureIR {
     exportName: string;
     file: string;
+    line?: number;
     maskColumns: {
         column: string;
         table: string;
