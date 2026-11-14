@@ -1,7 +1,7 @@
 import type { BindingElement, Identifier, Node as TsNode, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { bindingKeyName, descendantsOfKind } from "./discover/ast";
+import { bindingKeyName, descendantsOfKind, unwrapExpression } from "./discover/ast";
 import { declarationOf, isReassignedBinding } from "./discover/attribution";
 import { isHandlerArgsParameter, referencesContext } from "./discover/context-root";
 
@@ -230,6 +230,17 @@ const valueIdentifiersIn = (node: TsNode): Identifier[] =>
     });
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
+/** A call or `new` under any `await`, parentheses or type assertion: `await sha256Hex(args.bytes)` recomputes its input. */
+const isRecomputed = (node: TsNode): boolean => {
+    let current = unwrapExpression(node) ?? node;
+
+    while (Node.isAwaitExpression(current)) {
+        current = unwrapExpression(current.getExpression()) ?? current.getExpression();
+    }
+
+    return Node.isCallExpression(current) || Node.isNewExpression(current);
+};
+
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
 /**
@@ -338,13 +349,13 @@ export const isArgumentDerived = (expression: TsNode): boolean => {
  * caller-controlled input reaching the sink verbatim.
  */
 export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
-    if (Node.isCallExpression(node) || Node.isNewExpression(node)) {
+    if (isRecomputed(node)) {
         return false;
     }
 
     const initializer = singleHopInitializer(node);
 
-    if (initializer !== undefined && (Node.isCallExpression(initializer) || Node.isNewExpression(initializer))) {
+    if (initializer !== undefined && isRecomputed(initializer)) {
         return false;
     }
 
@@ -360,7 +371,7 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
     return valueIdentifiersIn(composed).some((identifier) => {
         const bound = singleHopInitializer(identifier);
 
-        return bound !== undefined && referencesArgs(bound) && !(Node.isCallExpression(bound) || Node.isNewExpression(bound));
+        return bound !== undefined && referencesArgs(bound) && !isRecomputed(bound);
     });
 };
 
