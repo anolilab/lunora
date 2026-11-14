@@ -66,8 +66,11 @@ const boundSourceOf = (node: TsNode): TsNode | undefined => {
     const unwrapped = unwrapExpression(source);
     const literal = unwrapExpression(unwrapped !== undefined && Node.isIdentifier(unwrapped) ? constInitializerOf(unwrapped) : unwrapped);
     // Only the property this binding reads decides it: a sibling `params: [args.id]` must not taint fixed text.
-    // A key the literal does not declare (it may come from a spread) keeps the whole source, failing toward reporting.
-    const property = Node.isObjectLiteralExpression(literal) ? literal.getProperty(bindingKeyName(declaration)) : undefined;
+    // A literal with a spread keeps the whole source, since the spread may supply or overwrite the key.
+    const property =
+        Node.isObjectLiteralExpression(literal) && !literal.getProperties().some((member) => Node.isSpreadAssignment(member))
+            ? literal.getProperty(bindingKeyName(declaration))
+            : undefined;
 
     if (Node.isShorthandPropertyAssignment(property)) {
         return property.getNameNode();

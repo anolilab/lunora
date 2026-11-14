@@ -136,6 +136,15 @@ const DESTRUCTURED_FIXED_TEXT = `
     };
 `;
 
+/** Fixed text that a later spread of the handler's \`args\` can overwrite. */
+const SPREAD_OVERRIDE = `
+    export const run = async (ctx, args) => {
+        const options = { text: "SELECT 1", ...args };
+        const { text } = options;
+        return ctx.sql.query(text);
+    };
+`;
+
 /** A plain parameter passed straight through: the caller is not visible here, so it is left alone. */
 const PARAM_PASSTHROUGH = `
     export const run = async (ctx, q) => ctx.sql.query(q);
@@ -266,6 +275,7 @@ describe("discoverSqlInterpolation", () => {
         ["two const aliases", TWO_HOP_ARG],
         ["a destructure of args", DESTRUCTURED_ARG],
         ["a cast alias of built text", CAST_ALIAS],
+        ["a destructure of a literal an args spread can overwrite", SPREAD_OVERRIDE],
     ])("flags request text reached through %s", (_label, source) => {
         expect.assertions(1);
 
