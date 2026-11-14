@@ -1,6 +1,7 @@
 import { isReachableSite } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /** The `tableWrites` methods that create rows, so they count as an insert path. Updates and deletes do not. */
 const INSERT_PATH_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "insertManyUnsafe", "upsert", "upsertMany"]);
@@ -58,7 +59,7 @@ const tableWithoutInsert: Lint = {
                 emit(tableWithoutInsert, {
                     cacheKey: `table_without_insert:${table.name}`,
                     detail: `No function inserts into "${table.name}" via \`ctx.db.insert("${table.name}", …)\`, \`ctx.db.${table.name}.insert\`, \`ctx.db.${table.name}.upsert\` or \`insertMany\` — table "${table.name}" has no discovered insert path.`,
-                    metadata: { table: table.name },
+                    metadata: { ...declarationSiteFields(table), table: table.name },
                 }),
             );
     },

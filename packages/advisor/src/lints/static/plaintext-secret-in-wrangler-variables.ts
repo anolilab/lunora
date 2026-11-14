@@ -41,7 +41,13 @@ const plaintextSecretInWranglerVariables: Lint = {
                 emit(plaintextSecretInWranglerVariables, {
                     cacheKey: `plaintext_secret_in_wrangler_vars:${wranglerVariable.file}:${wranglerVariable.key}`,
                     detail: `The \`vars\` entry \`${wranglerVariable.key}\` in ${wranglerVariable.file} holds a plaintext ${wranglerVariable.kind.replaceAll("_", " ")} (${wranglerVariable.preview}). \`vars\` ship in cleartext to the deployed Worker and are committed to source control — move it to a Secrets Store binding or \`wrangler secret put\` and rotate the exposed value.`,
-                    metadata: { file: wranglerVariable.file, key: wranglerVariable.key, kind: wranglerVariable.kind, preview: wranglerVariable.preview },
+                    metadata: {
+                        file: wranglerVariable.file,
+                        key: wranglerVariable.key,
+                        kind: wranglerVariable.kind,
+                        preview: wranglerVariable.preview,
+                        ...(wranglerVariable.line === undefined ? {} : { line: wranglerVariable.line }),
+                    },
                 }),
             ),
         );

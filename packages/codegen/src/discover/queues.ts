@@ -321,7 +321,11 @@ const queuesFromSources = (sources: ReadonlyArray<SourceFile>, lunoraDirectory: 
     }
 
     const topics = topicEntries.map((entry): TopicIR => {
-        return { exportName: entry.exportName, filePath: lunoraRelativePath(lunoraDirectory, entry.call.getSourceFile().getFilePath()) };
+        return {
+            exportName: entry.exportName,
+            filePath: lunoraRelativePath(lunoraDirectory, entry.call.getSourceFile().getFilePath()),
+            line: declarationLineOf(entry.call),
+        };
     });
 
     return { queues, topics };

@@ -307,7 +307,7 @@ export type { AdvisorPaymentWebhook } from "./payment-webhooks";
 export type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 export type { AdvisorProcedureDocument, AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
-export type { AdvisorQueue, AdvisorQueueTuning } from "./queues";
+export type { AdvisorQueue, AdvisorQueueTuning, AdvisorTopic } from "./queues";
 export type { AdvisorR2sqlCall } from "./r2sql-calls";
 export type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 export type { AdvisorRawRowReturn } from "./raw-row-returns";

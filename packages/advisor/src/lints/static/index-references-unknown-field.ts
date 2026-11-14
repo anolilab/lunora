@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { tableColumnSet } from "../helpers";
+import { declarationSiteFields, tableColumnSet } from "../helpers";
 
 /**
  * A correctness lint with no splinter analogue — it exploits Lunora's static
@@ -32,7 +32,7 @@ const indexReferencesUnknownField: Lint = {
                         emit(indexReferencesUnknownField, {
                             cacheKey: `index_references_unknown_field:${table.name}:${index.name}:${field}`,
                             detail: `Index "${index.name}" on table "${table.name}" references column "${field}", which is not declared on the table.`,
-                            metadata: { field, index: index.name, indexKind: index.kind, table: table.name },
+                            metadata: { ...declarationSiteFields(index), field, index: index.name, indexKind: index.kind, table: table.name },
                         }),
                     ),
             );

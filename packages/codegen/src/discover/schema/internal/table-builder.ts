@@ -6,6 +6,7 @@ import { isInternalTableName } from "../../../../../../shared/internal-table-nam
 import type { CodegenDiagnosticError } from "../../../diagnostics";
 import { diagnosticAt } from "../../../diagnostics";
 import type {
+    DeclarationSiteIR,
     ExternalSourceIR,
     GeoIndexIR,
     IndexIR,
@@ -23,6 +24,8 @@ import { parseObjectShape, resolveObjectLiteral } from "../../../parse-validator
 import { RESERVED_JS_WORDS } from "../../../reserved-words";
 import { findObjectProperty, propertyKeyName, symbolConstInitializer, unwrapExpression } from "../../ast";
 import { asMetric, getBooleanProperty, getNumberProperty, getStringArrayProperty, getStringProperty, indexNameOf, stringArrayPropertyOf } from "./properties";
+import type { SiteLocator } from "./sites";
+import { noSite } from "./sites";
 
 const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 
@@ -246,7 +249,7 @@ const relationFromProperty = (property: Node): RelationIR | undefined => {
  * `r.one(table, opts)` / `r.many(table, opts)` call. `references` defaults to
  * `_id`; `onDelete` is captured only on `one`.
  */
-const parseRelations = (argument: Node): RelationIR[] => {
+const parseRelations = (argument: Node, locate: SiteLocator): RelationIR[] => {
     const body = relationsObjectBody(argument);
 
     if (!body) {
@@ -259,7 +262,9 @@ const parseRelations = (argument: Node): RelationIR[] => {
         const relation = relationFromProperty(property);
 
         if (relation) {
-            relations.push(relation);
+            const site = locate(property);
+
+            relations.push(site === undefined ? relation : { ...relation, site });
         }
     }
 
@@ -493,6 +498,8 @@ interface TableBuilderAccumulator {
     globalBackend?: TableIR["globalBackend"];
     indexes: IndexIR[];
     isPublic: boolean;
+    /** Resolves a node to its declaration site; the index and relation rows record theirs through it. */
+    locate: SiteLocator;
     memory: boolean;
     rankIndexes: RankIndexIR[];
     relations: RelationIR[];
@@ -574,7 +581,14 @@ const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
 };
 
 /** Apply one chained method call (`.index`, `.shardBy`, …) to the accumulator. */
-const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, args: ReadonlyArray<Node>, name: string): void => {
+/** `row` with its declaration site attached, unless the site is unknown (the row then stays as the parser built it). */
+const withSite = <T extends object>(row: T, site: DeclarationSiteIR | undefined): T & { site?: DeclarationSiteIR } =>
+    site === undefined ? row : { ...row, site };
+
+const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, args: ReadonlyArray<Node>, name: string, methodNameNode: Node): void => {
+    // The method name, not the whole call: a chained `.index(...)` call starts on the line of its `defineTable(...)` head.
+    const site = accumulator.locate(methodNameNode);
+
     switch (method) {
         case "aggregateIndex": {
             // The index's options are read by the runtime; codegen needs only that one exists.
@@ -601,7 +615,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
         }
 
         case "geoIndex": {
-            accumulator.geoIndexes.push(parseGeoIndexCall(args));
+            accumulator.geoIndexes.push(withSite(parseGeoIndexCall(args), site));
 
             break;
         }
@@ -616,7 +630,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
         case "index": {
             // The chain is unwound outermost-first, so each index is prepended to land in declaration order: the
             // planner lets an earlier index claim a shared column, so the order is part of the schema.
-            accumulator.indexes.unshift(parseIndexCall(args));
+            accumulator.indexes.unshift(withSite(parseIndexCall(args), site));
 
             break;
         }
@@ -635,7 +649,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
         }
 
         case "rankIndex": {
-            accumulator.rankIndexes.push(parseRankIndexCall(args));
+            accumulator.rankIndexes.push(withSite(parseRankIndexCall(args), site));
 
             break;
         }
@@ -644,14 +658,14 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             const builder = args[0];
 
             if (builder) {
-                accumulator.relations.push(...parseRelations(builder));
+                accumulator.relations.push(...parseRelations(builder, accumulator.locate));
             }
 
             break;
         }
 
         case "searchIndex": {
-            accumulator.searchIndexes.push(parseSearchIndexCall(args));
+            accumulator.searchIndexes.push(withSite(parseSearchIndexCall(args), site));
 
             break;
         }
@@ -699,7 +713,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             const vectorIndex = parseVectorizeCall(args, name);
 
             if (vectorIndex) {
-                accumulator.vectorIndexes.push(vectorIndex);
+                accumulator.vectorIndexes.push(withSite(vectorIndex, site));
             }
 
             break;
@@ -964,7 +978,8 @@ const defineTableShape = (first: TsNode | undefined, name: string): Record<strin
     );
 };
 
-const parseTableBuilder = (expression: Expression, name: string): TableIR => {
+/** The table a `defineTable(...)` chain declares; `locate` gives the base `defineTable(...)` call's site. */
+const parseTableBuilder = (expression: Expression, name: string, locate: SiteLocator = noSite): TableIR => {
     const accumulator: TableBuilderAccumulator = {
         aggregateIndexed: false,
         commitOrdered: false,
@@ -972,6 +987,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         geoIndexes: [],
         indexes: [],
         isPublic: false,
+        locate,
         memory: false,
         rankIndexes: [],
         relations: [],
@@ -984,6 +1000,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     const followSource = tableSourceReader(name);
     let current: TsNode = followSource(expression);
     let basedOnDefineTable = false;
+    let defineTableCall: TsNode | undefined;
 
     // Unwind the chain: e.g. defineTable({...}).index(...).shardBy("x")
     while (Node.isCallExpression(current)) {
@@ -991,10 +1008,11 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         const args = current.getArguments();
 
         if (Node.isPropertyAccessExpression(callee)) {
-            applyTableMethod(accumulator, callee.getName(), args, name);
+            applyTableMethod(accumulator, callee.getName(), args, name, callee.getNameNode());
             current = followSource(callee.getExpression());
         } else if (Node.isIdentifier(callee) && isDefineTableCallee(callee)) {
             // Reached the base defineTable({...}) call.
+            defineTableCall = current;
             shape = defineTableShape(args[0], name);
             basedOnDefineTable = true;
             break;
@@ -1013,12 +1031,15 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
 
     assertNoGlobalTtl(expression, name, accumulator);
 
+    const site = defineTableCall === undefined ? undefined : locate(defineTableCall);
+
     return {
         ...(accumulator.aggregateIndexed ? { aggregateIndexed: true as const } : {}),
         commitOrdered: accumulator.commitOrdered,
         externallyManaged: accumulator.externallyManaged,
         externalSource: accumulator.externalSource,
         geoIndexes: accumulator.geoIndexes,
+        ...(site === undefined ? {} : { site }),
         globalBackend: accumulator.shardMode === "global" ? (accumulator.globalBackend ?? "d1") : undefined,
         indexes: accumulator.indexes,
         isPublic: accumulator.isPublic,
@@ -1057,7 +1078,13 @@ const tableMemberSource = (member: PropertyAssignment | ShorthandPropertyAssignm
  * check spans the spread and the inline keys together, which is exactly the
  * collision `authTables`' own docs warn silently loses a table to spread order.
  */
-const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = [], seenNames = new Set<string>(), visited = new Set<Node>()): TableIR[] => {
+const parseBaseTables = (
+    object: ObjectLiteralExpression,
+    locate: SiteLocator = noSite,
+    tables: TableIR[] = [],
+    seenNames = new Set<string>(),
+    visited = new Set<Node>(),
+): TableIR[] => {
     visited.add(object);
 
     for (const property of object.getProperties()) {
@@ -1065,7 +1092,7 @@ const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = []
             const spread = resolveObjectLiteral(property.getExpression());
 
             if (spread !== undefined && !visited.has(spread)) {
-                parseBaseTables(spread, tables, seenNames, visited);
+                parseBaseTables(spread, locate, tables, seenNames, visited);
             }
 
             continue;
@@ -1090,7 +1117,7 @@ const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = []
             }
 
             seenNames.add(name);
-            tables.push(parseTableBuilder(initializer, name));
+            tables.push(parseTableBuilder(initializer, name, locate));
         }
     }
 

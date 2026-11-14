@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * A correctness lint: every relation declared via `.relations((r) => …)` names a
@@ -30,7 +31,7 @@ const relationReferencesUnknownTable: Lint = {
                         emit(relationReferencesUnknownTable, {
                             cacheKey: `relation_references_unknown_table:${table.name}:${relation.name}${role}`,
                             detail: `Relation "${relation.name}" on table "${table.name}" targets table "${name}", which does not exist in the schema.`,
-                            metadata: { relation: relation.name, table: table.name, target: name },
+                            metadata: { ...declarationSiteFields(relation), relation: relation.name, table: table.name, target: name },
                         }),
                     ),
             ),

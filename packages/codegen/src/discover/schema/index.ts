@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+
 import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -8,6 +10,7 @@ import type { SchemaIR, TableIR, VectorIndexIR } from "../../ir";
 import { descendantsOfKind } from "../ast";
 import { applyExtensions, parseStandaloneVectorIndexes } from "./internal/extensions";
 import { chainedStringLiteralArgument, getBooleanProperty, getStringProperty } from "./internal/properties";
+import { siteLocatorFor } from "./internal/sites";
 import { parseBaseTables } from "./internal/table-builder";
 
 /** Recognised Cloudflare DO data-residency jurisdictions — the literals a `.jurisdiction("…")` call may carry. */
@@ -134,7 +137,8 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
         throw diagnosticAt(defineSchemaCall, "defineSchema() expects an object literal");
     }
 
-    const tables: TableIR[] = parseBaseTables(argument);
+    const locate = siteLocatorFor(dirname(schemaPath));
+    const tables: TableIR[] = parseBaseTables(argument, locate);
 
     // Standalone vector indexes live in the optional second argument (Shape B).
     const standaloneArgument = defineSchemaCall.getArguments()[1];
@@ -143,7 +147,7 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
 
     // Merge chained `.extend(...)` extensions, mutating `tables` and collecting
     // their standalone vector indexes.
-    const extensionStandaloneVectorIndexes = applyExtensions(defineSchemaCall, tables, projectRoot);
+    const extensionStandaloneVectorIndexes = applyExtensions(defineSchemaCall, tables, projectRoot, locate);
 
     // Standalone aggregate indexes live in the optional third argument; extension
     // tables are merged above, so they are marked too.

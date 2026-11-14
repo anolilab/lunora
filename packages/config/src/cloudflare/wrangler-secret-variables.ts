@@ -20,6 +20,7 @@
  */
 import type { WranglerVariableIR } from "@lunora/codegen";
 import { redact, secretKindOf } from "@lunora/codegen";
+import { parseTree } from "jsonc-parser";
 
 import { isPublicKeyName, isSecretKeyName } from "../../../../shared/secret-key";
 import { isPlaceholderValue } from "../scaffold-dev-variables";
@@ -40,7 +41,11 @@ const MIN_SECRET_NAMED_VALUE_LENGTH = 8;
  * value is long enough to plausibly be one. `kind` is the matched shape, or
  * `secret_named_var` for the key-name path.
  */
-const scanWranglerVariablesForSecrets = (variables: Record<string, unknown> | undefined, file: string): WranglerVariableIR[] => {
+const scanWranglerVariablesForSecrets = (
+    variables: Record<string, unknown> | undefined,
+    file: string,
+    lineOf: (key: string) => number | undefined = () => undefined,
+): WranglerVariableIR[] => {
     if (variables === undefined) {
         return [];
     }
@@ -72,11 +77,38 @@ const scanWranglerVariablesForSecrets = (variables: Record<string, unknown> | un
             continue;
         }
 
-        findings.push({ file, key, kind, preview: redact(rawValue) });
+        const line = lineOf(key);
+
+        findings.push({ file, key, kind, preview: redact(rawValue), ...(line === undefined ? {} : { line }) });
     }
 
     return findings;
 };
 
-// eslint-disable-next-line import/prefer-default-export -- named export by package convention; the index re-exports it
-export { scanWranglerVariablesForSecrets };
+/** The line breaks `jsonc-parser` counts: a lone CR is one, as a CRLF is. */
+const LINE_BREAK = /\r\n|\r|\n/u;
+
+/**
+ * The 1-based line of each top-level `vars` key in the `wrangler.jsonc` text, read from the JSONC tree so a comment or a
+ * string that happens to contain a key cannot match. A repeated key (or a repeated `vars` object) maps to its last
+ * occurrence, the one whose value the parser keeps and the scan judges.
+ */
+const variableKeyLines = (text: string): ReadonlyMap<string, number> => {
+    const keyNodes = (parseTree(text, [], { allowTrailingComma: true })?.children ?? [])
+        .filter((property) => property.children?.[0]?.value === "vars")
+        .flatMap((property) => property.children?.[1]?.children ?? [])
+        .flatMap((entry) => (typeof entry.children?.[0]?.value === "string" ? [entry.children[0]] : []));
+    const lines = new Map<string, number>();
+    let line = 1;
+    let scanned = 0;
+
+    for (const keyNode of keyNodes) {
+        line += text.slice(scanned, keyNode.offset).split(LINE_BREAK).length - 1;
+        scanned = keyNode.offset;
+        lines.set(keyNode.value as string, line);
+    }
+
+    return lines;
+};
+
+export { scanWranglerVariablesForSecrets, variableKeyLines };

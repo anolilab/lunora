@@ -1,6 +1,7 @@
 import emit from "../../finding";
 import type { AdvisorRelation, AdvisorTable } from "../../schema";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 import { leadingIndexedColumns, PRIMARY_KEY, suggestIndexName } from "./fk-index";
 
 interface KeyHolder {
@@ -81,6 +82,7 @@ const unindexedRelationTarget: Lint = {
                                 cacheKey: `unindexed_relation_target:${target.name}:${holder.column}`,
                                 detail: `Relation "${relation.name}" on table "${table.name}" is a to-many over "${target.name}" via its column "${holder.column}", which is not the leading column of any index on "${target.name}". Relation predicates (\`some\`/\`none\`/\`every\`) and \`with:\` reads of "${relation.name}" full-scan "${target.name}".`,
                                 metadata: {
+                                    ...declarationSiteFields(relation),
                                     fkColumn: holder.column,
                                     references: { column: holder.references, table: table.name },
                                     relation: relation.name,

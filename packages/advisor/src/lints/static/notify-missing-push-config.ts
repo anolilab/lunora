@@ -13,7 +13,8 @@ import type { Lint } from "../../types";
  *
  * This lint runs when the codegen feeder has supplied config evidence
  * (`context.notifyConfig` present); a runtime caller with no evidence flags
- * nothing.
+ * nothing. The finding carries no source location: its evidence is the channel
+ * wiring plus the send sites across every handler, not one call to point at.
  */
 const notifyMissingPushConfig: Lint = {
     categories: ["SCHEMA"],

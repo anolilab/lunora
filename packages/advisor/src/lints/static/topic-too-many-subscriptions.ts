@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /** Subscriptions past which one publish noticeably stretches the calling handler. */
 const MAX_SUBSCRIPTIONS = 10;
@@ -48,7 +49,11 @@ const topicTooManySubscriptions: Lint = {
                 emit(topicTooManySubscriptions, {
                     cacheKey: `topic_too_many_subscriptions:${topic}`,
                     detail: `Topic "${topic}" has ${String(subscriptions.length)} subscriptions, so each publish sends to ${String(subscriptions.length)} queues.`,
-                    metadata: { subscriptions: subscriptions.map((queue) => queue.exportName), topic },
+                    metadata: {
+                        ...declarationSiteFields(context.topics?.find((declared) => declared.exportName === topic) ?? {}),
+                        subscriptions: subscriptions.map((queue) => queue.exportName),
+                        topic,
+                    },
                 }),
             );
         }

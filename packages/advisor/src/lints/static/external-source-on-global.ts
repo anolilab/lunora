@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a table that is both `.source(...)` and `.global()`.
@@ -32,7 +33,7 @@ const externalSourceOnGlobal: Lint = {
                 emit(externalSourceOnGlobal, {
                     cacheKey: `external_source_on_global:${table.name}`,
                     detail: `Table \`${table.name}\` is both \`.source(...)\` and \`.global()\` — contradictory. A sourced table materializes into a shard DO's SQLite; a global table lives in the external tier.`,
-                    metadata: { table: table.name },
+                    metadata: { ...declarationSiteFields(table), table: table.name },
                 }),
             ),
     source: "static",
