@@ -4,6 +4,7 @@ import { rateLimit } from "lunorash/ratelimit";
 import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { requireMember } from "./membership.js";
 import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /**
@@ -30,7 +31,7 @@ export const list = query.query(async ({ ctx }): Promise<Document_<"channels">[]
 export const create = mutation
     .use(rateLimit(mutationLimiter, "send", byUser))
     .input({ name: v.string().max(64) })
-    .mutation(async ({ args: { name }, ctx }): Promise<Id<"channels">> => {
+    .mutation(async ({ args: { name }, ctx }): Promise<{ id: Id<"channels">; name: string }> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHENTICATED", "sign in to create a channel");
         }
@@ -61,5 +62,105 @@ export const create = mutation
 
         ctx.log.info("channel created", { name: slug });
 
-        return ctx.db.insert("channels", { createdBy: ctx.auth.userId, name: slug });
+        return { id: await ctx.db.insert("channels", { createdBy: ctx.auth.userId, name: slug }), name: slug };
+    });
+
+/** Write the membership row if it is absent. */
+const addMember = async (ctx: MutationCtx, channelId: string, userId: string): Promise<void> => {
+    const existing = await ctx.db
+        .query("members")
+        .withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId))
+        .first();
+
+    if (!existing) {
+        await ctx.db.insert("members", { channelId, joinedAt: Date.now(), userId });
+    }
+};
+
+/**
+ * Join a channel. Idempotent. The client calls this right after `create` (with
+ * the channel's shard key), which is how the creator becomes a member.
+ *
+ * It does not check that the channel exists in the root `channels` table: a
+ * channel shard cannot read that table. That is no wider than before, where
+ * `messages.send` already accepts any channel id a signed-in caller names; a
+ * membership row for an unknown name grants access to nothing.
+ */
+export const join = mutation
+    .use(rateLimit(mutationLimiter, "send", byUser))
+    .input({ channelId: v.string().max(128) })
+    .mutation(async ({ args: { channelId }, ctx }): Promise<void> => {
+        if (!ctx.auth.userId) {
+            throw new LunoraError("UNAUTHENTICATED", "sign in to join a channel");
+        }
+
+        await addMember(ctx, channelId, ctx.auth.userId);
+
+        ctx.log.info("channel joined", { channelId });
+    });
+
+/** Leave a channel. Removing the last member is allowed; the channel stays. */
+export const leave = mutation
+    .use(rateLimit(mutationLimiter, "send", byUser))
+    .input({ channelId: v.string().max(128) })
+    .mutation(async ({ args: { channelId }, ctx }): Promise<void> => {
+        const { userId } = ctx.auth;
+
+        if (!userId) {
+            throw new LunoraError("UNAUTHENTICATED", "sign in to leave a channel");
+        }
+
+        const existing = await ctx.db
+            .query("members")
+            .withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId))
+            .first();
+
+        if (existing) {
+            await ctx.db.delete("members", existing._id);
+        }
+
+        // Without this the other members keep seeing the leaver online until the client-side TTL lapses,
+        // and the leaver's own heartbeats now stop at the membership guard.
+        const presence = await ctx.db
+            .query("presence")
+            .withIndex("by_channel_session", (q) => q.eq("channelId", channelId))
+            .collect();
+
+        await Promise.all(presence.filter((row) => row.userId === userId).map(async (row) => ctx.db.delete("presence", row._id)));
+
+        ctx.log.info("channel left", { channelId });
+    });
+
+/** Whether the caller is a member, and how many members the channel has. Visible to any signed-in user, so they can decide to join. */
+export const membership = query
+    .input({ channelId: v.string().max(128) })
+    .query(async ({ args: { channelId }, ctx }): Promise<{ isMember: boolean; memberCount: number }> => {
+        const rows = await ctx.db
+            .query("members")
+            .withIndex("by_channel_user", (q) => q.eq("channelId", channelId))
+            .collect();
+
+        const isMember = Boolean(ctx.auth.userId) && rows.some((row) => row.userId === ctx.auth.userId);
+
+        return { isMember, memberCount: rows.length };
+    });
+
+/** Member ids and join times for a channel. Member-only, so a non-member cannot enumerate who is in it. */
+export const members = query
+    .input({ channelId: v.string().max(128) })
+    .query(async ({ args: { channelId }, ctx }): Promise<{ joinedAt: number; userId: string }[]> => {
+        if (!ctx.auth.userId) {
+            return [];
+        }
+
+        await requireMember(ctx, channelId);
+
+        const rows = await ctx.db
+            .query("members")
+            .withIndex("by_channel_user", (q) => q.eq("channelId", channelId))
+            .collect();
+
+        return rows.map((row) => {
+            return { joinedAt: row.joinedAt, userId: row.userId };
+        });
     });

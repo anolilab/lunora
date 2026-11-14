@@ -125,6 +125,128 @@
         "x-lunora-function-kind": "mutation"
       }
     },
+    "/_lunora/rpc#channels:join": {
+      "post": {
+        "description": "Invoke the `mutation` `channels:join` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "channels:join",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "channelId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "channelId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "channels:join",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: channels:join",
+        "tags": [
+          "channels"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
+    "/_lunora/rpc#channels:leave": {
+      "post": {
+        "description": "Invoke the `mutation` `channels:leave` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "channels:leave",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "channelId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "channelId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "channels:leave",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "mutation: channels:leave",
+        "tags": [
+          "channels"
+        ],
+        "x-lunora-function-kind": "mutation"
+      }
+    },
     "/_lunora/rpc#channels:list": {
       "post": {
         "description": "Invoke the `query` `channels:list` over the Lunora RPC envelope (POST /_lunora/rpc).",
@@ -174,6 +296,128 @@
           }
         },
         "summary": "query: channels:list",
+        "tags": [
+          "channels"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#channels:members": {
+      "post": {
+        "description": "Invoke the `query` `channels:members` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "channels:members",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "channelId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "channelId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "channels:members",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: channels:members",
+        "tags": [
+          "channels"
+        ],
+        "x-lunora-function-kind": "query"
+      }
+    },
+    "/_lunora/rpc#channels:membership": {
+      "post": {
+        "description": "Invoke the `query` `channels:membership` over the Lunora RPC envelope (POST /_lunora/rpc).",
+        "operationId": "channels:membership",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "properties": {
+                      "channelId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "channelId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "channels:membership",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "default": {
+            "$ref": "#/components/responses/LunoraError"
+          }
+        },
+        "summary": "query: channels:membership",
         "tags": [
           "channels"
         ],

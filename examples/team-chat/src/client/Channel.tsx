@@ -51,15 +51,28 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
     // this channel's Durable Object. Drop the shard key and the runtime has to
     // fan out across every channel.
     // No casts: `api.*` is generated, so these are already typed.
-    const messages = useQuery(api.messages.list, { channelId }, { shardKey: channelId });
-    const hits = useQuery(api.messages.search, { channelId, text: search }, { shardKey: channelId });
-    const here = useQuery(api.presence.list, { channelId }, { shardKey: channelId });
+    //
+    // Membership is answered by the channel's own shard, so it is the first thing
+    // this component asks. Until it answers, or when the caller is not a member,
+    // the channel's data queries are skipped: a non-member would only get FORBIDDEN.
+    const access = useQuery(api.channels.membership, { channelId }, { shardKey: channelId });
+    const isMember = access?.isMember === true;
+    const messages = useQuery(api.messages.list, isMember ? { channelId } : "skip", { shardKey: channelId });
+    const hits = useQuery(api.messages.search, isMember ? { channelId, text: search } : "skip", { shardKey: channelId });
+    const here = useQuery(api.presence.list, isMember ? { channelId } : "skip", { shardKey: channelId });
+    const roster = useQuery(api.channels.members, isMember ? { channelId } : "skip", { shardKey: channelId });
 
     const { mutate: send } = useMutation(api.messages.send);
     const { mutate: heartbeat } = useMutation(api.presence.heartbeat);
     const { mutate: leave } = useMutation(api.presence.leave);
+    const { mutate: join } = useMutation(api.channels.join);
+    const { mutate: leaveChannel } = useMutation(api.channels.leave);
 
     useEffect(() => {
+        if (!isMember) {
+            return undefined;
+        }
+
         // The first heartbeat fires immediately, but `now` is NOT set here: seeding
         // it from `useState(() => Date.now())` keeps this effect free of a
         // synchronous `setState`, which forces a second render pass on mount.
@@ -101,7 +114,7 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
             globalThis.clearInterval(timer);
             globalThis.removeEventListener("pagehide", goodbye);
         };
-    }, [channelId, displayName, heartbeat, leave, sessionId]);
+    }, [channelId, displayName, heartbeat, isMember, leave, sessionId]);
 
     // No `useMemo`: the React Compiler memoizes this derivation already.
     const byUser = new Map(profiles.map((profile) => [profile.userId, profile.name]));
@@ -135,7 +148,7 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
      * optimization entirely.
      */
     const upload = async (file: File): Promise<{ key: string; name: string }> => {
-        const { key, url } = await client.action(api.messages.requestAttachmentUpload, { channelId, contentType: file.type });
+        const { key, url } = await client.action(api.messages.requestAttachmentUpload, { channelId, contentType: file.type }, { shardKey: channelId });
         const response = await fetch(url, { body: file, headers: { "content-type": file.type }, method: "PUT" });
 
         if (!response.ok) {
@@ -146,6 +159,35 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
     };
 
     const shown = search.trim() ? (hits ?? []) : (messages ?? []);
+
+    if (access !== undefined && !isMember) {
+        return (
+            <main className="channel">
+                <header className="channel-header">
+                    <h1>#{channelId}</h1>
+                </header>
+                <section className="join-panel">
+                    <p className="muted">
+                        You are not a member of #{channelId}. {access.memberCount} {access.memberCount === 1 ? "member" : "members"} so far.
+                    </p>
+                    {error && <p className="error">{error}</p>}
+                    <button
+                        className="primary"
+                        onClick={() => {
+                            setError(null);
+                            join({ channelId }, { shardKey: channelId }).catch((error_: unknown) => {
+                                setError(error_ instanceof Error ? error_.message : "could not join that channel");
+                            });
+                        }}
+                        type="button"
+                    >
+                        Join #{channelId}
+                    </button>
+                </section>
+            </main>
+        );
+    }
+
     // The TTL is applied here rather than in the query: a live query re-runs on
     // a poke, not on a clock, so a `Date.now()` filter server-side would sit
     // stale until somebody else wrote.
@@ -165,6 +207,26 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
                     type="search"
                     value={search}
                 />
+
+                {isMember && (
+                    <span className="muted">
+                        {access.memberCount} {access.memberCount === 1 ? "member" : "members"}
+                    </span>
+                )}
+
+                {isMember && (
+                    <button
+                        className="link"
+                        onClick={() => {
+                            leaveChannel({ channelId }, { shardKey: channelId }).catch((error_: unknown) => {
+                                setError(error_ instanceof Error ? error_.message : "could not leave that channel");
+                            });
+                        }}
+                        type="button"
+                    >
+                        Leave
+                    </button>
+                )}
 
                 <ul aria-label="Online now" className="presence">
                     {online.map((row) => (
@@ -199,6 +261,14 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
 
                 {shown.length === 0 && <li className="muted">{search.trim() ? "No matches in this channel." : "Nothing here yet — say something."}</li>}
             </ol>
+
+            {roster && (
+                <ul aria-label="Members" className="roster">
+                    {roster.map((member) => (
+                        <li key={member.userId}>{nameOf(member.userId)}</li>
+                    ))}
+                </ul>
+            )}
 
             <form
                 className="composer"

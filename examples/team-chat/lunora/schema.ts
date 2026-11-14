@@ -47,6 +47,19 @@ export default defineSchema({
         .index("by_channel", ["channelId"])
         .searchIndex("search_content", { field: "content", filterFields: ["channelId"] }),
 
+    /**
+     * Who may read and write a channel. Shard-local, not `.global()`: every gate
+     * reads it inside the channel's own shard, so a `leave` is a write in that shard
+     * and re-runs the subscriptions that depend on it. A global table would not.
+     */
+    members: defineTable({
+        channelId: v.string(),
+        userId: v.string(),
+        joinedAt: v.number(),
+    })
+        .shardBy("channelId")
+        .index("by_channel_user", ["channelId", "userId"], { unique: true }),
+
     /** One row per open tab. `lastSeen` is refreshed by a heartbeat; stale rows are simply not listed. */
     presence: defineTable({
         channelId: v.string(),
