@@ -269,6 +269,28 @@ export const typo = mutation({ args: {}, handler: async () => { throw new Error(
         expect(other?.suppressed).toBeUndefined();
         expect(named(advisories, "advisor_suppression_unused")).toHaveLength(0);
     });
+    it("skips a JSONC block comment between a wrangler directive and its key", () => {
+        expect.assertions(2);
+
+        const advisories = advisoriesFor(OPEN_APP, {
+            keys: ["STRIPE_SECRET"],
+            text: `{
+  "name": "app",
+  "vars": {
+    // lunora-advisor-exempt plaintext_secret_in_wrangler_vars -- rotated and read by the test harness only
+    /* rotated monthly
+       by the ops runbook */
+    "STRIPE_SECRET": "sk_live_0000000000000000"
+  }
+}
+`,
+        });
+        const [stripe] = named(advisories, "plaintext_secret_in_wrangler_vars");
+
+        expect(stripe?.suppressed?.file).toBe("wrangler.jsonc");
+        expect(named(advisories, "advisor_suppression_unused")).toHaveLength(0);
+    });
+
     it("attaches a wrangler directive only to the first key of a line holding two", () => {
         expect.assertions(2);
 

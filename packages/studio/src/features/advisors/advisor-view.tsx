@@ -26,7 +26,7 @@ interface AdvisorRow {
     readonly key: string;
     readonly level: AdvisorLevel;
     /** Set when an inline directive accepts this finding; the row stays listed, marked with the reason. */
-    readonly suppressed?: { readonly reason: string };
+    readonly suppressed?: { readonly file: string; readonly line: number; readonly reason: string };
 }
 
 interface AdvisorViewProps {
@@ -64,7 +64,7 @@ interface AdvisoryLike {
     readonly level: "ERROR" | "INFO" | "WARN";
     readonly metadata: Record<string, unknown>;
     readonly remediation: string;
-    readonly suppressed?: { readonly reason: string };
+    readonly suppressed?: { readonly file: string; readonly line: number; readonly reason: string };
     readonly title: string;
 }
 
@@ -83,7 +83,9 @@ const advisoryRow = (finding: AdvisoryLike): AdvisorRow => {
         issueType: finding.title,
         key: finding.cacheKey,
         level: ADVISORY_LEVEL[finding.level],
-        ...(finding.suppressed === undefined ? {} : { suppressed: { reason: finding.suppressed.reason } }),
+        ...(finding.suppressed === undefined
+            ? {}
+            : { suppressed: { file: finding.suppressed.file, line: finding.suppressed.line, reason: finding.suppressed.reason } }),
     };
 };
 
@@ -216,7 +218,10 @@ export const AdvisorView = ({ error = null, errorSource, rows, shardKey, testId,
                                             <span>{row.description}</span>
                                             {row.suppressed !== undefined && (
                                                 <span className="mt-1 block text-xs" data-testid="advisor-suppressed-reason">
-                                                    {t("Suppressed: {reason}", { reason: row.suppressed.reason })}
+                                                    {t("Suppressed at {location}: {reason}", {
+                                                        location: `${row.suppressed.file}:${String(row.suppressed.line)}`,
+                                                        reason: row.suppressed.reason,
+                                                    })}
                                                 </span>
                                             )}
                                             {(row.action !== undefined || canAsk) && (

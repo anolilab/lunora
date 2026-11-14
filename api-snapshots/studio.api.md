@@ -2278,7 +2278,7 @@ const MESSAGE_IDS: readonly [
     "No suggestions",
     "Nothing to report for this deployment.",
     "{count} suppressed",
-    "Suppressed: {reason}",
+    "Suppressed at {location}: {reason}",
     "Security and performance findings for your deployment.",
     "Review admin gates, credentials, and log redaction.",
     "Lunora checks admin-token strength, the live-subscription gate, and request-log redaction here.",
