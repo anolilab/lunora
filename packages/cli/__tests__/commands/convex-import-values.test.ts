@@ -97,6 +97,29 @@ describe("convex export value handling", () => {
         await expect(rejection).rejects.toThrow("$bytes");
     });
 
+    it("refuses a negative zero, which JSON would write back as 0", async () => {
+        expect.assertions(1);
+
+        const root = writeExport("users", ['{"_id":"u1","balance":-0.0}']);
+
+        await expect(collect(root, [])).rejects.toThrow(/field `balance`/);
+    });
+
+    it("imports a pre-2026 table whose lossy-looking tokens are quoted keys or string literals", async () => {
+        expect.assertions(1);
+
+        const root = writeExport(
+            "users",
+            ['{"_id":"u1","bytes":"x","kind":"int64"}'],
+            sidecarLine('{_creationTime: normalfloat64, _id: id<users>, "bytes": string, kind: "int64"}'),
+        );
+        const rows: EmittedRow[] = [];
+
+        await collect(root, rows);
+
+        expect(rows).toHaveLength(1);
+    });
+
     it("refuses a $float encoding, naming the field", async () => {
         expect.assertions(1);
 

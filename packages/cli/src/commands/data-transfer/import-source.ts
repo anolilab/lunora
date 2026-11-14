@@ -23,10 +23,11 @@ const DOCUMENTS_JSONL_RE = /documents\.jsonl$/;
  * Pre-2026 Convex exports write Int64, bytes and non-finite floats as plain
  * strings, and only the table's `generated_schema.jsonl` says which string is
  * which. Whole-token matching keeps `normalfloat64` (an ordinary finite float)
- * from tripping it, a token followed by `:` is a field name, not a type, and one
- * inside `id<…>` is the name of a referenced table.
+ * from tripping it, a token followed by `:` is a field name, not a type, one
+ * inside `id<…>` is the name of a referenced table, and a quoted one is a field
+ * name or a string literal.
  */
-const LEGACY_LOSSY_SHAPE_RE = /(?:^|[^\w-])(?<!id<)(?:int64|bytes|float64|NaN|-?inf|unknown)(?!\w|\??\s*:)/;
+const LEGACY_LOSSY_SHAPE_RE = /(?:^|[^\w"-])(?<!id<)(?:int64|bytes|float64|NaN|-?inf|unknown)(?![\w"]|\??\s*:)/;
 
 /** Source text of a number that is a Float64, not an Int64: it carries a dot or an exponent. */
 const FLOAT_TEXT_RE = /[.e]/i;
@@ -70,6 +71,10 @@ interface LossyValue {
 const findLossyValue = (value: unknown, path: string): LossyValue | undefined => {
     if (value instanceof UnsafeInt64) {
         return { path, reason: `holds the Int64 ${value.source}, which a JavaScript number cannot represent exactly` };
+    }
+
+    if (Object.is(value, -0)) {
+        return { path, reason: "holds -0, which the import would write as 0" };
     }
 
     let children: ReadonlyArray<readonly [string, unknown]>;
