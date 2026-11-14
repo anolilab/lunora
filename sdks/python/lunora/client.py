@@ -261,7 +261,10 @@ def _send_resubscribe(send: Callable[[dict], None], frame: dict) -> None:
 def _retry_after_ms(envelope: Any) -> Optional[float]:
     """The server's retry hint on a subscription error, or ``None`` when it sent none we can honour."""
     delay = envelope.get("retryAfterMs") if isinstance(envelope, dict) else None
-    if isinstance(delay, bool) or not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay < 0:
+    if isinstance(delay, bool) or not isinstance(delay, (int, float)) or delay < 0:
+        return None
+    # An int is compared as an int: `math.isfinite` converts to float and raises on one past its range.
+    if isinstance(delay, float) and not math.isfinite(delay):
         return None
     return min(delay, MAX_RETRY_AFTER_MS)
 
@@ -1185,8 +1188,8 @@ class LunoraClient:
 
         ``now`` is a ``time.monotonic()`` reading and defaults to the current one. Each
         re-subscribe is cold (no resume cursor), since the hint asks for a fresh snapshot.
-        Nothing is sent and nothing is dropped while no socket is attached: the deadline
-        waits for the next one.
+        With no socket attached it sends nothing and returns 0. Attaching or detaching a
+        socket cancels every pending retry: the reconnect's resend re-subscribes everything.
         """
 
         with self._lock:
@@ -1209,6 +1212,13 @@ class LunoraClient:
 
         for frame in frames:
             sender(frame)
+        # The frames went out after the lock was released, so an unsubscribe on another thread
+        # may have reached the socket first; follow it with another, or the server keeps a
+        # subscription this client no longer holds.
+        with self._lock:
+            dropped = [frame["id"] for frame in frames if frame["id"] not in self._subs]
+        for sub_id in dropped:
+            sender(build_unsubscribe_frame(sub_id))
         return len(frames)
 
     def next_subscription_retry_at(self) -> Optional[float]:
@@ -1250,8 +1260,9 @@ class LunoraClient:
             return {"kind": "ignored", "type": None}
 
         kind = frame.get("type")
-        if kind in ("ack", "data", "delta", "resume", "settled"):
-            # The server answered, so a retry this subscription was waiting on is moot.
+        if kind in ("ack", "resume", "settled"):
+            # The server answered, so a retry this subscription was waiting on is moot. A `data`
+            # or `delta` cancels it only once applied (see `_handle_data`).
             self._pending_retries.pop(_frame_key(frame.get("id")), None)
         if kind == "ack":
             sub = self._subs.get(_frame_key(frame.get("id")))
@@ -1381,6 +1392,7 @@ class LunoraClient:
                 }
             value = displayed = merged
         if sub is not None:
+            self._pending_retries.pop(sub.id, None)
             sub.server_base = value
             # Only an integer cursor advances the tracked one. A frame that omits
             # it, or sends an explicit null, must LEAVE it where it was — the

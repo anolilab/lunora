@@ -208,3 +208,51 @@ pub fn the_hint_is_clamped() {
 
     assert!(d <= t1 + Duration::from_secs(60), "the server's hint is clamped to the 60s ceiling");
 }
+
+pub fn a_data_frame_that_cannot_be_applied_keeps_the_retry() {
+    let retry = retry_fixture();
+    let (mut client, _sent, _codes, id) = open();
+
+    client.handle_frame(&wire_text(&retry["hintFrame"])).expect("hint frame");
+
+    let refused = format!(
+        r#"{{"cursor":13,"data":["{}","bigint","not-a-number"],"id":"{id}","type":"data"}}"#,
+        lunora::wire::TAG
+    );
+    client.handle_frame(&refused).expect("a refused payload must not fail handle_frame");
+
+    assert!(client.next_subscription_retry_at().is_some(), "a frame that was not applied answers nothing");
+}
+
+pub fn a_cold_retry_forgets_the_confirmed_cursor() {
+    let retry = retry_fixture();
+    let (mut client, _sent, _codes, id) = open();
+
+    client.handle_frame(&wire_text(&retry["hintFrame"])).expect("hint frame");
+    let d = client.next_subscription_retry_at().expect("a retry is pending");
+    client.retry_due_subscriptions(d).expect("due");
+
+    assert_eq!(client.subscription_state(&id).expect("registered").server_cursor, None);
+}
+
+pub fn a_slow_error_handler_does_not_push_the_retry_later() {
+    let retry = retry_fixture();
+    let sent: Sent = Arc::new(Mutex::new(Vec::new()));
+    let mut client = Client::new("https://app.example", None);
+    client.attach_socket(recording_sender(&sent), None);
+
+    let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
+    client.subscribe(
+        "messages:list",
+        args,
+        None,
+        Some(Box::new(|_error| std::thread::sleep(Duration::from_millis(200)))),
+    );
+    client.handle_frame(&wire_text(&retry["seedFrame"])).expect("seed frame");
+
+    let t0 = Instant::now();
+    client.handle_frame(&wire_text(&retry["hintFrame"])).expect("hint frame");
+    let d = client.next_subscription_retry_at().expect("a retry is pending");
+
+    assert!(d < t0 + Duration::from_secs(5) + Duration::from_millis(200), "the hint counts from arrival");
+}

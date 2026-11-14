@@ -14728,11 +14728,12 @@ abstract class ShardDO {
      * re-snapshot of a subscription that is not failing, start afresh.
      */
     private restartFailureStreakUnlessRetry(ws: ShardSocketLike, subId: string, previous: SubscriptionQuery | undefined, query: SubscriptionQuery): void {
+        // Args are wire-decoded here (bigint, Date, bytes), which `stableStringify` refuses; a throw would escape `webSocketMessage`.
         const isHintedRetry =
+            this.subscriptionFailures.hasStreak(ws, subId) &&
             previous !== undefined &&
             previous.functionPath === query.functionPath &&
-            stableStringify(previous.args ?? {}) === stableStringify(query.args ?? {}) &&
-            this.subscriptionFailures.hasStreak(ws, subId);
+            stableWireKey(previous.args ?? {}) === stableWireKey(query.args ?? {});
 
         if (!isHintedRetry) {
             this.subscriptionFailures.clear(ws, subId);
@@ -14985,6 +14986,16 @@ abstract class ShardDO {
         await runSocketPool(sockets, (ws) => this.inRefreshBatch(ws, () => refreshOne(ws)));
     }
 
+    /** A retried seed that failed again: the subscription stays registered and is answered with the next hint. */
+    private retryFailedSeed(ws: ShardSocketLike, subId: string, functionPath: string, error: unknown): void {
+        this.recordSubscriptionRefreshError(functionPath, error, { subId });
+        this.subscriptionFailures.recordFailure(ws, subId, subscriptionIdentityKey(socketIdentity(this.readAttachment(ws))), Date.now());
+
+        const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
+
+        this.sendSubscriptionError(ws, subId, body.code, body.message, body, this.subscriptionFailures.retryHintMs(ws, subId));
+    }
+
     /**
      * Run {@link ShardDO.seedSubscription} and fail the ONE subscription — never
      * the socket — when its handler throws.
@@ -15000,40 +15011,33 @@ abstract class ShardDO {
      * spins at the initial delay for the life of the page.
      *
      * So: drop the just-registered subscription from the attachment and answer
-     * with a structured `error` frame carrying the thrown error's code. Mirrors
+     * with a structured `error` frame carrying the thrown error's code. The one
+     * exception is a retry on an unguarded socket: a same-args re-subscribe of a
+     * subscription in a failure streak stays registered and is answered with the
+     * next retry hint (see {@link ShardDO.retryFailedSeed}). Mirrors
      * `refreshSubscriptions`' per-`(socket, sub)` catch on the write-flush half
      * of the same path, and `handleShapeSubscribe`'s rollback-then-error on a
      * failed shape seed.
      */
-    /** A retried seed that failed again: the subscription stays registered and is answered with the next hint. */
-    private retryFailedSeed(ws: ShardSocketLike, subId: string, functionPath: string, error: unknown): void {
-        this.recordSubscriptionRefreshError(functionPath, error, { subId });
-        this.subscriptionFailures.recordFailure(ws, subId, subscriptionIdentityKey(socketIdentity(this.readAttachment(ws))), Date.now());
-
-        if (this.deliveryAuthorization) {
-            return;
-        }
-
-        const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
-
-        this.sendSubscriptionError(ws, subId, body.code, body.message, body, this.subscriptionFailures.retryHintMs(ws, subId));
-    }
-
     private async seedSubscriptionGuarded(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
+        // A failure recorded while this seed ran (a flush, or a newer retry of the same id) is newer than its success.
+        const streakAtStart = this.subscriptionFailures.streakMark(ws, subId);
+
         try {
             await this.seedSubscription(ws, subId, query, functionPath, isAdmin);
-            this.subscriptionFailures.clear(ws, subId);
+            this.subscriptionFailures.clearIfUnchanged(ws, subId, streakAtStart);
         } catch (error: unknown) {
             // A same-args re-subscribe of a failing subscription is the client's retry at the hint: it stays registered
             // and answers with the next hint, so the backoff keeps growing. Only a seed with no streak behind it is refused.
+            // A guarded socket is never sent a hint, so its re-subscribe is refused as a first seed is, never left unanswered.
             if (this.subscriptionFailures.hasStreak(ws, subId)) {
-                if (!this.isDeterministicSubscriptionFailure(error)) {
+                if (this.deliveryAuthorization === undefined && !this.isDeterministicSubscriptionFailure(error)) {
                     this.retryFailedSeed(ws, subId, functionPath, error);
 
                     return;
                 }
 
-                // A retry cannot fix this error, so the streak ends here and the seed is refused as a first seed is.
+                // A retry cannot fix this error (or no hint can be sent), so the streak ends here and the seed is refused.
                 this.subscriptionFailures.clear(ws, subId);
 
                 if (isDeliveryAccessDenied(error)) {

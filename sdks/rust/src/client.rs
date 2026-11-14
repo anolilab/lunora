@@ -1220,7 +1220,9 @@ impl Client {
     }
 
     /// Re-subscribes every subscription whose retry hint has elapsed, and returns how many
-    /// frames it sent. Nothing is sent, and nothing is dropped, while no socket is attached.
+    /// frames it sent. With no socket attached it sends nothing and returns 0; attaching or
+    /// detaching a socket cancels every pending retry, since the reconnect's resend
+    /// re-subscribes everything.
     ///
     /// Each re-subscribe is cold: the hint asks for a fresh snapshot, so the stored resume
     /// cursor and epoch are cleared first.
@@ -1247,6 +1249,8 @@ impl Client {
 
             entry.cursor = None;
             entry.epoch = None;
+            // A write confirmed before the fresh snapshot must not be checked against the old position.
+            entry.state.server_cursor = None;
             frames.push(build_subscribe_frame(&id, &entry.function_path, &entry.args, None, None, None)?);
         }
 
@@ -1317,8 +1321,9 @@ impl Client {
         let kind = frame.get("type").and_then(Value::as_str).unwrap_or("").to_string();
         let id = frame.get("id").and_then(Value::as_str).unwrap_or("").to_string();
 
-        // The server answered, so a retry this subscription was waiting on is moot.
-        if matches!(kind.as_str(), "ack" | "data" | "delta" | "resume" | "settled") {
+        // The server answered, so a retry this subscription was waiting on is moot. A `data` or
+        // `delta` cancels it only once applied, below: one that cannot be applied answers nothing.
+        if matches!(kind.as_str(), "ack" | "resume" | "settled") {
             self.pending_retries.remove(&id);
         }
 
@@ -1387,6 +1392,7 @@ impl Client {
                         value
                     };
 
+                    self.pending_retries.remove(&id);
                     advance(entry, &frame);
                     entry.has_base = true;
                     entry.state.server_base = value;
@@ -1445,6 +1451,8 @@ impl Client {
                 }
             }
             "error" => {
+                // The hint counts from arrival, not from whenever the error handlers return.
+                let received = Instant::now();
                 let envelope = frame.get("error");
                 let code = envelope.and_then(|inner| inner.get("code")).and_then(Value::as_str);
 
@@ -1478,7 +1486,7 @@ impl Client {
                 if self.subscriptions.contains_key(&id) {
                     match retry_after(envelope) {
                         Some(delay) => {
-                            self.pending_retries.insert(id.clone(), Instant::now() + delay);
+                            self.pending_retries.insert(id.clone(), received + delay);
                         }
                         // A hint-less error is how the server ends a subscription, so a retry an earlier hint scheduled is cancelled.
                         None => {
