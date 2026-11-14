@@ -3,6 +3,58 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/advisor@1.0.0-alpha.291"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/agent@1.0.0-alpha.283"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/auth@1.0.0-alpha.264"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/shard-engine@1.0.0-alpha.197"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/codegen@1.0.0-alpha.412"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/testing@1.0.0-alpha.336"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/seed@1.0.0-alpha.283"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/cli@1.0.0-alpha.495"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/client@1.0.0-alpha.297"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/nuxt@1.0.0-alpha.305"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/observability@1.0.0-alpha.204"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/payment@1.0.0-alpha.273"
+    },
+    {
+      "at": "2026-11-14T08:35:45.107Z",
+      "key": "@lunora/studio@1.0.0-alpha.384"
+    },
+    {
       "at": "2026-11-14T07:28:58.244Z",
       "key": "@lunora/shard-engine@1.0.0-alpha.196"
     },
@@ -349,60 +401,8 @@
     {
       "at": "2026-11-05T17:36:50.706Z",
       "key": "@lunora/config@1.0.0-alpha.459"
-    },
-    {
-      "at": "2026-11-05T17:36:50.706Z",
-      "key": "@lunora/cli@1.0.0-alpha.487"
-    },
-    {
-      "at": "2026-11-05T17:36:50.706Z",
-      "key": "@lunora/do@1.0.0-alpha.283"
-    },
-    {
-      "at": "2026-11-05T14:54:09.291Z",
-      "key": "@lunora/server@1.0.0-alpha.271"
-    },
-    {
-      "at": "2026-11-05T14:54:09.291Z",
-      "key": "@lunora/codegen@1.0.0-alpha.402"
-    },
-    {
-      "at": "2026-11-05T14:54:09.291Z",
-      "key": "@lunora/config@1.0.0-alpha.458"
-    },
-    {
-      "at": "2026-11-05T14:54:09.291Z",
-      "key": "@lunora/runtime@1.0.0-alpha.279"
-    },
-    {
-      "at": "2026-11-05T14:54:09.291Z",
-      "key": "@lunora/astro@1.0.0-alpha.312"
-    },
-    {
-      "at": "2026-11-05T14:54:09.291Z",
-      "key": "@lunora/auth@1.0.0-alpha.258"
-    },
-    {
-      "at": "2026-11-05T14:54:09.291Z",
-      "key": "@lunora/nuxt@1.0.0-alpha.304"
-    },
-    {
-      "at": "2026-11-05T14:54:09.291Z",
-      "key": "@lunora/rspack@1.0.0-alpha.150"
-    },
-    {
-      "at": "2026-11-05T14:54:09.291Z",
-      "key": "@lunora/vite@1.0.0-alpha.428"
-    },
-    {
-      "at": "2026-11-05T13:28:06.713Z",
-      "key": "@lunora/mail@1.0.0-alpha.139"
-    },
-    {
-      "at": "2026-11-05T13:28:06.713Z",
-      "key": "@lunora/agent@1.0.0-alpha.282"
     }
   ],
-  "updatedAt": "2026-11-14T07:28:58.245Z",
+  "updatedAt": "2026-11-14T08:35:45.108Z",
   "version": 1
 }
