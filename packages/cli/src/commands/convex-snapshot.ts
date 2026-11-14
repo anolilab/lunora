@@ -94,6 +94,31 @@ const resolveConvexSnapshot = async (path: string): Promise<ConvexSnapshot | und
     return undefined;
 };
 
+const DOCUMENTS_JSONL_RE = /documents\.jsonl$/;
+
+/**
+ * Resolve a snapshot file the reader will open, refusing one that links out of the
+ * snapshot directory, and record the identity `readSnapshotLines` checks the opened
+ * file against.
+ */
+const listedDirectoryFile = async (canonicalRoot: string, file: string, label: string): Promise<{ file: string; identity: { dev: number; ino: number } }> => {
+    const canonicalFile = await realpath(file);
+
+    if (!isInsideDirectory(canonicalRoot, canonicalFile)) {
+        throw new Error(`${label} resolves outside the snapshot directory`);
+    }
+
+    const { dev, ino } = await stat(canonicalFile);
+
+    // A swap between the containment check and the stat records the outside file's identity. Re-resolving
+    // catches a swap that is still in place; the reader's identity check covers the rest.
+    if ((await realpath(file)) !== canonicalFile) {
+        throw new Error(`${label} changed while it was being listed`);
+    }
+
+    return { file: canonicalFile, identity: { dev, ino } };
+};
+
 /**
  * Enumerate `<table>/documents.jsonl` under an exploded export directory. The
  * export is operator-downloaded data, so a table file that links out of it is
@@ -115,23 +140,7 @@ const listDirectoryTables = async (root: string): Promise<ConvexSnapshotTable[]>
 
         if (documents?.isFile()) {
             // eslint-disable-next-line no-await-in-loop -- ditto; the reader must open the path that was checked
-            const canonicalFile = await realpath(file);
-
-            if (!isInsideDirectory(canonicalRoot, canonicalFile)) {
-                throw new Error(`table ${entry.name}: documents.jsonl resolves outside the snapshot directory`);
-            }
-
-            // eslint-disable-next-line no-await-in-loop -- ditto; the identity is taken from the file that was checked
-            const { dev, ino } = await stat(canonicalFile);
-
-            // A swap between the containment check and the stat records the outside file's identity. Re-resolving
-            // catches a swap that is still in place; the reader's identity check covers the rest.
-            // eslint-disable-next-line no-await-in-loop -- ditto; the re-check must follow the stat
-            if ((await realpath(file)) !== canonicalFile) {
-                throw new Error(`table ${entry.name}: documents.jsonl changed while it was being listed`);
-            }
-
-            found.push({ file: canonicalFile, identity: { dev, ino }, table: entry.name });
+            found.push({ ...(await listedDirectoryFile(canonicalRoot, file, `table ${entry.name}: documents.jsonl`)), table: entry.name });
         }
     }
 
@@ -266,5 +275,40 @@ const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, blobId: string)
     return Buffer.from(blob);
 };
 
+/**
+ * List a file that sits beside a table's `documents.jsonl` (its `generated_schema.jsonl`),
+ * held to the same containment and identity rules, or `undefined` when there is none.
+ * Only a missing file means none: any other failure would skip whatever reads it, so it throws.
+ */
+const listSnapshotSidecar = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable, name: string): Promise<ConvexSnapshotTable | undefined> => {
+    const file = tableEntry.file.replace(DOCUMENTS_JSONL_RE, name);
+
+    if (snapshot.kind === "zip") {
+        return snapshot.zip.getEntry(file) === null ? undefined : { file, table: tableEntry.table };
+    }
+
+    const info = await stat(file).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return undefined;
+        }
+
+        throw error;
+    });
+
+    if (info?.isFile() !== true) {
+        return undefined;
+    }
+
+    return { ...(await listedDirectoryFile(await realpath(snapshot.root), file, `table ${tableEntry.table}: ${name}`)), table: tableEntry.table };
+};
+
 export type { ConvexSnapshot, ConvexSnapshotTable };
-export { CONVEX_STORAGE_TABLE, isConvexSystemTable, listConvexSnapshotTables, readSnapshotLines, readSnapshotStorageBlob, resolveConvexSnapshot };
+export {
+    CONVEX_STORAGE_TABLE,
+    isConvexSystemTable,
+    listConvexSnapshotTables,
+    listSnapshotSidecar,
+    readSnapshotLines,
+    readSnapshotStorageBlob,
+    resolveConvexSnapshot,
+};

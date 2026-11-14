@@ -9,15 +9,20 @@ import { LunoraError } from "@lunora/errors";
 
 import type { Logger } from "../../util/logger";
 import type { ConvexSnapshot, ConvexSnapshotTable } from "../convex-snapshot";
-import { CONVEX_STORAGE_TABLE, isConvexSystemTable, listConvexSnapshotTables, readSnapshotLines, resolveConvexSnapshot } from "../convex-snapshot";
+import {
+    CONVEX_STORAGE_TABLE,
+    isConvexSystemTable,
+    listConvexSnapshotTables,
+    listSnapshotSidecar,
+    readSnapshotLines,
+    resolveConvexSnapshot,
+} from "../convex-snapshot";
 import type { DumpFile } from "./sources/dump-directory";
 import { listFirestoreCollections } from "./sources/firebase";
 import type { ImportSourceMapping } from "./sources/mapping";
 import { readImportSourceMapping } from "./sources/mapping";
 import { listSupabaseTables } from "./sources/supabase";
 import { readStorageMetadata } from "./storage-blobs";
-
-const DOCUMENTS_JSONL_RE = /documents\.jsonl$/;
 
 /**
  * Pre-2026 Convex exports write Int64, bytes and non-finite floats as plain
@@ -141,29 +146,9 @@ const findLossyValue = (value: unknown, path: string): LossyValue | undefined =>
  * nothing from the table reaches the endpoint.
  */
 const refuseLegacyLossyTable = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): Promise<void> => {
-    const sidecar: ConvexSnapshotTable = {
-        file: tableEntry.file.replace(DOCUMENTS_JSONL_RE, "generated_schema.jsonl"),
-        table: tableEntry.table,
-    };
+    const sidecar = await listSnapshotSidecar(snapshot, tableEntry, "generated_schema.jsonl");
 
-    let present: boolean;
-
-    if (snapshot.kind === "zip") {
-        present = snapshot.zip.getEntry(sidecar.file) !== null;
-    } else {
-        // Only a missing file means no sidecar: any other failure would skip the guard, so it stops the import.
-        const info = await stat(sidecar.file).catch((error: unknown) => {
-            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-                return undefined;
-            }
-
-            throw error;
-        });
-
-        present = info?.isFile() === true;
-    }
-
-    if (!present) {
+    if (sidecar === undefined) {
         return;
     }
 

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -230,6 +230,18 @@ describe("convex export value handling", () => {
         await collect(root, rows);
 
         expect(rows).toHaveLength(1);
+    });
+
+    it("refuses a sidecar that links out of the snapshot directory", async () => {
+        expect.assertions(1);
+
+        const root = writeExport("users", ['{"_id":"u1"}']);
+        const outside = join(workDir, "outside-schema.jsonl");
+
+        writeFileSync(outside, sidecarLine("uniform"));
+        symlinkSync(outside, join(root, "users", "generated_schema.jsonl"));
+
+        await expect(collect(root, [])).rejects.toThrow(/generated_schema\.jsonl resolves outside the snapshot directory/);
     });
 
     it("imports a current export whose sidecar is the uniform marker", async () => {
