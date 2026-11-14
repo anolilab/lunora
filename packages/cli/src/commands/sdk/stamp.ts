@@ -124,7 +124,7 @@ const fileIdentity = (stats: Stats): string => `${String(stats.dev)}:${String(st
 
 /** A path that is gone is skipped; one that could not be inspected (EACCES, …) is refused, so it stays reported. */
 const inspectionFailure = (error: unknown): Verdict => {
-    const {code} = (error as NodeJS.ErrnoException);
+    const { code } = error as NodeJS.ErrnoException;
 
     return code === "ENOENT" || code === "ENOTDIR" ? { kind: "skip" } : { kind: "refuse", reason: `could not be inspected (${code ?? "unknown error"})` };
 };
