@@ -29,6 +29,8 @@ final class SubscriptionRetryTest {
         unsubscribeSocketChangesAndCloseCancelRetry(retry);
         shapeErrorSchedulesNothing(retry);
         hintIsClampedToMaxRetryAfter(retry);
+        unsubscribeThatOvertakesRetryIsFollowedByAnother(retry);
+        failedSendKeepsUnsentRetriesDue(retry);
     }
 
     @SuppressWarnings("unchecked")
@@ -281,5 +283,102 @@ final class SubscriptionRetryTest {
         check(
                 due - (t0 + 60 * SECOND_NANOS) >= 0 && (t1 + 60 * SECOND_NANOS) - due >= 0,
                 "a retry hint above the 60000ms cap must be clamped to exactly that cap");
+    }
+
+    /**
+     * An unsubscribe on another thread can reach the socket between the retry's selection and its
+     * write; the retry must then be followed by another unsubscribe.
+     */
+    private static void unsubscribeThatOvertakesRetryIsFollowedByAnother(Map<String, Object> retry)
+            throws IOException {
+        List<Map<String, Object>> sent = new ArrayList<>();
+        Runnable[] unsubscribe = new Runnable[1];
+        boolean[] armed = {false};
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(
+                frame -> {
+                    if (armed[0] && "subscribe".equals(frame.get("type"))) {
+                        armed[0] = false;
+                        unsubscribe[0].run();
+                    }
+                    sent.add(frame);
+                },
+                null);
+        Map<String, Object> args = Map.of("channel", "general");
+
+        unsubscribe[0] = client.subscribe("messages:list", args, value -> {}, error -> {}, null);
+        client.handleFrame(Json.write(retry.get("seedFrame")));
+        client.handleFrame(Json.write(retry.get("hintFrame")));
+        Long due = client.nextSubscriptionRetryAtNanos();
+        sent.clear();
+        armed[0] = true;
+
+        client.retryDueSubscriptions(due);
+
+        List<Object> types = new ArrayList<>();
+
+        for (Map<String, Object> frame : sent) {
+            types.add(frame.get("type"));
+        }
+
+        check(
+                types.equals(List.of("unsubscribe", "subscribe", "unsubscribe")),
+                "a retry overtaken by an unsubscribe must be followed by another, got " + types);
+    }
+
+    /** A sender that throws must not discard the retries whose frames it never wrote. */
+    private static void failedSendKeepsUnsentRetriesDue(Map<String, Object> retry)
+            throws IOException {
+        boolean[] failing = {false};
+        List<Map<String, Object>> sent = new ArrayList<>();
+        Client client = new Client("https://app.example", null);
+
+        client.attachSocket(
+                frame -> {
+                    if (failing[0] && "subscribe".equals(frame.get("type"))) {
+                        failing[0] = false;
+                        throw new IllegalStateException("socket write failed");
+                    }
+                    sent.add(frame);
+                },
+                null);
+        client.subscribe("messages:list", Map.of("channel", "a"), value -> {}, error -> {}, null);
+        client.subscribe("messages:list", Map.of("channel", "b"), value -> {}, error -> {}, null);
+
+        for (String id : List.of("sub_1", "sub_2")) {
+            client.handleFrame(
+                    Json.write(
+                            Map.of(
+                                    "id",
+                                    id,
+                                    "type",
+                                    "error",
+                                    "error",
+                                    Map.of(
+                                            "code",
+                                            "SUBSCRIPTION_REFRESH_FAILED",
+                                            "message",
+                                            "refresh failed",
+                                            "retryAfterMs",
+                                            5000))));
+        }
+
+        long later = System.nanoTime() + 10 * SECOND_NANOS;
+        boolean threw = false;
+
+        failing[0] = true;
+
+        try {
+            client.retryDueSubscriptions(later);
+        } catch (IllegalStateException expected) {
+            threw = true;
+        }
+
+        check(threw, "the sender's failure must reach the caller");
+        sent.clear();
+        check(
+                client.retryDueSubscriptions(later) == 2,
+                "both retries must stay due after a failed write");
     }
 }
