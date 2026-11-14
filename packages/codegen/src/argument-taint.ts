@@ -678,8 +678,9 @@ export const isScopedByIdentity = (node: TsNode): boolean => {
     const identifiers = Node.isIdentifier(composed) ? [composed] : composed.getDescendantsOfKind(SyntaxKind.Identifier);
 
     return identifiers.some((identifier) => {
-        // `args.key ?? uid` is the caller's key whenever one is sent, whatever `uid` holds.
-        if (isAlternativeOf(identifier, composed)) {
+        // `args.key ?? uid` is the caller's key whenever one is sent, whatever `uid` holds, and a value passed into a
+        // `ctx.db` call does not scope the key either: only an identity-bound read does, through the direct branch.
+        if (isAlternativeOf(identifier, composed) || insideDatabaseCallWithin(identifier, composed)) {
             return false;
         }
 

@@ -148,6 +148,17 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("flags a caller key composed with an identity local passed into a db write", () => {
+        expect.assertions(1);
+
+        write(
+            "write-local.ts",
+            `export const save = mutation(async ({ ctx, args }) => { const actorId = ctx.auth.userId; return ctx.kv.get(\`\${args.key}:\${await ctx.db.patch(args.id, { actorId })}\`); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("flags a caller key that only falls back to an identity local", () => {
         expect.assertions(1);
 
