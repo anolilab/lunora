@@ -1,6 +1,7 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import type { AuthAdmin } from "../src/admin";
 import { createAuthAdmin } from "../src/admin";
 import { createAuth } from "../src/create-auth";
 import { admin, deviceAuthorization, jwt, oauthProvider, organization, twoFactor } from "../src/plugins";
@@ -516,6 +517,58 @@ describe("createAuthAdmin", () => {
         await expect(orgAdmin.removeMember({ memberId: memberIdOf(orgDatabase, first.id, org.id) })).resolves.toBeUndefined();
 
         expect(orgDatabase["member"]).toHaveLength(1);
+    });
+
+    /** Two owners of one organization, the only two, with their member ids. */
+    const createTwoOwnerOrg = async (label: string) => {
+        const fixture = createOrgFixture();
+        const first = await fixture.orgAdmin.createUser({ email: `${label}-a@example.com`, name: `${label}A` });
+        const second = await fixture.orgAdmin.createUser({ email: `${label}-b@example.com`, name: `${label}B` });
+        const org = await fixture.orgAdmin.createOrganization({ name: `${label} Co`, ownerId: first.id });
+
+        await fixture.orgAdmin.addMember({ organizationId: org.id, role: "owner", userId: second.id });
+
+        return {
+            ...fixture,
+            first: { memberId: memberIdOf(fixture.orgDatabase, first.id, org.id), userId: first.id },
+            second: { memberId: memberIdOf(fixture.orgDatabase, second.id, org.id), userId: second.id },
+        };
+    };
+
+    const ownerCount = (memoryDatabase: Record<string, unknown[]>): number =>
+        (memoryDatabase["member"] as { role: string }[]).filter((row) => row.role.split(",").some((token) => token.trim() === "owner")).length;
+
+    it.each([
+        [
+            "two demotions",
+            (a: AuthAdmin, first: string, second: string) => [
+                a.updateMemberRole({ memberId: first, role: "member" }),
+                a.updateMemberRole({ memberId: second, role: "member" }),
+            ],
+        ],
+        ["two removals", (a: AuthAdmin, first: string, second: string) => [a.removeMember({ memberId: first }), a.removeMember({ memberId: second })]],
+        [
+            "a demotion and a removal",
+            (a: AuthAdmin, first: string, second: string) => [a.updateMemberRole({ memberId: first, role: "member" }), a.removeMember({ memberId: second })],
+        ],
+    ])("keeps an owner when %s of the last two owners run concurrently", async (_label, run) => {
+        expect.assertions(2);
+
+        const { first, orgAdmin, orgDatabase, second } = await createTwoOwnerOrg("race");
+        const results = await Promise.allSettled(run(orgAdmin, first.memberId, second.memberId));
+
+        expect(ownerCount(orgDatabase)).toBeGreaterThanOrEqual(1);
+        expect(results.some((result) => result.status === "rejected")).toBe(true);
+    });
+
+    it("keeps an owner when removeUser races removeMember over the last two owners", async () => {
+        expect.assertions(1);
+
+        const { first, orgAdmin, orgDatabase, second } = await createTwoOwnerOrg("race-user");
+
+        await Promise.allSettled([orgAdmin.removeUser({ userId: first.userId }), orgAdmin.removeMember({ memberId: second.memberId })]);
+
+        expect(ownerCount(orgDatabase)).toBeGreaterThanOrEqual(1);
     });
 
     it("guards per organization: a sole-owner role elsewhere does not block removal from a co-owned org", async () => {
