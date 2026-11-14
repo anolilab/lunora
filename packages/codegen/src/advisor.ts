@@ -150,7 +150,6 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                       }
                     : undefined,
                 ...siteFieldsOf(table.site),
-                ...(table.fieldSites === undefined ? {} : { fieldSites: table.fieldSites }),
                 columnKinds: columnKindsOf(table),
                 fields: Object.keys(table.shape),
                 indexes: flattenIndexes(table),

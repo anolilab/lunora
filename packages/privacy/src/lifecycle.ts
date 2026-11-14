@@ -30,17 +30,19 @@ const CANCELLABLE: ReadonlySet<RequestStatus> = new Set(Object.values(CANCEL_WIN
  * Every other transition the package makes, one entry per status in `REQUEST_STATUSES`. `failed` is
  * not terminal: an operator retries it into `processing`, and the Art. 12(3) clock keeps running. A
  * run can fail before it starts processing (a missing secret), so `received` and `grace` may move to
- * `failed` too. A `ready` export only expires: nothing runs it again or cancels it.
+ * `failed` too. A `ready` export only expires: nothing runs it again or cancels it. A restore moves a
+ * re-erased erasure request to `restored` from any status but `cancelled`, including `completed`.
  */
 const TRANSITIONS: Readonly<Record<RequestStatus, ReadonlyArray<RequestStatus>>> = {
     cancelled: [],
-    completed: [],
+    completed: ["restored"],
     expired: [],
-    failed: ["processing"],
-    grace: ["failed", "processing"],
-    processing: ["completed", "failed", "ready"],
+    failed: ["processing", "restored"],
+    grace: ["failed", "processing", "restored"],
+    processing: ["completed", "failed", "ready", "restored"],
     ready: ["expired"],
-    received: ["failed", "processing"],
+    received: ["failed", "processing", "restored"],
+    restored: [],
 };
 
 /** Thrown when a transition is not in {@link TRANSITIONS}. An `UNPROCESSABLE` error, like every refused request change. */

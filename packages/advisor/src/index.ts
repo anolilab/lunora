@@ -488,7 +488,25 @@ export const runAdvisor = (context: LintContext, options: RunAdvisorOptions = {}
             continue;
         }
 
-        findings.push(...lint.run(context));
+        // One throwing rule must not end the codegen run in dev watch and the deploy
+        // preflight. The failure finding keeps the lint's level so a strict deploy
+        // still fails closed, as it did when the throw escaped.
+        try {
+            findings.push(...lint.run(context));
+        } catch (error) {
+            findings.push({
+                cacheKey: `advisor_lint_failed:${lint.name}`,
+                categories: lint.categories,
+                description: "An advisor lint threw while running, so its check did not run. This is a bug in the lint, not in your app.",
+                detail: `The \`${lint.name}\` lint threw: ${error instanceof Error ? error.message : String(error)}. Its findings are missing from this run.`,
+                facing: "INTERNAL",
+                level: lint.level,
+                metadata: { lint: lint.name },
+                name: "advisor_lint_failed",
+                remediation: "Report the error with the source shape that triggered it. Pass `--no-strict-advisories` to deploy past it in the meantime.",
+                title: `Advisor lint \`${lint.name}\` failed`,
+            });
+        }
     }
 
     // Any two findings that share a `cacheKey` (e.g. two file:line-keyed sinks on

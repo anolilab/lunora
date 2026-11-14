@@ -102,6 +102,45 @@ describe("discover/crons", () => {
         expect(result).toEqual([{ args: {}, cron: "0 */1 * * *", functionPath: "jobs:run", file: "crons", line: 5, name: "heartbeat" }]);
     });
 
+    it("points a cron registered by a returning helper at the registration, not the helper", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/server";
+            import { internal } from "./_generated/internal.js";
+            const crons = cronJobs();
+            function register() {
+                return crons.interval("heartbeat", { hours: 1 }, internal.jobs.run, {});
+            }
+            register();
+            export default crons;
+        `,
+        );
+
+        expect(discoverCrons(newProject(), workdir)).toMatchObject([{ line: 6, name: "heartbeat" }]);
+    });
+
+    it("points a cron registered in a one-line arrow helper at the registration, not the helper", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/server";
+            import { internal } from "./_generated/internal.js";
+            const crons = cronJobs();
+            const register = () =>
+                crons.interval("heartbeat", { hours: 1 }, internal.jobs.run, {});
+            register();
+            export default crons;
+        `,
+        );
+
+        expect(discoverCrons(newProject(), workdir)).toMatchObject([{ line: 6, name: "heartbeat" }]);
+    });
+
     it("resolves an aliased cronJobs import", () => {
         expect.assertions(1);
 

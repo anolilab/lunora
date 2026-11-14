@@ -301,12 +301,6 @@ export interface TableIR {
      */
     externalSource?: ExternalSourceIR;
 
-    /**
-     * Where each declared column's property sits in the `defineTable({...})` object, keyed by column name. Columns the
-     * table gains by injection (`.timestamps()`, `.softDelete()`) have no entry.
-     */
-    fieldSites?: Readonly<Record<string, DeclarationSiteIR>>;
-
     /** Geospatial indexes declared inline via `.geoIndex(name, …)`. Optional so hand-built IR may omit it (discovery always sets it). */
     geoIndexes?: ReadonlyArray<GeoIndexIR>;
 

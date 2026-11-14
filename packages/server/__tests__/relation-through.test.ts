@@ -113,6 +113,16 @@ const linked = async (post: string): Promise<string[]> => {
 const sorted = (ids: string[]): string[] => ids.toSorted((left, right) => left.localeCompare(right));
 
 describe("r.many through: schema rules", () => {
+    /** A schema whose `join` table is `join`, with `posts` many-to-many onto `tags` through it. */
+    const build = (join: TableDefinition) => () =>
+        defineSchema({
+            join,
+            posts: defineTable({ title: v.string() }).relations((r) => {
+                return { tags: r.many("tags", { through: { from: "postId", table: "join", to: "tagId" } }) };
+            }),
+            tags: defineTable({ label: v.string() }),
+        });
+
     it("records the join table and keys on the relation", () => {
         expect.assertions(1);
 
@@ -152,7 +162,7 @@ describe("r.many through: schema rules", () => {
     it("requires both keys to be required v.id columns on the right tables", () => {
         expect.assertions(2);
 
-        const build = (shape: Record<string, Validator>) => () =>
+        const buildShape = (shape: Record<string, Validator>) => () =>
             defineSchema({
                 join: defineTable(shape).index("byPair", ["postId", "tagId"], { unique: true }),
                 posts: defineTable({ title: v.string() }).relations((r) => {
@@ -161,25 +171,26 @@ describe("r.many through: schema rules", () => {
                 tags: defineTable({ label: v.string() }),
             });
 
-        expect(build({ postId: v.id("tags"), tagId: v.id("tags") })).toThrow(/join\.postId" must be a required v\.id\("posts"\)/u);
-        expect(build({ postId: v.id("posts"), tagId: v.optional(v.id("tags")) })).toThrow(/join\.tagId" must be a required v\.id\("tags"\)/u);
+        expect(buildShape({ postId: v.id("tags"), tagId: v.id("tags") })).toThrow(/join\.postId" must be a required v\.id\("posts"\)/u);
+        expect(buildShape({ postId: v.id("posts"), tagId: v.optional(v.id("tags")) })).toThrow(/join\.tagId" must be a required v\.id\("tags"\)/u);
     });
 
     it("requires a unique index over exactly the two keys", () => {
         expect.assertions(2);
 
-        const build = (join: TableDefinition) => () =>
-            defineSchema({
-                join,
-                posts: defineTable({ title: v.string() }).relations((r) => {
-                    return { tags: r.many("tags", { through: { from: "postId", table: "join", to: "tagId" } }) };
-                }),
-                tags: defineTable({ label: v.string() }),
-            });
-
         // A plain index does not stop a repeated connect from storing the pair twice.
         expect(build(defineTable(joinShape).index("byPair", ["postId", "tagId"]))).toThrow(/unique index over \("postId", "tagId"\)/u);
         expect(build(defineTable(joinShape).index("byPair", ["tagId", "postId"], { unique: true }))).not.toThrow();
+    });
+
+    it("refuses a soft-delete join table", () => {
+        expect.assertions(2);
+
+        // A soft-deleted link keeps its unique pair, so a later connect could never store it again.
+        expect(build(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true }).softDelete())).toThrow(
+            /Hard-delete the soft-deleted rows of "join" first.*remove \.softDelete\(\)/u,
+        );
+        expect(build(defineTable(joinShape).index("byPair", ["postId", "tagId"], { unique: true }))).not.toThrow();
     });
 });
 

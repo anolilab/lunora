@@ -26,9 +26,9 @@ const WIDE_TOLERANCE_THRESHOLD_SECONDS = 60 * 60;
  *
  * Runs only when the codegen feeder supplies adapter evidence
  * (`context.paymentWebhooks`); a runtime caller flags nothing. Fires only on a
- * statically-known numeric `webhookToleranceSeconds` literal above the ceiling —
- * a computed or env-sourced value is not evaluated, to keep the false-positive
- * rate low. One finding per matching adapter.
+ * statically-known `webhookToleranceSeconds` (a literal or arithmetic over
+ * literals) above the ceiling; an env-sourced value is not evaluated, to keep the
+ * false-positive rate low. One finding per matching adapter.
  */
 const paymentWebhookWideTolerance: Lint = {
     categories: ["SECURITY"],
@@ -44,7 +44,7 @@ const paymentWebhookWideTolerance: Lint = {
             return [];
         }
 
-        const isWide = (row: AdvisorPaymentWebhook): boolean => row.toleranceSeconds !== undefined && row.toleranceSeconds >= WIDE_TOLERANCE_THRESHOLD_SECONDS;
+        const isWide = (row: AdvisorPaymentWebhook): boolean => row.toleranceSeconds !== undefined && row.toleranceSeconds > WIDE_TOLERANCE_THRESHOLD_SECONDS;
 
         return context.paymentWebhooks
             .filter((row) => isWide(row))

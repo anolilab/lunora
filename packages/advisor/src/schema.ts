@@ -66,12 +66,6 @@ export interface AdvisorTable {
     fields: ReadonlyArray<string>;
 
     /**
-     * Declaration site of each column's property in the `defineTable({...})` object, keyed by column name. Absent for a
-     * column with no recorded site (one injected by `.timestamps()` / `.softDelete()`, or one whose table has none).
-     */
-    fieldSites?: Readonly<Record<string, { file?: string; line?: number }>>;
-
-    /**
      * Lunora-relative file the table is declared in, without `.ts`. Absent when the declaration is not source under `lunora/`.
      */
     file?: string;

@@ -35,6 +35,130 @@ const SAFE = `
     };
 `;
 
+/** A `const` text built from a substitution template, then passed by name — the hop must be followed. */
+const CONST_HOP = `
+    export const search = async (ctx, args) => {
+        const q = \`SELECT * FROM t WHERE a = '\${args.a}'\`;
+        return ctx.sql.query(q);
+    };
+`;
+
+/** A raw handler argument passed as the text — the caller controls the whole statement. */
+const RAW_ARG = `
+    export const run = async (ctx, args) => {
+        return ctx.sql.query(args.sql);
+    };
+`;
+
+/** A concatenation hidden behind a parenthesis and a cast. */
+const CAST_CONCAT = `
+    export const lookup = async (ctx, name) => {
+        return ctx.sql.query(("SELECT * FROM t WHERE a = '" + name + "'") as string);
+    };
+`;
+
+/** A `.join` that splices a handler argument into the statement. */
+const JOIN = `
+    export const find = async (ctx, args) => {
+        return ctx.sql.query(["SELECT * FROM t WHERE a =", args.a].join(" "));
+    };
+`;
+
+/** A module constant interpolated into a template is fixed text, not an injection vector. */
+const MODULE_CONST_TEMPLATE = `
+    const TABLE = "users";
+    export const byId = async (ctx, id) => {
+        return ctx.sql.query(\`SELECT * FROM \${TABLE} WHERE id = $1\`, [id]);
+    };
+`;
+
+/** A `const` bound to a fixed literal, then passed by name with params — safe. */
+const CONST_TEXT_HOP = `
+    export const byId = async (ctx, id) => {
+        const q = "SELECT * FROM users WHERE id = $1";
+        return ctx.sql.query(q, [id]);
+    };
+`;
+
+/** A `.join` over constant pieces only — the statement is fixed. */
+const CONSTANT_JOIN = `
+    export const byId = async (ctx, id) => {
+        return ctx.sql.query(["SELECT *", "FROM users", "WHERE id = $1"].join(" "), [id]);
+    };
+`;
+
+/** A `.concat` over constant pieces only — the statement is fixed. */
+const CONSTANT_CONCAT = `
+    export const byId = async (ctx, id) => {
+        return ctx.sql.query("SELECT * FROM users".concat(" WHERE id = $1"), [id]);
+    };
+`;
+
+/** A `.concat` that appends a handler argument. */
+const ARG_CONCAT = `
+    export const byName = async (ctx, args) => {
+        return ctx.sql.query("SELECT * FROM users WHERE name = ".concat(args.name));
+    };
+`;
+
+/** Request text passed through two \`const\` aliases. */
+const TWO_HOP_ARG = `
+    export const run = async (ctx, args) => {
+        const first = args.sql;
+        const second = first;
+        return ctx.sql.query(second);
+    };
+`;
+
+/** Request text destructured from the handler's \`args\`. */
+const DESTRUCTURED_ARG = `
+    export const run = async (ctx, args) => {
+        const { sql } = args;
+        return ctx.sql.query(sql);
+    };
+`;
+
+/** Text built in place, then passed through a cast alias. */
+const CAST_ALIAS = `
+    export const run = async (ctx, raw) => {
+        const built = \`SELECT * FROM users WHERE name = '\${raw}'\`;
+        const alias = built as string;
+        return ctx.sql.query(alias);
+    };
+`;
+
+/** Fixed text destructured from an options literal whose params carry a handler argument. */
+const DESTRUCTURED_FIXED_TEXT = `
+    export const run = async (ctx, args) => {
+        const options = { params: [args.id], text: "SELECT * FROM users WHERE id = $1" };
+        const { params, text } = options;
+        return ctx.sql.query(text, params);
+    };
+`;
+
+/** Fixed text that a later spread of the handler's \`args\` can overwrite. */
+const SPREAD_OVERRIDE = `
+    export const run = async (ctx, args) => {
+        const options = { text: "SELECT 1", ...args };
+        const { text } = options;
+        return ctx.sql.query(text);
+    };
+`;
+
+/** Fixed text that a later computed key from the handler's \`args\` can overwrite. */
+const COMPUTED_OVERRIDE = `
+    export const run = async (ctx, args) => {
+        const options = { text: "SELECT 1", [args.key]: args.sql };
+        const { text } = options;
+        return ctx.sql.query(text);
+    };
+`;
+
+/** A plain parameter passed straight through: the caller is not visible here, so it is left alone. */
+const PARAM_PASSTHROUGH = `
+    export const run = async (ctx, q) => ctx.sql.query(q);
+`;
+
 let workdir: string;
 let project: Project;
 
@@ -80,6 +204,108 @@ describe("discoverSqlInterpolation", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "byid.ts"), SAFE, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags text built in a const before being passed to ctx.sql.query", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "const-hop.ts"), CONST_HOP, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a raw handler argument passed as the text", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "raw-arg.ts"), RAW_ARG, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a parenthesised, cast concatenation", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "cast-concat.ts"), CAST_CONCAT, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a .join that splices a handler argument", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "join.ts"), JOIN, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("does NOT flag a module constant interpolated into a template", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "module-const.ts"), MODULE_CONST_TEMPLATE, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does NOT flag a const bound to a fixed literal", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "const-text.ts"), CONST_TEXT_HOP, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does NOT flag a .join over constant pieces", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "constant-join.ts"), CONSTANT_JOIN, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does NOT flag a .concat over constant pieces", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "constant-concat.ts"), CONSTANT_CONCAT, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a .concat that appends a handler argument", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "arg-concat.ts"), ARG_CONCAT, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["two const aliases", TWO_HOP_ARG],
+        ["a destructure of args", DESTRUCTURED_ARG],
+        ["a cast alias of built text", CAST_ALIAS],
+        ["a destructure of a literal an args spread can overwrite", SPREAD_OVERRIDE],
+        ["a destructure of a literal a computed key can overwrite", COMPUTED_OVERRIDE],
+    ])("flags request text reached through %s", (_label, source) => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "hop.ts"), source, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("does NOT flag fixed text destructured beside argument-derived params", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "options.ts"), DESTRUCTURED_FIXED_TEXT, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does NOT flag a plain parameter passed through as the text", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "passthrough.ts"), PARAM_PASSTHROUGH, "utf8");
 
         expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
     });

@@ -49,6 +49,7 @@ const duplicateIndex: Lint = {
                 // Find another index that strictly covers this one. When two indexes
                 // are exact duplicates, the tie is broken by name so exactly one of
                 // the pair is reported (the later-sorted one is the "redundant" side).
+                // A unique index always wins the tie, since it is the one that must survive.
                 const cover = secondary.find((other) => {
                     if (other === candidate) {
                         return false;
@@ -60,7 +61,7 @@ const duplicateIndex: Lint = {
 
                     const sameLength = candidate.fields.length === other.fields.length;
 
-                    return sameLength ? candidate.name > other.name : true;
+                    return sameLength ? other.unique === true || candidate.name > other.name : true;
                 });
 
                 if (!cover) {

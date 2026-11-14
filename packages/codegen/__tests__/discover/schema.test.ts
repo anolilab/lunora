@@ -1050,6 +1050,24 @@ describe("discoverSchema", () => {
         expect(buckets?.indexes).toEqual([{ fields: ["key"], name: "by_key", site: { file: "schema", line: 12 }, unique: true }]);
     });
 
+    it("reads an extension table written as a shorthand member", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
+
+            const buckets = defineTable({ key: v.string() });
+
+            export const schema = defineSchema({
+                todos: defineTable({ title: v.string() }),
+            }).extend(defineSchemaExtension("ext", { tables: { buckets } }));
+        `);
+
+        const buckets = discoverSchema(project, schemaPath).tables.find((table) => table.name === "ext_buckets");
+
+        expect(Object.keys(buckets?.shape ?? {})).toStrictEqual(["key"]);
+    });
+
     it("throws a located diagnostic for an extension key that is not a valid JS identifier", () => {
         expect.assertions(4);
 
@@ -1997,5 +2015,213 @@ describe("discoverSchema", () => {
         const dataModel = emitDataModel(schema);
 
         expect(dataModel).not.toContain("_unknown_");
+    });
+
+    it("reads a table whose defineTable is imported under an alias", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable as table, v } from "@lunora/server";
+
+            export const schema = defineSchema({ users: table({ email: v.string() }).global() });
+        `);
+
+        const users = discoverSchema(project, schemaPath).tables.find((entry) => entry.name === "users");
+
+        expect(Object.keys(users?.shape ?? {})).toStrictEqual(["email"]);
+        expect(users?.shardMode).toBe("global");
+    });
+
+    it("rejects a const table builder that another statement mutates", () => {
+        expect.assertions(1);
+
+        // Builder methods mutate and return the same object, so the runtime table
+        // also carries `removedAt`, which the `tasks` chain alone does not show.
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const base = defineTable({ title: v.string() });
+
+            base.softDelete({ field: "removedAt" });
+
+            export const schema = defineSchema({ tasks: base.timestamps({ field: "changedAt" }) });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/"base".*outside the chain/u);
+    });
+
+    it("reads a table bound to a same-file const, not an empty table", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const tasksTable = defineTable({ title: v.string() });
+
+            export const schema = defineSchema({ tasks: tasksTable });
+        `);
+
+        const tasks = discoverSchema(project, schemaPath).tables.find((table) => table.name === "tasks");
+
+        expect(Object.keys(tasks?.shape ?? {})).toStrictEqual(["title"]);
+    });
+
+    it("reads a table bound to a const imported from another file", () => {
+        expect.assertions(2);
+
+        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
+
+        project.createSourceFile(
+            "/virtual/lunora/tables.ts",
+            `
+            import { defineTable, v } from "@lunora/server";
+
+            export const tasksTable = defineTable({ title: v.string(), status: v.string() }).index("by_status", ["status"]);
+            `,
+        );
+
+        const schemaPath = "/virtual/lunora/schema.ts";
+
+        project.createSourceFile(
+            schemaPath,
+            `
+            import { defineSchema } from "@lunora/server";
+            import { tasksTable } from "./tables";
+
+            export const schema = defineSchema({ tasks: tasksTable });
+            `,
+        );
+
+        const tasks = discoverSchema(project, schemaPath).tables.find((table) => table.name === "tasks");
+
+        expect(Object.keys(tasks?.shape ?? {})).toStrictEqual(["title", "status"]);
+        expect(tasks?.indexes).toEqual([{ fields: ["status"], name: "by_status", site: { file: "tables", line: 4 }, unique: false }]);
+    });
+
+    it("reads an index chained onto a const base table", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const base = defineTable({ title: v.string(), status: v.string() });
+
+            export const schema = defineSchema({ tasks: base.index("by_status", ["status"]) });
+        `);
+
+        const tasks = discoverSchema(project, schemaPath).tables.find((table) => table.name === "tasks");
+
+        expect(Object.keys(tasks?.shape ?? {})).toStrictEqual(["title", "status"]);
+        expect(tasks?.indexes).toEqual([{ fields: ["status"], name: "by_status", site: { file: "schema", line: 6 }, unique: false }]);
+    });
+
+    it("reads a table written as an `as` cast around defineTable", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({ tasks: defineTable({ title: v.string() }) as unknown });
+        `);
+
+        const tasks = discoverSchema(project, schemaPath).tables.find((table) => table.name === "tasks");
+
+        expect(Object.keys(tasks?.shape ?? {})).toStrictEqual(["title"]);
+    });
+
+    it("reads a shorthand table property (`defineSchema({ tasks })`) instead of dropping the table", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const tasks = defineTable({ title: v.string() });
+
+            export const schema = defineSchema({ tasks });
+        `);
+
+        const { tables } = discoverSchema(project, schemaPath);
+
+        expect(tables.map((table) => table.name)).toStrictEqual(["tasks"]);
+        expect(Object.keys(tables[0]?.shape ?? {})).toStrictEqual(["title"]);
+    });
+
+    it("follows a const that is bound to another const", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const base = defineTable({ title: v.string() });
+            const alias = base;
+
+            export const schema = defineSchema({ tasks: alias });
+        `);
+
+        const tasks = discoverSchema(project, schemaPath).tables.find((table) => table.name === "tasks");
+
+        expect(Object.keys(tasks?.shape ?? {})).toStrictEqual(["title"]);
+    });
+
+    it("rejects a table built by a factory call, naming the table", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const makeTable = () => defineTable({ title: v.string() });
+
+            export const schema = defineSchema({ tasks: makeTable() });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/table "tasks" is defined as "makeTable\(\)"/u);
+    });
+
+    it("rejects a table chosen by a conditional, naming the table", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const flag = Math.random() > 0.5;
+
+            export const schema = defineSchema({
+                tasks: flag ? defineTable({ title: v.string() }) : defineTable({ body: v.string() }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/table "tasks" is defined as/u);
+    });
+
+    it("rejects a table bound with `let`, which can be reassigned, naming the table", () => {
+        expect.assertions(1);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            let tasksTable = defineTable({ title: v.string() });
+
+            export const schema = defineSchema({ tasks: tasksTable });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/table "tasks" is defined as "tasksTable"/u);
+    });
+
+    it("rejects a const chain longer than the hop limit, naming the table", () => {
+        expect.assertions(1);
+
+        // `t0` holds the defineTable, so `t5` needs six const lookups to reach it: past the four allowed.
+        const bindings = Array.from({ length: 5 }, (_, index) => `const t${String(index + 1)} = t${String(index)};`).join("\n");
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            const t0 = defineTable({ title: v.string() });
+            ${bindings}
+
+            export const schema = defineSchema({ tasks: t5 });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/table "tasks" is reached through more than 4 const bindings/u);
     });
 });

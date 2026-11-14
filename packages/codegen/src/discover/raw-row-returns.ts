@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { singleHopInitializer } from "../argument-taint";
+import { singleHopDeclaration } from "../argument-taint";
 import type { RawRowReturnIR } from "../ir";
 import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
@@ -109,9 +109,11 @@ const rawRowReadTable = (expression: TsNode, hopped = false): string | undefined
             return undefined;
         }
 
-        const initializer = singleHopInitializer(node);
+        const declaration = singleHopDeclaration(node);
+        const initializer = declaration?.getInitializer();
 
-        return initializer === undefined ? undefined : rawRowReadTable(initializer, true);
+        // A destructured field (`const { email } = await read()`) is a projection, not the row.
+        return initializer === undefined || !Node.isIdentifier(declaration?.getNameNode()) ? undefined : rawRowReadTable(initializer, true);
     }
 
     if (!Node.isCallExpression(node)) {
