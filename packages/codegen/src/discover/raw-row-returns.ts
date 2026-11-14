@@ -109,8 +109,9 @@ const rawRowReadTable = (expression: TsNode, hopped = false): string | undefined
             return undefined;
         }
 
+        // Only a binding of the whole value is the row: a destructured name holds one field or a projection of it.
         const declaration = singleHopDeclaration(node);
-        const initializer = declaration?.getInitializer();
+        const initializer = declaration !== undefined && Node.isIdentifier(declaration.getNameNode()) ? declaration.getInitializer() : undefined;
 
         // A destructured field (`const { email } = await read()`) is a projection, not the row.
         return initializer === undefined || !Node.isIdentifier(declaration?.getNameNode()) ? undefined : rawRowReadTable(initializer, true);

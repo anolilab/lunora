@@ -12,8 +12,8 @@ import { callSiteFields, callSiteWhere } from "../helpers";
  * a key built one hop earlier from `args`), any caller can name any object — reading,
  * overwriting, or deleting another user's file. The fix is to prefix the key with a
  * server-trusted identity (`` `${ctx.auth.userId}/…` ``) or to resolve the object
- * through a record the caller is known to own; a key that references `ctx` is treated
- * as scoped and is not flagged.
+ * through a record the caller is known to own. Only that identity, or a db read bound
+ * to it, scopes a key: `ctx.env.PREFIX` is the same for every caller and does not.
  *
  * Runs only when the codegen feeder supplies storage-key evidence
  * (`context.storageKeyAccesses`); a runtime caller flags nothing. One finding per
