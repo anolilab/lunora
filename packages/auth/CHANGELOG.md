@@ -1,3 +1,11 @@
+## @lunora/auth [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.262...@lunora/auth@1.0.0-alpha.263) (2026-11-14)
+
+- security(auth): run the email gate on address changes (#1545)
+
+## @lunora/auth [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.261...@lunora/auth@1.0.0-alpha.262) (2026-11-13)
+
+- security(auth)!: admit invited oauth and sso accounts only with a verified email (#1547)
+
 ## @lunora/auth [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.260...@lunora/auth@1.0.0-alpha.261) (2026-11-11)
 
 - feat(auth): add API keys via the apiKey() plugin (#1526)

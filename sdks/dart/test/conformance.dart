@@ -60,6 +60,11 @@ Future<void> main() async {
   await run(casePageDeltaFramesMergeIntoTheBase);
   await run(caseUnmergeableRowDeltaKeepsThePreviousValue);
   await run(casePoisonedSubscriptionFreezesTheResumeCursor);
+  await run(casePageDeltaRunIsHeldUntilItsLastFrame);
+  await run(caseUndecodableRunFrameFreezesTheSubscription);
+  await run(caseIdentityChangeEvictsTheBaseAndThePoison);
+  await run(casePoisonedSubscriptionStaysFrozenWhenTheResendCannotRun);
+  await run(casePoisonedSubscriptionStaysFrozenWhenTheResendThrows);
   await run(caseSubscriptionStreamYieldsFrameValuesInOrder);
   await run(caseShapeSubscribeFrame);
   await run(caseShapeSubscriptionsResendAfterReconnect);
