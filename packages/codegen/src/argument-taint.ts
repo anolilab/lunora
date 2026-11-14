@@ -239,7 +239,7 @@ export const referencesArgs = (node: TsNode): boolean => referencesBinding(node,
  * … key`); otherwise `undefined`. Only same-function declarations are followed — the
  * taint stays deliberately single-hop.
  */
-export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
+export const singleHopDeclaration = (node: TsNode): VariableDeclaration | undefined => {
     if (!Node.isIdentifier(node)) {
         return undefined;
     }
@@ -261,7 +261,7 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     // checker, and a predicate that SILENCES on a match must use it instead, as
     // the owner-field feeder does for mutator impls (`implTaintOf`).
     const usePosition = node.getStart();
-    let nearest: TsNode | undefined;
+    let nearest: VariableDeclaration | undefined;
     let nearestPosition = -1;
 
     for (const variable of descendantsOfKind(enclosingFunction, SyntaxKind.VariableDeclaration)) {
@@ -281,13 +281,16 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
         const declarationPosition = variable.getStart();
 
         if (initializer !== undefined && declarationPosition < usePosition && declarationPosition > nearestPosition) {
-            nearest = initializer;
+            nearest = variable;
             nearestPosition = declarationPosition;
         }
     }
 
     return nearest;
 };
+
+/** The initializer of {@link singleHopDeclaration}: for a destructured binding, the whole object it was taken from. */
+export const singleHopInitializer = (node: TsNode): TsNode | undefined => singleHopDeclaration(node)?.getInitializer();
 
 /**
  * True when `expression` is derived from the handler's `args` — directly (`args.x`,
@@ -341,7 +344,24 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
 
     const initializer = singleHopInitializer(node);
 
-    return initializer === undefined || !(Node.isCallExpression(initializer) || Node.isNewExpression(initializer));
+    if (initializer !== undefined && (Node.isCallExpression(initializer) || Node.isNewExpression(initializer))) {
+        return false;
+    }
+
+    const composed = initializer ?? node;
+
+    if (referencesArgs(composed)) {
+        return true;
+    }
+
+    // `isArgumentDerived` also follows each composed identifier one hop, so a key built only from
+    // call results (`blobs/${digest}` with `digest = sha256Hex(args.bytes)`) is tainted but was
+    // recomputed; it is a passthrough only when some composed binding forwards args unchanged.
+    return valueIdentifiersIn(composed).some((identifier) => {
+        const bound = singleHopInitializer(identifier);
+
+        return bound !== undefined && referencesArgs(bound) && !(Node.isCallExpression(bound) || Node.isNewExpression(bound));
+    });
 };
 
 /**

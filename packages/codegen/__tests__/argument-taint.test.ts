@@ -172,6 +172,16 @@ describe("argument-taint", () => {
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`SINK(storeFile(args.bytes));`))).toBe(false);
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const key = storeFile(args.bytes);\nSINK(key);`))).toBe(false);
         });
+
+        it("rejects a composed key whose only args-derived part a call recomputed, and keeps one that forwards an arg", () => {
+            expect.assertions(3);
+
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const digest = sha256Hex(args.bytes);\nSINK(\`blobs/\${digest}\`);`))).toBe(false);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const name = args.name;\nSINK(\`blobs/\${name}\`);`))).toBe(true);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const digest = sha256Hex(args.bytes);\nSINK(\`blobs/\${digest}/\${args.name}\`);`))).toBe(
+                true,
+            );
+        });
     });
 
     describe("isScopedByContext", () => {
