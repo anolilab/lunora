@@ -404,30 +404,7 @@ const appFunctionOf = (callee: TsNode | undefined): FunctionNode | undefined => 
     return Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer) ? initializer : undefined;
 };
 
-/**
- * The row a sink key is read off: `K` (or the initializer of `K` when it is a bare identifier) is an
- * access chain with at least one level, rooted at a single-identifier `const` whose initializer is a
- * `ctx.db` read. `undefined` otherwise, which leaves the sink reported.
- */
-const rowDeclarationOf = (key: TsNode): VariableDeclaration | undefined => {
-    const unwrapped = unwrapExpression(key);
-    const chain = Node.isIdentifier(unwrapped) ? (unwrapExpression(trustedInitializerOf(unwrapped)) ?? unwrapped) : unwrapped;
-    const access = accessPathOf(chain);
-
-    if (access === undefined || access.path.length === 0) {
-        return undefined;
-    }
-
-    const declaration = declarationOf(access.root);
-
-    if (!isConstDeclaration(declaration) || !Node.isIdentifier(declaration.getNameNode())) {
-        return undefined;
-    }
-
-    const read = awaitedOperand(declaration.getInitializer());
-
-    return Node.isCallExpression(read) && contextTrustPathOf(read.getExpression())?.[0] === "db" ? declaration : undefined;
-};
+const isAssignmentOperator = (kind: SyntaxKind): boolean => kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
 
 /** A chain of calls and property reads, as a `db` read is written: every call in it, the names read along it, and its root. */
 interface DatabaseChain {
@@ -485,6 +462,33 @@ const singleRowReadOf = (chain: DatabaseChain): { selfEnforcing: boolean } | und
     const base = method.endsWith("OrThrow") ? method.slice(0, -"OrThrow".length) : undefined;
 
     return base !== undefined && SINGLE_ROW_READS.has(base) ? { selfEnforcing: true } : undefined;
+};
+
+/**
+ * The row a sink key is read off: `K` (or the initializer of `K` when it is a bare identifier) is an
+ * access chain with at least one level, rooted at a single-identifier `const` whose initializer is a
+ * `ctx.db` read. `undefined` otherwise, which leaves the sink reported.
+ */
+const rowDeclarationOf = (key: TsNode): VariableDeclaration | undefined => {
+    const unwrapped = unwrapExpression(key);
+    const chain = Node.isIdentifier(unwrapped) ? (unwrapExpression(trustedInitializerOf(unwrapped)) ?? unwrapped) : unwrapped;
+    const access = accessPathOf(chain);
+
+    if (access === undefined || access.path.length === 0) {
+        return undefined;
+    }
+
+    const declaration = declarationOf(access.root);
+
+    if (!isConstDeclaration(declaration) || !Node.isIdentifier(declaration.getNameNode())) {
+        return undefined;
+    }
+
+    // Only a single-row read: an insert or update returns the row as the caller wrote it.
+    const read = awaitedOperand(declaration.getInitializer());
+    const readChain = Node.isCallExpression(read) && contextTrustPathOf(read.getExpression())?.[0] === "db" ? databaseChainOf(read) : undefined;
+
+    return readChain !== undefined && singleRowReadOf(readChain) !== undefined ? declaration : undefined;
 };
 
 /** Every argument of the chain, and every node inside each argument (a callback's body included). */
@@ -614,7 +618,15 @@ const helperEnforcesRead = (helper: FunctionNode, parameter: ParameterDeclaratio
             return false;
         }
 
-        return single.selfEnforcing || statements.slice(index + 1).some((later) => isNullCheckExit(later, declaration, true));
+        const enforcing = single.selfEnforcing ? statement : statements.slice(index + 1).find((later) => isNullCheckExit(later, declaration, true));
+
+        // A `return` before the check is enforced lets a call complete without it.
+        return (
+            enforcing !== undefined &&
+            !helper
+                .getDescendantsOfKind(SyntaxKind.ReturnStatement)
+                .some((exit) => enclosingFunctionOf(exit)?.compilerNode === helper.compilerNode && exit.getStart() < enforcing.getEnd())
+        );
     });
 };
 
@@ -642,8 +654,9 @@ const isHelperGuardCall = (call: CallExpression, row: VariableDeclaration, await
     const tiedParameters: ParameterDeclaration[] = [];
 
     args.forEach((argument, index) => {
-        const tied =
-            index === contextIndex || !valueIdentifiersOf(argument).some((identifier) => bindsTo(identifier, row)) ? undefined : helper.getParameters()[index];
+        // The argument must be the row or a field read off it; `args.id || row.id` may pass the caller's value.
+        const access = accessPathOf(unwrapExpression(argument));
+        const tied = index === contextIndex || access === undefined || !bindsTo(access.root, row) ? undefined : helper.getParameters()[index];
 
         if (tied !== undefined && Node.isIdentifier(tied.getNameNode())) {
             tiedParameters.push(tied);
@@ -1014,6 +1027,17 @@ export const isGuardedByIdentityCheck = (sinkCall: CallExpression, key: TsNode):
     const row = rowDeclarationOf(key);
 
     if (enclosing === undefined || row === undefined || enclosingFunctionOf(row)?.compilerNode !== enclosing.compilerNode) {
+        return false;
+    }
+
+    // A `const` row's fields stay writable: `row.key = args.key` after the guard replaces what the guard vouched for.
+    const overwritten = enclosing.getDescendantsOfKind(SyntaxKind.BinaryExpression).some((expression) => {
+        const target = accessPathOf(expression.getLeft());
+
+        return isAssignmentOperator(expression.getOperatorToken().getKind()) && target !== undefined && bindsTo(target.root, row);
+    });
+
+    if (overwritten) {
         return false;
     }
 

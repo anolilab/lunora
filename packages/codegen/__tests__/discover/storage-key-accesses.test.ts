@@ -366,6 +366,57 @@ export const getAttachment = query(async ({ ctx, args }) => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("reports a key read off a row the handler created from caller input", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            `${HELPER}
+export const send = mutation(async ({ ctx, args }) => {
+    const message = await ctx.db.insert("messages", { attachmentKey: args.key, channelId: args.channelId });
+    await requireMember(ctx, message.channelId);
+    ${SINK}
+});`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a helper guard whose row argument falls back to a caller value", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, args.channelId || message.channelId);"));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a helper that can return before its identity read is enforced", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx, channelId) => {
+    const userId = ctx.auth.userId;
+    if (!userId) {
+        return;
+    }
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a guarded row whose key the handler overwrites before the sink", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);\n    message.attachmentKey = args.key;"));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("reports a helper guard whose argument does not reference the row", () => {
         expect.assertions(1);
 
