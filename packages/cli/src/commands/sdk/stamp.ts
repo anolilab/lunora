@@ -1,11 +1,13 @@
 /**
  * The stamp is the record of what a `sdk generate` run wrote, and regeneration
- * trusts it to decide what to delete. A file is only ever removed when a stamp
- * of the current format lists it, so a missing, older or garbled stamp means
- * nothing is pruned — the cost of a stale file is far lower than the cost of
- * deleting something the user wrote.
+ * uses it to decide what to delete. The stamp sits in the user's tree and can be
+ * edited or planted, so listing a path is not enough: a file is only removed when
+ * its current content still hashes to what the CLI recorded writing. A missing,
+ * older or garbled stamp therefore prunes nothing — the cost of a stale file is
+ * far lower than the cost of deleting something the user wrote.
  */
 
+import { createHash } from "node:crypto";
 import type { Stats } from "node:fs";
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, resolve, sep } from "node:path";
@@ -19,7 +21,13 @@ const STAMP_FILE = "lunora-transport.json";
  * Bumped whenever the stamp's shape changes. A reader that finds any other value
  * treats the stamp as absent, which is what makes an older run's stamp safe.
  */
-const STAMP_FORMAT = 2;
+const STAMP_FORMAT = 3;
+
+/**
+ * Format 2 listed files without hashes. Its entries are still read so a stale file
+ * is reported, but none can be verified, so none is deleted.
+ */
+const UNVERIFIED_STAMP_FORMAT = 2;
 
 /** What a completed vendoring recorded. */
 interface VendorResult {
@@ -41,6 +49,12 @@ interface StampFiles {
     transportFiles: ReadonlyArray<string>;
 }
 
+/** A previous run's lists, plus the content hash recorded for each file it wrote. */
+interface RecordedStamp extends StampFiles {
+    /** Path as listed → sha256 hex of what was written. Empty for a format-2 stamp. */
+    hashes: ReadonlyMap<string, string>;
+}
+
 interface PruneResult {
     deleted: string[];
     refused: { path: string; reason: string }[];
@@ -50,11 +64,23 @@ const byPath = (a: string, b: string): number => a.localeCompare(b);
 
 const isStringArray = (value: unknown): value is string[] => Array.isArray(value) && value.every((entry) => typeof entry === "string");
 
+const contentHash = (absolute: string): string => createHash("sha256").update(readFileSync(absolute)).digest("hex");
+
+const readHashes = (value: unknown): Map<string, string> | undefined => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+        return undefined;
+    }
+
+    const entries = Object.entries(value as Record<string, unknown>);
+
+    return entries.every(([, hash]) => typeof hash === "string") ? new Map(entries as [string, string][]) : undefined;
+};
+
 /**
- * The previous run's file lists, or `undefined` when there is nothing trustworthy
- * to prune against: no stamp, an older format, or a file that does not parse.
+ * The previous run's file lists and hashes, or `undefined` when there is nothing to
+ * prune against: no stamp, an unknown format, or a file that does not parse.
  */
-const readStamp = (outputDirectory: string): StampFiles | undefined => {
+const readStamp = (outputDirectory: string): RecordedStamp | undefined => {
     const path = join(outputDirectory, STAMP_FILE);
 
     if (!existsSync(path)) {
@@ -73,13 +99,34 @@ const readStamp = (outputDirectory: string): StampFiles | undefined => {
         return undefined;
     }
 
-    const { format, generatedFiles, transportFiles } = parsed as Record<string, unknown>;
+    const { format, generatedFiles, hashes, transportFiles } = parsed as Record<string, unknown>;
 
-    if (format !== STAMP_FORMAT || !isStringArray(generatedFiles) || !isStringArray(transportFiles)) {
+    if (!isStringArray(generatedFiles) || !isStringArray(transportFiles)) {
         return undefined;
     }
 
-    return { generatedFiles, transportFiles };
+    if (format === UNVERIFIED_STAMP_FORMAT) {
+        return { generatedFiles, hashes: new Map(), transportFiles };
+    }
+
+    const recorded = format === STAMP_FORMAT ? readHashes(hashes) : undefined;
+
+    return recorded === undefined ? undefined : { generatedFiles, hashes: recorded, transportFiles };
+};
+
+/** Hash each listed file as it is on disk now; one that cannot be read gets no hash and so is never pruned. */
+const hashWrittenFiles = (outputDirectory: string, paths: ReadonlyArray<string>): Record<string, string> => {
+    const hashes: Record<string, string> = {};
+
+    for (const path of [...paths].toSorted(byPath)) {
+        try {
+            hashes[path] = contentHash(resolve(outputDirectory, path));
+        } catch {
+            // Left unhashed: the next run will report it rather than delete it.
+        }
+    }
+
+    return hashes;
 };
 
 /**
@@ -98,6 +145,7 @@ const writeStamp = (outputDirectory: string, language: string, result: VendorRes
         cliVersion: resolveCliVersion(),
         format: STAMP_FORMAT,
         generatedFiles: [...generatedFiles].toSorted(byPath),
+        hashes: hashWrittenFiles(outputDirectory, [...result.transportFiles, ...generatedFiles]),
         language,
         note: result.versionMatched
             ? "Vendored by `lunora sdk generate` at the ref matching the CLI that generated the surface beside it. Regenerate with a newer CLI to upgrade."
@@ -213,12 +261,35 @@ const deleteCandidate = (result: PruneResult, candidate: string, absolute: strin
 };
 
 /**
- * Delete the files the previous run wrote and this one did not. Files the current
- * run still produces are kept, and so is anything a stamp never listed. Only files
- * are removed; a directory a previous run created stays, since the user may have
- * put things beside the generated ones.
+ * The stamp's say-so is not ownership: only a file whose content still matches the
+ * hash the CLI recorded is one it wrote and nobody has touched since.
  */
-const pruneStale = (outputDirectory: string, previous: StampFiles | undefined, current: StampFiles): PruneResult => {
+const verifyOwnership = (previous: RecordedStamp, candidate: string, absolute: string): string | undefined => {
+    const recorded = previous.hashes.get(candidate);
+
+    if (recorded === undefined) {
+        return "has no recorded content hash, so it cannot be verified as generated";
+    }
+
+    let actual: string;
+
+    try {
+        actual = contentHash(absolute);
+    } catch (error) {
+        return `could not be read (${(error as NodeJS.ErrnoException).code ?? "unknown error"})`;
+    }
+
+    return actual === recorded ? undefined : "has changed since it was generated";
+};
+
+/**
+ * Delete the files the previous run wrote and this one did not. Files the current
+ * run still produces are kept, and so is anything a stamp never listed or whose
+ * content no longer matches its recorded hash. Only files are removed; a directory
+ * a previous run created stays, since the user may have put things beside the
+ * generated ones.
+ */
+const pruneStale = (outputDirectory: string, previous: RecordedStamp | undefined, current: StampFiles): PruneResult => {
     const result: PruneResult = { deleted: [], refused: [] };
 
     if (previous === undefined) {
@@ -246,8 +317,16 @@ const pruneStale = (outputDirectory: string, previous: StampFiles | undefined, c
         const verdict = judge(outputDirectory, candidate);
 
         if (verdict.kind === "delete") {
-            if (!keptFiles.has(verdict.identity)) {
+            if (keptFiles.has(verdict.identity)) {
+                continue;
+            }
+
+            const unverified = verifyOwnership(previous, candidate, verdict.absolute);
+
+            if (unverified === undefined) {
                 deleteCandidate(result, candidate, verdict.absolute);
+            } else {
+                result.refused.push({ path: candidate, reason: unverified });
             }
         } else if (verdict.kind === "refuse") {
             result.refused.push({ path: candidate, reason: verdict.reason });
@@ -257,5 +336,5 @@ const pruneStale = (outputDirectory: string, previous: StampFiles | undefined, c
     return result;
 };
 
-export type { PruneResult, StampFiles, VendorResult };
+export type { PruneResult, RecordedStamp, StampFiles, VendorResult };
 export { pruneStale, readStamp, STAMP_FILE, writeStamp };

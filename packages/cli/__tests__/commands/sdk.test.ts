@@ -6,6 +6,7 @@
  * what was actually copied, test files are filtered out of the vendored copy,
  * and spec validation fails with a directive error naming the path.
  */
+import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -181,7 +182,12 @@ describe("lunora sdk generate", () => {
         writeFileSync(join(outputDirectory, "lunora_api", "retired.py"), "RETIRED = 1\n", "utf8");
         writeFileSync(
             join(outputDirectory, "lunora-transport.json"),
-            JSON.stringify({ format: 2, generatedFiles: ["lunora_api/retired.py"], transportFiles: [] }),
+            JSON.stringify({
+                format: 3,
+                generatedFiles: ["lunora_api/retired.py"],
+                hashes: { "lunora_api/retired.py": createHash("sha256").update("RETIRED = 1\n").digest("hex") },
+                transportFiles: [],
+            }),
             "utf8",
         );
 
@@ -224,8 +230,9 @@ describe("lunora sdk generate", () => {
             writeFileSync(
                 join(outputDirectory, "lunora-transport.json"),
                 JSON.stringify({
-                    format: 2,
+                    format: 3,
                     generatedFiles: ["../outside.txt", outsideFile, "link.txt", "linked/victim.txt"],
+                    hashes: {},
                     transportFiles: [],
                 }),
                 "utf8",
@@ -264,7 +271,26 @@ describe("lunora sdk generate", () => {
 
         const stamp = JSON.parse(readFileSync(join(outputDirectory, "lunora-transport.json"), "utf8")) as { format?: number };
 
-        expect(stamp.format).toBe(2);
+        expect(stamp.format).toBe(3);
+    });
+
+    it.each([
+        ["format 3 with a hash that does not match", { format: 3, generatedFiles: ["notes.txt"], hashes: { "notes.txt": "0".repeat(64) }, transportFiles: [] }],
+        ["format 2, which records no hashes", { format: 2, generatedFiles: ["notes.txt"], transportFiles: [] }],
+    ])("never deletes a user file a planted stamp names (%s)", async (_label, planted) => {
+        expect.assertions(2);
+
+        const spec = writeSpec(SPEC);
+        const outputDirectory = join(workdir, "sdk", "python");
+
+        mkdirSync(outputDirectory, { recursive: true });
+        writeFileSync(join(outputDirectory, "notes.txt"), "mine\n", "utf8");
+        writeFileSync(join(outputDirectory, "lunora-transport.json"), JSON.stringify(planted), "utf8");
+
+        const { output } = await runSdk({ from: transportRoot, lang: "python", spec });
+
+        expect(readFileSync(join(outputDirectory, "notes.txt"), "utf8")).toBe("mine\n");
+        expect(output).toContain("refusing to delete notes.txt");
     });
 
     it("records transport and generated files under separate keys, both sorted", async () => {
@@ -282,7 +308,7 @@ describe("lunora sdk generate", () => {
         const stamp = JSON.parse(readFileSync(join(outputDirectory, "lunora-transport.json"), "utf8")) as Record<string, unknown>;
 
         expect(stamp).toMatchObject({
-            format: 2,
+            format: 3,
             generatedFiles: ["lib/lunora_api.dart", "lib/models.dart", "pubspec.yaml"],
             transportFiles: ["lib/lunora.dart", "lib/src/client.dart"],
         });
