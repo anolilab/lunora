@@ -706,8 +706,11 @@ access. The lists (~3 MB) are not evaluated when `@lunora/auth` is imported; the
 load on the first gated check, so their cost is paid there instead of during
 Worker startup. They are still part of the bundle, so upload size is unaffected.
 
-Wire it into better-auth's native `/sign-up/email` endpoint with `withEmailGate`
-(or spread `emailGateDatabaseHooks(...)` into `createAuth({ databaseHooks })`):
+Wire it into better-auth with `withEmailGate` (or spread `emailGateDatabaseHooks(...)`
+into `createAuth({ databaseHooks })`). The gate runs when a user is created (the native
+`/sign-up/email` endpoint) **and** when an address changes (`/change-email`, the email-OTP
+change, and admin updates, including `AuthAdmin.updateUser`), so an account cannot move to a
+blocked domain after sign-up. `onClassify` fires only at creation.
 
 ```ts
 import { createAuth, lunoraD1Adapter, withEmailGate } from "@lunora/auth";

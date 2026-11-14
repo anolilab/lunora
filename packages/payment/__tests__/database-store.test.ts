@@ -476,6 +476,37 @@ describe("createDatabasePaymentStore", () => {
         await expect(store.markEventProcessed("stripe", "evt_2", "payment.captured")).resolves.toBe(true);
     });
 
+    it("moves a reference's counter only from the value the caller read", async () => {
+        expect.assertions(6);
+
+        const store = createDatabasePaymentStore(makeDb());
+
+        await expect(store.getReferenceRevision("user_1")).resolves.toBe(0);
+        await expect(store.bumpReferenceRevision("user_1", 0)).resolves.toBe(true);
+        // A second writer that read 0 as well loses, and the counter does not move twice.
+        await expect(store.bumpReferenceRevision("user_1", 0)).resolves.toBe(false);
+        await expect(store.bumpReferenceRevision("user_1", 1)).resolves.toBe(true);
+        await expect(store.getReferenceRevision("user_1")).resolves.toBe(2);
+        await expect(store.getReferenceRevision("user_2")).resolves.toBe(0);
+    });
+
+    it("reports a lost insert race on a reference's first counter as a refused bump, not an error", async () => {
+        expect.assertions(1);
+
+        const database = makeDb();
+        const racing: typeof database = {
+            ...database,
+            // The unique index rejects the insert because another writer's counter row landed after our read.
+            insert: async (table, document) => {
+                await database.insert(table, document);
+
+                throw new Error("unique index violated");
+            },
+        };
+
+        await expect(createDatabasePaymentStore(racing).bumpReferenceRevision("user_1", 0)).resolves.toBe(false);
+    });
+
     it("records the event type on the claim so `events` is a readable audit log", async () => {
         expect.assertions(2);
 
