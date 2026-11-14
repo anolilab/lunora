@@ -1,4 +1,4 @@
-import type { AdvisorMap, BaselineComparison, Coverage, ProcedureScore } from "@lunora/advisor";
+import type { AdvisorMap, BaselineComparison, Coverage, Finding, ProcedureScore } from "@lunora/advisor";
 import { byCodepoint } from "@lunora/advisor";
 
 /** Single-character verdict marks, so a wide matrix stays readable. */
@@ -56,16 +56,21 @@ const comparisonLines = (comparison: BaselineComparison): string[] => {
     return lines;
 };
 
+/** `[LEVEL] name (suppressed: reason) — detail`, one per accepted finding. */
+const suppressedLines = (findings: ReadonlyArray<Finding>): string[] =>
+    findings.map((finding) => `    [${finding.level}] ${finding.name} (suppressed: ${finding.suppressed?.reason ?? ""}) — ${finding.detail}`);
+
 /**
  * The default view: headline score, coverage tallies, and only the procedures
- * that actually have findings — a clean project prints a few lines.
+ * that actually have findings — a clean project prints a few lines. Accepted
+ * findings are counted and listed with their reason, so they stay visible.
  */
-const formatSummary = (map: AdvisorMap, comparison?: BaselineComparison): string => {
+const formatSummary = (map: AdvisorMap, comparison?: BaselineComparison, suppressed: ReadonlyArray<Finding> = []): string => {
     const flagged = map.procedures.filter((entry) => entry.coverage !== "clean" && entry.coverage !== "exempt");
     const width = idWidth(flagged);
     const lines = [
         `advisor health ${String(map.score)}/100 — ${map.grade}`,
-        `  ${String(map.summary.clean)} clean · ${String(map.summary.warned)} warned · ${String(map.summary.failing)} failing · ${String(map.summary.exempt)} exempt (${String(map.summary.procedures)} procedures, ${String(map.summary.rulesFired)} rules fired)`,
+        `  ${String(map.summary.clean)} clean · ${String(map.summary.warned)} warned · ${String(map.summary.failing)} failing · ${String(map.summary.exempt)} exempt · ${String(map.summary.suppressed)} suppressed (${String(map.summary.procedures)} procedures, ${String(map.summary.rulesFired)} rules fired)`,
     ];
 
     if (map.project.checks.length > 0) {
@@ -74,6 +79,10 @@ const formatSummary = (map: AdvisorMap, comparison?: BaselineComparison): string
 
     if (flagged.length > 0) {
         lines.push("", ...flagged.map((entry) => row(entry, width)), "", "  run with --all for every procedure, or --entry <file#export> for one");
+    }
+
+    if (suppressed.length > 0) {
+        lines.push("", "  suppressed (accepted by an inline directive):", ...suppressedLines(suppressed));
     }
 
     if (comparison !== undefined) {

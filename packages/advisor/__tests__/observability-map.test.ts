@@ -218,7 +218,23 @@ describe("scoreAdvisor artifact", () => {
             { generatedAt: STAMP },
         );
 
-        expect(map.summary).toStrictEqual({ clean: 1, exempt: 0, failing: 1, procedures: 2, rulesFired: 3, warned: 0 });
+        expect(map.summary).toStrictEqual({ clean: 1, exempt: 0, failing: 1, procedures: 2, rulesFired: 3, suppressed: 0, warned: 0 });
+    });
+
+    it("does not score a suppressed finding, and counts it in the summary", () => {
+        expect.assertions(3);
+
+        const accepted: Finding = {
+            ...finding("e1", "ERROR", { exportName: "broken", file: "b" }),
+            suppressed: { file: "lunora/b.ts", line: 1, reason: "accepted at this site" },
+        };
+        const map = scoreAdvisor([procedure({ exportName: "broken", file: "b" })], [accepted, finding("e2", "WARN", { exportName: "broken", file: "b" })], {
+            generatedAt: STAMP,
+        });
+
+        expect(map.procedures[0]?.checks.map((check) => check.name)).toStrictEqual(["e2"]);
+        expect(map.procedures[0]?.coverage).toBe("warned");
+        expect(map.summary).toMatchObject({ rulesFired: 1, suppressed: 1 });
     });
 });
 

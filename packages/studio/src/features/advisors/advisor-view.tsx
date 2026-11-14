@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { useAssistant } from "../../components/assistant-provider";
 import ErrorAlert from "../../components/error-alert";
+import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import type { TFunction } from "../../i18n/i18n-context";
@@ -24,6 +25,8 @@ interface AdvisorRow {
     /** A stable key for the row. */
     readonly key: string;
     readonly level: AdvisorLevel;
+    /** Set when an inline directive accepts this finding; the row stays listed, marked with the reason. */
+    readonly suppressed?: { readonly reason: string };
 }
 
 interface AdvisorViewProps {
@@ -61,6 +64,7 @@ interface AdvisoryLike {
     readonly level: "ERROR" | "INFO" | "WARN";
     readonly metadata: Record<string, unknown>;
     readonly remediation: string;
+    readonly suppressed?: { readonly reason: string };
     readonly title: string;
 }
 
@@ -79,6 +83,7 @@ const advisoryRow = (finding: AdvisoryLike): AdvisorRow => {
         issueType: finding.title,
         key: finding.cacheKey,
         level: ADVISORY_LEVEL[finding.level],
+        ...(finding.suppressed === undefined ? {} : { suppressed: { reason: finding.suppressed.reason } }),
     };
 };
 
@@ -134,6 +139,7 @@ export const AdvisorView = ({ error = null, errorSource, rows, shardKey, testId,
     const [active, setActive] = useState<AdvisorLevel>("error");
 
     const counts = tallyByLevel(rows);
+    const suppressedCount = (rows ?? []).filter((row) => row.suppressed !== undefined).length;
 
     const visible = (rows ?? []).filter((row) => row.level === active);
 
@@ -163,6 +169,11 @@ export const AdvisorView = ({ error = null, errorSource, rows, shardKey, testId,
                         <span className="ps-4 text-xs text-muted-foreground">{levelCount(t, level, counts[level])}</span>
                     </button>
                 ))}
+                {suppressedCount > 0 && (
+                    <span className="ms-auto self-center px-4 text-xs text-muted-foreground" data-testid={`${testId}-suppressed-count`}>
+                        {t("{count} suppressed", { count: suppressedCount })}
+                    </span>
+                )}
             </div>
 
             {/* Toolbar (rendered only when a panel supplies controls, e.g. a shard selector). */}
@@ -192,10 +203,22 @@ export const AdvisorView = ({ error = null, errorSource, rows, shardKey, testId,
                             ) : (
                                 visible.map((row) => (
                                     <TableRow key={row.key}>
-                                        <TableCell className="font-medium text-foreground">{row.issueType}</TableCell>
+                                        <TableCell className="font-medium text-foreground">
+                                            {row.issueType}
+                                            {row.suppressed !== undefined && (
+                                                <Badge className="ms-2" data-testid="advisor-suppressed-badge" title={row.suppressed.reason} variant="outline">
+                                                    {t("Suppressed")}
+                                                </Badge>
+                                            )}
+                                        </TableCell>
                                         <TableCell className="font-mono text-xs text-muted-foreground">{row.entity ?? "—"}</TableCell>
                                         <TableCell className="text-muted-foreground">
                                             <span>{row.description}</span>
+                                            {row.suppressed !== undefined && (
+                                                <span className="mt-1 block text-xs" data-testid="advisor-suppressed-reason">
+                                                    {t("Suppressed: {reason}", { reason: row.suppressed.reason })}
+                                                </span>
+                                            )}
                                             {(row.action !== undefined || canAsk) && (
                                                 <span className="mt-1.5 flex flex-wrap items-center gap-1.5">
                                                     {row.action}

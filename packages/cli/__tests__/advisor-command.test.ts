@@ -93,6 +93,27 @@ describe("lunora advisor", () => {
         expect(output).toMatch(/clean · .* warned · .* failing/u);
     });
 
+    it("counts and lists an accepted finding with its reason in the summary", () => {
+        expect.assertions(3);
+
+        const accepted = SCHEMA.replace(
+            "    posts: defineTable",
+            "    // lunora-advisor-exempt unindexed_foreign_key -- posts are append-only\n    posts: defineTable",
+        );
+
+        writeFileSync(join(workdir, "lunora", "schema.ts"), accepted, "utf8");
+
+        const { lines, logger } = recordingLogger();
+
+        runAdvisorCommand({ cwd: workdir, logger, write: false });
+
+        const output = lines.join("\n");
+
+        expect(output).toContain("1 suppressed");
+        expect(output).toContain("suppressed (accepted by an inline directive):");
+        expect(output).toContain("unindexed_foreign_key (suppressed: posts are append-only)");
+    });
+
     it("rejects a --min-score outside 0-100 rather than silently skipping the gate", () => {
         expect.assertions(2);
 

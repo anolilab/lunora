@@ -632,6 +632,7 @@ const MUTATORS_FILENAME = "mutators.ts";
 interface MaskProcedureIR {
     exportName: string;
     file: string;
+    line?: number;
     maskColumns: {
         column: string;
         table: string;
@@ -1615,7 +1616,7 @@ const emitWranglerCronTriggers: (crons: ReadonlyArray<CronJobIR>) => string[];
 ### `errorAdvisoryNames` (const)
 
 ```ts
-const errorAdvisoryNames: (advisories: ReadonlyArray<Pick<Finding, "level" | "name">>) => ReadonlyArray<string>;
+const errorAdvisoryNames: (advisories: ReadonlyArray<Pick<Finding, "level" | "name" | "suppressed">>) => ReadonlyArray<string>;
 ```
 
 ### `errorPlatformDiagnosticNames` (const)

@@ -136,6 +136,22 @@ describe("advisorHealthPanel", () => {
         expect(fetchMock).toHaveBeenCalledWith("/__lunora/advisor-procedures");
     });
 
+    it("counts a suppressed finding in the header, apart from the coverage split", async () => {
+        expect.assertions(2);
+
+        stubProceduresResponse(200, { procedures: [] });
+
+        const accepted: AdvisoryFinding = { ...NEW_FINDING, suppressed: { file: "lunora/todos.ts", line: 4, reason: "todos are append-only" } };
+        const query = (reference: string): unknown => (reference === ADMIN_FUNCTIONS.getAdvisories ? { advisories: [accepted] } : defaultQuery(reference));
+
+        render(renderPanel(true, null, true, query));
+
+        await screen.findByTestId("advisor-health-score");
+
+        expect(screen.getByTestId("advisor-health-suppressed").textContent).toBe("1 suppressed");
+        expect(screen.getByTestId("advisor-health-summary").textContent).toContain("0 clean");
+    });
+
     it("shows the host's reason when the dev host has no generated list yet", async () => {
         expect.assertions(2);
 

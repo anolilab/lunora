@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
-import type { AdvisorMap, BaselineComparison } from "@lunora/advisor";
+import type { AdvisorMap, BaselineComparison, Finding } from "@lunora/advisor";
 import { compareToBaseline, parseAdvisorMap, scoreAdvisor } from "@lunora/advisor";
 import { runCodegen } from "@lunora/codegen";
 import { resolveLazyFunctions } from "@lunora/config";
@@ -123,12 +123,12 @@ const diffAgainstBaseline = (map: AdvisorMap, projectRoot: string, baselineOptio
 const describeIncomparable = (reason: string): string => `baseline is not comparable (${reason}) — regenerate it; this run verified nothing`;
 
 /** Pick the view the flags asked for. */
-const render = (map: AdvisorMap, options: AdvisorCommandOptions, comparison: BaselineComparison | undefined): string => {
+const render = (map: AdvisorMap, options: AdvisorCommandOptions, comparison: BaselineComparison | undefined, suppressed: ReadonlyArray<Finding>): string => {
     if (options.entry !== undefined) {
         return formatEntry(map, options.entry);
     }
 
-    return options.all === true ? formatMatrix(map) : formatSummary(map, comparison);
+    return options.all === true ? formatMatrix(map) : formatSummary(map, comparison, suppressed);
 };
 
 /**
@@ -202,7 +202,14 @@ const runAdvisorCommand = (options: AdvisorCommandOptions): AdvisorCommandResult
         return result;
     }
 
-    logger.info(render(map, options, result.comparison));
+    logger.info(
+        render(
+            map,
+            options,
+            result.comparison,
+            advisories.filter((finding) => finding.suppressed !== undefined),
+        ),
+    );
 
     if (result.written !== undefined) {
         logger.success(`wrote ${result.written}`);

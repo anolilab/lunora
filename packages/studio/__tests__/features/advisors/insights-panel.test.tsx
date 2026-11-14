@@ -177,6 +177,21 @@ describe("insightsPanel", () => {
         expect(view.textContent).toContain("posts");
     });
 
+    it("marks a suppressed static advisory with its reason and counts it in the header", async () => {
+        expect.assertions(3);
+
+        const accepted: AdvisoryFinding = { ...FK_ADVISORY, suppressed: { file: "lunora/schema.ts", line: 12, reason: "posts are append-only" } };
+
+        render(renderPanel(createClient(HEALTHY, EMPTY_STATS, [accepted])));
+
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
+        await screen.findByText("Unindexed foreign key");
+
+        expect(screen.getByTestId("advisor-suppressed-badge").textContent).toBe("Suppressed");
+        expect(screen.getByTestId("advisor-suppressed-reason").textContent).toBe("Suppressed: posts are append-only");
+        expect(screen.getByTestId("lunora-insights-suppressed-count").textContent).toBe("1 suppressed");
+    });
+
     it("surfaces a runtime dead-index advisory for a declared index with no recorded reads", async () => {
         expect.assertions(2);
 
