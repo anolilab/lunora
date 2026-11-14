@@ -35,7 +35,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
         setStatus("error");
     };
 
-    const submit = async (event: SyntheticEvent) => {
+    const submit = async (event: SyntheticEvent<HTMLFormElement>) => {
         event.preventDefault();
 
         if (!EMAIL_RE.test(email)) {
@@ -55,7 +55,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
 
         try {
             const response = await fetch("/api/waitlist", {
-                body: JSON.stringify({ email, honeyField: "", privacy: true, source }),
+                body: JSON.stringify({ email, honeyField: new FormData(event.currentTarget).get("honeyField") ?? "", privacy: true, source }),
                 headers: { "Content-Type": "application/json" },
                 method: "POST",
             });

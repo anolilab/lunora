@@ -9,10 +9,11 @@ const app = await alchemy("lunora-docs");
 // stored sign-ups. The binding name matches `WAITLIST` in src/routes/api/waitlist.ts.
 const waitlist = await KVNamespace("WAITLIST", { adopt: true, title: "lunora-docs-waitlist" });
 
-// Builds with `vite build`; dist/client is uploaded as static assets.
+// The package's full build: it generates the package pages, error reference and stats before `vite build`.
+// dist/client is uploaded as static assets.
 await TanStackStart("lunora-docs", {
     bindings: { WAITLIST: waitlist },
-    build: "vite build",
+    build: "pnpm run build",
     compatibilityDate: "2026-10-01",
 });
 

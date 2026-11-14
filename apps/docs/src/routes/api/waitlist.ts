@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { env } from "cloudflare:workers";
 
+import { readWaitlistBody } from "@/lib/waitlist-body";
+
 /**
  * Deliberately loose: one `@`, a non-empty local part, and a domain with at
  * least one dot and no empty label. Delivery is the real test; this only rejects
@@ -27,13 +29,6 @@ const WHITESPACE = /\s/u;
 const MAX_EMAIL_LENGTH = 254;
 const SOURCES = new Set(["cloud", "stable"]);
 
-interface WaitlistBody {
-    email?: unknown;
-    honeyField?: unknown;
-    privacy?: unknown;
-    source?: unknown;
-}
-
 /**
  * `POST /api/waitlist` — stores one waitlist sign-up in the `WAITLIST` KV
  * namespace, keyed by the lowercased address so a repeat submission overwrites
@@ -44,11 +39,13 @@ export const Route = createFileRoute("/api/waitlist")({
     server: {
         handlers: {
             POST: async ({ request }) => {
-                let body: WaitlistBody;
+                const body = await readWaitlistBody(request);
 
-                try {
-                    body = (await request.json()) as WaitlistBody;
-                } catch {
+                if (body === "too_large") {
+                    return Response.json({ error: "body_too_large" }, { status: 413 });
+                }
+
+                if (body === undefined) {
                     return Response.json({ error: "invalid_body" }, { status: 400 });
                 }
 
