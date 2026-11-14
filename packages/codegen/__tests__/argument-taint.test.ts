@@ -181,7 +181,7 @@ describe("argument-taint", () => {
         });
 
         it("rejects a composed key whose only args-derived part a call recomputed, and keeps one that forwards an arg", () => {
-            expect.assertions(7);
+            expect.assertions(8);
 
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const digest = sha256Hex(args.bytes);\nSINK(\`blobs/\${digest}\`);`))).toBe(false);
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const digest = await sha256Hex(args.bytes);\nSINK(\`blobs/\${digest}\`);`))).toBe(false);
@@ -189,6 +189,7 @@ describe("argument-taint", () => {
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const name = args.name;\nSINK(\`blobs/\${name}\`);`))).toBe(true);
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const name = args.name;\nSINK(\`blobs/\${sha256Hex(name)}\`);`))).toBe(false);
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const { key = args.key } = config;\nSINK(key);`))).toBe(true);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const { key = args.key } = config;\nSINK(\`prefix/\${key}\`);`))).toBe(true);
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const digest = sha256Hex(args.bytes);\nSINK(\`blobs/\${digest}/\${args.name}\`);`))).toBe(
                 true,
             );

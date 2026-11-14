@@ -385,10 +385,16 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
     // recomputed; it is a passthrough only when some composed binding forwards args unchanged.
     // An identifier read inside a call in the key (`blobs/${sha256Hex(name)}`) is recomputed there.
     return valueIdentifiersIn(composed).some((identifier) => {
-        const bound = singleHopInitializer(identifier);
         const nearest = identifier.getFirstAncestor((ancestor) => ancestor === composed || Node.isCallExpression(ancestor) || Node.isNewExpression(ancestor));
 
-        return nearest === composed && bound !== undefined && referencesArgs(bound) && !isRecomputed(bound);
+        if (nearest !== composed) {
+            return false;
+        }
+
+        const declaration = singleHopDeclaration(identifier);
+        const forwards = (source: TsNode | undefined): boolean => source !== undefined && referencesArgs(source) && !isRecomputed(source);
+
+        return forwards(declaration?.getInitializer()) || forwards(bindingDefaultOf(declaration, identifier.getText()));
     });
 };
 
