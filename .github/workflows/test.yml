@@ -424,6 +424,7 @@
                         "packages/workflow",
                         "packages/x402",
                         "examples/privacy",
+                        "examples/team-chat",
                     ]
         "steps":
             - "name": "Harden Runner"

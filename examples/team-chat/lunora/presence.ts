@@ -4,6 +4,7 @@ import { rateLimit } from "lunorash/ratelimit";
 import type { Doc as Document_ } from "./_generated/dataModel.js";
 import type { MutationCtx } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { requireMember } from "./membership.js";
 import { makeRateLimiter } from "./ratelimit/schema.js";
 
 /** Signed-in app, so limits key on the user rather than the IP. */
@@ -27,6 +28,12 @@ const byUser = { key: (ctx: { auth: { userId?: string | null }; ip?: string }): 
 export const list = query
     .input({ channelId: v.string().max(128) })
     .query(async ({ args: { channelId }, ctx }): Promise<Omit<Document_<"presence">, "sessionId">[]> => {
+        if (!ctx.auth.userId) {
+            return [];
+        }
+
+        await requireMember(ctx, channelId);
+
         const rows = await ctx.db
             .query("presence")
             .withIndex("by_channel_session", (q) => q.eq("channelId", channelId))
@@ -70,6 +77,8 @@ export const heartbeat = mutation
             return;
         }
 
+        await requireMember(ctx, channelId);
+
         const existing = await ownPresence(ctx, channelId, sessionId, ctx.auth.userId);
 
         if (existing) {
@@ -90,6 +99,8 @@ export const leave = mutation
         if (!ctx.auth.userId) {
             return;
         }
+
+        await requireMember(ctx, channelId);
 
         const existing = await ownPresence(ctx, channelId, sessionId, ctx.auth.userId);
 

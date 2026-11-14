@@ -130,7 +130,7 @@ return { "title": source["title"] };
  * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor
  * was read at, which a claims fingerprint leaves out.
  */
-export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["admin:listOpenPrivacyRequests", "requests:exportFile", "requests:myRequests", "tasks:myTasks"]);
+export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["admin:listOpenPrivacyRequests", "requests:exportFile", "requests:myRequests"]);
 
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a

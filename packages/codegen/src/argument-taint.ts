@@ -1270,3 +1270,5 @@ export const isGuardedByIdentityCheck = (sinkCall: CallExpression, key: TsNode):
 
     return false;
 };
+
+export { appFunctionOf };
