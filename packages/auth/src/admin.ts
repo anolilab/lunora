@@ -580,6 +580,18 @@ const withoutOwnerRole = (role: string): string =>
         .join(",") || "member";
 
 /**
+ * Run a demotion's undo after a later step failed. Its own failure is dropped so
+ * the caller rethrows the error that explains why the operation stopped.
+ */
+const undoAfterFailure = async (undo: () => Promise<void>): Promise<void> => {
+    try {
+        await undo();
+    } catch {
+        // The original failure is the one the caller reports.
+    }
+};
+
+/**
  * Write `nextRole` (which holds no `owner` token) to an owner's member row, then
  * undo the write and refuse if the organization was left with no other owner.
  *
@@ -616,13 +628,23 @@ const demoteOwner = async (
         });
     };
 
-    const roster = await context_.adapter.findMany<{ id?: string; role?: string }>({
-        model: "member",
-        where: [{ field: "organizationId", value: member.organizationId }],
-    });
+    let keepsOwner: boolean;
 
-    if (!roster.some((candidate) => candidate.id !== member.id && isOwnerRole(candidate.role))) {
-        await undo();
+    try {
+        const roster = await context_.adapter.findMany<{ id?: string; role?: string }>({
+            model: "member",
+            where: [{ field: "organizationId", value: member.organizationId }],
+        });
+
+        keepsOwner = roster.some((candidate) => candidate.id !== member.id && isOwnerRole(candidate.role));
+    } catch (error) {
+        await undoAfterFailure(undo);
+
+        throw error;
+    }
+
+    if (!keepsOwner) {
+        await undoAfterFailure(undo);
 
         throw new LunoraAuthAdminError(
             `cannot remove or demote the last owner of organization ${member.organizationId} — transfer ownership or delete the organization first`,
@@ -634,9 +656,35 @@ const demoteOwner = async (
 };
 
 /**
- * Take a user out of the owner role of every organization they own, refusing
- * (and restoring the roles already taken) if any of those organizations would be
- * left without an owner.
+ * Delete a member row only while it still holds `role`, the role this call left
+ * it with, and refuse if it was changed in the meantime.
+ *
+ * A concurrent `updateMemberRole` could re-promote a row this call demoted; a
+ * removal of another owner could then count it as the remaining owner. Deleting
+ * it regardless would leave that organization ownerless, so the delete is
+ * conditional and a row that survives it ends the operation.
+ */
+const deleteMemberIfUnchanged = async (context_: AuthContext, memberId: string, role: string): Promise<void> => {
+    await context_.adapter.delete({
+        model: "member",
+        where: [
+            { field: "id", value: memberId },
+            { connector: "AND", field: "role", value: role },
+        ],
+    });
+
+    const survivor = await context_.adapter.findOne<{ id?: string }>({ model: "member", where: [{ field: "id", value: memberId }] });
+
+    if (survivor) {
+        throw new LunoraAuthAdminError(`member ${memberId} changed role during its removal — retry`, "MEMBERSHIP_CHANGED");
+    }
+};
+
+/**
+ * Remove every membership of a user without orphaning an organization: demote
+ * each owned membership through {@link demoteOwner}, then delete each membership
+ * through {@link deleteMemberIfUnchanged}. Any refusal or failure undoes the
+ * demotions whose rows remain.
  *
  * `removeUser` unwinds `member` rows, so without this the org survives with zero
  * owners: nobody can administer it, invite to it, or delete it, and the operator
@@ -644,35 +692,38 @@ const demoteOwner = async (
  * `deleteOrganization` first are both explicit acts; silently orphaning an org is
  * not one of them.
  */
-const demoteOwnedMemberships = async (context_: AuthContext, userId: string): Promise<void> => {
+const removeUserMemberships = async (context_: AuthContext, userId: string): Promise<void> => {
     const memberships = await context_.adapter.findMany<{ id?: string; organizationId?: string; role?: string }>({
         model: "member",
         where: [{ field: "userId", value: userId }],
     });
 
     const undos: (() => Promise<void>)[] = [];
+    const removals: { id: string; role: string }[] = [];
 
     try {
         for (const membership of memberships) {
-            if (
-                typeof membership.id === "string" &&
-                typeof membership.organizationId === "string" &&
-                typeof membership.role === "string" &&
-                isOwnerRole(membership.role)
-            ) {
+            if (typeof membership.id !== "string" || typeof membership.role !== "string") {
+                continue;
+            }
+
+            if (typeof membership.organizationId === "string" && isOwnerRole(membership.role)) {
+                const nextRole = withoutOwnerRole(membership.role);
+
                 // Sequential: each refusal must be able to undo exactly the demotions that already landed.
                 // eslint-disable-next-line no-await-in-loop -- see above
-                const { undo } = await demoteOwner(
-                    context_,
-                    { id: membership.id, organizationId: membership.organizationId, role: membership.role },
-                    withoutOwnerRole(membership.role),
-                );
+                const { undo } = await demoteOwner(context_, { id: membership.id, organizationId: membership.organizationId, role: membership.role }, nextRole);
 
                 undos.push(undo);
+                removals.push({ id: membership.id, role: nextRole });
+            } else {
+                removals.push({ id: membership.id, role: membership.role });
             }
         }
+
+        await Promise.all(removals.map(async ({ id, role }) => deleteMemberIfUnchanged(context_, id, role)));
     } catch (error) {
-        await Promise.all(undos.map(async (undo) => undo()));
+        await Promise.all(undos.map(async (undo) => undoAfterFailure(undo)));
 
         throw error;
     }
@@ -1385,19 +1436,35 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                     where: [{ field: "id", value: memberId }],
                 });
 
+                if (!member || typeof member.organizationId !== "string" || typeof member.role !== "string") {
+                    await context_.adapter.delete({ model: "member", where: [{ field: "id", value: memberId }] });
+
+                    return;
+                }
+
                 // Demoted before the delete so the owner guard covers removal too: a deleted row cannot be undone
-                // faithfully, a role can. If a later step fails, the member stays demoted rather than removed.
-                if (member && typeof member.organizationId === "string" && typeof member.role === "string" && isOwnerRole(member.role)) {
-                    await demoteOwner(context_, { id: memberId, organizationId: member.organizationId, role: member.role }, withoutOwnerRole(member.role));
-                }
+                // faithfully, a role can.
+                const owner = isOwnerRole(member.role);
+                const leftRole = owner ? withoutOwnerRole(member.role) : member.role;
+                const demotion = owner
+                    ? await demoteOwner(context_, { id: memberId, organizationId: member.organizationId, role: member.role }, leftRole)
+                    : undefined;
 
-                // The team rows are keyed on the user, not the member, so they outlive the removal unless unwound here.
-                // Unwound first: the member row is what a retry needs to find the user and org if this fails midway.
-                if (member && typeof member.organizationId === "string" && typeof member.userId === "string" && tables["teamMember"] && tables["team"]) {
-                    await deleteOrganizationTeamMemberships(context_, member.organizationId, member.userId);
-                }
+                try {
+                    // The team rows are keyed on the user, not the member, so they outlive the removal unless unwound here.
+                    // Unwound first: the member row is what a retry needs to find the user and org if this fails midway.
+                    if (typeof member.userId === "string" && tables["teamMember"] && tables["team"]) {
+                        await deleteOrganizationTeamMemberships(context_, member.organizationId, member.userId);
+                    }
 
-                await context_.adapter.delete({ model: "member", where: [{ field: "id", value: memberId }] });
+                    await deleteMemberIfUnchanged(context_, memberId, leftRole);
+                } catch (error) {
+                    if (demotion) {
+                        await undoAfterFailure(demotion.undo);
+                    }
+
+                    throw error;
+                }
             }),
 
         // `internalAdapter.deleteUser` removes only `session`/`account`/`user` rows.
@@ -1413,7 +1480,7 @@ const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {})
                 const tables = getAuthTables(context_.options);
 
                 if (tables["member"]) {
-                    await demoteOwnedMemberships(context_, userId);
+                    await removeUserMemberships(context_, userId);
                 }
 
                 await Promise.all(

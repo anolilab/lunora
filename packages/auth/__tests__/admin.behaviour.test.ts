@@ -1,5 +1,5 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthAdmin } from "../src/admin";
 import { createAuthAdmin } from "../src/admin";
@@ -438,7 +438,7 @@ describe("createAuthAdmin", () => {
             secret: SECRET,
         });
 
-        return { orgAdmin: createAuthAdmin(orgAuth), orgDatabase };
+        return { orgAdmin: createAuthAdmin(orgAuth), orgAuth, orgDatabase };
     };
 
     it("refuses removeMember on the sole owner of an organization and keeps the row", async () => {
@@ -559,6 +559,64 @@ describe("createAuthAdmin", () => {
 
         expect(ownerCount(orgDatabase)).toBeGreaterThanOrEqual(1);
         expect(results.some((result) => result.status === "rejected")).toBe(true);
+    });
+
+    const roleOf = (memoryDatabase: Record<string, unknown[]>, memberId: string): string | undefined =>
+        (memoryDatabase["member"] as { id: string; role: string }[]).find((row) => row.id === memberId)?.role;
+
+    it("restores the owner role when the roster read after a demotion fails", async () => {
+        expect.assertions(2);
+
+        const { first, orgAdmin, orgAuth, orgDatabase } = await createTwoOwnerOrg("roster-fail");
+        const { adapter } = await orgAuth.$context;
+        const findMany = adapter.findMany.bind(adapter);
+
+        vi.spyOn(adapter, "findMany").mockImplementation(async (query) => {
+            if (query.model === "member" && query.where?.[0]?.field === "organizationId") {
+                throw new Error("roster read failed");
+            }
+
+            return findMany(query);
+        });
+
+        await expect(orgAdmin.updateMemberRole({ memberId: first.memberId, role: "member" })).rejects.toThrow(/roster read failed/u);
+        expect(roleOf(orgDatabase, first.memberId)).toBe("owner");
+    });
+
+    it("restores the owner role when removeMember fails after demoting", async () => {
+        expect.assertions(2);
+
+        const { first, orgAdmin, orgAuth, orgDatabase } = await createTwoOwnerOrg("delete-fail");
+        const { adapter } = await orgAuth.$context;
+
+        vi.spyOn(adapter, "delete").mockRejectedValueOnce(new Error("delete failed"));
+
+        await expect(orgAdmin.removeMember({ memberId: first.memberId })).rejects.toThrow(/delete failed/u);
+        expect(roleOf(orgDatabase, first.memberId)).toBe("owner");
+    });
+
+    it("refuses removeUser when a demoted membership is re-promoted before its delete", async () => {
+        expect.assertions(2);
+
+        const { first, orgAdmin, orgAuth, orgDatabase, second } = await createTwoOwnerOrg("repromote");
+        const { adapter } = await orgAuth.$context;
+        const remove = adapter.delete.bind(adapter);
+        let interleaved = false;
+
+        // Between removeUser's demotion of `first` and its delete, another admin re-promotes `first` and, counting
+        // it as the remaining owner, removes `second`.
+        vi.spyOn(adapter, "delete").mockImplementation(async (query) => {
+            if (!interleaved && query.model === "member" && query.where[0]?.value === first.memberId) {
+                interleaved = true;
+                await orgAdmin.updateMemberRole({ memberId: first.memberId, role: "owner" });
+                await orgAdmin.removeMember({ memberId: second.memberId });
+            }
+
+            return remove(query);
+        });
+
+        await expect(orgAdmin.removeUser({ userId: first.userId })).rejects.toThrow(/MEMBERSHIP_CHANGED|changed role/iu);
+        expect(ownerCount(orgDatabase)).toBe(1);
     });
 
     it("keeps an owner when removeUser races removeMember over the last two owners", async () => {

@@ -286,12 +286,15 @@ describe("createWorker — auth admin mutation endpoints", () => {
         error.mockRestore();
     });
 
-    it("maps LAST_ORGANIZATION_OWNER to 409, a conflict with the organization's current state", async () => {
+    it.each([
+        ["LAST_ORGANIZATION_OWNER", "user is the last owner of an organization"],
+        ["MEMBERSHIP_CHANGED", "member changed role during its removal"],
+    ])("maps %s to 409, a conflict with the organization's current state", async (code, message) => {
         expect.assertions(1);
 
         const plane = authAdmin();
         vi.mocked(plane.banUser as NonNullable<AuthAdmin["banUser"]>).mockImplementationOnce(async () => {
-            throw new LunoraError("LAST_ORGANIZATION_OWNER", "user is the last owner of an organization");
+            throw new LunoraError(code, message);
         });
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: plane, shardDO: noopNamespace });

@@ -244,6 +244,7 @@ const NAMED_TOKEN_AUTH_METHODS: ReadonlySet<keyof AuthAdmin> = new Set<keyof Aut
 const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
     INVITER_REQUIRED: 400,
     LAST_ORGANIZATION_OWNER: 409,
+    MEMBERSHIP_CHANGED: 409,
     ORG_SLUG_INVALID: 400,
     ORG_SLUG_TAKEN: 409,
     PASSWORD_TOO_LONG: 400,
