@@ -152,7 +152,7 @@ export interface VectorIndexIR {
     metadata?: ReadonlyArray<string>;
     metric?: "cosine" | "dot-product" | "euclidean";
     name: string;
-    /** Where the inline `.vectorize(...)` call's method name is declared; absent for a standalone (Shape B) index. */
+    /** Where the inline `.vectorize(...)` call's method name, or a standalone (Shape B) `defineVectorIndex(...)` call, is declared. */
     site?: DeclarationSiteIR;
     /** Owning table the vectors are sourced from. */
     table: string;
@@ -300,12 +300,6 @@ export interface TableIR {
      * `tenantBy`) are not serialized, only their presence (`hasTenantBy`).
      */
     externalSource?: ExternalSourceIR;
-
-    /**
-     * Where each declared column's property sits in the `defineTable({...})` object, keyed by column name. Columns the
-     * table gains by injection (`.timestamps()`, `.softDelete()`) have no entry.
-     */
-    fieldSites?: Readonly<Record<string, DeclarationSiteIR>>;
 
     /** Geospatial indexes declared inline via `.geoIndex(name, …)`. Optional so hand-built IR may omit it (discovery always sets it). */
     geoIndexes?: ReadonlyArray<GeoIndexIR>;

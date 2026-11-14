@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { isPublicKeyName, isSecretKeyName } from "../../../shared/secret-key";
 import { wranglerCodegenInputs } from "../src/cloudflare/wrangler-codegen-inputs";
-import { scanWranglerVariablesForSecrets } from "../src/cloudflare/wrangler-secret-variables";
+import { scanWranglerVariablesForSecrets, variableKeyLines } from "../src/cloudflare/wrangler-secret-variables";
 
 /**
  * The key-name classifier is `shared/secret-key.ts` — the SAME function
@@ -137,6 +137,19 @@ describe("scanWranglerVariablesForSecrets", () => {
     it("returns nothing when there is no `vars` block", () => {
         expect.assertions(1);
         expect(scanWranglerVariablesForSecrets(undefined, "wrangler.jsonc")).toHaveLength(0);
+    });
+});
+
+describe(variableKeyLines, () => {
+    it("counts CRLF, lone CR and LF as one line break each, as the JSONC parser does", () => {
+        expect.assertions(1);
+
+        const text = '{\r\n"vars": {\r"A": "1",\n"B": "2"\r\n}\r}';
+
+        expect([...variableKeyLines(text)]).toStrictEqual([
+            ["A", 3],
+            ["B", 4],
+        ]);
     });
 });
 

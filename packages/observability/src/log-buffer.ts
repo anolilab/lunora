@@ -55,7 +55,8 @@ const DEFAULT_CAPACITY = 500;
  * Anything not a finite value of at least 1 therefore falls back to the default
  * rather than being coerced into a degenerate ring.
  */
-const normalizeCapacity = (capacity: number): number => (Number.isFinite(capacity) && capacity >= 1 ? Math.trunc(capacity) : DEFAULT_CAPACITY);
+const normalizeCapacity = (capacity: number, fallback: number = DEFAULT_CAPACITY): number =>
+    Number.isFinite(capacity) && capacity >= 1 ? Math.trunc(capacity) : fallback;
 
 /**
  * A bounded, in-memory ring buffer of recent {@link LogEntry} records.

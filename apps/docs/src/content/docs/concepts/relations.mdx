@@ -154,7 +154,7 @@ export default defineSchema({
 
 - **The schema is checked when it loads.** The join table has to exist, `from` and `to` have to be required
   `v.id` columns on two different columns pointing at the declaring table and the target, and a **unique index over
-  exactly those two columns** is required. The `through_relation_missing_unique_index` advisor lint reports the missing index at
+  exactly those two columns** is required. The join table must not be `.softDelete()`: a disconnected link would still hold its unique pair, so it could never be linked again. The `through_relation_missing_unique_index` advisor lint reports the missing index at
   codegen time.
 - **Reads work like any other `many`.** `with: { tags: true }` loads the linked tags (two batched reads: the join
   rows, then the tags), `where: { tags: { some | every | none: … } }` filters posts through the join, and

@@ -65,6 +65,20 @@ describe("duplicate_index", () => {
         expect(findings[0]?.metadata).toMatchObject({ index: "b" });
     });
 
+    it("flags a non-unique index exactly covered by a unique one, whatever their names", () => {
+        expect.assertions(3);
+
+        const schema = defineSchema({
+            posts: defineTable({ authorId: v.string() }).index("a", ["authorId"]).index("b", ["authorId"], { unique: true }),
+        });
+
+        const findings = duplicateIndex.run({ schema: fromServerSchema(schema) });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.metadata).toMatchObject({ index: "a" });
+        expect(findings[0]?.metadata).toMatchObject({ coveredBy: { name: "b" } });
+    });
+
     it("never reports a unique index as redundant", () => {
         expect.assertions(1);
 

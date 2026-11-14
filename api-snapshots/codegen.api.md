@@ -1110,7 +1110,6 @@ interface TableIR {
     extensionKey?: string;
     externallyManaged?: boolean;
     externalSource?: ExternalSourceIR;
-    fieldSites?: Readonly<Record<string, DeclarationSiteIR>>;
     geoIndexes?: ReadonlyArray<GeoIndexIR>;
     globalBackend?: "d1" | "hyperdrive";
     indexes: ReadonlyArray<IndexIR>;
@@ -2565,6 +2564,7 @@ const CAPABILITY_ROWS: readonly [
     },
     {
         readonly bindingFreeExports: readonly [
+            "authorizeSignedGet",
             "buildPresignedUrl",
             "buildSignedUrl",
             "scopeKey",

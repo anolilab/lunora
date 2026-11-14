@@ -268,9 +268,9 @@ the full read contract.
 When a finding is accepted for your app, accept that one finding at one site with
 an inline directive above the code it concerns:
 
-```ts title="lunora/messages.ts"
-// lunora-advisor-exempt unindexed_foreign_key -- messages are append-only and never filtered by author
-export const archive = mutation({ ... });
+```ts title="lunora/health.ts"
+// lunora-advisor-exempt procedure_without_structured_event -- a liveness probe with nothing to log
+export const ping = mutation({ ... });
 ```
 
 The directive is `// lunora-advisor-exempt <rule> -- <reason>` on its own line.

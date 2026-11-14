@@ -34,18 +34,26 @@ const lunoraRelativePath = (lunoraDirectory: string, filePath: string): string =
 
 /**
  * The 1-based line an advisor finding points at for a declaration: the statement that
- * declares it (`export const …`, `export function …`, or the expression statement that
- * registers a call), so a JSDoc block above it is excluded. A node with no such statement
- * above it (or a function declaration itself) falls back to its own start line.
+ * declares it (`export const …`, `export function …`, or the expression or `return` statement
+ * that registers a call), so a JSDoc block above it is excluded. A node with no such statement
+ * above it (or a function declaration itself) falls back to its own start line, and so does one
+ * that sits in a function body with no statement of its own (`const register = () => crons.daily(…)`):
+ * the statement past that boundary declares the helper, not the registration.
  */
 const declarationLineOf = (node: Node): number => {
     const statement = Node.isFunctionDeclaration(node)
         ? node
         : node.getFirstAncestor(
-              (ancestor) => Node.isVariableStatement(ancestor) || Node.isFunctionDeclaration(ancestor) || Node.isExpressionStatement(ancestor),
+              (ancestor) =>
+                  Node.isVariableStatement(ancestor) ||
+                  Node.isFunctionDeclaration(ancestor) ||
+                  Node.isExpressionStatement(ancestor) ||
+                  Node.isReturnStatement(ancestor) ||
+                  Node.isArrowFunction(ancestor) ||
+                  Node.isFunctionExpression(ancestor),
           );
 
-    return (statement ?? node).getStartLineNumber();
+    return (statement === undefined || Node.isArrowFunction(statement) || Node.isFunctionExpression(statement) ? node : statement).getStartLineNumber();
 };
 
 /** Directories under `lunora/` that are never source: codegen's own output, and installed packages. */
@@ -721,6 +729,66 @@ const unwrapExpression = (node: Node | undefined): Node | undefined => {
     return current;
 };
 
+/**
+ * The numeric value of `node` when the source states it outright: a numeric
+ * literal (`604_800`), a sign on one, or `+ - *` over two such values
+ * (`7 * 24 * 60 * 60`, the way durations are written). Identifiers and calls are
+ * not followed — a binding can be reassigned or read from the environment.
+ */
+const staticNumberValue = (node: Node | undefined): number | undefined => {
+    const current = unwrapExpression(node);
+
+    if (current === undefined) {
+        return undefined;
+    }
+
+    if (Node.isNumericLiteral(current)) {
+        return current.getLiteralValue();
+    }
+
+    if (Node.isPrefixUnaryExpression(current)) {
+        const operand = staticNumberValue(current.getOperand());
+
+        if (operand === undefined) {
+            return undefined;
+        }
+
+        const operator = current.getOperatorToken();
+
+        if (operator === SyntaxKind.MinusToken) {
+            return -operand;
+        }
+
+        return operator === SyntaxKind.PlusToken ? operand : undefined;
+    }
+
+    if (Node.isBinaryExpression(current)) {
+        const left = staticNumberValue(current.getLeft());
+        const right = staticNumberValue(current.getRight());
+
+        if (left === undefined || right === undefined) {
+            return undefined;
+        }
+
+        switch (current.getOperatorToken().getKind()) {
+            case SyntaxKind.AsteriskToken: {
+                return left * right;
+            }
+            case SyntaxKind.MinusToken: {
+                return left - right;
+            }
+            case SyntaxKind.PlusToken: {
+                return left + right;
+            }
+            default: {
+                return undefined;
+            }
+        }
+    }
+
+    return undefined;
+};
+
 /** Where {@link walkChain} stopped: at the chain's root, or at a call `settle` decided. */
 type ChainEnd = { root: Node | undefined; verdict?: never } | { root?: never; verdict: boolean };
 
@@ -977,6 +1045,7 @@ export {
     propertyInitializer,
     returningFunctionOf,
     RUN_METHODS,
+    staticNumberValue,
     stringPropertyFor,
     stringPropertyOf,
     symbolConstInitializer,

@@ -7,7 +7,7 @@ import { resolvePackageExtension } from "../../../resolve-package-extension";
 import { findObjectProperty, propertyKeyName } from "../../ast";
 import { asMetric, getNumberProperty, getStringProperty, objectPropertyInitializer } from "./properties";
 import type { SiteLocator } from "./sites";
-import { assertTableNameAllowed, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE } from "./table-builder";
+import { assertTableNameAllowed, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE, tableMemberSource } from "./table-builder";
 
 /** Read the `source.table` literal off a `defineVectorIndex({ source: { table } })` options object. */
 const sourceTableOf = (optionsExpression: ObjectLiteralExpression): string => {
@@ -25,7 +25,7 @@ const sourceTableOf = (optionsExpression: ObjectLiteralExpression): string => {
 };
 
 /** Lift one `name: defineVectorIndex({...})` property into a {@link VectorIndexIR}, or `undefined`. */
-const standaloneVectorIndexFromProperty = (property: Node): VectorIndexIR | undefined => {
+const standaloneVectorIndexFromProperty = (property: Node, locate: SiteLocator): VectorIndexIR | undefined => {
     if (!Node.isPropertyAssignment(property)) {
         return undefined;
     }
@@ -50,11 +50,13 @@ const standaloneVectorIndexFromProperty = (property: Node): VectorIndexIR | unde
 
     const nameNode = property.getNameNode();
     const indexName = Node.isStringLiteral(nameNode) ? nameNode.getLiteralText() : nameNode.getText();
+    const site = locate(initializer);
 
     return {
         dimensions: getNumberProperty(optionsExpression, "dimensions"),
         metric: asMetric(getStringProperty(optionsExpression, "metric")),
         name: indexName,
+        ...(site === undefined ? {} : { site }),
         table: sourceTableOf(optionsExpression),
     };
 };
@@ -64,11 +66,11 @@ const standaloneVectorIndexFromProperty = (property: Node): VectorIndexIR | unde
  * name -> `defineVectorIndex({...})` call (DSL Shape B). The embedded text
  * source is a `select` function, so `field`/`metadata` stay undefined here.
  */
-const parseStandaloneVectorIndexes = (object: ObjectLiteralExpression): VectorIndexIR[] => {
+const parseStandaloneVectorIndexes = (object: ObjectLiteralExpression, locate: SiteLocator): VectorIndexIR[] => {
     const result: VectorIndexIR[] = [];
 
     for (const property of object.getProperties()) {
-        const index = standaloneVectorIndexFromProperty(property);
+        const index = standaloneVectorIndexFromProperty(property, locate);
 
         if (index) {
             result.push(index);
@@ -375,11 +377,11 @@ const parseExtensionTables = (options: ObjectLiteralExpression, locate: SiteLoca
     const tables: TableIR[] = [];
 
     for (const property of tablesObject.getProperties()) {
-        if (!Node.isPropertyAssignment(property)) {
+        if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
             continue;
         }
 
-        const initializer = property.getInitializer();
+        const initializer = tableMemberSource(property);
 
         if (!initializer) {
             continue;
@@ -392,14 +394,14 @@ const parseExtensionTables = (options: ObjectLiteralExpression, locate: SiteLoca
         // so an error about the prefixed name would point at something the
         // user never typed.
         assertTableNameAllowed(name, property.getNameNode());
-        tables.push(parseTableBuilder(initializer, name, locate, property));
+        tables.push(parseTableBuilder(initializer, name, locate));
     }
 
     return tables;
 };
 
 /** Parse the optional `vectorIndexes: {...}` property of a `defineSchemaExtension` options object (Shape B map). */
-const parseExtensionVectorIndexes = (options: ObjectLiteralExpression): VectorIndexIR[] => {
+const parseExtensionVectorIndexes = (options: ObjectLiteralExpression, locate: SiteLocator): VectorIndexIR[] => {
     const property = findObjectProperty(options, "vectorIndexes");
 
     if (!property || !Node.isPropertyAssignment(property)) {
@@ -412,7 +414,7 @@ const parseExtensionVectorIndexes = (options: ObjectLiteralExpression): VectorIn
         return [];
     }
 
-    return parseStandaloneVectorIndexes(object);
+    return parseStandaloneVectorIndexes(object, locate);
 };
 
 /** Result of merging one `.extend(...)` extension: prefixed tables + prefixed standalone vector indexes. */
@@ -459,7 +461,7 @@ const mergeExtension = (key: string, keyNode: TsNode, options: ObjectLiteralExpr
     namespaceExtension(
         key,
         parseExtensionTables(options, locate),
-        parseExtensionVectorIndexes(options),
+        parseExtensionVectorIndexes(options, locate),
         keyNode,
         keyNode.getSourceFile().getFilePath().includes("/node_modules/"),
     );
