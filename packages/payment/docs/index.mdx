@@ -274,6 +274,8 @@ Call the facade from an action. Every method authorizes the caller against the
 | `track(input)`                                 | `TrackResult`      | Record metered usage (exactly-once by idempotency key).                                                         |
 | `handleWebhook(request)`                       | `Response`         | Verify + normalize + apply a provider webhook.                                                                  |
 
+`refundPayment` derives the provider's idempotency key from the session, the amount sent and the reason. On a provider whose refund endpoint takes that key (Stripe), a same-amount refund without a caller `idempotencyKey` can therefore be replayed by the provider: no money moves, the call returns the session unchanged and the observer receives a `refund.replayed` event. Pass a distinct `idempotencyKey` for an intentional second refund of the same amount. Polar and Dodo take no refund key, so there a repeated refund is a new refund, bounded only by the local over-refund guard.
+
 <Callout type="warn">
     The provider adapter is not reachable from `ctx.payments`. Every money and subscription operation goes through the facade methods above, which authorize the
     caller and write the store. `ctx.payments.provider` gives the provider's `identifier` and `capabilities` (read-only) for checks an app makes before it
@@ -549,7 +551,7 @@ Builds a `Money` value, `{ currency, minorUnits: bigint }`, from integer minor u
 
 **Type:** `(event: PaymentEvent) => void`
 
-The type of the `observability` option. `PaymentEvent.type` is one of `webhook.applied`, `webhook.duplicate`, `subscription.duplicate`, `payment.failed`, `subscription.past_due`, `usage.report_failed`, `reconcile.drift`, `reconcile.completed` or `reconcile.error`.
+The type of the `observability` option. `PaymentEvent.type` is one of `webhook.applied`, `webhook.duplicate`, `subscription.duplicate`, `payment.failed`, `subscription.past_due`, `usage.report_failed`, `reconcile.drift`, `reconcile.completed`, `reconcile.error` or `refund.replayed`.
 
 ### `PaymentAdapter`
 
