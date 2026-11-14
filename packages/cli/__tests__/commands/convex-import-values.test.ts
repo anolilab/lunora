@@ -97,6 +97,14 @@ describe("convex export value handling", () => {
         await expect(rejection).rejects.toThrow("$bytes");
     });
 
+    it("refuses a number literal that overflows to Infinity, which JSON would write back as null", async () => {
+        expect.assertions(1);
+
+        const root = writeExport("users", ['{"_id":"u1","huge":1e309}']);
+
+        await expect(collect(root, [])).rejects.toThrow(/field `huge`/);
+    });
+
     it("refuses a negative zero, which JSON would write back as 0", async () => {
         expect.assertions(1);
 

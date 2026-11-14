@@ -67,14 +67,30 @@ interface LossyValue {
     reason: string;
 }
 
-/** The first value in a parsed row the import would change, with its field path. */
-const findLossyValue = (value: unknown, path: string): LossyValue | undefined => {
+/** Why a leaf value would not survive the import's JSON round trip, or `undefined` when it would. */
+const lossyScalarReason = (value: unknown): string | undefined => {
     if (value instanceof UnsafeInt64) {
-        return { path, reason: `holds the Int64 ${value.source}, which a JavaScript number cannot represent exactly` };
+        return `holds the Int64 ${value.source}, which a JavaScript number cannot represent exactly`;
     }
 
     if (Object.is(value, -0)) {
-        return { path, reason: "holds -0, which the import would write as 0" };
+        return "holds -0, which the import would write as 0";
+    }
+
+    // A literal past the Float64 range (`1e309`) parses to Infinity, which JSON writes as null.
+    if (typeof value === "number" && !Number.isFinite(value)) {
+        return "holds a number outside the Float64 range, which the import would write as null";
+    }
+
+    return undefined;
+};
+
+/** The first value in a parsed row the import would change, with its field path. */
+const findLossyValue = (value: unknown, path: string): LossyValue | undefined => {
+    const scalar = lossyScalarReason(value);
+
+    if (scalar !== undefined) {
+        return { path, reason: scalar };
     }
 
     let children: ReadonlyArray<readonly [string, unknown]>;
