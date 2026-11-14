@@ -119,7 +119,7 @@ describe("convex export value handling", () => {
         const root = writeExport(
             "users",
             ['{"_id":"u1","bytes":"x","kind":"int64"}'],
-            sidecarLine('{_creationTime: normalfloat64, _id: id<users>, "bytes": string, kind: "int64"}'),
+            sidecarLine('{_creationTime: normalfloat64, _id: id<users>, "bytes": string, kind: "int64", note: "holds bytes here"}'),
         );
         const rows: EmittedRow[] = [];
 
