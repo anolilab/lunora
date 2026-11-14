@@ -349,7 +349,7 @@ const buildArchitecture = (input: ArchitectureInput): ArchitectureManifest => {
 
 /**
  * The manifest as the importable `_generated/architecture.ts` module the worker
- * passes to `createWorker({ architecture })`, mirroring `emitOpenApiModule`: a
+ * loads with `import()` behind `createWorker({ architecture })`, mirroring `emitOpenApiModule`: a
  * Worker cannot read the `.json` at runtime, so the same document is inlined.
  */
 const emitArchitectureModule = (manifest: ArchitectureManifest): string =>

@@ -448,7 +448,7 @@ const emitOpenApi = (input: OpenApiEmitInput): string => `${JSON.stringify(build
 
 /**
  * Emit the OpenAPI document as an importable TS module
- * (`_generated/openapi.ts`) the worker entry imports and passes to
+ * (`_generated/openapi.ts`) the worker entry loads with `import()` behind
  * `createWorker({ openApiSpec })`. The document is inlined as a `JSON.parse`
  * string (see {@link renderJsonData}), so the `.ts` and `.json` carry the same
  * content and regenerate together — closing the gap where a Worker cannot read

@@ -267,18 +267,23 @@ the surface degrades to the same headers-only behaviour.
 The exposed surface is described by the generated OpenAPI 3.1 document, so
 consumers can generate their own clients. Codegen emits it as both
 `_generated/openapi.json` and `_generated/openapi.ts` (a Worker can't read a JSON
-file at runtime, so the inlined `export const openApiSpec` is what you serve):
+file at runtime, so the inlined `export const openApiSpec` is what you serve).
+Hand `createWorker` a loader rather than the document: the spec grows with the
+app, and a dynamic `import()` keeps it out of every request but the one that
+asks for it:
 
 ```ts
-import { openApiSpec } from "@/lunora/_generated/openapi";
-
 export default createWorker({
     // …schema, functions…
-    openApiSpec,
+    openApiSpec: () => import("@/lunora/_generated/openapi").then((module) => module.openApiSpec),
 });
 ```
 
-That exposes the admin-gated `GET /_lunora/admin/openapi`.
+That exposes the admin-gated `GET /_lunora/admin/openapi`. The worker calls the
+loader on that route's first request and keeps the document. The generated
+`defineApp()` wires this for you; in a Worker wrangler bundles it reads the
+document from Workers Static Assets instead, so the spec is not in the script at
+all (see [Studio's documents](/docs/deployment#studios-documents)).
 
 The spec and the live router derive the path/method mapping from the **same**
 helper, so "the published OpenAPI matches what is actually routable" is a

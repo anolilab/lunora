@@ -1104,13 +1104,18 @@ interface WorkerOptions {
     applySqlMigrations?: SqlMigrationApplier;
 
     /**
-     * The generated architecture manifest (module catalog + static call graph).
-     * Codegen emits `_generated/architecture.ts` once the app declares a module
-     * (`lunora/<dir>/module.ts`) and the generated app passes it through. Served
+     * Loads the generated architecture manifest (module catalog + static call
+     * graph). Codegen emits `_generated/architecture.ts` once the app declares a
+     * module (`lunora/<dir>/module.ts`) and the generated app passes
+     * `() => import("./architecture.js").then((m) => m.architecture)`. Served
      * verbatim at the admin-gated `GET /_lunora/admin/architecture` for the
      * studio's Architecture view; omitted, the route answers an empty manifest.
+     *
+     * A loader, not the document: the manifest grows with the app, and only that
+     * route reads it. The worker calls it on the route's first authorized request
+     * and keeps the result, so no other request evaluates the module.
      */
-    architecture?: unknown;
+    architecture?: () => Promise<unknown>;
 
     /**
      * The auth user-management plane backing the studio's users dashboard:
@@ -1521,13 +1526,17 @@ interface WorkerOptions {
     observability?: ObservabilitySink;
 
     /**
-     * The generated OpenAPI 3.1 document. Import it from the codegen-emitted
-     * module and pass it through:
-     * `import { openApiSpec } from "./lunora/_generated/openapi"`. A Worker can't
-     * read the `_generated/openapi.json` file at runtime, so codegen also emits
-     * `openapi.ts` (the same document inlined as `export const openApiSpec`) for
-     * exactly this wiring — it regenerates on every `lunora/` change so the spec
-     * stays live.
+     * Loads the generated OpenAPI 3.1 document from the codegen-emitted module:
+     * `() => import("./lunora/_generated/openapi").then((m) => m.openApiSpec)`.
+     * A Worker can't read the `_generated/openapi.json` file at runtime, so
+     * codegen also emits `openapi.ts` (the same document inlined as
+     * `export const openApiSpec`) for exactly this wiring — it regenerates on
+     * every `lunora/` change so the spec stays live.
+     *
+     * A loader, not the document: the spec grows with the app (hundreds of KiB in
+     * a large one), and only the admin route reads it. Pass a dynamic `import()`
+     * so the bundler keeps it out of the entry chunk. The worker calls it on the
+     * route's first authorized request and keeps the result.
      *
      * When set, the worker exposes the admin-gated `GET /_lunora/admin/openapi`
      * endpoint the studio's API-reference view renders. The runtime does
@@ -1535,15 +1544,15 @@ interface WorkerOptions {
      * Omit it and the endpoint returns an empty-but-valid OpenAPI 3.1 document
      * (no paths), so the studio shows a "not configured" state rather than erroring.
      */
-    openApiSpec?: unknown;
+    openApiSpec?: () => Promise<unknown>;
 
     /**
-     * The generated OpenRPC 1.x document. Import it from the codegen-emitted
-     * module and pass it through:
-     * `import { openRpcSpec } from "./lunora/_generated/openrpc"` (only emitted
-     * when the project opts into `apiSpec: "openrpc"` or `"both"`). Like
-     * `openApiSpec`, codegen inlines the document into `openrpc.ts` because a
-     * Worker can't read the `.json` at runtime; both regenerate together.
+     * Loads the generated OpenRPC 1.x document from the codegen-emitted module:
+     * `() => import("./lunora/_generated/openrpc").then((m) => m.openRpcSpec)`
+     * (only emitted when the project opts into `apiSpec: "openrpc"` or
+     * `"both"`). Like `openApiSpec`, codegen inlines the document into
+     * `openrpc.ts` because a Worker can't read the `.json` at runtime; both
+     * regenerate together, and both are loaded only by their admin route.
      *
      * When set, the worker exposes the admin-gated `GET /_lunora/admin/openrpc`
      * endpoint the studio's API-reference view can render. OpenRPC is the
@@ -1554,7 +1563,7 @@ interface WorkerOptions {
      * returns an empty-but-valid OpenRPC 1.x document (no methods), so the studio
      * shows a "not configured" state rather than erroring.
      */
-    openRpcSpec?: unknown;
+    openRpcSpec?: () => Promise<unknown>;
 
     /**
      * When true, the runtime calls `ctx.passThroughOnException()` at the top

@@ -122,6 +122,10 @@ interface CodegenOptions {
     project?: Project;
     projectRoot: string;
     spaAssetsBindings?: ReadonlyArray<string>;
+    studioAssets?: {
+        binding: string;
+        directory: string;
+    };
     target?: string;
     wranglerQueueProducers: ReadonlyArray<WranglerQueueProducerIR>;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
@@ -344,6 +348,7 @@ interface EmitAppOptions {
     liveStreamsWithheld?: boolean;
     securityHeaders?: boolean | SecurityHeadersOptions;
     spaAssetsBindings?: ReadonlyArray<string>;
+    studioAssetsBinding?: string;
     tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     useUmbrella: boolean;
     vectorIndexCount?: number;

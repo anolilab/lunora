@@ -1843,7 +1843,7 @@ export default app.extend(() => ({ backupCron: "0 4 * * *" })).build();
             expect(existsSync(join(generatedDirectory, "shard.ts"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(true);
             // The importable spec module is written alongside the JSON so the
-            // worker entry can `import { openApiSpec } from "./openapi.js"`.
+            // worker entry can load it with `import("./openapi.js")`.
             expect(existsSync(join(generatedDirectory, "openapi.ts"))).toBe(true);
         });
 

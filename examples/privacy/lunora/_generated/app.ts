@@ -25,7 +25,6 @@ type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>;
 /** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
 interface DeferredModules {
     auth: typeof LunoraAuthModule;
-    openApiSpec: unknown;
 }
 
 let deferredModules: Promise<DeferredModules> | undefined;
@@ -35,7 +34,6 @@ const loadDeferredModules = (): Promise<DeferredModules> =>
     (deferredModules ??= (async (): Promise<DeferredModules> => {
         return {
             auth: await import("./authModule.js"),
-            openApiSpec: (await import("./openapi.js")).openApiSpec,
         };
     })());
 
@@ -374,7 +372,7 @@ class AppBuilder<Env extends object> {
             aiOptInLevel: (env as Record<string, unknown>)["LUNORA_AI_OPT_IN"] as WorkerOptions["aiOptInLevel"],
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
-            openApiSpec: deferred.openApiSpec,
+            openApiSpec: () => import("./openapi.js").then((module) => module.openApiSpec),
             ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),

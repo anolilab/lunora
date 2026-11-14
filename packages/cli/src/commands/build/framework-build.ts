@@ -14,7 +14,7 @@ import {
     resolveTargetOrThrow,
     STRICT_ADVISORIES_ENV,
 } from "@lunora/config";
-import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { findWranglerFile, isOwnedStudioAssets, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
@@ -100,7 +100,9 @@ const frameworkBuildFor = (cwd: string, environment?: string): FrameworkTool | u
     }
 
     const envAssets = environment === undefined ? undefined : wrangler?.env?.[environment]?.assets?.directory;
-    const assetsDirectory = wrangler?.assets?.directory ?? envAssets;
+    // The block holding Studio's documents is filled by codegen, not a client build; reading it as one would run the
+    // project's `build` script, which is often `lunora build` itself.
+    const assetsDirectory = (isOwnedStudioAssets(wrangler?.assets) ? undefined : wrangler?.assets?.directory) ?? envAssets;
     const needed = composed || detectFramework(cwd).class !== "C" || assetsDirectory !== undefined;
 
     return needed ? tool : undefined;

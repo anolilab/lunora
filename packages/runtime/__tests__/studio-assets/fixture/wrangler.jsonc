@@ -1,0 +1,10 @@
+// The Worker `studio-assets.test.ts` boots through wrangler, with the `assets`
+// block `@lunora/config` writes for Studio's documents (see `studio-assets.ts`).
+{
+    "$schema": "../../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-runtime-studio-assets",
+    "main": "worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "assets": { "binding": "ASSETS", "directory": "./assets", "run_worker_first": true },
+}

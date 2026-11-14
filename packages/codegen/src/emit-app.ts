@@ -15,18 +15,19 @@ type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>;
         : "";
 
 /** Whether anything the worker reads only once a request arrives is loaded on demand (see {@link buildDeferredModules}). */
-const hasDeferredModules = (options: ResolvedAppOptions): boolean =>
-    options.hasAuth || options.wantsArchitecture || options.wantsOpenApi || options.wantsOpenRpc;
+const hasDeferredModules = (options: ResolvedAppOptions): boolean => options.hasAuth;
 
 /**
  * The modules the worker reads only while it is built on the first request:
- * `@lunora/auth` (better-auth, zod, jose, … — the largest closure an app pulls in)
- * and the OpenAPI / OpenRPC / architecture documents (a `JSON.parse` of a string
- * that grows with the app). An isolate evaluates the script's whole global scope
- * before its first event, and Cloudflare rejects a Worker whose startup takes more
- * than 1 s of CPU (error 10021), so these load behind `import()` rather than a
- * static import. The Durable Object classes the same script exports never pay for
- * them at all.
+ * `@lunora/auth` (better-auth, zod, jose, … — the largest closure an app pulls in).
+ * An isolate evaluates the script's whole global scope before its first event, and
+ * Cloudflare rejects a Worker whose startup takes more than 1 s of CPU (error
+ * 10021), so it loads behind `import()` rather than a static import. The Durable
+ * Object classes the same script exports never pay for it at all.
+ *
+ * The OpenAPI / OpenRPC / architecture documents are not here: only Studio's admin
+ * routes read them, so the worker gets a loader per document instead (see
+ * `buildBaseWorkerOptions`) and no ordinary request evaluates them.
  *
  * Every entry that can build the worker awaits the load and only then runs the
  * `worker ??= …`, so concurrent cold requests still build the worker once.
@@ -36,18 +37,10 @@ const buildDeferredModules = (options: ResolvedAppOptions): string => {
         return "";
     }
 
-    const candidates: ReadonlyArray<readonly [wanted: boolean, name: string, type: string, load: string]> = [
-        [options.wantsArchitecture, "architecture", "unknown", `(await import("./architecture.js")).architecture`],
-        [options.hasAuth, "auth", "typeof LunoraAuthModule", `await import("./authModule.js")`],
-        [options.wantsOpenApi, "openApiSpec", "unknown", `(await import("./openapi.js")).openApiSpec`],
-        [options.wantsOpenRpc, "openRpcSpec", "unknown", `(await import("./openrpc.js")).openRpcSpec`],
-    ];
-    const fields = candidates.filter(([wanted]) => wanted).map(([, name, type, load]) => [name, type, load] as const);
-
     return `
 /** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
 interface DeferredModules {
-${fields.map(([name, type]) => `    ${name}: ${type};`).join("\n")}
+    auth: typeof LunoraAuthModule;
 }
 
 let deferredModules: Promise<DeferredModules> | undefined;
@@ -56,7 +49,7 @@ let deferredModules: Promise<DeferredModules> | undefined;
 const loadDeferredModules = (): Promise<DeferredModules> =>
     (deferredModules ??= (async (): Promise<DeferredModules> => {
         return {
-${fields.map(([name, , load]) => `            ${name}: ${load},`).join("\n")}
+            auth: await import("./authModule.js"),
         };
     })());
 `;

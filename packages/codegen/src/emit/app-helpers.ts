@@ -160,6 +160,8 @@ interface EmitAppOptions {
 
     /** Wrangler's assets bindings for a single-page app → `spaAssets`; absent or empty emits nothing. See `RunCodegenOptions.spaAssetsBindings`. */
     spaAssetsBindings?: ReadonlyArray<string>;
+    /** Studio's documents ship as assets read through this binding (see `RunCodegenOptions.studioAssets`); absent `import()`s them. */
+    studioAssetsBinding?: string;
 
     /**
      * Every table the schema declares, with its shard mode. Emitted as a literal

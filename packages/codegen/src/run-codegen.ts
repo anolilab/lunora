@@ -82,7 +82,7 @@ import { setStandardTypeResolver } from "./parse-validator";
 import { gateAdminTokenRevocation, platformFeatureAvailable, resolveCodegenTarget } from "./platform-target";
 import { readMergeDurableObjects, readProjectLazyFunctions, readProjectSecurityHeaders, readProjectStudioCompanion } from "./project-config-file";
 import assertValidProjectConfigs from "./project-config-validate";
-import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged } from "./run-codegen-files";
+import { projectFileMatches, syncProjectFile, writeGeneratedFiles, writeIfChanged, writeStudioAssets } from "./run-codegen-files";
 import type { CodegenOptions, CodegenResult } from "./run-codegen-types";
 import { buildSchemaSnapshot, indexReferencesOf } from "./schema-drift";
 import { buildSpecArtifacts } from "./spec-artifacts";
@@ -660,6 +660,8 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     // Judged on the matrix, not the usage: the builder method is emitted whether
     // or not the app calls it, so a host that cannot back it withholds it anyway.
     const deliveryAuthorizationSupported = platformFeatureAvailable(resolveCodegenTarget(options.projectRoot, options.target), "deliveryAuthorization");
+    // Workers Static Assets exist on Cloudflare only; Node and celld keep the documents as modules.
+    const studioAssets = resolveCodegenTarget(options.projectRoot, options.target) === "cloudflare" ? options.studioAssets : undefined;
 
     // Which optional features the studio should show a nav page for.
     // `buildStudioFeatures` OR's the code-usage flags with the schema/project
@@ -891,6 +893,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         // `lunora.config`'s `security.headers`, validated; the build's `_headers` writer reads the same value.
         securityHeaders: readProjectSecurityHeaders(lunoraDirectory),
         spaAssetsBindings: options.spaAssetsBindings,
+        studioAssetsBinding: studioAssets?.binding,
         useUmbrella,
         // The app's own declaration, which `emitApp` AND's with `hasVectors`.
         // `emitApp` takes no schema (only the table list), so the count it
@@ -990,7 +993,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
                   owned: COMPANION_FILES,
               },
               // The `.json` is the portable artifact for external tooling; the `.ts` (same
-              // document, inlined) is what the worker imports and passes to `createWorker({
+              // document, inlined) is what the worker loads with `import()` behind `createWorker({
               // openApiSpec })`. Both are gated on the same `apiSpec` choice so they regenerate
               // together, and an unselected format is removed rather than left stale.
               { content: wantsOpenApi ? openApiContent : "", kind: "optional", name: "openapi.json" },
@@ -1003,7 +1006,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
               // run writes the marker here too, so the dev host never serves a roster from an
               // earlier run next to this run's (empty) advisories.
               { content: advisorProceduresJson, kind: "optional", name: "advisor-procedures.json" },
-              // Same pairing as the specs: the `.json` for tooling, the `.ts` for `createWorker({ architecture })`,
+              // Same pairing as the specs: the `.json` for tooling, the `.ts` loaded behind `createWorker({ architecture })`,
               // both removed when the last module goes.
               {
                   content: architectureDocument === undefined ? "" : `${JSON.stringify(architectureDocument, undefined, 2)}\n`,
@@ -1016,6 +1019,14 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
                   name: "architecture.ts",
               },
           ]);
+
+    if (!options.dryRun && studioAssets !== undefined) {
+        writeStudioAssets(join(options.projectRoot, studioAssets.directory), {
+            architecture: architectureDocument === undefined ? "" : JSON.stringify(architectureDocument),
+            openapi: wantsOpenApi ? openApiContent : "",
+            openrpc: wantsOpenRpc ? openRpcContent : "",
+        });
+    }
 
     // Bless the schema baseline on first capture, so a project gets a committed snapshot the
     // moment it runs codegen. The CLI gate reads the existing baseline BEFORE calling codegen.

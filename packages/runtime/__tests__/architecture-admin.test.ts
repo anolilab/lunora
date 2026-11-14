@@ -35,7 +35,7 @@ describe("createWorker — architecture admin endpoint", () => {
     it("rejects without a valid admin bearer (403)", async () => {
         expect.assertions(1);
 
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, architecture: MANIFEST, shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, architecture: async () => MANIFEST, shardDO: noopNamespace });
 
         await expect(worker.fetch(get(false), {}, fakeContext)).resolves.toHaveProperty("status", 403);
     });
@@ -43,7 +43,7 @@ describe("createWorker — architecture admin endpoint", () => {
     it("serves the injected manifest verbatim (200)", async () => {
         expect.assertions(2);
 
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, architecture: MANIFEST, shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, architecture: async () => MANIFEST, shardDO: noopNamespace });
         const response = await worker.fetch(get(true), {}, fakeContext);
 
         expect(response.status).toBe(200);

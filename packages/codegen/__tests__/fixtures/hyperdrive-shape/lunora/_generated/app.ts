@@ -18,21 +18,6 @@ type Selector<Env, T> = (env: Env) => T | undefined;
 /** The generated `createShardDO` config — `.observability()`, `.maxRelationKeys()` and the long-tail `.ai()` / `.kv()` / … methods pass straight through to it. */
 type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
 
-/** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
-interface DeferredModules {
-    openApiSpec: unknown;
-}
-
-let deferredModules: Promise<DeferredModules> | undefined;
-
-/** Loads {@link DeferredModules} once per isolate; every entry that builds the worker awaits it first. */
-const loadDeferredModules = (): Promise<DeferredModules> =>
-    (deferredModules ??= (async (): Promise<DeferredModules> => {
-        return {
-            openApiSpec: (await import("./openapi.js")).openApiSpec,
-        };
-    })());
-
 /** `.hyperdriveGlobal(...)` declaration — backs `.global({ backend: "hyperdrive" })` tables on a Postgres/MySQL database via Hyperdrive. Stays reactive: the writer is injected as `globalDb` and the broadcast hook drives live queries. */
 interface HyperdriveGlobalDeclaration<Env> {
     /** The Hyperdrive engine — selects the Postgres or MySQL dialect. */
@@ -269,26 +254,23 @@ class AppBuilder<Env extends object> {
         // the same isolate reuses them.
         let worker: LunoraWorker | null = null;
 
-        const buildWorker = (env: Env, deferred: DeferredModules): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => null, deferred));
+        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => null));
 
         const composed: ComposedApp = {
             ShardDO,
             fetch: async (request: Request, rawEnv: unknown, context: ExecutionContextLike): Promise<Response> => {
                 const env = rawEnv as Env;
-                const deferred = await loadDeferredModules();
-                worker ??= buildWorker(env, deferred);
+                worker ??= buildWorker(env);
 
                 return worker.fetch(request, rawEnv, context);
             },
             scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
-                const deferred = await loadDeferredModules();
-                worker ??= buildWorker(rawEnv as Env, deferred);
+                worker ??= buildWorker(rawEnv as Env);
 
                 return worker.scheduled(controller, rawEnv, context);
             },
-            serverQuery: async (request, rawEnv, reference, args, options) => {
-                const deferred = await loadDeferredModules();
-                worker ??= buildWorker(rawEnv as Env, deferred);
+            serverQuery: (request, rawEnv, reference, args, options) => {
+                worker ??= buildWorker(rawEnv as Env);
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
             },
@@ -304,13 +286,13 @@ class AppBuilder<Env extends object> {
     }
 
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
-    private buildWorkerOptions(env: Env, _getAuth: () => null, deferred: DeferredModules): WorkerOptions {
+    private buildWorkerOptions(env: Env, _getAuth: () => null): WorkerOptions {
         const options: WorkerOptions = {
             aiChatBinding: (env as Record<string, unknown>)["AI"] as WorkerOptions["aiChatBinding"],
             aiOptInLevel: (env as Record<string, unknown>)["LUNORA_AI_OPT_IN"] as WorkerOptions["aiOptInLevel"],
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
-            openApiSpec: deferred.openApiSpec,
+            openApiSpec: () => import("./openapi.js").then((module) => module.openApiSpec),
             ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
