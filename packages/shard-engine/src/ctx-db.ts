@@ -3837,7 +3837,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // them physically.
             for (;;) {
                 // eslint-disable-next-line no-await-in-loop -- chunked by design: one page of ids at a time, single-threaded SQLite
-                const page = await writer.findMany(tableName, { limit: chunkSize });
+                const page = await writer.findMany(tableName, { includeDeleted: allOptions?.hard === true, limit: chunkSize });
                 const ids = page.page.map((row) => String(row["_id"]));
 
                 if (ids.length === 0) {
@@ -3850,9 +3850,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                     deleted += 1;
                 }
 
-                // A short page means the table is drained. This also makes the
-                // soft-delete case terminate: `findMany` hides soft-deleted rows, so
-                // each pass sees only rows still to erase, never the ones just marked.
+                // A short page means the table is drained. A hard erase pages with
+                // `includeDeleted` so rows soft-deleted earlier are erased too; the soft
+                // path keeps hiding them, which is what makes it terminate.
                 if (ids.length < chunkSize) {
                     break;
                 }
