@@ -226,6 +226,12 @@ class Client(
     /** Bumped by every attach and detach, so an attach whose connect is still going out can tell it was superseded. */
     private var attachGeneration = 0L
     internal val subscriptions = LinkedHashMap<String, Subscription>()
+
+    /**
+     * The `System.nanoTime()` deadline of the one re-subscribe a retry hint asked for, per query
+     * subscription id. Guarded by [lock].
+     */
+    private val pendingRetries = HashMap<String, Long>()
     private val shapes = LinkedHashMap<String, Shape>()
     private val pokes = LinkedHashMap<String, PokeBuffer>()
 
@@ -592,6 +598,7 @@ class Client(
         // socket with a generation newer than the credential it presents.
         val (generation, credential, provider) = synchronized(lock) {
             send = null
+            pendingRetries.clear()
             discardHeldRuns()
             Triple(++attachGeneration, credentialGeneration, wsToken)
         }
@@ -637,6 +644,7 @@ class Client(
         val expired = synchronized(lock) {
             send = null
             attachGeneration++
+            pendingRetries.clear()
             discardHeldRuns()
 
             when {
@@ -794,6 +802,7 @@ class Client(
         val (discarded, open) = synchronized(lock) {
             closed = true
             send = null
+            pendingRetries.clear()
             offlineQueue.clear() to streams.toList()
         }
 
@@ -960,6 +969,7 @@ class Client(
         return {
             val current = synchronized(lock) {
                 subscriptions.remove(id)
+                pendingRetries.remove(id)
                 send
             }
 
@@ -1137,6 +1147,96 @@ class Client(
     }
 
     /**
+     * Re-subscribes every query whose retry hint has come due at [nowNanos], a `System.nanoTime()`
+     * reading, and returns how many frames it sent. Nothing is sent, and nothing is dropped, while
+     * no socket is attached. The caller arms its own timer for [nextSubscriptionRetryAtNanos].
+     * A sender that throws stops the batch and the retries not yet written stay due; an attach,
+     * detach or close while the batch is sent stops it too.
+     */
+    fun retryDueSubscriptions(nowNanos: Long = System.nanoTime()): Int {
+        // Built under the lock for the same reason as resendSubscriptions: each cold frame
+        // reads the entry the frame handler writes.
+        val (sender, generation, frames) = synchronized(lock) {
+            val sender = send ?: return 0
+            val frames = mutableListOf<Pair<String, Map<String, Any?>>>()
+            val pending = pendingRetries.entries.iterator()
+
+            while (pending.hasNext()) {
+                val retry = pending.next()
+
+                if (retry.value - nowNanos > 0) continue
+
+                pending.remove()
+
+                val subscription = subscriptions[retry.key] ?: continue
+
+                subscription.cursor = null
+                subscription.epoch = null
+                frames.add(retry.key to buildSubscribeFrame(retry.key, subscription.functionPath, subscription.args))
+            }
+
+            Triple(sender, attachGeneration, frames)
+        }
+
+        var sent = 0
+
+        for ((index, retry) in frames.withIndex()) {
+            val (current, registered) = synchronized(lock) { (attachGeneration == generation && !closed) to subscriptions.containsKey(retry.first) }
+
+            if (!current) break
+            if (!registered) continue
+
+            try {
+                sender(retry.second)
+            } catch (failure: RuntimeException) {
+                // Unless the socket has changed since, which cancels every retry, the frames not
+                // written stay due; a newer hint or an unsubscribe has already decided the rest.
+                synchronized(lock) {
+                    if (attachGeneration == generation && !closed) {
+                        for ((id, _) in frames.subList(index, frames.size)) {
+                            if (subscriptions.containsKey(id)) pendingRetries.putIfAbsent(id, nowNanos)
+                        }
+                    }
+                }
+
+                throw failure
+            }
+
+            sent++
+        }
+
+        return sent
+    }
+
+    /** The earliest pending retry deadline in `System.nanoTime()` terms, or null when none is pending. */
+    fun nextSubscriptionRetryAtNanos(): Long? {
+        synchronized(lock) {
+            var earliest: Long? = null
+
+            for (deadline in pendingRetries.values) {
+                val current = earliest
+
+                if (current == null || deadline - current < 0) earliest = deadline
+            }
+
+            return earliest
+        }
+    }
+
+    /**
+     * The server's retry hint on a subscription error in nanoseconds, or null when it names no delay
+     * this client can honour. [Json] parses numbers to Double and booleans to Boolean, so a boolean
+     * is not a Number and falls through.
+     */
+    private fun retryAfterNanos(envelope: Map<*, *>): Long? {
+        val delay = (envelope["retryAfterMs"] as? Number)?.toDouble() ?: return null
+
+        if (delay.isNaN() || delay.isInfinite() || delay < 0) return null
+
+        return (minOf(delay, MAX_RETRY_AFTER_MS.toDouble()) * 1_000_000).toLong()
+    }
+
+    /**
      * Applies one server frame and returns its type. Unknown types are ignored,
      * per the protocol's forward-compatibility rule.
      */
@@ -1152,6 +1252,11 @@ class Client(
 
         val kind = frame["type"] as? String ?: ""
         val id = frame["id"] as? String ?: ""
+
+        // The server answered this subscription, so a retry it was waiting on is moot.
+        if (kind == "ack" || kind == "data" || kind == "delta" || kind == "resume" || kind == "settled") {
+            synchronized(lock) { pendingRetries.remove(id) }
+        }
 
         // Each branch resolves the subscription UNDER the lock and hands the
         // callback back out, rather than looking `entry` up once up here: the app
@@ -1331,7 +1436,20 @@ class Client(
                     envelope["code"] as? String,
                     frame["message"] as? String ?: envelope["message"] as? String ?: "subscription error",
                 )
-                val handlers = synchronized(lock) { listOfNotNull(subscriptions[id]?.onError, shapes[id]?.onError) }
+                val delay = retryAfterNanos(envelope)
+                val handlers = synchronized(lock) {
+                    // Only a query subscription is re-run at the hint. A hint-less error ends
+                    // it, so an earlier hint's retry for it is dropped too.
+                    if (subscriptions.containsKey(id)) {
+                        if (delay != null) {
+                            pendingRetries[id] = System.nanoTime() + delay
+                        } else {
+                            pendingRetries.remove(id)
+                        }
+                    }
+
+                    listOfNotNull(subscriptions[id]?.onError, shapes[id]?.onError)
+                }
 
                 for (handler in handlers) handler(error)
             }

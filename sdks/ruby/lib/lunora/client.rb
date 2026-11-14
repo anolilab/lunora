@@ -401,6 +401,9 @@ module Lunora
       @identity = identity
       @send = nil
       @subscriptions = {}
+      # The monotonic deadline of the one re-subscribe a retry hint asked for, per query id.
+      # See +retry_due_subscriptions+.
+      @pending_retries = {}
       @shapes = {}
       @pokes = {}
       @next_id = 0
@@ -449,6 +452,7 @@ module Lunora
         @send = nil
         discard_held_runs
         @attach_generation += 1
+        @pending_retries.clear
         @socket_generation = @credential_generation
         [@attach_generation,
          Lunora.build_connect_frame(@client_id, context, token: @session_token, caps: [Delta::PAGE_DELTA_CAPABILITY])]
@@ -484,6 +488,7 @@ module Lunora
         @send = nil
         discard_held_runs
         @attach_generation += 1
+        @pending_retries.clear
         expiry_notified_by_close?(close_code, reason)
       end
 
@@ -580,6 +585,7 @@ module Lunora
         # An attach still in flight is superseded, so its sender is never installed after shutdown.
         @attach_generation += 1
         @send = nil
+        @pending_retries.clear
         discard_held_runs
         [@offline_queue.clear, @streams.slice!(0..)]
       end
@@ -627,6 +633,7 @@ module Lunora
       lambda do
         locked_send do
           @subscriptions.delete(id)
+          @pending_retries.delete(id)
           Lunora.build_unsubscribe_frame(id)
         end
       end
@@ -960,7 +967,72 @@ module Lunora
       end
     end
 
+    # Re-subscribe every query whose retry hint has elapsed, and return how many
+    # frames were sent. +now+ is a +Lunora.monotonic_now+ reading. Each re-subscribe
+    # is cold (no resume cursor), since the hint asks for a fresh snapshot. While no
+    # socket is attached nothing is sent and nothing is dropped: the deadline waits
+    # for the next one. A sender that raises stops the batch, and the retries not yet
+    # written stay due; a socket change while the batch is sent stops it too.
+    def retry_due_subscriptions(now = Lunora.monotonic_now)
+      sender, generation, batch = @mutex.synchronize do
+        next [nil, nil, []] if @send.nil?
+
+        due = @pending_retries.select { |_id, deadline| deadline <= now }.keys
+        due.each { |id| @pending_retries.delete(id) }
+        batch = due.filter_map do |id|
+          entry = @subscriptions[id]
+          next nil if entry.nil?
+
+          entry[:cursor] = nil
+          entry[:epoch] = nil
+          [id, Lunora.build_subscribe_frame(id, entry[:function_path], entry[:args])]
+        end
+        [@send, @attach_generation, batch]
+      end
+
+      sent = 0
+      batch.each_with_index do |(id, frame), index|
+        current, registered = @mutex.synchronize { [@attach_generation == generation, @subscriptions.key?(id)] }
+        break unless current
+        next unless registered
+
+        begin
+          sender.call(frame)
+        rescue StandardError
+          restore_unsent_retries(batch.drop(index), generation, now)
+          raise
+        end
+        sent += 1
+      end
+      sent
+    end
+
+    # The monotonic deadline of the earliest pending retry, or nil when none is pending.
+    def next_subscription_retry_at = @mutex.synchronize { @pending_retries.values.min }
+
     private
+
+    # Put a failed batch's unwritten retries back, unless the socket has changed since
+    # (which cancels every retry) or a newer hint or an unsubscribe has decided them.
+    def restore_unsent_retries(unsent, generation, now)
+      @mutex.synchronize do
+        next unless @attach_generation == generation
+
+        unsent.each do |(id, _frame)|
+          @pending_retries[id] = now if @subscriptions.key?(id) && !@pending_retries.key?(id)
+        end
+      end
+    end
+
+    # The server's retry hint on a query error, in seconds, or nil when it sent no
+    # hint this client can honour. Only a JSON number qualifies: +true+ and strings
+    # are not, and a hint past the clamp is cut to it.
+    def retry_after_seconds(envelope)
+      delay = envelope["retryAfterMs"]
+      return nil unless delay.is_a?(Numeric) && delay.finite? && delay >= 0
+
+      [delay, MAX_RETRY_AFTER_MS].min / 1000.0
+    end
 
     # Mutate the guarded state, then send the frame the block returns with the
     # lock released. A nil frame sends nothing.
@@ -980,6 +1052,8 @@ module Lunora
     def dispatch(frame, deferred)
       kind = frame["type"]
       entry = @subscriptions[frame["id"]]
+      # The server answered the subscription, so a retry it was waiting on is moot.
+      @pending_retries.delete(frame["id"]) if %w[ack data delta resume settled].include?(kind)
 
       case kind
       when "ack" then kind
@@ -1151,6 +1225,17 @@ module Lunora
 
       [@subscriptions[id]&.fetch(:on_error, nil), @shapes[id]&.fetch(:on_error, nil)].compact.each do |handler|
         deferred << -> { handler.call(error) }
+      end
+
+      # A query error without a usable hint is how the server ends a subscription, so
+      # a retry an earlier hint scheduled for it is cancelled rather than sent.
+      if @subscriptions.key?(id)
+        delay = retry_after_seconds(envelope)
+        if delay.nil?
+          @pending_retries.delete(id)
+        else
+          @pending_retries[id] = Lunora.monotonic_now + delay
+        end
       end
 
       kind

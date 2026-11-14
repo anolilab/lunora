@@ -165,6 +165,14 @@ type Client struct {
 	closed           bool
 	settledListeners []func(MutationSettled)
 
+	// pendingRetries holds the deadline of the one cold re-subscribe a retry hint
+	// asked for, per query subscription id. Guarded by mu; a nil map reads as empty.
+	pendingRetries map[string]time.Time
+
+	// attachGeneration changes on every attach, detach and close, so a retry batch
+	// sent outside mu can tell that the socket it captured is gone. Guarded by mu.
+	attachGeneration int
+
 	// sessionToken is the WS session credential, sent as connect.token on every
 	// socket open. It is not the RPC bearer (authToken), and it never rides a URL.
 	// See SessionToken/SetSessionToken.
@@ -483,6 +491,8 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	// socket whose connect failed is never a refusal of the current credential.
 	c.send = nil
 	c.socketGeneration = -1
+	c.attachGeneration++
+	clear(c.pendingRetries)
 	// A run held on the previous socket never finishes on this one.
 	c.discardRunsLocked()
 
@@ -522,6 +532,8 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 func (c *Client) DetachSocket(closeCode int, reason string) {
 	c.mu.Lock()
 	c.send = nil
+	c.attachGeneration++
+	clear(c.pendingRetries)
 	c.discardRunsLocked()
 
 	expired := closeCode == 4001
@@ -719,6 +731,8 @@ func (c *Client) Close() {
 	c.mu.Lock()
 	c.closed = true
 	c.send = nil
+	c.attachGeneration++
+	clear(c.pendingRetries)
 	discarded := c.offline.Clear()
 
 	streams := make([]func(), 0, len(c.streams))
@@ -1228,6 +1242,7 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 	return func() {
 		c.mu.Lock()
 		delete(c.subscriptions, id)
+		delete(c.pendingRetries, id)
 		sender := c.send
 		c.mu.Unlock()
 
@@ -1479,6 +1494,140 @@ func (c *Client) ResendSubscriptions() error {
 	return nil
 }
 
+// RetryDueSubscriptions re-subscribes, cold, every query whose retry hint has come
+// due at now, and returns how many frames it wrote. Nothing is sent while no socket is
+// attached. A failed write stops the batch and is returned, as ResendSubscriptions
+// does, so the caller can drop the socket; the retries not yet written stay due. A
+// subscription whose args cannot be encoded is skipped and its error returned. The
+// caller arms its own timer for [Client.NextSubscriptionRetryAt].
+func (c *Client) RetryDueSubscriptions(now time.Time) (int, error) {
+	type retryFrame struct {
+		id    string
+		frame map[string]any
+	}
+
+	// Built under the lock: each cold frame reads the entry the frame handler writes.
+	c.mu.Lock()
+
+	if c.send == nil {
+		c.mu.Unlock()
+
+		return 0, nil
+	}
+
+	send := c.send
+	generation := c.attachGeneration
+	batch := make([]retryFrame, 0, len(c.pendingRetries))
+
+	var buildErr error
+
+	for id, deadline := range c.pendingRetries {
+		if deadline.After(now) {
+			continue
+		}
+
+		delete(c.pendingRetries, id)
+
+		entry := c.subscriptions[id]
+		if entry == nil {
+			continue
+		}
+
+		frame, err := BuildSubscribeFrame(id, entry.functionPath, entry.args, "", nil, nil)
+		if err != nil {
+			if buildErr == nil {
+				buildErr = err
+			}
+
+			continue
+		}
+
+		// A retry asks for a fresh snapshot, so it carries no resume cursor.
+		entry.cursor = nil
+		entry.epoch = nil
+		batch = append(batch, retryFrame{id: id, frame: frame})
+	}
+
+	c.mu.Unlock()
+
+	sent := 0
+
+	// Sent outside the lock, as Subscribe does: the FrameSender is socket I/O. Each
+	// write first checks that the socket the batch captured is still the attached one.
+	for index, retry := range batch {
+		c.mu.Lock()
+		current := c.attachGeneration == generation
+		registered := c.subscriptions[retry.id] != nil
+		c.mu.Unlock()
+
+		if !current {
+			break
+		}
+
+		if !registered {
+			continue
+		}
+
+		if err := send(retry.frame); err != nil {
+			c.mu.Lock()
+
+			// Unless the socket has changed since, which cancels every retry, the frames
+			// not written stay due; a newer hint for one of them is kept.
+			if c.attachGeneration == generation {
+				for _, unsent := range batch[index:] {
+					if _, pending := c.pendingRetries[unsent.id]; !pending && c.subscriptions[unsent.id] != nil {
+						if c.pendingRetries == nil {
+							c.pendingRetries = map[string]time.Time{}
+						}
+
+						c.pendingRetries[unsent.id] = now
+					}
+				}
+			}
+
+			c.mu.Unlock()
+
+			return sent, err
+		}
+
+		sent++
+	}
+
+	return sent, buildErr
+}
+
+// NextSubscriptionRetryAt reports the earliest pending retry deadline, and false when
+// none is pending.
+func (c *Client) NextSubscriptionRetryAt() (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var earliest time.Time
+
+	found := false
+
+	for _, deadline := range c.pendingRetries {
+		if !found || deadline.Before(earliest) {
+			earliest = deadline
+			found = true
+		}
+	}
+
+	return earliest, found
+}
+
+// retryHint reads an error envelope's retryAfterMs, clamped at MaxRetryAfterMs. It
+// reports false for a missing, non-numeric, negative or non-finite value. encoding/json
+// decodes every number as float64, so a bool or a string fails the assertion here.
+func retryHint(envelope map[string]any) (time.Duration, bool) {
+	value, ok := envelope["retryAfterMs"].(float64)
+	if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0, false
+	}
+
+	return time.Duration(math.Min(value, MaxRetryAfterMs) * float64(time.Millisecond)), true
+}
+
 // HandleFrame applies one server frame, invoking the relevant callbacks. It
 // returns the frame's type so a caller (and the conformance suite) can assert
 // what happened. Unknown types are ignored, per the protocol's forward-compat rule.
@@ -1501,6 +1650,12 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 	c.mu.Lock()
 	entry := c.subscriptions[id]
 	shape := c.shapes[id]
+
+	// The server answered this subscription, so a retry an earlier hint scheduled is moot.
+	if kind == "ack" || kind == "data" || kind == "delta" || kind == "resume" || kind == "settled" {
+		delete(c.pendingRetries, id)
+	}
+
 	c.mu.Unlock()
 
 	switch kind {
@@ -1699,6 +1854,27 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 
 			return kind, nil
 		}
+
+		// A hint schedules one cold re-subscribe of a query; a hint-less error ends
+		// the query, so an earlier hint's retry is dropped. Shapes never retry here.
+		envelope, _ := frame["error"].(map[string]any)
+		delay, hasHint := retryHint(envelope)
+
+		c.mu.Lock()
+
+		if c.subscriptions[id] != nil {
+			if hasHint {
+				if c.pendingRetries == nil {
+					c.pendingRetries = map[string]time.Time{}
+				}
+
+				c.pendingRetries[id] = time.Now().Add(delay)
+			} else {
+				delete(c.pendingRetries, id)
+			}
+		}
+
+		c.mu.Unlock()
 
 		// BOTH registries: an error frame is addressed by subscription id, and a
 		// shape id is one. Looking only in the query registry made every

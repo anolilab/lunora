@@ -24,6 +24,7 @@ import 'model_cases.dart';
 import 'offline_cases.dart';
 import 'optimistic_cases.dart';
 import 'replay_cases.dart';
+import 'retry_cases.dart';
 import 'rpc_cases.dart';
 import 'socket_cases.dart';
 import 'wire_cases.dart';
@@ -82,6 +83,18 @@ Future<void> main() async {
   await run(caseHydrateAfterConnectingStillReplays);
   await run(caseCloseDuringAFlushSettlesDrainedWrites);
   await run(caseRestoredWriteVerdictsReachTheObserver);
+
+  await run(caseSubscriptionRetryFiresOneColdResubscribeAtTheHint);
+  await run(caseSubscriptionRetryLeavesTheErrorCallbackAsBefore);
+  await run(caseSubscriptionRetryLaterHintReplacesThePendingOne);
+  await run(caseSubscriptionRetryCancelledByAnsweringFrames);
+  await run(caseSubscriptionRetryIgnoresFramesWithoutAValidHint);
+  await run(caseSubscriptionRetryCancelledByUnsubscribeSocketAndClose);
+  await run(caseSubscriptionRetryIgnoresShapeErrors);
+  await run(caseSubscriptionRetryClampedToMaxRetryAfter);
+  await run(caseSubscriptionRetryFailedWriteKeepsUnsentRetriesDue);
+  await run(caseSubscriptionRetryDetachMidBatchStopsRetries);
+  await run(caseSubscriptionRetryDeadlineIsOnThePublicClock);
 
   // The shared golden scenarios in protocol/fixtures/offline-optimistic.json,
   // which every port asserts the same values from — the manifest names below
