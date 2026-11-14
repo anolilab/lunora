@@ -557,6 +557,47 @@ const ALIASED_RATE_LIMITED = `${PREAMBLE}
         });
 `;
 
+/** A `let` middleware alias rebound before `.use(...)`: the chain installs the later value, not `rateLimit`. */
+const REASSIGNED_LET_ALIAS = `${PREAMBLE}
+    let guard = rateLimit({ limit: 5 });
+    guard = verifyTurnstileMiddleware();
+
+    export const send = c.mutation
+        .use(guard)
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("messages", {});
+        });
+`;
+
+/** A `const` base builder carrying `.use(rateLimit())`, then a procedure built on it. */
+const CONST_BASE_RATE_LIMITED = `${PREAMBLE}
+    const guarded = c.mutation.use(rateLimit({ limit: 5 }));
+
+    export const send = guarded.mutation(async () => {});
+`;
+
+/** A `const` base builder followed by another builder step before the procedure is built. */
+const CONST_BASE_CHAINED_RATE_LIMITED = `${PREAMBLE}
+    const a = c.mutation.use(rateLimit({ limit: 5 }));
+    const b = a.input({});
+
+    export const send = b.mutation(async () => {});
+`;
+
+/** A `const` base builder with no middleware, so nothing is installed. */
+const CONST_BASE_PLAIN = `${PREAMBLE}
+    const plain = c.mutation.input({});
+
+    export const send = plain.mutation(async () => {});
+`;
+
+/** A `let` base builder is not followed: a `let` can be reassigned after its initializer ran. */
+const LET_BASE_RATE_LIMITED = `${PREAMBLE}
+    let base = c.mutation.use(rateLimit({ limit: 5 }));
+
+    export const send = base.mutation(async () => {});
+`;
+
 /** A bare-factory public mutation whose handler is extracted to a same-file `const` — `handler: createHandler` instead of an inline function. */
 const SAME_FILE_EXTRACTED_HANDLER = `
     import { mutation } from "@lunora/server";
@@ -1047,6 +1088,56 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "send", usesCaptcha: false, usesRateLimit: true });
+    });
+
+    it("does not credit a rate limit through a `let` alias that is rebound before `.use(...)`", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "send.ts"), REASSIGNED_LET_ALIAS, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "send", usesRateLimit: false });
+    });
+
+    it("follows a `const` base builder carrying `.use(rateLimit())` into the procedures built on it", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "send.ts"), CONST_BASE_RATE_LIMITED, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "send", usesCaptcha: false, usesRateLimit: true });
+    });
+
+    it("follows a `const` base builder through a further builder step", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "send.ts"), CONST_BASE_CHAINED_RATE_LIMITED, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "send", usesCaptcha: false, usesRateLimit: true });
+    });
+
+    it("reports no protection for a `const` base builder that installs no middleware", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "send.ts"), CONST_BASE_PLAIN, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "send", usesRateLimit: false });
+    });
+
+    it("does not follow a `let` base builder, whose binding can change after its initializer", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "send.ts"), LET_BASE_RATE_LIMITED, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "send", usesRateLimit: false });
     });
 
     it("does NOT assume protection from a non-literal `protectPublic(cfg)` config", () => {
