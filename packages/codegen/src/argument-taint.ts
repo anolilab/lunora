@@ -259,16 +259,8 @@ const invokedBy = (chain: TsNode): CallExpression | undefined => {
     return Node.isCallExpression(parent) && parent.getExpression() === chain ? parent : undefined;
 };
 
-/**
- * Whether a database read is bound to the caller: one of its arguments names the
- * caller's identity, directly or through a local whose initializer does
- * (`ctx.db.files.findFirst({ where: { ownerId: uid } })` with `uid = ctx.auth.userId`).
- * A read keyed by a caller-supplied id (`ctx.db.get("files", args.id)`) is not: the
- * row it returns is whichever one the caller pointed at, so a key read off it is
- * caller-chosen.
- */
 /** The `ctx.db` methods that read rows; a write returns whatever it wrote, so its arguments do not bind the row to anyone. */
-const DB_READ_METHODS: ReadonlySet<string> = new Set(["find", "findFirst", "findMany", "findUnique", "first", "get", "unique"]);
+const DB_READ_METHODS: ReadonlySet<string> = new Set(["find", "findFirst", "findFirstOrThrow", "findMany", "findUnique", "first", "get", "unique"]);
 
 /** Whether `call` invokes a `ctx.db` row read (`ctx.db.files.findFirst(…)`, `ctx.db.get(…)`), not a write. */
 const isDatabaseReadCall = (call: CallExpression): boolean => {
@@ -277,6 +269,14 @@ const isDatabaseReadCall = (call: CallExpression): boolean => {
     return Node.isPropertyAccessExpression(callee) && DB_READ_METHODS.has(callee.getName()) && contextTrustPathOf(callee)?.[0] === "db";
 };
 
+/**
+ * Whether a database read is bound to the caller: one of its arguments names the
+ * caller's identity, directly or through a local whose initializer does
+ * (`ctx.db.files.findFirst({ where: { ownerId: uid } })` with `uid = ctx.auth.userId`).
+ * A read keyed by a caller-supplied id (`ctx.db.get("files", args.id)`) is not: the
+ * row it returns is whichever one the caller pointed at, so a key read off it is
+ * caller-chosen.
+ */
 const isIdentityBoundRead = (call: CallExpression): boolean =>
     isDatabaseReadCall(call) &&
     call.getArguments().some((argument) =>
@@ -290,6 +290,33 @@ const isIdentityBoundRead = (call: CallExpression): boolean =>
             return initializer !== undefined && valueIdentifiersOf(initializer).some((inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth");
         }),
     );
+
+/**
+ * Whether `identifier` reaches the value of `within` only on some paths: the fallback of a `??` or
+ * `||`, the left of a `&&`, or any part of a conditional. `args.key ?? ctx.auth.userId` is the
+ * caller's key whenever one is sent, so the identity there scopes nothing; the identity on the
+ * left of `ctx.auth.userId ?? "anon"` is used whenever it exists.
+ */
+const isAlternativeOf = (identifier: TsNode, within: TsNode): boolean => {
+    for (let child = identifier, parent = identifier.getParent(); parent !== undefined && child !== within; child = parent, parent = parent.getParent()) {
+        if (Node.isConditionalExpression(parent)) {
+            return true;
+        }
+
+        if (Node.isBinaryExpression(parent)) {
+            const operator = parent.getOperatorToken().getKind();
+
+            if (
+                (child === parent.getRight() && (operator === SyntaxKind.QuestionQuestionToken || operator === SyntaxKind.BarBarToken)) ||
+                (child === parent.getLeft() && operator === SyntaxKind.AmpersandAmpersandToken)
+            ) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+};
 
 /**
  * True when `node` is, or textually contains, a value reference to a key source the
@@ -307,7 +334,10 @@ const referencesScopedKeySource = (node: TsNode): boolean =>
 
         // Inside a `ctx.db` call's arguments the identity only scopes the key through that call, judged below.
         if (root === "auth") {
-            return !identifier.getAncestors().some((ancestor) => Node.isCallExpression(ancestor) && contextTrustPathOf(ancestor.getExpression())?.[0] === "db");
+            return (
+                !isAlternativeOf(identifier, node) &&
+                !identifier.getAncestors().some((ancestor) => Node.isCallExpression(ancestor) && contextTrustPathOf(ancestor.getExpression())?.[0] === "db")
+            );
         }
 
         const call = root === "db" ? invokedBy(outermost) : undefined;
@@ -338,6 +368,24 @@ const isDatabaseReadSource = (node: TsNode): boolean => {
     const current = unawaited(node);
 
     return Node.isCallExpression(current) && isDatabaseReadCall(current);
+};
+
+/**
+ * For a name destructured from a `ctx.db` read (`const { key } = await ctx.db.files.findFirst(…)`),
+ * that read; `undefined` for any other binding. Only a read qualifies: every field of a row the read
+ * bound to the caller is the caller's own, while a literal's sibling `ctx.auth` field says nothing
+ * about the field taken from it.
+ */
+const ownedRowInitializerOf = (node: TsNode): TsNode | undefined => {
+    const element = Node.isIdentifier(node) ? declarationOf(node) : undefined;
+
+    if (!Node.isBindingElement(element) || isReassignedBinding(element)) {
+        return undefined;
+    }
+
+    const initializer = element.getFirstAncestorByKind(SyntaxKind.VariableDeclaration)?.getInitializer();
+
+    return initializer !== undefined && isDatabaseReadSource(initializer) ? initializer : undefined;
 };
 
 /**
@@ -571,7 +619,7 @@ export const isScopedByIdentity = (node: TsNode): boolean => {
         return true;
     }
 
-    const initializer = trustedInitializerOf(node);
+    const initializer = trustedInitializerOf(node) ?? ownedRowInitializerOf(node);
 
     if (initializer !== undefined && referencesScopedKeySource(initializer)) {
         return true;
@@ -581,7 +629,7 @@ export const isScopedByIdentity = (node: TsNode): boolean => {
     const identifiers = Node.isIdentifier(composed) ? [composed] : composed.getDescendantsOfKind(SyntaxKind.Identifier);
 
     return identifiers.some((identifier) => {
-        const boundInitializer = trustedInitializerOf(identifier);
+        const boundInitializer = trustedInitializerOf(identifier) ?? ownedRowInitializerOf(identifier);
 
         return boundInitializer !== undefined && referencesScopedKeySource(boundInitializer);
     });
