@@ -2855,6 +2855,9 @@ abstract class ShardDO {
      */
     private readonly rerunNearLimitWarned = new Set<string>();
 
+    /** One-shot warning for subscriptions `broadcastDelta` skips because re-execution serves them. */
+    private broadcastSkipWarned = false;
+
     /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
      * `x-lunora-mutation-id` header. When set, the dispatch path dedups the call
@@ -6728,8 +6731,11 @@ abstract class ShardDO {
 
     /**
      * Broadcast a mutation delta to every subscriber whose registered query
-     * targets the affected table _and_ matches its args. The wire payload
-     * includes the per-socket subscription id, so we serialise once per
+     * targets the affected table _and_ matches its args. Subscriptions this
+     * shard serves by re-execution (see `servedByReexecution`) are skipped: the
+     * row sent is the written row, not filtered by RLS, masks or the
+     * subscriber's query, and `matchesSubscription` is its only filter. The wire
+     * payload includes the per-socket subscription id, so we serialise once per
      * `(socket, sub)` pair — but the structural delta body itself is
      * identical, so we build a payload keyed by `subId` lazily.
      */
@@ -6784,7 +6790,7 @@ abstract class ShardDO {
             for (const subId of Object.keys(subs)) {
                 const query = subs[subId];
 
-                if (query === undefined || !this.matchesSubscription(query, delta)) {
+                if (query === undefined || !this.matchesSubscription(query, delta) || this.skipsForReexecution(query)) {
                     continue;
                 }
 
@@ -9764,6 +9770,46 @@ abstract class ShardDO {
         this.currentRequestTrace = scope.trace;
         this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
+    }
+
+    /**
+     * Whether a subscription gets its updates by re-execution, which diffs the
+     * query's own result. A broadcast row would bypass that diff baseline (no
+     * later delta removes it) and the subscriber's RLS, masks and query filter,
+     * so `broadcastDelta` must not reach such a subscription.
+     * @returns `true` when the shard re-runs this subscription's query
+     */
+    private servedByReexecution(functionPath: string | undefined): boolean {
+        if (!functionPath) {
+            return false;
+        }
+
+        return (
+            functionPath.startsWith(ADMIN_FUNCTION_PREFIX) ||
+            functionPath.startsWith(FLAGS_FUNCTION_PREFIX) ||
+            this.executeSubscription !== ShardDO.prototype.executeSubscription
+        );
+    }
+
+    /**
+     * `broadcastDelta`'s skip for a subscription the shard re-runs, logging the
+     * one-time warning the first time it fires.
+     * @returns `true` when `broadcastDelta` must not send this subscription the delta
+     */
+    private skipsForReexecution(query: SubscriptionQuery): boolean {
+        if (!this.servedByReexecution(query.functionPath)) {
+            return false;
+        }
+
+        if (!this.broadcastSkipWarned) {
+            this.broadcastSkipWarned = true;
+            // eslint-disable-next-line no-console -- a shard that mixes the two delivery mechanisms must hear about it once
+            console.warn(
+                "[@lunora/do] broadcastDelta skipped a subscription this shard serves by re-execution; re-execution delivers its updates. Broadcast reaches only subscriptions the shard does not re-run.",
+            );
+        }
+
+        return true;
     }
 
     private deliveryRoleSupported(): boolean {

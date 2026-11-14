@@ -401,6 +401,24 @@ describe("shardDO", () => {
         expect(JSON.parse(matching.sent[0]!)).toMatchObject({ delta: { op: "insert", table: "messages" }, id: "a", type: "delta" });
     });
 
+    it("broadcastDelta still reaches a table-only subscription on a shard that re-executes", () => {
+        expect.assertions(2);
+
+        const reexec = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        reexec.registerSocket(ws, { subs: { t: { table: "messages" } } });
+        (reexec as unknown as { broadcastDelta: (delta: unknown) => void }).broadcastDelta({
+            key: "m1",
+            op: "insert",
+            row: { _id: "m1" },
+            table: "messages",
+        });
+
+        expect(ws.sent).toHaveLength(1);
+        expect(JSON.parse(ws.sent[0]!)).toMatchObject({ delta: { table: "messages" }, id: "t", type: "delta" });
+    });
+
     it("broadcastDelta does not deliver to a socket whose credential expired", () => {
         expect.assertions(2);
 
@@ -1864,6 +1882,51 @@ describe("shardDO subscription delta push", () => {
 
         expect(last).toMatchObject({ id: "sub-1", type: "delta" });
         expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: DELTA_PLACEHOLDER_TABLE });
+    });
+
+    it("a subscription served by re-execution never receives a broadcast delta", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        const tables = new Set(["members", "messages"]);
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables });
+
+        await shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "messages:list", table: "messages:list" }, type: "subscribe" });
+
+        const start = ws.sent.length;
+
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })], tables });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        (shard as unknown as { broadcastDelta: (delta: unknown) => void }).broadcastDelta({
+            key: "x",
+            op: "insert",
+            row: idRow("x", { text: "stray" }),
+            table: "messages:list",
+        });
+
+        shard.outcomes.set("messages:list", {
+            result: [...filler(16), idRow("a"), idRow("b", { text: "hi" }), idRow("c")],
+            tables,
+        });
+        await shard.writeRpc();
+
+        const keys = ws.sent
+            .slice(start)
+            .map((frame) => JSON.parse(frame) as { delta?: { key: string }; type: string })
+            .filter((frame) => frame.type === "delta")
+            .map((frame) => frame.delta?.key);
+
+        expect(keys).toStrictEqual(["b", "c"]);
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
     });
 
     it("a single-table query still names its table alongside an unvouchable read", async () => {

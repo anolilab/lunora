@@ -73,7 +73,9 @@ fanned out to sockets whose subscription registered a matching `table` string.
 It predates re-execution and is there for hand-written `ShardDO` subclasses that
 don't override `executeSubscription`. Generated shards don't use it, and a
 `@lunora/client` subscription registers its function path as the `table`, so
-nothing addressed by a real table name reaches one.
+nothing addressed by a real table name reaches one. A subscription the shard serves by
+re-execution never receives one, and the row it carries is not filtered by row-level security
+or masks.
 
 ## Reconnect
 
