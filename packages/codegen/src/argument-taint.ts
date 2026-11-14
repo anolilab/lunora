@@ -1,5 +1,5 @@
 import type { BindingElement, Identifier, Node as TsNode, VariableDeclaration } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { bindingKeyName, descendantsOfKind } from "./discover/ast";
 import { declarationOf, isReassignedBinding } from "./discover/attribution";
@@ -183,6 +183,22 @@ const trustedInitializerOf = (node: TsNode): TsNode | undefined => {
         : undefined;
 };
 
+/**
+ * The node a declaration's binding is visible in: the enclosing function for a
+ * `var`, else the block, `for` statement or file that holds the `let`/`const`.
+ */
+const bindingScope = (variable: VariableDeclaration, enclosingFunction: TsNode): TsNode | undefined => {
+    const list = variable.getParent();
+
+    if (Node.isVariableDeclarationList(list) && list.getDeclarationKind() === VariableDeclarationKind.Var) {
+        return enclosingFunction;
+    }
+
+    const holder = list.getParent();
+
+    return Node.isVariableStatement(holder) ? holder.getParent() : holder;
+};
+
 /** Whether `variable` binds `name` directly, or as an identifier anywhere inside a destructuring pattern. */
 const declaresName = (variable: VariableDeclaration, name: string): boolean => {
     const nameNode = variable.getNameNode();
@@ -250,6 +266,14 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
 
     for (const variable of descendantsOfKind(enclosingFunction, SyntaxKind.VariableDeclaration)) {
         if (!declaresName(variable, name)) {
+            continue;
+        }
+
+        // A binding in a block that does not contain the use is a different variable,
+        // and taking its initializer would replace the real source.
+        const scope = bindingScope(variable, enclosingFunction);
+
+        if (scope === undefined || usePosition < scope.getStart() || usePosition >= scope.getEnd()) {
             continue;
         }
 

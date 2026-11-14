@@ -106,6 +106,15 @@ describe("argument-taint", () => {
             // Only identifiers hop; a member access is already its own root.
             expect(singleHopInitializer(sinkArgument(`SINK(args.key);`))).toBeUndefined();
         });
+
+        it("skips a same-named binding in a sibling block, which the use cannot see", () => {
+            expect.assertions(2);
+
+            const source = `const url = args.url;\nif (flag) {\n    const { url } = trustedConfig;\n}\nSINK(url);`;
+
+            expect(singleHopInitializer(sinkArgument(source))?.getText()).toBe("args.url");
+            expect(isArgumentDerived(sinkArgument(source))).toBe(true);
+        });
     });
 
     describe("isArgumentDerived", () => {
