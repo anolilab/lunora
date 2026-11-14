@@ -321,10 +321,13 @@ that `normalfloat64` deliberately does not match.
 
 Add `const refuseLegacyLossyTable = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable): Promise<void>`:
 
-1. Build the sidecar entry:
-   `const sidecar: ConvexSnapshotTable = { file: tableEntry.file.replace(/documents\.jsonl$/, "generated_schema.jsonl"), table: tableEntry.table };`
-   Hoist the regex literal into a module-level constant if the lint rules
-   require it.
+1. Build the sidecar entry with `listSnapshotSidecar(snapshot, tableEntry, "generated_schema.jsonl")`
+   in `convex-snapshot.ts`. For a directory snapshot it resolves
+   `join(snapshot.root, tableEntry.table, "generated_schema.jsonl")`, the listed table
+   directory, never a suffix swap on `tableEntry.file`: that path is canonical, so a
+   `documents.jsonl` linked to another file in the export would leave the swap a no-op and
+   read the documents themselves as the sidecar. A zip snapshot keeps the suffix swap,
+   since zip entry names are not resolved.
 2. Check that it exists:
     - `snapshot.kind === "directory"` → `(await stat(sidecar.file).catch(() => undefined))?.isFile() === true`,
       and `isInsideDirectory(await realpath(snapshot.root), await realpath(sidecar.file))` (the containment
