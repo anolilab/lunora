@@ -197,7 +197,12 @@ on the facade (Studio, MCP, CLI, registry, templates and the SDKs were grepped).
       Cancel needs that loop because a cancel must never be lost silently. An update has no
       such field to merge onto the newer row, and the provider's own event for the change
       follows anyway.
-    - Return `(await store.getSubscription(adapter.identifier, subscriptionId)) ?? synced`.
+    - Return `(await store.getSubscription(adapter.identifier, answer.id)) ?? synced`, keyed by
+      the answer's id, not the requested one. Autumn derives a subscription's id from its
+      product (`parseAutumnSubscriptionId`), so a plan change comes back under a new id. When
+      `answer.id !== subscriptionId`, store the answer as its own row and end the old row in the
+      same step (status `canceled`, as the provider's event for the old product would), or the
+      old row keeps granting the old plan.
       Put this in one private helper used by both methods.
 7. **Docs move to the facade.** Every `ctx.payments.adapter.updateSubscription(` and
    `ctx.payments.adapter.resumeSubscription(` example becomes `ctx.payments.…`. The docs guard
