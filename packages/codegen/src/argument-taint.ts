@@ -241,6 +241,14 @@ const isRecomputed = (node: TsNode): boolean => {
     return Node.isCallExpression(current) || Node.isNewExpression(current);
 };
 
+/** The default of the destructured element of `variable` that binds `name` (`const { url = args.url } = config`). */
+const bindingDefaultOf = (variable: VariableDeclaration | undefined, name: string): TsNode | undefined =>
+    variable
+        ?.getNameNode()
+        .getDescendantsOfKind(SyntaxKind.BindingElement)
+        .find((candidate) => Node.isIdentifier(candidate.getNameNode()) && candidate.getNameNode().getText() === name)
+        ?.getInitializer();
+
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
 /**
@@ -322,12 +330,7 @@ export const isArgumentDerived = (expression: TsNode): boolean => {
     const reachesArgs = (node: TsNode): boolean => {
         const variable = singleHopDeclaration(node);
         const initializer = variable?.getInitializer();
-        const name = node.getText();
-        const fallback = variable
-            ?.getNameNode()
-            .getDescendantsOfKind(SyntaxKind.BindingElement)
-            .find((candidate) => Node.isIdentifier(candidate.getNameNode()) && candidate.getNameNode().getText() === name)
-            ?.getInitializer();
+        const fallback = bindingDefaultOf(variable, node.getText());
 
         return (initializer !== undefined && referencesArgs(initializer)) || (fallback !== undefined && referencesArgs(fallback));
     };
@@ -358,6 +361,13 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
         return false;
     }
 
+    // A default that forwards args reaches the sink whenever the object lacks the field.
+    const fallback = bindingDefaultOf(singleHopDeclaration(node), node.getText());
+
+    if (fallback !== undefined && referencesArgs(fallback) && !isRecomputed(fallback)) {
+        return true;
+    }
+
     const initializer = singleHopInitializer(node);
 
     if (initializer !== undefined && isRecomputed(initializer)) {
@@ -373,10 +383,12 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
     // `isArgumentDerived` also follows each composed identifier one hop, so a key built only from
     // call results (`blobs/${digest}` with `digest = sha256Hex(args.bytes)`) is tainted but was
     // recomputed; it is a passthrough only when some composed binding forwards args unchanged.
+    // An identifier read inside a call in the key (`blobs/${sha256Hex(name)}`) is recomputed there.
     return valueIdentifiersIn(composed).some((identifier) => {
         const bound = singleHopInitializer(identifier);
+        const nearest = identifier.getFirstAncestor((ancestor) => ancestor === composed || Node.isCallExpression(ancestor) || Node.isNewExpression(ancestor));
 
-        return bound !== undefined && referencesArgs(bound) && !isRecomputed(bound);
+        return nearest === composed && bound !== undefined && referencesArgs(bound) && !isRecomputed(bound);
     });
 };
 
