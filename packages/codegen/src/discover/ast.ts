@@ -36,7 +36,9 @@ const lunoraRelativePath = (lunoraDirectory: string, filePath: string): string =
  * The 1-based line an advisor finding points at for a declaration: the statement that
  * declares it (`export const …`, `export function …`, or the expression or `return` statement
  * that registers a call), so a JSDoc block above it is excluded. A node with no such statement
- * above it (or a function declaration itself) falls back to its own start line.
+ * above it (or a function declaration itself) falls back to its own start line, and so does one
+ * that sits in a function body with no statement of its own (`const register = () => crons.daily(…)`):
+ * the statement past that boundary declares the helper, not the registration.
  */
 const declarationLineOf = (node: Node): number => {
     const statement = Node.isFunctionDeclaration(node)
@@ -46,10 +48,12 @@ const declarationLineOf = (node: Node): number => {
                   Node.isVariableStatement(ancestor) ||
                   Node.isFunctionDeclaration(ancestor) ||
                   Node.isExpressionStatement(ancestor) ||
-                  Node.isReturnStatement(ancestor),
+                  Node.isReturnStatement(ancestor) ||
+                  Node.isArrowFunction(ancestor) ||
+                  Node.isFunctionExpression(ancestor),
           );
 
-    return (statement ?? node).getStartLineNumber();
+    return (statement === undefined || Node.isArrowFunction(statement) || Node.isFunctionExpression(statement) ? node : statement).getStartLineNumber();
 };
 
 /** Directories under `lunora/` that are never source: codegen's own output, and installed packages. */
