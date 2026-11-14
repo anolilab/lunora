@@ -10,6 +10,7 @@
  * break an auth request.
  */
 
+import { decodeBasicCredentials } from "@better-auth/core/oauth2";
 import { cyrb53 } from "@lunora/values";
 import { createAuthMiddleware } from "better-auth/api";
 
@@ -414,14 +415,14 @@ const stringOf = (value: unknown): string | undefined => (typeof value === "stri
 /** Longest id copied into `detail`; a longer value is cut rather than dropped. */
 const MAX_DETAIL_ID_LENGTH = 256;
 
-/**
- * An id read from a request body or response and copied into `detail`. Capped, because a caller can send any length
- * and a failed request is still written.
- */
 /** An id cut to the detail limit, keeping a hash of the whole value so two long ids that share a prefix stay apart. */
 const boundedDetailValue = (id: string): string =>
     id.length <= MAX_DETAIL_ID_LENGTH ? id : `${id.slice(0, MAX_DETAIL_ID_LENGTH - 15)}~${cyrb53(id).toString(16).padStart(14, "0")}`;
 
+/**
+ * An id read from a request body or response and copied into `detail`. Capped, because a caller can send any length
+ * and a failed request is still written.
+ */
 const detailId = (value: unknown): string | undefined => {
     const id = stringOf(value);
 
@@ -436,12 +437,6 @@ const detailId = (value: unknown): string | undefined => {
 
 const fieldOf = (value: unknown, key: string): unknown =>
     typeof value === "object" && value !== null && key in value ? (value as Record<string, unknown>)[key] : undefined;
-
-/**
- * Resolve actor id/email from the freshly-created session (sign-in/up) or the existing session.
- * An impersonated session names the administrator in `impersonatedBy`, and that is the actor: its
- * `user` is the impersonated account. The administrator's email is not on the session, so none is recorded.
- */
 
 /**
  * The session an event is performed by. A revoke, a switch or an email change is made by the request's session: a
@@ -460,6 +455,11 @@ const actingSession = (context: AuditHookContext, event: AuthAuditEvent | undefi
         : (resultingSession ?? requestSession);
 };
 
+/**
+ * Resolve actor id/email from the freshly-created session (sign-in/up) or the existing session.
+ * An impersonated session names the administrator in `impersonatedBy`, and that is the actor: its
+ * `user` is the impersonated account. The administrator's email is not on the session, so none is recorded.
+ */
 const resolveActor = (context: AuditHookContext, event: AuthAuditEvent | undefined): { actorEmail?: string; actorId?: string } => {
     const source = actingSession(context, event);
     const impersonator = stringOf(source?.session?.impersonatedBy);
@@ -640,7 +640,8 @@ const BASIC_SCHEME = /^basic /iu;
 
 /**
  * The organization an invitation answer names: an accept returns the invitation and the member it created, each
- * carrying the organization. Accepting or rejecting carries no organization id in the request.
+ * carrying the organization, and a cancel returns the cancelled invitation itself. Accepting, rejecting or cancelling
+ * carries no organization id in the request.
  */
 const invitationOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
     if (!event.startsWith("org-invitation-")) {
@@ -649,7 +650,11 @@ const invitationOrganizationId = (context: AuditHookContext, event: AuthAuditEve
 
     const returned = context.context?.returned;
 
-    return detailId(fieldOf(fieldOf(returned, "invitation"), "organizationId")) ?? detailId(fieldOf(fieldOf(returned, "member"), "organizationId"));
+    return (
+        detailId(fieldOf(fieldOf(returned, "invitation"), "organizationId")) ??
+        detailId(fieldOf(fieldOf(returned, "member"), "organizationId")) ??
+        (event === "org-invitation-cancel" ? detailId(fieldOf(returned, "organizationId")) : undefined)
+    );
 };
 
 /** The organization a switch moved to: the answer to `set-active` is that organization, and `null` when the switch cleared it. */
@@ -699,8 +704,8 @@ const resourceIdentifierOf = (value: unknown): string | undefined => {
 };
 
 /**
- * The client id a `client_secret_basic` credential names. The header is `Basic base64(client_id:client_secret)` with the
- * client id form-encoded, and only that part is read: the secret is never copied.
+ * The client id a `client_secret_basic` credential names, decoded by better-auth's own reader so the row names the client
+ * the server authenticated. Only the id is copied, never the secret.
  */
 const clientIdFromBasic = (authorization: string | undefined): string | undefined => {
     if (authorization === undefined || !BASIC_SCHEME.test(authorization)) {
@@ -708,12 +713,9 @@ const clientIdFromBasic = (authorization: string | undefined): string | undefine
     }
 
     try {
-        const decoded = atob(authorization.slice("basic ".length).trim());
-        const separator = decoded.indexOf(":");
-
-        // Without a colon the whole value is the secret, so it is never read as an id.
-        return separator === -1 ? undefined : detailId(decoded.slice(0, separator));
+        return detailId(decodeBasicCredentials(authorization).clientId);
     } catch {
+        // A malformed credential, or one without a separator, which would make the whole value the secret.
         return undefined;
     }
 };
@@ -809,14 +811,17 @@ const oauthIds = (context: AuditHookContext, event: AuthAuditEvent): ReadonlyArr
     const body = context.body ?? {};
     const params = context.params ?? {};
 
-    // A proxy's HTTP Basic credential is not the client, so only a token exchange or a revoke reads one.
+    // A proxy's HTTP Basic credential is not the client, so only a token exchange or a revoke reads one. There the server
+    // authenticates the Basic credential before any body `client_id`, so the credential names the client.
     const basicClientId = event === "oauth-token-issue" || event === "oauth-token-revoke" ? clientIdFromBasic(header(context, "authorization")) : undefined;
+    // A registration is named only by the client it created: a `client_id` in its request names nothing the server made.
+    const clientId =
+        event === "oauth-client-create"
+            ? createdClientId(context, event)
+            : (basicClientId ?? detailId(body["client_id"]) ?? detailId(params["client_id"]) ?? clientIdOf(body["oauth_query"]));
 
     return [
-        [
-            "clientId",
-            detailId(body["client_id"]) ?? detailId(params["client_id"]) ?? clientIdOf(body["oauth_query"]) ?? basicClientId ?? createdClientId(context, event),
-        ],
+        ["clientId", clientId],
         // A resource is named by its path, or by the `identifier` a create request carries.
         ["resourceIdentifier", resourceIdentifierOf(params["identifier"] ?? body["identifier"])],
         // An update or revoke of a consent names it by its own id, not by a client.
@@ -853,8 +858,12 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
         }
 
         if (event === "token-refresh") {
-            // A refresh grant names the client it refreshes for; the row must say which.
-            return [["clientId", detailId(body["client_id"]) ?? clientIdFromBasic(header(context, "authorization"))]];
+            // A refresh grant names the client it refreshes for. Only the OAuth token endpoint authenticates a client with
+            // Basic; on the session `/refresh-token` or the JWT `/token` that header is a proxy's login, not a client.
+            const isOAuthToken = context.path?.toLowerCase().endsWith("/oauth2/token") === true;
+            const basicClientId = isOAuthToken ? clientIdFromBasic(header(context, "authorization")) : undefined;
+
+            return [["clientId", basicClientId ?? detailId(body["client_id"])]];
         }
 
         if (event.startsWith("scim-")) {
@@ -878,9 +887,8 @@ const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Rec
     })();
 
     // An impersonated session's rows are about the impersonated account. The entry is added last, so it overrides the
-    // subject any body field names: a stray field cannot hide who was impersonated.
-    // A team membership change names the user it acts on in the body, which is the subject. Every other event takes the
-    // impersonated account, so a stray body field cannot hide who was impersonated.
+    // subject any body field names: a stray field cannot hide who was impersonated. A team membership change names the
+    // user it acts on in the body, which is the subject.
     const namesUser = event.startsWith("org-team-member-");
     const impersonated = event.startsWith("admin-") || namesUser ? undefined : impersonatedUserId(context, event);
     const entries = [...candidates, ...(impersonated === undefined ? [] : [["targetUserId", impersonated] as const])];

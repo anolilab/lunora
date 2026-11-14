@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildAuditEntry } from "../src/audit-hooks";
 
 describe("a form-encoded client id is read as the client named", () => {
-    it("records a Basic client id as the client sent it, form encoding included", () => {
+    it("decodes a form-encoded Basic client id as the server does, a plus sign read as a space", () => {
         expect.assertions(1);
 
         const credential = Buffer.from("My+App:secret").toString("base64");
@@ -13,7 +13,7 @@ describe("a form-encoded client id is read as the client named", () => {
             path: "/api/auth/oauth2/token",
         });
 
-        expect(entry?.detail).toMatchObject({ clientId: "My+App" });
+        expect(entry?.detail).toMatchObject({ clientId: "My App" });
     });
 });
 
