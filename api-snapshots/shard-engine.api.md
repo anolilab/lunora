@@ -3031,6 +3031,7 @@ interface SocketAttachment {
     admin?: boolean;
     adminBinding?: string;
     authenticated?: boolean;
+    broadcastSubs?: Record<string, string>;
     clientId?: string;
     connected?: boolean;
     connectionId?: string;

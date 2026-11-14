@@ -537,11 +537,15 @@ defaults to 1 MiB and closes with `1009`, on every reconnect) must raise it.
 the server re-executes; `table` addresses the legacy raw-delta fan-out
 (`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A subscription
 the server serves by re-execution (every `__lunora_admin__:` and flag subscription,
-and every subscription with a `functionPath` on a shard that re-runs queries) never receives a
-`broadcastDelta` frame, so one subscription id is fed by exactly one of the two paths. A client
+and, on a shard that re-runs queries, every subscription with a `functionPath` whose seed returned
+a result, is still in flight, or was refused) never receives a `broadcastDelta` frame. A seed that
+deliberately resolves to no result leaves its subscription to `broadcastDelta` until a later
+re-run returns one; that re-run sends a full snapshot and ends the broadcasts for good. At any
+moment one subscription id is fed by exactly one of the two paths. A client
 that has no table name to give sends the function path there — `@lunora/client`
 always does, because a function reference carries only its `namespace:fn` id — so
-those subscriptions are fed by re-execution alone. The non-JS SDKs carry `table`
+on a generated shard, whose seeds return results, those subscriptions are fed by re-execution
+alone. The non-JS SDKs carry `table`
 on their frame BUILDERS only (`build_subscribe_frame` / `BuildSubscribeFrame` /
 `buildSubscribeFrame`), where it likewise defaults to `functionPath`; no public
 `subscribe` in any of the eight takes it, and every one of them passes that

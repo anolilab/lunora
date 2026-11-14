@@ -250,6 +250,14 @@ export interface SocketAttachment {
     authenticated?: boolean;
 
     /**
+     * Subscriptions that receive `broadcastDelta` frames on a shard that overrides
+     * `executeSubscription`, keyed by subscription id to the function path whose
+     * seed resolved to `null`. Written only by the shard, never from a client
+     * envelope; persisted so the choice survives hibernation.
+     */
+    broadcastSubs?: Record<string, string>;
+
+    /**
      * Stable per-client id from the `connect` envelope (the same id the client
      * stamps on its custom-mutator pushes). Lets a shape poke echo this client's
      * `__client_watermark` as the poke's `lastMutationId`, so a `@lunora/db`
