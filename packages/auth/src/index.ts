@@ -34,7 +34,7 @@ export type {
 } from "./audit";
 export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable, readAuthAuditLog } from "./audit";
 export type { AuthAuditHookConfig } from "./audit-hooks";
-export { authAuditHook, buildAuditEntry, eventForPath, withAuthAudit } from "./audit-hooks";
+export { authAuditBeforeHook, authAuditHook, buildAuditEntry, eventForPath, withAuthAudit } from "./audit-hooks";
 export type { AuthDoOptions, AuthDoState } from "./auth-do";
 export {
     READ_AUDIT_PATH as AUTH_DO_AUDIT_PATH,
