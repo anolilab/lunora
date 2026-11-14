@@ -303,7 +303,9 @@ const sweepUnreportedUsage = async (
         } catch {
             failed += 1;
 
-            const retryAt = now + Math.min(Math.max(now - event.createdAt, USAGE_RETRY_MIN_MS), USAGE_RETRY_MAX_MS);
+            // From the failure, not the sweep's start: a slow batch would otherwise store a time already past.
+            const failedAt = Date.now();
+            const retryAt = failedAt + Math.min(Math.max(failedAt - event.createdAt, USAGE_RETRY_MIN_MS), USAGE_RETRY_MAX_MS);
 
             // A failed deferral only means the row stays due next tick, which is the old behaviour.
             // eslint-disable-next-line no-await-in-loop -- see above

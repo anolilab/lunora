@@ -907,4 +907,42 @@ describe("reconcile", () => {
         expect(lookup).toHaveBeenCalledTimes(2);
         await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toStrictEqual([]);
     });
+
+    it("times a failed forward's backoff from the failure, not from the start of the sweep", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const failedAt = 1_000_000 + 10 * 60 * 1000;
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async () => {
+                // A slow provider: the failure lands well after the sweep began.
+                vi.setSystemTime(failedAt);
+
+                throw new Error("provider down");
+            },
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1_000_000,
+            featureId: "tokens",
+            idempotencyKey: "evt_slow",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        vi.useFakeTimers({ now: 1_000_000, toFake: ["Date"] });
+
+        try {
+            await reconcile({ singleSubscriptionPerReference: false, adapter, store });
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // Half the minimum wait after the failure, the row must still be backing off.
+        await expect(store.listUnreportedUsage("stripe", 10, failedAt + 30_000)).resolves.toStrictEqual([]);
+    });
 });
