@@ -44,6 +44,7 @@ const STATUS_VARIANT: Readonly<Record<RequestStatus, StatusBadgeVariant>> = {
     processing: "warning",
     ready: "success",
     received: "info",
+    restored: "outline",
 };
 
 /** Human-readable deadline cell: the extended date when one is set, otherwise a dash. */

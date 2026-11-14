@@ -6,7 +6,7 @@ import type { TableIR, ValidatorIR, VectorIndexIR } from "../../../ir";
 import { resolvePackageExtension } from "../../../resolve-package-extension";
 import { findObjectProperty, propertyKeyName } from "../../ast";
 import { asMetric, getNumberProperty, getStringProperty, objectPropertyInitializer } from "./properties";
-import { assertTableNameAllowed, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE } from "./table-builder";
+import { assertTableNameAllowed, parseTableBuilder, TABLE_NAME_IDENTIFIER_RE, tableMemberSource } from "./table-builder";
 
 /** Read the `source.table` literal off a `defineVectorIndex({ source: { table } })` options object. */
 const sourceTableOf = (optionsExpression: ObjectLiteralExpression): string => {
@@ -374,11 +374,11 @@ const parseExtensionTables = (options: ObjectLiteralExpression): TableIR[] => {
     const tables: TableIR[] = [];
 
     for (const property of tablesObject.getProperties()) {
-        if (!Node.isPropertyAssignment(property)) {
+        if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
             continue;
         }
 
-        const initializer = property.getInitializer();
+        const initializer = tableMemberSource(property);
 
         if (!initializer) {
             continue;

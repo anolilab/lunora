@@ -318,6 +318,45 @@ describe("shardDO: failing subscription backoff", () => {
         expect(shard.runs).toBe(runsBefore + 1);
     });
 
+    it("keeps retrying a failing same-args re-subscribe after the object hibernates and forgets the streak", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const before = new FlakyShard(state, {});
+        const socket = createFakeWebSocket();
+
+        before.registerSocket(socket);
+        await before.subscribeFlaky(socket);
+        before.failing = true;
+        await before.write();
+
+        // A cold wake: the subscription comes back from the socket attachment, the in-memory streak does not.
+        const woken = new FlakyShard(state, {});
+
+        woken.failing = true;
+        await woken.subscribeFlaky(socket);
+
+        const last = errorFrames(socket).at(-1);
+
+        expect(last?.error?.code).toBe("SUBSCRIPTION_REFRESH_FAILED");
+        expect(last?.error?.retryAfterMs).toBe(1000);
+        expect(Object.hasOwn(socket.attachment?.subs ?? {}, "sub")).toBe(true);
+
+        await woken.subscribeFlaky(socket);
+
+        expect(errorFrames(socket).at(-1)?.error?.retryAfterMs).toBe(1000);
+    });
+
+    it("keeps a delta-merge re-snapshot registered when its seed fails", async () => {
+        expect.assertions(2);
+
+        // No flush has failed yet: the client re-subscribes because it could not merge a delta.
+        await shard.subscribeFlaky(ws);
+
+        expect(errorFrames(ws).at(-1)?.error?.retryAfterMs).toBe(1000);
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "sub")).toBe(true);
+    });
+
     it("runs a backed-off subscription zero times across writes inside its window", async () => {
         expect.assertions(1);
 

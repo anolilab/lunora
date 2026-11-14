@@ -67,11 +67,13 @@ All four scope the key with `scopeKey(requireOwner(ctx.auth.userId), key)` — `
 
 ```ts
 import { serveStorageObject } from "@lunora/server";
-import { verifySignedUrl } from "@lunora/storage";
+import { authorizeSignedGet } from "@lunora/storage";
 
 // inside an httpAction handler
-return serveStorageObject(ctx, key, request, async ({ request: r }) => (await verifySignedUrl(new URL(r.url), env.STORAGE_SIGNING_SECRET)).valid);
+return serveStorageObject(ctx, key, request, authorizeSignedGet(env.STORAGE_SIGNING_SECRET, { bucketName: "default" }));
 ```
+
+Checking only `verifySignedUrl(...).valid` is not enough: a valid signature also covers PUT upload URLs and URLs for other buckets or keys. `authorizeSignedGet` requires a GET for the key the route resolved, in the named bucket.
 
 `serveStorageObject` covers `GET` only. The upload half has no helper, so wire both verbs by hand:
 

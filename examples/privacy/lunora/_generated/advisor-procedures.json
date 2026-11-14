@@ -23,6 +23,7 @@
       "file": "admin",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 32,
       "visibility": "internal"
     },
     {
@@ -48,6 +49,7 @@
       "file": "admin",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 43,
       "visibility": "internal"
     },
     {
@@ -73,6 +75,7 @@
       "file": "admin",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 73,
       "visibility": "internal"
     },
     {
@@ -98,6 +101,7 @@
       "file": "requests",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 45,
       "visibility": "public"
     },
     {
@@ -123,6 +127,7 @@
       "file": "requests",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 54,
       "visibility": "public"
     },
     {
@@ -148,6 +153,7 @@
       "file": "requests",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 63,
       "visibility": "public"
     },
     {
@@ -173,6 +179,7 @@
       "file": "requests",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 76,
       "visibility": "public"
     },
     {
@@ -198,6 +205,7 @@
       "file": "requests",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 87,
       "visibility": "public"
     },
     {
@@ -223,6 +231,7 @@
       "file": "requests",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 93,
       "visibility": "internal"
     },
     {
@@ -248,6 +257,7 @@
       "file": "requests",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 105,
       "visibility": "internal"
     },
     {
@@ -273,6 +283,7 @@
       "file": "requests",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 146,
       "visibility": "internal"
     },
     {
@@ -298,6 +309,7 @@
       "file": "requests",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 149,
       "visibility": "internal"
     },
     {
@@ -323,6 +335,7 @@
       "file": "tasks",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 9,
       "visibility": "public"
     },
     {
@@ -348,6 +361,7 @@
       "file": "tasks",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 18,
       "visibility": "public"
     }
   ]

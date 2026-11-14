@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -29,10 +29,16 @@ interface AnalyzeFileEntry {
 }
 
 interface AnalyzeReport {
-    /** Files under lunora/_generated, when present. */
+    /**
+     * `metafile`: `topModules` and `generatedFiles` are source modules, sized from
+     * wrangler's esbuild metafile. `output-files`: the entry was pre-bundled, so
+     * `topModules` is the largest build output files instead.
+     */
+    breakdown: "metafile" | "output-files";
+    /** Source modules under a `_generated/` directory; empty without a metafile. */
     generatedFiles: ReadonlyArray<AnalyzeFileEntry>;
     outdir: string;
-    /** All files in the build output, sorted largest-first. */
+    /** Largest-first, at most ten; see `breakdown` for what each entry is. */
     topModules: ReadonlyArray<AnalyzeFileEntry>;
     totalBytes: number;
     totalFiles: number;
@@ -79,19 +85,100 @@ const formatBytes = (bytes: number): string => {
     return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
 };
 
-const buildReport = (outdir: string): AnalyzeReport => {
-    const all = walk(outdir);
-    const sorted = all.toSorted((a, b) => b.sizeBytes - a.sizeBytes);
-    const totalBytes = all.reduce((sum, entry) => sum + entry.sizeBytes, 0);
-    const generatedFiles = all.filter((entry) => entry.path.includes("_generated"));
+const METAFILE_NAME = "bundle-meta.json";
+const TOP_COUNT = 10;
+const GENERATED_SEGMENT = /(?:^|[\\/])_generated[\\/]/u;
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** wrangler writes this beside the bundle in `--outdir` to explain the folder; it is not uploaded. */
+const WRANGLER_README = "README.md";
+
+/** Maps are a debugging aid and metafile and README are wrangler's own bookkeeping; none is bundle size. */
+const isBundleOutput = (entry: AnalyzeFileEntry): boolean => !entry.path.endsWith(".map") && entry.path !== METAFILE_NAME && entry.path !== WRANGLER_README;
+
+const largestFirst = (entries: ReadonlyArray<AnalyzeFileEntry>): AnalyzeFileEntry[] => entries.toSorted((a, b) => b.sizeBytes - a.sizeBytes);
+
+/** Sums `bytesInOutput` per input path across every output in an esbuild metafile. */
+const sumInputBytes = (outputs: Record<string, unknown>): Map<string, number> => {
+    const sizes = new Map<string, number>();
+
+    for (const output of Object.values(outputs)) {
+        const inputs = isRecord(output) ? output["inputs"] : undefined;
+
+        if (!isRecord(inputs)) {
+            continue;
+        }
+
+        for (const [inputPath, input] of Object.entries(inputs)) {
+            const bytes = isRecord(input) ? input["bytesInOutput"] : undefined;
+
+            if (typeof bytes === "number") {
+                sizes.set(inputPath, (sizes.get(inputPath) ?? 0) + bytes);
+            }
+        }
+    }
+
+    return sizes;
+};
+
+/** Per-input sizes from `<outdir>/bundle-meta.json`, or `undefined` when there is none to trust. */
+const readInputSizes = (outdir: string): Map<string, number> | undefined => {
+    const metafilePath = join(outdir, METAFILE_NAME);
+
+    if (!existsSync(metafilePath)) {
+        return undefined;
+    }
+
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(readFileSync(metafilePath, "utf8"));
+    } catch {
+        return undefined;
+    }
+
+    const outputs = isRecord(parsed) ? parsed["outputs"] : undefined;
+
+    const sizes = isRecord(outputs) ? sumInputBytes(outputs) : undefined;
+
+    // A metafile that sizes no module would print an empty breakdown and skip the fallback.
+    return sizes !== undefined && sizes.size > 0 ? sizes : undefined;
+};
+
+const reportFromMetafile = (outdir: string, outputs: ReadonlyArray<AnalyzeFileEntry>, inputSizes: Map<string, number>): AnalyzeReport => {
+    const modules = largestFirst(
+        [...inputSizes].map(([path, sizeBytes]) => {
+            return { path, sizeBytes };
+        }),
+    );
 
     return {
-        generatedFiles,
+        breakdown: "metafile",
+        generatedFiles: modules.filter((entry) => GENERATED_SEGMENT.test(entry.path)),
         outdir,
-        topModules: sorted.slice(0, 10),
-        totalBytes,
-        totalFiles: all.length,
+        topModules: modules.slice(0, TOP_COUNT),
+        totalBytes: outputs.reduce((sum, entry) => sum + entry.sizeBytes, 0),
+        totalFiles: outputs.length,
     };
+};
+
+const reportFromOutputFiles = (outdir: string, outputs: ReadonlyArray<AnalyzeFileEntry>): AnalyzeReport => {
+    return {
+        breakdown: "output-files",
+        generatedFiles: [],
+        outdir,
+        topModules: largestFirst(outputs).slice(0, TOP_COUNT),
+        totalBytes: outputs.reduce((sum, entry) => sum + entry.sizeBytes, 0),
+        totalFiles: outputs.length,
+    };
+};
+
+const buildReport = (outdir: string): AnalyzeReport => {
+    const outputs = walk(outdir).filter((entry) => isBundleOutput(entry));
+    const inputSizes = readInputSizes(outdir);
+
+    return inputSizes ? reportFromMetafile(outdir, outputs, inputSizes) : reportFromOutputFiles(outdir, outputs);
 };
 
 const renderText = (report: AnalyzeReport, logger: Logger): void => {
@@ -100,7 +187,7 @@ const renderText = (report: AnalyzeReport, logger: Logger): void => {
 
     if (report.topModules.length > 0) {
         logger.info("");
-        logger.info("top modules by size:");
+        logger.info(report.breakdown === "metafile" ? "top modules by bytes in bundle:" : "largest output files:");
 
         for (const entry of report.topModules) {
             logger.info(`  ${formatBytes(entry.sizeBytes).padStart(10, " ")}  ${entry.path}`);
@@ -139,7 +226,8 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
         outdir = mkdtempSync(join(tmpdir(), "lunora-analyze-"));
         temporary = true;
 
-        const exec = execArgsFor(detectPackageManager(cwd), "wrangler", ["deploy", "--dry-run", "--outdir", outdir]);
+        // Bare `--metafile` makes wrangler write `<outdir>/bundle-meta.json`, the only per-module size source.
+        const exec = execArgsFor(detectPackageManager(cwd), "wrangler", ["deploy", "--dry-run", "--outdir", outdir, "--metafile"]);
 
         descriptor = {
             args: exec.args,
@@ -177,6 +265,10 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
         }
 
         const report = buildReport(outdir);
+
+        if (report.breakdown === "output-files") {
+            logger.warn("analyze: no readable esbuild metafile with module sizes (a pre-bundled entry writes none), so per-module sizes are unavailable");
+        }
 
         if (!json) {
             renderText(report, logger);

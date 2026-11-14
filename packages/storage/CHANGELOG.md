@@ -1,3 +1,7 @@
+## @lunora/storage [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.171...@lunora/storage@1.0.0-alpha.172) (2026-11-14)
+
+- security(storage): add authorizeSignedGet for serveStorageObject (#1542)
+
 ## @lunora/storage [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/storage@1.0.0-alpha.170...@lunora/storage@1.0.0-alpha.171) (2026-11-03)
 
 

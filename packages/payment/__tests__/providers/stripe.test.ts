@@ -1,6 +1,7 @@
 import type { Stripe } from "stripe";
 import { describe, expect, it, vi } from "vitest";
 
+import { LunoraPaymentError } from "../../src/errors";
 import { money } from "../../src/money";
 import type { StripeClientLike } from "../../src/providers/stripe";
 import { createStripeAdapter } from "../../src/providers/stripe";
@@ -45,6 +46,9 @@ const makeClient = (calls: RecordedCall[]): Stripe =>
                     calls.push({ args: [parameters, options], name: "checkout" });
 
                     return { id: "cs_1", url: "https://checkout.test" };
+                },
+                retrieve: async (id: string) => {
+                    return { id, status: "open", url: "https://checkout.test" };
                 },
             },
         },
@@ -157,6 +161,144 @@ describe("stripe adapter", () => {
 
         expect((checkout?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe("checkout:stripe:user_1");
         expect((checkout?.args[0] as { metadata?: Record<string, string> }).metadata?.referenceId).toBe("user_1");
+    });
+
+    describe("checkout replay of a finished session", () => {
+        const request = {
+            cancelUrl: "https://x/cancel",
+            idempotencyKey: "checkout:stripe:user_1",
+            mode: "subscription" as const,
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        };
+
+        /**
+         * A client whose `checkout.sessions.create` answers with the queued responses, in order.
+         * `retrieve` reports each session's live status: the one in `current`, else the status it
+         * was created with, since Stripe's idempotent replay returns the stored creation body.
+         */
+        const replayingClient = (
+            calls: RecordedCall[],
+            responses: { id: string; status?: string; url: string }[],
+            current: Record<string, string> = {},
+        ): Stripe => {
+            const queue = [...responses];
+            const created = new Map(responses.map((response) => [response.id, response]));
+
+            return {
+                checkout: {
+                    sessions: {
+                        create: async (parameters: Record<string, unknown>, options?: { idempotencyKey?: string }) => {
+                            calls.push({ args: [parameters, options], name: "checkout" });
+
+                            return queue.shift();
+                        },
+                        retrieve: async (id: string) => {
+                            calls.push({ args: [id], name: "retrieve" });
+
+                            const session = created.get(id);
+
+                            return { ...session, status: current[id] ?? session?.status };
+                        },
+                    },
+                },
+            } as unknown as Stripe;
+        };
+
+        it("retries when a replayed session reads open but has since completed", async () => {
+            expect.assertions(2);
+
+            // The replay returns the stored creation body, which still says `open`.
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () =>
+                    replayingClient(
+                        calls,
+                        [
+                            { id: "cs_old", status: "open", url: "https://checkout.test/old" },
+                            { id: "cs_new", status: "open", url: "https://checkout.test/new" },
+                        ],
+                        { cs_old: "complete" },
+                    ),
+                webhookSecret: "whsec",
+            });
+
+            await expect(adapter.createCheckout(request)).resolves.toEqual({ id: "cs_new", provider: "stripe", url: "https://checkout.test/new" });
+            expect((calls.filter((call) => call.name === "checkout")[1]?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe(
+                "checkout:stripe:user_1:cs_old",
+            );
+        });
+
+        it.each(["complete", "expired"])("retries once under a derived key when the replayed session is %s", async (status) => {
+            expect.assertions(4);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () =>
+                    replayingClient(calls, [
+                        { id: "cs_old", status, url: "https://checkout.test/old" },
+                        { id: "cs_new", status: "open", url: "https://checkout.test/new" },
+                    ]),
+                webhookSecret: "whsec",
+            });
+
+            const result = await adapter.createCheckout(request);
+
+            expect(result).toEqual({ id: "cs_new", provider: "stripe", url: "https://checkout.test/new" });
+
+            const checkouts = calls.filter((call) => call.name === "checkout");
+
+            expect(checkouts).toHaveLength(2);
+            expect((checkouts[1]?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe("checkout:stripe:user_1:cs_old");
+            expect(checkouts[1]?.args[0]).toEqual(checkouts[0]?.args[0]);
+        });
+
+        it("returns an open session from a single call", async () => {
+            expect.assertions(2);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () => replayingClient(calls, [{ id: "cs_1", status: "open", url: "https://checkout.test/1" }]),
+                webhookSecret: "whsec",
+            });
+
+            await expect(adapter.createCheckout(request)).resolves.toEqual({ id: "cs_1", provider: "stripe", url: "https://checkout.test/1" });
+            expect(calls.filter((call) => call.name === "checkout")).toHaveLength(1);
+        });
+
+        it("rejects with PROVIDER_ERROR when the retry also replays a finished session", async () => {
+            expect.assertions(3);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () =>
+                    replayingClient(calls, [
+                        { id: "cs_old", status: "complete", url: "https://checkout.test/old" },
+                        { id: "cs_older", status: "expired", url: "https://checkout.test/older" },
+                    ]),
+                webhookSecret: "whsec",
+            });
+
+            const failure = await adapter.createCheckout(request).catch((error: unknown) => error);
+
+            expect(failure).toBeInstanceOf(LunoraPaymentError);
+            expect(failure).toMatchObject({ code: "PROVIDER_ERROR" });
+            expect(calls.filter((call) => call.name === "checkout")).toHaveLength(2);
+        });
+
+        it("does not retry a finished session when the request carries no idempotency key", async () => {
+            expect.assertions(2);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () => replayingClient(calls, [{ id: "cs_old", status: "complete", url: "https://checkout.test/old" }]),
+                webhookSecret: "whsec",
+            });
+
+            await expect(adapter.createCheckout({ ...request, idempotencyKey: undefined })).resolves.toMatchObject({ id: "cs_old" });
+            expect(calls.filter((call) => call.name === "checkout")).toHaveLength(1);
+        });
     });
 
     it("forwards a checkout expiry in the seconds Stripe takes, and none when unset", async () => {
@@ -398,6 +540,37 @@ describe("stripe adapter", () => {
 
         expect(action.type).toBe("payment.captured");
         expect(action.sessionId).toBe("pi_1");
+    });
+
+    it("does not record a setup-mode checkout session as a captured payment (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
+
+        // A setup session saves a card: no PaymentIntent, `no_payment_required`, and no money moves.
+        const event = {
+            data: { object: { customer: "cus_1", id: "cs_setup", mode: "setup", payment_status: "no_payment_required", setup_intent: "seti_1" } },
+            id: "evt_cs_setup",
+            type: "checkout.session.completed",
+        };
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        expect(action.type).toBe("unhandled");
+    });
+
+    it("does not record an async-settled setup-mode checkout session as a captured payment (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
+
+        const event = {
+            data: { object: { customer: "cus_1", id: "cs_setup", mode: "setup", payment_status: "no_payment_required", setup_intent: "seti_1" } },
+            id: "evt_cs_setup_async",
+            type: "checkout.session.async_payment_succeeded",
+        };
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        expect(action.type).toBe("unhandled");
     });
 
     it("still captures a fully discounted session, which never gets a payment intent (regression)", async () => {

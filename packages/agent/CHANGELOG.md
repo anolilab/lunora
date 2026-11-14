@@ -1,3 +1,7 @@
+## @lunora/agent [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.282...@lunora/agent@1.0.0-alpha.283) (2026-11-14)
+
+- fix: land five small audit fixes (#1538)
+
 ## @lunora/agent [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/agent@1.0.0-alpha.281...@lunora/agent@1.0.0-alpha.282) (2026-11-05)
 
 - fix(mail): bound sends, dedupe on idempotency keys, guard inbound size (#1483)

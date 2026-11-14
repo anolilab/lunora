@@ -49,8 +49,12 @@ const PAYMENT_TRANSITIONS: Record<PaymentState, Partial<Record<PaymentAction, Pa
 const SUBSCRIPTION_TRANSITIONS: Record<SubscriptionState, Partial<Record<SubscriptionAction, SubscriptionState>>> = {
     active: { cancel: "canceled", mark_past_due: "past_due", pause: "paused", renew: "active" },
     canceled: {},
-    past_due: { activate: "active", cancel: "canceled", pause: "paused", renew: "active" },
-    paused: { cancel: "canceled", resume: "active" },
+    // Self-loop, not an exit: a `subscription.past_due` update that changes only period, price, quantity or
+    // `cancelAtPeriodEnd` arrives with the same status. It must merge those fields and advance `lastEventAt`,
+    // or the staleness guard admits a delayed older `active` and re-entitles a customer whose payment failed.
+    past_due: { activate: "active", cancel: "canceled", mark_past_due: "past_due", pause: "paused", renew: "active" },
+    // Same reason as `past_due`: a `subscription.paused` update on a paused row is a field change, not an illegal edge.
+    paused: { cancel: "canceled", pause: "paused", resume: "active" },
     // `pause` is NOT optional here, even though no adapter's webhook mapping ever writes `trialing`
     // (`subscription-event.ts` routes it to `subscription.active`): the reconcile sweep does, straight
     // from `getSubscriptionStatus`, and Stripe's `pause_collection` at trial end then arrives as
