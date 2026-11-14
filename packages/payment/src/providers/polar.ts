@@ -474,7 +474,11 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
             // Polar's plan change (`productId`) and seat change (`seats`) are separate update variants,
             // so one call cannot carry both. Refuse the combined patch rather than drop one half.
             if (patch.priceId !== undefined && patch.quantity !== undefined) {
-                return notSupported("changing the plan and the quantity in one update; apply them as two updates");
+                // A refusal before any request, so it is a VALIDATION_ERROR: the facade can tell nothing reached the provider.
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    "polar does not support changing the plan and the quantity in one update; apply them as two updates",
+                );
             }
 
             if (patch.quantity !== undefined && (!Number.isSafeInteger(patch.quantity) || patch.quantity < 0)) {
