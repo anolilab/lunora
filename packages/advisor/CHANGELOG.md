@@ -1,3 +1,7 @@
+## @lunora/advisor [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.291...@lunora/advisor@1.0.0-alpha.292) (2026-11-14)
+
+- feat(advisor): report declaration file and line on declaration findings (#1584)
+
 ## @lunora/advisor [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.290...@lunora/advisor@1.0.0-alpha.291) (2026-11-14)
 
 - fix(codegen): follow sql text through consts and casts for sql_injection_risk (#1565)

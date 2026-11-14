@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.413](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.412...@lunora/codegen@1.0.0-alpha.413) (2026-11-14)
+
+- feat(advisor): report declaration file and line on declaration findings (#1584)
+
 ## @lunora/codegen [1.0.0-alpha.412](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.411...@lunora/codegen@1.0.0-alpha.412) (2026-11-14)
 
 - fix(codegen): follow body destructures and composed locals in the args taint (#1569)

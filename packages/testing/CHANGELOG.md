@@ -1,3 +1,7 @@
+## @lunora/testing [1.0.0-alpha.337](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.336...@lunora/testing@1.0.0-alpha.337) (2026-11-14)
+
+- fix(testing): wire-round-trip lunoraTest results like production (#1532)
+
 ## @lunora/testing [1.0.0-alpha.336](https://github.com/anolilab/lunora/compare/@lunora/testing@1.0.0-alpha.335...@lunora/testing@1.0.0-alpha.336) (2026-11-14)
 
 - fix(testing): run a scheduled job's composed calls on the virtual clock (#1531)
