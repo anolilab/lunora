@@ -554,15 +554,18 @@ describe("lunora import --from firebase", () => {
         await expectAbort(root, "firebase", /unrecognised Firestore value/);
     });
 
-    it.each(["NaN", "Infinity", "-Infinity"])("rejects a non-finite doubleValue %s rather than writing null", async (doubleValue) => {
-        expect.assertions(3);
+    it.each(["NaN", "Infinity", "-Infinity", "", " ", null])(
+        "rejects a non-finite or malformed doubleValue %j rather than writing a number",
+        async (doubleValue) => {
+            expect.assertions(3);
 
-        const root = writeDump({
-            "t.json": JSON.stringify({ documents: [{ fields: { ratio: { doubleValue } }, name: "projects/p/databases/(default)/documents/t/x1" }] }),
-        });
+            const root = writeDump({
+                "t.json": JSON.stringify({ documents: [{ fields: { ratio: { doubleValue } }, name: "projects/p/databases/(default)/documents/t/x1" }] }),
+            });
 
-        await expectAbort(root, "firebase", /not a finite number/);
-    });
+            await expectAbort(root, "firebase", /not a finite number/);
+        },
+    );
 
     it("rejects a document whose own `_id` field would collide with the reserved id", async () => {
         expect.assertions(3);

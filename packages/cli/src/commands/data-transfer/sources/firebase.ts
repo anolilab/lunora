@@ -124,7 +124,8 @@ const decodeBytes = (raw: NonNullable<FirestoreValue["bytesValue"]>, path: strin
  * so `JSON.stringify` would write `null` and the value would be lost silently.
  */
 const decodeDouble = (raw: number | string, path: string): number => {
-    const parsed = Number(raw);
+    // `Number(null)` and `Number("")` are both 0, so only a number or a non-blank string is parsed at all.
+    const parsed = typeof raw === "number" || (typeof raw === "string" && raw.trim() !== "") ? Number(raw) : Number.NaN;
 
     if (!Number.isFinite(parsed)) {
         throw new LunoraError(
