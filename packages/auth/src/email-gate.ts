@@ -1,12 +1,14 @@
 /**
- * Wire the email-domain gate into better-auth's native signup path.
+ * Wire the email-domain gate into better-auth's native user lifecycle.
  *
- * better-auth mints users through its own `/sign-up/email` endpoint (and OAuth
- * linking), which never passes through a Lunora procedure middleware. To gate
- * those, we hook better-auth's `databaseHooks.user.create.before`: it classifies
- * the incoming address with {@link assertEmailAllowed} and, on a policy failure,
- * throws a better-auth `APIError` carrying the Lunora `code` — so the client sees
- * a clean `400 { code: "EMAIL_DOMAIN_BLOCKED", … }` instead of a generic 500.
+ * better-auth mints users and changes addresses through its own endpoints and
+ * `internalAdapter` (OAuth linking, `/change-email`, the email-OTP and admin
+ * updates), none of which pass through a Lunora procedure middleware. So the gate
+ * hooks two seams: `databaseHooks.user.create.before` for sign-up, and
+ * `databaseHooks.user.update.before` for address changes. Both classify the
+ * incoming address with {@link assertEmailAllowed} and, on a policy failure, throw
+ * a better-auth `APIError` carrying the Lunora `code`, so the client sees a clean
+ * `400 { code: "EMAIL_DOMAIN_BLOCKED", … }` instead of a generic 500.
  *
  * The classification is pure-data/edge-safe on the default path; the opt-in MX
  * step (`mx: true`) is the only branch that touches DNS.
@@ -25,13 +27,18 @@ type DatabaseHooks = NonNullable<BetterAuthOptions["databaseHooks"]>;
 /** The `user.create.before` hook signature better-auth calls before persisting a new user. */
 type UserCreateBefore = NonNullable<NonNullable<NonNullable<DatabaseHooks["user"]>["create"]>["before"]>;
 
+/** The `user.update.before` hook signature better-auth calls with the patch of a user update. */
+type UserUpdateBefore = NonNullable<NonNullable<NonNullable<DatabaseHooks["user"]>["update"]>["before"]>;
+
 /** Config for the signup gate hooks: the base {@link EmailGateConfig} plus an optional classification tap. */
 interface EmailGateHookConfig extends EmailGateConfig {
     /**
      * Called with the resolved classification once the gate passes, so app policy
      * can react to `free` vs `business` at signup (e.g. tag the account). Never
-     * fires when the gate rejects. `context` is better-auth's endpoint context
-     * (`null` outside a request, e.g. an internal create).
+     * fires when the gate rejects. Fires only at creation: an address change never
+     * calls it, because its hook receives the patch rather than the new user record.
+     * `context` is better-auth's endpoint context (`null` outside a request, e.g. an
+     * internal create).
      */
     onClassify?: (classification: EmailClassification, user: Record<string, unknown>, context: unknown) => void;
 }
@@ -55,10 +62,25 @@ const statusString = (status: number): "BAD_REQUEST" | "INTERNAL_SERVER_ERROR" |
 };
 
 /**
+ * Classify an address under the given list loads and rethrow a policy failure as
+ * a better-auth `APIError`, so the transport carries the right status and `code`.
+ * Shared by the create and update hooks so both reject with the same shape.
+ */
+const gateAddress = async (email: string, config: EmailGateHookConfig, lists: { disposable: boolean; free: boolean }): Promise<EmailClassification> => {
+    try {
+        return await assertEmailAllowed(email, { ...config, lists });
+    } catch (error) {
+        if (error instanceof LunoraError) {
+            throw new APIError(statusString(error.status), { code: error.code, message: error.message });
+        }
+
+        throw error;
+    }
+};
+
+/**
  * Build a better-auth `user.create.before` hook that enforces the email gate.
- * On a policy failure it rethrows the coded {@link LunoraError} as a better-auth
- * `APIError` so the transport carries the right status + `code`. A record with
- * no string `email` (some plugin flows) passes through ungated.
+ * A record with no string `email` (some plugin flows) passes through ungated.
  */
 const buildBeforeHook =
     (config: EmailGateHookConfig): UserCreateBefore =>
@@ -69,31 +91,48 @@ const buildBeforeHook =
             return;
         }
 
-        let classification: EmailClassification;
-
-        try {
-            const observed = config.onClassify !== undefined;
-
-            classification = await assertEmailAllowed(email, {
-                ...config,
-                lists: { disposable: config.blockDisposable !== false || observed, free: observed },
-            });
-        } catch (error) {
-            if (error instanceof LunoraError) {
-                throw new APIError(statusString(error.status), { code: error.code, message: error.message });
-            }
-
-            throw error;
-        }
+        const observed = config.onClassify !== undefined;
+        const classification = await gateAddress(email, config, { disposable: config.blockDisposable !== false || observed, free: observed });
 
         config.onClassify?.(classification, user, context);
     };
 
 /**
- * Produce a `databaseHooks` fragment that gates better-auth's native signup on
- * the email-domain policy. Spread it into `createAuth({ databaseHooks: … })`, or
- * use {@link withEmailGate} to merge it (composing with any existing
- * `user.create.before`).
+ * Build a better-auth `user.update.before` hook that gates address changes. Every
+ * address-change path (`/change-email`, the email-OTP change, the admin update and
+ * `AuthAdmin.updateUser`) writes through `internalAdapter.updateUser`, and that
+ * hook receives only the patch, so the gate reads `patch.email` and skips patches
+ * that do not carry an address. `onClassify` stays creation-only, so the lists
+ * loaded here are the ones the policy needs, not the ones a tap would need.
+ */
+const buildUpdateBeforeHook =
+    (config: EmailGateHookConfig): UserUpdateBefore =>
+    async (patch) => {
+        if (patch.email === undefined) {
+            return;
+        }
+
+        // A supplied blank or non-string address is not "no address change": the admin
+        // update route passes such values straight to the adapter, so it must not slip through.
+        if (typeof patch.email !== "string" || patch.email === "") {
+            throw new APIError("BAD_REQUEST", { code: "VALIDATION_ERROR", message: "email must be a non-empty string" });
+        }
+
+        await gateAddress(patch.email, config, { disposable: config.blockDisposable !== false, free: false });
+    };
+
+/** The patch better-auth will persist: the (possibly mutated) patch, merged with a hook's `{ data }` as better-auth merges it. */
+type UserUpdatePatch = Parameters<UserUpdateBefore>[0];
+
+// `| null`: a plain-JS hook can return null despite the type, and `typeof null` is "object".
+const effectiveUpdatePatch = (result: Awaited<ReturnType<UserUpdateBefore>> | null, patch: UserUpdatePatch): UserUpdatePatch =>
+    typeof result === "object" && result !== null && "data" in result ? { ...patch, ...result.data } : patch;
+
+/**
+ * Produce a `databaseHooks` fragment that gates better-auth's user lifecycle on the
+ * email-domain policy: sign-up (`user.create.before`) and address changes
+ * (`user.update.before`). Spread it into `createAuth({ databaseHooks: … })`, or
+ * use {@link withEmailGate} to merge it (composing with any existing hooks).
  *
  * ```ts
  * const auth = createAuth({
@@ -105,31 +144,57 @@ const buildBeforeHook =
  */
 const emailGateDatabaseHooks = (config: EmailGateHookConfig = {}): DatabaseHooks => {
     return {
-        user: { create: { before: buildBeforeHook(config) } },
+        user: {
+            create: { before: buildBeforeHook(config) },
+            update: { before: buildUpdateBeforeHook(config) },
+        },
     };
 };
 
 /**
- * Merge the email-domain signup gate into an existing better-auth options object,
- * preserving any `databaseHooks` the caller already set. If they already declared
- * a `user.create.before`, the gate runs first (rejecting disposable signups
- * before their hook sees them), then theirs runs on the (possibly rewritten) user.
+ * Merge the email-domain gate into an existing better-auth options object,
+ * preserving any `databaseHooks` the caller already set. For each hook the caller
+ * already declared (`user.create.before`, `user.update.before`), the gate runs
+ * first, rejecting a disallowed address before their hook sees it, then theirs
+ * runs on the (possibly rewritten) input. Other existing hooks, such as
+ * `user.update.after`, are kept as they were.
  *
  * ```ts
  * const auth = createAuth(withEmailGate({ secret, database }, { blockDisposable: true }));
  * ```
  */
 const withEmailGate = (options: BetterAuthOptions, config: EmailGateHookConfig = {}): BetterAuthOptions => {
-    const gate = buildBeforeHook(config);
-    const existing = options.databaseHooks?.user?.create?.before;
+    const gateCreate = buildBeforeHook(config);
+    const gateUpdate = buildUpdateBeforeHook(config);
+    const existingCreate = options.databaseHooks?.user?.create?.before;
+    const existingUpdate = options.databaseHooks?.user?.update?.before;
 
-    const before: UserCreateBefore = existing
+    const createBefore: UserCreateBefore = existingCreate
         ? async (user, context) => {
-              await gate(user, context);
+              await gateCreate(user, context);
 
-              return existing(user, context);
+              return existingCreate(user, context);
           }
-        : gate;
+        : gateCreate;
+
+    // The caller's hook runs after the gate and may rewrite the address (mutating the patch, or
+    // returning replacement data that better-auth persists), so the gate checks the result too.
+    const updateBefore: UserUpdateBefore = existingUpdate
+        ? async (patch, context) => {
+              await gateUpdate(patch, context);
+
+              const checkedEmail = patch.email;
+              const result = await existingUpdate(patch, context);
+              const effective = effectiveUpdatePatch(result, patch);
+
+              // An unchanged address was already classified; re-checking it would repeat the MX lookup.
+              if (effective.email !== checkedEmail) {
+                  await gateUpdate(effective, context);
+              }
+
+              return result;
+          }
+        : gateUpdate;
 
     return {
         ...options,
@@ -139,7 +204,11 @@ const withEmailGate = (options: BetterAuthOptions, config: EmailGateHookConfig =
                 ...options.databaseHooks?.user,
                 create: {
                     ...options.databaseHooks?.user?.create,
-                    before,
+                    before: createBefore,
+                },
+                update: {
+                    ...options.databaseHooks?.user?.update,
+                    before: updateBefore,
                 },
             },
         },

@@ -636,6 +636,15 @@ page deltas when every field outside `page` is byte-identical to the last
 delivered value, so a moved `continueCursor` or a flipped `isDone` always arrives
 as a full `data` snapshot instead.
 
+**`delta.table`.** A row delta's `table` is a real table name only when the query's read set is
+exactly one table and nothing else. A query that read several tables, read none, or depends on
+every table (the admin wildcard behind Studio's live views, whose result may depend on any table)
+gets the placeholder `"__lunora__"` instead (a leading `__` is reserved for framework tables, so
+no user table has that name). The server diffs the
+query's result, whose rows carry no record of their source table, so it cannot name the table
+of each row. A client MUST NOT route, key or filter by this field: the merge is by `key` / `_id`
+alone, and `table` only marks the payload as a row delta (it must be a string).
+
 **Insert placement.** An `insert` op carries no index, so a merging client
 decides the position itself: if the new row and its neighbours all carry a
 numeric `_creationTime`, insert before the first neighbour that breaks the
@@ -798,6 +807,16 @@ monotonic on the read side).
 Without that split, a socket dying mid-run left the client having ACKed a
 checkpoint whose remaining rows it never received: its next `sinceSeq` resolved
 as "already current" and the half-applied list was never re-snapshotted.
+
+A `settled` that arrives while a run is held, and a `delta` frame the decoder refuses,
+whether or not it is part of a run, discard the held frames and freeze the subscription,
+as a row change that cannot merge does. The settled cursor is past rows the client never
+applied, and a refused frame's rows never reached the base. A later valid `delta` would
+commit against a base missing them and advance the cursor past them, so a reconnect
+would never replay them. While frozen, `delta`, `resume` and `settled` frames are
+ignored until a `data` frame or a resubscribe clears the freeze. A refused frame
+reports `WIRE_DECODE_FAILED` once; a mid-run `settled` reports nothing. A
+resubscribe after the freeze replays the run from before it.
 
 A single-frame run is its own last frame and carries the cursor as before; so
 does the `data` snapshot.

@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.271...@lunora/payment@1.0.0-alpha.272) (2026-11-13)
+
+- security(payment)!: owner-checked subscription changes, replace the raw adapter with provider (#1544)
+
 ## @lunora/payment [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.270...@lunora/payment@1.0.0-alpha.271) (2026-11-08)
 
 - feat(payment): refuse a second live subscription per reference when asked (#1510)

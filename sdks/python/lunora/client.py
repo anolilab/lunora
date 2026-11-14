@@ -301,8 +301,48 @@ def _decode_row_op(op: Any) -> tuple:
 #: Sentinel ``_decode_row_op`` returns for a delete.
 _DELETE = object()
 
-#: Sentinel a :meth:`LunoraClient.stream` buffer receives when the client closes.
+#: Sentinel a :meth:`LunoraClient.watch` buffer receives when the client closes.
 _CLOSED = object()
+
+
+def _once(release: Unsubscribe) -> Unsubscribe:
+    """Make a release safe to reach from both the loop's exit and ``aclose()``."""
+    lock = threading.Lock()
+    done = False
+
+    def run() -> None:
+        nonlocal done
+        with lock:
+            if done:
+                return
+            done = True
+        release()
+
+    return run
+
+
+class WatchStream:
+    """The iterator :meth:`LunoraClient.watch` returns.
+
+    ``async for`` yields each value. ``aclose()`` releases the subscription whether
+    or not the loop ever started, which is the only release a watch that was never
+    iterated has.
+    """
+
+    def __init__(self, inner: AsyncIterator, release: Unsubscribe) -> None:
+        self._inner = inner
+        self._release = release
+
+    def __aiter__(self) -> WatchStream:
+        return self
+
+    async def __anext__(self) -> Any:
+        return await self._inner.__anext__()
+
+    async def aclose(self) -> None:
+        self._release()
+        await self._inner.aclose()
+
 
 #: Default for an RPC's ``token``: send the bearer held when the request goes
 #: out. ``None`` cannot mean that, since it is a real value: no bearer at all.
@@ -333,6 +373,10 @@ class SocketRunInProgressError(RuntimeError):
 
 
 class _Subscription:
+    def discard_run(self) -> None:
+        self.pending_run = None
+        self.run_held = False
+
     def __init__(self, sub_id: str, function_path: str, args: Any, shard_key: Optional[str]) -> None:
         self.id = sub_id
         self.function_path = function_path
@@ -350,6 +394,11 @@ class _Subscription:
         #: or a resubscribe clears it, delta frames are ignored whole, so a later frame's cursor
         #: cannot move the resume position past the dropped change.
         self.poisoned = False
+        #: Row changes of an unfinished run (``more: true`` frames), merged but not committed. Held
+        #: apart from ``server_base`` so the resume cursor only moves when the run's last frame lands;
+        #: anything that ends the run drops it, and the server replays the whole run from the cursor.
+        self.pending_run: Any = None
+        self.run_held = False
         #: The DISPLAYED value: ``server_base`` folded through
         #: ``optimistic_layers``.
         self.last_value: Any = None
@@ -522,6 +571,9 @@ class LunoraClient:
             self._send = None
             self._attach_generation += 1
             attach_generation = self._attach_generation
+            # The previous socket's run will not finish, and a failed connect below must not keep it either.
+            for sub in self._subs.values():
+                sub.discard_run()
         send(build_connect_frame(self.client_id, context, session))
         with self._lock:
             # A detach, or a newer attach, while connect was in flight supersedes this one: the
@@ -561,6 +613,9 @@ class LunoraClient:
             self._send = None
             self._attach_generation += 1
             self._pending_retries.clear()
+            # The cursor never moved for a held run, so the next resend replays it whole.
+            for sub in self._subs.values():
+                sub.discard_run()
             notify = close_code == TOKEN_EXPIRED_CLOSE
             if close_code == REFUSED_CLOSE and reason != CONNECT_DEADLINE_REASON:
                 opened = self._socket_generation
@@ -803,6 +858,7 @@ class LunoraClient:
         for sub in self._subs.values():
             sub.server_base = None
             sub.poisoned = False
+            sub.discard_run()
             sub.server_cursor = None
             sub.server_epoch = None
             sub.acked = False
@@ -817,7 +873,7 @@ class LunoraClient:
     def close(self) -> None:
         """Reject every queued write so no caller waits on a dead client, and end every stream.
 
-        Every :meth:`stream` generator returns and :meth:`connect_and_run`
+        Every :meth:`watch` generator returns and :meth:`connect_and_run`
         returns — without this a consumer's ``async for`` over a closed client
         waited forever, and the read loop went on delivering frames to it.
         Durable storage is untouched: the next session restores those writes.
@@ -1060,15 +1116,17 @@ class LunoraClient:
 
         return unsubscribe
 
-    def stream(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> AsyncIterator:
+    def watch(self, function_path: str, args: Any = None, shard_key: Optional[str] = None) -> AsyncIterator:
         """A live query as an async generator, for ``async for`` and the loops built on it.
 
         Each call opens its OWN subscription — at CALL time, not at first
-        ``__anext__``, so a frame arriving before the loop starts is not lost —
-        and tears it down when the generator is closed: breaking out of the loop,
-        cancelling the task, or calling ``aclose()``. A consumer never holds an
-        unsubscribe handle. Use :meth:`subscribe` directly when the value
-        outlives one loop.
+        ``__anext__``, so a frame arriving before the loop starts is not lost.
+        The subscription is released by ``aclose()``, which also works on a watch
+        that was never iterated, and when the loop exits after it started (a
+        ``break``, an exception, or a cancelled task). A watch the loop never
+        started is released only by ``aclose()``, so close it in a ``try`` /
+        ``finally`` that awaits ``aclose()``. Use :meth:`subscribe` directly when
+        the value outlives one loop.
 
         A subscription error is raised into the loop rather than delivered as a
         value, which is what stops a caller from mistaking it for data.
@@ -1093,7 +1151,7 @@ class LunoraClient:
             with contextlib.suppress(RuntimeError):  # the loop is already closed
                 loop.call_soon_threadsafe(values.put_nowait, _CLOSED)
 
-        unsubscribe = self.subscribe(function_path, args, values.put_nowait, values.put_nowait, shard_key)
+        release = _once(self.subscribe(function_path, args, values.put_nowait, values.put_nowait, shard_key))
 
         async def iterate() -> AsyncIterator:
             # Registered on the first `__anext__`, not at call time: a generator
@@ -1116,9 +1174,9 @@ class LunoraClient:
             finally:
                 with self._lock:
                     self._close_hooks.remove(end)
-                unsubscribe()
+                release()
 
-        return iterate()
+        return WatchStream(iterate(), release)
 
     def subscribe_shape(
         self,
@@ -1169,18 +1227,32 @@ class LunoraClient:
                 return
             # The resubscribe resumes from the last applied cursor, so a dropped change is
             # replayed; if it is still unmergeable the flag is set again.
-            for sub in self._subs.values():
-                sub.poisoned = False
-            frames = [
-                build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch)
+            queries = [
+                (sub, build_subscribe_frame(sub.id, sub.function_path, sub.args, since_seq=sub.server_cursor, since_epoch=sub.server_epoch))
                 for sub in self._subs.values()
             ]
-            frames += [
+            shapes = [
                 build_shape_subscribe_frame(shape.id, shape.name, shape.args, since_checkpoint=shape.server_cursor, since_epoch=shape.server_epoch)
                 for shape in self._shapes.values()
             ]
 
-        for frame in frames:
+        for sub, frame in queries:
+            # The flag clears per send, not up front: a send that fails means the server never
+            # saw the replay, so the dropped change is still unapplied and a later delta must
+            # not advance the cursor past it.
+            with self._lock:
+                was_poisoned = sub.poisoned
+                sub.poisoned = False
+                sub.discard_run()
+            try:
+                sender(frame)
+            except BaseException:
+                if was_poisoned:
+                    with self._lock:
+                        sub.poisoned = True
+                raise
+
+        for frame in shapes:
             sender(frame)
 
     def retry_due_subscriptions(self, now: Optional[float] = None) -> int:
@@ -1356,21 +1428,29 @@ class LunoraClient:
             # the loop — and with it every OTHER subscription on this client —
             # over one bad frame, where the reference and the Java port both
             # surface it and keep reading.
-            reported = SubscriptionError(str(error), "INVALID_FRAME")
+            reported = SubscriptionError(str(error), "INVALID_FRAME" if has_data else WIRE_DECODE_FAILED)
             if sub is not None:
-                deferred.extend(partial(cb, reported) for cb in sub.error_callbacks)
+                was_frozen = sub.poisoned
+                sub.discard_run()
+                if not has_data:
+                    # The refused rows never reached the base, so a later delta would commit past them:
+                    # freeze until a snapshot or a resubscribe, and report only when the freeze starts.
+                    sub.poisoned = True
+                if has_data or not was_frozen:
+                    deferred.extend(partial(cb, reported) for cb in sub.error_callbacks)
             return {"kind": "error", "id": frame.get("id"), "error": reported}
         displayed = value
         if sub is not None:
             if has_data:
                 # A snapshot is authoritative: it supersedes whatever change was dropped.
                 sub.poisoned = False
+                sub.discard_run()
             elif sub.poisoned:
                 return {"kind": "delta", "id": frame.get("id"), "value": sub.server_base, "displayed": sub.last_value, "unmerged": True}
         if not has_data and is_mutation_delta(value) and sub is not None:
             # A row change merges into the SERVER BASE, never the displayed value: the optimistic
             # layers are re-folded onto the result below, exactly as for a `data` frame.
-            merged = apply_delta(sub.server_base, value)
+            merged = apply_delta(sub.pending_run if sub.run_held else sub.server_base, value)
             if merged is None:
                 # DIVERGENCE from the reference, which re-snapshots here: this port has no
                 # resubscribe-for-snapshot path. Publishing the `{key, op, table, row}` envelope
@@ -1380,6 +1460,7 @@ class LunoraClient:
                 # this change. Delta frames are ignored until a snapshot or a resubscribe, and
                 # that resubscribe resumes from the last applied cursor, so the server replays it.
                 sub.poisoned = True
+                sub.discard_run()
                 # Reported once, when the freeze starts: an app that stays silent shows a stale list.
                 notice = SubscriptionError("row change could not be merged; subscription frozen until a snapshot or resubscribe", "delta_unmergeable")
                 deferred.extend(partial(cb, notice) for cb in sub.error_callbacks)
@@ -1390,9 +1471,15 @@ class LunoraClient:
                     "displayed": sub.last_value,
                     "unmerged": True,
                 }
+            if frame.get("more") is True:
+                # Mid-run: nothing publishes, and cursor, epoch and optimistic layers wait for the last frame.
+                sub.pending_run = merged
+                sub.run_held = True
+                return {"kind": "delta", "id": frame.get("id"), "value": sub.server_base, "displayed": sub.last_value, "held": True}
             value = displayed = merged
         if sub is not None:
             self._pending_retries.pop(sub.id, None)
+            sub.discard_run()
             sub.server_base = value
             # Only an integer cursor advances the tracked one. A frame that omits
             # it, or sends an explicit null, must LEAVE it where it was — the
@@ -1462,9 +1549,16 @@ class LunoraClient:
         sub = self._subs.get(_frame_key(frame.get("id")))
         if sub is not None:
             sub.acked = True
+            # Both end a held run. A settled that lands mid-run must not advance the cursor either:
+            # the run's rows were dropped, so resuming from the settled cursor would skip them.
+            held = sub.run_held
+            sub.discard_run()
+            if kind == "settled" and held:
+                # Freezes like an unmergeable row change, silently: the settled cursor is past rows never applied.
+                sub.poisoned = True
         # A poisoned subscription ignores these frames too: their cursor would move
         # the resume position past the dropped row change.
-        if sub is not None and not sub.poisoned:
+        if sub is not None and not sub.poisoned and not (kind == "settled" and held):
             if isinstance(frame.get("cursor"), int) and not isinstance(frame["cursor"], bool):
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:

@@ -17,6 +17,13 @@
  * release — that is a different, already-guarded mechanism, not catalog
  * drift.
  *
+ * The same run also compares the catalogs with each other. A name that sits in
+ * two catalogs with different specifiers means a bump to one catalog (`vis
+ * update`) silently leaves the other behind, which the manifest check cannot
+ * see. Deliberate splits are listed in `CATALOG_ALLOWLIST` with their reason;
+ * a listed split that has since been aligned is reported too, so the list
+ * cannot quietly go stale.
+ *
  * Run by the `dependency-manifests` job in `.github/workflows/lint.yml`, and by
  * hand as `pnpm run lint:catalog-drift`. (The header used to say it was unwired
  * because of a pre-existing "stripe" violation; both the violation and the
@@ -26,7 +33,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { workspaceGroups } from "./workspace-config.js";
+import { catalogs, workspaceGroups } from "./workspace-config.js";
 
 const rootDir = join(import.meta.dirname, "..");
 
@@ -109,7 +116,65 @@ for (const [name, bySpecifier] of seen) {
 
 if (violations > 0) {
     console.error(`❌ ${violations} dependency name(s) drifted outside a catalog across 2+ manifests.`);
+}
+
+/** Each split here is deliberate. An entry is only valid while its specifiers differ. */
+const CATALOG_ALLOWLIST = new Map([
+    [
+        "solid-js",
+        "solid2 catalog tracks the Solid 2 RC on purpose: it moves independently of frontend's Solid 1 (see the solid2 comment in pnpm-workspace.yaml)",
+    ],
+    [
+        "vite-plugin-solid",
+        "solid2 catalog tracks the Solid 2 RC on purpose: it moves independently of frontend's Solid 1 (see the solid2 comment in pnpm-workspace.yaml)",
+    ],
+    [
+        "@solidjs/testing-library",
+        "solid2 catalog tracks the Solid 2 RC on purpose: it moves independently of frontend's Solid 1 (see the solid2 comment in pnpm-workspace.yaml)",
+    ],
+]);
+
+/** name -> [catalog, specifier][] across every named catalog. */
+const byCatalogName = new Map();
+
+for (const [catalogName, entries] of Object.entries(catalogs())) {
+    for (const [name, specifier] of Object.entries(entries)) {
+        byCatalogName.set(name, [...(byCatalogName.get(name) ?? []), [catalogName, specifier]]);
+    }
+}
+
+let catalogViolations = 0;
+
+for (const [name, entries] of byCatalogName) {
+    const distinct = new Set(entries.map(([, specifier]) => specifier));
+
+    if (distinct.size < 2 || CATALOG_ALLOWLIST.has(name)) {
+        continue;
+    }
+
+    catalogViolations += 1;
+
+    const detail = entries.map(([catalogName, specifier]) => `${catalogName}=${specifier}`).join(", ");
+
+    console.error(`❌ "${name}" has different specifiers across catalogs: ${detail}`);
+}
+
+for (const name of CATALOG_ALLOWLIST.keys()) {
+    const entries = byCatalogName.get(name) ?? [];
+    const distinct = new Set(entries.map(([, specifier]) => specifier));
+
+    if (entries.length >= 2 && distinct.size >= 2) {
+        continue;
+    }
+
+    catalogViolations += 1;
+
+    console.error(`❌ "${name}" is on the cross-catalog allowlist but no longer differs — remove it`);
+}
+
+if (violations > 0 || catalogViolations > 0) {
     process.exit(1);
 }
 
 console.log(`✅ No dependency is hand-pinned outside a catalog in more than one manifest (${manifests.length} manifests read).`);
+console.log(`✅ No dependency has different specifiers across catalogs (${CATALOG_ALLOWLIST.size} allowlisted).`);

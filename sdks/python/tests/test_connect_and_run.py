@@ -423,7 +423,7 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         self._install(socket)
 
         client = LunoraClient("http://example.invalid")
-        values = client.stream("messages:list", {})
+        values = client.watch("messages:list", {})
         run = asyncio.ensure_future(client.connect_and_run())
 
         await asyncio.wait_for(socket.sent_at_least(2).wait(), TIMEOUT)
@@ -743,7 +743,7 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         self._install(socket)
 
         client = LunoraClient("http://example.invalid")
-        values = client.stream("messages:list", {})
+        values = client.watch("messages:list", {})
         run = asyncio.ensure_future(client.connect_and_run())
 
         await _wait_for(lambda: len(socket.sent) >= 2)
