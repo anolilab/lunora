@@ -80,6 +80,17 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("flags a destructured args key whose name an inner function reuses for an unrelated value", () => {
+        expect.assertions(1);
+
+        write(
+            "inner-shadow.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = args; const fixed = () => { const { key } = { key: "x" }; return key; }; fixed(); await ctx.kv.get(key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("ignores a body-destructured args value composed after a ctx-scoped prefix", () => {
         expect.assertions(1);
 

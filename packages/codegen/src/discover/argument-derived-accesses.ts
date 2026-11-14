@@ -39,9 +39,9 @@ const accessInCall = (call: CallExpression, relativePath: string, config: Argume
 
     const key = call.getArguments()[config.argIndex];
 
-    // Arg-derived (directly or through one local `const` hop) *and* not scoped by
-    // a server-trusted `ctx.*` value — a value like `` `${ctx.auth.userId}:${args.id}` ``
-    // references `ctx` and is treated as scoped, so it is not flagged.
+    // Arg-derived (directly or through one local `const` hop) *and* not scoped. `config.scope`
+    // decides what scopes: `"context"` accepts any server-trusted `ctx.*` value, `"identity"`
+    // only the caller's `ctx.auth` identity or a db read bound to it, so an env prefix does not.
     const isScoped = config.scope === "identity" ? isScopedByIdentity : isScopedByContext;
 
     if (!key || !isArgumentDerived(key) || isScoped(key)) {
