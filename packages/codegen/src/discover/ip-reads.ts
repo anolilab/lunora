@@ -130,9 +130,28 @@ const isHandedToAddressFreeHelper = (identifier: TsNode, visiting: Set<ts.Node>)
 const isParameterUse = (node: TsNode, parameter: ParameterDeclaration | undefined): boolean =>
     parameter !== undefined && Node.isIdentifier(node) && declarationOf(node)?.compilerNode === parameter.compilerNode;
 
+const isFunctionLike = (node: TsNode): boolean =>
+    Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isFunctionDeclaration(node) || Node.isMethodDeclaration(node);
+
+/**
+ * Whether `node` is a rest element in a parameter of a function nested inside another function under `root`, such as
+ * `rows.map(({ secret, ...row }) => row)`. The ctx reaches such a callback only as a value passed in, which this walk
+ * already counts as a read, so the rest collects a row's fields and cannot hold the address.
+ */
+const isNestedCallbackRest = (node: TsNode, root: TsNode): boolean => {
+    if (!Node.isBindingElement(node) || node.getDotDotDotToken() === undefined) {
+        return false;
+    }
+
+    const parameter = node.getFirstAncestorByKind(SyntaxKind.Parameter);
+    const callback = parameter?.getParent();
+
+    return callback?.getAncestors().some((ancestor) => ancestor !== root && isFunctionLike(ancestor) && ancestor.getAncestors().includes(root)) === true;
+};
+
 const mayReadIpIn = (root: TsNode, contextParameter: ParameterDeclaration | undefined, visiting: Set<ts.Node>): boolean => {
     for (const node of root.getDescendants()) {
-        if (namesIp(node)) {
+        if (namesIp(node) && !isNestedCallbackRest(node, root)) {
             return true;
         }
 

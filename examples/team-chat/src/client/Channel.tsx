@@ -73,14 +73,21 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
             return undefined;
         }
 
+        // A beat or goodbye that lands after `channels.leave` is refused as FORBIDDEN before the
+        // membership push stops this effect. The leave already removed the presence row, so the
+        // refusal needs no handling beyond not surfacing as an unhandled rejection.
+        const presence = (call: Promise<unknown>): void => {
+            call.catch(() => undefined);
+        };
+
         // The first heartbeat fires immediately, but `now` is NOT set here: seeding
         // it from `useState(() => Date.now())` keeps this effect free of a
         // synchronous `setState`, which forces a second render pass on mount.
-        void heartbeat({ channelId, name: displayName, sessionId }, { shardKey: channelId });
+        presence(heartbeat({ channelId, name: displayName, sessionId }, { shardKey: channelId }));
 
         const beat = (): void => {
             setNow(Date.now());
-            void heartbeat({ channelId, name: displayName, sessionId }, { shardKey: channelId });
+            presence(heartbeat({ channelId, name: displayName, sessionId }, { shardKey: channelId }));
         };
 
         const timer = globalThis.setInterval(beat, HEARTBEAT_MS);
@@ -105,7 +112,7 @@ export const Channel = ({ channelId, displayName, profiles, userId }: ChannelPro
         // PRESENCE_TTL_MS instead — which is what that TTL is for, and why the
         // staleness cut already lives on the client.
         const goodbye = (): void => {
-            void leave({ channelId, sessionId }, { shardKey: channelId });
+            presence(leave({ channelId, sessionId }, { shardKey: channelId }));
         };
 
         globalThis.addEventListener("pagehide", goodbye);

@@ -113,6 +113,14 @@ describe("discoverFunctions — queries that may read ctx.ip", () => {
         expect(readsIpFor("return helper(ctx, 1);", helper)).toBe(true);
     });
 
+    it("leaves a query unmarked when a nested callback collects the rest of a row", () => {
+        expect.assertions(1);
+
+        expect(
+            readsIpFor("const rows = await ctx.db.query('presence').collect(); return rows.map(({ sessionId: _sessionId, ...row }: any) => row);"),
+        ).toBeUndefined();
+    });
+
     it("leaves a query that only reads its database unmarked", () => {
         expect.assertions(1);
 

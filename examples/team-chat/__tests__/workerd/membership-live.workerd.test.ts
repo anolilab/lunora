@@ -180,6 +180,8 @@ describe("channel membership on a live shard (workerd)", () => {
         const mark = graceSocket.frames.length;
 
         await callOk(grace, channel, "channels:leave", { channelId: channel });
+        // The leave re-runs the leaver's subscription; its refusal is the milestone, so the snapshot below cannot race it.
+        await graceSocket.next(errorFor("grace-list"), mark);
 
         // A later message by the other member. Ada's own live subscription is the milestone: her socket is pushed the
         // message, so the shard has committed it and fanned it out to every subscriber, the leaver included.
