@@ -97,7 +97,11 @@ const variableKeyLines = (text: string): ReadonlyMap<string, number> => {
     const keyNodes = (parseTree(text, [], { allowTrailingComma: true })?.children ?? [])
         .filter((property) => property.children?.[0]?.value === "vars")
         .flatMap((property) => property.children?.[1]?.children ?? [])
-        .flatMap((entry) => (typeof entry.children?.[0]?.value === "string" ? [entry.children[0]] : []));
+        .flatMap((entry) => {
+            const keyNode = entry.children?.[0];
+
+            return typeof keyNode?.value === "string" ? [{ key: keyNode.value, offset: keyNode.offset }] : [];
+        });
     const lines = new Map<string, number>();
     let line = 1;
     let scanned = 0;
@@ -105,7 +109,7 @@ const variableKeyLines = (text: string): ReadonlyMap<string, number> => {
     for (const keyNode of keyNodes) {
         line += text.slice(scanned, keyNode.offset).split(LINE_BREAK).length - 1;
         scanned = keyNode.offset;
-        lines.set(keyNode.value as string, line);
+        lines.set(keyNode.key, line);
     }
 
     return lines;

@@ -776,6 +776,7 @@ describe("discoverSchema", () => {
                 dimensions: 768,
                 metric: "euclidean",
                 name: "docs-title-and-body",
+                site: { file: "schema", line: 10 },
                 table: "docs",
             },
         ]);
@@ -1208,6 +1209,7 @@ describe("discoverSchema", () => {
             dimensions: 768,
             metric: "euclidean",
             name: "ext_docs-body",
+            site: { file: "schema", line: 13 },
             table: "ext_docs",
         });
     });

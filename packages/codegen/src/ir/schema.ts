@@ -152,7 +152,7 @@ export interface VectorIndexIR {
     metadata?: ReadonlyArray<string>;
     metric?: "cosine" | "dot-product" | "euclidean";
     name: string;
-    /** Where the inline `.vectorize(...)` call's method name is declared; absent for a standalone (Shape B) index. */
+    /** Where the inline `.vectorize(...)` call's method name, or a standalone (Shape B) `defineVectorIndex(...)` call, is declared. */
     site?: DeclarationSiteIR;
     /** Owning table the vectors are sourced from. */
     table: string;

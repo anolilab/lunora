@@ -133,6 +133,53 @@ describe("declaration sites on schema IR", () => {
         });
     });
 
+    it("records a standalone defineVectorIndex(...) call's line on the index", () => {
+        expect.assertions(1);
+
+        const source = `
+            import { defineSchema, defineTable, defineVectorIndex, v } from "@lunora/server";
+
+            export const schema = defineSchema(
+                { docs: defineTable({ title: v.string() }) },
+                {
+                    "docs-title": defineVectorIndex({
+                        source: { table: "docs", select: (row) => row.title },
+                        dimensions: 1024,
+                        metric: "cosine",
+                    }),
+                },
+            );
+        `;
+
+        const index = discover(source).vectorIndexes.find((vectorIndex) => vectorIndex.name === "docs-title");
+
+        expect(index?.site).toStrictEqual({ file: "schema", line: lineOf(source, '"docs-title": defineVectorIndex') });
+    });
+
+    it("records a table from a lunora file whose name starts with two dots", () => {
+        expect.assertions(1);
+
+        const sharedSource = `
+            import { defineTable, v } from "@lunora/server";
+
+            export const tagsTable = defineTable({ label: v.string() });
+        `;
+
+        writeLunora("..shared.ts", sharedSource);
+
+        const schema = discover(`
+            import { defineSchema } from "@lunora/server";
+            import { tagsTable } from "./..shared";
+
+            export const schema = defineSchema({ tags: tagsTable });
+        `);
+
+        expect(schema.tables.find((table) => table.name === "tags")?.site).toStrictEqual({
+            file: "..shared",
+            line: lineOf(sharedSource, "export const tagsTable"),
+        });
+    });
+
     it("records the followed defineTable call for a table bound to a const", () => {
         expect.assertions(1);
 
