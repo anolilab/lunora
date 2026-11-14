@@ -23,8 +23,12 @@ import { Node, ts } from "ts-morph";
 /** A directive line: the word starts a comment line and is not a prefix of a longer token. */
 const DIRECTIVE_LINE = /^\s*\/\/\s*lunora-advisor-exempt(?![\w-])(.*)$/u;
 
-/** A snake_case rule id at the start of the text after the directive word, followed by a space, `--` or the end. */
-const RULE_ID = /^([a-z][a-z0-9_]*)(?=\s|--|$)/u;
+/**
+ * A rule id at the start of the text after the directive word, followed by a space, `--` or the end. Any
+ * letter-led word counts, not only a snake_case one, so a mistyped id (`Unindexed-FK`) is reported invalid
+ * instead of falling through to the whole-procedure exemption.
+ */
+const RULE_ID = /^([a-z][\w-]*)(?=\s|--|$)/iu;
 
 /**
  * The rule id a directive names, or `undefined` for the whole-procedure form.

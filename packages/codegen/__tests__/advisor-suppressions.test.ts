@@ -227,6 +227,25 @@ export const scoped = mutation({ args: {}, handler: async () => { throw new Erro
         expect(result.advisories.filter((advisory) => advisory.name === "advisor_suppression_invalid")).toHaveLength(0);
     });
 
+    it("reports a mistyped rule id as invalid instead of exempting the whole procedure", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "typo.ts"),
+            `import { mutation } from "@lunora/server";
+// lunora-advisor-exempt Procedure-Without-Structured-Event -- mistyped rule id
+export const typo = mutation({ args: {}, handler: async () => { throw new Error("boom"); } });
+`,
+            "utf8",
+        );
+
+        const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+        const row = result.advisorContext?.procedureProtections?.find((entry) => entry.exportName === "typo");
+
+        expect(row?.exempt).toBe(false);
+        expect(named(result.advisories, "advisor_suppression_invalid").map((entry) => entry.metadata["rule"])).toContain("Procedure-Without-Structured-Event");
+    });
+
     it("suppresses a wrangler.jsonc variable only for the key below the directive", () => {
         expect.assertions(3);
 
