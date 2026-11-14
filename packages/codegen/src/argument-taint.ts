@@ -395,6 +395,15 @@ const isDatabaseReadSource = (node: TsNode): boolean => {
     return Node.isCallExpression(current) && isDatabaseReadCall(current);
 };
 
+/** Whether `node` reads `args` itself or through one local (`const requestedKey = args.key`). */
+const reachesArgsWithinOneHop = (node: TsNode): boolean =>
+    referencesBinding(node, "args") ||
+    valueIdentifiersOf(node).some((identifier) => {
+        const initializer = trustedInitializerOf(identifier);
+
+        return initializer !== undefined && referencesBinding(initializer, "args");
+    });
+
 /**
  * The defaults on the path to the destructured element of `variable` that binds `name`: its own
  * (`const { url = args.url } = config`) and every enclosing element's
@@ -432,7 +441,7 @@ const ownedRowInitializerOf = (node: TsNode): TsNode | undefined => {
     const initializer = variable?.getInitializer();
 
     // `const { storageKey = args.key } = await ownedRead()` takes the caller's key whenever the row lacks the field.
-    if (bindingDefaultsOf(variable, node.getText()).some((fallback) => referencesBinding(fallback, "args"))) {
+    if (bindingDefaultsOf(variable, node.getText()).some((fallback) => reachesArgsWithinOneHop(fallback))) {
         return undefined;
     }
 
@@ -647,6 +656,14 @@ export const isScopedByContext = (node: TsNode): boolean => {
  * safe shape there.
  */
 export const isScopedByIdentity = (node: TsNode): boolean => {
+    // A caller value on any fallback path (`row?.storageKey ?? args.key`) is the key whenever the scoped
+    // side is missing, so nothing the key also reads can scope it.
+    const expanded = trustedInitializerOf(node) ?? node;
+
+    if (valueIdentifiersOf(expanded).some((identifier) => isAlternativeOf(identifier, expanded) && reachesArgsWithinOneHop(outermostChainOf(identifier)))) {
+        return false;
+    }
+
     if (referencesScopedKeySource(node)) {
         return true;
     }

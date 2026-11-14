@@ -52,6 +52,28 @@ describe("discoverStorageKeyAccesses", () => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("flags an owned-row key whose default forwards args through a local", () => {
+        expect.assertions(1);
+
+        write(
+            "local-default.ts",
+            `export const read = query(async ({ ctx, args }) => { const requestedKey = args.key; const { storageKey = requestedKey } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }); return ctx.storage.files.get(\`\${storageKey}/\${args.name}\`); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a stored key that falls back to the caller's key", () => {
+        expect.assertions(1);
+
+        write(
+            "stored-fallback.ts",
+            `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }); return ctx.storage.files.get(row?.storageKey ?? args.key); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("flags a bare key destructured from a row the caller picked by id", () => {
         expect.assertions(1);
 
