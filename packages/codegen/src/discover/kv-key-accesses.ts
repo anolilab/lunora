@@ -18,7 +18,7 @@ const KV_KEY_METHODS = new Set(["delete", "get", "getRaw", "getWithMetadata", "p
  * lint input. Workers KV is a single flat namespace, so a key taken straight from
  * request input lets any caller read, overwrite, or delete another user's entry
  * (IDOR). A fixed literal key, or one prefixed with a server-trusted identity
- * (`` `${ctx.auth.userId}:…` `` — references `ctx`, so treated as scoped), is not
+ * (`` `${ctx.auth.userId}:…` ``, not a caller-independent `ctx.env` value), is not
  * recorded; only an arg-derived, unscoped key (directly, or through one local
  * `const` hop) reaches here. `list` is excluded (it takes a prefix, not a key).
  *

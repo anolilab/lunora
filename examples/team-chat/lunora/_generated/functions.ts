@@ -240,7 +240,7 @@ return { "name": source["name"], ...(__has1 ? { "avatarKey": __val1 } : {}) };
  * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor
  * was read at, which a claims fingerprint leaves out.
  */
-export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["channels:members", "messages:list", "messages:search", "presence:list"]);
+export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["presence:list"]);
 
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a

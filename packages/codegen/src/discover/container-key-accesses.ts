@@ -29,8 +29,8 @@ const isContainerInstanceReceiver = (receiver: string): boolean => {
  * container definition's `.get(name)` accessor routes to one instance per
  * `name`, so a key taken straight from request input lets any caller reach any
  * other tenant's container (a cross-tenant IDOR). A fixed literal key, or one
- * derived from a server-trusted identity (`` `${ctx.auth.userId}` `` —
- * references `ctx`, so treated as scoped), is not recorded; only an
+ * derived from the caller's identity (`` `${ctx.auth.userId}` ``, not a
+ * caller-independent `ctx.env` value), is not recorded; only an
  * arg-derived, unscoped key (directly, or through one local `const` hop)
  * reaches here. `.any()`/`.pool()` take no key and are not sinks.
  */

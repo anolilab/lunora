@@ -350,6 +350,70 @@ describe("createWorker — deployment pause", () => {
         now.mockRestore();
     });
 
+    it("keeps a pause it already saw when a later flag read fails", async () => {
+        expect.hasAssertions();
+
+        const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+
+        try {
+            let reads = 0;
+            const namespace: ShardNamespaceLike = {
+                get: () => {
+                    return {
+                        fetch: async (request: Request) => {
+                            if (new URL(request.url).pathname === "/instances") {
+                                return Response.json({ instances: [] });
+                            }
+
+                            reads += 1;
+
+                            return reads === 1 ? Response.json({ paused: true, pausedAt: 1 }) : new Response("down", { status: 500 });
+                        },
+                    };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            };
+            const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: countingShard().namespace });
+
+            const paused = await worker.fetch(rpc(), {}, fakeContext);
+
+            expect(paused.status).toBe(503);
+
+            now.mockReturnValue(1_000_000 + PAUSE_CACHE_MS);
+
+            const stillPaused = await worker.fetch(rpc(), {}, fakeContext);
+
+            expect(reads).toBe(2);
+            expect(stillPaused.status).toBe(503);
+        } finally {
+            now.mockRestore();
+        }
+    });
+
+    it("still fails open when the very first flag read fails", async () => {
+        expect.hasAssertions();
+
+        const namespace: ShardNamespaceLike = {
+            get: () => {
+                return {
+                    fetch: async () => new Response("down", { status: 500 }),
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const shard = countingShard();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: shard.namespace });
+
+        const response = await worker.fetch(rpc(), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(shard.calls()).toBe(1);
+    });
+
     it("shares one flag read between concurrent calls", async () => {
         expect.hasAssertions();
 

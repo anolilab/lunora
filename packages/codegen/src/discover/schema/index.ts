@@ -143,7 +143,7 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
     // Standalone vector indexes live in the optional second argument (Shape B).
     const standaloneArgument = defineSchemaCall.getArguments()[1];
     const standaloneVectorIndexes =
-        standaloneArgument && Node.isObjectLiteralExpression(standaloneArgument) ? parseStandaloneVectorIndexes(standaloneArgument) : [];
+        standaloneArgument && Node.isObjectLiteralExpression(standaloneArgument) ? parseStandaloneVectorIndexes(standaloneArgument, locate) : [];
 
     // Merge chained `.extend(...)` extensions, mutating `tables` and collecting
     // their standalone vector indexes.

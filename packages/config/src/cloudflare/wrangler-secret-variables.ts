@@ -85,6 +85,9 @@ const scanWranglerVariablesForSecrets = (
     return findings;
 };
 
+/** The line breaks `jsonc-parser` counts: a lone CR is one, as a CRLF is. */
+const LINE_BREAK = /\r\n|\r|\n/u;
+
 /**
  * The 1-based line of each top-level `vars` key in the `wrangler.jsonc` text, read from the JSONC tree so a comment or a
  * string that happens to contain a key cannot match. A repeated key (or a repeated `vars` object) maps to its last
@@ -94,15 +97,19 @@ const variableKeyLines = (text: string): ReadonlyMap<string, number> => {
     const keyNodes = (parseTree(text, [], { allowTrailingComma: true })?.children ?? [])
         .filter((property) => property.children?.[0]?.value === "vars")
         .flatMap((property) => property.children?.[1]?.children ?? [])
-        .flatMap((entry) => (typeof entry.children?.[0]?.value === "string" ? [entry.children[0]] : []));
+        .flatMap((entry) => {
+            const keyNode = entry.children?.[0];
+
+            return typeof keyNode?.value === "string" ? [{ key: keyNode.value, offset: keyNode.offset }] : [];
+        });
     const lines = new Map<string, number>();
     let line = 1;
     let scanned = 0;
 
     for (const keyNode of keyNodes) {
-        line += text.slice(scanned, keyNode.offset).split("\n").length - 1;
+        line += text.slice(scanned, keyNode.offset).split(LINE_BREAK).length - 1;
         scanned = keyNode.offset;
-        lines.set(keyNode.value as string, line);
+        lines.set(keyNode.key, line);
     }
 
     return lines;

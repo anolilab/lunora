@@ -884,10 +884,6 @@ interface AdvisorTable {
     externallyManaged?: boolean;
     externalSource?: AdvisorExternalSource;
     fields: ReadonlyArray<string>;
-    fieldSites?: Readonly<Record<string, {
-        file?: string;
-        line?: number;
-    }>>;
     file?: string;
     indexes: ReadonlyArray<AdvisorIndex>;
     isPublic?: boolean;

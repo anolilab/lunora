@@ -38,7 +38,27 @@ describe("payment_webhook_wide_tolerance", () => {
         expect(paymentWebhookWideTolerance.run({ schema: schema() })).toHaveLength(0);
     });
 
-    it("does not flag a tolerance at the one-hour ceiling boundary minus a second", () => {
+    it("does not flag a tolerance at exactly the one-hour ceiling", () => {
+        expect.assertions(1);
+
+        const atCeiling: AdvisorPaymentWebhook[] = [
+            { callee: "createStripeAdapter", scope: { kind: "export", name: "s" }, file: "p", line: 1, toleranceSeconds: 3600 },
+        ];
+
+        expect(paymentWebhookWideTolerance.run({ paymentWebhooks: atCeiling, schema: schema() })).toHaveLength(0);
+    });
+
+    it("flags a tolerance one second above the one-hour ceiling", () => {
+        expect.assertions(1);
+
+        const aboveCeiling: AdvisorPaymentWebhook[] = [
+            { callee: "createStripeAdapter", scope: { kind: "export", name: "s" }, file: "p", line: 1, toleranceSeconds: 3601 },
+        ];
+
+        expect(paymentWebhookWideTolerance.run({ paymentWebhooks: aboveCeiling, schema: schema() })).toHaveLength(1);
+    });
+
+    it("does not flag a tolerance one second below the one-hour ceiling", () => {
         expect.assertions(1);
 
         const nearCeiling: AdvisorPaymentWebhook[] = [

@@ -85,7 +85,7 @@ const LUNORA_ADVISORIES = ((): (() => AdvisoryFinding[]) => {
 })();
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__lunora_admin__:rlsPolicies` for the studio's RLS inspector. */
-const LUNORA_RLS_METADATA = ((): (() => RlsPoliciesResult) => { let cached: RlsPoliciesResult | undefined; return () => (cached ??= JSON.parse("{\"policies\":[],\"roles\":[]}") as RlsPoliciesResult); })();
+const LUNORA_RLS_METADATA = ((): (() => RlsPoliciesResult) => { let cached: RlsPoliciesResult | undefined; return () => (cached ??= JSON.parse("{\"policies\":[{\"file\":\"notes\",\"on\":\"read\",\"procedure\":\"mine\",\"table\":\"notes\"},{\"file\":\"notes\",\"on\":\"insert\",\"procedure\":\"mine\",\"table\":\"notes\"},{\"file\":\"notes\",\"on\":\"read\",\"procedure\":\"orgNotes\",\"table\":\"notes\"},{\"file\":\"notes\",\"on\":\"read\",\"procedure\":\"add\",\"table\":\"notes\"},{\"file\":\"notes\",\"on\":\"insert\",\"procedure\":\"add\",\"table\":\"notes\"}],\"roles\":[]}") as RlsPoliciesResult); })();
 
 /** Read-only masking metadata (table + column + strategy discovered from `.use(mask(...))` chains) served via `__lunora_admin__:maskPolicies` for the studio's data-browser mask preview. */
 const LUNORA_MASK_METADATA = ((): (() => MaskPoliciesResult) => { let cached: MaskPoliciesResult | undefined; return () => (cached ??= JSON.parse("{\"columns\":[]}") as MaskPoliciesResult); })();
