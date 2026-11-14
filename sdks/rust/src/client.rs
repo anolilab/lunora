@@ -5,12 +5,14 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::mpsc::{channel, Receiver};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
 use crate::delta::{resolve_delta, Resolved};
-use crate::offline::{random_id, same_shard, token_stamp, Identity, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED};
+use crate::offline::{
+    random_id, same_shard, token_stamp, Identity, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED, MAX_RETRY_AFTER_MS,
+};
 use crate::optimistic::{drop_confirmed_layers, fold, OptimisticState};
 pub use crate::submit::MutationSettled;
 use crate::submit::{args_key, matches};
@@ -562,6 +564,9 @@ pub struct Client {
     /// came back rate-limited and the envelope named a delay. [`Instant`] rather
     /// than a wall clock, so an NTP correction cannot strand a queue for hours.
     pub(crate) flush_not_before: Option<Instant>,
+    /// The monotonic deadline of the one re-subscribe a retry hint asked for, per query
+    /// subscription id. See [`Client::retry_due_subscriptions`].
+    pending_retries: HashMap<String, Instant>,
     pub(crate) closed: bool,
     pub(crate) settled_listeners: Vec<SettledHandler>,
     /// The WebSocket session credential, sent as `connect.token` on every open.
@@ -602,6 +607,7 @@ impl Client {
             client_id: format!("client-{}", random_id()),
             closed: false,
             flush_not_before: None,
+            pending_retries: HashMap::new(),
             identity: None,
             next_id: 0,
             next_shape_id: 0,
@@ -642,6 +648,7 @@ impl Client {
     pub fn attach_socket(&mut self, send: FrameSender, context: Option<&Value>) {
         // Until this open has written its frames, nothing routes to the new socket.
         self.send = None;
+        self.pending_retries.clear();
         // A run is one socket's stream; a failed open never delivered the rest of it.
         self.discard_pending_runs();
 
@@ -670,6 +677,7 @@ impl Client {
     /// unwinds out of this call, as every other callback here does.
     pub fn detach_socket(&mut self, close_code: Option<u16>, reason: Option<&str>) {
         self.send = None;
+        self.pending_retries.clear();
         self.discard_pending_runs();
 
         let opened = self.socket_generation.take();
@@ -838,6 +846,7 @@ impl Client {
 
         self.report_discarded(discarded);
         self.subscriptions.clear();
+        self.pending_retries.clear();
         self.shapes.clear();
         self.pokes.clear();
         self.poke_order.clear();
@@ -1228,8 +1237,57 @@ impl Client {
         Ok(())
     }
 
+    /// Re-subscribes every subscription whose retry hint has elapsed, and returns how many
+    /// frames it sent. With no socket attached it sends nothing and returns 0; attaching or
+    /// detaching a socket cancels every pending retry, since the reconnect's resend
+    /// re-subscribes everything.
+    ///
+    /// Each re-subscribe is cold: the hint asks for a fresh snapshot, so the stored resume
+    /// cursor and epoch are cleared first.
+    pub fn retry_due_subscriptions(&mut self, now: Instant) -> Result<usize, ClientError> {
+        let Some(send) = &self.send else {
+            return Ok(0);
+        };
+
+        let due: Vec<String> = self
+            .pending_retries
+            .iter()
+            .filter(|(_, deadline)| **deadline <= now)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let mut frames = Vec::with_capacity(due.len());
+
+        for id in due {
+            self.pending_retries.remove(&id);
+
+            let Some(entry) = self.subscriptions.get_mut(&id) else {
+                continue;
+            };
+
+            entry.cursor = None;
+            entry.epoch = None;
+            // A write confirmed before the fresh snapshot must not be checked against the old position.
+            entry.state.server_cursor = None;
+            frames.push(build_subscribe_frame(&id, &entry.function_path, &entry.args, None, None, None)?);
+        }
+
+        for frame in &frames {
+            send(frame);
+        }
+
+        Ok(frames.len())
+    }
+
+    /// The earliest pending retry deadline, or `None` when none is pending. The caller
+    /// calls [`Client::retry_due_subscriptions`] at or after it.
+    pub fn next_subscription_retry_at(&self) -> Option<Instant> {
+        self.pending_retries.values().min().copied()
+    }
+
     pub fn unsubscribe(&mut self, id: &str) {
         self.subscriptions.remove(id);
+        self.pending_retries.remove(id);
 
         if let Some(send) = &self.send {
             send(&build_unsubscribe_frame(id));
@@ -1280,6 +1338,12 @@ impl Client {
 
         let kind = frame.get("type").and_then(Value::as_str).unwrap_or("").to_string();
         let id = frame.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+
+        // The server answered, so a retry this subscription was waiting on is moot. A `data` or
+        // `delta` cancels it only once applied, below: one that cannot be applied answers nothing.
+        if matches!(kind.as_str(), "ack" | "resume" | "settled") {
+            self.pending_retries.remove(&id);
+        }
 
         match kind.as_str() {
             "data" | "delta" => {
@@ -1372,6 +1436,7 @@ impl Client {
                         value
                     };
 
+                    self.pending_retries.remove(&id);
                     entry.pending_run = None;
                     advance(entry, &frame);
                     entry.has_base = true;
@@ -1445,6 +1510,8 @@ impl Client {
                 }
             }
             "error" => {
+                // The hint counts from arrival, not from whenever the error handlers return.
+                let received = Instant::now();
                 let envelope = frame.get("error");
                 let code = envelope.and_then(|inner| inner.get("code")).and_then(Value::as_str);
 
@@ -1473,6 +1540,18 @@ impl Client {
 
                 if let Some(handler) = self.shapes.get(&id).and_then(|shape| shape.on_error.as_ref()) {
                     handler(&error);
+                }
+
+                if self.subscriptions.contains_key(&id) {
+                    match retry_after(envelope) {
+                        Some(delay) => {
+                            self.pending_retries.insert(id.clone(), received + delay);
+                        }
+                        // A hint-less error is how the server ends a subscription, so a retry an earlier hint scheduled is cancelled.
+                        None => {
+                            self.pending_retries.remove(&id);
+                        }
+                    }
                 }
             }
             "complete" => {
@@ -1741,6 +1820,13 @@ fn decode_poke_ops(operations: &[Value]) -> Result<Vec<PokeOp>, WireError> {
     }
 
     Ok(ops)
+}
+
+/// The server's retry hint on a subscription error, or `None` when it sent none this client can honour.
+fn retry_after(envelope: Option<&Value>) -> Option<Duration> {
+    let delay = envelope?.get("retryAfterMs")?.as_f64()?;
+
+    (delay.is_finite() && delay >= 0.0).then(|| Duration::from_secs_f64(delay.min(MAX_RETRY_AFTER_MS as f64) / 1000.0))
 }
 
 fn advance(entry: &mut Subscription, frame: &Value) {

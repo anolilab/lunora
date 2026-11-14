@@ -152,7 +152,7 @@ change that adds or removes a capability.
 | Token expiry from close codes | ✅     | ✅   | ✅   | ✅   | ✅    | ✅   | ✅     | ✅   |
 | Identity frame adopted        | ➖¹²   | ➖¹² | ➖¹² | ➖¹² | ➖¹²  | ➖¹² | ➖¹²   | ➖¹² |
 | 503 at upgrade retried        | ✅¹¹   | ➖¹¹ | ➖¹¹ | ➖¹¹ | ➖¹¹  | ➖¹¹ | ➖¹¹   | ➖¹¹ |
-| Subscription retry hint       | ❌¹³   | ❌¹³ | ❌¹³ | ❌¹³ | ❌¹³  | ❌¹³ | ❌¹³   | ❌¹³ |
+| Subscription retry hint       | ✅¹³   | ❌¹³ | ❌¹³ | ✅¹³ | ❌¹³  | ❌¹³ | ❌¹³   | ❌¹³ |
 | Multi-tab leader election     | ❌     | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Built-in HTTP / socket        | ✅⁴    | ❌   | ❌   | ❌   | ❌    | ❌   | ❌     | ❌   |
 | Several sockets per client    | ❌³    | ❌³  | ❌³  | ❌³  | ❌³   | ❌³  | ❌³    | ❌³  |
@@ -314,16 +314,19 @@ a 503 included. `test_a_503_at_upgrade_is_retried_with_backoff_and_refuses_no_cr
 ¹² **The identity frame is not adopted.** `identity` (protocol/README.md §5.2) names the user a cookie session
 runs as. Each port states its own session credential, which §5.2 allows, so each ignores the frame.
 
-¹³ **The live-query retry hint is ignored here.** A subscription whose re-run fails is backed off
-by the shard, and its `error` frame carries `error.retryAfterMs` (protocol/README.md §5.2).
-`@lunora/client` re-subscribes that id once at the hint, cold; a newer hint replaces the
-pending retry, and any `data` (other than a stale seed), `delta`, `ack`, `resume` or `settled`
-frame for the id, an `error` for the id without the field, an unsubscribe, a socket close or
-open, or `close()` cancels it. A port that ignores the field
-delivers the error as before, so the subscription stays on it until a write touches its
-tables after the backoff window or the socket reconnects. The goldens are `subscriptionRetry`
-in `protocol/fixtures/ws-frames.json`; it is not in `conformance-cases.json`, which may only
-require behaviour every port has.
+¹³ **The live-query retry hint, where a port honours it.** A subscription whose re-run fails is
+backed off by the shard, and its `error` frame carries `error.retryAfterMs` (protocol/README.md
+§5.2). `@lunora/client` re-subscribes that id once at the hint, cold; a newer hint replaces the
+pending retry, and any `data` (other than a stale seed), `delta`, `ack`, `resume` or `settled` frame for the id, an `error`
+for it without a hint, an unsubscribe, a socket close or open, or `close()` cancels it. A port
+marked ❌ ignores the field and delivers the error as before, so the subscription stays on it until a
+write touches its tables after the backoff window or the socket reconnects. The goldens are
+`subscriptionRetry` in `protocol/fixtures/ws-frames.json`; it is not in `conformance-cases.json`,
+which may only require behaviour every port has. Python and Rust honour it through a pulled
+deadline: the client records one per subscription, `retry_due_subscriptions(now)` sends the due
+re-subscribes and `next_subscription_retry_at()` says when to call it next — the caller's timer, as
+for a flush's `retry_after_ms`. Python's `connect_and_run` arms that timer itself; a Rust caller
+arms its own.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the

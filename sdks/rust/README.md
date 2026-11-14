@@ -112,6 +112,7 @@ which ends the reader and so the run.
 enum Event {
     Frame(String),
     Flush, // a flush timer fired
+    Retry(Instant), // a subscription's retry hint elapsed; the deadline it was armed for
     // the reader hit end of stream or an error; the close frame's code and reason, if it sent one
     Closed(Option<u16>, Option<String>),
 }
@@ -121,6 +122,14 @@ fn schedule_flush(tx: mpsc::Sender<Event>, retry_after_ms: Option<u64>, backoff:
     thread::spawn(move || {
         sleep(Duration::from_millis(wait));
         let _ = tx.send(Event::Flush); // errs once the run has ended, which is fine
+    });
+}
+
+fn schedule_retry(tx: mpsc::Sender<Event>, at: Option<Instant>) {
+    let Some(at) = at else { return };
+    thread::spawn(move || {
+        sleep(at.saturating_duration_since(Instant::now()));
+        let _ = tx.send(Event::Retry(at));
     });
 }
 
@@ -168,6 +177,8 @@ loop {
                 match event {
                     Event::Frame(raw) => match client.handle_frame(&raw) {
                         Ok(kind) if kind.as_deref() == Some("ack") => attempt = 0,
+                        // A subscription error may carry a retry hint; arm a timer for the earliest one.
+                        Ok(kind) if kind.as_deref() == Some("error") => schedule_retry(tx.clone(), client.next_subscription_retry_at()),
                         Ok(_) => {}
                         Err(_) => break, // ends this run; the cleanup below still runs
                     },
@@ -176,6 +187,12 @@ loop {
                         if !next.requeued.is_empty() || next.retry_after_ms.is_some() {
                             flush_backoff = (flush_backoff * 2).min(30_000);
                             schedule_flush(tx.clone(), next.retry_after_ms.map(|ms| ms as u64), flush_backoff);
+                        }
+                    }
+                    // Pass the armed deadline, not `Instant::now()`: a replaced or cancelled hint makes this a no-op.
+                    Event::Retry(at) => {
+                        if client.retry_due_subscriptions(at).is_err() {
+                            break;
                         }
                     }
                     Event::Closed(code, reason) => {

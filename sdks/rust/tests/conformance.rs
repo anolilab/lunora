@@ -25,6 +25,9 @@ mod offline_cases;
 // The socket session and whisper cases. Same arrangement: plain functions, dispatched
 // from the manifest arms below and wrapped in `#[test]`s at the foot of this file.
 mod socket_cases;
+// The subscription retry hint. Not manifest cases yet, so only the `#[test]` wrappers
+// at the foot of this file run them.
+mod retry_cases;
 
 use offline_cases::{
     batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_envelopeless_413, offline_flush_batch_splits_on_payload_too_large,
@@ -1741,4 +1744,74 @@ fn whisper_topics_rejoin_after_reconnect() {
 #[test]
 fn closed_client_does_not_rejoin_rooms() {
     socket_cases::closed_client_does_not_rejoin_rooms();
+}
+
+#[test]
+fn re_subscribes_once_cold_at_the_hint() {
+    retry_cases::re_subscribes_once_cold_at_the_hint();
+}
+
+#[test]
+fn the_error_still_reaches_the_handler() {
+    retry_cases::the_error_still_reaches_the_handler();
+}
+
+#[test]
+fn a_later_hint_replaces_the_pending_one() {
+    retry_cases::a_later_hint_replaces_the_pending_one();
+}
+
+#[test]
+fn each_cancel_frame_cancels() {
+    retry_cases::each_cancel_frame_cancels();
+}
+
+#[test]
+fn no_retry_frames_schedule_nothing() {
+    retry_cases::no_retry_frames_schedule_nothing();
+}
+
+#[test]
+fn unsubscribe_cancels() {
+    retry_cases::unsubscribe_cancels();
+}
+
+#[test]
+fn detach_cancels() {
+    retry_cases::detach_cancels();
+}
+
+#[test]
+fn attach_cancels() {
+    retry_cases::attach_cancels();
+}
+
+#[test]
+fn close_cancels() {
+    retry_cases::close_cancels();
+}
+
+#[test]
+fn a_shape_error_never_schedules() {
+    retry_cases::a_shape_error_never_schedules();
+}
+
+#[test]
+fn the_hint_is_clamped() {
+    retry_cases::the_hint_is_clamped();
+}
+
+#[test]
+fn a_data_frame_that_cannot_be_applied_keeps_the_retry() {
+    retry_cases::a_data_frame_that_cannot_be_applied_keeps_the_retry();
+}
+
+#[test]
+fn a_cold_retry_forgets_the_confirmed_cursor() {
+    retry_cases::a_cold_retry_forgets_the_confirmed_cursor();
+}
+
+#[test]
+fn a_slow_error_handler_does_not_push_the_retry_later() {
+    retry_cases::a_slow_error_handler_does_not_push_the_retry_later();
 }
