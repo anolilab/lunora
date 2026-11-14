@@ -791,6 +791,23 @@ describe("discoverProcedureMiddleware", () => {
         expect(found[0]).toMatchObject({ exportName: "signUpFacade", writesUserTable: true });
     });
 
+    it("recognizes a facade `ctx.db.users.upsertMany(...)` as a user-table write", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "facade.ts"),
+            FACADE_USER_TABLE_INSERT.replace(
+                `ctx.db.users.insert({ email: "a@example.com" })`,
+                `ctx.db.users.upsertMany({ target: "email", rows: [{ create: { email: "a@example.com" } }] })`,
+            ),
+            "utf8",
+        );
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "signUpFacade", writesUserTable: true });
+    });
+
     it("does not treat a facade `ctx.db.posts.insert(...)` as a user-table write", () => {
         expect.assertions(1);
 

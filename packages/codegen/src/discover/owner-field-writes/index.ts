@@ -37,19 +37,36 @@ const IDENTITY_FIELDS = new Set<string>([
 
 /**
  * `ctx.db` write surfaces whose document / partial (the object whose identity
- * columns this feeder inspects) is the argument after the table: `insert(table, doc)`
- * and `insertManyUnsafe(table, rows)` (`rows` an array of documents) take it at
+ * columns this feeder inspects) is the argument after the table: `insert(table, doc)`,
+ * `insertMany(table, rows)` and `insertManyUnsafe(table, rows)` (`rows` an array of documents) take it at
  * `arg[1]`, while `patch(table, id, partial)` and `replace(table, id, doc)` take it at
  * `arg[2]`, after the id.
  */
-const IDENTITY_WRITE_METHODS = new Set<string>(["insert", "insertManyUnsafe", "patch", "replace"]);
+const IDENTITY_WRITE_METHODS = new Set<string>(["insert", "insertMany", "insertManyUnsafe", "patch", "replace"]);
 
 /**
  * The `ctx.db.<table>.<method>` facade writes whose document carries identity columns. `upsert` carries two, in its
  * `create` and `update` objects, and both are inspected: an `update` can re-own an existing row just as a `create`
  * can own a new one.
  */
-const FACADE_IDENTITY_WRITE_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "patch", "replace", "upsert"]);
+const FACADE_IDENTITY_WRITE_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "patch", "patchMany", "replace", "upsert", "upsertMany"]);
+
+/** The initializers of `names` in `object`, when it is an object literal: the documents an upsert row or a batch patch writes. */
+const propertyInitializers = (object: TsNode | undefined, names: ReadonlyArray<string>): TsNode[] => {
+    if (object === undefined || !Node.isObjectLiteralExpression(object)) {
+        return [];
+    }
+
+    return names.flatMap((name) => {
+        const property = findObjectProperty(object, name);
+        const initializer = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
+
+        return initializer === undefined ? [] : [initializer];
+    });
+};
+
+/** The object-literal elements of `node` when it is an array literal. */
+const arrayElements = (node: TsNode | undefined): TsNode[] => (node !== undefined && Node.isArrayLiteralExpression(node) ? node.getElements() : []);
 
 /**
  * When `node` is a `<ctx>.db.<method>` member access for one of the
@@ -77,22 +94,24 @@ interface IdentityWrite {
 /**
  * The document arguments of a facade `ctx.db.<table>.<method>(…)` call. `patch` and `replace` take the id first, so
  * their document is at `arg[1]`; `insert` and `insertMany` take the document at `arg[0]`. `upsert` takes
- * `{ target, create, update }`, and both document objects are returned.
+ * `{ target, create, update }`, and both document objects are returned; `upsertMany` takes `{ target, rows }` of
+ * those pairs. `patchMany` takes `[{ id, values }]` or `{ where, values }`, and each `values` is returned.
  */
 const facadeDocumentArguments = (method: string, call: CallExpression): TsNode[] => {
     const [first] = call.getArguments();
 
     if (method === "upsert") {
-        if (first === undefined || !Node.isObjectLiteralExpression(first)) {
-            return [];
-        }
+        return propertyInitializers(first, ["create", "update"]);
+    }
 
-        return ["create", "update"].flatMap((name) => {
-            const property = findObjectProperty(first, name);
-            const initializer = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
+    if (method === "upsertMany") {
+        return propertyInitializers(first, ["rows"]).flatMap((rows) => arrayElements(rows).flatMap((row) => propertyInitializers(row, ["create", "update"])));
+    }
 
-            return initializer === undefined ? [] : [initializer];
-        });
+    if (method === "patchMany") {
+        const patches = first !== undefined && Node.isArrayLiteralExpression(first) ? arrayElements(first) : [first];
+
+        return patches.flatMap((patch) => propertyInitializers(patch, ["values"]));
     }
 
     const document = method === "patch" || method === "replace" ? call.getArguments()[1] : first;
@@ -286,6 +305,33 @@ const identityWritesInObjectLiteral = (
     return rows;
 };
 
+/** One finding per column: proven owner-scoped or guarded only when every copy of it is. */
+const mergeByField = (rows: OwnerFieldWriteIR[]): OwnerFieldWriteIR[] => {
+    const byField = new Map<string, OwnerFieldWriteIR>();
+
+    for (const row of rows) {
+        const seen = byField.get(row.field);
+
+        if (seen === undefined) {
+            byField.set(row.field, row);
+        } else {
+            const merged: OwnerFieldWriteIR = { ...seen };
+
+            if (row.ownerScoped !== true) {
+                delete merged.ownerScoped;
+            }
+
+            if (row.guarded !== true) {
+                delete merged.guarded;
+            }
+
+            byField.set(row.field, merged);
+        }
+    }
+
+    return [...byField.values()];
+};
+
 /** Identity columns written from `args` by a single `ctx.db` write call. */
 const ownerFieldWritesInCall = (call: CallExpression, relativePath: string, ownerFieldOf: (exportName: string) => string | undefined): OwnerFieldWriteIR[] => {
     const identityWrite = identityWriteOf(call);
@@ -306,7 +352,11 @@ const ownerFieldWritesInCall = (call: CallExpression, relativePath: string, owne
     const implScope = mutatorImplScopeOf(call);
     const write = { call, method, ownerField: implScope === undefined ? undefined : ownerFieldOf(implScope.mutatorName), relativePath, scope };
 
-    return objectLiterals.flatMap((objectLiteral) => identityWritesInObjectLiteral(objectLiteral, write, implScope));
+    const rows = objectLiterals.flatMap((objectLiteral) => identityWritesInObjectLiteral(objectLiteral, write, implScope));
+
+    // An upsert's `create` and `update` are one write: the same column tainted in both is one finding, proven only
+    // when both copies are.
+    return method === "upsert" ? mergeByField(rows) : rows;
 };
 
 /**

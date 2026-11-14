@@ -186,6 +186,15 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
         ["an upsert create", `await ctx.db.posts.upsert({ target: "slug", create: { userId: args.userId, slug: args.slug }, update: {} });`, "userId"],
         ["an upsert update", `await ctx.db.posts.upsert({ target: "slug", create: {}, update: { userId: args.userId } });`, "userId"],
         ["an insert through a const alias", `const posts = ctx.db.posts; await posts.insert({ userId: args.userId });`, "userId"],
+        [
+            "an upsert with the column in both create and update",
+            `await ctx.db.posts.upsert({ target: "slug", create: { userId: args.userId }, update: { userId: args.userId } });`,
+            "userId",
+        ],
+        ["an upsertMany row", `await ctx.db.posts.upsertMany({ target: "slug", rows: [{ create: { ownerId: args.ownerId } }] });`, "ownerId"],
+        ["a patchMany by id", `await ctx.db.posts.patchMany([{ id: args.id, values: { ownerId: args.ownerId } }]);`, "ownerId"],
+        ["a patchMany by where", `await ctx.db.posts.patchMany({ where: { slug: args.slug }, values: { ownerId: args.ownerId } });`, "ownerId"],
+        ["a by-name insertMany", `await ctx.db.insertMany("posts", [{ ownerId: args.ownerId }]);`, "ownerId"],
     ])("flags an identity column written through the facade: %s", (_label, body, field) => {
         expect.assertions(2);
 

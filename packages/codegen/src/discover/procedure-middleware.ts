@@ -230,7 +230,7 @@ const protectionsInChain = (receiver: TsNode): Protections => {
 const USER_TABLE_INSERT_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "insertManyUnsafe", "replace"]);
 
 /** The `ctx.db.<table>.<method>` facade writes that create/replace a row wholesale. */
-const FACADE_USER_TABLE_INSERT_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "replace", "upsert"]);
+const FACADE_USER_TABLE_INSERT_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "replace", "upsert", "upsertMany"]);
 
 /** True when `call` is a by-name `ctx.db.insert("table", …)` / `db.insertMany("table", …)` / … write into a user-shaped table. */
 const isByNameUserTableInsert = (call: CallExpression): boolean => {
