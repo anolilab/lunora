@@ -130,7 +130,7 @@ describe("saas template checkout", () => {
         const ctx = {
             auth,
             payments: {
-                adapter: { capabilities: { checkoutExpiry }, identifier: checkoutExpiry ? "stripe" : "polar" },
+                provider: { capabilities: { checkoutExpiry }, identifier: checkoutExpiry ? "stripe" : "polar" },
                 createCheckout,
                 listSubscriptions: vi.fn<() => Promise<Row[]>>(async () => subscriptions),
             },

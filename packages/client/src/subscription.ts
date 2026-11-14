@@ -102,6 +102,14 @@ export interface SubscriptionState {
      */
     awaitingSnapshot?: boolean;
 
+    /**
+     * Set when the committed base is missing rows the server has confirmed: a held run was discarded
+     * or a row change was refused. Deltas and settled frames wait until a `data` frame commits or a
+     * `resume` from before the gap applies. Kept apart from `awaitingSnapshot`, which a failure clears
+     * to release joiners, so a failure cannot reopen the gate.
+     */
+    baseIncomplete?: boolean;
+
     readonly callbacks: Set<SubscriptionCallback>;
 
     /**

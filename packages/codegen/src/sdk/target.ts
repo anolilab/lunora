@@ -39,6 +39,12 @@
  * **Subscriptions are queries only.** A write has nothing for the server to
  * re-run, so a `subscribe_*` on one generates a call the server rejects.
  *
+ * **Every query gets two live members.** The callback form (`subscribeX`) and
+ * the stream form (`watchX`), which wraps the transport's watch primitive so
+ * the language's native loop binds the query. `watch` is the prefix in every
+ * language (plan 395 §1). The stream form degrades to the language's `any`-shaped
+ * event where the callback form does.
+ *
  * **Verbs cross into the runtime as typed constants**, never bare strings, so a
  * template typo cannot silently route a read over the write path.
  *

@@ -4,7 +4,7 @@ A **protocol-conformant** Kotlin client for a Lunora deployment, implementing th
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, a closeable `Sequence` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, a closeable `Sequence` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -143,7 +143,7 @@ success whose `result` does not decode throws `ApiException`
 (`WIRE_DECODE_FAILED`): the call did reach the server, and a mutation behind it
 committed.
 
-`client.close()` also ends every open `stream`: a loop over one yields what was
+`client.close()` also ends every open `watch`: a loop over one yields what was
 already delivered and then returns.
 
 ## Optimistic updates and offline writes

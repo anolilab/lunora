@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.194...@lunora/shard-engine@1.0.0-alpha.195) (2026-11-13)
+
+- fix(do): name a delta's table only for a single-table query (#1595)
+
 ## @lunora/shard-engine [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.193...@lunora/shard-engine@1.0.0-alpha.194) (2026-11-09)
 
 - feat(cli): apply generated SQL migrations per stage (#1516)
