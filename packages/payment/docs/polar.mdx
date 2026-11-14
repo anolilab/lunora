@@ -424,9 +424,9 @@ await ctx.payments.refundPayment({ sessionId: orderId, amount: money(500n, "USD"
 ```
 
 <Callout type="warn">
-    Go through the facade, not `ctx.payments.adapter.refundPayment`. Polar's [Create Refund](https://polar.sh/docs/api-reference/refunds/create) accepts no
-    idempotency key, so nothing on the wire dedupes a retry: the facade's local refund ledger is the only thing that stops a repeated call from moving the money
-    twice. It also authorizes the caller and rejects an over-refund before anything is issued.
+    Refund through `ctx.payments.refundPayment`. Polar's [Create Refund](https://polar.sh/docs/api-reference/refunds/create) accepts no idempotency key, so
+    nothing on the wire dedupes a retry: the facade's local refund ledger is the only thing that stops a repeated call from moving the money twice. It also
+    authorizes the caller and rejects an over-refund before anything is issued.
 </Callout>
 
 ## Billing portal

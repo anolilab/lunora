@@ -161,7 +161,7 @@ describe("composed mutation trigger scheduling", () => {
                 {
                     payment: () => {
                         return {
-                            adapter: { identifier: "test" },
+                            adapter: { capabilities: { merchantOfRecord: false, portal: false, usageMetering: false }, identifier: "test" },
                             authorize: (referenceId: string, caller: { db: unknown }) => {
                                 paymentDatabases.set(referenceId, caller.db);
                                 return false;
