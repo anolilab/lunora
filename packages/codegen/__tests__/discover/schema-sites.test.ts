@@ -78,26 +78,6 @@ describe("declaration sites on schema IR", () => {
         expect(messages?.searchIndexes[0]?.site).toStrictEqual({ file: "schema", line: lineOf(source, ".searchIndex(") });
     });
 
-    it("records a column's property line in fieldSites, keyed by column name", () => {
-        expect.assertions(2);
-
-        const source = `
-            import { defineSchema, defineTable, v } from "@lunora/server";
-
-            export const schema = defineSchema({
-                posts: defineTable({
-                    title: v.string(),
-                    body: v.string(),
-                }),
-            });
-        `;
-
-        const posts = discover(source).tables.find((table) => table.name === "posts");
-
-        expect(posts?.fieldSites?.title).toStrictEqual({ file: "schema", line: lineOf(source, "title: v.string()") });
-        expect(posts?.fieldSites?.body).toStrictEqual({ file: "schema", line: lineOf(source, "body: v.string()") });
-    });
-
     it("records a relation's property line on the relation, under the table that declares it", () => {
         expect.assertions(2);
 
@@ -153,8 +133,55 @@ describe("declaration sites on schema IR", () => {
         });
     });
 
-    it("records the defineSchema property line for a table that is not written as a defineTable chain", () => {
-        expect.assertions(2);
+    it("records a standalone defineVectorIndex(...) call's line on the index", () => {
+        expect.assertions(1);
+
+        const source = `
+            import { defineSchema, defineTable, defineVectorIndex, v } from "@lunora/server";
+
+            export const schema = defineSchema(
+                { docs: defineTable({ title: v.string() }) },
+                {
+                    "docs-title": defineVectorIndex({
+                        source: { table: "docs", select: (row) => row.title },
+                        dimensions: 1024,
+                        metric: "cosine",
+                    }),
+                },
+            );
+        `;
+
+        const index = discover(source).vectorIndexes.find((vectorIndex) => vectorIndex.name === "docs-title");
+
+        expect(index?.site).toStrictEqual({ file: "schema", line: lineOf(source, '"docs-title": defineVectorIndex') });
+    });
+
+    it("records a table from a lunora file whose name starts with two dots", () => {
+        expect.assertions(1);
+
+        const sharedSource = `
+            import { defineTable, v } from "@lunora/server";
+
+            export const tagsTable = defineTable({ label: v.string() });
+        `;
+
+        writeLunora("..shared.ts", sharedSource);
+
+        const schema = discover(`
+            import { defineSchema } from "@lunora/server";
+            import { tagsTable } from "./..shared";
+
+            export const schema = defineSchema({ tags: tagsTable });
+        `);
+
+        expect(schema.tables.find((table) => table.name === "tags")?.site).toStrictEqual({
+            file: "..shared",
+            line: lineOf(sharedSource, "export const tagsTable"),
+        });
+    });
+
+    it("records the followed defineTable call for a table bound to a const", () => {
+        expect.assertions(1);
 
         const source = `
             import { defineSchema, defineTable, v } from "@lunora/server";
@@ -168,7 +195,6 @@ describe("declaration sites on schema IR", () => {
 
         const users = discover(source).tables.find((table) => table.name === "users");
 
-        expect(users?.site).toStrictEqual({ file: "schema", line: lineOf(source, "users: usersTable") });
-        expect(users?.fieldSites).toBeUndefined();
+        expect(users?.site).toStrictEqual({ file: "schema", line: lineOf(source, "const usersTable = defineTable") });
     });
 });

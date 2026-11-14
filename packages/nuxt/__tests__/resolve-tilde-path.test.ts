@@ -23,6 +23,18 @@ describe("resolveTildePath", () => {
         expect(resolveTildePath("~/lunora/server", rootDir, srcDir)).toBe("/project/app/lunora/server");
     });
 
+    it("expands `@/` against the srcDir", () => {
+        expect.assertions(1);
+
+        expect(resolveTildePath("@/lunora/server", rootDir, srcDir)).toBe("/project/app/lunora/server");
+    });
+
+    it("expands `@@/` against the rootDir", () => {
+        expect.assertions(1);
+
+        expect(resolveTildePath("@@/lunora/server", rootDir, srcDir)).toBe("/project/lunora/server");
+    });
+
     it("resolves a `./` relative specifier against the rootDir", () => {
         expect.assertions(1);
 

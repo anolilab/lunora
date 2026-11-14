@@ -161,6 +161,13 @@ export interface SubscriptionState {
     pendingDeltaRun?: { payload: unknown };
 
     /**
+     * The refusal the server answered this subscription with, handed to a subscriber
+     * that joins later: the state is already `"acked"`, so no frame goes out and no
+     * value will come. Kept until the subscription is re-armed or a value lands.
+     */
+    refusal?: SubscriptionError;
+
+    /**
      * The authoritative server value the optimistic layers fold onto — the value
      * with NO optimistic overlay. Tracks `lastValue` exactly whenever no layers
      * are active; diverges only while a per-call optimistic write is pending. A
@@ -308,6 +315,8 @@ export class SubscriptionRegistry {
 export const setSubscriptionAck = (state: SubscriptionState, next: SubscriptionState["ack"]): void => {
     // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place
     state.ack = next;
+    // eslint-disable-next-line no-param-reassign -- a re-armed subscription no longer holds the refusal it was answered with
+    state.refusal = undefined;
 };
 
 /**
@@ -346,7 +355,10 @@ export function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined)
 
 /** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
 export const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
-    for (const errorCallback of callbacks) {
+    // A copy: a callback that subscribes again joins the set and is handed the refusal on joining, not a second time here.
+    const snapshot = [...callbacks];
+
+    for (const errorCallback of snapshot) {
         try {
             errorCallback(error);
         } catch {
@@ -364,4 +376,21 @@ export const failSubscription = (state: SubscriptionState, error: SubscriptionEr
     // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
     state.awaitingSnapshot = false;
     fanSubscriptionError(state.errorCallbacks, error);
+};
+
+/**
+ * Hand a late subscriber the refusal the subscription was answered with: a refused query sends no
+ * frame for a joiner, so this is the only answer it will get. A value held from before the refusal is
+ * replayed too, as the subscribers already present saw it, and does not stand in for the refusal.
+ */
+export const replaySubscriptionRefusal = (state: SubscriptionState, errorCallback: SubscriptionErrorCallback | undefined): void => {
+    if (errorCallback === undefined || state.refusal === undefined) {
+        return;
+    }
+
+    try {
+        errorCallback(state.refusal);
+    } catch {
+        /* user callback threw — ignore */
+    }
 };
