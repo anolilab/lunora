@@ -63,3 +63,67 @@ describe("runAdvisor cacheKey disambiguation", () => {
         expect(findings.map((f) => f.cacheKey)).toEqual(["kv_unscoped_user_key_idor:handlers:12", "kv_unscoped_user_key_idor:handlers:12:2"]);
     });
 });
+
+describe("runAdvisor lint isolation", () => {
+    it("reports a throwing lint as a failure finding and still returns the other lints' findings", () => {
+        expect.assertions(7);
+
+        const throwingLint: Lint = {
+            categories: ["SECURITY"],
+            description: "d",
+            facing: "INTERNAL",
+            level: "ERROR",
+            name: "throwing_lint",
+            remediation: "r",
+            run: () => {
+                throw new Error("boom");
+            },
+            source: "static",
+            title: "t",
+        };
+        const okLint: Lint = {
+            categories: ["SECURITY"],
+            description: "d",
+            facing: "INTERNAL",
+            level: "ERROR",
+            name: "ok_lint",
+            remediation: "r",
+            run: () => [finding("ok:1")],
+            source: "static",
+            title: "t",
+        };
+
+        const findings = runAdvisor({ schema: { tables: [] } }, { lints: [throwingLint, okLint] });
+
+        expect(findings).toHaveLength(2);
+        expect(findings[0]?.name).toBe("advisor_lint_failed");
+        expect(findings[0]?.level).toBe("ERROR");
+        expect(findings[0]?.cacheKey).toBe("advisor_lint_failed:throwing_lint");
+        expect(findings[0]?.metadata).toEqual({ lint: "throwing_lint" });
+        expect(findings[0]?.detail).toContain("boom");
+        expect(findings[1]?.cacheKey).toBe("ok:1");
+    });
+
+    it("gives the failure finding the throwing lint's own level, not a fixed WARN", () => {
+        expect.assertions(2);
+
+        const infoLint: Lint = {
+            categories: ["SECURITY"],
+            description: "d",
+            facing: "INTERNAL",
+            level: "INFO",
+            name: "info_lint",
+            remediation: "r",
+            run: () => {
+                throw new Error("boom");
+            },
+            source: "static",
+            title: "t",
+        };
+
+        const findings = runAdvisor({ schema: { tables: [] } }, { lints: [infoLint] });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.level).toBe("INFO");
+    });
+});

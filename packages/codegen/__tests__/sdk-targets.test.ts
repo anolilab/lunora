@@ -87,6 +87,23 @@ describe("assertGeneratable", () => {
 
         await expect(generateSdk(colliding, targets[0]!)).rejects.toThrow(/"messages:list".*"messages:watchList".*"WatchList".*Dart/su);
     });
+
+    it.each(["python", "ruby", "rust"])("rejects a function whose name collides with a query's %s watch member", async (lang) => {
+        expect.assertions(1);
+
+        // The query `fooBAR` emits a `watch_foo_bar` member in these targets, the same
+        // name a sibling function `watch_foo_bar` generates. The distinct-member check
+        // must see the watch name, not only the call and subscribe names.
+        const target = targets.find((candidate) => candidate.id === lang)!;
+        const colliding: OpenRpcDocument = {
+            methods: [
+                { name: "foo:fooBAR", "x-lunora-function-kind": "query" },
+                { name: "foo:watch_foo_bar", "x-lunora-function-kind": "mutation" },
+            ],
+        };
+
+        await expect(generateSdk(colliding, target)).rejects.toThrow(/"foo:fooBAR".*"foo:watch_foo_bar".*watch_foo_bar/su);
+    });
 });
 
 describe("wire types no model can carry", () => {
@@ -267,6 +284,36 @@ describe.each(targets.map((target) => [target.id, target] as const))("target: %s
         // Naming differs per language (`subscribe_list`, `subscribeList`), so
         // match the shared stem rather than any one convention.
         expect(/subscribe/iu.test(surface)).toBe(true);
+    });
+
+    it("renders a stream form named watch for every query, next to the callback form", async () => {
+        expect.assertions(1);
+
+        const spec: OpenRpcDocument = {
+            methods: [{ name: "messages:list", "x-lunora-function-kind": "query" }],
+        };
+
+        const { files } = await generateSdk(spec, target);
+        const surface = Object.values(files).join("\n");
+
+        // `watch` is the generated prefix in every language (plan 395 §1); Dart already emits it.
+        expect(/watch/iu.test(surface)).toBe(true);
+    });
+
+    it("binds the watch form to the watch primitive, not the wire stream's stream primitive", async () => {
+        expect.assertions(2);
+
+        const spec: OpenRpcDocument = {
+            methods: [{ name: "messages:list", "x-lunora-function-kind": "query" }],
+        };
+
+        const { files } = await generateSdk(spec, target);
+        const surface = Object.values(files).join("\n");
+
+        // `stream` is reserved for the wire stream client (plan 395 naming split); the watch
+        // form calls the subscription-backed `watch` primitive that every port exposes.
+        expect(/\.(?:stream|Stream)\(/u.test(surface)).toBe(false);
+        expect(/\.(?:watch|Watch)\(/u.test(surface)).toBe(true);
     });
 
     it("renders no subscription for a write, which the server cannot re-run", async () => {

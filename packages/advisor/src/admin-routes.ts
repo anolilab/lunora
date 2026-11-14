@@ -9,6 +9,8 @@ export interface AdvisorAdminRoute {
     exportName: string;
     /** Source file relative to the lunora dir, no extension. */
     file: string;
+    /** 1-based start line of the declaring statement, when the feeder recorded it. */
+    line?: number;
     /** HTTP verb the route binds to (uppercased), e.g. `"POST"`. */
     method: string;
     /** The route path, e.g. `/admin/users`. */

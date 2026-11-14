@@ -23,6 +23,7 @@
       "file": "documents",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 7,
       "visibility": "public"
     }
   ]

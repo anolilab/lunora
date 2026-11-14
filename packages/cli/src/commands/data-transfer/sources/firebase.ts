@@ -118,7 +118,46 @@ const decodeBytes = (raw: NonNullable<FirestoreValue["bytesValue"]>, path: strin
  * Supabase reshape rule refuses.
  */
 
+/** A `doubleValue` string Firestore can produce: a decimal or exponent number. */
+const DOUBLE_TEXT = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
+
+/**
+ * `doubleValue` → number. The REST encoding spells non-finite doubles as the
+ * strings `"NaN"`, `"Infinity"` and `"-Infinity"`; JSON has no spelling for them,
+ * so `JSON.stringify` would write `null` and the value would be lost silently.
+ */
+const decodeDouble = (raw: number | string, path: string): number => {
+    // `Number()` coerces `null`, `""`, `true` and `"0x10"` to finite numbers, so a string is parsed only in decimal
+    // or exponent form, or as one of the non-finite spellings that the finiteness check below refuses.
+    const parsed = typeof raw === "number" || (typeof raw === "string" && DOUBLE_TEXT.test(raw)) ? Number(raw) : Number.NaN;
+
+    if (!Number.isFinite(parsed)) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${path}: doubleValue ${JSON.stringify(raw)} is not a finite number — JSON cannot carry it, and writing it would store null`,
+        );
+    }
+
+    return parsed;
+};
+
+/**
+ * `"nullValue" in value` throws a bare `TypeError` on a primitive, which is what a
+ * stray field such as a document's `__name__` string used to produce. Refuse
+ * anything that is not a typed-value object before the `in` checks run.
+ */
+const assertTypedValueObject = (value: unknown, path: string): void => {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${path}: expected a Firestore typed value ({ stringValue: … } and so on), got ${JSON.stringify(value).slice(0, 80)}`,
+        );
+    }
+};
+
 const decodeValue = (value: FirestoreValue, path: string): unknown => {
+    assertTypedValueObject(value, path);
+
     if ("nullValue" in value) {
         // eslint-disable-next-line unicorn/no-null -- a Firestore nullValue is JSON `null`; `undefined` would drop the field
         return null;
@@ -140,7 +179,7 @@ const decodeValue = (value: FirestoreValue, path: string): unknown => {
     }
 
     if (value.doubleValue !== undefined) {
-        return Number(value.doubleValue);
+        return decodeDouble(value.doubleValue, path);
     }
 
     if (value.timestampValue !== undefined) {
@@ -213,9 +252,29 @@ const isWrappedDocument = (raw: Record<string, unknown>): boolean => {
     return Object.keys(raw).every((key) => WRAPPED_DOCUMENT_KEYS.has(key)) && !isFirestoreValue(fields);
 };
 
+/**
+ * A bare document's `__name__` is its resource path, not a field: it is read for
+ * the id and must not reach `decodeValue`, where a string is not a typed value.
+ */
+const withoutResourceName = (raw: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "__name__"));
+
 /** Decode a `fields` map to a plain object. */
 const decodeFields = (fields: Record<string, FirestoreValue>, path: string): Record<string, unknown> =>
     Object.fromEntries(Object.entries(fields).map(([key, value]) => [key, decodeValue(value, `${path}.${key}`)]));
+
+/**
+ * A document's own `_id` field would be silently replaced by the document id
+ * spread after it. Refuse, as the Supabase reader does for the same column.
+ */
+const assertNoReservedIdField = (decoded: Record<string, unknown>, path: string): void => {
+    if ("_id" in decoded) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${path}._id: the document has its own \`_id\` field, which collides with the reserved id field — rename it in the source`,
+        );
+    }
+};
 
 /**
  * Decode one Firestore document to a Lunora document, preserving its id.
@@ -238,9 +297,10 @@ const toDocument = (
     const wrapped = isWrappedDocument(raw);
     const decoded = wrapped
         ? decodeFields((raw["fields"] ?? {}) as Record<string, FirestoreValue>, path)
-        : decodeFields(raw as unknown as Record<string, FirestoreValue>, path);
+        : decodeFields(withoutResourceName(raw) as unknown as Record<string, FirestoreValue>, path);
 
-    const name = raw["name"] ?? raw["__name__"];
+    // A bare document's `name` is an ordinary typed field, so only `__name__` carries its resource path.
+    const name = wrapped ? raw["name"] : raw["__name__"];
     const id = typeof name === "string" ? documentIdFromName(name) : fallbackId;
 
     if (id === undefined) {
@@ -266,6 +326,8 @@ const toDocument = (
         // eslint-disable-next-line unicorn/no-null -- `null` is the reshape contract's "this cell was NULL"
         decoded[column] = applyReshape(column, kind, current === null ? null : String(current));
     }
+
+    assertNoReservedIdField(decoded, path);
 
     return { ...decoded, _id: id };
 };

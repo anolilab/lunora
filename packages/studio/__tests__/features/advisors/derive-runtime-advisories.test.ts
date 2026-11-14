@@ -237,4 +237,16 @@ describe("declaredIndexesFor", () => {
             { index: "byTitle", table: "posts" },
         ]);
     });
+
+    it("leaves out vector and unique indexes, which never record a read", () => {
+        expect.assertions(1);
+
+        const pairs = declaredIndexesFor("posts", [
+            { fields: ["authorId"], name: "by_owner", type: "index" },
+            { fields: ["embedding"], name: "by_embedding", type: "vector" },
+            { fields: ["email"], name: "by_email", type: "index", unique: true },
+        ]);
+
+        expect(pairs).toStrictEqual([{ index: "by_owner", table: "posts" }]);
+    });
 });

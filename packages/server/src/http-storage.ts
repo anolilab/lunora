@@ -273,8 +273,10 @@ interface StorageServeAuthzContext {
  * **403**; a throwing gate is a denial too, never a 500 (fail closed, mirroring
  * `@lunora/storage`'s `createUploadHandler`).
  *
- * For a signed-URL topology this is where `verifySignedUrl` goes:
- * `async ({ request }) => (await verifySignedUrl(new URL(request.url), secret)).valid`.
+ * For a signed-URL topology this is where `authorizeSignedGet` goes:
+ * `authorizeSignedGet(secret, { bucketName })` from `@lunora/storage`. A bare
+ * `verifySignedUrl(...).valid` check admits an upload URL, another bucket or
+ * another key.
  */
 type StorageServeAuthorizer = (context: StorageServeAuthzContext) => boolean | Promise<boolean>;
 
@@ -310,7 +312,7 @@ const isServeAuthorized = async (authorize: StorageServeAuthorizer, key: string,
  * `authorize` runs FIRST and is mandatory: this helper reads bytes out of a
  * bucket and hands them to whoever asked, so without a gate every mounted route
  * is an open object store. It does not verify signed URLs by itself — pass
- * `verifySignedUrl` (or a session check) as the gate.
+ * `authorizeSignedGet` (or a session check) as the gate.
  *
  * Every response carries `x-content-type-options: nosniff`, and any object whose
  * content type is not a raster image or media file also carries

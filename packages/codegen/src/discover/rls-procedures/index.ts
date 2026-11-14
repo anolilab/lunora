@@ -2,35 +2,25 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { RlsProcedureIR } from "../../ir";
-import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "../ast";
+import { declarationLineOf, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "../ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "../attribution";
 import { tablesAccessedIn } from "../database-calls";
 import { classifyProcedureCall } from "../functions/classify-procedure-call";
 import { rlsCallsInChain } from "./internal/chain";
+import policyObjectLiterals from "./internal/policies";
 
 /**
- * Extract the string-literal `table` property values from the first argument of
- * an `rls(policies)` call. `policies` is expected to be an array literal of
- * object literals, each with a `table: "name"` property assignment.
+ * Extract the string-literal `table` property values of the policies an
+ * `rls(...)` call declares (see `policyObjectLiterals` for the accepted shapes).
  *
- * When the argument is not a literal array (a variable reference), returns `[]`
- * (conservative: `usesRls` is still `true` but table names are unknown).
+ * When the policies cannot be enumerated statically (a function call, an imported
+ * list), returns `[]` (conservative: `usesRls` is still `true` but table names are
+ * unknown).
  */
 const extractPolicyTables = (rlsCall: CallExpression): string[] => {
-    const argument = rlsCall.getArguments()[0];
-
-    if (!argument || !Node.isArrayLiteralExpression(argument)) {
-        // Non-literal array → can't enumerate tables statically.
-        return [];
-    }
-
     const tables: string[] = [];
 
-    for (const element of argument.getElements()) {
-        if (!Node.isObjectLiteralExpression(element)) {
-            continue;
-        }
-
+    for (const element of policyObjectLiterals(rlsCall)) {
         const tableProperty = findObjectProperty(element, "table");
 
         if (!tableProperty || !Node.isPropertyAssignment(tableProperty)) {
@@ -123,6 +113,7 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
     return {
         exportName: exportedNameOf(declaration) ?? declaration.getName(),
         file: relativePath,
+        line: declarationLineOf(declaration),
         rlsTables: chain.rlsTables,
         tablesRead,
         tablesWritten,

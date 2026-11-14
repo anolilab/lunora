@@ -23,6 +23,7 @@
       "file": "games",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 61,
       "visibility": "public"
     },
     {
@@ -48,6 +49,7 @@
       "file": "games",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 66,
       "visibility": "public"
     },
     {
@@ -73,6 +75,7 @@
       "file": "games",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 75,
       "visibility": "public"
     },
     {
@@ -98,6 +101,7 @@
       "file": "games",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 82,
       "visibility": "public"
     },
     {
@@ -123,6 +127,7 @@
       "file": "games",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 101,
       "visibility": "public"
     },
     {
@@ -148,6 +153,7 @@
       "file": "games",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 170,
       "visibility": "public"
     },
     {
@@ -173,6 +179,7 @@
       "file": "games",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 279,
       "visibility": "public"
     },
     {
@@ -198,6 +205,7 @@
       "file": "games",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 299,
       "visibility": "public"
     },
     {
@@ -223,6 +231,7 @@
       "file": "games",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 309,
       "visibility": "public"
     },
     {
@@ -248,6 +257,7 @@
       "file": "lobby",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 20,
       "visibility": "public"
     },
     {
@@ -273,6 +283,7 @@
       "file": "lobby",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 29,
       "visibility": "public"
     },
     {
@@ -298,6 +309,7 @@
       "file": "lobby",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 57,
       "visibility": "public"
     },
     {
@@ -323,6 +335,7 @@
       "file": "lobby",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 91,
       "visibility": "public"
     },
     {
@@ -348,6 +361,7 @@
       "file": "lobby",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 121,
       "visibility": "public"
     },
     {
@@ -373,6 +387,7 @@
       "file": "lobby",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 151,
       "visibility": "public"
     },
     {
@@ -398,6 +413,7 @@
       "file": "lobby",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 198,
       "visibility": "public"
     },
     {
@@ -423,6 +439,7 @@
       "file": "players",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 18,
       "visibility": "public"
     },
     {
@@ -448,6 +465,7 @@
       "file": "players",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 40,
       "visibility": "public"
     },
     {
@@ -473,6 +491,7 @@
       "file": "players",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 42,
       "visibility": "public"
     },
     {
@@ -498,6 +517,7 @@
       "file": "players",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 50,
       "visibility": "public"
     }
   ]

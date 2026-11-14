@@ -173,7 +173,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
  */
 const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
     shapes.map((shape) => {
-        return { exportName: shape.exportName, file: `lunora/${shape.filePath}.ts`, table: shape.table };
+        return { exportName: shape.exportName, file: `lunora/${shape.filePath}.ts`, line: shape.line, table: shape.table };
     });
 
 /**

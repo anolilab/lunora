@@ -300,33 +300,121 @@ class TestWsFrames < Minitest::Test
     assert_empty seen, "the row-change envelope must never be published as the result"
   end
 
+  # One client with one subscription, seeded; +seen+ and +errors+ record what the
+  # subscription's callbacks received.
+  def delta_case_client(entry, identity: nil)
+    sent = []
+    seen = []
+    errors = []
+    client = Lunora::Client.new("https://app.example", identity: identity)
+    client.attach_socket(->(frame) { sent << frame })
+    client.subscribe("messages:list", {}, ->(value) { seen << value }, ->(error) { errors << error.code })
+    client.handle_frame(JSON.generate(entry["seedFrame"]))
+    seen.clear
+
+    [client, sent, seen, errors]
+  end
+
+  # The step loop shared by every delta fixture key: a frame step checks how many
+  # values were published (and the last one's wire form) and, when the step names
+  # +errors+, exactly which error codes fired; a resume step checks the resend.
+  def run_delta_steps(entry, client, sent, seen, errors)
+    entry["steps"].each_with_index do |step, index|
+      label = "#{entry["name"]} step #{index + 1}"
+
+      if step["resume"]
+        sent.clear
+        client.resend_subscriptions
+        subscribe = sent.find { |frame| frame["type"] == "subscribe" }
+        assert_equal step["resume"]["sinceSeq"], subscribe["query"]["sinceSeq"], label
+        assert_equal step["resume"]["sinceEpoch"], subscribe["query"]["sinceEpoch"], label
+        next
+      end
+
+      seen.clear
+      errors.clear
+      client.handle_frame(JSON.generate(step["frame"]))
+      assert_equal step["publishes"], seen.length, label
+      assert_equal canonical(step["valueWire"]), canonical(Lunora.encode_wire(seen.first)), label if step["valueWire"]
+      assert_equal step["errors"], errors, "#{label} error codes" if step.key?("errors")
+    end
+  end
+
   def test_unmergeable_run_freezes_the_cursor
     fixture("ws-frames.json")["pageDeltaPoisonCases"].each do |entry|
-      client = Lunora::Client.new("https://app.example")
-      sent = []
-      client.attach_socket(->(frame) { sent << frame })
-      seen = []
-      client.subscribe("messages:list", {}, ->(value) { seen << value })
-      client.handle_frame(JSON.generate(entry["seedFrame"]))
-      seen.clear
+      client, sent, seen, errors = delta_case_client(entry)
+      run_delta_steps(entry, client, sent, seen, errors)
+    end
+  end
 
-      entry["steps"].each_with_index do |step, index|
-        label = "#{entry["name"]} step #{index + 1}"
+  def test_a_failed_resend_keeps_a_poisoned_subscription_frozen
+    entry = fixture("ws-frames.json")["pageDeltaPoisonCases"].first
+    freeze = entry["steps"][0]["frame"]
+    later = entry["steps"][1]["frame"]
+    broken = false
+    sent = []
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(lambda { |frame|
+      raise IOError, "socket gone" if broken
 
-        if step["resume"]
-          sent.clear
-          client.resend_subscriptions
-          subscribe = sent.find { |frame| frame["type"] == "subscribe" }
-          assert_equal step["resume"]["sinceSeq"], subscribe["query"]["sinceSeq"], label
-          assert_equal step["resume"]["sinceEpoch"], subscribe["query"]["sinceEpoch"], label
-          next
-        end
+      sent << frame
+    })
+    seen = []
+    client.subscribe("messages:list", {}, ->(value) { seen << value }, ->(_error) {})
+    client.handle_frame(JSON.generate(entry["seedFrame"]))
+    client.handle_frame(JSON.generate(freeze))
 
-        seen.clear
-        client.handle_frame(JSON.generate(step["frame"]))
-        assert_equal step["publishes"], seen.length, label
-        assert_equal canonical(step["valueWire"]), canonical(Lunora.encode_wire(seen.first)), label if step["valueWire"]
+    broken = true
+    assert_raises(IOError) { client.resend_subscriptions }
+
+    # The replay never reached the server, so the dropped change is still unapplied.
+    seen.clear
+    client.handle_frame(JSON.generate(later))
+
+    assert_empty seen
+
+    broken = false
+    sent.clear
+    client.resend_subscriptions
+    subscribe = sent.find { |frame| frame["type"] == "subscribe" }
+
+    assert_equal entry["steps"][4]["resume"]["sinceSeq"], subscribe["query"]["sinceSeq"]
+  end
+
+  def test_delta_runs_are_held_until_their_last_frame
+    cases = fixture("ws-frames.json")["pageDeltaRunCases"]
+    assert_equal 5, cases.length, "pageDeltaRunCases must carry all five cases"
+
+    cases.each do |entry|
+      client, sent, seen, errors = delta_case_client(entry)
+      run_delta_steps(entry, client, sent, seen, errors)
+    end
+  end
+
+  def test_an_undecodable_run_frame_freezes_the_subscription
+    cases = fixture("ws-frames.json")["undecodableDeltaRunCases"]
+    assert_equal 2, cases.length, "undecodableDeltaRunCases must carry its two cases"
+
+    cases.each do |entry|
+      client, sent, seen, errors = delta_case_client(entry)
+      run_delta_steps(entry, client, sent, seen, errors)
+    end
+  end
+
+  def test_identity_change_evicts_the_cached_base_and_the_poison
+    cases = fixture("ws-frames.json")["identityChangeEvictionCases"]
+    assert_equal 2, cases.length, "identityChangeEvictionCases must carry both cases"
+
+    cases.each do |entry|
+      client, sent, seen, errors = delta_case_client(entry, identity: entry["identityChange"]["from"])
+
+      if entry["freezeFrame"]
+        client.handle_frame(JSON.generate(entry["freezeFrame"]))
+        assert_equal entry["freezeErrors"], errors, "#{entry["name"]} freeze"
       end
+
+      client.identity = entry["identityChange"]["to"]
+      run_delta_steps(entry, client, sent, seen, errors)
     end
   end
 
@@ -420,11 +508,11 @@ class TestWsFrames < Minitest::Test
   def test_a_subscription_streams_its_frame_values_in_order
     ConformanceManifest.covers("subscription_stream_yields_frame_values_in_order")
 
-    case_data = fixture("ws-frames.json")["stream"]
+    case_data = fixture("ws-frames.json")["watch"]
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})
 
-    values, stop = client.stream("messages:list", { "channel" => "general" })
+    values, stop = client.watch("messages:list", { "channel" => "general" })
     seen = []
 
     case_data["frames"].each do |frame|

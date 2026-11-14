@@ -1,6 +1,7 @@
 import emit from "../../finding";
 import type { AdvisorShape } from "../../shapes";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a replication shape whose `table` is a `.global()` table.
@@ -47,7 +48,7 @@ const shapeTargetsGlobalTable: Lint = {
                 emit(shapeTargetsGlobalTable, {
                     cacheKey: `shape_targets_global_table:${shape.exportName}`,
                     detail: `Shape \`${shape.exportName}\` (${shape.file}) replicates from the \`.global()\` table \`${shape.table}\`. It is served through the cross-shard global tier — poll-refreshed and latency-tiered, not poke-live.`,
-                    metadata: { exportName: shape.exportName, file: shape.file, table: shape.table },
+                    metadata: { exportName: shape.exportName, ...declarationSiteFields(shape), table: shape.table },
                 }),
             );
     },

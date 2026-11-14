@@ -4122,8 +4122,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     /**
      * Receiver for the `SchedulerDO`'s scheduled-job dispatch. The scheduler DO
      * POSTs `{ functionPath, args, shardKey, scheduledFor, id }` as raw JSON,
-     * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
-     * in the `x-lunora-scheduler-signature` header (secret in
+     * authenticated by an HMAC-SHA-256 (base64url) signature in the
+     * `x-lunora-scheduler-signature` header. The signature covers the
+     * `x-lunora-scheduler-timestamp` header, the forwarded identity headers and the
+     * exact body, and it is refused outside a five-minute window (secret in
      * `env.LUNORA_SCHEDULER_SECRET`), or — when no HMAC secret is configured on
      * the scheduler — an `authorization: Bearer <admin token>` fallback. An
      * unsigned/forged request is rejected with 403; we never run a job we can't

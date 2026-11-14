@@ -63,6 +63,22 @@ export { renameChannel as retitleChannel };
         expect(discoverMutatorWrites(newProject(), workdir)).toEqual([{ exportName: "retitleChannel", file: "lunora/mutators.ts", line: 5 }]);
     });
 
+    it("lifts a facade `ctx.db.<table>.replace(...)` from a mutator's server impl", () => {
+        expect.assertions(1);
+
+        writeMutators(`import { defineMutator } from "@lunora/server";
+
+export const renameChannel = defineMutator({
+    client: () => {},
+    server: async (ctx, args) => {
+        await ctx.db.channels.replace(args.id, { name: args.name });
+    },
+});
+`);
+
+        expect(discoverMutatorWrites(newProject(), workdir)).toEqual([{ exportName: "renameChannel", file: "lunora/mutators.ts", line: 6 }]);
+    });
+
     it("does not flag `ctx.db.patch(...)` — the blessed column-level write", () => {
         expect.assertions(1);
 
