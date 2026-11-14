@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDecla
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { AdminRouteIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { declarationLineOf, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 
 /** The `httpRoute.<verb>(...)` factory verbs. */
@@ -147,7 +147,14 @@ const adminRouteFromDeclaration = (declaration: VariableDeclaration, relativePat
         (Node.isArrowFunction(handlerArgument) || Node.isFunctionExpression(handlerArgument)) &&
         handlerReferencesGuard(handlerArgument);
 
-    return { exportName: exportedNameOf(declaration) ?? declaration.getName(), file: relativePath, method: root.method, path: root.path, usesGuard };
+    return {
+        exportName: exportedNameOf(declaration) ?? declaration.getName(),
+        file: relativePath,
+        line: declarationLineOf(declaration),
+        method: root.method,
+        path: root.path,
+        usesGuard,
+    };
 };
 
 /** Admin-path routes in one source file. */

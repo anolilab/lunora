@@ -1,6 +1,7 @@
 import { isReachableSite } from "../../call-site-scope";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a declared workflow that nothing starts.
@@ -53,7 +54,7 @@ const workflowUnused: Lint = {
                 emit(workflowUnused, {
                     cacheKey: `workflow_unused:${workflow.exportName}`,
                     detail: `No function calls \`ctx.workflows.get("${workflow.exportName}")\` — workflow "${workflow.exportName}" is declared but never started in app code.`,
-                    metadata: { workflow: workflow.exportName },
+                    metadata: { ...declarationSiteFields(workflow), workflow: workflow.exportName },
                 }),
             );
     },
