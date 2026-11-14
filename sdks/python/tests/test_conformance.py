@@ -269,18 +269,30 @@ class TestWsFrameConsumer(unittest.TestCase):
                 if "epoch" in expect:
                     self.assertEqual(descriptor.get("epoch"), expect["epoch"])
 
-    def test_an_unmergeable_row_change_freezes_the_resume_cursor(self):
-        cases = load("ws-frames.json")["pageDeltaPoisonCases"]
-        self.assertTrue(cases, "pageDeltaPoisonCases must carry cases")
+    def _replay_delta_cases(self, key):
+        """Drive every case under ``key`` through one client, checking each step's publishes, resend query and errors."""
+
+        cases = load("ws-frames.json")[key]
+        self.assertTrue(cases, f"{key} must carry cases")
 
         for case in cases:
             with self.subTest(case=case["name"]):
                 sent: list = []
-                client = LunoraClient("https://app.example")
+                # An identity of None is "unset": the constructor sets it directly, so a first identity evicts nothing.
+                client = LunoraClient("https://app.example", identity=case.get("identityChange", {}).get("from"))
                 client.attach_socket(sent.append)
                 seen: list = []
-                client.subscribe("messages:list", {"channel": "general"}, seen.append)
+                errors: list = []
+                client.subscribe("messages:list", {"channel": "general"}, seen.append, errors.append)
                 client.handle_frame(case["seedFrame"])
+
+                if "freezeFrame" in case:
+                    client.handle_frame(case["freezeFrame"])
+                    self.assertEqual([error.code for error in errors], case["freezeErrors"])
+                    errors.clear()
+                if "identityChange" in case:
+                    client.identity = case["identityChange"]["to"]
+                    seen.clear()
 
                 for step in case["steps"]:
                     if "resume" in step:
@@ -293,10 +305,92 @@ class TestWsFrameConsumer(unittest.TestCase):
                         continue
 
                     seen.clear()
+                    errors.clear()
                     client.handle_frame(step["frame"])
                     self.assertEqual(len(seen), step["publishes"])
                     if "valueWire" in step:
                         self.assertEqual(encode_wire(seen[-1]), step["valueWire"])
+                    # Only a step that names its errors is checked: a held row change also notifies, and the
+                    # fixture pins the notice where it matters rather than on every held step.
+                    if "errors" in step:
+                        self.assertEqual([error.code for error in errors], step["errors"])
+
+    def test_an_unmergeable_row_change_freezes_the_resume_cursor(self):
+        self._replay_delta_cases("pageDeltaPoisonCases")
+
+    def test_a_failed_resend_keeps_a_poisoned_subscription_frozen(self):
+        case = load("ws-frames.json")["pageDeltaPoisonCases"][0]
+        freeze, later = case["steps"][0]["frame"], case["steps"][1]["frame"]
+        sent: list = []
+        broken = {"on": False}
+
+        def sender(frame):
+            if broken["on"]:
+                raise OSError("socket gone")
+            sent.append(frame)
+
+        client = LunoraClient("https://app.example")
+        client.attach_socket(sender)
+        seen: list = []
+        client.subscribe("messages:list", {"channel": "general"}, seen.append, lambda _error: None)
+        client.handle_frame(case["seedFrame"])
+        client.handle_frame(freeze)
+
+        broken["on"] = True
+        with self.assertRaises(OSError):
+            client.resend_subscriptions()
+
+        # The replay never reached the server, so the dropped change is still unapplied.
+        seen.clear()
+        client.handle_frame(later)
+        self.assertEqual(seen, [])
+
+        broken["on"] = False
+        sent.clear()
+        client.resend_subscriptions()
+        query = next(frame for frame in sent if frame["type"] == "subscribe")["query"]
+        self.assertEqual(query.get("sinceSeq"), case["steps"][4]["resume"]["sinceSeq"])
+
+    def test_a_delta_run_is_held_until_its_last_frame(self):
+        self._replay_delta_cases("pageDeltaRunCases")
+        self.assertEqual(len(load("ws-frames.json")["pageDeltaRunCases"]), 5)
+        self._replay_delta_cases("undecodableDeltaRunCases")
+        self.assertEqual(len(load("ws-frames.json")["undecodableDeltaRunCases"]), 2)
+
+    def _client_holding_a_run(self, sender):
+        case = load("ws-frames.json")["pageDeltaRunCases"][0]
+        client = LunoraClient("https://app.example")
+        client.attach_socket(sender)
+        seen: list = []
+        client.subscribe("messages:list", {"channel": "general"}, seen.append)
+        client.handle_frame(case["seedFrame"])
+        seen.clear()
+        client.handle_frame(case["steps"][0]["frame"])
+        client.handle_frame(case["steps"][1]["frame"])
+        return client, seen, case["steps"][2]
+
+    def test_attaching_a_socket_discards_a_held_run(self):
+        client, seen, last = self._client_holding_a_run(lambda _frame: None)
+        client.attach_socket(lambda _frame: None)
+        client.handle_frame(last["frame"])
+        self.assertEqual(len(seen), 1)
+        self.assertNotEqual(encode_wire(seen[0]), last["valueWire"])
+
+    def test_a_failed_connect_still_discards_a_held_run(self):
+        client, seen, last = self._client_holding_a_run(lambda _frame: None)
+
+        def failing(_frame):
+            raise OSError("connect failed")
+
+        with self.assertRaises(OSError):
+            client.attach_socket(failing)
+        client.handle_frame(last["frame"])
+        self.assertEqual(len(seen), 1)
+        self.assertNotEqual(encode_wire(seen[0]), last["valueWire"])
+
+    def test_an_identity_change_evicts_the_cached_base_and_the_poison(self):
+        self._replay_delta_cases("identityChangeEvictionCases")
+        self.assertEqual(len(load("ws-frames.json")["identityChangeEvictionCases"]), 2)
 
     def test_row_delta_without_a_mergeable_base_never_publishes_the_envelope(self):
         delta = {"key": "m1", "op": "update", "row": {"_id": "m1"}, "table": "messages"}
@@ -321,13 +415,13 @@ class TestWsFrameConsumer(unittest.TestCase):
     def test_a_subscription_streams_its_frame_values_in_order(self):
         covers("subscription_stream_yields_frame_values_in_order")
 
-        case = load("ws-frames.json")["stream"]
+        case = load("ws-frames.json")["watch"]
 
         async def collect() -> list:
             client = LunoraClient("https://app.example")
             client._send = lambda _frame: None
             seen: list = []
-            values = client.stream("messages:list", {"channel": "general"})
+            values = client.watch("messages:list", {"channel": "general"})
 
             for frame in case["frames"]:
                 client.handle_frame(frame)

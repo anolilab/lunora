@@ -62,6 +62,8 @@ interface NodeDispatchRouteOptions {
     defaultShardKey: string;
     /** Runs the call in-process and returns the shard's response, unchanged. */
     invoke: (call: NodeDispatchInvocation) => Promise<Response>;
+    /** Epoch-ms clock for the signature window. Defaults to `Date.now`; tests inject one. */
+    now?: () => number;
     /** `LUNORA_SCHEDULER_SECRET`. When set, a signed request is verified against it. */
     schedulerSecret?: string;
 }
@@ -85,6 +87,7 @@ const handle = async (request: Request, options: NodeDispatchRouteOptions): Prom
     const rawBody = await readRawBody(request);
     const authenticated = await verifySchedulerDispatch(request, rawBody, {
         adminToken: options.adminToken,
+        now: options.now,
         schedulerSecret: options.schedulerSecret,
     });
 

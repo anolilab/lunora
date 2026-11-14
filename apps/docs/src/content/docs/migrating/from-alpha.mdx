@@ -194,7 +194,7 @@ table above.
 
 The payment store now reads and writes the tables of `paymentExtension`, which
 `.extend()` prefixes with its key: `payment_customers`, `payment_events`,
-`payment_sessions`, `payment_subscriptions` and `payment_usageEvents`. An app
+`payment_referenceRevisions`, `payment_sessions`, `payment_subscriptions` and `payment_usageEvents`. An app
 that declared the store tables itself under the bare names (`customers`,
 `events`, `paymentSessions`, `subscriptions`, `usageEvents`) still typechecks,
 then fails on every store access with `unknown table: payment_subscriptions`.

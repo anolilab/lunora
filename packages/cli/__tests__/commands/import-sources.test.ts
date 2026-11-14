@@ -490,6 +490,64 @@ describe("lunora import --from firebase", () => {
         expect(imported.map((row) => row.doc["_id"])).toStrictEqual(["p1", "p2"]);
     });
 
+    it("imports bare NDJSON documents carrying __name__, taking the id from it", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({
+            "t.ndjson": [
+                JSON.stringify({ __name__: "projects/p/databases/(default)/documents/t/x1", title: { stringValue: "a" } }),
+                JSON.stringify({ __name__: "projects/p/databases/(default)/documents/t/x2", title: { stringValue: "b" } }),
+            ].join("\n"),
+        });
+
+        const { imported } = await runImport(root, "firebase");
+
+        expect(imported.map((row) => row.doc)).toStrictEqual([
+            { _id: "x1", title: "a" },
+            { _id: "x2", title: "b" },
+        ]);
+    });
+
+    it("takes a bare document's id from __name__ even when it has a typed name field", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({
+            "t.ndjson": JSON.stringify({ __name__: "projects/p/databases/(default)/documents/t/x1", name: { stringValue: "Ada" } }),
+        });
+
+        const { imported } = await runImport(root, "firebase");
+
+        expect(imported.map((row) => row.doc)).toStrictEqual([{ _id: "x1", name: "Ada" }]);
+    });
+
+    it("imports bare array documents carrying __name__, taking the id from it", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({
+            "t.json": JSON.stringify([
+                { __name__: "projects/p/databases/(default)/documents/t/x1", title: { stringValue: "a" } },
+                { __name__: "projects/p/databases/(default)/documents/t/x2", title: { stringValue: "b" } },
+            ]),
+        });
+
+        const { imported } = await runImport(root, "firebase");
+
+        expect(imported.map((row) => row.doc)).toStrictEqual([
+            { _id: "x1", title: "a" },
+            { _id: "x2", title: "b" },
+        ]);
+    });
+
+    it("rejects a bare document field that is a raw value rather than a typed one", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({
+            "t.json": JSON.stringify([{ __name__: "projects/p/databases/(default)/documents/t/x1", oops: 5 }]),
+        });
+
+        await expectAbort(root, "firebase", /expected a Firestore typed value/);
+    });
+
     it("rejects a document with no id rather than inventing one", async () => {
         expect.assertions(3);
 
@@ -506,6 +564,31 @@ describe("lunora import --from firebase", () => {
         });
 
         await expectAbort(root, "firebase", /unrecognised Firestore value/);
+    });
+
+    it.each(["NaN", "Infinity", "-Infinity", "", " ", null, true, "0x10"])(
+        "rejects a non-finite or malformed doubleValue %j rather than writing a number",
+        async (doubleValue) => {
+            expect.assertions(3);
+
+            const root = writeDump({
+                "t.json": JSON.stringify({ documents: [{ fields: { ratio: { doubleValue } }, name: "projects/p/databases/(default)/documents/t/x1" }] }),
+            });
+
+            await expectAbort(root, "firebase", /not a finite number/);
+        },
+    );
+
+    it("rejects a document whose own `_id` field would collide with the reserved id", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({
+            "t.json": JSON.stringify({
+                documents: [{ fields: { _id: { stringValue: "mine" } }, name: "projects/p/databases/(default)/documents/t/x1" }],
+            }),
+        });
+
+        await expectAbort(root, "firebase", /collides with the reserved id field/);
     });
 
     it("refuses --with-storage without --storage-dir, which would migrate nothing", async () => {

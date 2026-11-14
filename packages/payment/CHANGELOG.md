@@ -1,3 +1,15 @@
+## @lunora/payment [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.272...@lunora/payment@1.0.0-alpha.273) (2026-11-14)
+
+- fix(payment): send checkout quantity to Polar as seats (#1563)
+- fix(payment): retry a Stripe checkout that replays a finished session (#1571)
+- fix(payment): report a replayed refund to the observer (#1573)
+- fix(payment): merge same-state past_due and paused subscription events (#1556)
+- fix(payment): ignore non-payment Stripe checkout sessions (#1558)
+
+## @lunora/payment [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.271...@lunora/payment@1.0.0-alpha.272) (2026-11-13)
+
+- security(payment)!: owner-checked subscription changes, replace the raw adapter with provider (#1544)
+
 ## @lunora/payment [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.270...@lunora/payment@1.0.0-alpha.271) (2026-11-08)
 
 - feat(payment): refuse a second live subscription per reference when asked (#1510)

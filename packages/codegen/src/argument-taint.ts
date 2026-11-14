@@ -1,7 +1,7 @@
-import type { BindingElement, Identifier, Node as TsNode } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import type { BindingElement, Identifier, Node as TsNode, VariableDeclaration } from "ts-morph";
+import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { bindingKeyName, descendantsOfKind } from "./discover/ast";
+import { bindingKeyName, descendantsOfKind, unwrapExpression } from "./discover/ast";
 import { declarationOf, isReassignedBinding } from "./discover/attribution";
 import { isHandlerArgsParameter, referencesContext } from "./discover/context-root";
 
@@ -183,16 +183,94 @@ const trustedInitializerOf = (node: TsNode): TsNode | undefined => {
         : undefined;
 };
 
+/**
+ * The node a declaration's binding is visible in: the enclosing function for a
+ * `var`, else the block, `for` statement or file that holds the `let`/`const`.
+ */
+const bindingScope = (variable: VariableDeclaration, enclosingFunction: TsNode): TsNode | undefined => {
+    const list = variable.getParent();
+
+    if (Node.isVariableDeclarationList(list) && list.getDeclarationKind() === VariableDeclarationKind.Var) {
+        return enclosingFunction;
+    }
+
+    const holder = list.getParent();
+
+    return Node.isVariableStatement(holder) ? holder.getParent() : holder;
+};
+
+/** Whether `variable` binds `name` directly, or as an identifier anywhere inside a destructuring pattern. */
+const declaresName = (variable: VariableDeclaration, name: string): boolean => {
+    const nameNode = variable.getNameNode();
+
+    if (Node.isIdentifier(nameNode)) {
+        return nameNode.getText() === name;
+    }
+
+    return nameNode.getDescendantsOfKind(SyntaxKind.BindingElement).some((element) => {
+        const elementName = element.getNameNode();
+
+        return Node.isIdentifier(elementName) && elementName.getText() === name;
+    });
+};
+
+/**
+ * The identifiers in `node` that read a value: the trailing `.name` of a member
+ * access and the key of an explicit `{ name: … }` property name a different
+ * binding, so they are skipped.
+ */
+const valueIdentifiersIn = (node: TsNode): Identifier[] =>
+    node.getDescendantsOfKind(SyntaxKind.Identifier).filter((identifier) => {
+        const parent = identifier.getParent();
+
+        return (
+            !(Node.isPropertyAccessExpression(parent) && parent.getNameNode() === identifier) &&
+            !(Node.isPropertyAssignment(parent) && parent.getNameNode() === identifier)
+        );
+    });
+
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
+/** A call or `new` under any `await`, parentheses or type assertion: `await sha256Hex(args.bytes)` recomputes its input. */
+const isRecomputed = (node: TsNode): boolean => {
+    let current = unwrapExpression(node) ?? node;
+
+    while (Node.isAwaitExpression(current)) {
+        current = unwrapExpression(current.getExpression()) ?? current.getExpression();
+    }
+
+    return Node.isCallExpression(current) || Node.isNewExpression(current);
+};
+
+/**
+ * The defaults on the path to the destructured element of `variable` that binds `name`: its own
+ * (`const { url = args.url } = config`) and every enclosing element's
+ * (`const { network: { url } = args.network } = config`), each of which can supply the value.
+ */
+const bindingDefaultsOf = (variable: VariableDeclaration | undefined, name: string): TsNode[] => {
+    const element = variable
+        ?.getNameNode()
+        .getDescendantsOfKind(SyntaxKind.BindingElement)
+        .find((candidate) => Node.isIdentifier(candidate.getNameNode()) && candidate.getNameNode().getText() === name);
+
+    if (element === undefined) {
+        return [];
+    }
+
+    return [element, ...element.getAncestors().filter((ancestor) => Node.isBindingElement(ancestor))]
+        .map((node) => (Node.isBindingElement(node) ? node.getInitializer() : undefined))
+        .filter((initializer) => initializer !== undefined);
+};
+
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
 /**
- * When `node` is a bare identifier bound by a `const key = args.key` in the enclosing
- * handler, return that initializer so a *single* extra hop of taint can be checked
- * (`const key = args.key; … key`); otherwise `undefined`. Only same-function
- * declarations are followed — the taint stays deliberately single-hop.
+ * When `node` is a bare identifier bound by a `const key = args.key` (or by a
+ * destructure such as `const { key } = args`) in the enclosing handler, return that
+ * initializer so a *single* extra hop of taint can be checked (`const key = args.key;
+ * … key`); otherwise `undefined`. Only same-function declarations are followed — the
+ * taint stays deliberately single-hop.
  */
-export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
+export const singleHopDeclaration = (node: TsNode): VariableDeclaration | undefined => {
     if (!Node.isIdentifier(node)) {
         return undefined;
     }
@@ -214,11 +292,19 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     // checker, and a predicate that SILENCES on a match must use it instead, as
     // the owner-field feeder does for mutator impls (`implTaintOf`).
     const usePosition = node.getStart();
-    let nearest: TsNode | undefined;
+    let nearest: VariableDeclaration | undefined;
     let nearestPosition = -1;
 
     for (const variable of descendantsOfKind(enclosingFunction, SyntaxKind.VariableDeclaration)) {
-        if (variable.getName() !== name) {
+        if (!declaresName(variable, name)) {
+            continue;
+        }
+
+        // A binding in a block that does not contain the use is a different variable,
+        // and taking its initializer would replace the real source.
+        const scope = bindingScope(variable, enclosingFunction);
+
+        if (scope === undefined || usePosition < scope.getStart() || usePosition >= scope.getEnd()) {
             continue;
         }
 
@@ -226,7 +312,7 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
         const declarationPosition = variable.getStart();
 
         if (initializer !== undefined && declarationPosition < usePosition && declarationPosition > nearestPosition) {
-            nearest = initializer;
+            nearest = variable;
             nearestPosition = declarationPosition;
         }
     }
@@ -234,20 +320,35 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     return nearest;
 };
 
+/** The initializer of {@link singleHopDeclaration}: for a destructured binding, the whole object it was taken from. */
+export const singleHopInitializer = (node: TsNode): TsNode | undefined => singleHopDeclaration(node)?.getInitializer();
+
 /**
  * True when `expression` is derived from the handler's `args` — directly (`args.x`,
- * a template / `new URL(...)` / helper call embedding `args.*`) or through one local
- * hop (`const key = args.key; … key`). This is the shared taint predicate every
- * Wave 3 sink feeder (SSRF fetch, owner-field write, storage/kv IDOR) reads.
+ * a template / `new URL(...)` / helper call embedding `args.*`), through one local
+ * hop on the expression itself (`const key = args.key; … key`), or through one hop
+ * on each value identifier composed into a larger expression (`const host =
+ * args.host; fetch(\`https://${host}/x\`)`). Each identifier is followed one hop
+ * only; an initializer is never followed again. This is the shared taint predicate
+ * every Wave 3 sink feeder (SSRF fetch, owner-field write, storage/kv IDOR) reads.
  */
 export const isArgumentDerived = (expression: TsNode): boolean => {
     if (referencesArgs(expression)) {
         return true;
     }
 
-    const initializer = singleHopInitializer(expression);
+    // A destructured binding's default (`const { url = args.url } = config`) supplies the value
+    // whenever the object lacks the field, so it is a source alongside the initializer.
+    const reachesArgs = (node: TsNode): boolean => {
+        const variable = singleHopDeclaration(node);
+        const initializer = variable?.getInitializer();
+        return (
+            (initializer !== undefined && referencesArgs(initializer)) ||
+            bindingDefaultsOf(variable, node.getText()).some((fallback) => referencesArgs(fallback))
+        );
+    };
 
-    return initializer !== undefined && referencesArgs(initializer);
+    return reachesArgs(expression) || valueIdentifiersIn(expression).some((identifier) => reachesArgs(identifier));
 };
 
 /**
@@ -269,13 +370,43 @@ export const isArgumentDerived = (expression: TsNode): boolean => {
  * caller-controlled input reaching the sink verbatim.
  */
 export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
-    if (Node.isCallExpression(node) || Node.isNewExpression(node)) {
+    if (isRecomputed(node)) {
         return false;
+    }
+
+    // A default that forwards args reaches the sink whenever the object lacks the field.
+    if (bindingDefaultsOf(singleHopDeclaration(node), node.getText()).some((fallback) => referencesArgs(fallback) && !isRecomputed(fallback))) {
+        return true;
     }
 
     const initializer = singleHopInitializer(node);
 
-    return initializer === undefined || !(Node.isCallExpression(initializer) || Node.isNewExpression(initializer));
+    if (initializer !== undefined && isRecomputed(initializer)) {
+        return false;
+    }
+
+    const composed = initializer ?? node;
+
+    if (referencesArgs(composed)) {
+        return true;
+    }
+
+    // `isArgumentDerived` also follows each composed identifier one hop, so a key built only from
+    // call results (`blobs/${digest}` with `digest = sha256Hex(args.bytes)`) is tainted but was
+    // recomputed; it is a passthrough only when some composed binding forwards args unchanged.
+    // An identifier read inside a call in the key (`blobs/${sha256Hex(name)}`) is recomputed there.
+    return valueIdentifiersIn(composed).some((identifier) => {
+        const nearest = identifier.getFirstAncestor((ancestor) => ancestor === composed || Node.isCallExpression(ancestor) || Node.isNewExpression(ancestor));
+
+        if (nearest !== composed) {
+            return false;
+        }
+
+        const declaration = singleHopDeclaration(identifier);
+        const forwards = (source: TsNode | undefined): boolean => source !== undefined && referencesArgs(source) && !isRecomputed(source);
+
+        return forwards(declaration?.getInitializer()) || bindingDefaultsOf(declaration, identifier.getText()).some((fallback) => forwards(fallback));
+    });
 };
 
 /**
