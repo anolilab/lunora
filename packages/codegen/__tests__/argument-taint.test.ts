@@ -129,6 +129,13 @@ describe("argument-taint", () => {
             expect(isArgumentDerived(sinkArgument(`const key = "static";\nSINK(key);`))).toBe(false);
         });
 
+        it("sees an args-derived default on a destructured binding", () => {
+            expect.assertions(2);
+
+            expect(isArgumentDerived(sinkArgument(`const { url = args.url } = config;\nSINK(url);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const { url = "https://fixed.example" } = config;\nSINK(url);`))).toBe(false);
+        });
+
         it("stays fail-open through a helper call embedding args", () => {
             expect.assertions(2);
 

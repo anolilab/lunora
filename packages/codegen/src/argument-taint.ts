@@ -317,17 +317,22 @@ export const isArgumentDerived = (expression: TsNode): boolean => {
         return true;
     }
 
-    const initializer = singleHopInitializer(expression);
+    // A destructured binding's default (`const { url = args.url } = config`) supplies the value
+    // whenever the object lacks the field, so it is a source alongside the initializer.
+    const reachesArgs = (node: TsNode): boolean => {
+        const variable = singleHopDeclaration(node);
+        const initializer = variable?.getInitializer();
+        const name = node.getText();
+        const fallback = variable
+            ?.getNameNode()
+            .getDescendantsOfKind(SyntaxKind.BindingElement)
+            .find((candidate) => Node.isIdentifier(candidate.getNameNode()) && candidate.getNameNode().getText() === name)
+            ?.getInitializer();
 
-    if (initializer !== undefined && referencesArgs(initializer)) {
-        return true;
-    }
+        return (initializer !== undefined && referencesArgs(initializer)) || (fallback !== undefined && referencesArgs(fallback));
+    };
 
-    return valueIdentifiersIn(expression).some((identifier) => {
-        const boundInitializer = singleHopInitializer(identifier);
-
-        return boundInitializer !== undefined && referencesArgs(boundInitializer);
-    });
+    return reachesArgs(expression) || valueIdentifiersIn(expression).some((identifier) => reachesArgs(identifier));
 };
 
 /**
