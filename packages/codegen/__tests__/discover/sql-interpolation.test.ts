@@ -145,6 +145,15 @@ const SPREAD_OVERRIDE = `
     };
 `;
 
+/** Fixed text that a later computed key from the handler's \`args\` can overwrite. */
+const COMPUTED_OVERRIDE = `
+    export const run = async (ctx, args) => {
+        const options = { text: "SELECT 1", [args.key]: args.sql };
+        const { text } = options;
+        return ctx.sql.query(text);
+    };
+`;
+
 /** A plain parameter passed straight through: the caller is not visible here, so it is left alone. */
 const PARAM_PASSTHROUGH = `
     export const run = async (ctx, q) => ctx.sql.query(q);
@@ -276,6 +285,7 @@ describe("discoverSqlInterpolation", () => {
         ["a destructure of args", DESTRUCTURED_ARG],
         ["a cast alias of built text", CAST_ALIAS],
         ["a destructure of a literal an args spread can overwrite", SPREAD_OVERRIDE],
+        ["a destructure of a literal a computed key can overwrite", COMPUTED_OVERRIDE],
     ])("flags request text reached through %s", (_label, source) => {
         expect.assertions(1);
 

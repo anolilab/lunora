@@ -66,9 +66,12 @@ const boundSourceOf = (node: TsNode): TsNode | undefined => {
     const unwrapped = unwrapExpression(source);
     const literal = unwrapExpression(unwrapped !== undefined && Node.isIdentifier(unwrapped) ? constInitializerOf(unwrapped) : unwrapped);
     // Only the property this binding reads decides it: a sibling `params: [args.id]` must not taint fixed text.
-    // A literal with a spread keeps the whole source, since the spread may supply or overwrite the key.
+    // A literal with a spread or a computed key keeps the whole source, since either may supply or
+    // overwrite the key (`{ text: "SELECT 1", [args.key]: args.sql }`).
+    const overridable = (member: TsNode): boolean =>
+        Node.isSpreadAssignment(member) || (Node.isPropertyAssignment(member) && Node.isComputedPropertyName(member.getNameNode()));
     const property =
-        Node.isObjectLiteralExpression(literal) && !literal.getProperties().some((member) => Node.isSpreadAssignment(member))
+        Node.isObjectLiteralExpression(literal) && !literal.getProperties().some((member) => overridable(member))
             ? literal.getProperty(bindingKeyName(declaration))
             : undefined;
 
