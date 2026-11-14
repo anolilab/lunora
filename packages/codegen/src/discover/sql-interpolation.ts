@@ -73,8 +73,34 @@ const isBuiltText = (node: TsNode): boolean => {
 };
 
 /**
+ * The call half of `isConstantText`, which passes itself in as `isConstant`: a `.concat(...)` of a constant receiver and constant arguments, or a
+ * `.join(...)` over an array literal of constants with a constant separator.
+ */
+const isConstantCall = (call: CallExpression, isConstant: (node: TsNode | undefined) => boolean): boolean => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee)) {
+        return false;
+    }
+
+    const constantArguments = call.getArguments().every((argument) => isConstant(argument));
+
+    // Strings are immutable, so a constant receiver concatenated with constant arguments is fixed text.
+    if (callee.getName() === "concat") {
+        return constantArguments && isConstant(callee.getExpression());
+    }
+
+    // Only an inline array: a `const` array can still be pushed to before the `.join`.
+    const array = unwrapExpression(callee.getExpression());
+
+    return (
+        callee.getName() === "join" && constantArguments && Node.isArrayLiteralExpression(array) && array.getElements().every((element) => isConstant(element))
+    );
+};
+
+/**
  * True when `node` is provably a fixed string: a literal, a template whose spans are
- * all constant, a `+` of constants, a `.join(...)` over an array of constants, or a
+ * all constant, a `+` or `.concat(...)` of constants, a `.join(...)` over an array literal of constants, or a
  * `const` binding (followed up to {@link CONST_HOP_LIMIT} hops) whose initializer is.
  * A parameter, a request-derived value or any other expression is not constant.
  */
@@ -102,19 +128,7 @@ const isConstantText = (node: TsNode | undefined, depth = CONST_HOP_LIMIT): bool
     }
 
     if (Node.isCallExpression(value)) {
-        const callee = value.getExpression();
-
-        if (!Node.isPropertyAccessExpression(callee) || callee.getName() !== "join") {
-            return false;
-        }
-
-        const array = unwrapExpression(callee.getExpression());
-
-        return (
-            Node.isArrayLiteralExpression(array) &&
-            array.getElements().every((element) => isConstantText(element, depth)) &&
-            value.getArguments().every((argument) => isConstantText(argument, depth))
-        );
+        return isConstantCall(value, (candidate) => isConstantText(candidate, depth));
     }
 
     return false;

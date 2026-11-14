@@ -87,6 +87,20 @@ const CONSTANT_JOIN = `
     };
 `;
 
+/** A `.concat` over constant pieces only — the statement is fixed. */
+const CONSTANT_CONCAT = `
+    export const byId = async (ctx, id) => {
+        return ctx.sql.query("SELECT * FROM users".concat(" WHERE id = $1"), [id]);
+    };
+`;
+
+/** A `.concat` that appends a handler argument. */
+const ARG_CONCAT = `
+    export const byName = async (ctx, args) => {
+        return ctx.sql.query("SELECT * FROM users WHERE name = ".concat(args.name));
+    };
+`;
+
 /** A plain parameter passed straight through: the caller is not visible here, so it is left alone. */
 const PARAM_PASSTHROUGH = `
     export const run = async (ctx, q) => ctx.sql.query(q);
@@ -195,6 +209,22 @@ describe("discoverSqlInterpolation", () => {
         writeFileSync(join(workdir, "lunora", "constant-join.ts"), CONSTANT_JOIN, "utf8");
 
         expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("does NOT flag a .concat over constant pieces", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "constant-concat.ts"), CONSTANT_CONCAT, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a .concat that appends a handler argument", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "arg-concat.ts"), ARG_CONCAT, "utf8");
+
+        expect(discoverSqlInterpolation(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
     it("does NOT flag a plain parameter passed through as the text", () => {
