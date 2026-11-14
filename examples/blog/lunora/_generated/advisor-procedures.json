@@ -23,6 +23,7 @@
       "file": "cleanup",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 13,
       "visibility": "internal"
     },
     {
@@ -48,6 +49,7 @@
       "file": "drafts",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 32,
       "visibility": "public"
     },
     {
@@ -73,6 +75,7 @@
       "file": "drafts",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 55,
       "visibility": "public"
     },
     {
@@ -98,6 +101,7 @@
       "file": "posts",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 30,
       "visibility": "public"
     },
     {
@@ -123,6 +127,7 @@
       "file": "posts",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 36,
       "visibility": "public"
     },
     {
@@ -148,6 +153,7 @@
       "file": "posts",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 46,
       "visibility": "public"
     },
     {
@@ -173,6 +179,7 @@
       "file": "posts",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 76,
       "visibility": "public"
     },
     {
@@ -198,6 +205,7 @@
       "file": "posts",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 109,
       "visibility": "public"
     }
   ]

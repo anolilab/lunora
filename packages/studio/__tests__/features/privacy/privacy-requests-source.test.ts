@@ -52,7 +52,7 @@ describe("isPrivacyRequestOverdue", () => {
     });
 
     it("agrees with the shared rule the privacy package's sweep uses, for every status", () => {
-        expect.assertions(8);
+        expect.assertions(9);
 
         for (const status of REQUEST_STATUSES) {
             expect(isPrivacyRequestOverdue(row({ dueAt: NOW - DAY, status }), NOW)).toBe(isOverdue({ dueAt: new Date(NOW - DAY), status }, new Date(NOW)));

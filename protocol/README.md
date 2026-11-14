@@ -691,9 +691,10 @@ A client that honours it re-subscribes that id once, at the hint; a newer hint r
 pending re-subscribe. Any `data` (other than a stale seed older than the held cursor), `ack`,
 `resume` or `settled` frame for the id, an `error` frame for the id without `retryAfterMs` (the
 server sends one when it has ended the subscription), an unsubscribe, a disconnect or closing the
-client cancels it. The server treats a same-args re-subscribe of a failing subscription as a
-retry: it keeps the failure streak, so a re-run that fails again is answered with the next hint
-in the sequence 1 s, 1 s, 2 s, 4 s, … capped at 60 s.
+client cancels it. The server treats a same-args re-subscribe of a registered subscription as a
+retry: a re-run that fails again keeps the subscription registered and is answered with the next
+hint in the sequence 1 s, 1 s, 2 s, 4 s, … capped at 60 s. The streak lives in memory, so after
+the Durable Object hibernates the sequence restarts at 1 s rather than ending.
 
 `identity` is sent in reply to every `connect` frame (§5.1), including a re-sent
 one, and only after the socket has passed the §6 gate. `subject` is the resolved

@@ -1397,6 +1397,136 @@ describe("lunoraClient", () => {
             expect(data).toHaveLength(0);
         });
 
+        it("replays a refusal to a subscriber who joins the refused query later", () => {
+            expect.assertions(3);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const firstErrors: { code?: string }[] = [];
+            const lateErrors: { code?: string }[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, () => {}, { onError: (error) => firstErrors.push(error) });
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ error: { code: "FORBIDDEN", message: "denied" }, id: firstSub(socket).id, type: "error" });
+
+            const sentBefore = wireFrames(socket).length;
+
+            client.subscribe(fnRef("messages:list"), {}, () => {}, { onError: (error) => lateErrors.push(error) });
+
+            expect(lateErrors).toEqual([expect.objectContaining({ code: "FORBIDDEN" })]);
+            expect(firstErrors).toHaveLength(1);
+            expect(wireFrames(socket)).toHaveLength(sentBefore);
+        });
+
+        it("hands the refusal once to a subscriber an error handler adds while the refusal fans out", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+            const lateErrors: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, () => {}, {
+                onError: () => {
+                    client.subscribe(fnRef("messages:list"), {}, () => {}, { onError: (error) => lateErrors.push(error) });
+                },
+            });
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ error: { code: "FORBIDDEN", message: "denied" }, id: firstSub(socket).id, type: "error" });
+
+            expect(lateErrors).toHaveLength(1);
+        });
+
+        it("hands a late subscriber a refusal that came after a value, with the value", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => {}, { onError: () => {} });
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ cursor: 7, data: ["kept"], id: firstSub(socket).id as string, type: "data" });
+            socket.receive({ error: { code: "FORBIDDEN", message: "denied" }, id: firstSub(socket).id, type: "error" });
+
+            const lateData: unknown[] = [];
+            const lateErrors: { code?: string }[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (value) => lateData.push(value), { onError: (error) => lateErrors.push(error) });
+
+            expect(lateData).toEqual([["kept"]]);
+            expect(lateErrors).toEqual([expect.objectContaining({ code: "FORBIDDEN" })]);
+        });
+
+        it("forgets the refusal once the server re-arms the subscription", () => {
+            expect.assertions(3);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => {}, { onError: () => {} });
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ error: { code: "FORBIDDEN", message: "denied" }, id: firstSub(socket).id, type: "error" });
+
+            const sentBefore = wireFrames(socket).length;
+            const lateErrors: unknown[] = [];
+
+            socket.receive({ id: firstSub(socket).id, type: "complete" });
+
+            client.subscribe(fnRef("messages:list"), {}, () => {}, { onError: (error) => lateErrors.push(error) });
+
+            expect(lateErrors).toHaveLength(0);
+            expect(wireFrames(socket)).toHaveLength(sentBefore + 1);
+            expect(wireFrames(socket).at(-1)).toMatchObject({ query: { functionPath: "messages:list" }, type: "subscribe" });
+        });
+
+        it("a late subscriber of an answered query gets no error", () => {
+            expect.assertions(2);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => {}, { onError: () => {} });
+
+            const socket = latestSocket();
+
+            socket.open();
+            socket.receive({ data: { count: 2 }, id: firstSub(socket).id, type: "data" });
+
+            const lateErrors: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, () => {}, { onError: (error) => lateErrors.push(error) });
+
+            expect(lateErrors).toHaveLength(0);
+            expect(wireFrames(socket)).toHaveLength(1);
+        });
+
         it("keeps the server's why explanation on a subscription error", () => {
             expect.assertions(1);
 

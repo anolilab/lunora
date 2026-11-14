@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { validateEvent, WebhookVerificationError } from "@polar-sh/sdk/webhooks";
 import { describe, expect, it } from "vitest";
 
+import { LunoraPaymentError } from "../../src/errors";
 import { money } from "../../src/money";
 import type { PolarClientLike } from "../../src/providers/polar";
 import { createPolarAdapter } from "../../src/providers/polar";
@@ -42,13 +43,18 @@ interface RecordedCall {
     name: string;
 }
 
-const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall[] = []): PolarClientLike => {
+/** `seatsFor` decides what Polar reports back as the checkout's seats; by default it echoes the request. */
+const makeClient = (
+    created: Record<string, unknown>[] = [],
+    calls: RecordedCall[] = [],
+    seatsFor: (requested: unknown) => null | number = (requested) => (typeof requested === "number" ? requested : null),
+): PolarClientLike => {
     return {
         checkouts: {
             create: async (parameters: Record<string, unknown>) => {
                 created.push(parameters);
 
-                return { id: "co_1", url: "https://polar.test/co_1" };
+                return { id: "co_1", seats: seatsFor(parameters.seats), url: "https://polar.test/co_1" };
             },
         },
         customerSessions: {
@@ -152,6 +158,100 @@ describe("polar adapter", () => {
         expect(result).toEqual({ id: "co_1", provider: "polar", url: "https://polar.test/co_1" });
         expect((created[0]?.metadata as { referenceId?: string }).referenceId).toBe("user_1");
         expect(created[0]?.products).toEqual(["prod_1"]);
+    });
+
+    it("sends a checkout quantity to Polar as seats", async () => {
+        expect.assertions(1);
+
+        const created: Record<string, unknown>[] = [];
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
+
+        await adapter.createCheckout({
+            cancelUrl: "https://x/cancel",
+            mode: "subscription",
+            priceId: "prod_1",
+            quantity: 5,
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        expect(created[0]?.seats).toBe(5);
+    });
+
+    it.each([0, -1, 2.5, Number.NaN])("refuses a checkout quantity of %s before calling Polar", async (quantity) => {
+        expect.assertions(2);
+
+        const created: Record<string, unknown>[] = [];
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
+
+        await expect(
+            adapter.createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "subscription",
+                priceId: "prod_1",
+                quantity,
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(created).toHaveLength(0);
+    });
+
+    it("reports an invalid quantity even when the Polar client cannot load", async () => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({
+            client: () => {
+                throw new Error("client unavailable");
+            },
+            webhookSecret: SECRET,
+        });
+
+        await expect(
+            adapter.createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "subscription",
+                priceId: "prod_1",
+                quantity: 0,
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("omits seats for a single-unit checkout so non-seat products are unchanged", async () => {
+        expect.assertions(2);
+
+        const created: Record<string, unknown>[] = [];
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
+        const base = { cancelUrl: "https://x/cancel", mode: "subscription" as const, priceId: "prod_1", referenceId: "user_1", successUrl: "https://x/ok" };
+
+        await adapter.createCheckout(base);
+        await adapter.createCheckout({ ...base, quantity: 1 });
+
+        expect("seats" in (created[0] ?? {})).toBe(false);
+        expect("seats" in (created[1] ?? {})).toBe(false);
+    });
+
+    it("rejects a checkout when Polar does not apply the requested seat count", async () => {
+        expect.assertions(2);
+
+        // A non-seat price answers `seats: null`; the checkout must not look like a successful 5-seat sale.
+        const adapter = createPolarAdapter({ client: () => makeClient([], [], () => null), webhookSecret: SECRET });
+
+        const error = await adapter
+            .createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "subscription",
+                priceId: "prod_1",
+                quantity: 5,
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            })
+            .catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(LunoraPaymentError);
+        expect(error).toMatchObject({ code: "PROVIDER_ERROR" });
     });
 
     it("binds the checkout to the reference's customer instead of orphaning it", async () => {

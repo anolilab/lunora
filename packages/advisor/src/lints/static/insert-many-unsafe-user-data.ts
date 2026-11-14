@@ -1,6 +1,7 @@
 import emit from "../../finding";
 import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a public procedure whose handler calls `ctx.db.insertManyUnsafe(...)`.
@@ -41,7 +42,7 @@ const insertManyUnsafeUserData: Lint = {
                 emit(insertManyUnsafeUserData, {
                     cacheKey: `insert_many_unsafe_user_data:${procedure.file}:${procedure.exportName}`,
                     detail: `\`${procedure.exportName}\` (${procedure.file}) is public and calls \`ctx.db.insertManyUnsafe(...)\`, bypassing validators and insert triggers on request-shaped rows. Switch to \`ctx.db.insert(...)\`, or move the bulk write into an internal function fed server-built rows.`,
-                    metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
+                    metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), kind: procedure.kind },
                 }),
             );
     },

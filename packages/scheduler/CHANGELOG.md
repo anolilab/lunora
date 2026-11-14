@@ -1,3 +1,7 @@
+## @lunora/scheduler [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.169...@lunora/scheduler@1.0.0-alpha.170) (2026-11-14)
+
+- security(scheduler): sign the timestamp and forwarded identity on dispatch (#1541)
+
 ## @lunora/scheduler [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.168...@lunora/scheduler@1.0.0-alpha.169) (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

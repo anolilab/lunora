@@ -23,6 +23,7 @@
       "file": "billing",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 31,
       "visibility": "public"
     },
     {
@@ -48,6 +49,7 @@
       "file": "billing",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 74,
       "visibility": "public"
     },
     {
@@ -73,6 +75,7 @@
       "file": "billing",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 81,
       "visibility": "public"
     },
     {
@@ -98,6 +101,7 @@
       "file": "billing",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 88,
       "visibility": "public"
     },
     {
@@ -123,6 +127,7 @@
       "file": "billing",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 100,
       "visibility": "public"
     },
     {
@@ -148,6 +153,7 @@
       "file": "billing",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 134,
       "visibility": "internal"
     }
   ]

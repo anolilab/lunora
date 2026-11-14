@@ -9,7 +9,7 @@ import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { HandlerSiteIR, WorkflowIR, WorkflowStepIR } from "../ir";
-import { findObjectProperty, stringPropertyFor, unwrapToCallExpression } from "./ast";
+import { declarationLineOf, findObjectProperty, lunoraRelativePath, stringPropertyFor, unwrapToCallExpression } from "./ast";
 import { addressableExportNameOf } from "./attribution";
 import { resolveHandlerReference } from "./handler-reference";
 
@@ -303,6 +303,8 @@ const workflowFromCall = (call: CallExpression, exportName: string, lunoraDirect
     const ir: WorkflowIR = {
         className: workflowClassName(exportName),
         exportName,
+        file: lunoraRelativePath(lunoraDirectory, call.getSourceFile().getFilePath()),
+        line: declarationLineOf(call),
         name: workflowDefaultName(exportName),
         steps: stepsFromHandler(handler.body),
         ...(handler.file === undefined ? {} : { handlerFile: handler.file }),

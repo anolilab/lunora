@@ -1,10 +1,11 @@
 import { join } from "node:path";
 
 /**
- * Expand a Nuxt `~`/`~~` tilde or a relative (`./`, `../`) specifier to an
- * absolute path. `~/` is the project srcDir, `~~/` the rootDir; a relative
+ * Expand a Nuxt alias (`~/` or `@/` for the srcDir, `~~/` or `@@/` for the
+ * rootDir) or a relative (`./`, `../`) specifier to an absolute path; a relative
  * specifier is resolved against the rootDir. A bare package specifier or an
- * already-absolute path is returned untouched.
+ * already-absolute path is returned untouched. A scoped package (`@scope/pkg`)
+ * always has a name after `@`, so `@/` and `@@/` cannot be package names.
  *
  * Used for the `#lunora/app` alias, which the Nitro server bundle consumes: Nitro
  * re-resolves a non-absolute alias target against its OWN srcDir (the `server/`
@@ -14,11 +15,11 @@ import { join } from "node:path";
  * names, so resolving them against rootDir is unambiguous.
  */
 const resolveTildePath = (specifier: string, rootDirectory: string, sourceDirectory: string): string => {
-    if (specifier.startsWith("~~/")) {
+    if (specifier.startsWith("~~/") || specifier.startsWith("@@/")) {
         return join(rootDirectory, specifier.slice(3));
     }
 
-    if (specifier.startsWith("~/")) {
+    if (specifier.startsWith("~/") || specifier.startsWith("@/")) {
         return join(sourceDirectory, specifier.slice(2));
     }
 
