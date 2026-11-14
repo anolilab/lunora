@@ -2,8 +2,8 @@
  * Inline suppression of one advisor finding, scoped to one rule at one site:
  *
  * ```ts
- * // lunora-advisor-exempt unindexed_foreign_key -- the parent table is append-only
- * export const audit = mutation({ ... });
+ * // lunora-advisor-exempt procedure_without_structured_event -- a health probe with nothing to log
+ * export const ping = mutation({ ... });
  * ```
  *
  * The directive attaches to the code on the next line that holds code, and it
@@ -284,6 +284,8 @@ const metaFinding = (name: string, directive: ParsedDirective, detail: string): 
     };
 };
 
+const spanSize = (directive: ParsedDirective): number => (directive.span === undefined ? Number.POSITIVE_INFINITY : directive.span.last - directive.span.first);
+
 /** The reason a directive cannot suppress anything, or `undefined` when it can. */
 const invalidityOf = (directive: ParsedDirective): string | undefined => {
     if (RUNTIME_RULES.has(directive.rule)) {
@@ -354,16 +356,20 @@ const applySuppressions = (project: Project, projectRoot: string, lunoraDirector
             return finding;
         }
 
-        const match = valid.find(
-            (directive) =>
-                directive.rule === finding.name &&
-                directive.key === normaliseFile(file) &&
-                directive.span !== undefined &&
-                // A wrangler directive whose key could not be read accepts nothing rather than every key on its line.
-                (!WRANGLER_FILES.includes(directive.key) || directive.variable === key) &&
-                directive.span.first <= line &&
-                line <= directive.span.last,
-        );
+        // The innermost directive is the one written for this finding; an enclosing one of the same rule
+        // stays free to match something else, or is reported unused.
+        const [match] = valid
+            .filter(
+                (directive) =>
+                    directive.rule === finding.name &&
+                    directive.key === normaliseFile(file) &&
+                    directive.span !== undefined &&
+                    // A wrangler directive whose key could not be read accepts nothing rather than every key on its line.
+                    (!WRANGLER_FILES.includes(directive.key) || directive.variable === key) &&
+                    directive.span.first <= line &&
+                    line <= directive.span.last,
+            )
+            .toSorted((left, right) => spanSize(left) - spanSize(right));
 
         if (match === undefined) {
             return finding;

@@ -477,6 +477,24 @@ const secret = "xxxxxxxx";
         expect(onBuild?.suppressed).toBeUndefined();
     });
 
+    it("credits the innermost directive when two directives of one rule cover the same line", () => {
+        expect.assertions(2);
+
+        const project = projectWith(
+            `${lunoraDirectory}/nested.ts`,
+            `// lunora-advisor-exempt hardcoded_secret -- whole config
+export const config = {
+    // lunora-advisor-exempt hardcoded_secret -- this key only
+    token: "xxxxxxxx",
+};
+`,
+        );
+        const result = applySuppressions(project, projectRoot, lunoraDirectory, [finding("hardcoded_secret", "nested", 4)]);
+
+        expect(result[0]?.suppressed?.line).toBe(3);
+        expect(result.filter((entry) => entry.name === "advisor_suppression_unused").map((entry) => entry.metadata["line"])).toStrictEqual([1]);
+    });
+
     it("ignores a directive-looking line inside a block comment or a template string", () => {
         expect.assertions(3);
 
