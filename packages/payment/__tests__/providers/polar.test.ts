@@ -178,6 +178,25 @@ describe("polar adapter", () => {
         expect(created[0]?.seats).toBe(5);
     });
 
+    it.each([0, -1, 2.5, Number.NaN])("refuses a checkout quantity of %s before calling Polar", async (quantity) => {
+        expect.assertions(2);
+
+        const created: Record<string, unknown>[] = [];
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
+
+        await expect(
+            adapter.createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "subscription",
+                priceId: "prod_1",
+                quantity,
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(created).toHaveLength(0);
+    });
+
     it("omits seats for a single-unit checkout so non-seat products are unchanged", async () => {
         expect.assertions(2);
 

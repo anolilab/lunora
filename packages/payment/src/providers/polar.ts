@@ -95,9 +95,20 @@ const polarSubscriptionUpdate = (patch: SubscriptionPatch): { productId: string 
 
 /**
  * The seat count a checkout asks Polar for. A single unit is Polar's default, so it is left unsent and
- * the request stays byte-identical for non-seat products.
+ * the request stays byte-identical for non-seat products. Anything but a positive safe integer is refused
+ * here, since the checkout facade does not validate `quantity` before the provider call.
  */
-const checkoutSeats = (quantity: number | undefined): number | undefined => (quantity === undefined || quantity === 1 ? undefined : quantity);
+const checkoutSeats = (quantity: number | undefined): number | undefined => {
+    if (quantity === undefined || quantity === 1) {
+        return undefined;
+    }
+
+    if (!Number.isSafeInteger(quantity) || quantity < 1) {
+        throw new LunoraPaymentError("VALIDATION_ERROR", `polar checkout: \`quantity\` must be a positive safe integer (got ${String(quantity)})`);
+    }
+
+    return quantity;
+};
 
 /**
  * Polar applies `seats` only to seat-based prices and answers `seats: null` otherwise. A silent mismatch
