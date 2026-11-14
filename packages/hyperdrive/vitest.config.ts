@@ -6,4 +6,6 @@ import { getVitestConfig } from "../../tools/get-vitest-config";
 //
 // ratchet: functions below the default floor (the mysql-memory-server suite is
 // skipped where the binary is unobtainable); raise as coverage improves.
-export default getVitestConfig({ test: { environment: "node" } }, { functions: 70 });
+// Files run one at a time: the mysql-memory-server suites all provision mysqld into the same
+// `${tmpdir}/mysqlmsn/binaries` directory, and two concurrent extractions corrupt each other.
+export default getVitestConfig({ test: { environment: "node", fileParallelism: false } }, { functions: 70 });

@@ -16,10 +16,11 @@ import { derivedIdempotencyKey, LOCAL_REFUND_CLAIM_TYPE, localRefundKey } from "
 import { addMoney, compareMoney, isZeroMoney, maxMoney, subtractMoney } from "./money";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
+import { SUBSCRIPTION_TERMINAL_STATES } from "./state-machine";
 import type { PaymentStore } from "./store";
-import { overlayProviderSubscription } from "./store";
+import { overlayProviderSubscription, ownerOf } from "./store";
 import type { SubscriptionWrite } from "./subscription-policy";
-import { storeSubscription } from "./subscription-policy";
+import { ENTITLING_STATES, hasOtherLiveSubscription, restoreSubscription, storeSubscription } from "./subscription-policy";
 import applyWebhookAction from "./sync";
 import type {
     AttachInput,
@@ -32,9 +33,11 @@ import type {
     FeatureBalance,
     Money,
     PaymentSession,
+    ProviderCapabilities,
     ProviderId,
     RefundInput,
     Subscription,
+    SubscriptionPatch,
     TrackInput,
     TrackResult,
 } from "./types";
@@ -57,6 +60,48 @@ import { readWebhookBody } from "./webhook-body";
  * they cannot BOTH apply, which absolute markers guarantee.
  */
 let lastUsageStamp = 0;
+
+/**
+ * The price set after an operation that changes only the primary price, from the stored set it started from. The old
+ * primary leaves the set and the new one joins it; every other price the stored set held stays.
+ */
+const swapPrimaryPrice = (stored: Subscription, answer: Subscription): ReadonlyArray<string> => [
+    ...new Set([answer.priceId, ...(stored.priceIds ?? []).filter((id) => id !== stored.priceId)]),
+];
+
+/**
+ * How far before a plan change or resume the floor for later webhooks sits. Provider event times come from the provider's
+ * clock (Stripe's in whole seconds), so a floor at the call itself would drop a genuine event created just after it, such
+ * as the move to past due when the proration charge fails. A redelivered event from before the change is minutes old, so
+ * it is still dropped.
+ */
+const EVENT_FLOOR_MARGIN_MS = 60_000;
+
+/**
+ * The row an update or resume answer is recorded as, over `target` (the row under the answer's id).
+ *
+ * A moved row keeps the history of the row it lands on (its creation date and last event), not the one it left, and the
+ * owner the subscription already had. A status read that failed can leave the price set unknown, and a full-row write
+ * would then erase the one stored; these operations change only the primary price, so the stored set stands with that
+ * price swapped. The seat count is kept the same way, since a mutation answer can omit it (Creem maps missing units to
+ * one). An accepted resume clears the period-end cancel even when the status read still reports it (Autumn derives the
+ * flag from `canceled_at`, which can trail the uncancel). And a provider event created well before the call describes the
+ * row as it was, so a point {@link EVENT_FLOOR_MARGIN_MS} before the call is the floor for the last applied event.
+ */
+const answerRow = (
+    existing: Subscription,
+    target: Subscription | undefined,
+    answer: { calledAt: number; moved: boolean; readFailed: boolean; setsQuantity: boolean; settled: Subscription; verb: "resumed" | "updated" },
+): Subscription => {
+    const { calledAt, moved, readFailed, settled } = answer;
+    const priceIds = !moved && settled.priceIds === undefined && existing.priceIds !== undefined ? swapPrimaryPrice(existing, settled) : settled.priceIds;
+    const quantity = readFailed && !answer.setsQuantity ? existing.quantity : settled.quantity;
+    const cancelAtPeriodEnd = answer.verb === "resumed" ? false : settled.cancelAtPeriodEnd;
+    const overlaid = overlayProviderSubscription(target, { ...settled, cancelAtPeriodEnd, priceIds, quantity });
+    const row: Subscription = { ...overlaid, lastEventAt: Math.max(overlaid.lastEventAt ?? 0, calledAt - EVENT_FLOOR_MARGIN_MS) };
+
+    return moved ? { ...row, referenceId: ownerOf(existing.referenceId, settled.referenceId) } : row;
+};
 
 /** How many guarded writes record a cancel answer over a row that keeps moving under it, before the conflict is raised. */
 const CANCEL_RECORD_ATTEMPTS = 3;
@@ -189,8 +234,6 @@ export interface CreatePaymentOptions {
 }
 
 export interface LunoraPayment {
-    readonly adapter: PaymentAdapter;
-
     /**
      * Subscribe a reference to a plan — a plan-oriented alias of {@link LunoraPayment.createCheckout}
      * with `mode` defaulting to `"subscription"`. Returns a hosted-checkout URL to redirect to.
@@ -222,6 +265,13 @@ export interface LunoraPayment {
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
 
     /**
+     * Who the provider is and what it supports, for checks an app makes before it starts an
+     * operation (e.g. refusing a checkout that needs session expiry before taking a hold).
+     * Read-only data: no operation and no reference to the adapter is reachable from it.
+     */
+    readonly provider: { readonly capabilities: ProviderCapabilities; readonly identifier: ProviderId };
+
+    /**
      * Refund the caller's own captured payment (authorized, derived idempotency key, store synced).
      *
      * The derived key makes "same session, same amount, same reason" ONE operation, so a retried
@@ -230,6 +280,16 @@ export interface LunoraPayment {
      * the second one, or the provider replays the first and the second moves no money.
      */
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
+
+    /**
+     * Undo a period-end cancel, or resume a paused subscription (Creem; the others clear `cancelAtPeriodEnd`).
+     * Authorized against the subscription's owner, unknown and not-owner both raise NOT_FOUND, and the provider's
+     * answer is stored. A resume the single-subscription policy blocks raises INVALID_TRANSITION before the provider
+     * is called. A caller-supplied key is claimed before the provider call, and a retry with a key already claimed is
+     * refused rather than replayed: the provider's own key window does not cover every provider, and a replayed answer
+     * can be stale.
+     */
+    resumeSubscription: (subscriptionId: string, options?: { idempotencyKey?: string }) => Promise<Subscription>;
     readonly store: PaymentStore;
 
     /**
@@ -242,6 +302,13 @@ export interface LunoraPayment {
      * billing more than the local ledger holds. Use `mode: "add"` there.
      */
     track: (input: TrackInput) => Promise<TrackResult>;
+
+    /**
+     * Change the plan (`priceId`) or seats (`quantity`) of the caller's own subscription. Authorized against the
+     * subscription's owner, unknown and not-owner both raise NOT_FOUND, and the provider's answer is stored. Only a
+     * caller-supplied key is forwarded, for the reason given on {@link SubscriptionPatch.idempotencyKey}.
+     */
+    updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
 }
 
 export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
@@ -358,6 +425,188 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return { allowed: entitlements.has(featureId), unlimited: entitlements.has(featureId) };
     };
 
+    // Shared ownership guard for the subscription operations. Collapse "doesn't exist" and "not yours"
+    // into one indistinguishable NOT_FOUND so the endpoint can't be used as a cross-tenant existence
+    // oracle. A non-owner authorizer denial is rewritten to the same 404 as a genuinely missing id.
+    const ownedSubscription = async (subscriptionId: string): Promise<Subscription> => {
+        const notFound = (): LunoraPaymentError => new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
+        const existing = await store.getSubscription(adapter.identifier, subscriptionId);
+
+        if (!existing) {
+            throw notFound();
+        }
+
+        try {
+            await ensureAuthorized(existing.referenceId);
+        } catch {
+            throw notFound();
+        }
+
+        return existing;
+    };
+
+    // An update or resume names an owner that has to be a real one: a row a webhook wrote with no reference is no one's to change.
+    const changeableSubscription = async (subscriptionId: string): Promise<Subscription> => {
+        const existing = await ownedSubscription(subscriptionId);
+
+        if (existing.referenceId.trim() === "") {
+            throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
+        }
+
+        // A canceled subscription has no way back in the state machine, so it is refused before the provider sees it.
+        if (SUBSCRIPTION_TERMINAL_STATES.has(existing.state)) {
+            throw new LunoraPaymentError("INVALID_TRANSITION", `subscription "${subscriptionId}" is ${existing.state} and cannot be changed`);
+        }
+
+        return existing;
+    };
+
+    // A keyed update or resume is claimed before the provider is called, and a claim that is already taken is refused. The
+    // attempt that took it may have reached the provider, so the provider is not called again under the same key: Creem and
+    // Dodo ignore the key on a proration, so a second call would charge it twice. The claim is kept on failure too, since a
+    // rejection cannot be told apart from a lost response here.
+    const claimKeyedChange = async (key: string | undefined, type: string, subscriptionId: string): Promise<void> => {
+        if (key !== undefined && !(await store.markEventProcessed(adapter.identifier, key, type))) {
+            throw new LunoraPaymentError(
+                "INVALID_TRANSITION",
+                `the change to subscription "${subscriptionId}" was already attempted with this idempotency key and its outcome is unknown; check the subscription and retry with a new key`,
+            );
+        }
+    };
+
+    // Runs the provider call for a claimed key. An adapter raises VALIDATION_ERROR only for a request it refused before
+    // sending it (Autumn's seat change, the combined plan-and-seat patch on Creem and Polar), so that outcome is known:
+    // nothing changed, and the key is released for a corrected retry. Every other failure keeps the claim.
+    const callUnderClaim =
+        (key: string | undefined, call: () => Promise<Subscription>): (() => Promise<Subscription>) =>
+        async () => {
+            try {
+                return await call();
+            } catch (error) {
+                if (key !== undefined && error instanceof LunoraPaymentError && error.code === "VALIDATION_ERROR") {
+                    await store.releaseEvent(adapter.identifier, key);
+                }
+
+                throw error;
+            }
+        };
+
+    // Stores the provider's answer to an update or a resume, settled against the provider's current state: the answer is
+    // what the provider accepted, and its status read also carries what a webhook changed since. Both calls set absolute
+    // state, so a row a webhook moved during the call is not merged onto: the provider has accepted the change and its
+    // own event for it follows. The conflict is raised rather than the answer dropped silently. Repeating the call is not
+    // safe, since Creem and Dodo charge a proration again, so the caller is sent to reconcile instead.
+    // `call` makes the provider request. `sets.quantity` says whether that request changes the seat count.
+    const recordSubscriptionAnswer = async (
+        existing: Subscription,
+        call: () => Promise<Subscription>,
+        verb: "updated" | "resumed",
+        sets: { quantity: boolean },
+    ): Promise<Subscription> => {
+        // Any provider event created before the call describes the row as it was, so it must not land on top of the answer.
+        const calledAt = Date.now();
+        const answer = await call();
+
+        // A provider can move the subscription to a new id (Autumn: a plan change is a new `customer::product` row). The
+        // target is guarded by whatever row sits under its id now: absent, or a row from an earlier plan that is replaced.
+        // It is read before the provider's state, so a webhook that writes it afterwards makes the guarded write refuse,
+        // rather than replace a newer row with an older snapshot.
+        const moved = answer.id !== existing.id;
+        const target = moved ? await store.getSubscription(adapter.identifier, answer.id) : existing;
+
+        // If the status read fails, the answer the provider accepted is recorded instead: losing a completed change is worse
+        // than a stale field that the provider's later event corrects.
+        const status = await adapter.getSubscriptionStatus(answer.id).then(
+            (settled) => {
+                return { readFailed: false, settled };
+            },
+            () => {
+                return { readFailed: true, settled: answer };
+            },
+        );
+        const policy = options.singleSubscriptionPerReference ?? false;
+        const conflict = (): LunoraPaymentError =>
+            new LunoraPaymentError(
+                "INVALID_TRANSITION",
+                `the subscription changed while it was being ${verb}; the provider has accepted the change, so reconcile this subscription rather than repeating the change`,
+            );
+
+        const synced = answerRow(existing, target, { ...status, calledAt, moved, setsQuantity: sets.quantity, verb });
+
+        // The old row retires first, and only once the new one grants access: a retire that loses a race stops the write
+        // there, so both rows never grant at once. A downgrade that leaves the old plan running keeps it active.
+        const retires = moved && ENTITLING_STATES.has(synced.state);
+
+        if (retires && !(await store.upsertSubscription({ ...existing, state: "canceled" }, { ifRevision: existing.revision }))) {
+            throw conflict();
+        }
+
+        // The new row did not land, so the old one goes back to granting access. Only the row this call retired is
+        // restored: a revision another write has since moved past is left as that write made it. Nor once anything has
+        // written the new row since it was read: that is the provider's own event for the new plan (active, past due, or
+        // canceled), and it says what the customer has now, so the old plan stays retired.
+        // Says whether a plan still grants access afterwards, as far as this call can tell: the old one restored, or the new one
+        // granting because a write made it so.
+        const restoreRetired = async (): Promise<boolean> => {
+            const current = await store.getSubscription(adapter.identifier, existing.id);
+            const destination = await store.getSubscription(adapter.identifier, synced.id);
+            const destinationUntouched = destination?.revision === target?.revision && !ENTITLING_STATES.has(destination?.state ?? "canceled");
+
+            if (current?.state === "canceled" && current.revision === (existing.revision ?? 0) + 1 && destinationUntouched) {
+                return restoreSubscription(store, policy, current, existing);
+            }
+
+            return ENTITLING_STATES.has(destination?.state ?? "canceled");
+        };
+
+        // A failed restore leaves the subscription with no plan granting access, and the caller must know that. The message
+        // is fixed: storage errors can carry database detail, which `toErrorBody` would echo to the caller. Both failures
+        // travel on `cause` for the operator.
+        const rollbackFailed = (cause: unknown, restoreError: unknown): LunoraPaymentError =>
+            new LunoraPaymentError(
+                "INVALID_TRANSITION",
+                "the provider's change could not be stored, and the old plan could not be restored; the subscription has no plan granting access, so reconcile it",
+                { cause: { restoreError, storeError: cause } },
+            );
+
+        let outcome: SubscriptionWrite;
+
+        try {
+            outcome = await storeSubscription(store, policy, target, synced, { ifRevision: target?.revision });
+        } catch (error) {
+            // A failed write after the retire leaves nothing granting access, so the old row is restored before the error goes up.
+            // A restore that is skipped leaves no plan granting too, for instance when the policy stepped the new row back
+            // after a storage fault, and the caller hears the same: reconcile, not a bare storage error.
+            if (retires) {
+                const granting = await restoreRetired().catch((restoreError: unknown) => {
+                    throw rollbackFailed(error, restoreError);
+                });
+
+                if (!granting) {
+                    throw rollbackFailed(error, undefined);
+                }
+            }
+
+            throw error;
+        }
+
+        if (outcome === "rejected") {
+            if (retires) {
+                await restoreRetired().catch((restoreError: unknown) => {
+                    throw rollbackFailed(conflict(), restoreError);
+                });
+            }
+
+            throw conflict();
+        }
+
+        if (outcome === "refused") {
+            notifyObserver(options.observability, { provider: synced.provider, subscriptionId: synced.id, type: "subscription.duplicate" });
+        }
+
+        return (await store.getSubscription(adapter.identifier, synced.id)) ?? synced;
+    };
+
     // Shared ownership guard for the money-moving session operations. Collapse "doesn't exist" and
     // "not yours" into one indistinguishable NOT_FOUND so the endpoint can't be used as a
     // cross-tenant existence oracle (same posture as `cancelSubscription`).
@@ -407,9 +656,19 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         return merged;
     };
 
-    return {
-        adapter,
+    // Copies, not the adapter's own objects: nothing reachable from `provider` can call an operation or change
+    // what the facade reads from the adapter.
+    const provider = Object.freeze({
+        capabilities: Object.freeze({
+            ...(adapter.capabilities.checkoutExpiry === undefined ? {} : { checkoutExpiry: adapter.capabilities.checkoutExpiry }),
+            merchantOfRecord: adapter.capabilities.merchantOfRecord,
+            portal: adapter.capabilities.portal,
+            usageMetering: adapter.capabilities.usageMetering,
+        }),
+        identifier: adapter.identifier,
+    });
 
+    return {
         attach: async (input) => startCheckout({ ...input, mode: input.mode ?? "subscription" }),
 
         cancelPayment: async (sessionId, cancelOptions) => {
@@ -425,20 +684,7 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         },
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
-            const existing = await store.getSubscription(adapter.identifier, subscriptionId);
-
-            // Collapse "doesn't exist" and "not yours" into one indistinguishable NOT_FOUND so the
-            // endpoint can't be used as a cross-tenant existence oracle. A non-owner authorizer denial
-            // is rewritten to the same 404 as a genuinely missing id.
-            if (!existing) {
-                throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
-            }
-
-            try {
-                await ensureAuthorized(existing.referenceId);
-            } catch {
-                throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
-            }
+            const existing = await ownedSubscription(subscriptionId);
 
             // Already in the requested end state: a retry after a successful cancel. Calling the
             // provider again would be a fresh key (the row's `updatedAt` moved) on a canceled sub.
@@ -646,6 +892,45 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             return store.listSubscriptionsByReference(referenceId);
         },
 
+        provider,
+
+        resumeSubscription: async (subscriptionId, resumeOptions) => {
+            const existing = await changeableSubscription(subscriptionId);
+
+            // A resume that would start granting access while another subscription already does is refused before the provider
+            // is called, so the provider does not bill for a subscription the policy will not grant. A row that already grants
+            // access (an undone period-end cancel) adds nothing, so it is not refused.
+            if (
+                (options.singleSubscriptionPerReference ?? false) &&
+                !ENTITLING_STATES.has(existing.state) &&
+                (await hasOtherLiveSubscription(store, existing.referenceId, existing.provider, existing.id))
+            ) {
+                notifyObserver(options.observability, { provider: existing.provider, subscriptionId: existing.id, type: "subscription.duplicate" });
+
+                throw new LunoraPaymentError(
+                    "INVALID_TRANSITION",
+                    "the single-subscription policy refuses this resume: another subscription for this reference already grants access",
+                );
+            }
+
+            // A caller-supplied key is derived here, then claimed before the provider call (see claimKeyedChange).
+            const key =
+                resumeOptions?.idempotencyKey === undefined
+                    ? undefined
+                    : await derivedIdempotencyKey("resume_subscription", adapter.identifier, subscriptionId, resumeOptions.idempotencyKey);
+
+            await claimKeyedChange(key, "marker.resume_subscription", subscriptionId);
+
+            return recordSubscriptionAnswer(
+                existing,
+                callUnderClaim(key, () => adapter.resumeSubscription(subscriptionId, { idempotencyKey: key })),
+                "resumed",
+                {
+                    quantity: false,
+                },
+            );
+        },
+
         refundPayment: async (input) => {
             const existing = await ownedSession(input.sessionId);
 
@@ -701,8 +986,26 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
             // The marker for this refund id is already claimed: the provider replayed an earlier refund
             // under a colliding key, so no money moved. (An amount-keyed marker proves nothing, so only
-            // a provider `refundId` short-circuits.)
+            // a provider `refundId` short-circuits.) The caller asked for a refund that never happened,
+            // so the observer is told; the return value stays the row as it stands.
             if (!freshRefund && issuedRefund.refundId !== undefined) {
+                // The confirming webhook claims the same marker, and can land while the refund call is in
+                // flight. Its booking shows as a refunded total that grew since the read above; an earlier
+                // facade call's booking is already in that read, so only a replay leaves the total unchanged.
+                const current = (await store.getPaymentSession(adapter.identifier, existing.id)) ?? existing;
+
+                if (compareMoney(current.refundedAmount, existing.refundedAmount) > 0) {
+                    return current;
+                }
+
+                notifyObserver(options.observability, {
+                    provider: adapter.identifier,
+                    referenceId: existing.referenceId,
+                    refundId: issuedRefund.refundId,
+                    sessionId: input.sessionId,
+                    type: "refund.replayed",
+                });
+
                 return existing;
             }
 
@@ -816,6 +1119,41 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
 
                 return { recorded: true, reportedToProvider: false };
             }
+        },
+
+        updateSubscription: async (subscriptionId, patch) => {
+            const existing = await changeableSubscription(subscriptionId);
+
+            // Validated here so every provider refuses a bad seat count before its own call. A missing quantity is
+            // not defaulted: requireQuantity's default of 1 would turn "leave the seats alone" into a seat cut.
+            // Zero seats would keep the plan running with nobody on it, so ending a subscription is cancelSubscription's job.
+            if (patch.quantity !== undefined) {
+                requireQuantity("updateSubscription", patch.quantity);
+
+                if (patch.quantity < 1) {
+                    throw new LunoraPaymentError("VALIDATION_ERROR", "updateSubscription(): `quantity` must be at least 1; cancel the subscription to end it");
+                }
+            }
+
+            if (patch.priceId?.trim() === "") {
+                throw new LunoraPaymentError("VALIDATION_ERROR", "updateSubscription(): `priceId` must name a plan");
+            }
+
+            const key =
+                patch.idempotencyKey === undefined
+                    ? undefined
+                    : await derivedIdempotencyKey("update_subscription", adapter.identifier, subscriptionId, patch.idempotencyKey);
+
+            await claimKeyedChange(key, "marker.update_subscription", subscriptionId);
+
+            return recordSubscriptionAnswer(
+                existing,
+                callUnderClaim(key, () => adapter.updateSubscription(subscriptionId, { ...patch, idempotencyKey: key })),
+                "updated",
+                {
+                    quantity: patch.quantity !== undefined,
+                },
+            );
         },
     };
 };

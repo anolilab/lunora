@@ -10,7 +10,7 @@ use lunora::client::{build_connect_frame, build_whisper_frame, build_whisper_sub
 use lunora::wire::{encode_wire, from_json, WireValue};
 use serde_json::{json, Value};
 
-use crate::{canonical, fixture, wire_text};
+use crate::{canonical, fixture, wire_text, with_page_delta};
 
 /// The session credential the goldens carry as `token`.
 const SESSION: &str = "session-token";
@@ -58,7 +58,7 @@ pub fn connect_frame_first_and_carries_session_token() {
     assert_eq!(opened[1]["type"], json!("subscribe"), "the subscription follows connect");
     assert_eq!(
         canonical(&opened[0]),
-        canonical(&frames["connect-with-token"]),
+        canonical(&with_page_delta(&frames["connect-with-token"])),
         "connect carries the session token"
     );
     assert!(!wire_text(&opened[0]).contains(BEARER), "the RPC bearer never reaches connect");
@@ -77,11 +77,11 @@ pub fn connect_frame_first_and_carries_session_token() {
     let unauthenticated = take(&sent);
 
     assert!(unauthenticated[0].get("token").is_none(), "no session credential means no token key");
-    assert_eq!(canonical(&unauthenticated[0]), canonical(&frames["connect"]));
+    assert_eq!(canonical(&unauthenticated[0]), canonical(&with_page_delta(&frames["connect"])));
 
     assert_eq!(
         canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })), Some(SESSION))),
-        canonical(&frames["connect-with-token-and-context"]),
+        canonical(&with_page_delta(&frames["connect-with-token-and-context"])),
         "the builder matches the token-and-context golden"
     );
 }
@@ -113,7 +113,7 @@ pub fn attach_socket_carries_connection_context() {
     with_context.client_id = "client-test".to_string();
     with_context.attach_socket(recording_sender(&sent), Some(&context));
 
-    assert_eq!(canonical(&take(&sent)[0]), canonical(&frames["connect-with-context"]));
+    assert_eq!(canonical(&take(&sent)[0]), canonical(&with_page_delta(&frames["connect-with-context"])));
 
     let mut without_context = Client::new("https://app.example", None);
 
@@ -123,7 +123,7 @@ pub fn attach_socket_carries_connection_context() {
     let connect = take(&sent)[0].clone();
 
     assert!(connect.get("context").is_none(), "no context means no context key");
-    assert_eq!(canonical(&connect), canonical(&frames["connect"]));
+    assert_eq!(canonical(&connect), canonical(&with_page_delta(&frames["connect"])));
 }
 
 /// Every close sequence in the fixture, driven through this port's own calls.

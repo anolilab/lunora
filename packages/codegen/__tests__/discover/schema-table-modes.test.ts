@@ -202,7 +202,7 @@ describe("discoverSchema — table modes", () => {
             `);
 
             expect(schema.tables[0]?.memory).toBe(true);
-            expect(schema.tables[0]?.indexes).toStrictEqual([{ fields: ["roomId"], name: "by_room", unique: false }]);
+            expect(schema.tables[0]?.indexes).toStrictEqual([{ fields: ["roomId"], name: "by_room", site: { file: "schema", line: 7 }, unique: false }]);
         });
 
         it("leaves an ordinary table alone", () => {

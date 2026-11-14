@@ -1,3 +1,7 @@
+## @lunora/react [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.300...@lunora/react@1.0.0-alpha.301) (2026-11-12)
+
+- fix(react): depend on the workspace client so the release pins the matching one (#1555)
+
 ## @lunora/react [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.299...@lunora/react@1.0.0-alpha.300) (2026-11-11)
 
 - feat(client): move admin auth hook logic into @lunora/client (#1552)

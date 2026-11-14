@@ -45,11 +45,19 @@ const renderThrowingStub = (
     declaration: string,
     message: string,
     methods: ReadonlyArray<string>,
-    { cast = "", sync = [] }: { cast?: string; sync?: ReadonlyArray<string> | true } = {},
+    { cast = "", getters = [], sync = [] }: { cast?: string; getters?: ReadonlyArray<string>; sync?: ReadonlyArray<string> | true } = {},
 ): string => {
     const missing = `throw new Error(${JSON.stringify(message)});`;
-    const members = methods
-        .map((method) => `    ${method}: ${sync === true || sync.includes(method) ? "" : "async "}() => {\n        ${missing}\n    },`)
+    // A property the real helper exposes as data (not a method) is a throwing getter, so reading it reports the missing
+    // configuration rather than handing back `undefined` for the caller's next member access to crash on.
+    const members = [
+        ...methods.map(
+            (method) => [method, `    ${method}: ${sync === true || sync.includes(method) ? "" : "async "}() => {\n        ${missing}\n    },`] as const,
+        ),
+        ...getters.map((getter) => [getter, `    get ${getter}(): never {\n        ${missing}\n    },`] as const),
+    ]
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([, member]) => member)
         .join("\n");
 
     return `\nconst ${declaration} = {\n${members}\n}${cast};\n`;

@@ -77,6 +77,50 @@ describe("discoverFunctions — queries that may read ctx.ip", () => {
         expect(mayReadIp(call)).toBe(true);
     });
 
+    it("leaves a query unmarked when the helper it hands ctx to never reads the address", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx: any, channelId: string) => {
+    const { userId } = ctx.auth;
+    const row = await ctx.db.query("members").withIndex("by_user", (q: any) => q.eq("userId", userId).eq("channelId", channelId)).first();
+    if (!row) throw new Error("forbidden");
+};`;
+
+        expect(readsIpFor("await requireMember(ctx, 'general'); return ctx.db.query('messages').collect();", helper)).toBeUndefined();
+    });
+
+    it("leaves a query unmarked when its ctx helper lives in another file", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "membership.ts"),
+            `export const requireMember = async (ctx: any): Promise<void> => {\n    await ctx.db.query("members").first();\n};\n`,
+        );
+
+        expect(
+            readsIpFor("await requireMember(ctx); return ctx.db.query('messages').collect();", `import { requireMember } from "./membership.js";`),
+        ).toBeUndefined();
+    });
+
+    it.each([
+        ["reads the address", "const helper = (c: any) => c.ip;"],
+        ["hands ctx on to a function with no body", "declare const deeper: (ctx: unknown) => unknown;\nconst helper = (ctx: any) => deeper(ctx);"],
+        ["calls itself and then reads the address", "const helper = (ctx: any, n: number): unknown => (n > 0 ? helper(ctx, n - 1) : ctx.ip);"],
+        ["is a generator, whose body a call does not run", "function* helper(ctx: any) { yield ctx.db; }"],
+    ])("marks a query whose ctx helper %s", (_name, helper) => {
+        expect.assertions(1);
+
+        expect(readsIpFor("return helper(ctx, 1);", helper)).toBe(true);
+    });
+
+    it("leaves a query unmarked when a nested callback collects the rest of a row", () => {
+        expect.assertions(1);
+
+        expect(
+            readsIpFor("const rows = await ctx.db.query('presence').collect(); return rows.map(({ sessionId: _sessionId, ...row }: any) => row);"),
+        ).toBeUndefined();
+    });
+
     it("leaves a query that only reads its database unmarked", () => {
         expect.assertions(1);
 

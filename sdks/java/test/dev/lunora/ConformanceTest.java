@@ -54,6 +54,12 @@ public final class ConformanceTest {
         non2xxWithoutEnvelopeThrows();
         clientFrameBuilders();
         serverFrameConsumer();
+        pageDeltaFramesMergeIntoTheCachedResult();
+        rowDeltaWithoutMergeableBaseIsNotPublishedAsAnEnvelope();
+        unmergeableRunFreezesTheCursor();
+        failedResendKeepsTheSubscriptionFrozen();
+        identityChangeEvictsTheDeltaState();
+        deltaRunIsHeldUntilItsLastFrame();
         subscriptionStreamYieldsFrameValuesInOrder();
         shapeSubscribeFrame();
         shapeSubscriptionsResendAfterReconnect();
@@ -829,11 +835,15 @@ public final class ConformanceTest {
         context.put("roomId", "general");
 
         check(
-                canonical(Client.buildConnectFrame("client-test", null, null))
+                canonical(Client.buildConnectFrame("client-test", null, null, null))
                         .equals(canonical(frames.get("connect"))),
                 "connect");
         check(
-                canonical(Client.buildConnectFrame("client-test", context, null))
+                canonical(Client.buildConnectFrame("client-test", null, null, List.of("pageDelta")))
+                        .equals(canonical(frames.get("connect-with-page-delta-caps"))),
+                "connect-with-page-delta-caps");
+        check(
+                canonical(Client.buildConnectFrame("client-test", context, null, null))
                         .equals(canonical(frames.get("connect-with-context"))),
                 "connect-with-context");
         check(
@@ -930,6 +940,253 @@ public final class ConformanceTest {
     }
 
     /**
+     * Each {@code pageDeltaFrames} case seeds the subscription's server base with a {@code data}
+     * frame, applies the row-change {@code delta}, and expects the merged value rather than the
+     * {key, op, table, row} envelope.
+     */
+    @SuppressWarnings("unchecked")
+    private static void pageDeltaFramesMergeIntoTheCachedResult() throws IOException {
+        List<Object> cases = (List<Object>) fixture("ws-frames.json").get("pageDeltaFrames");
+
+        check(
+                cases.size() == 9,
+                "ws-frames.json must carry 9 pageDeltaFrames, got " + cases.size());
+
+        for (Object entry : cases) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+            Map<String, Object> frame = (Map<String, Object>) testCase.get("frame");
+            Map<String, Object> expect = (Map<String, Object>) testCase.get("expect");
+            Client client = new Client("https://app.example", null);
+
+            client.attachSocket(frame0 -> {}, null);
+
+            List<Object> seen = new ArrayList<>();
+
+            client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, null, null);
+
+            Map<String, Object> seed = new LinkedHashMap<>();
+
+            seed.put("type", "data");
+            seed.put("id", frame.get("id"));
+            seed.put("data", testCase.get("baseWire"));
+            client.handleFrame(Json.write(seed));
+
+            String kind = client.handleFrame(Json.write(frame));
+
+            check(expect.get("kind").equals(kind), "kind for " + testCase.get("name"));
+            check(
+                    seen.size() == 2,
+                    "onData should fire for the seed and the delta: " + testCase.get("name"));
+            check(
+                    canonical(Wire.encode(seen.get(1))).equals(canonical(expect.get("valueWire"))),
+                    "merged value for " + testCase.get("name"));
+        }
+    }
+
+    /**
+     * An unmergeable row change poisons the subscription: later deltas neither publish nor move the
+     * resume cursor, until a resubscribe or a data frame clears it.
+     */
+    private static void unmergeableRunFreezesTheCursor() throws IOException {
+        runDeltaCases("pageDeltaPoisonCases", 3);
+    }
+
+    /**
+     * A resend that fails to send leaves the subscription frozen: nothing replayed the dropped
+     * change, so a later delta must not publish or move the resume cursor past it.
+     */
+    @SuppressWarnings("unchecked")
+    private static void failedResendKeepsTheSubscriptionFrozen() {
+        Client client = new Client("https://app.example", null);
+        List<Object> seen = new ArrayList<>();
+        boolean[] failing = {false};
+
+        client.attachSocket(
+                frame -> {
+                    if (failing[0]) {
+                        throw new IllegalStateException("socket closed");
+                    }
+                },
+                null);
+        client.subscribe("messages:list", new LinkedHashMap<>(), seen::add, error -> {}, null);
+        client.handleFrame(
+                "{\"type\":\"data\",\"id\":\"sub_1\",\"cursor\":5,\"epoch\":\"e1\","
+                        + "\"data\":{\"continueCursor\":\"c\",\"isDone\":false,\"page\":"
+                        + "[{\"_id\":\"m1\",\"_creationTime\":1,\"text\":\"one\"}]}}");
+        client.handleFrame(
+                "{\"type\":\"delta\",\"id\":\"sub_1\",\"delta\":"
+                        + "{\"key\":\"m1\",\"op\":\"update\",\"table\":\"messages\"}}");
+
+        failing[0] = true;
+
+        boolean threw = false;
+
+        try {
+            client.resendSubscriptions();
+        } catch (IllegalStateException expected) {
+            threw = true;
+        }
+
+        check(threw, "the failed send must surface");
+
+        seen.clear();
+        client.handleFrame(
+                "{\"type\":\"delta\",\"id\":\"sub_1\",\"cursor\":9,\"epoch\":\"e1\","
+                        + "\"delta\":{\"key\":\"m1\",\"op\":\"update\",\"table\":\"messages\","
+                        + "\"row\":{\"_id\":\"m1\",\"_creationTime\":1,\"text\":\"ONE\"}}}");
+        check(seen.isEmpty(), "a delta after a failed resend must not publish");
+
+        List<Map<String, Object>> sent = new ArrayList<>();
+
+        client.attachSocket(sent::add, null);
+        client.resendSubscriptions();
+
+        Map<String, Object> query = (Map<String, Object>) resent(sent, "sub_1").get("query");
+
+        check(sameNumber(query.get("sinceSeq"), 5), "the cursor must stay at 5, sent " + query);
+    }
+
+    /**
+     * Changing identity drops the previous identity's cached base and its freeze along with the
+     * resume cursor, so neither carries over to the new one.
+     */
+    private static void identityChangeEvictsTheDeltaState() throws IOException {
+        runDeltaCases("identityChangeEvictionCases", 2);
+    }
+
+    /**
+     * A delta marked {@code more} is held, not published: the run commits once on its last frame,
+     * and the resume position moves only then.
+     */
+    private static void deltaRunIsHeldUntilItsLastFrame() throws IOException {
+        runDeltaCases("pageDeltaRunCases", 5);
+        runDeltaCases("undecodableDeltaRunCases", 2);
+    }
+
+    /**
+     * One loop for every delta-sequence fixture key: seed, optionally freeze and change identity,
+     * then replay the steps. A step is a frame with its publish count (and value, and the error
+     * codes the subscription must report for that frame alone, when named) or a resend checked
+     * against the resume position it names.
+     */
+    @SuppressWarnings("unchecked")
+    private static void runDeltaCases(String key, int expected) throws IOException {
+        List<Object> cases = (List<Object>) fixture("ws-frames.json").get(key);
+
+        check(cases.size() == expected, "ws-frames.json must carry " + expected + " " + key);
+
+        for (Object entry : cases) {
+            Map<String, Object> testCase = (Map<String, Object>) entry;
+            String name = (String) testCase.get("name");
+            Map<String, Object> change = (Map<String, Object>) testCase.get("identityChange");
+            Client client = new Client("https://app.example", null);
+            List<Map<String, Object>> sent = new ArrayList<>();
+            List<Object> seen = new ArrayList<>();
+            List<String> errors = new ArrayList<>();
+
+            if (change != null) {
+                client.identity((String) change.get("from"));
+            }
+
+            client.attachSocket(sent::add, null);
+            client.subscribe(
+                    "messages:list",
+                    new LinkedHashMap<>(),
+                    seen::add,
+                    error -> errors.add(error.code()),
+                    null);
+            client.handleFrame(Json.write(testCase.get("seedFrame")));
+
+            if (testCase.containsKey("freezeFrame")) {
+                client.handleFrame(Json.write(testCase.get("freezeFrame")));
+                check(
+                        errors.equals(testCase.get("freezeErrors")),
+                        name
+                                + ": the freeze must report "
+                                + testCase.get("freezeErrors")
+                                + ", got "
+                                + errors);
+            }
+
+            if (change != null) {
+                client.identity((String) change.get("to"));
+            }
+
+            for (Object stepEntry : (List<Object>) testCase.get("steps")) {
+                Map<String, Object> step = (Map<String, Object>) stepEntry;
+
+                if (step.containsKey("resume")) {
+                    Map<String, Object> resume = (Map<String, Object>) step.get("resume");
+
+                    sent.clear();
+                    client.resendSubscriptions();
+
+                    Map<String, Object> query =
+                            (Map<String, Object>) resent(sent, "sub_1").get("query");
+
+                    check(
+                            sameNumber(query.get("sinceSeq"), resume.get("sinceSeq"))
+                                    && resume.get("sinceEpoch").equals(query.get("sinceEpoch")),
+                            name + ": the resume must carry " + resume + ", sent " + query);
+
+                    continue;
+                }
+
+                seen.clear();
+                errors.clear();
+                client.handleFrame(Json.write(step.get("frame")));
+                check(
+                        seen.size() == ((Number) step.get("publishes")).intValue(),
+                        name + ": publishes, got " + seen.size());
+                // Only a step that names its errors is pinned: a freeze the fixture does not list
+                // is not part of the contract.
+                if (step.containsKey("errors")) {
+                    check(errors.equals(step.get("errors")), name + ": errors, got " + errors);
+                }
+
+                if (step.containsKey("valueWire")) {
+                    check(
+                            canonical(Wire.encode(seen.get(0)))
+                                    .equals(canonical(step.get("valueWire"))),
+                            name + ": value");
+                }
+            }
+        }
+    }
+
+    /**
+     * A row change with no base, or one that cannot be merged into it, keeps the previous value and
+     * is never published as the envelope.
+     */
+    private static void rowDeltaWithoutMergeableBaseIsNotPublishedAsAnEnvelope() {
+        String delta =
+                "{\"type\":\"delta\",\"id\":\"sub_1\",\"delta\":"
+                        + "{\"key\":\"m1\",\"op\":\"update\",\"table\":\"t\","
+                        + "\"row\":{\"_id\":\"m1\"}}}";
+        Client bare = new Client("https://app.example", null);
+
+        bare.attachSocket(frame0 -> {}, null);
+
+        List<Object> bareSeen = new ArrayList<>();
+
+        bare.subscribe("messages:list", new LinkedHashMap<>(), bareSeen::add, null, null);
+        bare.handleFrame(delta);
+        check(bareSeen.isEmpty(), "a row change with no base is held, not published");
+
+        Client scalar = new Client("https://app.example", null);
+
+        scalar.attachSocket(frame0 -> {}, null);
+
+        List<Object> scalarSeen = new ArrayList<>();
+
+        scalar.subscribe("messages:count", new LinkedHashMap<>(), scalarSeen::add, null, null);
+        scalar.handleFrame("{\"type\":\"data\",\"id\":\"sub_1\",\"data\":3}");
+        scalar.handleFrame(delta);
+        check(scalarSeen.size() == 1, "an unmergeable row change publishes nothing");
+        check(Double.valueOf(3).equals(scalarSeen.get(0)), "the previous value is kept");
+    }
+
+    /**
      * The Iterable form of a live query: same subscription, same decode, same order as the callback
      * form.
      */
@@ -937,8 +1194,7 @@ public final class ConformanceTest {
     private static void subscriptionStreamYieldsFrameValuesInOrder() throws IOException {
         covers("subscription_stream_yields_frame_values_in_order");
 
-        Map<String, Object> testCase =
-                (Map<String, Object>) fixture("ws-frames.json").get("stream");
+        Map<String, Object> testCase = (Map<String, Object>) fixture("ws-frames.json").get("watch");
         Client client = new Client("https://app.example", null);
 
         client.attachSocket(frame -> {}, null);
@@ -951,13 +1207,13 @@ public final class ConformanceTest {
 
         // Closed at the end rather than in a try-with-resources: the frames are fed from this same
         // thread, so the loop has to be driven one `next()` at a time.
-        Client.Stream stream = client.stream("messages:list", args, null);
-        Iterator<Client.StreamEvent> events = stream.iterator();
+        Client.Watch stream = client.watch("messages:list", args, null);
+        Iterator<Client.WatchEvent> events = stream.iterator();
 
         for (Object raw : (List<Object>) testCase.get("frames")) {
             client.handleFrame(Json.write(raw));
 
-            Client.StreamEvent event = events.next();
+            Client.WatchEvent event = events.next();
 
             check(event.error() == null, "a streamed event carries a value, not an error");
             seen.add(event.value());
@@ -1515,18 +1771,17 @@ public final class ConformanceTest {
     private static void subscriptionStreamEndsOnClose() throws IOException, InterruptedException {
         covers("subscription_stream_ends_on_close");
 
-        Map<String, Object> testCase =
-                (Map<String, Object>) fixture("ws-frames.json").get("stream");
+        Map<String, Object> testCase = (Map<String, Object>) fixture("ws-frames.json").get("watch");
         Client client = new Client("https://app.example", null);
 
         client.attachSocket(frame -> {}, null);
 
-        Client.Stream stream = client.stream("messages:list", Map.of("channel", "general"), null);
+        Client.Watch stream = client.watch("messages:list", Map.of("channel", "general"), null);
         List<Object> seen = java.util.Collections.synchronizedList(new ArrayList<>());
         Thread consumer =
                 new Thread(
                         () -> {
-                            for (Client.StreamEvent event : stream) {
+                            for (Client.WatchEvent event : stream) {
                                 seen.add(event.value());
                             }
                         });

@@ -1,3 +1,15 @@
+## @lunora/runtime [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.287...@lunora/runtime@1.0.0-alpha.288) (2026-11-14)
+
+- fix(runtime): keep a seen pause when a later flag read fails (#1528)
+
+## @lunora/runtime [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.286...@lunora/runtime@1.0.0-alpha.287) (2026-11-14)
+
+- security(scheduler): sign the timestamp and forwarded identity on dispatch (#1541)
+
+## @lunora/runtime [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.285...@lunora/runtime@1.0.0-alpha.286) (2026-11-12)
+
+- feat(sdk): merge row-delta frames into list results in all eight ports (#1553)
+
 ## @lunora/runtime [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.284...@lunora/runtime@1.0.0-alpha.285) (2026-11-11)
 
 - feat(auth): add API keys via the apiKey() plugin (#1526)

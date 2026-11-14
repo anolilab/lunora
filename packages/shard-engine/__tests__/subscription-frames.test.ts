@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { subscriptionFrames } from "../src/subscription-delivery";
+import { ADMIN_WILDCARD, UNVOUCHABLE_DEP } from "../src/read-footprint";
+import { DELTA_PLACEHOLDER_TABLE, deltaTableFor, subscriptionFrames } from "../src/subscription-delivery";
 
 /**
  * `subscriptionFrames` owns two things the rest of the delivery path relies on:
@@ -367,5 +368,46 @@ describe("subscriptionFrames — sockets sharing one result", () => {
         expect(typesOf(subscriptionFrames({ ...shared, previousJson: JSON.stringify(previous), table: "messages" }))).toStrictEqual(["delta"]);
         // Same baseline, other table: the table is part of the delta body.
         expect(subscriptionFrames({ ...shared, previousJson: JSON.stringify(previous), table: "notes" })[0]).toContain(`"table":"notes"`);
+    });
+});
+
+describe("deltaTableFor", () => {
+    it("names the one table a query read", () => {
+        expect.assertions(1);
+
+        expect(deltaTableFor(["messages"])).toBe("messages");
+    });
+
+    it("stamps the placeholder when the query read several tables", () => {
+        expect.assertions(1);
+
+        expect(deltaTableFor(["members", "messages"])).toBe(DELTA_PLACEHOLDER_TABLE);
+    });
+
+    it("ignores the unvouchable marker when naming the table", () => {
+        expect.assertions(1);
+
+        expect(deltaTableFor([UNVOUCHABLE_DEP, "messages"])).toBe("messages");
+    });
+
+    it("stamps the placeholder when the query read no table", () => {
+        expect.assertions(2);
+
+        expect(deltaTableFor([])).toBe(DELTA_PLACEHOLDER_TABLE);
+        expect(deltaTableFor([UNVOUCHABLE_DEP])).toBe(DELTA_PLACEHOLDER_TABLE);
+    });
+
+    it("stamps the placeholder for the admin wildcard, alone or beside a table", () => {
+        expect.assertions(3);
+
+        expect(deltaTableFor([ADMIN_WILDCARD])).toBe(DELTA_PLACEHOLDER_TABLE);
+        expect(deltaTableFor([ADMIN_WILDCARD, "messages"])).toBe(DELTA_PLACEHOLDER_TABLE);
+        expect(deltaTableFor(["messages", ADMIN_WILDCARD])).toBe(DELTA_PLACEHOLDER_TABLE);
+    });
+
+    it("pins the placeholder's wire value", () => {
+        expect.assertions(1);
+
+        expect(DELTA_PLACEHOLDER_TABLE).toBe("__lunora__");
     });
 });

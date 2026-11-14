@@ -20,6 +20,9 @@ const executorFor = (database: DatabaseSync): SqlExecutor => {
 let database: DatabaseSync;
 let executor: SqlExecutor;
 
+const SET_PASSWORD_PATH = "/api/auth/admin/set-user-password"; // secret-scanner:allow -- endpoint path or event name, not a credential
+const NEW_PASSWORD = "correct-horse-42";
+
 describe("auth audit trail", () => {
     beforeEach(() => {
         database = new DatabaseSync(":memory:");
@@ -513,11 +516,155 @@ describe("auth audit trail", () => {
             expect(entry?.targetEmail).toBe("victim@example.com");
         });
 
+        it("records a phone-code sign-in as sign-in, and an attached number as phone-verification", () => {
+            expect.assertions(2);
+
+            expect(
+                buildAuditEntry({
+                    body: { code: "123456", phoneNumber: "+15550100" },
+                    context: { returned: { token: "session_token", status: true } },
+                    path: "/api/auth/phone-number/verify",
+                })?.event,
+            ).toBe("sign-in");
+            expect(
+                buildAuditEntry({ body: { code: "123456", phoneNumber: "+15550100", updatePhoneNumber: true }, path: "/api/auth/phone-number/verify" })?.event,
+            ).toBe("phone-verification");
+        });
+
+        it("skips a device poll that is still waiting for approval, and records a terminal device error as a failed sign-in", () => {
+            expect.assertions(3);
+
+            const pending = Object.assign(new Error("pending"), { body: { error: "authorization_pending" } });
+            const expired = Object.assign(new Error("expired"), { body: { error: "expired_token" } });
+
+            expect(buildAuditEntry({ context: { returned: pending }, path: "/api/auth/device/token" })).toBeUndefined();
+            expect(buildAuditEntry({ context: { returned: expired }, path: "/api/auth/device/token" })?.outcome).toBe("failure");
+            expect(buildAuditEntry({ context: { returned: { access_token: "t" } }, path: "/api/auth/device/token" })?.event).toBe("sign-in");
+        });
+
+        it("records a deletion that only sends a confirmation link as user-delete-request, and the removal as user-delete", () => {
+            expect.assertions(2);
+
+            expect(
+                buildAuditEntry({ context: { returned: { message: "Verification email sent", success: true } }, path: "/api/auth/delete-user" })?.event,
+            ).toBe("user-delete-request");
+            expect(buildAuditEntry({ context: { returned: { message: "User deleted", success: true } }, path: "/api/auth/delete-user" })?.event).toBe(
+                "user-delete",
+            );
+        });
+
+        it("records a passkey rename as passkey-rename, without its request body", () => {
+            expect.assertions(2);
+
+            const entry = buildAuditEntry({ body: { id: "pk_1", name: "Work laptop" }, path: "/api/auth/passkey/update-passkey" });
+
+            expect(entry?.event).toBe("passkey-rename");
+            expect(entry?.detail).toStrictEqual({ path: "/api/auth/passkey/update-passkey" });
+        });
+
+        it("names the key a key-management row is about, and never copies the key secret", () => {
+            expect.assertions(3);
+
+            expect(buildAuditEntry({ body: { keyId: "key_1", name: "ci" }, path: "/api/auth/api-key/update" })?.detail).toMatchObject({ keyId: "key_1" });
+            expect(buildAuditEntry({ body: { keyId: "key_2" }, path: "/api/auth/api-key/delete" })?.detail).toMatchObject({ keyId: "key_2" });
+
+            const created = buildAuditEntry({ context: { returned: { id: "key_3", key: "sk_live_secret" } }, path: "/api/auth/api-key/create" });
+
+            expect(created?.detail).toMatchObject({ keyId: "key_3" });
+        });
+
         it("skips non-security endpoints (returns undefined)", () => {
             expect.assertions(2);
 
             expect(buildAuditEntry({ path: "/api/auth/get-session" })).toBeUndefined();
             expect(buildAuditEntry({ path: undefined })).toBeUndefined();
+        });
+
+        it("records the impersonated user's id on an admin action, and never other body fields", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ body: { userId: "user_42" }, path: "/api/auth/admin/impersonate-user" })?.detail).toStrictEqual({
+                path: "/api/auth/admin/impersonate-user",
+                targetUserId: "user_42",
+            });
+            expect(buildAuditEntry({ body: { newPassword: NEW_PASSWORD, userId: "user_42" }, path: SET_PASSWORD_PATH })?.detail).toStrictEqual({
+                path: SET_PASSWORD_PATH,
+                targetUserId: "user_42",
+            });
+        });
+
+        it("records the created account's id on create-user, from the response, not the body", () => {
+            expect.assertions(1);
+
+            const entry = buildAuditEntry({
+                body: { email: "new@example.com", password: NEW_PASSWORD },
+                context: { returned: { user: { email: "new@example.com", id: "user_new" } } },
+                path: "/api/auth/admin/create-user",
+            });
+
+            expect(entry?.detail).toStrictEqual({ path: "/api/auth/admin/create-user", targetUserId: "user_new" });
+        });
+
+        it("records the impersonated user's id on stop-impersonating, from the session being ended", () => {
+            expect.assertions(1);
+
+            const entry = buildAuditEntry({
+                context: { session: { session: { userId: "user_target" }, user: { id: "user_target" } } },
+                path: "/api/auth/admin/stop-impersonating",
+            });
+
+            expect(entry?.detail).toStrictEqual({ path: "/api/auth/admin/stop-impersonating", targetUserId: "user_target" });
+        });
+
+        it("names the administrator as actor when impersonation ends, and the impersonated user as target", () => {
+            expect.assertions(2);
+
+            const entry = buildAuditEntry({
+                context: {
+                    session: { session: { impersonatedBy: "admin_1", userId: "user_target" }, user: { email: "target@example.com", id: "user_target" } },
+                },
+                path: "/api/auth/admin/stop-impersonating",
+            });
+
+            expect(entry).toMatchObject({ actorId: "admin_1", detail: { targetUserId: "user_target" } });
+            expect(entry?.actorEmail).toBeUndefined();
+        });
+
+        it("names the administrator as actor when impersonation starts, not the new impersonated session's user", () => {
+            expect.assertions(1);
+
+            const entry = buildAuditEntry({
+                body: { userId: "user_target" },
+                context: {
+                    newSession: { session: { impersonatedBy: "admin_1", userId: "user_target" }, user: { id: "user_target" } },
+                },
+                path: "/api/auth/admin/impersonate-user",
+            });
+
+            expect(entry?.actorId).toBe("admin_1");
+        });
+
+        it("classifies an OAuth token refresh as token-refresh, and an initial grant as issuance", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ body: { grant_type: "refresh_token" }, path: "/api/auth/oauth2/token" })?.event).toBe("token-refresh");
+            expect(buildAuditEntry({ body: { grant_type: "authorization_code" }, path: "/api/auth/oauth2/token" })?.event).toBe("oauth-token-issue");
+        });
+
+        it("does not add targetUserId to a non-admin event", () => {
+            expect.assertions(1);
+
+            expect(buildAuditEntry({ body: { userId: "x" }, path: "/api/auth/sign-out" })?.detail).toStrictEqual({ path: "/api/auth/sign-out" });
+        });
+
+        it("keeps targetUserId through redaction on a persisted admin row", async () => {
+            expect.assertions(1);
+
+            await appendAuthAuditEntry(executor, buildAuditEntry({ body: { userId: "user_42" }, path: "/api/auth/admin/ban-user" })!);
+
+            const rows = await readAuthAuditLog(executor);
+
+            expect(rows[0]?.detail).toStrictEqual(expect.objectContaining({ targetUserId: "user_42" }));
         });
 
         it("extracts actor, IP and User-Agent from the request + fresh session", () => {
@@ -571,6 +718,54 @@ describe("auth audit trail", () => {
 
             expect(row?.event).toBe("sign-in");
             expect(row?.userAgent).toBe("UA");
+        });
+
+        it("records allow-listed ids for an organization change, and nothing else from the body", () => {
+            expect.hasAssertions();
+
+            const entry = buildAuditEntry({
+                body: { email: "invitee@example.com", organizationId: "org_1", role: "admin" },
+                method: "POST",
+                path: "/api/auth/organization/invite-member",
+            });
+
+            expect(entry?.event).toBe("org-invitation-create");
+            expect(entry?.detail).toStrictEqual({ organizationId: "org_1", path: "/api/auth/organization/invite-member" });
+        });
+
+        it("records the SCIM resource id from the path params on a SCIM write", () => {
+            expect.hasAssertions();
+
+            const entry = buildAuditEntry({ method: "DELETE", params: { userId: "scim-u-1" }, path: "/scim/v2/Users/:userId" });
+
+            expect(entry?.event).toBe("scim-user-delete");
+            expect(entry?.detail).toStrictEqual({ path: "/scim/v2/Users/:userId", scimUserId: "scim-u-1" });
+        });
+
+        it("records the client id on an OAuth client operation and never a secret-shaped param", () => {
+            expect.hasAssertions();
+
+            const entry = buildAuditEntry({
+                body: { client_id: "c-1" },
+                method: "POST",
+                params: { token: "t-should-not-appear" },
+                path: "/oauth2/client/rotate-secret",
+            });
+
+            expect(entry?.detail).toStrictEqual({ clientId: "c-1", path: "/oauth2/client/rotate-secret" });
+        });
+
+        it("does not treat an oauth admin event as an admin-user event", () => {
+            expect.hasAssertions();
+
+            const entry = buildAuditEntry({
+                body: { userId: "u-9" },
+                method: "POST",
+                path: "/admin/oauth2/create-client",
+            });
+
+            expect(entry?.event).toBe("oauth-client-create");
+            expect(entry?.detail).not.toHaveProperty("targetUserId");
         });
     });
 

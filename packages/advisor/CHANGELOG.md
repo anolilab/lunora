@@ -1,3 +1,28 @@
+## @lunora/advisor [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.294...@lunora/advisor@1.0.0-alpha.295) (2026-11-14)
+
+- fix(codegen): scope kv, storage and container keys by identity only (#1588)
+
+## @lunora/advisor [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.293...@lunora/advisor@1.0.0-alpha.294) (2026-11-14)
+
+- feat(advisor): suppress one finding at one site with an inline directive (#1587)
+
+## @lunora/advisor [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.292...@lunora/advisor@1.0.0-alpha.293) (2026-11-14)
+
+- feat(advisor): report source locations on schema and config findings (#1586)
+
+## @lunora/advisor [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.291...@lunora/advisor@1.0.0-alpha.292) (2026-11-14)
+
+- feat(advisor): report declaration file and line on declaration findings (#1584)
+
+## @lunora/advisor [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.290...@lunora/advisor@1.0.0-alpha.291) (2026-11-14)
+
+- fix(codegen): follow sql text through consts and casts for sql_injection_risk (#1565)
+- fix: land five small audit fixes (#1538)
+- fix(codegen): see ctx.db facade writes in the identity and insert feeders (#1566)
+- fix(advisor): isolate a throwing lint in runAdvisor (#1564)
+- fix(studio): stop reporting unstampable indexes as dead (#1576)
+- fix(codegen): fold numeric duration arithmetic for expiry and tolerance lints (#1577)
+
 ## @lunora/advisor [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/advisor@1.0.0-alpha.289...@lunora/advisor@1.0.0-alpha.290) (2026-11-07)
 
 - feat(notify): forward FCM platform fields, add topic sends (#1505)

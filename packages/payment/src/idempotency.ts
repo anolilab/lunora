@@ -45,8 +45,9 @@
  *
  * **A key is stable for the logical OPERATION, not fresh per attempt**, and changes when the
  * operation does: captures and refunds key on their amount, a subscription cancel on its mode and the
- * row's `updatedAt`. Plan changes and resumes derive no key (they set absolute state, so a retry is a
- * no-op). Every key the facade forwards is hashed and namespaced to the object it acts on, a
+ * row's `updatedAt`. A plan change or resume with a caller key is claimed in the events store before the
+ * provider is called, and a retry under a claimed key is refused, not forwarded: the provider's window is
+ * not reliable for proration. Every key the facade forwards is hashed and namespaced to the object it acts on, a
  * caller-supplied one included, so one tenant's key never claims another's.
  */
 import type { Money, ProviderId } from "./types";

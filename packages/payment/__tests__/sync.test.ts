@@ -1242,4 +1242,37 @@ describe("applyWebhookAction on a value the store cannot hold", () => {
             "database unavailable",
         );
     });
+
+    it.each(["subscription.past_due", "subscription.paused"] as const)(
+        "merges a same-status %s update instead of dropping it, and advances lastEventAt (regression)",
+        async (type) => {
+            expect.assertions(5);
+
+            const store = new MemoryPaymentStore();
+            const event = { provider: "stripe", referenceId: "user_1", subscriptionId: "sub_1" } as const;
+
+            await expect(applyWebhookAction(store, { ...event, eventId: "e1", occurredAt: 1000, quantity: 1, type })).resolves.toEqual({
+                applied: true,
+                reason: "ok",
+            });
+            await expect(applyWebhookAction(store, { ...event, cancelAtPeriodEnd: true, eventId: "e2", occurredAt: 2000, quantity: 3, type })).resolves.toEqual(
+                { applied: true, reason: "ok" },
+            );
+            await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({
+                cancelAtPeriodEnd: true,
+                lastEventAt: 2000,
+                quantity: 3,
+                state: type === "subscription.past_due" ? "past_due" : "paused",
+            });
+
+            // A delayed older `active` must not re-entitle the row the newer update already moved.
+            await expect(applyWebhookAction(store, { ...event, eventId: "e3", occurredAt: 1500, type: "subscription.active" })).resolves.toEqual({
+                applied: false,
+                reason: "stale",
+            });
+            await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({
+                state: type === "subscription.past_due" ? "past_due" : "paused",
+            });
+        },
+    );
 });

@@ -29,6 +29,14 @@ describe("discoverBrowserUrlAccesses", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
+    it("ignores a URL pinned to a server-trusted origin (the broader ctx check still applies)", () => {
+        expect.assertions(1);
+
+        write("pinned.ts", `export const grab = action(async ({ ctx, args }) => { return ctx.browser.screenshot(\`\${ctx.env.ORIGIN}/\${args.path}\`); });`);
+
+        expect(discoverBrowserUrlAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("flags a direct ctx.browser.screenshot(args.url)", () => {
         expect.assertions(2);
 

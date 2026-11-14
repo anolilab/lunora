@@ -62,6 +62,42 @@ describe("discoverSoftDeleteReads", () => {
         expect(rowFor("listHopped")).toMatchObject({ fromArgs: true, hardcodedTrue: false, table: "posts" });
     });
 
+    it("records a shorthand { includeDeleted } wired from an args destructure", () => {
+        expect.assertions(1);
+
+        write("shorthand.ts", `export const listShorthand = query(async ({ args: { includeDeleted }, ctx }) => ctx.db.posts.findMany({ includeDeleted }));`);
+
+        expect(rowFor("listShorthand")).toMatchObject({ fromArgs: true, hardcodedTrue: false, table: "posts" });
+    });
+
+    it("records a shorthand { includeDeleted } reached through a body-level args destructure", () => {
+        expect.assertions(1);
+
+        write(
+            "shorthand-hop.ts",
+            `export const listDestructured = query(async ({ args, ctx }) => {
+                const { includeDeleted } = args;
+                return ctx.db.posts.findMany({ includeDeleted });
+            });`,
+        );
+
+        expect(rowFor("listDestructured")).toMatchObject({ fromArgs: true, hardcodedTrue: false, table: "posts" });
+    });
+
+    it("skips a shorthand { includeDeleted } bound to a literal false", () => {
+        expect.assertions(1);
+
+        write(
+            "shorthand-false.ts",
+            `export const listLiveShorthand = query(async ({ ctx }) => {
+                const includeDeleted = false;
+                return ctx.db.posts.findMany({ includeDeleted });
+            });`,
+        );
+
+        expect(discoverSoftDeleteReads(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("reads the table from the table-arg read form", () => {
         expect.assertions(1);
 

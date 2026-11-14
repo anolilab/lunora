@@ -499,14 +499,22 @@ export const createAutumnAdapter = (options: AutumnAdapterOptions): PaymentAdapt
             const client = await loadClient();
 
             const { customerId, productId } = parseAutumnSubscriptionId(subscriptionId);
-            const targetProduct = patch.priceId ?? productId;
 
-            // A plan change is an `attach` of the new product. Autumn keys prepaid quantity by feature,
-            // so a bare `quantity` patch has no direct attach mapping; re-read Autumn's authoritative
-            // subscription (its real state AND quantity) instead of fabricating `quantity: 1` / `active`.
-            await client.billing.attach({ customerId, planId: targetProduct });
+            // Autumn keys prepaid quantity by feature, so a seat count has no attach mapping here. Refuse it:
+            // `billing.attach` would ignore it and the caller would be told a seat change succeeded.
+            if (patch.quantity !== undefined) {
+                throw new LunoraPaymentError("VALIDATION_ERROR", "autumn: a seat count cannot be changed through updateSubscription");
+            }
 
-            return readSubscription(client, customerId, targetProduct);
+            // Only a different product is a plan change. An empty or same-plan patch is a no-op, and
+            // `billing.attach` is a charge-capable call, so it must not run for one.
+            if (patch.priceId === undefined || patch.priceId === productId) {
+                return readSubscription(client, customerId, productId);
+            }
+
+            await client.billing.attach({ customerId, planId: patch.priceId });
+
+            return readSubscription(client, customerId, patch.priceId);
         },
     };
 };

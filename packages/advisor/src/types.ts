@@ -40,7 +40,7 @@ import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
-import type { AdvisorQueue } from "./queues";
+import type { AdvisorQueue, AdvisorTopic } from "./queues";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
 import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 import type { AdvisorRawRowReturn } from "./raw-row-returns";
@@ -121,6 +121,20 @@ export interface Finding {
     name: string;
     /** How to fix it — a doc URL or short imperative guidance. */
     remediation: string;
+
+    /**
+     * Set when an inline `// lunora-advisor-exempt <rule> -- <reason>` directive
+     * accepts this finding. The finding stays in the list so every surface can show
+     * it and its reason, but the gate, the health map and the blocking check ignore it.
+     */
+    suppressed?: {
+        /** The directive's site, relative to the project root. */
+        file: string;
+        /** 1-based line of the directive. */
+        line: number;
+        /** The directive's trimmed reason, required to be non-empty. */
+        reason: string;
+    };
     /** Short headline for the finding. */
     title: string;
 }
@@ -736,6 +750,11 @@ export interface LintContext {
      * absent for runtime callers.
      */
     tableWrites?: ReadonlyArray<AdvisorTableWrite>;
+
+    /**
+     * Topics declared via `defineTopic` exports in `lunora/queues.ts`. The lint that reports a topic's subscription count reads its declaration site; absent for runtime callers.
+     */
+    topics?: ReadonlyArray<AdvisorTopic>;
 
     /**
      * Literal-infinite loops (`while (true)`, `for (;;)`, `do … while (true)`)

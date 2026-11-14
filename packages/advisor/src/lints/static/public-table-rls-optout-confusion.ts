@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { ownershipOrPiiColumns } from "../helpers";
+import { declarationSiteFields, ownershipOrPiiColumns } from "../helpers";
 
 /**
  * Flags a `.public()` table that carries ownership/tenancy- or PII-named
@@ -57,7 +57,7 @@ const publicTableRlsOptoutConfusion: Lint = {
                 emit(publicTableRlsOptoutConfusion, {
                     cacheKey: `public_table_rls_optout_confusion:${table.name}`,
                     detail: `Table "${table.name}" is \`.public()\` (opted OUT of the schema's \`.rls("required")\` enforcement) but carries ownership/PII-shaped column(s): ${flaggedColumns.join(", ")}. \`.public()\` means "exempt from RLS", not "safe to expose" — confirm this table really needs the opt-out.`,
-                    metadata: { columns: flaggedColumns, table: table.name },
+                    metadata: { ...declarationSiteFields(table), columns: flaggedColumns, table: table.name },
                 }),
             );
         }
