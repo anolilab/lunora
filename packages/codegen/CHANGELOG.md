@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.416](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.415...@lunora/codegen@1.0.0-alpha.416) (2026-11-14)
+
+- fix(codegen): scope kv, storage and container keys by identity only (#1588)
+
 ## @lunora/codegen [1.0.0-alpha.415](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.414...@lunora/codegen@1.0.0-alpha.415) (2026-11-14)
 
 - feat(advisor): suppress one finding at one site with an inline directive (#1587)
