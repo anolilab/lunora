@@ -38,7 +38,10 @@ const reportCodegenFindings = (result: Pick<CodegenResult, "advisories" | "platf
     for (const advisory of result.advisories) {
         const line = advisoryLine(advisory.level, advisory.name, advisory.detail, advisory.remediation);
 
-        if (advisory.level === "ERROR") {
+        // An inline directive accepted it, so it does not block; print the reason as the CLI does.
+        if (advisory.suppressed !== undefined) {
+            logger.warn(`${line} (suppressed: ${advisory.suppressed.reason})`);
+        } else if (advisory.level === "ERROR") {
             logger.error(line);
         } else {
             logger.warn(line);

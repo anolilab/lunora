@@ -286,8 +286,12 @@ The directive is `// lunora-advisor-exempt <rule> -- <reason>` on its own line.
   reported in the same file, and its reported line falls inside that node's line
   span. A directive never matches by rule alone, by file alone, or by procedure,
   and it does not reach the statement below the one it sits above.
+- **Where it is read.** Files under `lunora/`, the worker entry and the root
+  `lunora.config.*`. Only a `//` line comment is a directive; the same text inside
+  a block comment or a string is not.
 - **`wrangler.jsonc`.** The same `//` comment above a key accepts findings of the
-  named rule for that key only. `plaintext_secret_in_wrangler_vars` is the rule
+  named rule for that key only, the first key when a line holds several. A
+  project whose config is `wrangler.json` uses the same form there. `plaintext_secret_in_wrangler_vars` is the rule
   that reports a plaintext secret in `vars`; the directive is then
   `// lunora-advisor-exempt plaintext_secret_in_wrangler_vars -- <reason>`.
 - **Reason.** A directive with an empty reason suppresses nothing.
@@ -295,7 +299,8 @@ The directive is `// lunora-advisor-exempt <rule> -- <reason>` on its own line.
   for a directive that cannot apply: no reason, an unknown rule id, a runtime
   lint, or a rule that reports no source location. `advisor_suppression_unused`
   fires for a valid directive that matches no finding, so a stale one gets
-  removed. Both name the directive's file and line. They are not lints, so they
+  removed. Both name the directive's file and line, and `advisor.minSeverity`
+  applies to them as to any WARN. They are not lints, so they
   have no row in the tables above.
 - **Gate.** The ERROR gate on `lunora codegen` and `lunora deploy` ignores a
   suppressed finding. An unsuppressed ERROR still blocks, even when a suppressed

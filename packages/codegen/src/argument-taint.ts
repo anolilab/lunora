@@ -262,7 +262,18 @@ const invokedBy = (chain: TsNode): CallExpression | undefined => {
  * row it returns is whichever one the caller pointed at, so a key read off it is
  * caller-chosen.
  */
+/** The `ctx.db` methods that read rows; a write returns whatever it wrote, so its arguments do not bind the row to anyone. */
+const DB_READ_METHODS: ReadonlySet<string> = new Set(["find", "findFirst", "findMany", "findUnique", "first", "get", "unique"]);
+
+/** Whether `call` invokes a `ctx.db` row read (`ctx.db.files.findFirst(…)`, `ctx.db.get(…)`), not a write. */
+const isDatabaseReadCall = (call: CallExpression): boolean => {
+    const callee = call.getExpression();
+
+    return Node.isPropertyAccessExpression(callee) && DB_READ_METHODS.has(callee.getName()) && contextTrustPathOf(callee)?.[0] === "db";
+};
+
 const isIdentityBoundRead = (call: CallExpression): boolean =>
+    isDatabaseReadCall(call) &&
     call.getArguments().some((argument) =>
         valueIdentifiersOf(argument).some((identifier) => {
             if (contextTrustPathOf(outermostChainOf(identifier))?.[0] === "auth") {
@@ -289,8 +300,9 @@ const referencesScopedKeySource = (node: TsNode): boolean =>
         const outermost = outermostChainOf(identifier);
         const root = contextTrustPathOf(outermost)?.[0];
 
+        // Inside a `ctx.db` call's arguments the identity only scopes the key through that call, judged below.
         if (root === "auth") {
-            return true;
+            return !identifier.getAncestors().some((ancestor) => Node.isCallExpression(ancestor) && contextTrustPathOf(ancestor.getExpression())?.[0] === "db");
         }
 
         const call = root === "db" ? invokedBy(outermost) : undefined;
@@ -733,11 +745,11 @@ export const referencesArgs = (node: TsNode): boolean => referencesBinding(node,
 /**
  * When `node` is a bare identifier bound by a `const key = args.key` (or by a
  * destructure such as `const { key } = args`) in the enclosing handler, return that
- * initializer so a *single* extra hop of taint can be checked (`const key = args.key;
+ * declaration so a *single* extra hop of taint can be checked (`const key = args.key;
  * … key`); otherwise `undefined`. Only same-function declarations are followed — the
  * taint stays deliberately single-hop.
  */
-export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
+export const singleHopDeclaration = (node: TsNode): VariableDeclaration | undefined => {
     if (!Node.isIdentifier(node)) {
         return undefined;
     }
@@ -758,8 +770,10 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
     // predicate report MORE, which fails open. The project does carry a type
     // checker, and a predicate that SILENCES on a match must use it instead, as
     // the owner-field feeder does for mutator impls (`implTaintOf`).
+    // A declaration inside a nested function is out of scope at this use, so it cannot be its source.
     const usePosition = node.getStart();
-    let nearest: TsNode | undefined;
+    const ancestors = new Set(node.getAncestors());
+    let nearest: VariableDeclaration | undefined;
     let nearestPosition = -1;
 
     for (const variable of descendantsOfKind(enclosingFunction, SyntaxKind.VariableDeclaration)) {
@@ -767,17 +781,27 @@ export const singleHopInitializer = (node: TsNode): TsNode | undefined => {
             continue;
         }
 
-        const initializer = variable.getInitializer();
+        const scope = variable.getFirstAncestor(
+            (ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isFunctionDeclaration(ancestor),
+        );
         const declarationPosition = variable.getStart();
 
-        if (initializer !== undefined && declarationPosition < usePosition && declarationPosition > nearestPosition) {
-            nearest = initializer;
+        if (
+            variable.getInitializer() !== undefined &&
+            (scope === undefined || ancestors.has(scope)) &&
+            declarationPosition < usePosition &&
+            declarationPosition > nearestPosition
+        ) {
+            nearest = variable;
             nearestPosition = declarationPosition;
         }
     }
 
     return nearest;
 };
+
+/** The initializer of {@link singleHopDeclaration}, the value one hop back from `node`. */
+export const singleHopInitializer = (node: TsNode): TsNode | undefined => singleHopDeclaration(node)?.getInitializer();
 
 /**
  * True when `expression` is derived from the handler's `args` — directly (`args.x`,
