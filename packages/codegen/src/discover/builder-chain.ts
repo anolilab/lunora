@@ -1,7 +1,7 @@
 import type { CallExpression, Node } from "ts-morph";
 import { Node as TsNode } from "ts-morph";
 
-import { isConstDeclaration, unwrapExpression } from "./ast";
+import { isConstDeclaration, symbolConstInitializer, unwrapExpression } from "./ast";
 import { resolvesToImportedName } from "./callee";
 
 /** One `.method(...)` step of a builder chain, in terminal-to-root order. */
@@ -107,8 +107,9 @@ const resolveUseArgumentCall = (argument: Node): CallExpression | undefined => {
         return undefined;
     }
 
-    const declaration = argument.getSourceFile().getVariableDeclaration(argument.getText());
-    const initializer = declaration?.getInitializer();
+    // Through the identifier's own binding, and only a module `const`: a `let` can be rebound
+    // after its initializer ran, and a same-named local can shadow the module binding.
+    const initializer = unwrapExpression(symbolConstInitializer(argument.getSymbol()));
 
     return initializer && TsNode.isCallExpression(initializer) ? initializer : undefined;
 };

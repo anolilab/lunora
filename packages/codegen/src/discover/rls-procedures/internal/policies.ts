@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { isConstDeclaration, unwrapExpression } from "../../ast";
+import { symbolConstInitializer, unwrapExpression } from "../../ast";
 import { resolvesToImportedName } from "../../callee";
 
 /**
@@ -16,15 +16,14 @@ const onePlaceHop = (node: TsNode | undefined): TsNode | undefined => {
         return unwrapped;
     }
 
-    const declaration = unwrapped.getSourceFile().getVariableDeclaration(unwrapped.getText());
-
-    return isConstDeclaration(declaration) ? unwrapExpression(declaration.getInitializer()) : undefined;
+    // Through the identifier's own binding, so a same-named `const` in another scope is not read.
+    return unwrapExpression(symbolConstInitializer(unwrapped.getSymbol()));
 };
 
 /** The argument of a `definePolicies(<x>)` call; any other node is returned as is. */
 const unwrapDefinePolicies = (node: TsNode | undefined): TsNode | undefined => {
     if (node && Node.isCallExpression(node) && resolvesToImportedName(node.getExpression(), "definePolicies")) {
-        return node.getArguments()[0];
+        return onePlaceHop(node.getArguments()[0]);
     }
 
     return node;
@@ -37,7 +36,7 @@ const policyObjectOf = (node: TsNode | undefined): ObjectLiteralExpression | und
     }
 
     if (node && Node.isCallExpression(node) && resolvesToImportedName(node.getExpression(), "definePolicy")) {
-        const argument = unwrapExpression(node.getArguments()[0]);
+        const argument = onePlaceHop(node.getArguments()[0]);
 
         return argument && Node.isObjectLiteralExpression(argument) ? argument : undefined;
     }

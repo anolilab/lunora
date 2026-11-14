@@ -89,6 +89,9 @@ const DEFINED = `${PREAMBLE}
 
     const one = definePolicy({ on: "read", table: "notes", when: () => true });
     export const single = c.query.use(rls(definePolicies([one]))).query(async () => []);
+
+    const list = [definePolicy({ on: "update", table: "posts", when: () => true })];
+    export const listed = c.query.use(rls(definePolicies(list))).query(async () => []);
 `;
 
 let workdir: string;
@@ -118,6 +121,14 @@ describe("discoverRlsMetadata", () => {
         expect(policies).toContainEqual({ file: "defined", on: "insert", procedure: "q", table: "posts" });
         // A single policy held in a `const` and listed inline.
         expect(policies).toContainEqual({ file: "defined", on: "read", procedure: "single", table: "notes" });
+    });
+
+    it("reads a `const` list handed to definePolicies by name", () => {
+        expect.assertions(1);
+
+        const { policies } = discoverRlsMetadata(project, join(workdir, "lunora"));
+
+        expect(policies).toContainEqual({ file: "defined", on: "update", procedure: "listed", table: "posts" });
     });
 
     it("extracts each policy's table + operation and the declaring procedure", () => {

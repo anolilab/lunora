@@ -533,6 +533,18 @@ const ALIASED_RATE_LIMITED = `${PREAMBLE}
         });
 `;
 
+/** A `let` middleware alias rebound before `.use(...)`: the chain installs the later value, not `rateLimit`. */
+const REASSIGNED_LET_ALIAS = `${PREAMBLE}
+    let guard = rateLimit({ limit: 5 });
+    guard = verifyTurnstileMiddleware();
+
+    export const send = c.mutation
+        .use(guard)
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("messages", {});
+        });
+`;
+
 /** A `const` base builder carrying `.use(rateLimit())`, then a procedure built on it. */
 const CONST_BASE_RATE_LIMITED = `${PREAMBLE}
     const guarded = c.mutation.use(rateLimit({ limit: 5 }));
@@ -1015,6 +1027,16 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "send", usesCaptcha: false, usesRateLimit: true });
+    });
+
+    it("does not credit a rate limit through a `let` alias that is rebound before `.use(...)`", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "send.ts"), REASSIGNED_LET_ALIAS, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "send", usesRateLimit: false });
     });
 
     it("follows a `const` base builder carrying `.use(rateLimit())` into the procedures built on it", () => {
