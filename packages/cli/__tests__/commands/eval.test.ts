@@ -164,7 +164,7 @@ describe("lunora eval", () => {
     });
 
     it("fails an eval whose run resolves without a finite average, and still renders the table", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const { logger } = recordingLogger();
         const cwd = join(fixtureRoot, "eval-nan-average-sample");
@@ -172,10 +172,12 @@ describe("lunora eval", () => {
         const result = await runEvalCommand({ cwd, logger });
         const nan = result.evals.find((entry) => entry.name === "nan");
         const missing = result.evals.find((entry) => entry.name === "missing");
+        const noItems = result.evals.find((entry) => entry.name === "no-items");
 
         expect(result.code).toBe(1);
         expect(nan?.error).toContain("average");
         expect(missing?.error).toContain("average");
+        expect(noItems?.error).toContain("`items` array");
         expect(result.evals.every((entry) => !entry.passed)).toBe(true);
     });
 
