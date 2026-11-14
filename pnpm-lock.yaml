@@ -1080,7 +1080,7 @@ overrides:
   svgo@>=4.0.0 <4.0.2: ^4.1.0
   tar@<=7.5.20: ^7.5.21
   tmp@<0.2.6: ^0.2.6
-  toml@<4.2.0: ^4.2.0
+  toml@<5.0.1: ^5.0.1
   undici@<6.27.0: ^6.28.1
   undici@>=7.0.0 <7.29.0: ^7.29.1
   undici@>=8.0.0 <8.10.2: ^8.10.2
@@ -25126,6 +25126,7 @@ packages:
 
   tldts-core@7.4.20:
     resolution: {integrity: sha512-C630TWXZCZmLq0F2bW4QqwnaaxCQ/svpAqvJwnC4JvgEM5ohhBnGsEzTLSOXcN+xjz+kEaHS5uoWIw2klnqd0A==}
+    deprecated: Partial release, see https://github.com/remusao/tldts/issues/2735. Use >=7.4.22.
 
   tldts@7.4.19:
     resolution: {integrity: sha512-48dH6aSpQnpbzDUc4vIQZ1VjB8tkK+e8c1yx05/SZK+rkssgjEOlxDd/yU8/a4vGYQ9vRgJr9dwMq9TJ0b3X2Q==}
@@ -25161,8 +25162,8 @@ packages:
     resolution: {integrity: sha512-A5F0cM6+mDleacLIEUkmfpkBbnHJFV1d2rprHU2MXNk7mlxHq2zGojA+SRvQD1RoMo9gqjZPWEaKG4v1BQ48lw==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  toml@4.3.0:
-    resolution: {integrity: sha512-lVb8X9BsPVuH0M4BKeS91tXAmJvCjQ5UIyAbQFaxkKGyUFK2RPkhwaFSQH8vbpl1d23eu/IBH+dwVMHWaq9A5A==}
+  toml@5.0.1:
+    resolution: {integrity: sha512-EqYNA/YvUNndrA2B3O2ojzLQoTQrBxeZ9UIjQwk8t10oe6n7dwclBwd9IdZQTOKwe6vWX+AXtl6IntXRbepdxQ==}
     engines: {node: '>=20'}
 
   tomlify-j0.4@3.0.0:
@@ -30654,7 +30655,7 @@ snapshots:
       resolve: 2.0.0-next.7
       semver: 7.8.5
       tmp-promise: 3.0.3
-      toml: 4.3.0
+      toml: 5.0.1
       unixify: 1.0.0
       urlpattern-polyfill: 8.0.2
       yargs: 17.7.2
@@ -49156,7 +49157,7 @@ snapshots:
     dependencies:
       eslint-visitor-keys: 5.0.1
 
-  toml@4.3.0: {}
+  toml@5.0.1: {}
 
   tomlify-j0.4@3.0.0: {}
 

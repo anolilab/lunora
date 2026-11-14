@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.496](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.495...@lunora/cli@1.0.0-alpha.496) (2026-11-14)
+
+- feat(advisor): suppress one finding at one site with an inline directive (#1587)
+
 ## @lunora/cli [1.0.0-alpha.495](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.494...@lunora/cli@1.0.0-alpha.495) (2026-11-14)
 
 - fix(cli): refuse convex values the import would change (#1585)

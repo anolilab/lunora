@@ -126,6 +126,58 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("ignores an identity-prefixed key read inside a db write's arguments", () => {
+        expect.assertions(1);
+
+        write(
+            "nested-in-write.ts",
+            `export const save = mutation(async ({ ctx, args }) => { await ctx.db.patch(args.id, { v: await ctx.kv.get(\`\${ctx.auth.userId}:\${args.k}\`) }); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a key read off a row whose owner filter only falls back to the caller", () => {
+        expect.assertions(1);
+
+        write(
+            "owner-fallback.ts",
+            `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.files.findFirst({ where: { ownerId: args.ownerId ?? ctx.auth.userId } }); return ctx.kv.get(row.key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a caller key composed with an identity local passed into a db write", () => {
+        expect.assertions(1);
+
+        write(
+            "write-local.ts",
+            `export const save = mutation(async ({ ctx, args }) => { const actorId = ctx.auth.userId; return ctx.kv.get(\`\${args.key}:\${await ctx.db.patch(args.id, { actorId })}\`); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a caller key that only falls back to an identity local", () => {
+        expect.assertions(1);
+
+        write("local-fallback.ts", `export const read = query(async ({ ctx, args }) => { const uid = ctx.auth.userId; return ctx.kv.get(args.key ?? uid); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a caller key that only falls back to a key read off an owned row", () => {
+        expect.assertions(1);
+
+        write(
+            "row-fallback.ts",
+            `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(args.key ?? (await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } })).key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("ignores a key read off an owned row through findFirstOrThrow", () => {
         expect.assertions(1);
 
