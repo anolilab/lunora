@@ -679,3 +679,50 @@ describe(otlpTelemetry, () => {
         expect(attribute(ok[0] as CapturedSpan, "gen_ai.usage.input_tokens")).toBe("12");
     });
 });
+
+describe("a rejected OTLP export", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+    });
+
+    it("is reported once per rejection streak, naming the status and host but never the path", async () => {
+        expect.assertions(5);
+
+        const fetchMock = vi.fn<typeof fetch>(async () => new Response("", { status: 401 }));
+
+        vi.stubGlobal("fetch", fetchMock);
+
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const collected: Promise<unknown>[] = [];
+        const telemetry = otlpTelemetry({
+            endpoint: "https://collector.test/secret-path",
+            waitUntil: (promise) => {
+                collected.push(promise);
+            },
+        });
+
+        const exportOnce = async (): Promise<void> => {
+            await runTools(telemetry, 1);
+            telemetry.flush();
+            await Promise.all(collected.splice(0));
+        };
+
+        await exportOnce();
+        await exportOnce();
+
+        const reports = errorSpy.mock.calls.map((call) => call.map(String).join(" "));
+
+        expect(reports).toHaveLength(1);
+        expect(reports[0]).toContain("401");
+        expect(reports[0]).toContain("collector.test");
+        expect(reports[0]).not.toContain("secret-path");
+
+        // A successful export ends the streak, so the next rejection is reported again.
+        fetchMock.mockResolvedValueOnce(new Response("", { status: 200 }));
+        await exportOnce();
+        await exportOnce();
+
+        expect(errorSpy).toHaveBeenCalledTimes(2);
+    });
+});

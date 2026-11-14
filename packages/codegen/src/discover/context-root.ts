@@ -451,5 +451,6 @@ export {
     isContextSurface,
     isHandlerArgsParameter,
     matchesContextReceiver,
+    memberFunctionOf,
     referencesContext,
 };

@@ -20,6 +20,8 @@ const SECRET = "lunora-auth-move-secret-lunora-auth-move-x";
 const INTERNAL_SECRET = "auth-move-internal-secret"; // secret-scanner:allow
 
 interface Harness {
+    /** Every Durable Object fetch the move makes through the namespace double. */
+    fetches: { count: number };
     move: AuthJurisdictionMove;
     source: DatabaseSync;
     target: DatabaseSync;
@@ -29,6 +31,7 @@ interface Harness {
 const harness = (): Harness => {
     const databases = new Map<string, DatabaseSync>();
     const objects = new Map<string, LunoraAuthDO>();
+    const fetches = { count: 0 };
     const objectFor = (name: string): LunoraAuthDO => {
         let object = objects.get(name);
 
@@ -53,7 +56,13 @@ const harness = (): Harness => {
             get: (id) => {
                 const object = objectFor(String(id));
 
-                return { fetch: async (request: Request) => object.fetch(request) };
+                return {
+                    fetch: async (request: Request) => {
+                        fetches.count += 1;
+
+                        return object.fetch(request);
+                    },
+                };
             },
             idFromName: (name) => `${prefix}${name}`,
         };
@@ -70,7 +79,12 @@ const harness = (): Harness => {
     objectFor("auth");
     objectFor("eu:auth");
 
-    return { move: jurisdictionMove, source: databases.get("auth") as DatabaseSync, target: databases.get("eu:auth") as DatabaseSync };
+    return {
+        fetches,
+        move: jurisdictionMove,
+        source: databases.get("auth") as DatabaseSync,
+        target: databases.get("eu:auth") as DatabaseSync,
+    };
 };
 
 const warm = async (object: { move: AuthJurisdictionMove }): Promise<void> => {
@@ -104,6 +118,19 @@ const copyAll = async (move: AuthJurisdictionMove, options?: { force?: boolean }
 };
 
 const count = (database: DatabaseSync, table: string): number => (database.prepare(`SELECT count(*) AS n FROM "${table}"`).get() as { n: number }).n;
+
+/** Past the 16-table mark that the page budget counts against: 20 extra tables with three rows each. */
+const EXTRA_TABLES = Array.from({ length: 20 }, (_, index) => `extra_${String(index + 1).padStart(2, "0")}`);
+
+const addExtraTables = (database: DatabaseSync): void => {
+    for (const name of EXTRA_TABLES) {
+        database.exec(`CREATE TABLE "${name}" ("id" text NOT NULL PRIMARY KEY, "v" text)`);
+
+        for (let row = 0; row < 3; row += 1) {
+            database.prepare(`INSERT INTO "${name}" VALUES (?, ?)`).run(`r${String(row)}`, `v${String(row)}`);
+        }
+    }
+};
 
 describe("auth jurisdiction move (node:sqlite)", () => {
     it("copies, re-runs as a no-op, reconciles later source changes, and purges only once they are carried", async () => {
@@ -166,5 +193,74 @@ describe("auth jurisdiction move (node:sqlite)", () => {
         seed(context.source);
 
         await expect(context.move.purge()).rejects.toMatchObject({ code: "AUTH_MOVE_INCOMPLETE" });
+    });
+
+    it("finishes a copy over 17 or more tables, each call under 50 fetches", async () => {
+        expect.assertions(3);
+
+        const context = harness();
+
+        await warm(context);
+        seed(context.source);
+        addExtraTables(context.source);
+
+        let finished = false;
+        let most = 0;
+
+        for (let call = 0; call < 10 && !finished; call += 1) {
+            context.fetches.count = 0;
+
+            // eslint-disable-next-line no-await-in-loop -- each call resumes where the previous one stopped
+            const result = await context.move.copy();
+
+            most = Math.max(most, context.fetches.count);
+            finished = result.done;
+        }
+
+        const unequal = EXTRA_TABLES.filter((name) => count(context.target, name) !== count(context.source, name));
+
+        expect(finished).toBe(true);
+        expect(most).toBeLessThanOrEqual(50);
+        expect(unequal).toEqual([]);
+    });
+
+    it("re-finishes a finished table that gains exactly one full page, so the purge accepts it", async () => {
+        expect.assertions(2);
+
+        const context = harness();
+
+        await warm(context);
+        seed(context.source);
+        addExtraTables(context.source);
+        await copyAll(context.move);
+
+        // Exactly one page: the first read is a full, non-final page and the second comes back empty.
+        for (let row = 0; row < 100; row += 1) {
+            context.source.prepare(`INSERT INTO "extra_07" VALUES (?, ?)`).run(`page${String(row)}`, "appended");
+        }
+
+        await copyAll(context.move);
+
+        expect(count(context.target, "extra_07")).toBe(count(context.source, "extra_07"));
+        await expect(context.move.purge()).resolves.toMatchObject({ dropped: expect.arrayContaining(["extra_07"]) });
+    });
+
+    it("carries a row appended to a finished table in a single call, without a full re-copy", async () => {
+        expect.assertions(2);
+
+        const context = harness();
+
+        await warm(context);
+        seed(context.source);
+        addExtraTables(context.source);
+        await copyAll(context.move);
+
+        context.source.prepare(`INSERT INTO "extra_07" VALUES (?, ?)`).run("late", "appended");
+        context.fetches.count = 0;
+
+        await context.move.copy();
+
+        expect(context.target.prepare(`SELECT "v" FROM "extra_07" WHERE "id" = 'late'`).get()).toMatchObject({ v: "appended" });
+        expect(context.fetches.count).toBeLessThan(20);
     });
 });

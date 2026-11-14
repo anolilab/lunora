@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MetricEvent } from "../../../shared/metric-event";
+import { DEFAULT_CAPACITY, normalizeCapacity } from "../src/log-buffer";
 import { MetricBuffer, metricSeriesKey } from "../src/metric-buffer";
 
 /** Build a MetricEvent with sensible defaults so each test states only what it exercises. */
@@ -161,5 +162,23 @@ describe("metricBuffer", () => {
 
         expect(buffer.size).toBe(0);
         expect(buffer.entries()).toStrictEqual([]);
+    });
+
+    it.each([0.5, Number.POSITIVE_INFINITY, Number.NaN])("bounds the series count for a capacity of %s", (capacity) => {
+        expect.assertions(1);
+
+        const buffer = new MetricBuffer(capacity);
+
+        for (let index = 0; index < 300; index += 1) {
+            buffer.push(event({ kind: "counter", name: `series.${String(index)}`, ts: index, value: 1 }));
+        }
+
+        expect(buffer.size).toBe(256);
+    });
+
+    it("falls back to the log buffer default for a sub-unit capacity", () => {
+        expect.assertions(1);
+
+        expect(normalizeCapacity(0.5)).toBe(DEFAULT_CAPACITY);
     });
 });

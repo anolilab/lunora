@@ -4,7 +4,8 @@
  * A through relation is only as sound as its join table: the join table must exist, `from` and `to` must be two
  * different required `v.id` columns pointing at the owner and the target, and a unique index over exactly that pair
  * must make a link a single row. Without the index a double `connect` is two rows and every read through the relation
- * returns the target twice. Run by `defineSchema` and again by `mergeSchemaExtension` over the merged set.
+ * returns the target twice. The join table must not be `.softDelete()`: a disconnected link would keep its unique pair,
+ * so it could never be linked again. Run by `defineSchema` and again by `mergeSchemaExtension` over the merged set.
  */
 import { LunoraError } from "@lunora/errors";
 import type { Validator } from "@lunora/values";
@@ -50,6 +51,13 @@ const validateThroughRelation = (tables: Record<string, TableDefinition>, tableN
         throw new LunoraError(
             "INTERNAL",
             `${label} needs a unique index over ("${from}", "${to}") on "${joinName}": ${JSON.stringify(`.index("by_${from}_${to}", ["${from}", "${to}"], { unique: true })`)}. Without it a repeated connect stores the same link twice.`,
+        );
+    }
+
+    if (join.softDeleteMode !== undefined) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${label}: the join table is .softDelete(), so a disconnected pair could never be linked again (the unique index still holds the soft-deleted row). Hard-delete the soft-deleted rows of "${joinName}" first, or those links come back, then remove .softDelete() from it.`,
         );
     }
 };

@@ -246,6 +246,7 @@ export const onFollowerSubscriptionData = (
 
     state.valueReceived = true;
     commitDataFrame(state, data, cursor === undefined ? { claims } : { claims, cursor, epoch });
+    state.refusal = undefined;
 
     if (cursor !== undefined) {
         dropConfirmedLayers(state, cursor);
@@ -289,6 +290,8 @@ export const onFollowerSubscriptionError = (
         const firstAnswer = !state.valueReceived;
 
         state.valueReceived = true;
+        // Held for a subscriber that joins this tab later: a follower sends no subscribe frame of its own.
+        state.refusal = error;
         fanSubscriptionError(state.errorCallbacks, error);
 
         if (firstAnswer) {

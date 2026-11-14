@@ -8,14 +8,17 @@
  */
 
 /** Every status, in lifecycle order. */
-const REQUEST_STATUSES = ["received", "grace", "processing", "ready", "completed", "failed", "cancelled", "expired"] as const;
+const REQUEST_STATUSES = ["received", "grace", "processing", "ready", "completed", "restored", "failed", "cancelled", "expired"] as const;
 
 type RequestStatus = (typeof REQUEST_STATUSES)[number];
 
 type RequestType = "erasure" | "export";
 
-/** A request in a terminal state takes no further transitions. `expired` is a ready export whose files were removed. */
-const TERMINAL_STATUSES: ReadonlySet<RequestStatus> = new Set<RequestStatus>(["cancelled", "completed", "expired"]);
+/**
+ * A request in a terminal state takes no further transitions, except that a backup restore moves a re-erased `completed` erasure to `restored`.
+ * `expired` is a ready export whose files were removed. `restored` is an erasure a backup restore erased again.
+ */
+const TERMINAL_STATUSES: ReadonlySet<RequestStatus> = new Set<RequestStatus>(["cancelled", "completed", "expired", "restored"]);
 
 const isTerminal = (status: RequestStatus): boolean => TERMINAL_STATUSES.has(status);
 

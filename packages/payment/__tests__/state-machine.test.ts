@@ -69,6 +69,18 @@ describe("subscription state machine", () => {
         expect(nextSubscriptionState("active", "mark_past_due")).toBe("past_due");
     });
 
+    it("past_due → past_due via mark_past_due (regression)", () => {
+        expect.assertions(1);
+
+        expect(nextSubscriptionState("past_due", "mark_past_due")).toBe("past_due");
+    });
+
+    it("paused → paused via pause (regression)", () => {
+        expect.assertions(1);
+
+        expect(nextSubscriptionState("paused", "pause")).toBe("paused");
+    });
+
     it("paused → active via resume", () => {
         expect.assertions(1);
 
