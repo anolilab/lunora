@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags an `httpRoute` on an admin/privileged-looking path whose handler shows no
@@ -36,7 +37,7 @@ const adminRouteWithoutGuard: Lint = {
                 emit(adminRouteWithoutGuard, {
                     cacheKey: `admin_route_without_guard:${route.file}:${route.method}:${route.path}`,
                     detail: `Route \`${route.method} ${route.path}\` (\`${route.exportName}\` in ${route.file}) is on an admin/privileged path but its handler shows no auth/admin guard. Assert an authorized caller before doing privileged work.`,
-                    metadata: { exportName: route.exportName, file: route.file, method: route.method, path: route.path },
+                    metadata: { exportName: route.exportName, ...declarationSiteFields(route), method: route.method, path: route.path },
                 }),
             );
     },

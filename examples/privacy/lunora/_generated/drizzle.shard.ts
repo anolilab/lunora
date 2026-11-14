@@ -80,7 +80,7 @@ export const privacy_requests = sqliteTable("privacy_requests", {
     reason: text("reason"),
     receivedAt: real("receivedAt").notNull(),
     requestId: text("requestId").notNull(),
-    status: text("status", { mode: "json" }).$type<"received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired">().notNull(),
+    status: text("status", { mode: "json" }).$type<"received" | "grace" | "processing" | "ready" | "completed" | "restored" | "failed" | "cancelled" | "expired">().notNull(),
     storageKey: text("storageKey"),
     subjectId: text("subjectId").notNull(),
     type: text("type", { mode: "json" }).$type<"export" | "erasure">().notNull(),

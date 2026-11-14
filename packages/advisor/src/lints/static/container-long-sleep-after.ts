@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /** An idle window longer than this keeps a finished instance running, and billed, for an hour or more. */
 const LONG_IDLE_SECONDS = 60 * 60;
@@ -76,7 +77,13 @@ const containerLongSleepAfter: Lint = {
                 emit(containerLongSleepAfter, {
                     cacheKey: `container_long_sleep_after:${container.exportName}`,
                     detail: `Container "${container.exportName}" can sit idle for ${effective.toString()} s before it sleeps (sleepAfter ${String(sleepAfter)}${cap === undefined ? "" : `, capped by hardTimeout ${String(hardTimeout)}`}); every idle instance is billed for that whole window.`,
-                    metadata: { container: container.exportName, effectiveIdleSeconds: effective, hardTimeout, sleepAfter },
+                    metadata: {
+                        ...declarationSiteFields(container),
+                        container: container.exportName,
+                        effectiveIdleSeconds: effective,
+                        hardTimeout,
+                        sleepAfter,
+                    },
                 }),
             );
         }
