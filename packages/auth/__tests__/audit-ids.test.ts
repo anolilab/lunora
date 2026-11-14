@@ -176,4 +176,43 @@ describe("audit rows name the organization, role, member and resource they act o
         expect(entry?.detail).toMatchObject({ teamId: "team_1" });
         expect(entry?.detail).not.toHaveProperty("organizationId");
     });
+
+    it("names the organization a team update selects in its data, not the active organization", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { data: { name: "Crew", organizationId: "org_b" }, teamId: "team_1" },
+            context: { session: { session: { activeOrganizationId: "org_a" } } },
+            method: "POST",
+            path: "/api/auth/organization/update-team",
+        });
+
+        expect(entry?.detail).toMatchObject({ organizationId: "org_b", teamId: "team_1" });
+    });
+
+    it.each(["add-team-member", "remove-team-member"])("names the organization %s selects, not the active organization", (endpoint) => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { organizationId: "org_b", teamId: "team_1", userId: "member_c" },
+            context: { session: { session: { activeOrganizationId: "org_a" } } },
+            method: "POST",
+            path: `/api/auth/organization/${endpoint}`,
+        });
+
+        expect(entry?.detail).toMatchObject({ organizationId: "org_b", targetUserId: "member_c" });
+    });
+
+    it("names only the active organization for a team switch", () => {
+        expect.assertions(1);
+
+        const entry = buildAuditEntry({
+            body: { organizationId: "org_b", teamId: "team_1" },
+            context: { session: { session: { activeOrganizationId: "org_a" } } },
+            method: "POST",
+            path: "/api/auth/organization/set-active-team",
+        });
+
+        expect(entry?.detail).toMatchObject({ organizationId: "org_a" });
+    });
 });

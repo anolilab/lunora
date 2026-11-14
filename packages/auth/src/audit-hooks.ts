@@ -734,9 +734,8 @@ const memberRoleOf = (value: unknown): string | undefined => {
 };
 
 /**
- * The organization a row names. A new organization or team is named by its request or response. A team removal is scoped
- * by the request's organization, as the server scopes it, and defaults to the active one. Any other existing team is
- * found within the active organization, so a body cannot move it. An accept, reject or cancel is about its invitation's
+ * The organization a row names. A new organization or team is named by its request or response. A team change names the
+ * organization its request selects, as the server scopes it, and defaults to the active one. An accept, reject or cancel is about its invitation's
  * organization, and the request is not trusted for it. Otherwise the request's organization, then the response's, then the session's.
  */
 const organizationOf = (
@@ -750,12 +749,18 @@ const organizationOf = (
         return createdId;
     }
 
-    if (event === "org-team-remove") {
-        return detailId(body["organizationId"]) ?? activeOrganizationId;
+    // Team endpoints take the organization the request names and default to the active one, as the server scopes them:
+    // an update names it inside `data`, and a team switch only ever acts within the active organization.
+    if (event === "org-team-switch") {
+        return activeOrganizationId;
+    }
+
+    if (event === "org-team-update") {
+        return detailId(fieldOf(body["data"], "organizationId")) ?? activeOrganizationId;
     }
 
     if (event.startsWith("org-team-") && event !== "org-team-create") {
-        return activeOrganizationId;
+        return detailId(body["organizationId"]) ?? activeOrganizationId;
     }
 
     if (event === "org-invitation-accept" || event === "org-invitation-reject" || event === "org-invitation-cancel") {
