@@ -41,6 +41,11 @@ interface MutationDelta {
     key: string;
     op: "delete" | "insert" | "update";
     row?: Record<string, unknown>;
+
+    /**
+     * The query's only read table, or `"__lunora__"` when it read several, none, or
+     * depends on every table. The merge never uses it (protocol README §5.1.1).
+     */
     table: string;
 }
 

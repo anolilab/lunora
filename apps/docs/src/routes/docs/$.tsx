@@ -145,7 +145,7 @@ const serverLoader = createServerFn({
     strict: { output: false },
 })
     .middleware([staticFunctionMiddleware])
-    .inputValidator((slugs: string[]) => slugs)
+    .validator((slugs: string[]) => slugs)
     .handler(async ({ data: slugs }) => {
         const page = source.getPage(slugs);
 
