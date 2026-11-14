@@ -174,7 +174,7 @@ const refuseLegacyLossyTable = async (snapshot: ConvexSnapshot, tableEntry: Conv
 
         throw new LunoraError(
             "INTERNAL",
-            `${tableEntry.table}/generated_schema.jsonl: this table was exported in Convex's pre-2026 format, which writes Int64, bytes and NaN/Infinity values as plain strings that only this shape can decode (${shape}). lunora import would store them as strings. Re-export with a current Convex, which keeps Int64 exact; bytes and NaN/Infinity values are refused in either format, so store them as strings in Convex (or drop them) before exporting.`,
+            `${tableEntry.table}/generated_schema.jsonl: this table was exported in Convex's pre-2026 format, which writes Int64, bytes and NaN/Infinity values as plain strings that only this shape can decode (${shape}). lunora import would store them as strings. Re-export with a current Convex, which keeps an Int64 within ±(2^53−1) exact; a larger Int64, bytes and NaN/Infinity values are refused in either format, so store them as strings in Convex (or drop them) before exporting.`,
         );
     }
 };

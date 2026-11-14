@@ -265,9 +265,10 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
     JavaScript number would round; bytes and NaN/Infinity floats, which the
     export encodes as `{"$bytes": …}` or `{"$float": …}`; and any table of a
     pre-2026 export whose `generated_schema.jsonl` declares Int64, bytes or
-    non-finite floats. Re-exporting with a current Convex keeps Int64 exact;
-    bytes and NaN/Infinity floats are refused in either format, so store them as
-    strings in Convex (or drop them) before exporting.
+    non-finite floats. Re-exporting with a current Convex keeps an Int64 within
+    ±(2^53−1) exact; a larger Int64, bytes and NaN/Infinity floats are refused
+    in either format, so store them as strings in Convex (or drop them) before
+    exporting.
 
     **File storage needs the opt-in.** `lunora import` skips the `_storage`
     table by default (those rows describe blobs, not application data). To
