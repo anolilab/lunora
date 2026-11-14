@@ -421,7 +421,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
 
 // Checkout keys are derived from the request, so a repeat of a finished checkout inside Stripe's
 // idempotency window can be answered with that earlier session. Only an `open` session is payable,
-// so the session's own `status` (typed by the SDK) identifies it; the replay header is not relied on.
+// so the session's current `status` (typed by the SDK, read fresh) identifies it; the replay header
+// is not relied on.
 const isFinishedSession = (session: Stripe.Checkout.Session): boolean => session.status === "complete" || session.status === "expired";
 
 export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapter => {
@@ -484,12 +485,14 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
             let session = await client.checkout.sessions.create(params, { idempotencyKey: input.idempotencyKey });
 
-            if (input.idempotencyKey !== undefined && isFinishedSession(session)) {
+            // A replay returns the body Stripe stored at creation, whose status is still `open`
+            // after the customer finished; only a fresh read shows the session's current status.
+            if (input.idempotencyKey !== undefined && isFinishedSession(await client.checkout.sessions.retrieve(session.id))) {
                 // The retry key embeds the replayed session id: a double-click after the first session
                 // finished still collapses onto one new session, and no clock is needed.
                 session = await client.checkout.sessions.create(params, { idempotencyKey: `${input.idempotencyKey}:${session.id}` });
 
-                if (isFinishedSession(session)) {
+                if (isFinishedSession(await client.checkout.sessions.retrieve(session.id))) {
                     throw new LunoraPaymentError(
                         "PROVIDER_ERROR",
                         "stripe replayed a finished checkout session for this request twice; pass a distinct idempotencyKey to start a new one",

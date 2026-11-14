@@ -47,6 +47,9 @@ const makeClient = (calls: RecordedCall[]): Stripe =>
 
                     return { id: "cs_1", url: "https://checkout.test" };
                 },
+                retrieve: async (id: string) => {
+                    return { id, status: "open", url: "https://checkout.test" };
+                },
             },
         },
         customers: {
@@ -170,9 +173,18 @@ describe("stripe adapter", () => {
             successUrl: "https://x/ok",
         };
 
-        /** A client whose `checkout.sessions.create` answers with the queued responses, in order. */
-        const replayingClient = (calls: RecordedCall[], responses: { id: string; status?: string; url: string }[]): Stripe => {
+        /**
+         * A client whose `checkout.sessions.create` answers with the queued responses, in order.
+         * `retrieve` reports each session's live status: the one in `current`, else the status it
+         * was created with, since Stripe's idempotent replay returns the stored creation body.
+         */
+        const replayingClient = (
+            calls: RecordedCall[],
+            responses: { id: string; status?: string; url: string }[],
+            current: Record<string, string> = {},
+        ): Stripe => {
             const queue = [...responses];
+            const created = new Map(responses.map((response) => [response.id, response]));
 
             return {
                 checkout: {
@@ -182,10 +194,41 @@ describe("stripe adapter", () => {
 
                             return queue.shift();
                         },
+                        retrieve: async (id: string) => {
+                            calls.push({ args: [id], name: "retrieve" });
+
+                            const session = created.get(id);
+
+                            return { ...session, status: current[id] ?? session?.status };
+                        },
                     },
                 },
             } as unknown as Stripe;
         };
+
+        it("retries when a replayed session reads open but has since completed", async () => {
+            expect.assertions(2);
+
+            // The replay returns the stored creation body, which still says `open`.
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () =>
+                    replayingClient(
+                        calls,
+                        [
+                            { id: "cs_old", status: "open", url: "https://checkout.test/old" },
+                            { id: "cs_new", status: "open", url: "https://checkout.test/new" },
+                        ],
+                        { cs_old: "complete" },
+                    ),
+                webhookSecret: "whsec",
+            });
+
+            await expect(adapter.createCheckout(request)).resolves.toEqual({ id: "cs_new", provider: "stripe", url: "https://checkout.test/new" });
+            expect((calls.filter((call) => call.name === "checkout")[1]?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe(
+                "checkout:stripe:user_1:cs_old",
+            );
+        });
 
         it.each(["complete", "expired"])("retries once under a derived key when the replayed session is %s", async (status) => {
             expect.assertions(4);
