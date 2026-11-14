@@ -400,14 +400,20 @@ type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface & Topi
 const runClock = new AsyncLocalStorage<number>();
 
 /**
- * Production encodes every registered dispatch result on the shard and decodes it in the client,
- * so a value the codec cannot carry fails there and `undefined` fields disappear. A test must see
+ * Production encodes every registered dispatch result on the shard, sends it as JSON and decodes it
+ * in the client, so a value the codec cannot carry fails there, `undefined` fields and functions
+ * disappear, `-0` arrives as `0` and an array hole as `null`. A test must see
  * what a client sees, so registered results take the same round trip. Composed `ctx.runQuery` /
  * `ctx.runMutation` results are not encoded in production, so they are not encoded here either.
  */
 const wireRoundTrip = (value: unknown): unknown => {
     try {
-        return decodeWire(encodeWire(value));
+        // Wrapped as the response body is, so a top-level `undefined` survives `JSON.stringify` as an absent field.
+        // Not `structuredClone`: the point is JSON's losses (`-0`, holes, functions), which it would keep.
+        const json = JSON.stringify({ result: encodeWire(value) });
+        const body = JSON.parse(json) as { result?: unknown };
+
+        return decodeWire(body.result);
     } catch (error) {
         throw new LunoraError("WIRE_ENCODE_FAILED", error instanceof Error ? error.message : String(error), { cause: error });
     }

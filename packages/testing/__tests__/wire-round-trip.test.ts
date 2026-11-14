@@ -31,6 +31,11 @@ const returnsWireValue = query.query(() => {
 
 const returnsMoney = query.query(() => new Money(5));
 
+const returnsJsonLossyValue = query.query(() => {
+    // eslint-disable-next-line no-sparse-arrays -- the hole is the case: JSON sends it as null
+    return { fn: () => 1, negativeZero: -0, sparse: [1, , 3] };
+});
+
 const insertThenReturnMoney = mutation.mutation(async ({ ctx }) => {
     await ctx.db.insert("log", { message: "written" });
 
@@ -68,6 +73,18 @@ describe("lunoraTest wire round-trip", () => {
         expect(result).toStrictEqual({ at: new Date(0), n: 1n });
         expect(Object.keys(result as object)).not.toContain("skip");
         expect(result).not.toBe(capturedObject);
+    });
+
+    it("hands back a registered query result as the client's JSON parse leaves it", async () => {
+        expect.assertions(3);
+
+        const t = start();
+
+        const result = (await t.query(returnsJsonLossyValue, {})) as Record<string, unknown>;
+
+        expect(Object.is(result.negativeZero, 0)).toBe(true);
+        expect(result.sparse).toStrictEqual([1, null, 3]);
+        expect(Object.keys(result)).not.toContain("fn");
     });
 
     it("rejects a registered query whose result the wire cannot encode", async () => {
