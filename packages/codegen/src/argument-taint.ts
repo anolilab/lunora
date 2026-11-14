@@ -327,17 +327,31 @@ const isAlternativeOf = (identifier: TsNode, within: TsNode): boolean => {
  * `ctx.env.PREFIX` and `ctx.now` are server-trusted but name neither a caller nor a
  * stored record.
  */
+/** Whether a `ctx.db` call lies between `identifier` and `within`, counting `within` itself and nothing above it. */
+const insideDatabaseCallWithin = (identifier: TsNode, within: TsNode): boolean => {
+    for (let ancestor = identifier.getParent(); ancestor !== undefined; ancestor = ancestor.getParent()) {
+        if (Node.isCallExpression(ancestor) && contextTrustPathOf(ancestor.getExpression())?.[0] === "db") {
+            return true;
+        }
+
+        if (ancestor === within) {
+            return false;
+        }
+    }
+
+    return false;
+};
+
 const referencesScopedKeySource = (node: TsNode): boolean =>
     valueIdentifiersOf(node).some((identifier) => {
         const outermost = outermostChainOf(identifier);
         const root = contextTrustPathOf(outermost)?.[0];
 
-        // Inside a `ctx.db` call's arguments the identity only scopes the key through that call, judged below.
+        // Inside a `ctx.db` call's arguments the identity only scopes the key through that call, judged below. Only
+        // calls within the key count: a sink nested in a db write's arguments (`ctx.db.patch(id, { v: await
+        // ctx.kv.get(\`${ctx.auth.userId}:…\`) })`) is still scoped by its own identity prefix.
         if (root === "auth") {
-            return (
-                !isAlternativeOf(identifier, node) &&
-                !identifier.getAncestors().some((ancestor) => Node.isCallExpression(ancestor) && contextTrustPathOf(ancestor.getExpression())?.[0] === "db")
-            );
+            return !isAlternativeOf(identifier, node) && !insideDatabaseCallWithin(identifier, node);
         }
 
         // A fallback read (`args.key ?? (await ownedRead()).key`) is only taken when the caller sends nothing.

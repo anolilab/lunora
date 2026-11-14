@@ -126,6 +126,17 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("ignores an identity-prefixed key read inside a db write's arguments", () => {
+        expect.assertions(1);
+
+        write(
+            "nested-in-write.ts",
+            `export const save = mutation(async ({ ctx, args }) => { await ctx.db.patch(args.id, { v: await ctx.kv.get(\`\${ctx.auth.userId}:\${args.k}\`) }); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("flags a caller key that only falls back to a key read off an owned row", () => {
         expect.assertions(1);
 
