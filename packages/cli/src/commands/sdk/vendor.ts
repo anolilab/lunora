@@ -25,7 +25,7 @@ import { LunoraError } from "@lunora/errors";
 
 import { resolveCliVersion } from "../../util/cli-manifest";
 import type { Logger } from "../../util/logger";
-import { resolveCliVersionRef, resolvePinnedSourceRef, resolveSourceRef } from "../../util/source-ref";
+import { resolveCliVersionRef, resolvePinnedCustomSourceRef, resolvePinnedSourceRef } from "../../util/source-ref";
 import { resolveItemDirectory } from "../registry/resolve";
 import type { AddCommandOptions } from "../registry/types";
 
@@ -241,11 +241,11 @@ const vendorTransport = async (options: {
 
     // `candidate` is optional because that is how the fallback is spelt: passing
     // no ref is what makes the resolver derive the version's release BRANCH, which
-    // is precisely the fallback target. A custom source is resolved unpinned:
-    // `resolvePinnedSourceRef` pins against `anolilab/lunora`, and a SHA from that
-    // repo may not exist in the fork the transport is fetched from.
+    // is precisely the fallback target. A custom source is pinned against its own
+    // repository: a SHA from `anolilab/lunora` may not exist in the fork the
+    // transport is fetched from.
     const attempt = async (candidate: string | undefined): Promise<VendorResult | undefined> => {
-        const resolved = source === undefined ? await resolvePinnedSourceRef(candidate, logger) : resolveSourceRef(candidate);
+        const resolved = source === undefined ? await resolvePinnedSourceRef(candidate, logger) : await resolvePinnedCustomSourceRef(source, candidate);
 
         return vendorAtRef(resolved, { base, language, logger, outputDirectory, registryOptions, target });
     };
