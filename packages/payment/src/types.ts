@@ -218,6 +218,13 @@ export interface UsageEvent {
     readonly referenceId: string;
     /** Whether the event was successfully forwarded to the provider's metering API. */
     readonly reportedToProvider: boolean;
+
+    /**
+     * Epoch ms before which the reconcile sweep does not retry the forward. Set when a retry
+     * fails, so an event that keeps failing (a reference with no provider customer) steps
+     * aside for newer events instead of holding the oldest-first batch forever. Absent means due.
+     */
+    readonly reportRetryAt?: number;
 }
 
 /**

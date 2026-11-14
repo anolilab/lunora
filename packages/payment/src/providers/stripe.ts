@@ -626,6 +626,16 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         reportUsage: async (input: ReportUsageInput) => {
+            // Stripe attributes a meter event only by `stripe_customer_id`; with no customer the event cannot
+            // be billed to anyone, and the facade marks any forwarded row reported, so refuse before the call
+            // and leave the row for a later sweep.
+            if (input.customerId === undefined || input.customerId.trim() === "") {
+                throw new LunoraPaymentError(
+                    "NOT_FOUND",
+                    `stripe usage for reference "${input.referenceId}" has no Stripe customer to bill; it stays unreported until one exists`,
+                );
+            }
+
             const client = await loadClient();
 
             // Stripe v2 Meter Events: `event_name` is the meter, `value` a string, `identifier`
@@ -634,7 +644,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 {
                     event_name: input.featureId,
                     identifier: input.idempotencyKey,
-                    payload: { stripe_customer_id: input.customerId ?? "", value: String(input.quantity) },
+                    payload: { stripe_customer_id: input.customerId, value: String(input.quantity) },
                     timestamp: input.timestamp === undefined ? undefined : Math.floor(input.timestamp / 1000),
                 },
                 { idempotencyKey: input.idempotencyKey },

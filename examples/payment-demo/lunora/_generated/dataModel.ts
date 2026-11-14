@@ -95,6 +95,7 @@ export interface Doc_payment_usageEvents {
     quantity: number;
     referenceId: string;
     reportedToProvider: boolean;
+    reportRetryAt?: number;
 }
 
 export interface Doc_ratelimit_buckets {
@@ -249,6 +250,7 @@ export interface Insert_payment_usageEvents {
     quantity: number;
     referenceId: string;
     reportedToProvider: boolean;
+    reportRetryAt?: number;
 }
 
 export interface Insert_ratelimit_buckets {

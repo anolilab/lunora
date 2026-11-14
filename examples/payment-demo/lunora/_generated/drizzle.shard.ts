@@ -91,6 +91,7 @@ export const payment_usageEvents = sqliteTable("payment_usageEvents", {
     quantity: real("quantity").notNull(),
     referenceId: text("referenceId").notNull(),
     reportedToProvider: integer("reportedToProvider", { mode: "boolean" }).notNull(),
+    reportRetryAt: real("reportRetryAt"),
 }, (t) => ({
     by_idempotency: uniqueIndex("by_idempotency").on(t.provider, t.idempotencyKey),
     by_reference_feature_created: index("by_reference_feature_created").on(t.referenceId, t.featureId, t.createdAt),

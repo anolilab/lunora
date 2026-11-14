@@ -62,6 +62,15 @@ interface ReconcileResult {
 /** Usage events retried per sweep when the caller does not say otherwise. */
 const DEFAULT_USAGE_REPORT_LIMIT = 100;
 
+/**
+ * Bounds on how long a failed usage forward waits before the sweep retries it. The wait is the
+ * event's age, clamped: a fresh failure (a 5xx) is retried within minutes, and one that keeps
+ * failing for days (a reference with no provider customer) settles at the cap, so it takes a
+ * batch slot a few times a day rather than on every tick.
+ */
+const USAGE_RETRY_MIN_MS = 60_000;
+const USAGE_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
+
 const sameCurrencyAmount = (a: PaymentSession["amount"], b: PaymentSession["amount"]): boolean => a.currency === b.currency && compareMoney(a, b) === 0;
 
 /**
@@ -257,7 +266,8 @@ const sweepUnreportedUsage = async (
         return { checked: 0, failed: 0, updated: 0 };
     }
 
-    const pending = await store.listUnreportedUsage(adapter.identifier, limit);
+    const now = Date.now();
+    const pending = await store.listUnreportedUsage(adapter.identifier, limit, now);
     // Scoped to this tick: a batch often carries several events for one reference,
     // and each would repeat the same lookup. Only a found customer is memoised: a miss
     // (or a failed lookup, which throws before it is stored) is re-read by the next
@@ -292,6 +302,14 @@ const sweepUnreportedUsage = async (
             updated += 1;
         } catch {
             failed += 1;
+
+            // From the failure, not the sweep's start: a slow batch would otherwise store a time already past.
+            const failedAt = Date.now();
+            const retryAt = failedAt + Math.min(Math.max(failedAt - event.createdAt, USAGE_RETRY_MIN_MS), USAGE_RETRY_MAX_MS);
+
+            // A failed deferral only means the row stays due next tick, which is the old behaviour.
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await store.deferUsageReport(adapter.identifier, event.idempotencyKey, retryAt).catch(() => {});
             notifyObserver(observer, {
                 featureId: event.featureId,
                 provider: adapter.identifier,
