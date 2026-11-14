@@ -195,6 +195,26 @@ describe("wranglerCodegenInputs — wranglerVariables", () => {
         expect(finding?.line).toBe(source.split("\n").findIndex((line) => line.includes('"STRIPE_SECRET_KEY": "sk_live')) + 1);
     });
 
+    it("reports the line of the repeated vars key whose value wrangler keeps", () => {
+        expect.assertions(1);
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a fake committed secret fixture (the footgun this lint catches), not a real credential
+        const secretLine = `"STRIPE_SECRET_KEY": "sk_live_ABCDEFGHIJKLMNOPQRSTUV",`; // gitleaks:allow -- a fake committed secret fixture (the footgun this lint catches), not a real credential
+        const source = `{
+            "vars": { "STRIPE_SECRET_KEY": "<your-key>" },
+            "vars": {
+                "STRIPE_SECRET_KEY": "<your-key>",
+                ${secretLine}
+            },
+        }`;
+
+        writeFileSync(join(root, "wrangler.jsonc"), source, "utf8");
+
+        const [finding] = wranglerCodegenInputs(root).wranglerVariables;
+
+        expect(finding?.line).toBe(source.split("\n").findIndex((line) => line.includes('"STRIPE_SECRET_KEY": "sk_live')) + 1);
+    });
+
     it("returns [] when no wrangler config exists", () => {
         expect.assertions(1);
         expect(wranglerCodegenInputs(root).wranglerVariables).toHaveLength(0);
