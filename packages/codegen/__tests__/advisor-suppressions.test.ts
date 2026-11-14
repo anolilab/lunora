@@ -269,6 +269,24 @@ export const scoped = mutation({ args: {}, handler: async () => { throw new Erro
         expect(secrets.find((entry) => entry.metadata["key"] === "OTHER_SECRET")?.suppressed).toBeUndefined();
     });
 
+    it("accepts nothing when a wrangler directive's line opens with something other than a key", () => {
+        expect.assertions(2);
+
+        const advisories = advisoriesFor(OPEN_APP, {
+            keys: ["STRIPE_SECRET", "OTHER_SECRET"],
+            text: `{
+  "vars": {
+    // lunora-advisor-exempt plaintext_secret_in_wrangler_vars -- rotated and read by the test harness only
+    /* note */ "STRIPE_SECRET": "sk_live_0000000000000000", "OTHER_SECRET": "sk_live_1111111111111111"
+  }
+}
+`,
+        });
+
+        expect(named(advisories, "plaintext_secret_in_wrangler_vars").filter((entry) => entry.suppressed !== undefined)).toHaveLength(0);
+        expect(named(advisories, "advisor_suppression_unused")).toHaveLength(1);
+    });
+
     it("ignores a wrangler directive inside a block comment", () => {
         expect.assertions(2);
 
