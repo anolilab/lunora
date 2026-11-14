@@ -270,28 +270,6 @@ const isDatabaseReadCall = (call: CallExpression): boolean => {
 };
 
 /**
- * Whether a database read is bound to the caller: one of its arguments names the
- * caller's identity, directly or through a local whose initializer does
- * (`ctx.db.files.findFirst({ where: { ownerId: uid } })` with `uid = ctx.auth.userId`).
- * A read keyed by a caller-supplied id (`ctx.db.get("files", args.id)`) is not: the
- * row it returns is whichever one the caller pointed at, so a key read off it is
- * caller-chosen.
- */
-const isIdentityBoundRead = (call: CallExpression): boolean =>
-    isDatabaseReadCall(call) &&
-    call.getArguments().some((argument) =>
-        valueIdentifiersOf(argument).some((identifier) => {
-            if (contextTrustPathOf(outermostChainOf(identifier))?.[0] === "auth") {
-                return true;
-            }
-
-            const initializer = trustedInitializerOf(identifier);
-
-            return initializer !== undefined && valueIdentifiersOf(initializer).some((inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth");
-        }),
-    );
-
-/**
  * Whether `identifier` reaches the value of `within` only on some paths: the fallback of a `??` or
  * `||`, the left of a `&&`, or any part of a conditional. `args.key ?? ctx.auth.userId` is the
  * caller's key whenever one is sent, so the identity there scopes nothing; the identity on the
@@ -319,14 +297,37 @@ const isAlternativeOf = (identifier: TsNode, within: TsNode): boolean => {
 };
 
 /**
- * True when `node` is, or textually contains, a value reference to a key source the
- * caller cannot choose: the caller's identity (a ctx path whose first segment is
- * `auth`, `ctx.auth.userId`), or a value read from the database through a read that
- * is itself bound to that identity (see {@link isIdentityBoundRead}). A row fetched
- * by a caller-supplied id is not such a source. Narrower than {@link referencesContext}:
- * `ctx.env.PREFIX` and `ctx.now` are server-trusted but name neither a caller nor a
- * stored record.
+ * Whether a database read is bound to the caller: one of its arguments names the
+ * caller's identity, directly or through a local whose initializer does
+ * (`ctx.db.files.findFirst({ where: { ownerId: uid } })` with `uid = ctx.auth.userId`).
+ * A read keyed by a caller-supplied id (`ctx.db.get("files", args.id)`) is not: the
+ * row it returns is whichever one the caller pointed at, so a key read off it is
+ * caller-chosen.
  */
+const isIdentityBoundRead = (call: CallExpression): boolean =>
+    isDatabaseReadCall(call) &&
+    call.getArguments().some((argument) =>
+        valueIdentifiersOf(argument).some((identifier) => {
+            // `ownerId: args.ownerId ?? ctx.auth.userId` selects the caller's row only when nothing is sent.
+            if (isAlternativeOf(identifier, argument)) {
+                return false;
+            }
+
+            if (contextTrustPathOf(outermostChainOf(identifier))?.[0] === "auth") {
+                return true;
+            }
+
+            const initializer = trustedInitializerOf(identifier);
+
+            return (
+                initializer !== undefined &&
+                valueIdentifiersOf(initializer).some(
+                    (inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth" && !isAlternativeOf(inner, initializer),
+                )
+            );
+        }),
+    );
+
 /** Whether a `ctx.db` call lies between `identifier` and `within`, counting `within` itself and nothing above it. */
 const insideDatabaseCallWithin = (identifier: TsNode, within: TsNode): boolean => {
     for (let ancestor = identifier.getParent(); ancestor !== undefined; ancestor = ancestor.getParent()) {
@@ -342,6 +343,15 @@ const insideDatabaseCallWithin = (identifier: TsNode, within: TsNode): boolean =
     return false;
 };
 
+/**
+ * True when `node` is, or textually contains, a value reference to a key source the
+ * caller cannot choose: the caller's identity (a ctx path whose first segment is
+ * `auth`, `ctx.auth.userId`), or a value read from the database through a read that
+ * is itself bound to that identity (see {@link isIdentityBoundRead}). A row fetched
+ * by a caller-supplied id is not such a source. Narrower than {@link referencesContext}:
+ * `ctx.env.PREFIX` and `ctx.now` are server-trusted but name neither a caller nor a
+ * stored record.
+ */
 const referencesScopedKeySource = (node: TsNode): boolean =>
     valueIdentifiersOf(node).some((identifier) => {
         const outermost = outermostChainOf(identifier);
@@ -386,24 +396,6 @@ const isDatabaseReadSource = (node: TsNode): boolean => {
 };
 
 /**
- * For a name destructured from a `ctx.db` read (`const { key } = await ctx.db.files.findFirst(…)`),
- * that read; `undefined` for any other binding. Only a read qualifies: every field of a row the read
- * bound to the caller is the caller's own, while a literal's sibling `ctx.auth` field says nothing
- * about the field taken from it.
- */
-const ownedRowInitializerOf = (node: TsNode): TsNode | undefined => {
-    const element = Node.isIdentifier(node) ? declarationOf(node) : undefined;
-
-    if (!Node.isBindingElement(element) || isReassignedBinding(element)) {
-        return undefined;
-    }
-
-    const initializer = element.getFirstAncestorByKind(SyntaxKind.VariableDeclaration)?.getInitializer();
-
-    return initializer !== undefined && isDatabaseReadSource(initializer) ? initializer : undefined;
-};
-
-/**
  * The defaults on the path to the destructured element of `variable` that binds `name`: its own
  * (`const { url = args.url } = config`) and every enclosing element's
  * (`const { network: { url } = args.network } = config`), each of which can supply the value.
@@ -421,6 +413,30 @@ const bindingDefaultsOf = (variable: VariableDeclaration | undefined, name: stri
     return [element, ...element.getAncestors().filter((ancestor) => Node.isBindingElement(ancestor))]
         .map((node) => (Node.isBindingElement(node) ? node.getInitializer() : undefined))
         .filter((initializer) => initializer !== undefined);
+};
+
+/**
+ * For a name destructured from a `ctx.db` read (`const { key } = await ctx.db.files.findFirst(…)`),
+ * that read; `undefined` for any other binding. Only a read qualifies: every field of a row the read
+ * bound to the caller is the caller's own, while a literal's sibling `ctx.auth` field says nothing
+ * about the field taken from it.
+ */
+const ownedRowInitializerOf = (node: TsNode): TsNode | undefined => {
+    const element = Node.isIdentifier(node) ? declarationOf(node) : undefined;
+
+    if (!Node.isBindingElement(element) || isReassignedBinding(element)) {
+        return undefined;
+    }
+
+    const variable = element.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
+    const initializer = variable?.getInitializer();
+
+    // `const { storageKey = args.key } = await ownedRead()` takes the caller's key whenever the row lacks the field.
+    if (bindingDefaultsOf(variable, node.getText()).some((fallback) => referencesBinding(fallback, "args"))) {
+        return undefined;
+    }
+
+    return initializer !== undefined && isDatabaseReadSource(initializer) ? initializer : undefined;
 };
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
@@ -545,7 +561,8 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
 
     const initializer = singleHopInitializer(node);
 
-    if (initializer !== undefined && isRecomputed(initializer)) {
+    // A row fetched by a caller-supplied id is a lookup, not a recomputation, as below for composed keys.
+    if (initializer !== undefined && isRecomputed(initializer) && !(isDatabaseReadSource(initializer) && referencesArgs(initializer))) {
         return false;
     }
 
@@ -644,6 +661,11 @@ export const isScopedByIdentity = (node: TsNode): boolean => {
     const identifiers = Node.isIdentifier(composed) ? [composed] : composed.getDescendantsOfKind(SyntaxKind.Identifier);
 
     return identifiers.some((identifier) => {
+        // `args.key ?? uid` is the caller's key whenever one is sent, whatever `uid` holds.
+        if (isAlternativeOf(identifier, composed)) {
+            return false;
+        }
+
         const boundInitializer = trustedInitializerOf(identifier) ?? ownedRowInitializerOf(identifier);
 
         return boundInitializer !== undefined && referencesScopedKeySource(boundInitializer);

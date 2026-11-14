@@ -137,6 +137,25 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("flags a key read off a row whose owner filter only falls back to the caller", () => {
+        expect.assertions(1);
+
+        write(
+            "owner-fallback.ts",
+            `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.files.findFirst({ where: { ownerId: args.ownerId ?? ctx.auth.userId } }); return ctx.kv.get(row.key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a caller key that only falls back to an identity local", () => {
+        expect.assertions(1);
+
+        write("local-fallback.ts", `export const read = query(async ({ ctx, args }) => { const uid = ctx.auth.userId; return ctx.kv.get(args.key ?? uid); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("flags a caller key that only falls back to a key read off an owned row", () => {
         expect.assertions(1);
 
