@@ -1903,9 +1903,13 @@ read-only deployment tools; `--allow-writes` adds the mutation and action tools.
 
 ### `lunora analyze`
 
-Runs a `wrangler` dry-deploy and reports bundle size, the heaviest modules,
-and the state of `_generated/` files. Pass `--format json` to pipe the output to
-a CI artifact.
+Runs a `wrangler` dry-deploy and sizes the source modules in the bundle from
+wrangler's esbuild metafile, then reports the total, the heaviest modules, and
+the modules under `_generated/`. Source maps are excluded from the total. A
+pre-bundled entry writes no metafile, so the command falls back to listing the
+largest output files and warns. Pass `--format json` to pipe the output to a CI
+artifact; its `topModules` lists source modules, and `breakdown` says which
+meaning applies.
 
 ### `lunora logs`
 
