@@ -23,6 +23,7 @@
       "file": "documents",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 68,
       "visibility": "public"
     },
     {
@@ -48,6 +49,7 @@
       "file": "documents",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 82,
       "visibility": "public"
     }
   ]

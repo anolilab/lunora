@@ -20,7 +20,9 @@ const METHODS = {
     listBalances: true,
     listSubscriptions: true,
     refundPayment: true,
+    resumeSubscription: true,
     track: true,
+    updateSubscription: true,
 } satisfies Record<CallableKey, true>;
 
 const GENERATED_SHARD = join(import.meta.dirname, "..", "..", "..", "examples", "payment-demo", "lunora", "_generated", "shard.ts");

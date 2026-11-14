@@ -51,7 +51,7 @@ describe("quoted object keys read as their runtime key", () => {
         );
 
         expect(discoverCrons(newProject(), workdir)).toStrictEqual([
-            { args: { batch: 10, mode: "full", plain: true }, cron: "0 9 * * *", functionPath: "email:digest", name: "digest" },
+            { args: { batch: 10, mode: "full", plain: true }, cron: "0 9 * * *", file: "crons", functionPath: "email:digest", line: 5, name: "digest" },
         ]);
     });
 

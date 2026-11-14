@@ -47,16 +47,20 @@
  * clear exactly once when the invitation is issued, stored only as a SHA-256.
  * The invitee brings it back in the sign-up link (`?invite=…`).
  *
- * The token is checked on `/sign-up/email` and nowhere else, which is the whole
- * design rather than an oversight. Every other path that mints an account has
- * already proved the person controls the address before the row is written: an
- * OAuth callback carries a provider-verified email, and magic-link and email-OTP
- * only fire for whoever is holding the mailbox. Password sign-up is the one place
- * where anyone may claim any address, so it is the one place a shared secret adds
- * anything. So:
+ * The token is checked on `/sign-up/email` only. Password sign-up is the one place
+ * where anyone may claim any address, so it is the one place a shared secret is
+ * required. Other paths that mint an account are admitted against an invitation
+ * only when the new account's email is proven:
  *
  * - `databaseHooks.user.create.before` — the universal backstop. An unspent,
- *   unexpired invitation must exist for the address, whatever created the row.
+ *   unexpired invitation must exist for the address, and the creation must prove
+ *   the address: `user.emailVerified === true` (magic link, email OTP, or an OAuth
+ *   or SSO provider that reported the address verified), or a trusted route
+ *   (`/sign-up/email`, `/admin/create-user`), or no endpoint at all (server code).
+ *   Any other creation, such as an OAuth or SSO account the provider did not verify
+ *   or a SCIM provisioning, is refused, so an unverified provider cannot accept an
+ *   invitation. The refusal is the same error as no invitation, so it reveals
+ *   nothing about the list.
  * - `hooks.before` on `/sign-up/email` — additionally requires the token, and
  *   re-checks that the invitation is unspent and unexpired so a stale link earns
  *   the same vague rejection a wrong token does.
@@ -195,6 +199,22 @@ type AuthAdapter = Awaited<LunoraAuth["$context"]>["adapter"];
 type DatabaseHooks = NonNullable<BetterAuthOptions["databaseHooks"]>;
 type UserCreateAfter = NonNullable<NonNullable<NonNullable<DatabaseHooks["user"]>["create"]>["after"]>;
 type UserCreateBefore = NonNullable<NonNullable<NonNullable<DatabaseHooks["user"]>["create"]>["before"]>;
+
+/**
+ * Routes whose account creation may admit an invited address without a verified
+ * email. `/sign-up/email` is covered by the token check in `hooks.before`.
+ * `/admin/create-user` is the admin plugin, behind admin authorization. An absent
+ * endpoint context means server code is calling the internal adapter directly, as
+ * `AuthAdmin.createUser` does; that path is admin-token gated.
+ *
+ * Every other route is untrusted: better-auth creates OAuth and SSO users with the
+ * provider's own `emailVerified`, and several providers always report `false`.
+ */
+const TRUSTED_CREATE_PATHS: ReadonlySet<string> = new Set(["/admin/create-user", "/sign-up/email"]);
+
+/** Whether this creation proves the address, so an invitation may admit it. */
+const provesAddress = (user: { emailVerified?: unknown }, endpoint: Parameters<UserCreateBefore>[1]): boolean =>
+    user["emailVerified"] === true || !endpoint || TRUSTED_CREATE_PATHS.has(endpoint.path);
 
 /** A local part, exactly one `@`, and a domain. Kept free of adjacent quantifiers so it cannot backtrack. */
 const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+$/;
@@ -417,19 +437,15 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
         $ERROR_CODES: ERROR_CODES,
 
         /**
-         * The token check, on `/sign-up/email` and nowhere else.
+         * The token check, on `/sign-up/email` only.
          *
-         * That is not an arbitrary scope. Every other path that mints an account
-         * has already proved the person controls the address before the row is
-         * written — an OAuth callback carries a provider-verified email, magic
-         * link and email-OTP only fire for someone holding the mailbox. Password
-         * sign-up is the one place where anyone may claim any address, so it is
-         * the one place a shared secret adds something.
+         * Password sign-up is the one route where anyone may claim any address,
+         * so it is the one place a shared secret is required. Other routes admit
+         * an invitation only when the new account's email is proven (see
+         * `provesAddress`); none of them can present a token.
          *
          * This runs before the route, so a bad token means no user row at all,
-         * and it runs *in addition to* the `user.create.before` gate below —
-         * which stays the universal backstop for the paths that never present a
-         * token.
+         * and it runs *in addition to* the `user.create.before` gate below.
          */
         hooks: {
             before: [
@@ -491,14 +507,14 @@ const inviteOnly = (options: InviteOnlyOptions = {}): BetterAuthPlugin => {
 
             anonymousInstalled = hasAnonymousPlugin(context.options);
 
-            const before: UserCreateBefore = async (user) => {
+            const before: UserCreateBefore = async (user, endpoint) => {
                 if (anonymousInstalled && isAnonymousUser(user)) {
                     return;
                 }
 
                 const email = emailOf(user);
 
-                if (email !== undefined && (await hasUsableInvitation(adapter, email))) {
+                if (email !== undefined && provesAddress(user, endpoint) && (await hasUsableInvitation(adapter, email))) {
                     return;
                 }
 

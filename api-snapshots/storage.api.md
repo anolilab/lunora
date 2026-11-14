@@ -187,6 +187,18 @@ interface VerifyResult {
 }
 ```
 
+### `authorizeSignedGet` (const)
+
+```ts
+const authorizeSignedGet: (secret: string, options: {
+    bucketName: string;
+    expectedHost?: string;
+}) => ({ key, request }: {
+    key: string;
+    request: Request;
+}) => Promise<boolean>;
+```
+
 ### `buildPresignedUrl` (const)
 
 ```ts

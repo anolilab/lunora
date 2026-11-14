@@ -1,6 +1,7 @@
 import { hasUniquePairIndex } from "../../../../../shared/unique-pair-index";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * A correctness lint for many-to-many relations: the join table behind
@@ -52,6 +53,7 @@ const throughRelationMissingUniqueIndex: Lint = {
                         cacheKey: `through_relation_missing_unique_index:${table.name}:${relation.name}`,
                         detail: `Relation "${relation.name}" on table "${table.name}" goes through "${joinName}", which has no unique index over ("${from}", "${to}"). A repeated connect stores the same link twice.`,
                         metadata: {
+                            ...declarationSiteFields(relation),
                             relation: relation.name,
                             suggestedIndex: { fields: [from, to], name: `by_${from}_${to}`, unique: true },
                             table: joinName,

@@ -989,6 +989,7 @@ interface CodegenCommandData {
         level: Finding["level"];
         name: string;
         remediation: string;
+        suppressed?: Finding["suppressed"];
     }>;
     cronTriggers: ReadonlyArray<string>;
     failedAdvisories: number;

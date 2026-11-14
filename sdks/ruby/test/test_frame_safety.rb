@@ -235,7 +235,7 @@ class TestFrameSafety < Minitest::Test
     ConformanceManifest.covers("subscription_stream_ends_on_close")
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})
-    values, _stop = client.stream("messages:list", {})
+    values, _stop = client.watch("messages:list", {})
     client.handle_frame(JSON.generate({ "type" => "data", "id" => "sub_1", "data" => { "n" => 1 } }))
 
     client.close
@@ -244,6 +244,39 @@ class TestFrameSafety < Minitest::Test
       assert_equal({ "n" => 1 }, values.next)
       assert_raises(StopIteration) { values.next }
     end
+  end
+
+  # A loop that exits early must unsubscribe without the caller holding `stop`: the
+  # enumerator owns the subscription it opened.
+  def test_breaking_out_of_a_watch_loop_unsubscribes
+    frames = []
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(frame) { frames << frame })
+    values, _stop = client.watch("messages:list", {})
+    client.handle_frame(JSON.generate({ "type" => "data", "id" => "sub_1", "data" => { "n" => 1 } }))
+
+    values.first
+
+    unsubscribed = frames.select { |frame| frame["type"] == "unsubscribe" }
+
+    ids = unsubscribed.map { |frame| frame["id"] }
+
+    assert_equal ["sub_1"], ids
+  end
+
+  def test_raising_out_of_a_watch_loop_unsubscribes
+    frames = []
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(frame) { frames << frame })
+    values, _stop = client.watch("messages:list", {})
+    client.handle_frame(JSON.generate({ "type" => "data", "id" => "sub_1", "data" => { "n" => 1 } }))
+
+    assert_raises(RuntimeError) { values.each { |value| raise "consumer failed after #{value}" if value } }
+
+    unsubscribed = frames.select { |frame| frame["type"] == "unsubscribe" }
+    ids = unsubscribed.map { |frame| frame["id"] }
+
+    assert_equal ["sub_1"], ids
   end
 
   def test_the_auth_token_is_redacted_when_printed

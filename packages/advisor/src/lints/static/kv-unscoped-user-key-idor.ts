@@ -12,8 +12,9 @@ import { callSiteFields, callSiteWhere } from "../helpers";
  * `args.*`, or a key built one hop earlier from `args`), any caller can hand in
  * another user's key and read, overwrite, or delete that user's entry. The fix is
  * to prefix every key with a server-trusted identity (`` `${ctx.auth.userId}:…` ``)
- * so a caller can only ever address their own entries — a key that references
- * `ctx` is treated as scoped and is not flagged. `list` is not a sink (it takes a
+ * so a caller can only ever address their own entries. Only the caller's `ctx.auth`
+ * identity, or a db read bound to it, scopes a key: a server-trusted value the same
+ * for every caller (`ctx.env.PREFIX`) does not. `list` is not a sink (it takes a
  * prefix, not a per-entry key).
  *
  * Runs only when the codegen feeder supplies KV key-access evidence

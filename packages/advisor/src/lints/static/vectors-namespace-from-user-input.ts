@@ -14,8 +14,9 @@ import { callSiteFields, callSiteWhere } from "../helpers";
  * value built one hop earlier from `args`), any caller can hand in another
  * tenant's namespace and read or poison that tenant's vectors. The fix is to
  * derive the namespace from a server-trusted identity (`` `${ctx.auth.orgId}` ``)
- * so a caller can only ever address their own partition — a namespace that
- * references `ctx` is treated as scoped and is not flagged.
+ * so a caller can only ever address their own partition. Only the caller's
+ * `ctx.auth` identity, or a database read bound to it, scopes a namespace: a
+ * server-trusted value the same for every caller (`ctx.env.PREFIX`) does not.
  *
  * Runs only when the codegen feeder supplies vector-namespace evidence
  * (`context.vectorNamespaceAccesses`); a runtime caller flags nothing. One

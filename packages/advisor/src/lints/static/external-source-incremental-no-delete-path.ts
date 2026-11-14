@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a `.source({ mode: "incremental" })` table that declares neither a
@@ -53,7 +54,7 @@ const externalSourceIncrementalNoDeletePath: Lint = {
                         cacheKey: `external_source_incremental_no_delete_path:${table.name}`,
                         detail: `Table \`${table.name}\`'s \`.source(...)\` config is not a static object literal, so its \`mode\`/delete-visibility can't be verified. If it is \`mode: "incremental"\`, confirm it declares \`reconcileEveryMs\` or \`softDeleteColumn\` — an incremental source without one accumulates phantom rows on every upstream delete.`,
                         level: "WARN",
-                        metadata: { table: table.name },
+                        metadata: { ...declarationSiteFields(table), table: table.name },
                     }),
                 );
 
@@ -68,7 +69,7 @@ const externalSourceIncrementalNoDeletePath: Lint = {
                 emit(externalSourceIncrementalNoDeletePath, {
                     cacheKey: `external_source_incremental_no_delete_path:${table.name}`,
                     detail: `Table \`${table.name}\` is \`.source({ mode: "incremental" })\` but declares neither \`reconcileEveryMs\` nor \`softDeleteColumn\` — an incremental pull never sees upstream deletes, so the materialized table would accumulate phantom rows. Add one of the two delete-visibility paths.`,
-                    metadata: { table: table.name },
+                    metadata: { ...declarationSiteFields(table), table: table.name },
                 }),
             );
         }

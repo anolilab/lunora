@@ -3,15 +3,13 @@ import type { Lint } from "../../types";
 import { callSiteFields, callSiteWhere } from "../helpers";
 
 /**
- * Flags a `ctx.sql` tagged-template that splices an unparameterized
- * string-building expression into the query.
+ * Flags a `ctx.sql.query(text, params)` / `ctx.sql.unsafe(text, params)` call whose
+ * `text` is built from a non-constant value.
  *
- * The Hyperdrive `ctx.sql\`…\`` driver binds each `${value}` placeholder as a
- * query parameter — safe by construction. But a placeholder that *builds* a string
- * in place (`ctx.sql\`… ${"WHERE name='" + name + "'"}\``, or a nested template
- * literal) splices raw, attacker-controlled text into the SQL, reopening classic
- * SQL injection. The fix is always to pass the value through a placeholder so the
- * driver parameterizes it.
+ * The driver binds only `params`; `text` runs verbatim, so request input that reaches
+ * the text reopens SQL injection. Codegen's feeder decides what counts as constant
+ * (literals, module consts, fixed joins), so this lint only reports sinks it could not
+ * prove fixed.
  *
  * Runs only when the codegen feeder supplies interpolation evidence
  * (`context.sqlInterpolations`); a runtime caller flags nothing. One finding per
@@ -20,12 +18,12 @@ import { callSiteFields, callSiteWhere } from "../helpers";
 const sqlInjectionRisk: Lint = {
     categories: ["SECURITY"],
     description:
-        "A `ctx.sql` tagged-template interpolates an unparameterized string-building expression (concatenation or nested template) instead of a bound value — splicing raw text into the query and reopening SQL injection.",
+        "A `ctx.sql.query(text, params)` / `ctx.sql.unsafe(text, params)` call builds its SQL `text` from non-constant values. The driver binds only `params` and runs `text` verbatim, so request input in the text reopens SQL injection.",
     facing: "EXTERNAL",
     level: "ERROR",
     name: "sql_injection_risk",
     remediation:
-        "Pass the value through a bound placeholder so the driver parameterizes it — keep request input inside a `ctx.sql` placeholder instead of concatenating it into the query string. Never build SQL text from request input by hand.",
+        "Keep the SQL text constant and pass every value through the `params` array (`$1`, `$2`, …) so the driver binds it. Never build SQL text from request input.",
     run: (context) => {
         if (context.sqlInterpolations === undefined) {
             return [];
@@ -34,13 +32,13 @@ const sqlInjectionRisk: Lint = {
         return context.sqlInterpolations.map((interpolation) =>
             emit(sqlInjectionRisk, {
                 cacheKey: `sql_injection_risk:${interpolation.file}:${interpolation.line.toString()}`,
-                detail: `\`ctx.sql\` in ${callSiteWhere(interpolation)} interpolates a string-building expression instead of a bound value — a SQL-injection vector. Pass the value through a bound placeholder so the driver parameterizes it.`,
+                detail: `\`ctx.sql\` in ${callSiteWhere(interpolation)} builds its SQL text from a non-constant value instead of passing it in \`params\` — a SQL-injection vector. Keep the text constant and bind the value through \`params\`.`,
                 metadata: { ...callSiteFields(interpolation) },
             }),
         );
     },
     source: "static",
-    title: "Possible SQL injection in ctx.sql interpolation",
+    title: "Possible SQL injection in ctx.sql text",
 };
 
 export default sqlInjectionRisk;

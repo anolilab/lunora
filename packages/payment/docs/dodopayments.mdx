@@ -259,8 +259,8 @@ An upgrade / downgrade or a seat-count change goes through Dodo's dedicated
 endpoint, which is prorated immediately:
 
 ```ts
-// Adapter surface reached through `ctx.payments.adapter` — a plan and/or quantity change.
-await ctx.payments.adapter.updateSubscription(subscriptionId, { priceId: "<new-dodo-product-id>", quantity: 3 });
+// A plan and/or quantity change through the facade.
+await ctx.payments.updateSubscription(subscriptionId, { priceId: "<new-dodo-product-id>", quantity: 3 });
 ```
 
 <Callout type="info">

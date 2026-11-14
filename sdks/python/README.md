@@ -7,7 +7,7 @@ It implements the transport specified in
 [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, an async generator for `async for` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, an async generator for `async for` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribe_shape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -226,7 +226,7 @@ How a replayed write settles, on the single-call and the batch path alike:
 - A flush that is interrupted by an unexpected exception puts every drained write
   it had not settled back at the front of the queue, in order.
 
-`client.close()` also ends every `stream()` loop and makes `connect_and_run`
+`client.close()` also ends every `watch()` loop and makes `connect_and_run`
 return. A subscription or shape callback that raises is isolated: the others
 queued for the same frame still run. A poke is applied per shape whole or not at
 all — a row that does not decode leaves that shape's view and checkpoint as they

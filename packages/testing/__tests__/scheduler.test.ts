@@ -17,7 +17,7 @@ const RETRY_BACKOFFS_MS = Array.from({ length: MAX_RETRY_ATTEMPTS }, (_, index) 
 /** Total virtual clock a job must be advanced through before a terminal failure is observable. */
 const TOTAL_RETRY_BACKOFF_MS = RETRY_BACKOFFS_MS.reduce((sum, ms) => sum + ms, 0);
 
-const { internalAction, internalMutation, mutation, query } = initLunora.dataModel().create();
+const { internalAction, internalMutation, internalQuery, mutation, query } = initLunora.dataModel().create();
 
 const schema = defineSchema({
     log: defineTable({
@@ -144,9 +144,21 @@ const flakyThenSucceed = internalMutation.input({ failTimes: v.number(), key: v.
 /** Internal mutation that records the `ctx.now` it observed — used to pin the clock a scheduled job sees. */
 const recordNow = internalMutation.mutation(async ({ ctx }) => ctx.db.insert("log", { message: `now:${String(ctx.now)}` }));
 
+/** Internal query that reports the `ctx.now` it observed — composed from a scheduled job to pin the clock it inherits. */
+const readNow = internalQuery.query(({ ctx }) => ctx.now);
+
+/** Internal mutation that composes a query and records what that query saw as `ctx.now`. */
+const recordComposedNow = internalMutation.mutation(async ({ ctx }) => {
+    const seen = await ctx.runQuery(readNow, {});
+
+    await ctx.db.insert("log", { message: `composed:${String(seen)}` });
+});
+
 const functions = {
     "log:appendLog": appendLog,
     "log:recordNow": recordNow,
+    "log:readNow": readNow,
+    "log:recordComposedNow": recordComposedNow,
     "log:appendOrThrow": appendOrThrow,
     "log:appendThenThrow": appendThenThrow,
     "log:cancelPendingAppends": cancelPendingAppends,
@@ -850,6 +862,20 @@ describe("fake scheduler production parity", () => {
         // The job fired an hour into the virtual clock, so it must see that instant —
         // not the harness's construction time.
         await expect(t.query(readLog, {})).resolves.toStrictEqual([expect.objectContaining({ message: `now:${String(1_000_000 + 3_600_000)}` })]);
+    });
+
+    it("gives a composed query inside a scheduled job the advanced clock", async () => {
+        expect.assertions(1);
+
+        const t = lunoraTest(schema, { functions, now: 1_000_000 });
+
+        harnesses.track(t);
+
+        await t.run(async (ctx) => ctx.scheduler.runAfter(0, "log:recordComposedNow", {}));
+        await t.scheduler.advance(3_600_000);
+
+        // The composed query inherits the job's fire time, not the construction instant.
+        await expect(t.query(readLog, {})).resolves.toStrictEqual([expect.objectContaining({ message: `composed:${String(1_000_000 + 3_600_000)}` })]);
     });
 });
 

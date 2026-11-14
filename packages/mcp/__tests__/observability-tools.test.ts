@@ -293,6 +293,17 @@ describe("the remaining reads", () => {
         expect(result.structuredContent).toStrictEqual({ advisories: [{ id: "a" }, { id: "b" }], total: 3 });
     });
 
+    it("lunora_get_advisories passes an accepted finding's suppression through with its reason, file and line", async () => {
+        expect.assertions(1);
+
+        const suppressed = { file: "lunora/posts.ts", line: 4, reason: "posts are append-only" };
+        const advisories = [{ id: "a", name: "unindexed_foreign_key", suppressed }];
+        const mock = mockClient({ [ADMIN_FUNCTIONS.getAdvisories]: { advisories } });
+        const result = await callTool(mock.asClient, "lunora_get_advisories", {}, false, true);
+
+        expect(result.structuredContent).toStrictEqual({ advisories, total: 1 });
+    });
+
     it("lunora_get_query_insights forwards a known range and passes the series through", async () => {
         expect.assertions(2);
 

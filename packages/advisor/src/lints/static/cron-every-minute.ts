@@ -3,6 +3,7 @@ import { parse } from "@visulima/cron-parser/cloudflare";
 import type { AdvisorCron } from "../../crons";
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 const WHITESPACE = /\s+/;
 
@@ -85,7 +86,7 @@ const cronEveryMinute: Lint = {
                 emit(cronEveryMinute, {
                     cacheKey: `cron_every_minute:${job.name}`,
                     detail: `Cron job "${job.name}" (\`${job.cron}\`) ${cadence}, whether or not there is work. Jobs on the same schedule share one Worker invocation.`,
-                    metadata: { cron: job.cron, job: job.name, window: kind === "windowed" },
+                    metadata: { ...declarationSiteFields(job), cron: job.cron, job: job.name, window: kind === "windowed" },
                 }),
             ];
         }),

@@ -361,6 +361,13 @@ user — `/sign-up/email`, an OAuth callback creating a new account, magic link,
 `admin.createUser`, and Lunora's own `AuthAdmin.createUser` — because it hooks
 `user.create.before` rather than one route.
 
+Password sign-up needs the invitation token. Any other path admits an invitation
+only when the new account's email is verified: magic link and email OTP always
+are, and an OAuth or SSO account is only when its provider reports the address
+verified. Several built-in OAuth providers never do, Linear and Notion among them,
+so their invitees cannot sign up through them. SSO reports unverified unless the
+provider sets `trustEmailVerified`. SCIM provisioning cannot accept an invitation.
+
 ```ts
 import { createAuth, createSignUpInvitation } from "@lunora/auth";
 import { inviteOnly } from "@lunora/auth/plugins";

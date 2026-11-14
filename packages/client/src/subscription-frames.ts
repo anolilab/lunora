@@ -43,6 +43,7 @@ export const commitDataFrame = (state: SubscriptionState, payload: unknown, posi
     state.serverBase = payload;
     state.serverBaseCommitted = true;
     state.awaitingSnapshot = false;
+    state.baseIncomplete = false;
     state.serverClaims = position.claims;
 
     if (position.cursor !== undefined) {

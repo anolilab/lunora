@@ -47,12 +47,28 @@ const crossModuleTableWrite: Lint = {
         }
 
         // One finding per function (or helper) and table, however many writes it makes.
+        const keyOf = (write: (typeof writes)[number]): string => `cross_module_table_write:${write.file}:${callSiteLabel(write.scope)}:${write.table}`;
+
+        // The finding is built from the first write of its cache key; its location is the earliest known line among those writes.
+        const earliestLine = new Map<string, number>();
+
+        for (const write of writes) {
+            const key = keyOf(write);
+            const known = earliestLine.get(key);
+
+            if (write.line > 0 && (known === undefined || write.line < known)) {
+                earliestLine.set(key, write.line);
+            }
+        }
+
         const seen = new Set<string>();
 
         return writes.flatMap((write) => {
             const owner = owners.get(write.table);
             const writer = moduleOf(modules, write.file);
-            const cacheKey = `cross_module_table_write:${write.file}:${callSiteLabel(write.scope)}:${write.table}`;
+            const cacheKey = keyOf(write);
+
+            const line = earliestLine.get(cacheKey);
 
             if (owner === undefined || owner.name === writer || seen.has(cacheKey)) {
                 return [];
@@ -69,6 +85,7 @@ const crossModuleTableWrite: Lint = {
                     metadata: {
                         ...callSiteMetadata(write.scope),
                         file: write.file,
+                        ...(line === undefined ? {} : { line }),
                         owner: owner.name,
                         table: write.table,
                         ...(owner.installed === true ? { installed: true } : {}),

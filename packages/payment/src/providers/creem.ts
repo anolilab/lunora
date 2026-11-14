@@ -469,7 +469,11 @@ export const createCreemAdapter = (options: CreemAdapterOptions): PaymentAdapter
             // `upgrade` changes the product and `update` changes item units; neither takes the other's
             // field. Two calls are not atomic, so refuse the combined patch rather than apply half of it.
             if (patch.priceId && patch.quantity !== undefined) {
-                return notSupported("changing the plan and the quantity in one update; apply them as two updates");
+                // A refusal before any request, so it is a VALIDATION_ERROR: the facade can tell nothing reached the provider.
+                throw new LunoraPaymentError(
+                    "VALIDATION_ERROR",
+                    "creem does not support changing the plan and the quantity in one update; apply them as two updates",
+                );
             }
 
             if (patch.quantity !== undefined && (!Number.isSafeInteger(patch.quantity) || patch.quantity < 0)) {

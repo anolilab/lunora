@@ -10,6 +10,8 @@
  * break an auth request.
  */
 
+import { decodeBasicCredentials } from "@better-auth/core/oauth2";
+import { cyrb53 } from "@lunora/values";
 import { createAuthMiddleware } from "better-auth/api";
 
 import { onCloudflareEdge } from "../../../shared/on-cloudflare-edge";
@@ -54,14 +56,228 @@ interface AuthAuditHookConfig extends AppendAuthAuditOptions {
 interface AuditHookContext {
     body?: Record<string, unknown>;
     context?: {
-        newSession?: { session?: { userId?: string }; user?: { email?: string; id?: string } } | null;
+        newSession?: { session?: { activeOrganizationId?: string; impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
+        /** Cookies and headers the endpoint set on its way to the response, which the response is built from. */
+        responseHeaders?: Headers;
         returned?: unknown;
-        session?: { session?: { userId?: string }; user?: { email?: string; id?: string } } | null;
+        secret?: string;
+        session?: { session?: { activeOrganizationId?: string; impersonatedBy?: string; userId?: string }; user?: { email?: string; id?: string } } | null;
     };
     headers?: Headers;
+    /** The HTTP verb. better-auth sets it for a request over `handler`, not for a direct `auth.api.*` call. */
+    method?: string;
+    /** Path parameters, e.g. `{ userId }`. Can carry secrets, so only allow-listed keys are ever copied. */
+    params?: Record<string, unknown>;
     path?: string;
     request?: Request;
 }
+
+/**
+ * Exact-suffix endpoint table, checked before the branches in {@link eventForPath}.
+ * Suffixes are anchored to the whole segment path, never substrings like
+ * `/admin/`, so an app `basePath` cannot change the result. Checking this table
+ * first also keeps `/device/token` (a session issue) from falling into the
+ * `ends("/token")` refresh branch, which is an order-sensitive trap the
+ * substring branches cannot avoid.
+ */
+const SUFFIX_EVENTS: ReadonlyArray<readonly [suffix: string, event: AuthAuditEvent]> = [
+    ["/admin/impersonate-user", "admin-impersonate-start"],
+    ["/admin/stop-impersonating", "admin-impersonate-stop"],
+    ["/admin/set-user-password", "admin-password-set"], // secret-scanner:allow -- endpoint path or event name, not a credential
+    ["/admin/set-role", "admin-role-change"],
+    ["/admin/revoke-user-session", "admin-session-revoke"],
+    ["/admin/revoke-user-sessions", "admin-session-revoke"],
+    ["/admin/ban-user", "admin-user-ban"],
+    ["/admin/unban-user", "admin-user-unban"],
+    ["/admin/create-user", "admin-user-create"],
+    ["/admin/update-user", "admin-user-update"],
+    ["/admin/remove-user", "admin-user-remove"],
+    ["/api-key/create", "api-key-create"],
+    ["/api-key/update", "api-key-update"],
+    ["/api-key/delete", "api-key-delete"],
+    ["/device/approve", "device-approve"],
+    ["/device/deny", "device-deny"],
+    ["/device/token", "sign-in"],
+    // Before `/change-email`, which it ends with: the OTP flow changes the address itself, the plain request only sends a link.
+    ["/email-otp/change-email", "email-change"],
+    ["/email-otp/request-email-change", "email-change-request"],
+    ["/change-email", "email-change-request"],
+    ["/delete-user", "user-delete"],
+    ["/delete-user/callback", "user-delete"],
+    ["/delete-anonymous-user", "user-delete"],
+    ["/forget-password/email-otp", "password-reset-request"], // secret-scanner:allow -- endpoint path or event name, not a credential
+    // Also sends sign-in and verification codes; `refineEvent` keeps only the `forget-password` type.
+    ["/email-otp/send-verification-otp", "password-reset-request"], // secret-scanner:allow -- endpoint path or event name, not a credential
+    ["/two-factor/generate-backup-codes", "mfa-backup-codes-regenerate"],
+    ["/one-time-token/generate", "one-time-token-create"],
+    ["/one-time-token/verify", "sign-in"],
+    ["/one-tap/callback", "sign-in"],
+    ["/passkey/verify-authentication", "sign-in"],
+    ["/passkey/verify-registration", "passkey-add"],
+    ["/passkey/delete-passkey", "passkey-remove"],
+    ["/passkey/update-passkey", "passkey-rename"],
+    // Verification signs the caller in unless it attaches a number (see `refineEvent`).
+    ["/phone-number/verify", "sign-in"],
+    ["/siwe/verify", "sign-in"],
+    ["/sso/callback", "sign-in"],
+    ["/multi-session/set-active", "session-switch"],
+    ["/multi-session/revoke", "session-revoke"],
+    ["/oauth2/create-client", "oauth-client-create"], // also covers /admin/oauth2/create-client
+    ["/oauth2/register", "oauth-client-create"],
+    ["/oauth2/update-client", "oauth-client-update"], // also covers /admin/oauth2/update-client
+    ["/oauth2/delete-client", "oauth-client-delete"],
+    ["/oauth2/client/rotate-keys", "oauth-client-keys-rotate"],
+    ["/oauth2/client/rotate-secret", "oauth-client-secret-rotate"],
+    ["/oauth2/consent", "oauth-consent"],
+    ["/oauth2/update-consent", "oauth-consent-update"],
+    ["/oauth2/delete-consent", "oauth-consent-revoke"],
+    ["/oauth2/revoke", "oauth-token-revoke"],
+    // The code-grant token endpoint issues a session; eventForPath tells a refresh apart by grant_type.
+    ["/oauth2/token", "oauth-token-issue"],
+    // The end-session endpoint answers GET and POST, and can ask for a confirmation step; the
+    // suffix is anchored, so the confirm path needs its own row.
+    ["/oauth2/end-session", "sign-out"],
+    ["/oauth2/end-session/confirm", "sign-out"],
+    ["/organization/create", "org-create"],
+    ["/organization/update", "org-update"],
+    ["/organization/delete", "org-delete"],
+    ["/organization/invite-member", "org-invitation-create"],
+    ["/organization/accept-invitation", "org-invitation-accept"],
+    ["/organization/reject-invitation", "org-invitation-reject"],
+    ["/organization/cancel-invitation", "org-invitation-cancel"],
+    ["/organization/leave", "org-member-leave"],
+    ["/organization/remove-member", "org-member-remove"],
+    ["/organization/update-member-role", "org-member-role-change"],
+    ["/organization/set-active", "org-switch"],
+    ["/organization/set-active-team", "org-team-switch"],
+    ["/organization/create-role", "org-role-change"],
+    ["/organization/update-role", "org-role-change"],
+    ["/organization/delete-role", "org-role-change"],
+    ["/organization/create-team", "org-team-create"],
+    ["/organization/update-team", "org-team-update"],
+    ["/organization/remove-team", "org-team-remove"],
+    ["/organization/add-team-member", "org-team-member-add"],
+    ["/organization/remove-team-member", "org-team-member-remove"],
+    ["/sso/register", "sso-provider-register"],
+    ["/sso/update-provider", "sso-provider-update"],
+    ["/sso/delete-provider", "sso-provider-delete"],
+];
+
+/**
+ * Compile a table suffix to a case-insensitive end-anchored pattern. A `:param`
+ * segment matches exactly one path segment, so the template path the hook receives
+ * (`/scim/v2/Users/:userId`) and a concrete path behind an app `basePath`
+ * (`/api/auth/scim/v2/Users/u-123`) classify the same way.
+ */
+const suffixPattern = (suffix: string): RegExp =>
+    new RegExp(
+        `${suffix
+            .split("/")
+            .map((segment) => (segment.startsWith(":") ? "[^/]+" : segment.toLowerCase().replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`)))
+            .join("/")}$`,
+    );
+
+/**
+ * Rows for paths that serve several endpoints, told apart only by HTTP method. Each
+ * is checked before {@link SUFFIX_EVENTS}. A row matches only when the caller
+ * supplies a method that equals its own: with no method (a direct `auth.api.*`
+ * call, which the hook never sees a verb for) these paths stay unclassified. That is
+ * deliberate, since server code is trusted and guessing a verb would turn a read into
+ * a write row.
+ */
+const METHOD_EVENTS: ReadonlyArray<readonly [method: string, suffix: string, event: AuthAuditEvent]> = [
+    ["POST", "/admin/oauth2/resources", "oauth-resource-create"],
+    ["PATCH", "/admin/oauth2/resources/:identifier", "oauth-resource-update"],
+    ["DELETE", "/admin/oauth2/resources/:identifier", "oauth-resource-delete"],
+    ["POST", "/admin/oauth2/resources/:identifier/clients/:client_id", "oauth-resource-client-link"],
+    ["DELETE", "/admin/oauth2/resources/:identifier/clients/:client_id", "oauth-resource-client-unlink"],
+    ["POST", "/scim/v2/Users", "scim-user-create"],
+    ["PATCH", "/scim/v2/Users/:userId", "scim-user-update"],
+    ["PUT", "/scim/v2/Users/:userId", "scim-user-update"],
+    ["DELETE", "/scim/v2/Users/:userId", "scim-user-delete"],
+    ["POST", "/scim/v2/Groups", "scim-group-create"],
+    ["PATCH", "/scim/v2/Groups/:groupId", "scim-group-update"],
+    ["PUT", "/scim/v2/Groups/:groupId", "scim-group-update"],
+    ["DELETE", "/scim/v2/Groups/:groupId", "scim-group-delete"],
+];
+
+const SUFFIX_PATTERNS = SUFFIX_EVENTS.map(([suffix, event]) => {
+    return { event, pattern: suffixPattern(suffix) };
+});
+
+const METHOD_PATTERNS = METHOD_EVENTS.map(([method, suffix, event]) => {
+    return { event, method, pattern: suffixPattern(suffix) };
+});
+
+// The substring and suffix branches `eventForPath` falls back to. Order matters inside:
+// an earlier match wins, so reordering a branch changes the classification.
+const branchEventForPath = (normalized: string): AuthAuditEvent | undefined => {
+    const ends = (suffix: string): boolean => normalized === suffix || normalized.endsWith(suffix);
+
+    if (ends("/sign-up/email") || ends("/sign-up")) {
+        return "sign-up";
+    }
+
+    if (ends("/sign-in/social") || ends("/sign-in/magic-link") || ends("/sign-in/sso")) {
+        return "sign-in-initiated";
+    }
+
+    if (
+        normalized.includes("/sign-in/") ||
+        normalized.includes("/callback/") ||
+        normalized.includes("/saml2/sp/acs/") ||
+        ends("/magic-link/verify") ||
+        normalized.includes("/two-factor/verify-")
+    ) {
+        return "sign-in";
+    }
+
+    if (ends("/sign-out") || normalized.includes("/saml2/logout/") || normalized.includes("/saml2/sp/slo/")) {
+        return "sign-out";
+    }
+
+    if (ends("/change-password") || ends("/set-password")) {
+        return "password-change";
+    }
+
+    if (ends("/reset-password")) {
+        return "password-reset";
+    }
+
+    if (ends("/request-password-reset") || ends("/forget-password")) {
+        return "password-reset-request"; // secret-scanner:allow -- endpoint path or event name, not a credential
+    }
+
+    if (ends("/verify-email")) {
+        return "email-verification";
+    }
+
+    if (normalized.includes("/two-factor/enable") || normalized.includes("/totp/enable")) {
+        return "mfa-enable";
+    }
+
+    if (normalized.includes("/two-factor/disable") || normalized.includes("/totp/disable")) {
+        return "mfa-disable";
+    }
+
+    if (ends("/refresh-token") || ends("/token")) {
+        return "token-refresh";
+    }
+
+    if (ends("/revoke-session") || ends("/revoke-sessions") || ends("/revoke-other-sessions")) {
+        return "session-revoke";
+    }
+
+    if (ends("/link-social")) {
+        return "account-link";
+    }
+
+    if (ends("/unlink-account")) {
+        return "account-unlink";
+    }
+
+    return undefined;
+};
 
 /**
  * Map a better-auth endpoint path to the security event it represents, or
@@ -124,70 +340,36 @@ interface AuditHookContext {
  * `/oauth2/callback/` is inside `better-auth/plugins/oauth-popup`, which
  * `plugins.ts` does not re-export — so today the branch fires for the core
  * callback, and stays correct if the other becomes reachable.
+ *
+ * The plugin endpoints in {@link SUFFIX_EVENTS} are pinned against the installed
+ * better-auth by `__tests__/audit-endpoint-coverage.test.ts`, which fails on any
+ * endpoint it does not classify, so an upgrade cannot add one silently.
+ *
+ * The method-keyed rows are checked first, then the exact suffix table {@link SUFFIX_EVENTS},
+ * then the substring branches.
+ *
+ * `method` only matters for {@link METHOD_EVENTS}, the paths that serve a read and a
+ * write under one template (SCIM users, OAuth resources). Pass it whenever the verb
+ * is known; a direct server call has none, and those paths are left unclassified.
+ *
+ * `grantType` is the request's `grant_type`. The OAuth token endpoint serves both the
+ * initial grant and a refresh, and only the refresh is a token refresh.
  */
-const eventForPath = (path: string): AuthAuditEvent | undefined => {
+const eventForPath = (path: string, method?: string, grantType?: string): AuthAuditEvent | undefined => {
     const normalized = path.toLowerCase();
-    const ends = (suffix: string): boolean => normalized === suffix || normalized.endsWith(suffix);
+    const upperMethod = method?.toUpperCase();
+    // A callback's last segment is the provider's id, so it can equal an endpoint name (`/callback/delete-user`). A callback
+    // is a sign-in whatever ends it, so no other rule is consulted for it.
+    const isCallback = normalized.includes("/callback/") || normalized.includes("/saml2/sp/acs/");
+    const callbackEvent: AuthAuditEvent | undefined = isCallback ? "sign-in" : undefined;
+    const isTokenRefresh = normalized.endsWith("/oauth2/token") && grantType === "refresh_token";
+    const event: AuthAuditEvent | undefined =
+        (isTokenRefresh ? "token-refresh" : undefined) ??
+        METHOD_PATTERNS.find((row) => row.method === upperMethod && row.pattern.test(normalized))?.event ??
+        (isCallback ? undefined : SUFFIX_PATTERNS.find((row) => row.pattern.test(normalized))?.event) ??
+        branchEventForPath(normalized);
 
-    if (ends("/sign-up/email") || ends("/sign-up")) {
-        return "sign-up";
-    }
-
-    if (ends("/sign-in/social") || ends("/sign-in/magic-link") || ends("/sign-in/sso")) {
-        return "sign-in-initiated";
-    }
-
-    if (
-        normalized.includes("/sign-in/") ||
-        normalized.includes("/callback/") ||
-        normalized.includes("/saml2/sp/acs/") ||
-        ends("/magic-link/verify") ||
-        normalized.includes("/two-factor/verify-")
-    ) {
-        return "sign-in";
-    }
-
-    if (ends("/sign-out") || normalized.includes("/saml2/logout/") || normalized.includes("/saml2/sp/slo/")) {
-        return "sign-out";
-    }
-
-    if (ends("/change-password") || ends("/set-password")) {
-        return "password-change";
-    }
-
-    if (ends("/reset-password") || ends("/request-password-reset") || ends("/forget-password")) {
-        return "password-reset";
-    }
-
-    if (ends("/verify-email")) {
-        return "email-verification";
-    }
-
-    if (normalized.includes("/two-factor/enable") || normalized.includes("/totp/enable")) {
-        return "mfa-enable";
-    }
-
-    if (normalized.includes("/two-factor/disable") || normalized.includes("/totp/disable")) {
-        return "mfa-disable";
-    }
-
-    if (ends("/refresh-token") || ends("/token")) {
-        return "token-refresh";
-    }
-
-    if (ends("/revoke-session") || ends("/revoke-sessions") || ends("/revoke-other-sessions")) {
-        return "session-revoke";
-    }
-
-    if (ends("/link-social")) {
-        return "account-link";
-    }
-
-    if (ends("/unlink-account")) {
-        return "account-unlink";
-    }
-
-    return undefined;
+    return callbackEvent ?? event;
 };
 
 /** Pull the first present header off whichever of `headers` / `request.headers` exists. */
@@ -228,9 +410,64 @@ const resolveIp = (context: AuditHookContext, trustProxyHeaders: boolean | undef
     return header(context, "x-forwarded-for")?.split(",")[0]?.trim();
 };
 
-/** Resolve actor id/email from the freshly-created session (sign-in/up) or the existing session. */
-const resolveActor = (context: AuditHookContext): { actorEmail?: string; actorId?: string } => {
-    const source = context.context?.newSession ?? context.context?.session;
+const stringOf = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
+
+/** Longest id copied into `detail`; a longer value is cut rather than dropped. */
+const MAX_DETAIL_ID_LENGTH = 256;
+
+/** An id cut to the detail limit, keeping a hash of the whole value so two long ids that share a prefix stay apart. */
+const boundedDetailValue = (id: string): string =>
+    id.length <= MAX_DETAIL_ID_LENGTH ? id : `${id.slice(0, MAX_DETAIL_ID_LENGTH - 15)}~${cyrb53(id).toString(16).padStart(14, "0")}`;
+
+/**
+ * An id read from a request body or response and copied into `detail`. Capped, because a caller can send any length
+ * and a failed request is still written.
+ */
+const detailId = (value: unknown): string | undefined => {
+    const id = stringOf(value);
+
+    // An `@` marks an email, or a URL that carries userinfo. Neither is an id, and an identifier is exempt from redaction,
+    // so it is never copied.
+    if (id === undefined || id.includes("@")) {
+        return undefined;
+    }
+
+    return boundedDetailValue(id);
+};
+
+const fieldOf = (value: unknown, key: string): unknown =>
+    typeof value === "object" && value !== null && key in value ? (value as Record<string, unknown>)[key] : undefined;
+
+/**
+ * The session an event is performed by. A revoke, a switch or an email change is made by the request's session: a
+ * revoke or switch can leave another account's session in `newSession`, and an immediate email change puts the new
+ * address there, while the forensic actor is the account that was signed in. Every other event reads the identity it
+ * produces, which is `newSession`.
+ */
+type SessionShape = NonNullable<NonNullable<AuditHookContext["context"]>["session"]>;
+
+const actingSession = (context: AuditHookContext, event: AuthAuditEvent | undefined): SessionShape | null | undefined => {
+    const requestSession = context.context?.session;
+    const resultingSession = context.context?.newSession;
+
+    return event === "session-revoke" || event === "session-switch" || event === "email-change"
+        ? (requestSession ?? resultingSession)
+        : (resultingSession ?? requestSession);
+};
+
+/**
+ * Resolve actor id/email from the freshly-created session (sign-in/up) or the existing session.
+ * An impersonated session names the administrator in `impersonatedBy`, and that is the actor: its
+ * `user` is the impersonated account. The administrator's email is not on the session, so none is recorded.
+ */
+const resolveActor = (context: AuditHookContext, event: AuthAuditEvent | undefined): { actorEmail?: string; actorId?: string } => {
+    const source = actingSession(context, event);
+    const impersonator = stringOf(source?.session?.impersonatedBy);
+
+    if (impersonator !== undefined) {
+        return { actorId: impersonator };
+    }
+
     const actorId = source?.user?.id ?? source?.session?.userId;
     const actorEmail = source?.user?.email;
 
@@ -294,6 +531,377 @@ const resolveTargetEmail = (context: AuditHookContext, event: AuthAuditEvent): s
 };
 
 /**
+ * The account an impersonated session acts as, which the administrator named in `impersonatedBy` acts for.
+ * `undefined` for an ordinary session.
+ */
+const impersonatedUserId = (context: AuditHookContext, event: AuthAuditEvent | undefined): string | undefined => {
+    const source = actingSession(context, event);
+
+    if (stringOf(source?.session?.impersonatedBy) === undefined) {
+        return undefined;
+    }
+
+    return stringOf(source?.user?.id);
+};
+
+/**
+ * The subject of an admin action whose body names no `userId`: `create-user` acts on the
+ * account its response returns, and `stop-impersonating` on the impersonated session's user.
+ */
+const adminSubject = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
+    if (event === "admin-user-create") {
+        return detailId(fieldOf(fieldOf(context.context?.returned, "user"), "id"));
+    }
+
+    if (event === "admin-impersonate-stop") {
+        return detailId(fieldOf(fieldOf(context.context?.session, "user"), "id")) ?? detailId(fieldOf(fieldOf(context.context?.session, "session"), "userId"));
+    }
+
+    return undefined;
+};
+
+/**
+ * Whether `/change-email` changed the address at once rather than sending a link. Better-auth sets a new session only on
+ * that immediate path, and the session it sets carries the new address. A taken address, or a verified account, gets
+ * `{ status: true }` with no new session, so it stays a request.
+ */
+const isImmediateEmailChange = (context: AuditHookContext): boolean => {
+    const newEmail = stringOf(context.body?.["newEmail"])?.toLowerCase();
+
+    return newEmail !== undefined && context.context?.newSession?.user?.email === newEmail;
+};
+
+/** A non-empty value in the cookie the end-session endpoint sets before asking to confirm; its clearing cookie has none. */
+const LOGOUT_CONFIRMATION_COOKIE = /\.oauth_logout_confirmation=[^;]/u;
+
+/** Whether a logout only asked the user to confirm: that page sets the confirmation cookie and ends no session. */
+const isLogoutConfirmation = (context: AuditHookContext): boolean =>
+    (context.context?.responseHeaders?.getSetCookie() ?? []).some((cookie) => LOGOUT_CONFIRMATION_COOKIE.test(cookie));
+
+/** Device-flow errors that mean the user has not approved yet: the client polls again, and nothing failed. */
+const DEVICE_POLL_PENDING: ReadonlySet<string> = new Set(["authorization_pending", "slow_down"]);
+
+/** Settle the events the path decides only with the request: an email change, a logout's confirmation step, and a reset code. */
+const refinePathEvent = (context: AuditHookContext, event: AuthAuditEvent, path: string): AuthAuditEvent | undefined => {
+    let refined: AuthAuditEvent | undefined = event;
+
+    if (event === "email-change-request" && path.endsWith("/change-email") && isImmediateEmailChange(context)) {
+        refined = "email-change";
+    } else if (event === "sign-out" && path.endsWith("/oauth2/end-session") && isLogoutConfirmation(context)) {
+        // Asking the user to confirm ends no session. `/oauth2/end-session/confirm` records the logout once it happens.
+        refined = undefined;
+    } else if (event === "password-reset-request" && path.endsWith("/email-otp/send-verification-otp")) {
+        // The same endpoint sends sign-in and verification codes too; only a reset code is a password-reset request.
+        refined = context.body?.["type"] === "forget-password" ? event : undefined;
+    }
+
+    return refined;
+};
+
+/**
+ * Settle the endpoint's event from the request body and the response, where the path alone cannot tell.
+ * Returns `undefined` for a device poll that is still waiting for approval.
+ */
+const refineEvent = (context: AuditHookContext, event: AuthAuditEvent): AuthAuditEvent | undefined => {
+    const path = context.path?.toLowerCase() ?? "";
+    const returned = context.context?.returned;
+    const pendingDevicePoll = DEVICE_POLL_PENDING.has(stringOf(fieldOf(fieldOf(returned, "body"), "error")) ?? "");
+
+    let refined: AuthAuditEvent | undefined;
+
+    if (event === "sign-in" && path.endsWith("/phone-number/verify")) {
+        // Without `updatePhoneNumber` the code signs the caller in, unless sessions are disabled: a verified number then comes
+        // back with no token, and nobody is signed in. With `updatePhoneNumber` the number is attached to an existing account.
+        // A failed request is recorded as a failed sign-in attempt, as before. A successful one signs in only with a token.
+        const hasToken = stringOf(fieldOf(returned, "token")) !== undefined;
+        const signsIn = context.body?.["updatePhoneNumber"] !== true && (hasToken || resolveOutcome(context) === "failure");
+        refined = signsIn ? "sign-in" : "phone-verification";
+    } else if (event === "user-delete" && path.endsWith("/delete-user") && stringOf(fieldOf(returned, "message")) === "Verification email sent") {
+        refined = "user-delete-request";
+    } else if (event === "sign-in" && path.endsWith("/device/token") && pendingDevicePoll) {
+        refined = undefined;
+    } else {
+        refined = refinePathEvent(context, event, path);
+    }
+
+    return refined;
+};
+
+/** The `client_id` in a consent request's `oauth_query`, which is the OAuth query string the consent page was opened with. */
+const clientIdOf = (oauthQuery: unknown): string | undefined => {
+    if (typeof oauthQuery !== "string") {
+        return undefined;
+    }
+
+    return detailId(new URLSearchParams(oauthQuery).get("client_id") ?? undefined);
+};
+
+const BASIC_SCHEME = /^basic /iu;
+
+/**
+ * The organization an invitation answer names: an accept returns the invitation and the member it created, each
+ * carrying the organization, and a cancel returns the cancelled invitation itself. Accepting, rejecting or cancelling
+ * carries no organization id in the request.
+ */
+const invitationOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
+    if (!event.startsWith("org-invitation-")) {
+        return undefined;
+    }
+
+    const returned = context.context?.returned;
+
+    return (
+        detailId(fieldOf(fieldOf(returned, "invitation"), "organizationId")) ??
+        detailId(fieldOf(fieldOf(returned, "member"), "organizationId")) ??
+        (event === "org-invitation-cancel" ? detailId(fieldOf(returned, "organizationId")) : undefined)
+    );
+};
+
+/** The organization a switch moved to: the answer to `set-active` is that organization, and `null` when the switch cleared it. */
+const switchedOrganizationId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
+    event === "org-switch" ? detailId(fieldOf(context.context?.returned, "id")) : undefined;
+
+/** The part of a value before any query or fragment. */
+const BEFORE_QUERY = /^[^?#]*/u;
+
+/** Schemes whose URIs name a resource by identifier and carry no payload, so a URI without a host is still a valid identifier. */
+const HOSTLESS_IDENTIFIER_SCHEMES: ReadonlySet<string> = new Set(["did:", "urn:"]);
+
+/**
+ * A resource identifier is a URI, and a URI can carry credentials or a token in its query. Only the origin and path are
+ * kept, so the trail names the resource without the secret that rode along with it.
+ */
+const resourceIdentifierOf = (value: unknown): string | undefined => {
+    const identifier = stringOf(value);
+
+    if (identifier === undefined) {
+        return undefined;
+    }
+
+    try {
+        // Clearing the userinfo, query and fragment keeps every scheme, where an origin would read as "null" for most.
+        const url = new URL(identifier);
+
+        url.username = "";
+        url.password = "";
+        url.search = "";
+        url.hash = "";
+
+        // A special scheme gives an empty path a trailing slash. Only that one is dropped, never a slash in a real path.
+        const cleaned = url.pathname === "/" ? url.href.slice(0, -1) : url.href;
+
+        // A URI with no host keeps only a scheme that names a resource by identifier. Any other (a `data:` URI, say) carries its
+        // payload in the path, so it is not recorded, since an identifier is exempt from redaction.
+        if (url.host === "") {
+            return HOSTLESS_IDENTIFIER_SCHEMES.has(url.protocol) ? detailId(cleaned) : undefined;
+        }
+
+        return boundedDetailValue(cleaned);
+    } catch {
+        // Not a parseable URI, so the value before any query or fragment is all that is safe to keep.
+        return detailId(BEFORE_QUERY.exec(identifier)?.[0]);
+    }
+};
+
+/**
+ * The client id a `client_secret_basic` credential names, decoded by better-auth's own reader so the row names the client
+ * the server authenticated. Only the id is copied, never the secret.
+ */
+const clientIdFromBasic = (authorization: string | undefined): string | undefined => {
+    if (authorization === undefined || !BASIC_SCHEME.test(authorization)) {
+        return undefined;
+    }
+
+    try {
+        return detailId(decodeBasicCredentials(authorization).clientId);
+    } catch {
+        // A malformed credential, or one without a separator, which would make the whole value the secret.
+        return undefined;
+    }
+};
+
+/** The client id a client-registration response returns, for `oauth-client-create` (its request does not carry one). */
+const createdClientId = (context: AuditHookContext, event: AuthAuditEvent): string | undefined =>
+    event === "oauth-client-create" && resolveOutcome(context) === "success" ? detailId(fieldOf(context.context?.returned, "client_id")) : undefined;
+
+/** The role or roles a member is set to: one name, or several names joined, so a multi-role change keeps every role it assigned. */
+const memberRoleOf = (value: unknown): string | undefined => {
+    if (Array.isArray(value)) {
+        return detailId(value.every((role) => typeof role === "string") ? value.join(",") : undefined);
+    }
+
+    return detailId(value);
+};
+
+/**
+ * The organization a row names. A new organization or team is named by its request or response. A team change names the
+ * organization its request selects, as the server scopes it, and defaults to the active one. An accept, reject or cancel is about its invitation's
+ * organization, and the request is not trusted for it. Otherwise the request's organization, then the response's, then the session's.
+ */
+const organizationOf = (
+    context: AuditHookContext,
+    event: AuthAuditEvent,
+    body: Record<string, unknown>,
+    createdId: string | undefined,
+    activeOrganizationId: string | undefined,
+): string | undefined => {
+    if (event === "org-create") {
+        return createdId;
+    }
+
+    // Team endpoints take the organization the request names and default to the active one, as the server scopes them:
+    // an update names it inside `data`, and a team switch only ever acts within the active organization.
+    if (event === "org-team-switch") {
+        return activeOrganizationId;
+    }
+
+    if (event === "org-team-update") {
+        return detailId(fieldOf(body["data"], "organizationId")) ?? activeOrganizationId;
+    }
+
+    if (event.startsWith("org-team-") && event !== "org-team-create") {
+        return detailId(body["organizationId"]) ?? activeOrganizationId;
+    }
+
+    if (event === "org-invitation-accept" || event === "org-invitation-reject" || event === "org-invitation-cancel") {
+        return invitationOrganizationId(context, event);
+    }
+
+    return (
+        detailId(body["organizationId"]) ??
+        detailId(fieldOf(context.context?.returned, "organizationId")) ??
+        invitationOrganizationId(context, event) ??
+        switchedOrganizationId(context, event) ??
+        activeOrganizationId
+    );
+};
+
+/**
+ * The organization, team, invitation and member ids an `org-*` row names. A create endpoint is named by its
+ * response, since its request need not carry the new id; any other call falls back to the session's active organization.
+ */
+const organizationIds = (context: AuditHookContext, event: AuthAuditEvent): ReadonlyArray<readonly [key: string, value: string | undefined]> => {
+    const body = context.body ?? {};
+    const createdId = detailId(fieldOf(context.context?.returned, "id"));
+    // Only a call that acts within the active organization is attributed to it. A switch, an invitation (which may belong to
+    // another organization) or a create names its organization from the request or the response.
+    const activeOrganizationId =
+        event.startsWith("org-member-") ||
+        event.startsWith("org-team-") ||
+        event === "org-role-change" ||
+        event === "org-update" ||
+        event === "org-invitation-create"
+            ? detailId(fieldOf(fieldOf(context.context?.session, "session"), "activeOrganizationId"))
+            : undefined;
+    // `remove-member` takes a member id or an email. The `@` check runs on the whole value, since cutting it first could leave
+    // an email's prefix in the trail, and an email is never copied.
+    const memberReferenceOf = (value: unknown): string | undefined => (typeof value === "string" && value.includes("@") ? undefined : detailId(value));
+    const memberReference = memberReferenceOf(body["memberIdOrEmail"]);
+
+    return [
+        ["organizationId", organizationOf(context, event, body, createdId, activeOrganizationId)],
+        ["teamId", detailId(body["teamId"]) ?? (event === "org-team-create" ? createdId : undefined)],
+        ["roleId", detailId(body["roleId"]) ?? (event === "org-role-change" ? createdId : undefined)],
+        ["roleName", detailId(body["roleName"]) ?? (event === "org-role-change" ? detailId(body["role"]) : undefined)],
+        // The permission level a member is set to. A plain name, so it is kept as the request sent it.
+        ["role", event === "org-member-role-change" ? memberRoleOf(body["role"]) : undefined],
+        ["invitationId", detailId(body["invitationId"]) ?? (event === "org-invitation-create" ? createdId : undefined)],
+        ["memberId", memberReferenceOf(body["memberId"]) ?? memberReference],
+        ["targetUserId", detailId(body["userId"])],
+    ];
+};
+
+/** The client, resource and consent ids an OAuth row names. */
+const oauthIds = (context: AuditHookContext, event: AuthAuditEvent): ReadonlyArray<readonly [key: string, value: string | undefined]> => {
+    const body = context.body ?? {};
+    const params = context.params ?? {};
+
+    // A proxy's HTTP Basic credential is not the client, so only a token exchange or a revoke reads one. There the server
+    // authenticates the Basic credential before any body `client_id`, so the credential names the client.
+    const basicClientId = event === "oauth-token-issue" || event === "oauth-token-revoke" ? clientIdFromBasic(header(context, "authorization")) : undefined;
+    // A registration is named only by the client it created: a `client_id` in its request names nothing the server made.
+    const clientId =
+        event === "oauth-client-create"
+            ? createdClientId(context, event)
+            : (basicClientId ?? detailId(body["client_id"]) ?? detailId(params["client_id"]) ?? clientIdOf(body["oauth_query"]));
+
+    return [
+        ["clientId", clientId],
+        // A resource is named by its path, or by the `identifier` a create request carries.
+        ["resourceIdentifier", resourceIdentifierOf(params["identifier"] ?? body["identifier"])],
+        // An update or revoke of a consent names it by its own id, not by a client.
+        ["consentId", event === "oauth-consent-update" || event === "oauth-consent-revoke" ? detailId(body["id"]) : undefined],
+    ];
+};
+
+/**
+ * The ids an audit row names, per event family, copied from an allow-list only.
+ * Bodies and params carry secrets (`rotate-secret` returns one, `set-user-password`
+ * sends one) and emails (invitations), so no other field is ever copied.
+ *
+ * An `admin-*` row's `targetUserId` is the user the administrator acted on. An impersonated session's row names the
+ * impersonated account as `targetUserId`, except an `admin-*` row, which keeps the user it acted on, and a team-membership
+ * row, which names the user its body does.
+ */
+const resolveDetailIds = (context: AuditHookContext, event: AuthAuditEvent): Record<string, string> => {
+    const body = context.body ?? {};
+    const params = context.params ?? {};
+
+    const createdId = detailId(fieldOf(context.context?.returned, "id"));
+
+    const candidates = ((): ReadonlyArray<readonly [key: string, value: string | undefined]> => {
+        if (event.startsWith("admin-")) {
+            return [["targetUserId", detailId(body["userId"]) ?? adminSubject(context, event)]];
+        }
+
+        if (event.startsWith("org-")) {
+            return organizationIds(context, event);
+        }
+
+        if (event.startsWith("oauth-")) {
+            return oauthIds(context, event);
+        }
+
+        if (event === "token-refresh") {
+            // A refresh grant names the client it refreshes for. Only the OAuth token endpoint authenticates a client with
+            // Basic; on the session `/refresh-token` or the JWT `/token` that header is a proxy's login, not a client.
+            const isOAuthToken = context.path?.toLowerCase().endsWith("/oauth2/token") === true;
+            const basicClientId = isOAuthToken ? clientIdFromBasic(header(context, "authorization")) : undefined;
+
+            return [["clientId", basicClientId ?? detailId(body["client_id"])]];
+        }
+
+        if (event.startsWith("scim-")) {
+            // A SCIM resource id, not necessarily the better-auth user id. A create is collection-level, so its id comes from the response.
+            return [
+                ["scimUserId", detailId(params["userId"]) ?? (event === "scim-user-create" ? createdId : undefined)],
+                ["scimGroupId", detailId(params["groupId"]) ?? (event === "scim-group-create" ? createdId : undefined)],
+            ];
+        }
+
+        if (event.startsWith("api-key-")) {
+            // The created key's id, or the `keyId` the caller named. The key secret is never copied.
+            return [["keyId", event === "api-key-create" ? detailId(fieldOf(context.context?.returned, "id")) : detailId(body["keyId"])]];
+        }
+
+        if (event.startsWith("sso-provider-")) {
+            return [["providerId", detailId(body["providerId"])]];
+        }
+
+        return [];
+    })();
+
+    // An impersonated session's rows are about the impersonated account. The entry is added last, so it overrides the
+    // subject any body field names: a stray field cannot hide who was impersonated. A team membership change names the
+    // user it acts on in the body, which is the subject.
+    const namesUser = event.startsWith("org-team-member-");
+    const impersonated = event.startsWith("admin-") || namesUser ? undefined : impersonatedUserId(context, event);
+    const entries = [...candidates, ...(impersonated === undefined ? [] : [["targetUserId", impersonated] as const])];
+
+    return Object.fromEntries(entries.flatMap(([key, value]) => (value === undefined ? [] : [[key, value] as const])));
+};
+
+/**
  * Build the entry a given after-hook context should record, or `undefined` when
  * the path is not an audited security event. Exported for direct unit testing of
  * the classification/extraction without spinning up better-auth.
@@ -314,7 +922,10 @@ const buildAuditEntry = (
     context: AuditHookContext,
     { now = Date.now(), trustProxyHeaders }: { now?: number; trustProxyHeaders?: boolean } = {},
 ): AppendAuthAuditEntry | undefined => {
-    const event = context.path === undefined ? undefined : eventForPath(context.path);
+    const rawGrantType = context.body?.["grant_type"];
+    const grantType = typeof rawGrantType === "string" ? rawGrantType : undefined;
+    const endpointEvent = context.path === undefined ? undefined : eventForPath(context.path, context.method, grantType);
+    const event = endpointEvent === undefined ? undefined : refineEvent(context, endpointEvent);
 
     if (event === undefined) {
         return undefined;
@@ -325,14 +936,14 @@ const buildAuditEntry = (
     const targetEmail = resolveTargetEmail(context, event);
 
     return {
-        ...resolveActor(context),
+        ...resolveActor(context, event),
         event,
-        outcome: resolveOutcome(context),
+        outcome: event === "oauth-consent" && context.body?.["accept"] === false ? "failure" : resolveOutcome(context),
         ts: now,
         ...(ip === undefined ? {} : { ip }),
         ...(targetEmail === undefined ? {} : { targetEmail }),
         ...(userAgent === undefined ? {} : { userAgent }),
-        detail: { path: context.path },
+        detail: { path: context.path, ...resolveDetailIds(context, event) },
     };
 };
 
@@ -358,6 +969,9 @@ const buildAuditEntry = (
  * | `/callback/:id` (social + generic-oauth)          | _(not recorded)_    | `sign-in`             |
  * | `/magic-link/verify`                               | _(not recorded)_    | `sign-in`             |
  * | `/two-factor/verify-totp` / `-otp` / `-backup-code`| _(not recorded)_    | `sign-in`             |
+ * | `/device/token`                                    | `token-refresh`     | `sign-in`             |
+ * | `/request-password-reset`, `/forget-password`, `…/forget-password/email-otp`, `…/request-password-reset` | `password-reset` | `password-reset-request` |
+ * | Any event in a session that is impersonating another user | actor is the impersonated user, with `actorEmail` | actor is the administrator (`impersonatedBy`), with no `actorEmail`; the impersonated user is `detail.targetUserId` |
  *
  * A caller matching on `event === "sign-in"` now sees FEWER events for
  * `/sign-in/social` and `/sign-in/magic-link` (they never actually authenticated
@@ -382,6 +996,7 @@ const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAut
 
             if (entry !== undefined) {
                 const persisted = await appendAuthAuditEntry(config.executor, entry, {
+                    hashKey: context.context.secret,
                     redactDetail: config.redactDetail,
                     retention: config.retention,
                 });

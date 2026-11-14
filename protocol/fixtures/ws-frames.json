@@ -1,5 +1,5 @@
 {
-    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `pageDeltaFrames` is a SEPARATE set only an SDK that announced the `pageDelta` capability should run: each case applies its `frame` ON TOP of `baseWire` (merging, not replacing) and asserts the merged `valueWire`. It is deliberately not in `serverFrames`, which SDKs iterate wholesale and apply by replacement. `refreshBatchFrames` is likewise separate, for an SDK that announced `refreshBatch`: frames between `batchStart` and `batchEnd` are held and applied together at the end, with one notification per subscription (README 5.5). `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) \u2014 an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it. All eight non-JS ports announce `pageDelta` and assert `pageDeltaFrames` and `connect-with-page-delta-caps`. `connect-with-caps` and `refreshBatchFrames` are asserted by `@lunora/client` alone, since no port announces `refreshBatch`; they are the reference's forward contract, not dead data.",
+    "$comment": "Golden fixtures for the WebSocket subscription protocol (GET /_lunora/ws). `clientFrames` are frames a client MUST emit; a conforming client's builders produce these (compared as parsed JSON, key order irrelevant). `serverFrames` are frames a client MUST consume; each `expect` describes the observable effect (`valueWire` is the wire form of the value delivered to the callback, so encode(received) == valueWire). `shape` covers the poke-based partial-replication path. `pageDeltaFrames` is a SEPARATE set only an SDK that announced the `pageDelta` capability should run: each case applies its `frame` ON TOP of `baseWire` (merging, not replacing) and asserts the merged `valueWire`. It is deliberately not in `serverFrames`, which SDKs iterate wholesale and apply by replacement. `pageDeltaPoisonCases`, `pageDeltaRunCases` and `identityChangeEvictionCases` are separate for the same reason: each seeds one subscription and checks its steps in order. `refreshBatchFrames` is likewise separate, for an SDK that announced `refreshBatch`: frames between `batchStart` and `batchEnd` are held and applied together at the end, with one notification per subscription (README 5.5). `connect-with-caps` is the OPTIONAL capability-announcing form of the connect frame (protocol README 5.1.1) \u2014 an SDK that implements no capability tokens emits plain `connect` and is fully conforming, so only an SDK that has actually implemented a token should assert against it. All eight non-JS ports announce `pageDelta` and assert `pageDeltaFrames` and `connect-with-page-delta-caps`. `connect-with-caps` and `refreshBatchFrames` are asserted by `@lunora/client` alone, since no port announces `refreshBatch`; they are the reference's forward contract, not dead data.",
     "clientFrames": {
         "connect": {
             "clientId": "client-test",
@@ -78,7 +78,7 @@
             "type": "whisper"
         }
     },
-    "stream": {
+    "watch": {
         "$comment": "A live query consumed as the language's own PULL type — an async generator, a channel, an Enumerator, an Iterator, an AsyncStream — yields exactly the values the callback form delivers, in frame order, and stops delivering once the consumer stops. Same subscription, same decode: the values arrive wire-encoded on the frames and are decoded on the way out, so a port that hands the raw frame payload to its stream fails here rather than in a consumer. `sub_1` is the id every port mints for a first subscription.",
         "subscriptionId": "sub_1",
         "frames": [
@@ -523,12 +523,33 @@
             "baseWire": { "continueCursor": "c_2", "isDone": false, "page": [{ "_creationTime": 1001, "_id": "m1", "text": "one" }] },
             "frame": { "id": "sub_1", "type": "delta", "delta": { "count": 1 } },
             "expect": { "kind": "delta", "id": "sub_1", "valueWire": { "count": 1 } }
+        },
+        {
+            "name": "delta-multi-table-placeholder",
+            "$comment": "A query that read more than one table (here a membership check, then messages) stamps the placeholder \"__lunora__\" on its row deltas (protocol README 5.1.1). The merge is by key; the table field only has to be a string.",
+            "baseWire": [
+                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                { "_creationTime": 1002, "_id": "m2", "text": "two" }
+            ],
+            "frame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "__lunora__" }
+            },
+            "expect": {
+                "kind": "delta",
+                "id": "sub_1",
+                "valueWire": [
+                    { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                    { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                ]
+            }
         }
     ],
     "pageDeltaPoisonCases": [
         {
             "name": "unmergeable-run-freezes-the-cursor",
-            "$comment": "A row change that cannot be merged (an update with no row) poisons the subscription: later delta frames are not merged, published or allowed to advance the resume cursor, even when they carry one. Only a data frame or a resubscribe clears the poison. Without this a later frame's cursor would move the resume position past the dropped change, so a reconnect would not replay it (protocol README 5.4).",
+            "$comment": "A row change that cannot be merged (an update with no row) poisons the subscription: later delta frames are not merged, published or allowed to advance the resume cursor, even when they carry one. Only a data frame or a resubscribe clears the poison. The freezing frame raises one delta_unmergeable error. Without this a later frame's cursor would move the resume position past the dropped change, so a reconnect would not replay it (protocol README 5.4).",
             "steps": [
                 {
                     "frame": {
@@ -541,7 +562,8 @@
                         },
                         "more": true
                     },
-                    "publishes": 0
+                    "publishes": 0,
+                    "errors": ["delta_unmergeable"]
                 },
                 {
                     "frame": {
@@ -676,7 +698,8 @@
                         "cursor": 6,
                         "epoch": "e1"
                     },
-                    "publishes": 0
+                    "publishes": 0,
+                    "errors": ["delta_unmergeable"]
                 },
                 {
                     "resume": {
@@ -728,7 +751,8 @@
                         "cursor": 6,
                         "epoch": "e1"
                     },
-                    "publishes": 0
+                    "publishes": 0,
+                    "errors": ["delta_unmergeable"]
                 },
                 {
                     "resume": {
@@ -754,6 +778,510 @@
                         "isDone": false,
                         "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
                     }
+                }
+            ]
+        }
+    ],
+    "pageDeltaRunCases": [
+        {
+            "name": "run-commits-once-on-its-last-frame",
+            "$comment": "A run of delta frames marked more: true is held until its last frame, which carries no more. Nothing publishes mid-run; the last frame publishes once with every row of the run merged in order, and carries the cursor (protocol README 5.4).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m5", "op": "insert", "row": { "_id": "m5", "text": "five" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_2",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "ONE" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" },
+                            { "_id": "m5", "text": "five" }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "run-held-when-the-socket-drops-resumes-from-before-the-run",
+            "$comment": "The cursor moves only when a run commits. A socket drop or reconnect while a run is held discards the held frames and resumes from the cursor before the run, so the server replays the whole run (protocol README 5.4). A delta after the resend merges onto the committed base alone, so the discarded change does not reappear.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": { "sinceSeq": 5, "sinceEpoch": "e1" }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_2",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "data-frame-mid-run-discards-the-held-frames",
+            "$comment": "A data snapshot arriving mid-run is authoritative: the held frames are discarded, not merged onto the snapshot. A delta after the snapshot merges onto the snapshot alone, so the discarded row change does not reappear.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                { "_creationTime": 1001, "_id": "m1", "text": "uno" },
+                                { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                            ]
+                        },
+                        "cursor": 7,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "uno" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                        ]
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 8,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "uno" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "settled-mid-run-freezes-the-subscription",
+            "$comment": "A settled frame that arrives while a run is held discards the held frames and freezes the subscription, as an unmergeable row change does: the cursor and epoch do not move, and later delta, resume and settled frames are ignored until a data frame or a resubscribe clears the freeze. The settled cursor is past rows the client never applied, and a later valid delta would otherwise commit against a base missing them, so a reconnect could never replay them (protocol README 5.4).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "more": true
+                    },
+                    "publishes": 0
+                },
+                {
+                    "frame": { "id": "sub_1", "type": "settled", "cursor": 6, "epoch": "e1" },
+                    "publishes": 0
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 7,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": { "sinceSeq": 5, "sinceEpoch": "e1" }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                                { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                            ]
+                        },
+                        "cursor": 8,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "delta-without-more-publishes-on-arrival",
+            "$comment": "A delta with no more is a whole change on its own (a legacy broadcastDelta, or the last frame of a single-frame run) and is applied on arrival.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [{ "_creationTime": 1001, "_id": "m1", "text": "one" }]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_2",
+                        "isDone": false,
+                        "page": [{ "_creationTime": 1001, "_id": "m1", "text": "ONE" }]
+                    }
+                }
+            ]
+        }
+    ],
+    "undecodableDeltaRunCases": [
+        {
+            "name": "undecodable-run-frame-freezes-the-subscription",
+            "$comment": "A run frame the decoder refuses discards the held run and freezes the subscription. The refused frame reports WIRE_DECODE_FAILED once. A later valid final delta must not commit: the base never received the refused row, so the cursor stays put and the resume after the freeze replays the run from before it (protocol README 5.4).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE", "n": ["$lunora.wire$", "bigint", "not-a-number"] },
+                            "table": "messages"
+                        },
+                        "more": true
+                    },
+                    "publishes": 0,
+                    "errors": ["WIRE_DECODE_FAILED"]
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": { "sinceSeq": 5, "sinceEpoch": "e1" }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                                { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                            ]
+                        },
+                        "cursor": 7,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "undecodable-single-delta-freezes-the-subscription",
+            "$comment": "A lone delta the decoder refuses is a row change that never reaches the base, so it freezes the subscription like a refused run frame. It reports WIRE_DECODE_FAILED once. A later valid delta must not commit onto the base missing that row: the cursor stays put and the resume after the freeze replays from before it (protocol README 5.4).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": {
+                            "key": "m1",
+                            "op": "update",
+                            "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE", "n": ["$lunora.wire$", "bigint", "not-a-number"] },
+                            "table": "messages"
+                        },
+                        "cursor": 6,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0,
+                    "errors": ["WIRE_DECODE_FAILED"]
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m2", "op": "update", "row": { "_creationTime": 1002, "_id": "m2", "text": "TWO" }, "table": "messages" },
+                        "cursor": 7,
+                        "epoch": "e1"
+                    },
+                    "publishes": 0
+                },
+                {
+                    "resume": {
+                        "sinceSeq": 5,
+                        "sinceEpoch": "e1"
+                    }
+                },
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "data",
+                        "data": {
+                            "continueCursor": "c_3",
+                            "isDone": false,
+                            "page": [
+                                { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                                { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                            ]
+                        },
+                        "cursor": 8,
+                        "epoch": "e2"
+                    },
+                    "publishes": 1,
+                    "valueWire": {
+                        "continueCursor": "c_3",
+                        "isDone": false,
+                        "page": [
+                            { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                            { "_creationTime": 1002, "_id": "m2", "text": "TWO" }
+                        ]
+                    }
+                }
+            ]
+        }
+    ],
+    "identityChangeEvictionCases": [
+        {
+            "name": "identity-change-evicts-the-cached-base",
+            "$comment": "After a change to a different identity the cached base is gone, so a row change cannot merge into it: it is held and publishes nothing. A port that keeps the old base merges onto rows this identity was never shown (see identityChange).",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "identityChange": { "from": "user-a", "to": "user-b" },
+            "steps": [
+                {
+                    "frame": {
+                        "id": "sub_1",
+                        "type": "delta",
+                        "delta": { "key": "m1", "op": "update", "row": { "_creationTime": 1001, "_id": "m1", "text": "ONE" }, "table": "messages" },
+                        "cursor": 6,
+                        "epoch": "e2"
+                    },
+                    "publishes": 0
+                }
+            ]
+        },
+        {
+            "name": "identity-change-evicts-the-poison",
+            "$comment": "The freeze is per identity too. After the change a resume frame advances the cursor again, so the next resend names the new cursor. A port that keeps the poison ignores the frame and resends with no cursor.",
+            "seedFrame": {
+                "id": "sub_1",
+                "type": "data",
+                "data": {
+                    "continueCursor": "c_2",
+                    "isDone": false,
+                    "page": [
+                        { "_creationTime": 1001, "_id": "m1", "text": "one" },
+                        { "_creationTime": 1002, "_id": "m2", "text": "two" }
+                    ]
+                },
+                "cursor": 5,
+                "epoch": "e1"
+            },
+            "freezeFrame": {
+                "id": "sub_1",
+                "type": "delta",
+                "delta": { "key": "m1", "op": "update", "table": "messages" },
+                "more": true
+            },
+            "freezeErrors": ["delta_unmergeable"],
+            "identityChange": { "from": "user-a", "to": "user-b" },
+            "steps": [
+                {
+                    "frame": { "id": "sub_1", "type": "resume", "cursor": 7, "epoch": "e2" },
+                    "publishes": 0
+                },
+                {
+                    "resume": { "sinceSeq": 7, "sinceEpoch": "e2" }
                 }
             ]
         }

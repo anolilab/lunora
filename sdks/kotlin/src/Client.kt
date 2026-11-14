@@ -229,8 +229,8 @@ class Client(
     private val shapes = LinkedHashMap<String, Shape>()
     private val pokes = LinkedHashMap<String, PokeBuffer>()
 
-    /** The open [Stream]s, so [close] can end them. */
-    private val streams = mutableSetOf<Stream>()
+    /** The open [Watch]s, so [close] can end them. */
+    private val streams = mutableSetOf<Watch>()
     private var nextId = 0
     private var nextShapeId = 0
 
@@ -250,6 +250,13 @@ class Client(
          * Cleared by a `data` frame (a snapshot) or by a resubscribe, whose replay re-applies it.
          */
         var poisoned: Boolean = false
+
+        /**
+         * The payload of a run of `more: true` deltas, merged but not yet committed. Frames of a run
+         * merge onto this rather than onto the base, and cursor, epoch and the layers move only when
+         * the run's last frame commits it, so a reconnect mid-run resumes from before the whole run.
+         */
+        var heldRun: WireValue? = null
 
         /**
          * The stable wire key of [args], computed once at subscribe time so a
@@ -585,6 +592,7 @@ class Client(
         // socket with a generation newer than the credential it presents.
         val (generation, credential, provider) = synchronized(lock) {
             send = null
+            discardHeldRuns()
             Triple(++attachGeneration, credentialGeneration, wsToken)
         }
         sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke(), caps = CAPABILITIES))
@@ -629,6 +637,7 @@ class Client(
         val expired = synchronized(lock) {
             send = null
             attachGeneration++
+            discardHeldRuns()
 
             when {
                 closeCode == CLOSE_TOKEN_EXPIRED -> true
@@ -777,7 +786,7 @@ class Client(
 
     /**
      * Rejects every queued write so no caller waits on a dead client, and ends
-     * every open [Stream], so a loop blocked on one returns instead of waiting
+     * every open [Watch], so a loop blocked on one returns instead of waiting
      * forever on a client nothing will deliver to again. Durable storage is
      * untouched: the next session restores those writes.
      */
@@ -966,7 +975,7 @@ class Client(
      * consumer polling two of them can read them out of order, and the whole
      * point of a stream is that what arrived first is delivered first.
      */
-    data class StreamEvent(val value: WireValue?, val error: SubscriptionError?)
+    data class WatchEvent(val value: WireValue?, val error: SubscriptionError?)
 
     /**
      * A live query as a closeable [Sequence], for `for (event in stream)`.
@@ -980,21 +989,21 @@ class Client(
      * `Flow` lives in kotlinx-coroutines, and this transport takes no
      * dependencies beyond the JDK.
      */
-    class Stream internal constructor() :
-        Sequence<StreamEvent>,
+    class Watch internal constructor() :
+        Sequence<WatchEvent>,
         AutoCloseable {
         // Unbounded, so the frame dispatcher never blocks on a slow consumer; the
         // trade is that one which stops reading without closing grows the buffer.
-        internal val events = LinkedBlockingQueue<StreamEvent>()
+        internal val events = LinkedBlockingQueue<WatchEvent>()
 
         // The sentinel the iterator stops on. A distinct instance rather than a
         // null, because LinkedBlockingQueue rejects nulls outright.
-        private val end = StreamEvent(null, null)
+        private val end = WatchEvent(null, null)
         private val closed = AtomicBoolean()
         internal var unsubscribe: () -> Unit = {}
 
-        override fun iterator(): Iterator<StreamEvent> = object : Iterator<StreamEvent> {
-            private var next: StreamEvent? = null
+        override fun iterator(): Iterator<WatchEvent> = object : Iterator<WatchEvent> {
+            private var next: WatchEvent? = null
 
             override fun hasNext(): Boolean {
                 if (next != null) return true
@@ -1004,7 +1013,7 @@ class Client(
                 return next !== end
             }
 
-            override fun next(): StreamEvent {
+            override fun next(): WatchEvent {
                 if (!hasNext()) throw NoSuchElementException("the stream is closed")
 
                 return checkNotNull(next).also { next = null }
@@ -1022,19 +1031,19 @@ class Client(
     }
 
     /**
-     * Opens a live query as a [Stream].
+     * Opens a live query as a [Watch].
      *
      * Each call opens its OWN subscription — at CALL time, so a frame arriving
-     * before the loop starts is not lost — and [Stream.close] tears it down. Use
+     * before the loop starts is not lost — and [Watch.close] tears it down. Use
      * [subscribe] directly when the value outlives one loop.
      */
-    fun stream(functionPath: String, args: WireValue? = null, shardKey: String? = null): Stream {
-        val stream = Stream()
+    fun watch(functionPath: String, args: WireValue? = null, shardKey: String? = null): Watch {
+        val stream = Watch()
         val unsubscribe = subscribe(
             functionPath,
             args,
-            { value -> stream.events.add(StreamEvent(value, null)) },
-            { error -> stream.events.add(StreamEvent(null, error)) },
+            { value -> stream.events.add(WatchEvent(value, null)) },
+            { error -> stream.events.add(WatchEvent(null, error)) },
             shardKey,
         )
 
@@ -1084,6 +1093,7 @@ class Client(
         // The frames are BUILT under the lock, not just the iteration: each one
         // reads `cursor`/`epoch`, which the frame handler writes. Snapshotting the
         // entries and reading their cursors afterwards resends a torn one.
+        val frozen = LinkedHashMap<String, Subscription>()
         val (sender, frames) = synchronized(lock) {
             val sender = send
             val frames =
@@ -1094,7 +1104,10 @@ class Client(
                     // every shape view subscribed to a socket that no longer
                     // exists — silently, and for the rest of the process's life.
                     subscriptions.map { (id, entry) ->
+                        // A send that fails below puts the freeze back.
+                        if (entry.poisoned) frozen[id] = entry
                         entry.poisoned = false
+                        entry.heldRun = null
                         buildSubscribeFrame(id, entry.functionPath, entry.args, null, entry.cursor, entry.epoch)
                     } +
                         shapes.map { (id, shape) ->
@@ -1107,7 +1120,20 @@ class Client(
 
         if (sender == null) return
 
-        for (frame in frames) sender(frame)
+        for (frame in frames) {
+            try {
+                sender(frame)
+            } catch (error: Exception) {
+                // Nothing replayed the dropped change for the frames that never went out, so a
+                // later delta would move the cursor past it. The failed one and every unsent
+                // frame stay frozen; the ones already sent are replaying.
+                synchronized(lock) { frozen.values.forEach { it.poisoned = true } }
+
+                throw error
+            }
+
+            frozen.remove(frame["id"])
+        }
     }
 
     /**
@@ -1144,9 +1170,26 @@ class Client(
                     // EVERY other subscription on this client, so it is delivered
                     // to the addressed subscription's error callbacks instead and
                     // the frame is reported as the error it is.
-                    val handler = synchronized(lock) { subscriptions[id]?.onError }
+                    val (handler, alreadyFrozen) = synchronized(lock) {
+                        // A frame that cannot be read leaves the run incomplete, so it is not committed.
+                        val entry = subscriptions[id]
+                        val frozen = entry?.poisoned == true
 
-                    handler?.invoke(SubscriptionError("INVALID_FRAME", error.message ?: "subscription payload could not be decoded"))
+                        entry?.heldRun = null
+
+                        // A refused delta never reached the base, so a later delta would commit past it:
+                        // the subscription freezes until a data frame or a resubscribe.
+                        if (isDelta && entry != null) entry.poisoned = true
+
+                        entry?.onError to frozen
+                    }
+
+                    // A frozen subscription ignores delta frames, so the refusal is not reported twice.
+                    if (isDelta && alreadyFrozen) return "error"
+
+                    val code = if (isDelta) WIRE_DECODE_FAILED else "INVALID_FRAME"
+
+                    handler?.invoke(SubscriptionError(code, error.message ?: "subscription payload could not be decoded"))
 
                     return "error"
                 }
@@ -1161,10 +1204,10 @@ class Client(
                             entry.poisoned = false
                         }
 
-                        // The merge applies to the server base, never to the value the caller
-                        // sees: the overlays are re-folded onto the result below.
+                        // The merge applies to the server base (or the run held on top of it), never to
+                        // the value the caller sees: the overlays are re-folded onto the result below.
                         val resolved = if (isDelta) {
-                            RowDelta.resolve(value, if (entry.state.hasBase) entry.state.serverBase else null)
+                            RowDelta.resolve(value, entry.heldRun ?: if (entry.state.hasBase) entry.state.serverBase else null)
                         } else {
                             RowDelta.Resolution.Publish(value)
                         }
@@ -1173,6 +1216,7 @@ class Client(
                         // It also poisons the subscription so a later frame's cursor cannot skip it.
                         if (resolved !is RowDelta.Resolution.Publish) {
                             entry.poisoned = true
+                            entry.heldRun = null
                             // Reported once, when the freeze starts: an app that stays silent shows a stale list.
                             val onError = entry.onError
 
@@ -1188,6 +1232,16 @@ class Client(
                             return@let
                         }
 
+                        // Nothing of a run is visible until its last frame: publishing mid-run would show a
+                        // half-applied change, and advancing the cursor would skip the rest on a reconnect.
+                        if (isDelta && frame["more"] == true) {
+                            entry.heldRun = resolved.value
+
+                            return@let
+                        }
+
+                        // A data frame commits too, which is what discards a run it interrupts.
+                        entry.heldRun = null
                         entry.state.serverBase = resolved.value
                         entry.state.hasBase = true
                         // Advanced only once the frame is applied: an unmergeable row change returned above
@@ -1224,6 +1278,18 @@ class Client(
                         // A poisoned subscription ignores these frames too: their cursor would
                         // move the resume position past the dropped row change.
                         if (entry.poisoned) return@let
+
+                        // A run still held when `settled` arrives was cut short: its rest is
+                        // not coming, so the held frames are void and the cursor stays at the
+                        // last published state, or a reconnect would resume past the lost rows.
+                        // It freezes the subscription, as an unmergeable row change does, silently.
+                        if (kind == "settled" && entry.heldRun != null) {
+                            entry.heldRun = null
+                            entry.poisoned = true
+                            return@let
+                        }
+
+                        entry.heldRun = null
 
                         advance(entry, frame)
                         // A resume/settled frame advances the cursor without a
@@ -1348,6 +1414,11 @@ class Client(
         return hydrated.shardKeys
     }
 
+    /** Call with [lock] held: a dropped socket never delivers the rest of a run, so its held frames are void. */
+    private fun discardHeldRuns() {
+        for (entry in subscriptions.values) entry.heldRun = null
+    }
+
     /**
      * Drops the resume state the previous identity left, under the lock; returns
      * the shape callbacks to tell (outside it) that their view is now empty.
@@ -1357,6 +1428,7 @@ class Client(
             entry.cursor = null
             entry.epoch = null
             entry.poisoned = false
+            entry.heldRun = null
             // A cached base belongs to the previous identity; a row change must not merge into it.
             entry.state.hasBase = false
         }

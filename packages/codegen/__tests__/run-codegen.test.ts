@@ -5035,7 +5035,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
 
         it("wires ctx.payments into the ShardDO when payments are used", () => {
-            expect.assertions(10);
+            expect.assertions(12);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
@@ -5052,6 +5052,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // The money-moving facade methods are stubbed too — not left as `undefined` behind the cast.
             for (const method of ["cancelPayment", "capturePayment", "refundPayment"]) {
                 expect(output).toContain(`    ${method}: () => {`);
+            }
+
+            // `provider` and `store` are data, so reading them throws the same message instead of returning `undefined`.
+            for (const property of ["provider", "store"]) {
+                expect(output).toContain(`    get ${property}(): never {`);
             }
         });
 

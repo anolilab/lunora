@@ -111,7 +111,17 @@ const strayArguments = (tool: string, { logger, rest }: ToolRun): CommandResult<
 const runAiGateway = async (run: ToolRun): Promise<CommandResult<unknown>> => {
     const { cwd, logger, options } = run;
 
-    return strayArguments("ai-gateway", run) ?? runAiGatewayCommand({ cwd, dryRun: options.dryRun === true, id: options.id, logger, logs: options.logs });
+    return (
+        strayArguments("ai-gateway", run) ??
+        runAiGatewayCommand({
+            cwd,
+            dryRun: options.dryRun === true,
+            id: options.id,
+            logger,
+            logs: options.logs,
+            ...(options.env === undefined ? {} : { env: options.env }),
+        })
+    );
 };
 
 const runAlerts = async ({ cwd, format, logger, options, rest }: ToolRun): Promise<CommandResult<unknown>> => {

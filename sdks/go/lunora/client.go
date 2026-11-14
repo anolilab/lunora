@@ -258,6 +258,11 @@ type subscription struct {
 	// and a reconnect would never replay it. While set, delta frames are ignored;
 	// a data frame (an authoritative snapshot) or a resubscribe clears it.
 	poisoned bool
+	// pending is the value of a delta run held so far (frames marked more). A run commits only
+	// on its last frame, so the held frames never move the cursor, and a run cut off by a
+	// reconnect leaves the resume point before it: the server replays the whole run.
+	pending    any
+	hasPending bool
 	// state carries the displayed value and its optimistic overlays. See
 	// optimistic.go.
 	state OptimisticState
@@ -435,6 +440,7 @@ func (c *Client) evictSessionLocked(deferred *[]func()) {
 		entry.epoch = nil
 		// A freeze belongs to the previous identity, as its cached base does.
 		entry.poisoned = false
+		entry.discardRun()
 		entry.state.ServerBase = nil
 		entry.state.ServerCursor = nil
 		NotifySubscription(&entry.state, FoldOptimistic(nil, entry.state.Layers), deferred)
@@ -477,6 +483,8 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	// socket whose connect failed is never a refusal of the current credential.
 	c.send = nil
 	c.socketGeneration = -1
+	// A run held on the previous socket never finishes on this one.
+	c.discardRunsLocked()
 
 	if send(BuildConnectFrame(c.clientID, context, c.sessionToken, PageDeltaCapability)) != nil {
 		return
@@ -514,6 +522,7 @@ func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 func (c *Client) DetachSocket(closeCode int, reason string) {
 	c.mu.Lock()
 	c.send = nil
+	c.discardRunsLocked()
 
 	expired := closeCode == 4001
 
@@ -704,7 +713,7 @@ func (c *Client) Online() bool {
 }
 
 // Close rejects every queued write so no caller waits on a dead client, and ends
-// every open [Client.Stream]. Durable storage is untouched: the next session
+// every open [Client.Watch]. Durable storage is untouched: the next session
 // restores those writes.
 func (c *Client) Close() {
 	c.mu.Lock()
@@ -1228,13 +1237,13 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 	}
 }
 
-// StreamEvent is one item delivered by [Client.Stream]: a value, or the
+// WatchEvent is one item delivered by [Client.Watch]: a value, or the
 // subscription error that ended it.
 //
 // One channel carrying both, rather than a value channel plus an error channel:
 // a consumer selecting on two channels can read them out of order, and the whole
 // point of a stream is that what arrived first is delivered first.
-type StreamEvent struct {
+type WatchEvent struct {
 	Value any
 	Err   error
 }
@@ -1253,8 +1262,8 @@ type StreamEvent struct {
 //
 // [Client.Close] ends every open stream too: the channel closes, so a `range`
 // over it returns rather than waiting on a client that will never send again.
-func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan StreamEvent, Unsubscribe) {
-	events := make(chan StreamEvent, streamBufferSize)
+func (c *Client) Watch(functionPath string, args any, shardKey string) (<-chan WatchEvent, Unsubscribe) {
+	events := make(chan WatchEvent, streamBufferSize)
 	done := make(chan struct{})
 
 	// sending is held (shared) for the whole of every send and taken exclusively
@@ -1269,7 +1278,7 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 		closed  bool
 	)
 
-	emit := func(event StreamEvent) {
+	emit := func(event WatchEvent) {
 		sending.RLock()
 		defer sending.RUnlock()
 
@@ -1286,8 +1295,8 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 	unsubscribe := c.Subscribe(
 		functionPath,
 		args,
-		func(value any) { emit(StreamEvent{Value: value}) },
-		func(err SubscriptionError) { emit(StreamEvent{Err: err}) },
+		func(value any) { emit(WatchEvent{Value: value}) },
+		func(err SubscriptionError) { emit(WatchEvent{Err: err}) },
 		shardKey,
 	)
 
@@ -1331,7 +1340,7 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 	return events, end
 }
 
-// streamBufferSize is how many values [Client.Stream] holds before its sends
+// streamBufferSize is how many values [Client.Watch] holds before its sends
 // block. Big enough that an ordinary consumer never sees backpressure, small
 // enough that a stalled one is noticed rather than growing without bound.
 const streamBufferSize = 64
@@ -1441,6 +1450,8 @@ func (c *Client) ResendSubscriptions() error {
 		c.mu.Lock()
 		wasPoisoned := entry.sub.poisoned
 		entry.sub.poisoned = false
+		// The replay re-sends the whole run from the cursor before it.
+		entry.sub.discardRun()
 		c.mu.Unlock()
 
 		if err := send(frame); err != nil {
@@ -1507,6 +1518,29 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			// not on the socket read loop's stack. Returning it ended the caller's
 			// loop — and with it every other subscription on this client — over one
 			// bad frame.
+			if entry != nil && kind == "delta" {
+				// A run that lost a frame cannot complete, and a later frame would commit against
+				// a base missing it: drop the run and freeze, as an unmergeable row change does.
+				c.mu.Lock()
+				frozen := entry.poisoned
+				entry.poisoned = true
+				entry.discardRun()
+				c.mu.Unlock()
+
+				// A frozen subscription ignores delta frames, so the refusal is already reported.
+				if !frozen && entry.onError != nil {
+					entry.onError(SubscriptionError{Code: CodeWireDecodeFailed, Message: err.Error()})
+				}
+
+				return "error", nil
+			}
+
+			if entry != nil {
+				c.mu.Lock()
+				entry.discardRun()
+				c.mu.Unlock()
+			}
+
 			if entry != nil && entry.onError != nil {
 				entry.onError(SubscriptionError{Code: "INVALID_FRAME", Message: err.Error()})
 			}
@@ -1523,15 +1557,24 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			// sees: the overlay is re-folded onto the merged base below.
 			if kind == "data" {
 				entry.poisoned = false
+				// A snapshot is authoritative: held frames are not merged onto it.
+				entry.discardRun()
 			} else if entry.poisoned {
 				c.mu.Unlock()
 
 				return kind, nil
 			}
 
-			merged, publish := resolveDataPayload(kind, entry.state.ServerBase, value)
+			// A run's later frames merge onto the frames before them, not the committed base.
+			base := entry.state.ServerBase
+			if entry.hasPending {
+				base = entry.pending
+			}
+
+			merged, publish := resolveDataPayload(kind, base, value)
 			if !publish {
 				entry.poisoned = true
+				entry.discardRun()
 				notice := entry.onError
 				c.mu.Unlock()
 
@@ -1543,6 +1586,17 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 				return kind, nil
 			}
 
+			// A non-final frame of a run is held: no publish, and no cursor, epoch or overlay
+			// movement until the run's last frame commits it.
+			if kind == "delta" && frame["more"] == true {
+				entry.pending = merged
+				entry.hasPending = true
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
+			entry.discardRun()
 			c.advanceLocked(entry, frame)
 			entry.state.ServerBase = merged
 
@@ -1574,6 +1628,22 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			var deferred []func()
 
 			c.mu.Lock()
+
+			// The cached value is current as of the cursor it resumed from, so a run cut off
+			// before it is void.
+			if kind == "resume" {
+				entry.discardRun()
+			}
+
+			// A settled mid-run is not the run's last frame: its cursor would move the resume
+			// position past frames that were never applied, so drop the run and hold the cursor.
+			if kind == "settled" && entry.hasPending {
+				entry.discardRun()
+				entry.poisoned = true
+				c.mu.Unlock()
+
+				return kind, nil
+			}
 
 			// A poisoned subscription ignores these frames too: their cursor would move
 			// the resume position past the dropped row change.
@@ -1968,6 +2038,20 @@ func removeKey(keys []string, key string) []string {
 	}
 
 	return keys
+}
+
+// discardRun drops a held delta run; call with mu held.
+func (s *subscription) discardRun() {
+	s.pending = nil
+	s.hasPending = false
+}
+
+// discardRunsLocked drops every held run, for a socket that ended or never opened; call
+// with mu held.
+func (c *Client) discardRunsLocked() {
+	for _, entry := range c.subscriptions {
+		entry.discardRun()
+	}
 }
 
 // advanceLocked moves the resume point. The caller holds the mutex: every frame

@@ -72,6 +72,145 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("flags an args value destructured from args at the body level", () => {
+        expect.assertions(1);
+
+        write("destructure.ts", `export const save = mutation(async ({ ctx, args }) => { const { key } = args; await ctx.kv.get(key); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a destructured args key whose name an inner function reuses for an unrelated value", () => {
+        expect.assertions(1);
+
+        write(
+            "inner-shadow.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = args; const fixed = () => { const { key } = { key: "x" }; return key; }; fixed(); await ctx.kv.get(key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a body-destructured args value composed after a ctx-scoped prefix", () => {
+        expect.assertions(1);
+
+        write(
+            "destructure-scoped.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = args; await ctx.kv.get(\`\${ctx.auth.userId}/\${key}\`); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a key prefixed only by a server-trusted non-identity ctx value", () => {
+        expect.assertions(1);
+
+        write("env-prefix.ts", `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(\`\${ctx.env.PREFIX}/\${args.key}\`); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a key scoped by the caller's own identity", () => {
+        expect.assertions(1);
+
+        write("own-prefix.ts", `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(\`\${ctx.auth.userId}/\${args.key}\`); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a caller key that only falls back to the caller's identity", () => {
+        expect.assertions(1);
+
+        write("fallback.ts", `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(args.key ?? ctx.auth.userId); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores an identity-prefixed key read inside a db write's arguments", () => {
+        expect.assertions(1);
+
+        write(
+            "nested-in-write.ts",
+            `export const save = mutation(async ({ ctx, args }) => { await ctx.db.patch(args.id, { v: await ctx.kv.get(\`\${ctx.auth.userId}:\${args.k}\`) }); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a key read off a row whose owner filter only falls back to the caller", () => {
+        expect.assertions(1);
+
+        write(
+            "owner-fallback.ts",
+            `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.files.findFirst({ where: { ownerId: args.ownerId ?? ctx.auth.userId } }); return ctx.kv.get(row.key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a caller key composed with an identity local passed into a db write", () => {
+        expect.assertions(1);
+
+        write(
+            "write-local.ts",
+            `export const save = mutation(async ({ ctx, args }) => { const actorId = ctx.auth.userId; return ctx.kv.get(\`\${args.key}:\${await ctx.db.patch(args.id, { actorId })}\`); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a caller key that only falls back to an identity local", () => {
+        expect.assertions(1);
+
+        write("local-fallback.ts", `export const read = query(async ({ ctx, args }) => { const uid = ctx.auth.userId; return ctx.kv.get(args.key ?? uid); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a caller key that only falls back to a key read off an owned row", () => {
+        expect.assertions(1);
+
+        write(
+            "row-fallback.ts",
+            `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(args.key ?? (await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } })).key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a key read off an owned row through findFirstOrThrow", () => {
+        expect.assertions(1);
+
+        write(
+            "or-throw.ts",
+            `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.files.findFirstOrThrow({ where: { ownerId: ctx.auth.userId, id: args.id } }); return ctx.kv.get(row.key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("ignores a key destructured off an owned row", () => {
+        expect.assertions(1);
+
+        write(
+            "owned-destructure.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId, id: args.id } }); return ctx.kv.get(key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a key destructured off an object that only carries the identity beside it", () => {
+        expect.assertions(1);
+
+        write(
+            "sibling-destructure.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = { key: args.key, ownerId: ctx.auth.userId }; return ctx.kv.get(key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("ignores a key scoped by a server-trusted ctx value", () => {
         expect.assertions(1);
 
@@ -185,6 +324,50 @@ export { warm as warmCache };`,
   return ctx.kv.get(\`\${owner}/\${args.name}\`);
 });`,
         );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+});
+
+describe("discoverKvKeyAccesses identity-bound guard", () => {
+    const HELPER = `const requireMember = async (ctx, channelId) => {
+  const member = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId } });
+  if (!member) {
+    throw new Error("forbidden");
+  }
+};`;
+    const handler = (guard: string): string => `${HELPER}
+export const cached = query(async ({ ctx, args }) => {
+  const message = await ctx.db.get("messages", args.messageId);
+  if (!message) {
+    throw new Error("not found");
+  }
+  ${guard}
+  return ctx.kv.get(message.cacheKey);
+});`;
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-kv-guard-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("accepts a helper guard that checks the caller against the row before the sink", () => {
+        expect.assertions(1);
+
+        write("chat.ts", handler("await requireMember(ctx, message.channelId);"));
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a helper guard whose argument does not reference the row", () => {
+        expect.assertions(1);
+
+        write("chat.ts", handler("await requireMember(ctx, args.channelId);"));
 
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });

@@ -17,6 +17,7 @@ import { ensureRequestLogTable, findDanglingReferences, readAuthMetrics, readErr
 import type { AuditLogResult, SqlExec } from "@lunora/shard-engine";
 import {
     ADMIN_FUNCTIONS,
+    ADMIN_WILDCARD,
     ensureAuditTable,
     facetColumn,
     findStorageReferences,
@@ -31,14 +32,6 @@ import {
 } from "@lunora/shard-engine";
 
 import { isIssueStatus, parseTablePageFilters } from "./admin-rpc-args";
-
-/**
- * Sentinel table name for an admin read that spans every table rather than
- * naming one (`getMetrics`, `getLogs`, `listTables`, `migrationStatus`). It is
- * `"*"` — a name no real SQLite table can take, so it never collides with a
- * tracked write — and a subscription memo carrying it re-runs on every write flush.
- */
-const ADMIN_WILDCARD = "*";
 
 /**
  * Shared shape behind `describeTables` and `listTablesIndexes`: read the
@@ -348,8 +341,9 @@ const readAdminDurableSignal = (functionPath: string, sql: SqlExec, args: Record
     return undefined;
 };
 
+export { ADMIN_WILDCARD } from "@lunora/shard-engine";
+
 export {
-    ADMIN_WILDCARD,
     batchedTableLookup,
     readAdminAuditLog,
     readAdminDurableSignal,

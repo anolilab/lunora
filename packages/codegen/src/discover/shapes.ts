@@ -8,7 +8,7 @@ import { diagnosticAt } from "../diagnostics";
 import type { ShapeIR, ValidatorIR } from "../ir";
 import { isServerPackageModule } from "../module-specifiers";
 import { parseObjectShape } from "../parse-validator";
-import { findObjectProperty } from "./ast";
+import { declarationLineOf, findObjectProperty } from "./ast";
 import { addressableExportNameOf } from "./attribution";
 import mayReadIp from "./ip-reads";
 
@@ -204,6 +204,7 @@ const shapesFromSource = (source: SourceFile): ShapeIR[] => {
             args: argsFrom(callExpression),
             exportName,
             filePath: "shapes",
+            line: declarationLineOf(declaration),
             ...(shapeMayReadIp(callExpression) ? { readsIp: true as const } : {}),
             table: tableLiteralFrom(callExpression),
         });

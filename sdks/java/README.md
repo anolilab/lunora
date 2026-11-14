@@ -4,7 +4,7 @@ A **protocol-conformant** Java client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, a closeable `Iterable` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, a closeable `Iterable` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -62,7 +62,7 @@ were and its `onError` receives `WIRE_DECODE_FAILED`. A later part whose
 whose epoch differs from the view's, is not spliced on: unless it is a `reset`,
 the view is emptied (its `onRows` told `[]`), its checkpoint and epoch cleared,
 and a cold `shape_subscribe` sent at once so the server re-seeds it.
-`client.close()` also ends every open `stream`.
+`client.close()` also ends every open `watch`.
 
 Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
 (`handleFrame` returns the frame's type):
