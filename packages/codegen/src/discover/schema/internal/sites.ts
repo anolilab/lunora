@@ -22,7 +22,7 @@ const siteLocatorFor =
         const filePath = node.getSourceFile().getFilePath();
         const fromLunora = relative(lunoraDirectory, filePath);
 
-        if (fromLunora === "" || fromLunora.startsWith("..") || isAbsolute(fromLunora) || fromLunora.split(sep).includes("node_modules")) {
+        if (fromLunora === "" || isAbsolute(fromLunora) || fromLunora.split(sep)[0] === ".." || fromLunora.split(sep).includes("node_modules")) {
             return undefined;
         }
 

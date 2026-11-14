@@ -38,6 +38,7 @@ const DOCS = {
 /** The subset of the wrangler config this command reads. */
 interface WranglerAiShape {
     account_id?: unknown;
+    env?: Record<string, { account_id?: unknown; vars?: Record<string, unknown> } | null | undefined>;
     name?: unknown;
     vars?: Record<string, unknown>;
 }
@@ -51,6 +52,8 @@ interface AiGatewayEnvironment {
 interface AiCommandOptions {
     cwd: string;
     dryRun?: boolean;
+    /** Write into `env.<name>.vars` instead of the top-level `vars`. */
+    env?: string;
     /** Defaults to `process.env`. */
     environment?: AiGatewayEnvironment;
     /** Defaults to the global `fetch`; injected in tests so nothing touches the network. */
@@ -126,11 +129,17 @@ const describeFailure = (response: GatewayResponse): string => {
 };
 
 /**
- * Rewrite the top-level wrangler `vars` so they carry `entries`, returning the
- * new text and the keys that actually changed. Uses the wrangler reconcilers'
- * shared `applyModify` so comments and formatting survive.
+ * Rewrite the wrangler `vars` block at `prefix` (`["vars"]` or
+ * `["env", name, "vars"]`) so it carries `entries`, returning the new text and
+ * the keys that actually changed. Uses the wrangler reconcilers' shared
+ * `applyModify` so comments and formatting survive.
  */
-const writeVariables = (text: string, current: Record<string, unknown> | undefined, entries: Record<string, string>): { changed: string[]; text: string } => {
+const writeVariables = (
+    text: string,
+    prefix: ReadonlyArray<string>,
+    current: Record<string, unknown> | undefined,
+    entries: Record<string, string>,
+): { changed: string[]; text: string } => {
     let next = text;
     const changed: string[] = [];
 
@@ -139,11 +148,61 @@ const writeVariables = (text: string, current: Record<string, unknown> | undefin
             continue;
         }
 
-        next = applyModify(next, ["vars", key], value);
+        next = applyModify(next, [...prefix, key], value);
         changed.push(key);
     }
 
     return { changed, text: next };
+};
+
+/** The vars block this run writes: the top level, or one environment's. */
+interface VariablesTarget {
+    /** The `account_id` wrangler deploys this target to: an environment's own, else the top-level one. */
+    accountId: unknown;
+    current: Record<string, unknown> | undefined;
+    /** How the block is named in messages: `vars` or `env.<name>.vars`. */
+    label: string;
+    path: ReadonlyArray<string>;
+}
+
+/**
+ * Pick the vars block for `--env`. An unknown environment is refused rather
+ * than created: `applyModify` would otherwise add a new `env` block from a typo.
+ */
+const resolveVariablesTarget = (options: AiCommandOptions, parsed: WranglerAiShape): AiCommandResult | VariablesTarget => {
+    if (options.env === undefined) {
+        return { accountId: parsed.account_id, current: parsed.vars, label: "vars", path: ["vars"] };
+    }
+
+    // An own property only: `--env __proto__` would otherwise resolve to `Object.prototype` and pass the object check.
+    const block = parsed.env !== undefined && Object.hasOwn(parsed.env, options.env) ? parsed.env[options.env] : undefined;
+
+    if (typeof block !== "object" || block === null) {
+        return fail(
+            options.logger,
+            EXIT_CODE.USAGE,
+            `ai-gateway: wrangler.jsonc has no env.${options.env} block — check the name, or add the environment first.`,
+        );
+    }
+
+    return { accountId: block.account_id ?? parsed.account_id, current: block.vars, label: `env.${options.env}.vars`, path: ["env", options.env, "vars"] };
+};
+
+/**
+ * Without `--env` the top-level vars are written, but wrangler does not pass
+ * them into environments, so an environment-deployed Worker keeps the default
+ * gateway. Name the environments so the user can re-run for each one.
+ */
+const warnIfEnvironmentsSkipped = (options: AiCommandOptions, parsed: WranglerAiShape, verb: "would write" | "wrote"): void => {
+    const names = Object.keys(parsed.env ?? {});
+
+    if (options.env !== undefined || names.length === 0) {
+        return;
+    }
+
+    options.logger.warn(
+        `ai-gateway: ${verb} the top-level vars only; wrangler does not inherit vars into environments — re-run with --env <name> for each of: ${names.join(", ")}`,
+    );
 };
 
 const printNextSteps = (logger: Logger, gatewayId: string): void => {
@@ -246,12 +305,12 @@ const resolveProject = (options: AiCommandOptions): AiCommandResult | GatewayPro
 const onOff = (value: boolean): string => (value ? "on" : "off");
 
 /** Log what a `--dry-run` would do, including a prerequisite the real run would stop on. */
-const reportDryRun = (logger: Logger, data: AiGatewayData): AiCommandResult => {
+const reportDryRun = (logger: Logger, data: AiGatewayData, label: string): AiCommandResult => {
     logger.info(`ai-gateway (dry run): would create or reuse AI Gateway "${data.gatewayId}" (log collection ${onOff(data.collectLogs)}).`);
     logger.info(
         data.varsWritten.length === 0
-            ? `ai-gateway (dry run): ${data.wranglerPath} vars are already up to date.`
-            : `ai-gateway (dry run): would write ${data.varsWritten.join(", ")} into ${data.wranglerPath} vars.`,
+            ? `ai-gateway (dry run): ${data.wranglerPath} ${label} are already up to date.`
+            : `ai-gateway (dry run): would write ${data.varsWritten.join(", ")} into ${data.wranglerPath} ${label}.`,
     );
 
     if (data.accountId === undefined) {
@@ -271,17 +330,31 @@ const runAiGatewayCommand = async (options: AiCommandOptions): Promise<AiCommand
 
     const { gatewayId, parsed, text, wranglerPath } = project;
     const collectLogs = options.logs !== false;
-    const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, parsed.account_id);
+    const target = resolveVariablesTarget(options, parsed);
+
+    if ("code" in target) {
+        return target;
+    }
+
+    const { accountId, token } = resolveCloudflareCredentials(options.environment ?? process.env, target.accountId);
     // The account id is only read by bring-your-own providers (`resolveAiGateway`'s
     // `baseURL`); the binding path needs the gateway id alone.
     const variables: Record<string, string> = {
         [AI_GATEWAY_ID_VAR]: gatewayId,
         ...(accountId === undefined ? {} : { [AI_GATEWAY_ACCOUNT_ID_VAR]: accountId }),
     };
-    const written = writeVariables(text, parsed.vars, variables);
+    const written = writeVariables(text, target.path, target.current, variables);
 
     if (options.dryRun === true) {
-        return reportDryRun(logger, { accountId, action: "planned", collectLogs, dryRun: true, gatewayId, varsWritten: written.changed, wranglerPath });
+        const planned = reportDryRun(
+            logger,
+            { accountId, action: "planned", collectLogs, dryRun: true, gatewayId, varsWritten: written.changed, wranglerPath },
+            target.label,
+        );
+
+        warnIfEnvironmentsSkipped(options, parsed, "would write");
+
+        return planned;
     }
 
     if (token === undefined || accountId === undefined) {
@@ -309,11 +382,12 @@ const runAiGatewayCommand = async (options: AiCommandOptions): Promise<AiCommand
 
     if (written.changed.length > 0) {
         writeFileSync(wranglerPath, written.text, "utf8");
-        logger.success(`ai-gateway: wrote ${written.changed.join(", ")} into ${wranglerPath} vars.`);
+        logger.success(`ai-gateway: wrote ${written.changed.join(", ")} into ${wranglerPath} ${target.label}.`);
     } else {
-        logger.info(`ai-gateway: ${wranglerPath} vars are already up to date.`);
+        logger.info(`ai-gateway: ${wranglerPath} ${target.label} are already up to date.`);
     }
 
+    warnIfEnvironmentsSkipped(options, parsed, "wrote");
     printNextSteps(logger, gatewayId);
 
     return {

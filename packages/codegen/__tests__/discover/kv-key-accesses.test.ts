@@ -118,6 +118,47 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it("flags a caller key that only falls back to the caller's identity", () => {
+        expect.assertions(1);
+
+        write("fallback.ts", `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(args.key ?? ctx.auth.userId); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a key read off an owned row through findFirstOrThrow", () => {
+        expect.assertions(1);
+
+        write(
+            "or-throw.ts",
+            `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.files.findFirstOrThrow({ where: { ownerId: ctx.auth.userId, id: args.id } }); return ctx.kv.get(row.key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("ignores a key destructured off an owned row", () => {
+        expect.assertions(1);
+
+        write(
+            "owned-destructure.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId, id: args.id } }); return ctx.kv.get(key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a key destructured off an object that only carries the identity beside it", () => {
+        expect.assertions(1);
+
+        write(
+            "sibling-destructure.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = { key: args.key, ownerId: ctx.auth.userId }; return ctx.kv.get(key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("ignores a key scoped by a server-trusted ctx value", () => {
         expect.assertions(1);
 

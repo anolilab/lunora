@@ -4555,6 +4555,9 @@ importers:
       fallow:
         specifier: catalog:lint
         version: 3.34.0
+      fast-check:
+        specifier: catalog:test
+        version: 4.10.2
       stripe:
         specifier: catalog:payment
         version: 23.0.0(@types/node@26.6.4)

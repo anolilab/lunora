@@ -2,7 +2,7 @@ import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
 import type { StorageUploadIR } from "../ir";
-import { collectCallRows, propertyKeyName } from "./ast";
+import { collectCallRows, propertyKeyName, staticNumberValue } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { matchesContextReceiver } from "./context-root";
 
@@ -23,9 +23,6 @@ const OPTIONS_ARGUMENT_INDEX = new Map<string, number>([
 
 /** The subset of {@link StorageUploadIR} a call-site reader can determine from the options argument alone. */
 type StorageUploadEvidence = Pick<StorageUploadIR, "analyzable" | "expiresInSeconds" | "presentKeys">;
-
-/** The numeric value of `node` when it is a plain numeric literal (e.g. `604800`), else `undefined`. Deliberately does not evaluate expressions (`60 * 60 * 24 * 7`) or references — only a literal is a reliable static signal. */
-const numericLiteralValue = (node: TsNode | undefined): number | undefined => (node && Node.isNumericLiteral(node) ? Number(node.getText()) : undefined);
 
 /**
  * Read an options-object argument into the present-keys set plus, when present,
@@ -63,7 +60,7 @@ const readOptionsArgument = (argument: TsNode | undefined): StorageUploadEvidenc
             presentKeys.push(name);
 
             if (name === "expiresInSeconds") {
-                expiresInSeconds = numericLiteralValue(property.getInitializer());
+                expiresInSeconds = staticNumberValue(property.getInitializer());
             }
 
             continue;

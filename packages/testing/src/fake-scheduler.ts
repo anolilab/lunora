@@ -117,7 +117,7 @@ interface SweepOptions {
  * listeners on success. The harness supplies a callback that reproduces those
  * semantics (mutations wrapped + notified; actions run unwrapped).
  */
-type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown) => Promise<unknown>;
+type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown, nowMs: number) => Promise<unknown>;
 
 /**
  * Create a fake in-memory `Scheduler` implementation for use in
@@ -332,11 +332,11 @@ const createFakeScheduler = (
         const dispatch = getDispatch();
         const context = entry.kind === "action" ? getActionContext() : getMutationContext();
 
-        // `ctx.now` is the VIRTUAL clock at fire time, not the harness's construction
-        // instant: production dispatches the job as its own RPC and captures `Date.now()`
-        // then, so a TTL handler that woke after `advance(3_600_000)` must see an hour
-        // of elapsed time rather than zero.
-        await dispatch(entry.kind, entry, { ...(context as Record<string, unknown>), now: nowMs }, job.args);
+        // The fire time is passed so the harness runs the whole job, composed calls
+        // included, under the VIRTUAL clock at fire time: production dispatches the job
+        // as its own RPC and captures `Date.now()` then, so a TTL handler that woke after
+        // `advance(3_600_000)` must see an hour of elapsed time rather than zero.
+        await dispatch(entry.kind, entry, context, job.args, nowMs);
     };
 
     /**

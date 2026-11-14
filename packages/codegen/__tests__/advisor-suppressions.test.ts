@@ -227,6 +227,25 @@ export const scoped = mutation({ args: {}, handler: async () => { throw new Erro
         expect(result.advisories.filter((advisory) => advisory.name === "advisor_suppression_invalid")).toHaveLength(0);
     });
 
+    it("reports a mistyped rule id as invalid instead of exempting the whole procedure", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "typo.ts"),
+            `import { mutation } from "@lunora/server";
+// lunora-advisor-exempt Procedure-Without-Structured-Event -- mistyped rule id
+export const typo = mutation({ args: {}, handler: async () => { throw new Error("boom"); } });
+`,
+            "utf8",
+        );
+
+        const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+        const row = result.advisorContext?.procedureProtections?.find((entry) => entry.exportName === "typo");
+
+        expect(row?.exempt).toBe(false);
+        expect(named(result.advisories, "advisor_suppression_invalid").map((entry) => entry.metadata["rule"])).toContain("Procedure-Without-Structured-Event");
+    });
+
     it("suppresses a wrangler.jsonc variable only for the key below the directive", () => {
         expect.assertions(3);
 
@@ -456,6 +475,24 @@ const secret = "xxxxxxxx";
 
         expect(onLink?.suppressed?.line).toBe(2);
         expect(onBuild?.suppressed).toBeUndefined();
+    });
+
+    it("credits the innermost directive when two directives of one rule cover the same line", () => {
+        expect.assertions(2);
+
+        const project = projectWith(
+            `${lunoraDirectory}/nested.ts`,
+            `// lunora-advisor-exempt hardcoded_secret -- whole config
+export const config = {
+    // lunora-advisor-exempt hardcoded_secret -- this key only
+    token: "xxxxxxxx",
+};
+`,
+        );
+        const result = applySuppressions(project, projectRoot, lunoraDirectory, [finding("hardcoded_secret", "nested", 4)]);
+
+        expect(result[0]?.suppressed?.line).toBe(3);
+        expect(result.filter((entry) => entry.name === "advisor_suppression_unused").map((entry) => entry.metadata["line"])).toStrictEqual([1]);
     });
 
     it("ignores a directive-looking line inside a block comment or a template string", () => {

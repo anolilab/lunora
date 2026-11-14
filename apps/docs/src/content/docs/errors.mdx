@@ -359,7 +359,7 @@ A dispatch with this idempotency id is still running on the shard. Retry it; onc
 
 `403` — Dispatch caller not authenticated
 
-The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.
+The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current. A signed dispatch is also refused when the scheduler's and the worker's clocks differ by more than five minutes.
 
 ### `DUPLICATE_AGENT_CLASS`
 

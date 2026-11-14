@@ -12,7 +12,7 @@ import type {
 } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { isArgumentDerived, isScopedByContext } from "../argument-taint";
+import { isArgumentDerived, isScopedByIdentity } from "../argument-taint";
 import type { VectorNamespaceAccessIR } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
@@ -154,14 +154,15 @@ const identifierTainted = (identifier: Identifier, parameters: ParameterSymbols,
 };
 
 /**
- * Argument-derived (or reading a tainted callback parameter) and NOT scoped by a
- * server-trusted `ctx.*` value — a namespace like `` `${ctx.auth.orgId}` ``
- * references `ctx` and is treated as scoped, so it is not flagged.
+ * Argument-derived (or reading a tainted callback parameter) and NOT scoped by the
+ * caller's identity — `` `${ctx.auth.orgId}/${args.ns}` `` is scoped, while
+ * `` `${ctx.env.PREFIX}/${args.ns}` `` is not: the prefix is server-trusted but the
+ * same for every caller, so the caller still picks the tenant.
  */
 const expressionTainted = (expression: TsNode, parameters: ParameterSymbols, hops: number): boolean => {
     const node = unwrap(expression);
 
-    if (isScopedByContext(node)) {
+    if (isScopedByIdentity(node)) {
         return false;
     }
 

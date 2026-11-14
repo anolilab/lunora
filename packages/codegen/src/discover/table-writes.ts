@@ -5,6 +5,7 @@ import type { TableWriteIR } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { isDatabaseAccessor } from "./database-calls";
+import { FACADE_WRITES, facadeAliasOf, facadeWriteOf } from "./write-target";
 
 /** `ctx.db.<method>("table", …)` writes that name the table first. `insert` is `discoverInserts`'. */
 const BY_NAME = new Set([
@@ -19,21 +20,6 @@ const BY_NAME = new Set([
     "patchWhere",
     "replace",
     "restore",
-]);
-
-/** `ctx.db.<table>.<method>(…)` facade writes — the table is the receiver's property name. */
-const FACADE_WRITES = new Set([
-    "delete",
-    "deleteMany",
-    "hardDelete",
-    "insert",
-    "insertMany",
-    "patch",
-    "patchMany",
-    "replace",
-    "restore",
-    "upsert",
-    "upsertMany",
 ]);
 
 /** The {@link TableWriteIR.table} an unreadable target (an untyped id, a non-literal name) is recorded under. */
@@ -145,30 +131,11 @@ const databaseWrite = (method: string, first: TsNode | undefined): Write | undef
 const withFields = (write: Write | undefined, call: CallExpression, bodyIndex: number): Write | undefined =>
     write === undefined ? undefined : { ...write, fields: patchedFieldsOf(call, write.method, bodyIndex) };
 
-/**
- * The table an alias names when it is declared as a facade, `const db = ctx.db.posts`. An alias called `db` reads as
- * the generic writer by name, so without this its `db.patch(id, fields)` would take the id for the table. Only a
- * `const` qualifies: a `let` can be reassigned to another table before the write.
- */
-const facadeAliasTable = (receiver: TsNode): string | undefined => {
-    if (!Node.isIdentifier(receiver)) {
-        return undefined;
-    }
+/** The facade row `call` makes, as a {@link Write}, or `undefined` when it is not a facade write. */
+const facadeWriteRowOf = (call: CallExpression): Write | undefined => {
+    const facade = facadeWriteOf(call, FACADE_WRITES);
 
-    const declaration = receiver.getSymbol()?.getDeclarations()[0];
-
-    if (declaration === undefined || !Node.isVariableDeclaration(declaration)) {
-        return undefined;
-    }
-
-    const initializer = declaration.getInitializer();
-    const isConst = declaration.getVariableStatement()?.getDeclarationKind() === VariableDeclarationKind.Const;
-
-    if (!isConst || initializer === undefined || !Node.isPropertyAccessExpression(initializer) || !isDatabaseAccessor(initializer.getExpression())) {
-        return undefined;
-    }
-
-    return initializer.getName();
+    return facade === undefined ? undefined : withFields({ method: facade.method, tables: [facade.table] }, call, 1);
 };
 
 /** The {@link Write} one call makes, or `undefined` when it is not a table write. */
@@ -181,10 +148,10 @@ const writeOf = (call: CallExpression): Write | undefined => {
 
     const method = callee.getName();
     const receiver = callee.getExpression();
-    const aliasedTable = facadeAliasTable(receiver);
 
-    if (aliasedTable !== undefined) {
-        return FACADE_WRITES.has(method) ? withFields({ method, tables: [aliasedTable] }, call, 1) : undefined;
+    // An alias is a facade whatever it is called, so the by-name reading below must not see it.
+    if (facadeAliasOf(receiver) !== undefined) {
+        return facadeWriteRowOf(call);
     }
 
     if (isDatabaseAccessor(receiver)) {
@@ -192,11 +159,7 @@ const writeOf = (call: CallExpression): Write | undefined => {
     }
 
     // `ctx.db.<table>.<method>(…)` — the facade puts the table in the receiver.
-    if (FACADE_WRITES.has(method) && Node.isPropertyAccessExpression(receiver) && isDatabaseAccessor(receiver.getExpression())) {
-        return withFields({ method, tables: [receiver.getName()] }, call, 1);
-    }
-
-    return undefined;
+    return facadeWriteRowOf(call);
 };
 
 /**

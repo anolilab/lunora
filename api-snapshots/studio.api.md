@@ -3081,6 +3081,7 @@ const REQUEST_STATUSES: readonly [
     "processing",
     "ready",
     "completed",
+    "restored",
     "failed",
     "cancelled",
     "expired"
