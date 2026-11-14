@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.196...@lunora/shard-engine@1.0.0-alpha.197) (2026-11-14)
+
+- fix(studio): stop reporting unstampable indexes as dead (#1576)
+
 ## @lunora/shard-engine [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.195...@lunora/shard-engine@1.0.0-alpha.196) (2026-11-14)
 
 - fix(shard-engine): erase soft-deleted rows in a hard deleteAll (#1540)

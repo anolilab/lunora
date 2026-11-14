@@ -1,3 +1,7 @@
+## @lunora/studio [1.0.0-alpha.384](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.383...@lunora/studio@1.0.0-alpha.384) (2026-11-14)
+
+- fix(studio): stop reporting unstampable indexes as dead (#1576)
+
 ## @lunora/studio [1.0.0-alpha.383](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.382...@lunora/studio@1.0.0-alpha.383) (2026-11-14)
 
 - fix(privacy): retire restored requests like a completed erasure (#1533)
