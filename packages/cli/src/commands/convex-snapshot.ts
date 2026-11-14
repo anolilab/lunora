@@ -281,11 +281,15 @@ const readSnapshotStorageBlob = async (snapshot: ConvexSnapshot, blobId: string)
  * Only a missing file means none: any other failure would skip whatever reads it, so it throws.
  */
 const listSnapshotSidecar = async (snapshot: ConvexSnapshot, tableEntry: ConvexSnapshotTable, name: string): Promise<ConvexSnapshotTable | undefined> => {
-    const file = tableEntry.file.replace(DOCUMENTS_JSONL_RE, name);
-
     if (snapshot.kind === "zip") {
-        return snapshot.zip.getEntry(file) === null ? undefined : { file, table: tableEntry.table };
+        const entry = tableEntry.file.replace(DOCUMENTS_JSONL_RE, name);
+
+        return snapshot.zip.getEntry(entry) === null ? undefined : { file: entry, table: tableEntry.table };
     }
+
+    // From the listed table directory, not the resolved `documents.jsonl`: a document file linked to another
+    // name would otherwise leave the replace a no-op and read the documents themselves as the sidecar.
+    const file = join(snapshot.root, tableEntry.table, name);
 
     const info = await stat(file).catch((error: unknown) => {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {

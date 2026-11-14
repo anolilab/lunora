@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -230,6 +230,18 @@ describe("convex export value handling", () => {
         await collect(root, rows);
 
         expect(rows).toHaveLength(1);
+    });
+
+    it("reads the sidecar beside the listed table even when its documents file is a link", async () => {
+        expect.assertions(1);
+
+        const root = writeExport("users", ['{"_id":"u1","n":"12"}'], sidecarLine(LEGACY_SHAPE));
+        const tableDir = join(root, "users");
+
+        renameSync(join(tableDir, "documents.jsonl"), join(tableDir, "rows.jsonl"));
+        symlinkSync(join(tableDir, "rows.jsonl"), join(tableDir, "documents.jsonl"));
+
+        await expect(collect(root, [])).rejects.toThrow(/users\/generated_schema\.jsonl/);
     });
 
     it("refuses a sidecar that links out of the snapshot directory", async () => {
