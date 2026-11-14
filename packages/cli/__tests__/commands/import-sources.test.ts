@@ -566,7 +566,7 @@ describe("lunora import --from firebase", () => {
         await expectAbort(root, "firebase", /unrecognised Firestore value/);
     });
 
-    it.each(["NaN", "Infinity", "-Infinity", "", " ", null])(
+    it.each(["NaN", "Infinity", "-Infinity", "", " ", null, true, "0x10"])(
         "rejects a non-finite or malformed doubleValue %j rather than writing a number",
         async (doubleValue) => {
             expect.assertions(3);

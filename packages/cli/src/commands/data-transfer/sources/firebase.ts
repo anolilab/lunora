@@ -118,14 +118,18 @@ const decodeBytes = (raw: NonNullable<FirestoreValue["bytesValue"]>, path: strin
  * Supabase reshape rule refuses.
  */
 
+/** A `doubleValue` string Firestore can produce: a decimal or exponent number. */
+const DOUBLE_TEXT = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/iu;
+
 /**
  * `doubleValue` → number. The REST encoding spells non-finite doubles as the
  * strings `"NaN"`, `"Infinity"` and `"-Infinity"`; JSON has no spelling for them,
  * so `JSON.stringify` would write `null` and the value would be lost silently.
  */
 const decodeDouble = (raw: number | string, path: string): number => {
-    // `Number(null)` and `Number("")` are both 0, so only a number or a non-blank string is parsed at all.
-    const parsed = typeof raw === "number" || (typeof raw === "string" && raw.trim() !== "") ? Number(raw) : Number.NaN;
+    // `Number()` coerces `null`, `""`, `true` and `"0x10"` to finite numbers, so a string is parsed only in decimal
+    // or exponent form, or as one of the non-finite spellings that the finiteness check below refuses.
+    const parsed = typeof raw === "number" || (typeof raw === "string" && DOUBLE_TEXT.test(raw)) ? Number(raw) : Number.NaN;
 
     if (!Number.isFinite(parsed)) {
         throw new LunoraError(
