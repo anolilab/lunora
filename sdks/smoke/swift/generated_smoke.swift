@@ -54,6 +54,57 @@ guard summary.total == 3 else {
     fatalError("typed result decoded total \(summary.total), want 3")
 }
 
+// The generated watch member reaches the primitive with the right function path. The
+// subscribe frame is sent at call time, and the first data frame is decoded through the
+// stream. Termination on close is the conformance suite's job, so this does not await it.
+var watchFrames: [[String: Any]] = []
+let watchClient = LunoraClient(url: "https://app.example")
+
+watchClient.attachSocket { watchFrames.append($0) }
+
+let watchStream = try API(client: watchClient).messages.watchList(
+    MessagesListArgs(channelID: "chan_1", limit: nil)
+)
+var watchIterator = watchStream.makeAsyncIterator()
+
+guard let subscribe = watchFrames.first(where: { ($0["type"] as? String) == "subscribe" }),
+    let query = subscribe["query"] as? [String: Any],
+    let subscriptionID = subscribe["id"] as? String
+else {
+    fatalError("watch sent no subscribe frame: \(watchFrames)")
+}
+
+guard query["functionPath"] as? String == "messages:list" else {
+    fatalError("watch subscribed to \(String(describing: query["functionPath"])), want messages:list")
+}
+
+let watchArgs = Wire.stableStringify(query["args"] as Any)
+
+guard watchArgs == #"{"channelId":"chan_1"}"# else {
+    fatalError("watch sent args \(watchArgs)")
+}
+
+watchClient.handleFrame(#"{"cursor":1,"data":{"ok":true},"id":"\#(subscriptionID)","type":"data"}"#)
+
+guard let watchEvent = await watchIterator.next(), case .value(let watchValue) = watchEvent else {
+    fatalError("watch did not yield the data frame's value")
+}
+
+let watchDecoded = Wire.stableStringify(try Wire.encode(watchValue))
+
+guard watchDecoded == #"{"ok":true}"# else {
+    fatalError("watch yielded \(watchDecoded), want {\"ok\":true}")
+}
+
+// cancel() is what unsubscribes: leaving the loop does not, so the watch is cancelled here.
+watchStream.cancel()
+
+let watchUnsubscribes = watchFrames.filter { ($0["type"] as? String) == "unsubscribe" }
+
+guard watchUnsubscribes.count == 1, (watchUnsubscribes[0]["id"] as? String) == subscriptionID else {
+    fatalError("cancelling the watch sent \(watchUnsubscribes), want one unsubscribe for \(subscriptionID)")
+}
+
 // Two keys differing only by a lone surrogate are one Swift `String`, so the
 // transport hands this result back as a `[WireKey: Any]`.
 // `JSONSerialization.data(withJSONObject:)` crashed the process on that, past

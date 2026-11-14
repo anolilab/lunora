@@ -83,6 +83,15 @@ const createReadFootprint = (): ReadFootprint => {
 };
 
 /**
+ * Sentinel table name for an admin read that spans every table rather than
+ * naming one (`getMetrics`, `getLogs`, `listTables`, `migrationStatus`). It is
+ * `"*"` — a name no real SQLite table can take, so it never collides with a
+ * tracked write — and a subscription memo carrying it re-runs on every write flush.
+ * It lives here beside {@link UNVOUCHABLE_DEP} so `deltaTableFor` can recognise it.
+ */
+const ADMIN_WILDCARD = "*";
+
+/**
  * The dependency name stamped for a read the CDC changelog can never speak for.
  *
  * `__cdc_log` records writes to THIS shard's own SQLite tables and nothing else,
@@ -103,7 +112,7 @@ const createReadFootprint = (): ReadFootprint => {
  * `emitFlagsFragments` in `@lunora/codegen`'s `emit/shard-bindings.ts` for why, and for the
  * advisor lint that tells an app author instead.
  *
- * Deliberately NOT `"*"` (the admin wildcard in `shard-do.ts`). That one has a
+ * Deliberately NOT `"*"` ({@link ADMIN_WILDCARD}). That one has a
  * second meaning — `refreshSubscriptions` re-runs a memo carrying it on EVERY
  * write-flush — and a query that reads KV has no need of that: it still re-runs
  * exactly when one of its real tables moves. Reusing `"*"` would have turned an
@@ -168,5 +177,5 @@ const markUnvouchableReads = <T extends object>(facade: T, onRead: ReadFootprint
     });
 };
 
-export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP };
+export { ADMIN_WILDCARD, createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP };
 export type { ReadFootprint };
