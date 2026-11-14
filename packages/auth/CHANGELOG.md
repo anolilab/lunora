@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.264...@lunora/auth@1.0.0-alpha.265) (2026-11-14)
+
+- security(auth)!: audit organization, oauth provider, scim and sso management (#1549)
+
 ## @lunora/auth [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.263...@lunora/auth@1.0.0-alpha.264) (2026-11-14)
 
 - security(auth)!: audit plugin sign-ins, admin actions and account changes (#1546)
