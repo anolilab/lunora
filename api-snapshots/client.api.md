@@ -1387,6 +1387,7 @@ interface SubscriptionState {
     pendingDeltaRun?: {
         payload: unknown;
     };
+    refusal?: SubscriptionError;
     serverBase: unknown;
     serverBaseCommitted?: boolean;
     serverClaims?: string;

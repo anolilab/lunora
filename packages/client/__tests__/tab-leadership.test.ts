@@ -405,6 +405,21 @@ describe("onFollowerSubscriptionData", () => {
             expect(ownClaims).toHaveBeenCalledWith("s1", expect.any(Function), "fp-theirs");
         });
 
+        it("holds the leader's refusal for a later subscriber on this tab, until a value lands", () => {
+            expect.assertions(2);
+
+            const state = liveSubscription();
+            const { host } = fakeHost({ subscription: () => state });
+
+            onFollowerSubscriptionError(host, "s1", { code: "FORBIDDEN", message: "no" }, "subj:a");
+
+            expect(state.refusal).toStrictEqual({ code: "FORBIDDEN", message: "no" });
+
+            onFollowerSubscriptionData(host, "s1", [{ id: "a" }], 5, "e1", "subj:a");
+
+            expect(state.refusal).toBeUndefined();
+        });
+
         it("does not take an error the leader found under claims this tab does not hold", () => {
             expect.assertions(3);
 

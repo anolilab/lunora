@@ -83,7 +83,15 @@ import { registerSnapshotSource, snapshotSourceOf } from "./snapshot-preconditio
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
-import { failSubscription, fanSubscriptionError, releaseSubscribeFrame, setSubscriptionAck, SubscriptionRegistry, wrapSubscriber } from "./subscription";
+import {
+    failSubscription,
+    fanSubscriptionError,
+    releaseSubscribeFrame,
+    replaySubscriptionRefusal,
+    setSubscriptionAck,
+    SubscriptionRegistry,
+    wrapSubscriber,
+} from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isNonFinalRunFrame, isStaleDataFrame, replayableValue } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
 import {
@@ -3425,6 +3433,8 @@ class LunoraClient {
             }
         }
 
+        replaySubscriptionRefusal(state, errorCallback);
+
         this.ensureSocket(options.shardKey);
         this.sendSubscribeIfOpen(state);
 
@@ -5529,7 +5539,8 @@ class LunoraClient {
             } else {
                 // A refusal answers the request, as for a refused slot below.
                 this.markQueryRejected(state, true);
-                failSubscription(state, { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" });
+                state.refusal = { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" };
+                failSubscription(state, state.refusal);
             }
         }
 
@@ -5578,10 +5589,8 @@ class LunoraClient {
             if (!slot.ok) {
                 // A refusal answers the request: without this a denied query on a polling shard stays pending forever.
                 this.markQueryRejected(state, true);
-                failSubscription(state, {
-                    code: slot.error.code,
-                    message: slot.error.message,
-                });
+                state.refusal = { code: slot.error.code, message: slot.error.message };
+                failSubscription(state, state.refusal);
 
                 continue;
             }
@@ -7479,6 +7488,8 @@ class LunoraClient {
             // A refusal answers the request: the subscription stops counting as pending on this connection.
             // Marked before fanning, so a callback that resets the session (see above) is not undone by it.
             this.markQueryRejected(state);
+            // After `markQueryRejected`, whose `"acked"` write clears the refusal.
+            state.refusal = subscriptionError;
 
             failSubscription(state, subscriptionError);
 
@@ -7720,6 +7731,8 @@ class LunoraClient {
         const firstPolledValue = snapshotMark !== undefined && !state.valueReceived;
 
         commitDataFrame(state, payload, { claims: this.frameClaims, cursor: message.cursor, epoch: message.epoch });
+        // A value has landed, so the refusal a late subscriber would be handed is no longer the answer.
+        state.refusal = undefined;
 
         if (firstPolledValue) {
             state.valueReceived = true;
