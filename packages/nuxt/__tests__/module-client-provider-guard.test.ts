@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ResolvedNuxtPlugin } from "../src/module";
-import { checkClientOnlyProvider } from "../src/module";
+import type { ResolvedNuxtPlugin } from "../src/module-checks";
+import { checkClientOnlyProvider } from "../src/module-checks";
 
 /** The provider body every fixture below writes — what a real `plugins/lunora.ts` does. */
 const PROVIDER_SOURCE = "export default defineNuxtPlugin((nuxtApp) => { nuxtApp.vueApp.use(createLunora(new LunoraClient({ url }))); });\n";
