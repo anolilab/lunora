@@ -19,6 +19,7 @@ import type {
 import { withDeferredSchedules } from "@lunora/server";
 import { createInProcessRuntime, registeredFunctionKind, resolveInProcessIdentity, runRegisteredFunction } from "@lunora/server/in-process";
 import type { TransactionHeadroomTracker } from "@lunora/shard-engine";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 import type { RecordedWideEvent } from "./context-fakes";
 import { createRecordingSpan, noopLog, noopMetrics, passthroughTrace, servicesContext, stubProxy } from "./context-fakes";
@@ -397,6 +398,26 @@ type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface & Topi
  */
 /** The clock the current top-level harness call reads through `ctx.now`. */
 const runClock = new AsyncLocalStorage<number>();
+
+/**
+ * Production encodes every registered dispatch result on the shard, sends it as JSON and decodes it
+ * in the client, so a value the codec cannot carry fails there, `undefined` fields and functions
+ * disappear, `-0` arrives as `0` and an array hole as `null`. A test must see
+ * what a client sees, so registered results take the same round trip. Composed `ctx.runQuery` /
+ * `ctx.runMutation` results are not encoded in production, so they are not encoded here either.
+ */
+const wireRoundTrip = (value: unknown): unknown => {
+    try {
+        // Wrapped as the response body is, so a top-level `undefined` survives `JSON.stringify` as an absent field.
+        // Not `structuredClone`: the point is JSON's losses (`-0`, holes, functions), which it would keep.
+        const json = JSON.stringify({ result: encodeWire(value) });
+        const body = JSON.parse(json) as { result?: unknown };
+
+        return decodeWire(body.result);
+    } catch (error) {
+        throw new LunoraError("WIRE_ENCODE_FAILED", error instanceof Error ? error.message : String(error), { cause: error });
+    }
+};
 
 /** Each top-level dispatch's resource budget, so overlapping queries and actions never share one. */
 const dispatchBudget = new AsyncLocalStorage<TransactionHeadroomTracker>();
@@ -925,7 +946,8 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // scheduler is the trusted server-dispatch surface (allowInternal = true).
         const runScheduledJob = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown): Promise<unknown> => {
             if (kind === "mutation") {
-                return runInTransaction(() => runRegisteredFunction("mutation", reference as never, context, args, true)).then(notifyAfter);
+                // Encoded inside the transaction, as production does, so an unencodable return rolls the job back.
+                return runInTransaction(() => runRegisteredFunction("mutation", reference as never, context, args, true).then(wireRoundTrip)).then(notifyAfter);
             }
 
             return runWithBudget(() => runInternal("action", reference, context, args));
@@ -937,7 +959,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
         const query = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             if (registeredFunctionKind(referenceOrInline)) {
-                return runWithBudget(() => runRegisteredFunction("query", referenceOrInline as never, queryContext, args, false));
+                return runWithBudget(() => runRegisteredFunction("query", referenceOrInline as never, queryContext, args, false).then(wireRoundTrip));
             }
 
             return runWithBudget(() => Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext)));
@@ -945,7 +967,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
         const mutation = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             const body = registeredFunctionKind(referenceOrInline)
-                ? (): Promise<unknown> => runRegisteredFunction("mutation", referenceOrInline as never, mutationContext, args, false)
+                ? (): Promise<unknown> => runRegisteredFunction("mutation", referenceOrInline as never, mutationContext, args, false).then(wireRoundTrip)
                 : (): unknown => (referenceOrInline as InlineMutationFunction<unknown>)(mutationContext);
 
             return runInTransaction(body).then(notifyAfter);
@@ -953,7 +975,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
 
         const action = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             if (registeredFunctionKind(referenceOrInline)) {
-                return runWithBudget(() => runRegisteredFunction("action", referenceOrInline as never, actionContext, args, false));
+                return runWithBudget(() => runRegisteredFunction("action", referenceOrInline as never, actionContext, args, false).then(wireRoundTrip));
             }
 
             return runWithBudget(() => Promise.resolve((referenceOrInline as InlineActionFunction<unknown>)(actionContext)));
@@ -962,7 +984,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // A subscription re-run is its own top-level dispatch (production re-dispatches
         // the query), so it gets a fresh budget rather than accumulating onto the last one.
         const subscribe = buildSubscribe(
-            (...parameters) => runWithBudget(() => runRegisteredFunction(...parameters)),
+            (...parameters) => runWithBudget(() => runRegisteredFunction(...parameters).then(wireRoundTrip)),
             queryContext,
             mutationListeners,
             () => options?.now ?? Date.now(),
