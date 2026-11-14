@@ -946,7 +946,8 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // scheduler is the trusted server-dispatch surface (allowInternal = true).
         const runScheduledJob = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown): Promise<unknown> => {
             if (kind === "mutation") {
-                return runInTransaction(() => runRegisteredFunction("mutation", reference as never, context, args, true)).then(notifyAfter);
+                // Encoded inside the transaction, as production does, so an unencodable return rolls the job back.
+                return runInTransaction(() => runRegisteredFunction("mutation", reference as never, context, args, true).then(wireRoundTrip)).then(notifyAfter);
             }
 
             return runWithBudget(() => runInternal("action", reference, context, args));
@@ -983,7 +984,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // A subscription re-run is its own top-level dispatch (production re-dispatches
         // the query), so it gets a fresh budget rather than accumulating onto the last one.
         const subscribe = buildSubscribe(
-            (...parameters) => runWithBudget(() => runRegisteredFunction(...parameters)),
+            (...parameters) => runWithBudget(() => runRegisteredFunction(...parameters).then(wireRoundTrip)),
             queryContext,
             mutationListeners,
             () => options?.now ?? Date.now(),

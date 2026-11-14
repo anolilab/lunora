@@ -46,6 +46,8 @@ const actionReturnsMoney = action.action(() => new Money(5));
 
 const noopMutation = mutation.mutation(() => {});
 
+const scheduleMoneyMutation = mutation.mutation(({ ctx }) => ctx.scheduler.runAfter(0, "log:insertThenReturnMoney", {}));
+
 const listLog = query.query(({ ctx }) => ctx.db.query("log").collect());
 
 const harnesses = trackHarnesses();
@@ -110,6 +112,33 @@ describe("lunoraTest wire round-trip", () => {
         const t = start();
 
         await expect(t.action(actionReturnsMoney, {})).rejects.toMatchObject({ code: "WIRE_ENCODE_FAILED" });
+    });
+
+    it("emits a registered subscription value as the client's JSON parse leaves it", async () => {
+        expect.assertions(2);
+
+        const t = start();
+        const sub = t.subscribe(returnsJsonLossyValue, {});
+        const first = await sub.next();
+        const value = first.value as Record<string, unknown>;
+
+        await sub.return();
+
+        expect(Object.is(value.negativeZero, 0)).toBe(true);
+        expect(Object.keys(value)).not.toContain("fn");
+    });
+
+    it("rolls back a scheduled mutation whose result the wire cannot encode", async () => {
+        expect.assertions(1);
+
+        const t = lunoraTest(schema, { functions: { "log:insertThenReturnMoney": insertThenReturnMoney } });
+
+        harnesses.track(t);
+
+        await t.mutation(scheduleMoneyMutation, {});
+        await t.scheduler.advance(1000);
+
+        await expect(t.query(listLog, {})).resolves.toStrictEqual([]);
     });
 
     it("resolves undefined for a registered mutation that returns nothing", async () => {
