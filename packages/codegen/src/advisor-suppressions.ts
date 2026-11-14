@@ -187,6 +187,23 @@ const tsDirectivesOf = (sourceFile: SourceFile, display: string, key: string): P
 };
 
 /**
+ * Where each `//` comment in a JSONC text starts. JSONC is lexically a subset of JS, so the TypeScript scanner
+ * tells a line comment from the same text inside a block comment or a string.
+ */
+const lineCommentOffsetsOf = (text: string): ReadonlySet<number> => {
+    const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
+    const offsets = new Set<number>();
+
+    for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
+        if (kind === ts.SyntaxKind.SingleLineCommentTrivia) {
+            offsets.add(scanner.getTokenStart());
+        }
+    }
+
+    return offsets;
+};
+
+/**
  * Every rule-form directive in the wrangler config: a JSONC line comment attaches to the first key on
  * the next line holding one. `.jsonc` wins over `.json`, the order the config reader resolves them in.
  */
@@ -197,16 +214,21 @@ const wranglerDirectivesOf = (projectRoot: string): ParsedDirective[] => {
         return [];
     }
 
-    const path = join(projectRoot, name);
-
-    const lines = readFileSync(path, "utf8").split("\n");
+    const source = readFileSync(join(projectRoot, name), "utf8");
+    const lines = source.split("\n");
     const directives: ParsedDirective[] = [];
+    const lineComments = lineCommentOffsetsOf(source);
+    let offset = 0;
 
     lines.forEach((text, index) => {
+        const lineOffset = offset;
+
+        offset += text.length + 1;
+
         const match = DIRECTIVE_LINE.exec(text.trimEnd());
         const rest = match?.[1];
 
-        if (rest === undefined) {
+        if (rest === undefined || !lineComments.has(lineOffset + text.indexOf("//"))) {
             return;
         }
 
