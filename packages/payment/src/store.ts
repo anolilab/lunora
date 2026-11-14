@@ -30,8 +30,15 @@ export interface PaymentStore {
      * `false` means another writer moved it first, and nothing changed. A reference with no counter yet is at `0`.
      */
     bumpReferenceRevision: (referenceId: string, ifRevision: number) => Promise<boolean>;
+
+    /**
+     * Push a usage event's next forward retry out to `retryAt` (epoch ms), after a retry failed.
+     * See `UsageEvent.reportRetryAt`.
+     */
+    deferUsageReport: (provider: ProviderId, idempotencyKey: string, retryAt: number) => Promise<void>;
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
+
     /** A payment session for `subscriptionId` that names an owner (non-blank `referenceId`), if any. */
     getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
 
@@ -41,12 +48,13 @@ export interface PaymentStore {
      * rows and then write one, and two writers can both pass that read. See {@link PaymentStore.bumpReferenceRevision}.
      */
     getReferenceRevision: (referenceId: string) => Promise<number>;
+
     getSubscription: (provider: ProviderId, id: string) => Promise<Subscription | undefined>;
 
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
 
     /**
-     * Usage events that still owe an upstream forward, oldest first, at most `limit`.
+     * Usage events that still owe an upstream forward and are due at `now`, oldest first, at most `limit`.
      *
      * "Owes a forward" is narrower than `reportedToProvider === false`: only an
      * ADDITIVE event with a positive `quantity` qualifies. A `"set"` event's
@@ -54,12 +62,14 @@ export interface PaymentStore {
      * recorded and is not recoverable afterwards, and a non-positive quantity was
      * never sent, so neither is a retry candidate — returning them would make the
      * sweep re-send the same rows forever (or double-count on an additive meter).
+     * An event whose `reportRetryAt` is later than `now` is skipped, and the walk
+     * continues past it, so failing rows cannot fill every batch.
      *
      * Read by `reconcile` to retry a forward the provider rejected transiently;
      * without it a single 5xx loses that metered unit upstream for good, which for
      * a provider that owns entitlements under-bills and over-entitles the customer.
      */
-    listUnreportedUsage: (provider: ProviderId, limit: number) => Promise<UsageEvent[]>;
+    listUnreportedUsage: (provider: ProviderId, limit: number, now: number) => Promise<UsageEvent[]>;
 
     /**
      * Claims a provider event id for processing. Resolves `true` the first time an event is seen
@@ -209,9 +219,16 @@ export class MemoryPaymentStore implements PaymentStore {
         return Promise.resolve([...this.subscriptions.values()].filter((subscription) => subscription.referenceId === referenceId));
     }
 
-    public listUnreportedUsage(provider: ProviderId, limit: number): Promise<UsageEvent[]> {
+    public listUnreportedUsage(provider: ProviderId, limit: number, now: number): Promise<UsageEvent[]> {
         const pending = [...this.usageEvents.values()]
-            .filter((event) => event.provider === provider && !event.reportedToProvider && event.mode !== "set" && event.quantity > 0)
+            .filter(
+                (event) =>
+                    event.provider === provider &&
+                    !event.reportedToProvider &&
+                    event.mode !== "set" &&
+                    event.quantity > 0 &&
+                    (event.reportRetryAt === undefined || event.reportRetryAt <= now),
+            )
             .toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
 
         return Promise.resolve(pending.slice(0, Math.max(0, limit)));
@@ -247,6 +264,17 @@ export class MemoryPaymentStore implements PaymentStore {
 
     public releaseEvent(provider: ProviderId, eventId: string): Promise<void> {
         this.processedEvents.delete(recordKey(provider, eventId));
+
+        return Promise.resolve();
+    }
+
+    public deferUsageReport(provider: ProviderId, idempotencyKey: string, retryAt: number): Promise<void> {
+        const key = recordKey(provider, idempotencyKey);
+        const existing = this.usageEvents.get(key);
+
+        if (existing) {
+            this.usageEvents.set(key, { ...existing, reportRetryAt: retryAt });
+        }
 
         return Promise.resolve();
     }

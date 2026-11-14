@@ -1849,7 +1849,7 @@ describe("createPayment — attach / check / track", () => {
         });
         expect(events).toContain("usage.report_failed");
         expect(meterCreate).not.toHaveBeenCalled();
-        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toHaveLength(1);
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toHaveLength(1);
     });
 
     it("track skips provider reporting when the adapter has no reportUsage", async () => {

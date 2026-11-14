@@ -131,6 +131,8 @@ const usageEvents = defineTable({
     quantity: v.number(),
     referenceId: v.string(),
     reportedToProvider: v.boolean(),
+    /** Epoch ms the usage sweep may next retry this forward — see `UsageEvent.reportRetryAt`. */
+    reportRetryAt: v.optional(v.number()),
 })
     .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
     .index("by_reference_feature_created", ["referenceId", "featureId", "createdAt"])

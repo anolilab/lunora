@@ -534,7 +534,7 @@ describe("reconcile", () => {
         expect(result.checkedUsage).toBe(1);
 
         // Marked reported, so the next sweep does not send it again.
-        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toStrictEqual([]);
     });
 
     it("never regresses a refunded row to partially_refunded", async () => {
@@ -691,7 +691,7 @@ describe("reconcile", () => {
         expect(reported).toStrictEqual([]);
         expect(result.checkedUsage).toBe(0);
         // Still pending: the sweep declines to guess, it does not mark the row done.
-        await expect(store.listUnreportedUsage("autumn", 10)).resolves.toHaveLength(1);
+        await expect(store.listUnreportedUsage("autumn", 10, Number.POSITIVE_INFINITY)).resolves.toHaveLength(1);
     });
 
     it("leaves a usage event pending when the retried forward fails again", async () => {
@@ -719,7 +719,53 @@ describe("reconcile", () => {
         const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(result.failedUsage).toBe(1);
-        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toHaveLength(1);
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toHaveLength(1);
+    });
+
+    it("does not let a full batch of events with no customer starve a newer event's forward", async () => {
+        expect.assertions(4);
+
+        // Regression: a forward that kept failing (Stripe refuses a reference with no
+        // customer) left its row first in the oldest-first batch on every tick, so once
+        // `usageReportLimit` such rows piled up no newer event was ever forwarded.
+        const store = new MemoryPaymentStore();
+        const reported: string[] = [];
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async (input: { customerId?: string; idempotencyKey: string }) => {
+                if (input.customerId === undefined) {
+                    throw new Error("no Stripe customer");
+                }
+
+                reported.push(input.idempotencyKey);
+            },
+        } as unknown as PaymentAdapter;
+
+        const record = (createdAt: number, referenceId: string) =>
+            store.recordUsage({
+                createdAt,
+                featureId: "tokens",
+                idempotencyKey: `evt_${String(createdAt)}`,
+                provider: "stripe",
+                quantity: 1,
+                referenceId,
+                reportedToProvider: false,
+            });
+
+        await store.upsertCustomer({ createdAt: 1, id: "cus_1", provider: "stripe", referenceId: "user_paying" });
+        await record(1, "user_orphan");
+        await record(2, "user_orphan");
+        await record(3, "user_paying");
+
+        const first = await reconcile({ adapter, singleSubscriptionPerReference: false, store, usageReportLimit: 2 });
+        const second = await reconcile({ adapter, singleSubscriptionPerReference: false, store, usageReportLimit: 2 });
+
+        expect(first.failedUsage).toBe(2);
+        expect(second.updatedUsage).toBe(1);
+        expect(reported).toStrictEqual(["evt_3"]);
+        // Deferred, not dropped: the orphaned events are retried once their backoff passes.
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toHaveLength(2);
     });
 
     it("looks up each reference's customer once per tick, and still reports every event in order", async () => {
@@ -815,7 +861,7 @@ describe("reconcile", () => {
         await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(reported).toStrictEqual([undefined, "cus_new"]);
-        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toStrictEqual([]);
     });
 
     it("does not cache a failed customer lookup across ticks", async () => {
@@ -841,14 +887,24 @@ describe("reconcile", () => {
             reportedToProvider: false,
         });
 
-        const first = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
+        vi.useFakeTimers({ now: 1_000_000, toFake: ["Date"] });
 
-        expect(first.failedUsage).toBe(1);
+        try {
+            const first = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
-        const second = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
+            expect(first.failedUsage).toBe(1);
 
-        expect(second.updatedUsage).toBe(1);
+            // Past the failed forward's backoff, so the next tick retries it.
+            vi.setSystemTime(1_000_000 + 6 * 60 * 60 * 1000);
+
+            const second = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
+
+            expect(second.updatedUsage).toBe(1);
+        } finally {
+            vi.useRealTimers();
+        }
+
         expect(lookup).toHaveBeenCalledTimes(2);
-        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toStrictEqual([]);
     });
 });

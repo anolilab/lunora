@@ -261,6 +261,8 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
 };
 
 const rowToUsageEvent = (row: PaymentRow): UsageEvent => {
+    const reportRetryAt = readOptionalNumber(row, "reportRetryAt");
+
     return {
         createdAt: readNumber(row, "createdAt"),
         featureId: readString(row, "featureId"),
@@ -271,6 +273,7 @@ const rowToUsageEvent = (row: PaymentRow): UsageEvent => {
         quantity: readNumber(row, "quantity"),
         referenceId: readString(row, "referenceId"),
         reportedToProvider: readBoolean(row, "reportedToProvider"),
+        ...(reportRetryAt === undefined ? {} : { reportRetryAt }),
     };
 };
 
@@ -286,6 +289,7 @@ const usageEventToRow = (event: UsageEvent): Record<string, unknown> => {
         quantity: event.quantity,
         referenceId: event.referenceId,
         reportedToProvider: event.reportedToProvider,
+        ...(event.reportRetryAt === undefined ? {} : { reportRetryAt: event.reportRetryAt }),
     };
 };
 
@@ -391,7 +395,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             return rows.map((row) => rowToSubscription(row));
         },
 
-        listUnreportedUsage: async (provider, limit) => {
+        listUnreportedUsage: async (provider, limit, now) => {
             const wanted = Math.max(0, Math.floor(limit));
 
             if (wanted === 0) {
@@ -420,7 +424,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
                 for (const row of page.rows) {
                     const event = rowToUsageEvent(row);
 
-                    if (event.mode !== "set" && event.quantity > 0) {
+                    if (event.mode !== "set" && event.quantity > 0 && (event.reportRetryAt === undefined || event.reportRetryAt <= now)) {
                         events.push(event);
 
                         if (events.length === wanted) {
@@ -434,7 +438,8 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             // ponytail: memory is bounded, total scan length is not. A `"set"` row
             // (and a non-positive `"add"`) never becomes reported, so it is a
-            // permanent non-match this walk re-reads on every sweep. Upgrade path
+            // permanent non-match this walk re-reads on every sweep, and a deferred
+            // row is re-read until it is due. Upgrade path
             // when that prefix gets long: record never-forwardable rows as already
             // reported, or add a `(provider, reportedToProvider, createdAt)` index
             // so the scan starts past them.
@@ -496,6 +501,14 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             if (existing) {
                 await database.delete(PAYMENT_TABLES.events, existing._id);
+            }
+        },
+
+        deferUsageReport: async (provider, idempotencyKey, retryAt) => {
+            const existing = await database.findFirst(PAYMENT_TABLES.usageEvents, { idempotencyKey, provider });
+
+            if (existing) {
+                await database.patch(PAYMENT_TABLES.usageEvents, existing._id, { reportRetryAt: retryAt });
             }
         },
 
