@@ -276,6 +276,80 @@ describe("lunoraClient — retry hint on a failing subscription", () => {
         expect(subscribeFramesFor(socket, id)).toHaveLength(1);
     });
 
+    it("keeps the pending re-subscribe when a stale seed arrives after the hint", () => {
+        expect.assertions(1);
+
+        const { id, socket } = openSubscription();
+
+        socket.receive({ cursor: 7, data: { ok: true }, epoch: "e1", id, type: "data" });
+        socket.receive(refreshFailure(id, 5000));
+        socket.receive({ cursor: 3, data: { ok: false }, epoch: "e1", id, type: "data" });
+
+        vi.advanceTimersByTime(5000);
+
+        expect(subscribeFramesFor(socket, id)).toHaveLength(2);
+    });
+
+    it("leaves no retry timer behind when an error callback closes the client", () => {
+        expect.assertions(1);
+
+        const client = new LunoraClient({
+            fetch: async () => jsonResponse({ result: null }),
+            reconnect: { initialDelayMs: 60_000, jitter: false, maxDelayMs: 60_000 },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("items:list"), { page: 1 }, () => undefined, {
+            onError: () => {
+                client.close();
+            },
+        });
+
+        const socket = latestSocket();
+
+        socket.open();
+        socket.receive(refreshFailure(firstSub(socket).id as string, 5000));
+        // Let the socket's deferred close event run.
+        vi.advanceTimersByTime(1);
+
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("drops the pending re-subscribe when a manual resnapshot sends its own", () => {
+        expect.assertions(2);
+
+        const { client, id, socket } = openSubscription();
+
+        socket.receive(refreshFailure(id, 5000));
+        client.resnapshot(fnRef("items:list"), { page: 1 });
+
+        expect(subscribeFramesFor(socket, id)).toHaveLength(2);
+
+        vi.advanceTimersByTime(5000);
+
+        expect(subscribeFramesFor(socket, id)).toHaveLength(2);
+    });
+
+    it("holds a joiner off the stale value while the hinted retry is in flight", () => {
+        expect.assertions(1);
+
+        const { client, id, socket } = openSubscription();
+
+        socket.receive({ cursor: 7, data: { ok: true }, epoch: "e1", id, type: "data" });
+        socket.receive(refreshFailure(id, 5000));
+
+        vi.advanceTimersByTime(5000);
+
+        const seen: unknown[] = [];
+
+        client.subscribe(fnRef("items:list"), { page: 1 }, (value) => {
+            seen.push(value);
+        });
+
+        expect(seen).toStrictEqual([]);
+    });
+
     it("never re-subscribes an error that carries no hint", () => {
         expect.assertions(1);
 
