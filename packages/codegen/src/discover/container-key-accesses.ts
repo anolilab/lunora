@@ -37,6 +37,7 @@ const isContainerInstanceReceiver = (receiver: string): boolean => {
 const discoverContainerKeyAccesses = (project: Project, lunoraDirectory: string): ContainerKeyAccessIR[] =>
     discoverArgumentDerivedAccesses(project, lunoraDirectory, {
         argIndex: 0,
+        scope: "identity",
         matchReceiver: isContainerInstanceReceiver,
         methods: new Set(["get"]),
     });

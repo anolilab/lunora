@@ -58,6 +58,7 @@ const KEY_TAKING_METHODS = new Set<string>([
 const discoverStorageKeyAccesses = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR> = []): StorageKeyAccessIR[] => {
     const accesses = discoverArgumentDerivedAccesses(project, lunoraDirectory, {
         argIndex: 0,
+        scope: "identity",
         matchReceiver: (receiver) => receiver === "ctx.storage" || receiver.startsWith("ctx.storage."),
         methods: KEY_TAKING_METHODS,
         requireUnmodifiedReach: true,

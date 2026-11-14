@@ -72,6 +72,52 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("flags an args value destructured from args at the body level", () => {
+        expect.assertions(1);
+
+        write("destructure.ts", `export const save = mutation(async ({ ctx, args }) => { const { key } = args; await ctx.kv.get(key); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a destructured args key whose name an inner function reuses for an unrelated value", () => {
+        expect.assertions(1);
+
+        write(
+            "inner-shadow.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = args; const fixed = () => { const { key } = { key: "x" }; return key; }; fixed(); await ctx.kv.get(key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a body-destructured args value composed after a ctx-scoped prefix", () => {
+        expect.assertions(1);
+
+        write(
+            "destructure-scoped.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = args; await ctx.kv.get(\`\${ctx.auth.userId}/\${key}\`); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags a key prefixed only by a server-trusted non-identity ctx value", () => {
+        expect.assertions(1);
+
+        write("env-prefix.ts", `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(\`\${ctx.env.PREFIX}/\${args.key}\`); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a key scoped by the caller's own identity", () => {
+        expect.assertions(1);
+
+        write("own-prefix.ts", `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(\`\${ctx.auth.userId}/\${args.key}\`); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("ignores a key scoped by a server-trusted ctx value", () => {
         expect.assertions(1);
 

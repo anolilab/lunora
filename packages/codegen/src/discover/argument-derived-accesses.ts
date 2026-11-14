@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { isArgumentDerived, isScopedByContext, isUnmodifiedArgumentPassthrough } from "../argument-taint";
+import { isArgumentDerived, isScopedByContext, isScopedByIdentity, isUnmodifiedArgumentPassthrough } from "../argument-taint";
 import type { CallSiteScope } from "../ir";
 import { collectCallRows } from "./ast";
 import { callSiteScopeOf } from "./attribution";
@@ -39,10 +39,12 @@ const accessInCall = (call: CallExpression, relativePath: string, config: Argume
 
     const key = call.getArguments()[config.argIndex];
 
-    // Arg-derived (directly or through one local `const` hop) *and* not scoped by
-    // a server-trusted `ctx.*` value — a value like `` `${ctx.auth.userId}:${args.id}` ``
-    // references `ctx` and is treated as scoped, so it is not flagged.
-    if (!key || !isArgumentDerived(key) || isScopedByContext(key)) {
+    // Arg-derived (directly or through one local `const` hop) *and* not scoped. `config.scope`
+    // decides what scopes: `"context"` accepts any server-trusted `ctx.*` value, `"identity"`
+    // only the caller's `ctx.auth` identity or a db read bound to it, so an env prefix does not.
+    const isScoped = config.scope === "identity" ? isScopedByIdentity : isScopedByContext;
+
+    if (!key || !isArgumentDerived(key) || isScoped(key)) {
         return undefined;
     }
 
@@ -101,6 +103,14 @@ export interface ArgumentDerivedAccessConfig {
      * "embeds `args.*` anywhere" match `isArgumentDerived` already gives.
      */
     requireUnmodifiedReach?: boolean;
+
+    /**
+     * What counts as scoping the key. The default (`"context"`) accepts any
+     * server-trusted `ctx.*` value. `"identity"` accepts only the caller's own
+     * `ctx.auth.*` identity, for IDOR sinks where a server-pinned prefix such as
+     * `ctx.env.PREFIX` still leaves every caller on the same key.
+     */
+    scope?: "context" | "identity";
 }
 
 /**

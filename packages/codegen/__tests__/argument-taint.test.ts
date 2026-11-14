@@ -6,6 +6,7 @@ import {
     isArgumentDerived,
     isRequestInputDerived,
     isScopedByContext,
+    isScopedByIdentity,
     isUnmodifiedArgumentPassthrough,
     referencesArgs,
     referencesRequestInput,
@@ -126,6 +127,30 @@ describe("argument-taint", () => {
             expect(isArgumentDerived(sinkArgument(`SINK(hash(args.key));`))).toBe(true);
             expect(isArgumentDerived(sinkArgument(`SINK(new URL(args.url));`))).toBe(true);
         });
+
+        it("follows a binding destructured from args at the body level, renames and nesting included", () => {
+            expect.assertions(3);
+
+            expect(isArgumentDerived(sinkArgument(`const { url } = args;\nSINK(url);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const { target: url } = args;\nSINK(url);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const { page: { id } } = args;\nSINK(id);`))).toBe(true);
+        });
+
+        it("follows a local composed into a larger expression, one hop per identifier", () => {
+            expect.assertions(2);
+
+            expect(isArgumentDerived(sinkArgument(`const host = args.host;\nSINK(\`https://\${host}/x\`);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const body = args.payload;\nSINK(body.url);`))).toBe(true);
+        });
+
+        it("does not follow a destructure from a non-args source, or a second hop through a composed local", () => {
+            expect.assertions(4);
+
+            expect(isArgumentDerived(sinkArgument(`const { userId } = ctx.auth;\nSINK(\`users/\${userId}\`);`))).toBe(false);
+            expect(isArgumentDerived(sinkArgument(`const host = "example.com";\nSINK(\`https://\${host}/x\`);`))).toBe(false);
+            expect(isArgumentDerived(sinkArgument(`const first = args.key;\nconst second = first;\nSINK(\`k/\${second}\`);`))).toBe(false);
+            expect(isArgumentDerived(sinkArgument(`const { url } = config;\nSINK(url);`))).toBe(false);
+        });
     });
 
     describe("unmodified-argument passthrough", () => {
@@ -175,6 +200,58 @@ describe("argument-taint", () => {
 
             expect(isScopedByContext(scoped)).toBe(true);
             expect(isArgumentDerived(scoped)).toBe(true);
+        });
+    });
+
+    describe("isScopedByIdentity", () => {
+        it("accepts a key composed with the caller's own ctx.auth identity, direct or through a local", () => {
+            expect.assertions(4);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const { userId } = ctx.auth;\nSINK(\`\${userId}:\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const me = await ctx.db.users.get(ctx.auth.userId);\nSINK(\`\${me._id}/\${args.k}\`);`))).toBe(true);
+        });
+
+        it("accepts a key read off a database row fetched by the caller's identity", () => {
+            expect.assertions(2);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.key}/\${args.k}\`);`),
+                ),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const uid = ctx.auth.userId;\nconst row = await ctx.db.files.findFirst({ where: { ownerId: uid } });\nSINK(row.key);`),
+                ),
+            ).toBe(true);
+        });
+
+        it("rejects a key read off a database write, even one that stamps the caller's identity", () => {
+            expect.assertions(1);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.update({ where: { id: args.fileId }, data: { lastDownloadedBy: ctx.auth.userId } });\nSINK(row.key);`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
+        it("rejects a key read off a database row the caller selected by id", () => {
+            expect.assertions(1);
+
+            expect(isScopedByIdentity(sinkArgument(`const row = await ctx.db.get("files", args.id);\nSINK(row.key);`))).toBe(false);
+        });
+
+        it("rejects a key scoped only by a server-trusted ctx value that names no caller", () => {
+            expect.assertions(3);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.env.PREFIX}/\${args.k}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.now}-\${args.k}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(args.k);`))).toBe(false);
         });
     });
 
