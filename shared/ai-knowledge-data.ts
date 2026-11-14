@@ -556,6 +556,7 @@ export const DOC_TOPICS: ReadonlyArray<{
         headings: [
             "Hibernation",
             "How an update reaches a subscriber",
+            "When a re-run fails",
             "Reconnect",
             "When WebSockets are blocked",
             "Durable streams",

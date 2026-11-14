@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { LunoraClient } from "../src/lunora-client";
@@ -488,6 +488,17 @@ interface WsFixtures {
         "shape-subscribe-cold": unknown;
     };
     /** A live query consumed as the language's own pull type; see the fixture's `$comment`. */
+    subscriptionRetry: {
+        cancelFrames: { frame: Record<string, unknown>; name: string }[];
+        hintFrame: Record<string, unknown>;
+        laterHintFrame: Record<string, unknown>;
+        laterRetryAfterMs: number;
+        noRetryFrames: { frame: Record<string, unknown>; name: string }[];
+        retryAfterMs: number;
+        retryFrame: Record<string, unknown>;
+        seedFrame: Record<string, unknown>;
+        subscriptionId: string;
+    };
     watch: { frames: Record<string, unknown>[]; subscriptionId: string; yielded: unknown[] };
 }
 
@@ -618,6 +629,8 @@ describe("ws-frames fixtures", () => {
         expect(errors).toHaveLength(1);
         expect(errors[0]?.code).toBe(testCase.expect.code);
         expect(errors[0]?.message).toBe(testCase.expect.message);
+
+        client.close();
     });
 
     const cancellingFrames = ws.serverFrames.filter((testCase) => testCase.expect.resendsAfterReconnect === true);
@@ -779,5 +792,135 @@ describe("credential-refresh fixture", () => {
         expect(headers).toStrictEqual(spec.authorizationHeaders);
 
         client.close();
+    });
+});
+
+describe("ws-frames subscriptionRetry", () => {
+    const fixture = (readFixture("ws-frames.json") as WsFixtures).subscriptionRetry;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    const retryFramesSent = (socket: MockSocket): { id?: string; type?: string }[] =>
+        // The 60 s advances also fire the keepalive, which is a bare `lunora-ping` string, not a frame.
+        socket.sent
+            .filter((raw) => raw.startsWith("{"))
+            .map((raw) => JSON.parse(raw) as { id?: string; type?: string })
+            .filter((frame) => frame.type === "subscribe" && frame.id === fixture.subscriptionId);
+
+    const subscribeSeeded = () => {
+        const client = makeWsClient();
+
+        client.subscribe(fnRef("messages:list"), { channel: "general" }, () => undefined, { onError: () => undefined });
+
+        const socket = latestSocket();
+
+        socket.open();
+        socket.receive(fixture.seedFrame);
+
+        return { client, socket, before: retryFramesSent(socket).length };
+    };
+
+    it("re-subscribes once, cold, at the hint", () => {
+        expect.hasAssertions();
+
+        const { client, socket, before } = subscribeSeeded();
+
+        socket.receive(fixture.hintFrame);
+
+        vi.advanceTimersByTime(fixture.retryAfterMs - 1);
+
+        expect(retryFramesSent(socket)).toHaveLength(before);
+
+        vi.advanceTimersByTime(1);
+
+        expect(retryFramesSent(socket)).toHaveLength(before + 1);
+        expect(retryFramesSent(socket).at(-1)).toStrictEqual(fixture.retryFrame);
+
+        // The server answered the retry; without an ack the client's own unacked-subscribe watchdog re-sends, which is not the hint.
+        socket.receive({ id: fixture.subscriptionId, type: "ack" });
+        vi.advanceTimersByTime(60_000);
+
+        expect(retryFramesSent(socket)).toHaveLength(before + 1);
+
+        client.close();
+    });
+
+    it("a later hint replaces the pending one", () => {
+        expect.hasAssertions();
+
+        const { client, socket, before } = subscribeSeeded();
+
+        socket.receive(fixture.hintFrame);
+        vi.advanceTimersByTime(1000);
+        socket.receive(fixture.laterHintFrame);
+
+        vi.advanceTimersByTime(fixture.retryAfterMs - 1000);
+
+        expect(retryFramesSent(socket)).toHaveLength(before);
+
+        vi.advanceTimersByTime(fixture.laterRetryAfterMs - fixture.retryAfterMs + 1000);
+
+        expect(retryFramesSent(socket)).toHaveLength(before + 1);
+
+        client.close();
+    });
+
+    it.each(
+        table(
+            "ws subscriptionRetry cancel frames",
+            fixture.cancelFrames.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("frame %s cancels the pending re-subscribe", (_name, testCase) => {
+        expect.hasAssertions();
+
+        const { client, socket, before } = subscribeSeeded();
+
+        socket.receive(fixture.hintFrame);
+        vi.advanceTimersByTime(1000);
+        socket.receive(testCase.frame);
+
+        vi.advanceTimersByTime(60_000);
+
+        expect(retryFramesSent(socket)).toHaveLength(before);
+
+        client.close();
+    });
+
+    it.each(
+        table(
+            "ws subscriptionRetry no-retry frames",
+            fixture.noRetryFrames.map((testCase) => [testCase.name, testCase] as const),
+        ),
+    )("frame %s schedules nothing", (_name, testCase) => {
+        expect.hasAssertions();
+
+        const { client, socket, before } = subscribeSeeded();
+
+        socket.receive(testCase.frame);
+
+        vi.advanceTimersByTime(60_000);
+
+        expect(retryFramesSent(socket)).toHaveLength(before);
+
+        client.close();
+    });
+
+    it("closing the client cancels it", () => {
+        expect.hasAssertions();
+
+        const { client, socket, before } = subscribeSeeded();
+
+        socket.receive(fixture.hintFrame);
+        client.close();
+
+        vi.advanceTimersByTime(60_000);
+
+        expect(retryFramesSent(socket)).toHaveLength(before);
     });
 });
