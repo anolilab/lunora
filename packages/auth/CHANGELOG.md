@@ -1,3 +1,8 @@
+## @lunora/auth [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.263...@lunora/auth@1.0.0-alpha.264) (2026-11-14)
+
+- security(auth)!: audit plugin sign-ins, admin actions and account changes (#1546)
+- fix(auth): stop finished tables from spending the move's page budget (#1554)
+
 ## @lunora/auth [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.262...@lunora/auth@1.0.0-alpha.263) (2026-11-14)
 
 - security(auth): run the email gate on address changes (#1545)

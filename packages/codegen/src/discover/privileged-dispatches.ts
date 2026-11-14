@@ -1,9 +1,22 @@
-import type { ArrowFunction, CallExpression, FunctionExpression, Identifier, Node as TsNode, Project, SourceFile } from "ts-morph";
+import type {
+    ArrowFunction,
+    BindingElement,
+    BindingName,
+    CallExpression,
+    FunctionDeclaration,
+    FunctionExpression,
+    Identifier,
+    MethodDeclaration,
+    Node as TsNode,
+    Project,
+    SourceFile,
+} from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { PrivilegedDispatchIR } from "../ir";
 import { descendantsOfKind, findObjectProperty, functionReferenceSegments, listLunoraSourceFiles, lunoraRelativePath, RUN_METHODS } from "./ast";
 import { callSiteScopeOf } from "./attribution";
+import { memberFunctionOf } from "./context-root";
 
 /**
  * The privileged-dispatch handler factories, mapped to the index of their config
@@ -19,7 +32,8 @@ const HANDLER_FACTORIES = new Map([
     ["defineWorkflow", 0],
 ]);
 
-type HandlerFunction = ArrowFunction | FunctionExpression;
+/** A function a `handler:` member can name — the shapes {@link memberFunctionOf} resolves. */
+type HandlerFunction = ArrowFunction | FunctionDeclaration | FunctionExpression | MethodDeclaration;
 
 /**
  * The name of a call whose callee is a BARE IDENTIFIER, or `undefined`.
@@ -35,7 +49,7 @@ const bareCalleeName = (call: CallExpression): string | undefined => {
     return Node.isIdentifier(expression) ? expression.getText() : undefined;
 };
 
-/** The `handler` property's arrow/function expression on a handler factory's config literal (argument `configIndex`), or `undefined`. */
+/** The function the `handler` property on a handler factory's config literal (argument `configIndex`) denotes, or `undefined`. */
 const handlerFunctionOf = (call: CallExpression, configIndex: number): HandlerFunction | undefined => {
     const config = call.getArguments()[configIndex];
 
@@ -43,26 +57,28 @@ const handlerFunctionOf = (call: CallExpression, configIndex: number): HandlerFu
         return undefined;
     }
 
-    const property = findObjectProperty(config, "handler");
-
-    if (property === undefined || !Node.isPropertyAssignment(property)) {
-        return undefined;
-    }
-
-    const initializer = property.getInitializer();
-
-    if (initializer && (Node.isArrowFunction(initializer) || Node.isFunctionExpression(initializer))) {
-        return initializer;
-    }
-
-    return undefined;
+    return memberFunctionOf(findObjectProperty(config, "handler"));
 };
 
-/** The name of a handler parameter at `index`, or `undefined` when absent / not a plain identifier binding. */
-const parameterName = (handler: HandlerFunction, index: number): string | undefined => {
-    const nameNode = handler.getParameters()[index]?.getNameNode();
+/** The binding name of a handler parameter at `index`, or `undefined` when the handler has no such parameter. */
+const parameterNameNode = (handler: HandlerFunction, index: number): BindingName | undefined => handler.getParameters()[index]?.getNameNode();
 
-    return nameNode && Node.isIdentifier(nameNode) ? nameNode.getText() : undefined;
+/**
+ * The local each key of a destructured object parameter (`{ params, run: dispatch }`)
+ * is bound to, keyed by the property name. Nested or rest patterns bind no simple local.
+ */
+const boundLocals = (elements: BindingElement[]): Map<string, string> => {
+    const locals = new Map<string, string>();
+
+    for (const element of elements) {
+        const nameNode = element.getNameNode();
+
+        if (Node.isIdentifier(nameNode)) {
+            locals.set(element.getPropertyNameNode()?.getText() ?? nameNode.getText(), nameNode.getText());
+        }
+    }
+
+    return locals;
 };
 
 /**
@@ -139,23 +155,63 @@ const declaredNames = (declaration: TsNode): string[] => {
     return nameNode.getDescendantsOfKind(SyntaxKind.BindingElement).map((element) => element.getName());
 };
 
+/** Array iterators whose first callback parameter is each element — each message, on a batch's `messages`. */
+const MESSAGE_ITERATOR_METHODS: ReadonlySet<string> = new Set(["every", "filter", "flatMap", "forEach", "map", "some"]);
+
 /**
- * The payload access-path prefixes for a queue handler — `<batch>.messages`
- * (the batch param at index 1) plus `<message>.body` for each `message`
- * bound by a `for (… of <batch>.messages)` loop. Empty when the handler
- * declares no batch parameter.
+ * The text of a queue handler's messages array: `<batch>.messages` for a plain batch
+ * parameter, or the local a `{ messages }` batch parameter binds. `undefined` when the
+ * handler declares no batch parameter or one that carries no `messages`.
+ */
+const messagesExpressionOf = (handler: HandlerFunction): string | undefined => {
+    const nameNode = parameterNameNode(handler, 1);
+
+    if (nameNode && Node.isIdentifier(nameNode)) {
+        return `${nameNode.getText()}.messages`;
+    }
+
+    return nameNode && Node.isObjectBindingPattern(nameNode) ? boundLocals(nameNode.getElements()).get("messages") : undefined;
+};
+
+/**
+ * The first parameter's name of a `<messages>.forEach((m) => …)`-style callback, or
+ * `undefined`. Each callback invocation receives one message, so `m.body` is the payload.
+ */
+const messageParameterOf = (call: CallExpression, messages: string): string | undefined => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee) || !MESSAGE_ITERATOR_METHODS.has(callee.getName()) || callee.getExpression().getText() !== messages) {
+        return undefined;
+    }
+
+    const callback = call.getArguments()[0];
+
+    if (!callback || !(Node.isArrowFunction(callback) || Node.isFunctionExpression(callback))) {
+        return undefined;
+    }
+
+    const nameNode = callback.getParameters()[0]?.getNameNode();
+
+    return nameNode && Node.isIdentifier(nameNode) ? nameNode.getText() : undefined;
+};
+
+/**
+ * The payload access-path prefixes for a queue handler — the messages array
+ * (see {@link messagesExpressionOf}) plus `<message>.body` for each message bound by a
+ * `for (… of <messages>)` loop or a `<messages>.forEach((m) => …)`-style callback.
+ * Empty when the handler declares no batch parameter.
  */
 const queuePayloadPrefixes = (handler: HandlerFunction): string[] => {
-    const batchParameter = parameterName(handler, 1);
+    const messages = messagesExpressionOf(handler);
 
-    if (batchParameter === undefined) {
+    if (messages === undefined) {
         return [];
     }
 
-    const prefixes = [`${batchParameter}.messages`];
+    const prefixes = [messages];
 
     for (const loop of handler.getDescendantsOfKind(SyntaxKind.ForOfStatement)) {
-        if (loop.getExpression().getText() !== `${batchParameter}.messages`) {
+        if (loop.getExpression().getText() !== messages) {
             continue;
         }
 
@@ -167,7 +223,45 @@ const queuePayloadPrefixes = (handler: HandlerFunction): string[] => {
         }
     }
 
+    // A callback is the other way a message reaches the handler body (`batch.messages.forEach(m => …)`).
+    for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        const message = messageParameterOf(call, messages);
+
+        if (message !== undefined) {
+            prefixes.push(`${message}.body`);
+        }
+    }
+
     return prefixes;
+};
+
+/**
+ * What a handler's context parameter exposes: the plain-identifier receiver (`ctx` in
+ * `(ctx, batch)`), and for a destructured `({ params, run })` the local bound to
+ * `params` (a workflow payload) and the locals bound to dispatch methods (bare callees).
+ */
+type ContextNames = { params: string | undefined; receiver: string | undefined; runCallees: string[] };
+
+/** The {@link ContextNames} of a handler's first parameter; empty when it has none. */
+const contextNamesOf = (handler: HandlerFunction): ContextNames => {
+    const nameNode = parameterNameNode(handler, 0);
+
+    if (nameNode && Node.isIdentifier(nameNode)) {
+        return { params: undefined, receiver: nameNode.getText(), runCallees: [] };
+    }
+
+    if (!nameNode || !Node.isObjectBindingPattern(nameNode)) {
+        return { params: undefined, receiver: undefined, runCallees: [] };
+    }
+
+    const locals = boundLocals(nameNode.getElements());
+
+    return {
+        params: locals.get("params"),
+        receiver: undefined,
+        // `run` may be aliased (`{ run: dispatch }`); the bare call goes through the local.
+        runCallees: [...locals].filter(([key]) => RUN_METHODS.has(key)).map(([, local]) => local),
+    };
 };
 
 /**
@@ -181,9 +275,11 @@ const queuePayloadPrefixes = (handler: HandlerFunction): string[] => {
  * contributes its bound name(s), so `const { channelId } = context.params; …
  * channelId` is tracked one hop out.
  */
-const collectPayload = (handler: HandlerFunction, kind: "queue" | "workflow", contextParameter: string): { names: Set<string>; prefixes: string[] } => {
-    const prefixes = kind === "workflow" ? [`${contextParameter}.params`] : queuePayloadPrefixes(handler);
-    const names = new Set<string>();
+const collectPayload = (handler: HandlerFunction, kind: "queue" | "workflow", context: ContextNames): { names: Set<string>; prefixes: string[] } => {
+    // A destructured `{ params }` has no `<context>.params` path, so its local is the payload name.
+    const workflowPrefixes = context.receiver === undefined ? [] : [`${context.receiver}.params`];
+    const prefixes = kind === "workflow" ? workflowPrefixes : queuePayloadPrefixes(handler);
+    const names = new Set<string>(kind === "workflow" && context.params !== undefined ? [context.params] : []);
 
     // Follow one forward pass of `const`-bindings whose initializer is payload-derived.
     const referencesPayload = (node: TsNode): boolean => {
@@ -231,25 +327,25 @@ const resolveTarget = (node: TsNode | undefined): { exportName: string; file: st
 
 /** Payload-derived privileged dispatches inside one handler. */
 const dispatchesInHandler = (handler: HandlerFunction, kind: "queue" | "workflow", relativePath: string): PrivilegedDispatchIR[] => {
-    const contextParameter = parameterName(handler, 0);
-
-    if (contextParameter === undefined) {
-        return [];
-    }
-
-    const payload = collectPayload(handler, kind, contextParameter);
+    const context = contextNamesOf(handler);
+    const payload = collectPayload(handler, kind, context);
     // `ctx.run(...)`, plus a queue's `message.run(...)` — the message-pinned form the
     // docs recommend, dispatching under the same system identity.
     const receivers = new Set([
-        contextParameter,
+        ...(context.receiver === undefined ? [] : [context.receiver]),
         ...payload.prefixes.filter((prefix) => prefix.endsWith(".body")).map((prefix) => prefix.slice(0, -".body".length)),
     ]);
+    const runCallees = new Set(context.runCallees);
     const found: PrivilegedDispatchIR[] = [];
 
     for (const call of handler.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        const receiver = call.getExpression();
+        const callee = call.getExpression();
+        const isReceiverDispatch =
+            Node.isPropertyAccessExpression(callee) && RUN_METHODS.has(callee.getName()) && receivers.has(callee.getExpression().getText());
+        // A destructured `run(...)` has no receiver to match, so its local name is the callee.
+        const isBareDispatch = Node.isIdentifier(callee) && runCallees.has(callee.getText());
 
-        if (!Node.isPropertyAccessExpression(receiver) || !RUN_METHODS.has(receiver.getName()) || !receivers.has(receiver.getExpression().getText())) {
+        if (!isReceiverDispatch && !isBareDispatch) {
             continue;
         }
 

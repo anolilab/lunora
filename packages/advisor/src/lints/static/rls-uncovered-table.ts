@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a public procedure that reads or writes a table named in at least one
@@ -96,7 +97,7 @@ const rlsUncoveredTable: Lint = {
                     emit(rlsUncoveredTable, {
                         cacheKey: `rls_uncovered_table:${procedure.file}:${procedure.exportName}:${table}`,
                         detail: `\`${procedure.exportName}\` in ${procedure.file} accesses table \`${table}\` without \`.use(rls(...))\` — the table is policy-gated elsewhere in the app but this procedure bypasses those policies entirely.`,
-                        metadata: { exportName: procedure.exportName, file: procedure.file, table },
+                        metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), table },
                     }),
                 );
             }

@@ -21,6 +21,7 @@ const ALL_LINTS: ReadonlyArray<Lint>;
 interface AdvisorAdminRoute {
     exportName: string;
     file: string;
+    line?: number;
     method: string;
     path: string;
     usesGuard: boolean;
@@ -167,12 +168,14 @@ interface AdvisorConfigCall {
 interface AdvisorContainer {
     enableInternet?: boolean;
     exportName: string;
+    file?: string;
     hardTimeout?: number | string;
     instanceType?: string | {
         diskMb?: number;
         memoryMib?: number;
         vcpu?: number;
     };
+    line?: number;
     maxInstances?: number;
     sleepAfter?: number | string;
 }
@@ -219,7 +222,9 @@ interface AdvisorCountRead {
 ```ts
 interface AdvisorCron {
     cron: string;
+    file?: string;
     functionPath?: string;
+    line?: number;
     name: string;
     workflow?: {
         exportName: string;
@@ -615,6 +620,7 @@ interface AdvisorProcedureProtection {
     handlesErrors?: boolean;
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    line?: number;
     reachesOutbound?: boolean;
     runsAiGeneration?: boolean;
     throwsBareError?: boolean;
@@ -661,6 +667,7 @@ interface AdvisorQueue {
         exportName: string;
         file: string;
     };
+    line?: number;
     mode: "pull" | "push";
     name: string;
     topic?: string;
@@ -740,6 +747,7 @@ interface AdvisorRelationLoad {
 interface AdvisorRlsProcedure {
     exportName: string;
     file: string;
+    line?: number;
     rlsTables: ReadonlyArray<string>;
     tablesRead: ReadonlyArray<string>;
     tablesWritten: ReadonlyArray<string>;
@@ -786,6 +794,7 @@ interface AdvisorSecretLiteral {
 interface AdvisorShape {
     exportName: string;
     file: string;
+    line?: number;
     table?: string;
 }
 ```
@@ -945,7 +954,9 @@ interface AdvisorVectorNamespaceAccess {
 ```ts
 interface AdvisorWorkflow {
     exportName: string;
+    file?: string;
     handlerFile?: string;
+    line?: number;
     steps?: ReadonlyArray<AdvisorWorkflowStep>;
 }
 ```

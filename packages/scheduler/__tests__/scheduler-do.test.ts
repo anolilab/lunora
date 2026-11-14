@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { toBase64Url } from "../../../shared/base64";
+import { schedulerDispatchCanonical } from "../../../shared/scheduler-dispatch";
 import { SchedulerDO } from "../src/scheduler-do";
 import type { ScheduleRecord } from "../src/types";
 import { createAlarmHarness } from "./alarm-harness";
@@ -1330,7 +1331,7 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
     });
 
     it("posts to /_lunora/scheduler/dispatch with an HMAC signature header when a secret is set", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const { calls } = stubFetch(200);
 
@@ -1347,6 +1348,7 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
         expect(calls[0]?.url).toBe("https://app.test/_lunora/scheduler/dispatch");
         // The body is HMAC-signed so the receiver can reject anonymous callers.
         expect((calls[0]?.headers.get("x-lunora-scheduler-signature") ?? "").length).toBeGreaterThan(0);
+        expect(calls[0]?.headers.get("x-lunora-scheduler-timestamp")).toMatch(/^\d+$/u);
     });
 
     it("imports the HMAC key once and signs every dispatch with it", async () => {
@@ -1374,13 +1376,58 @@ describe("schedulerDO — real dispatch() fetch contract", () => {
             "sign",
         ]);
         const expected = await Promise.all(
-            calls.map(async (call) => toBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", verifyKey, new TextEncoder().encode(call.body))))),
+            calls.map(async (call) => {
+                const canonical = schedulerDispatchCanonical({
+                    body: call.body,
+                    timestamp: Number(call.headers.get("x-lunora-scheduler-timestamp")),
+                });
+
+                return toBase64Url(new Uint8Array(await crypto.subtle.sign("HMAC", verifyKey, new TextEncoder().encode(canonical))));
+            }),
         );
 
         // The key cache is per isolate, so this test owns its secret to see the first import.
         expect(imports).toBe(1);
         expect(calls).toHaveLength(2);
         expect(calls.map((call) => call.headers.get("x-lunora-scheduler-signature"))).toStrictEqual(expected);
+    });
+
+    it("re-signs a retried dispatch with a fresh timestamp", async () => {
+        expect.assertions(3);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, {
+            LUNORA_ORIGIN_URL: "https://app.test",
+            LUNORA_SCHEDULER_SECRET: "retry-resign-s3cr3t",
+        });
+        const fetchSpy = vi
+            .spyOn(globalThis, "fetch")
+            .mockResolvedValueOnce(new Response(null, { status: 500 }))
+            .mockResolvedValueOnce(new Response(null, { status: 200 }));
+
+        try {
+            await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
+            await scheduler.alarm();
+
+            const retry = [...state.storageMap.entries()].find(([key]) => key.startsWith("retry:"))?.[1] as ScheduleRecord | undefined;
+
+            // Move the clock past the backoff so the retry is due; the attempt time is then Date.now().
+            const clock = vi.spyOn(Date, "now").mockReturnValue((retry?.scheduledFor ?? 0) + 1);
+
+            try {
+                await scheduler.alarm();
+            } finally {
+                clock.mockRestore();
+            }
+
+            const timestamps = fetchSpy.mock.calls.map(([, init]) => new Headers(init?.headers).get("x-lunora-scheduler-timestamp"));
+
+            expect(fetchSpy).toHaveBeenCalledTimes(2);
+            expect(timestamps).toHaveLength(2);
+            expect(timestamps[0]).not.toBe(timestamps[1]);
+        } finally {
+            fetchSpy.mockRestore();
+        }
     });
 
     it("falls back to a bearer admin token when no HMAC secret is configured", async () => {

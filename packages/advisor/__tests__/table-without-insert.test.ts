@@ -2,7 +2,7 @@ import { defineSchema, defineTable } from "@lunora/server";
 import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
-import type { AdvisorInsertWrite } from "../src";
+import type { AdvisorInsertWrite, AdvisorTableWrite } from "../src";
 import { fromServerSchema } from "../src";
 import tableWithoutInsert from "../src/lints/static/table-without-insert";
 
@@ -14,7 +14,7 @@ const schema = () =>
         }),
     );
 
-const run = (inserts?: AdvisorInsertWrite[]) => tableWithoutInsert.run({ inserts, schema: schema() });
+const run = (inserts?: AdvisorInsertWrite[], tableWrites?: AdvisorTableWrite[]) => tableWithoutInsert.run({ inserts, schema: schema(), tableWrites });
 
 describe("table_without_insert", () => {
     it("finds nothing when no write evidence is supplied", () => {
@@ -55,6 +55,22 @@ describe("table_without_insert", () => {
             metadata: { table: "channels" },
             name: "table_without_insert",
         });
+    });
+
+    it("counts a facade upsert as an insert path", () => {
+        expect.assertions(1);
+
+        const tableWrites: AdvisorTableWrite[] = [{ file: "messages", line: 1, method: "upsert", scope: { kind: "export", name: "send" }, table: "messages" }];
+
+        expect(run([], tableWrites).map((finding) => finding.metadata.table)).toStrictEqual(["channels"]);
+    });
+
+    it("still reports a table whose only write is a patch", () => {
+        expect.assertions(1);
+
+        const tableWrites: AdvisorTableWrite[] = [{ file: "channels", line: 1, method: "patch", scope: { kind: "export", name: "rename" }, table: "channels" }];
+
+        expect(run([], tableWrites).map((finding) => finding.metadata.table)).toStrictEqual(["channels", "messages"]);
     });
 
     it("ignores inserts whose table argument wasn't a string literal", () => {
