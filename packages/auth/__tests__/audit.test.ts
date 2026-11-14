@@ -644,6 +644,13 @@ describe("auth audit trail", () => {
             expect(entry?.actorId).toBe("admin_1");
         });
 
+        it("classifies an OAuth token refresh as token-refresh, and an initial grant as issuance", () => {
+            expect.assertions(2);
+
+            expect(buildAuditEntry({ body: { grant_type: "refresh_token" }, path: "/api/auth/oauth2/token" })?.event).toBe("token-refresh");
+            expect(buildAuditEntry({ body: { grant_type: "authorization_code" }, path: "/api/auth/oauth2/token" })?.event).toBe("oauth-token-issue");
+        });
+
         it("does not add targetUserId to a non-admin event", () => {
             expect.assertions(1);
 
@@ -711,6 +718,54 @@ describe("auth audit trail", () => {
 
             expect(row?.event).toBe("sign-in");
             expect(row?.userAgent).toBe("UA");
+        });
+
+        it("records allow-listed ids for an organization change, and nothing else from the body", () => {
+            expect.hasAssertions();
+
+            const entry = buildAuditEntry({
+                body: { email: "invitee@example.com", organizationId: "org_1", role: "admin" },
+                method: "POST",
+                path: "/api/auth/organization/invite-member",
+            });
+
+            expect(entry?.event).toBe("org-invitation-create");
+            expect(entry?.detail).toStrictEqual({ organizationId: "org_1", path: "/api/auth/organization/invite-member" });
+        });
+
+        it("records the SCIM resource id from the path params on a SCIM write", () => {
+            expect.hasAssertions();
+
+            const entry = buildAuditEntry({ method: "DELETE", params: { userId: "scim-u-1" }, path: "/scim/v2/Users/:userId" });
+
+            expect(entry?.event).toBe("scim-user-delete");
+            expect(entry?.detail).toStrictEqual({ path: "/scim/v2/Users/:userId", scimUserId: "scim-u-1" });
+        });
+
+        it("records the client id on an OAuth client operation and never a secret-shaped param", () => {
+            expect.hasAssertions();
+
+            const entry = buildAuditEntry({
+                body: { client_id: "c-1" },
+                method: "POST",
+                params: { token: "t-should-not-appear" },
+                path: "/oauth2/client/rotate-secret",
+            });
+
+            expect(entry?.detail).toStrictEqual({ clientId: "c-1", path: "/oauth2/client/rotate-secret" });
+        });
+
+        it("does not treat an oauth admin event as an admin-user event", () => {
+            expect.hasAssertions();
+
+            const entry = buildAuditEntry({
+                body: { userId: "u-9" },
+                method: "POST",
+                path: "/admin/oauth2/create-client",
+            });
+
+            expect(entry?.event).toBe("oauth-client-create");
+            expect(entry?.detail).not.toHaveProperty("targetUserId");
         });
     });
 
