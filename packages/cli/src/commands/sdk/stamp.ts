@@ -122,6 +122,13 @@ type Verdict = { absolute: string; identity: string; kind: "delete" } | { kind: 
 /** Device and inode: two spellings name one file exactly when these match. */
 const fileIdentity = (stats: Stats): string => `${String(stats.dev)}:${String(stats.ino)}`;
 
+/** A path that is gone is skipped; one that could not be inspected (EACCES, …) is refused, so it stays reported. */
+const inspectionFailure = (error: unknown): Verdict => {
+    const {code} = (error as NodeJS.ErrnoException);
+
+    return code === "ENOENT" || code === "ENOTDIR" ? { kind: "skip" } : { kind: "refuse", reason: `could not be inspected (${code ?? "unknown error"})` };
+};
+
 /**
  * Decide whether one previously-written path may be deleted. Every check must
  * pass; the order matters because the later ones touch the filesystem and assume
@@ -151,9 +158,9 @@ const judge = (outputDirectory: string, candidate: unknown): Verdict => {
 
     try {
         parentReal = realpathSync(dirname(absolute));
-    } catch {
-        // The parent no longer exists, so neither does the file.
-        return { kind: "skip" };
+    } catch (error) {
+        // A missing parent means a missing file; any other failure must not drop the path from the stamp.
+        return inspectionFailure(error);
     }
 
     if (!isInside(realpathSync(outputDirectory), parentReal)) {
@@ -164,8 +171,8 @@ const judge = (outputDirectory: string, candidate: unknown): Verdict => {
 
     try {
         stats = lstatSync(absolute);
-    } catch {
-        return { kind: "skip" };
+    } catch (error) {
+        return inspectionFailure(error);
     }
 
     if (stats.isSymbolicLink()) {

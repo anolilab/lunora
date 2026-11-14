@@ -175,6 +175,22 @@ describe("sdk stamp", () => {
             }
         });
 
+        it.skipIf(process.platform === "win32" || process.getuid?.() === 0)("reports a stale file it cannot inspect instead of dropping it silently", () => {
+            expect.assertions(2);
+
+            writeOutput("sealed/gone.py");
+            chmodSync(join(outputDirectory, "sealed"), 0o000);
+
+            try {
+                const result = pruneStale(outputDirectory, previous(["sealed/gone.py"], []), { generatedFiles: [], transportFiles: [] });
+
+                expect(result.deleted).toStrictEqual([]);
+                expect(result.refused.map((entry) => entry.path)).toStrictEqual(["sealed/gone.py"]);
+            } finally {
+                chmodSync(join(outputDirectory, "sealed"), 0o700);
+            }
+        });
+
         it("skips a listed path that no longer exists, without reporting it", () => {
             expect.assertions(1);
 
