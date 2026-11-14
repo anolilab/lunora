@@ -29,12 +29,17 @@ export interface AdvisorWorkflow {
     /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
 
+    /** Lunora-relative module of the declaration, without extension, when the feeder recorded it. */
+    file?: string;
+
     /**
      * The file declaring the handler when it is passed by reference from another
      * file (`handler: onboard`) — the file the {@link AdvisorWorkflow.steps} lines
      * are in. Lunora-relative inside `lunora/`, project-relative outside it.
      */
     handlerFile?: string;
+    /** 1-based start line of the declaring statement, when the feeder recorded it. */
+    line?: number;
 
     /**
      * The durable step labels discovered in the handler body, in source order —

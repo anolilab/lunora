@@ -111,6 +111,7 @@ describe("cross_module_table_write", () => {
             callers: ["signupTransitive", "signupViaHelper"],
             file: "accounts/signup",
             helper: "openInvoice",
+            line: 9,
             owner: "billing",
             table: "invoices",
             writer: "accounts",

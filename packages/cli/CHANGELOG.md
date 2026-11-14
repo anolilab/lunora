@@ -1,3 +1,28 @@
+## @lunora/cli [1.0.0-alpha.495](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.494...@lunora/cli@1.0.0-alpha.495) (2026-11-14)
+
+- fix(cli): refuse convex values the import would change (#1585)
+- fix(cli): refuse non-finite doubles and _id fields in Firestore imports (#1560)
+- fix: land five small audit fixes (#1538)
+- fix(cli): size analyze modules from the esbuild metafile (#1570)
+- fix(cli): write ai-gateway vars into the chosen wrangler env (#1568)
+- fix(cli): stop promising a safe import re-run for rows without _id (#1559)
+
+## @lunora/cli [1.0.0-alpha.494](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.493...@lunora/cli@1.0.0-alpha.494) (2026-11-14)
+
+- security(storage): add authorizeSignedGet for serveStorageObject (#1542)
+
+## @lunora/cli [1.0.0-alpha.493](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.492...@lunora/cli@1.0.0-alpha.493) (2026-11-13)
+
+- security(cli): keep convex table reads inside the snapshot directory (#1543)
+
+## @lunora/cli [1.0.0-alpha.492](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.491...@lunora/cli@1.0.0-alpha.492) (2026-11-13)
+
+- security(payment)!: owner-checked subscription changes, replace the raw adapter with provider (#1544)
+
+## @lunora/cli [1.0.0-alpha.491](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.490...@lunora/cli@1.0.0-alpha.491) (2026-11-13)
+
+- fix(cli): loosen the jiti range and align versions across pnpm catalogs (#1590)
+
 ## @lunora/cli [1.0.0-alpha.490](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.489...@lunora/cli@1.0.0-alpha.490) (2026-11-09)
 
 - feat(cli): apply generated SQL migrations per stage (#1516)

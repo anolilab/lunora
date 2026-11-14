@@ -1,6 +1,6 @@
 import type { LunoraAdminClient } from "../admin/admin-client";
 import type { LunoraClient } from "../lunora-client";
-import type { AuthPage, AuthSession, AuthUser } from "../types";
+import type { AuthImpersonation, AuthPage, AuthSession, AuthUser } from "../types";
 
 /**
  * Framework-neutral core of the admin/organization list hooks (plan 237). The
@@ -105,14 +105,63 @@ const subscribeAdminAuthIdentity = (client: LunoraClient, onChange: () => void):
 /** `true` when the server reports rows beyond the loaded window; `false` before the first page resolves, so "load more" past the end is a no-op. */
 const adminAuthListHasMore = (page: AuthPage<unknown> | undefined): boolean => page !== undefined && page.rows.length < page.total;
 
-export type { AdminAuthList, AuthUsersListFilter };
+/** Query options for one window of an admin list, spread into a TanStack hook (the `lunoraQueryOptions` pattern). */
+interface AdminAuthListQueryOptions<T> {
+    readonly queryFn: () => Promise<AuthPage<T>>;
+    readonly queryKey: ReadonlyArray<unknown>;
+    readonly staleTime: number;
+}
+
+/**
+ * Options for one `{ limit }` window of an admin list. `staleTime` is `0`, not the
+ * provider's `Infinity`: this is a one-shot HTTP read, so a remount or a window
+ * refocus should re-fetch rather than serve the cached page indefinitely.
+ */
+const adminAuthListQueryOptions = <T>(list: AdminAuthList<T>, identity: string | null, limit: number): AdminAuthListQueryOptions<T> => {
+    return {
+        queryFn: () => list.fetchPage(limit),
+        queryKey: adminAuthListQueryKey(identity, list, limit),
+        staleTime: 0,
+    };
+};
+
+/**
+ * The page to show while a larger window of the same list loads. Only the previous
+ * window from the same identity may stand in: another identity's rows must never be
+ * shown while its first read is in flight.
+ */
+const adminAuthListPlaceholder = <T>(
+    previous: AuthPage<T> | undefined,
+    previousKey: ReadonlyArray<unknown> | undefined,
+    queryKey: ReadonlyArray<unknown>,
+): AuthPage<T> | undefined => (previousKey !== undefined && previousKey[1] === queryKey[1] ? previous : undefined);
+
+/** The `limit` after a "load more": one page larger, and unchanged past the end of the collection. */
+const nextAdminAuthLimit = (current: number, pageSize: number, hasMore: boolean): number => (hasMore ? current + pageSize : current);
+
+/**
+ * Mutation options for minting an impersonation session. It deliberately does not call
+ * `client.setAuthToken`: swapping the acting client's own token would sign the admin out
+ * of their admin session without a visible transition.
+ */
+const adminAuthImpersonateMutation = (client: LunoraAdminClient): { readonly mutationFn: (userId: string) => Promise<AuthImpersonation> } => {
+    return {
+        mutationFn: (userId) => client.impersonateAuthUser({ userId }),
+    };
+};
+
+export type { AdminAuthList, AdminAuthListQueryOptions, AuthUsersListFilter };
 export {
     ADMIN_AUTH_DEFAULT_PAGE_SIZE,
+    adminAuthImpersonateMutation,
     adminAuthListHasMore,
+    adminAuthListPlaceholder,
     adminAuthListQueryKey,
+    adminAuthListQueryOptions,
     authOrganizationsList,
     authSessionsList,
     authSignUpInvitationsList,
     authUsersList,
+    nextAdminAuthLimit,
     subscribeAdminAuthIdentity,
 };

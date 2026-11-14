@@ -65,6 +65,11 @@ export interface AdvisorTable {
      */
     fields: ReadonlyArray<string>;
 
+    /**
+     * Lunora-relative file the table is declared in, without `.ts`. Absent when the declaration is not source under `lunora/`.
+     */
+    file?: string;
+
     /** Every declared index, across all kinds (secondary / search / rank / vector). */
     indexes: ReadonlyArray<AdvisorIndex>;
 
@@ -77,6 +82,9 @@ export interface AdvisorTable {
      * `allow_unauthenticated_shard_access_enabled`.
      */
     isPublic?: boolean;
+
+    /** 1-based start line of the table's declaration, under {@link AdvisorTable.file}. */
+    line?: number;
 
     /** Table name. */
     name: string;
@@ -124,7 +132,11 @@ export interface AdvisorTable {
  */
 export interface AdvisorIndex {
     fields: ReadonlyArray<string>;
+    /** Lunora-relative file the index is declared in, without `.ts`. Absent when not source under `lunora/`. */
+    file?: string;
     kind: "geo" | "index" | "rank" | "search" | "vector";
+    /** 1-based start line of the index's method name (`.index`, `.searchIndex`, …), under {@link AdvisorIndex.file}. */
+    line?: number;
     name: string;
     unique?: boolean;
 }
@@ -155,7 +167,11 @@ export interface AdvisorExternalSource {
  */
 export interface AdvisorKeyedRelation {
     field: string;
+    /** Lunora-relative file the relation's property is declared in, without `.ts`. */
+    file?: string;
     kind: "many" | "one";
+    /** 1-based start line of the relation's property in the `.relations(...)` object, under {@link AdvisorKeyedRelation.file}. */
+    line?: number;
     name: string;
     onDelete?: "cascade" | "restrict" | "set null";
     references: string;
@@ -168,7 +184,11 @@ export interface AdvisorKeyedRelation {
  * whose `from` column points at the declaring table and `to` at `table`. It has no `field` of its own.
  */
 export interface AdvisorThroughRelation {
+    /** Lunora-relative file the relation's property is declared in, without `.ts`. */
+    file?: string;
     kind: "many";
+    /** 1-based start line of the relation's property in the `.relations(...)` object, under {@link AdvisorThroughRelation.file}. */
+    line?: number;
     name: string;
     table: string;
     through: { from: string; table: string; to: string };

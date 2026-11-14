@@ -587,6 +587,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
                   queues,
                   schema,
                   shapes,
+                  topics,
                   workflows,
                   wranglerVariables: options.wranglerVariables,
               });

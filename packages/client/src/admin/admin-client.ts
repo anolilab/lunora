@@ -1,3 +1,5 @@
+import { LunoraError } from "@lunora/errors";
+
 import {
     AUTH_ACCOUNTS_PATH,
     AUTH_ADD_MEMBER_PATH,
@@ -968,4 +970,16 @@ class LunoraAdminClient extends LunoraClient {
  */
 const isLunoraAdminClient = (client: LunoraClient): client is LunoraAdminClient => "listAuthUsers" in client;
 
-export { isLunoraAdminClient, LunoraAdminClient };
+/** The provider's client as a `LunoraAdminClient`, or a throw naming the class the caller must construct. */
+const requireAdminAuthClient = (client: LunoraClient): LunoraAdminClient => {
+    if (!isLunoraAdminClient(client)) {
+        throw new LunoraError(
+            "INTERNAL",
+            "The admin auth hooks need a LunoraAdminClient: construct the provider's client with `new LunoraAdminClient(...)` from `@lunora/client/admin`.",
+        );
+    }
+
+    return client;
+};
+
+export { isLunoraAdminClient, LunoraAdminClient, requireAdminAuthClient };

@@ -102,6 +102,14 @@ export interface SubscriptionState {
      */
     awaitingSnapshot?: boolean;
 
+    /**
+     * Set when the committed base is missing rows the server has confirmed: a held run was discarded
+     * or a row change was refused. Deltas and settled frames wait until a `data` frame commits or a
+     * `resume` from before the gap applies. Kept apart from `awaitingSnapshot`, which a failure clears
+     * to release joiners, so a failure cannot reopen the gate.
+     */
+    baseIncomplete?: boolean;
+
     readonly callbacks: Set<SubscriptionCallback>;
 
     /**
@@ -151,6 +159,13 @@ export interface SubscriptionState {
      * supersedes the run.
      */
     pendingDeltaRun?: { payload: unknown };
+
+    /**
+     * The refusal the server answered this subscription with, handed to a subscriber
+     * that joins later: the state is already `"acked"`, so no frame goes out and no
+     * value will come. Kept until the subscription is re-armed or a value lands.
+     */
+    refusal?: SubscriptionError;
 
     /**
      * The authoritative server value the optimistic layers fold onto — the value
@@ -300,6 +315,8 @@ export class SubscriptionRegistry {
 export const setSubscriptionAck = (state: SubscriptionState, next: SubscriptionState["ack"]): void => {
     // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place
     state.ack = next;
+    // eslint-disable-next-line no-param-reassign -- a re-armed subscription no longer holds the refusal it was answered with
+    state.refusal = undefined;
 };
 
 /**
@@ -338,7 +355,10 @@ export function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined)
 
 /** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
 export const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
-    for (const errorCallback of callbacks) {
+    // A copy: a callback that subscribes again joins the set and is handed the refusal on joining, not a second time here.
+    const snapshot = [...callbacks];
+
+    for (const errorCallback of snapshot) {
         try {
             errorCallback(error);
         } catch {
@@ -356,4 +376,21 @@ export const failSubscription = (state: SubscriptionState, error: SubscriptionEr
     // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
     state.awaitingSnapshot = false;
     fanSubscriptionError(state.errorCallbacks, error);
+};
+
+/**
+ * Hand a late subscriber the refusal the subscription was answered with: a refused query sends no
+ * frame for a joiner, so this is the only answer it will get. A value held from before the refusal is
+ * replayed too, as the subscribers already present saw it, and does not stand in for the refusal.
+ */
+export const replaySubscriptionRefusal = (state: SubscriptionState, errorCallback: SubscriptionErrorCallback | undefined): void => {
+    if (errorCallback === undefined || state.refusal === undefined) {
+        return;
+    }
+
+    try {
+        errorCallback(state.refusal);
+    } catch {
+        /* user callback threw — ignore */
+    }
 };

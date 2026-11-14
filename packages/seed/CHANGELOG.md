@@ -1,3 +1,7 @@
+## @lunora/seed [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.282...@lunora/seed@1.0.0-alpha.283) (2026-11-14)
+
+- fix(seed): record seeded rows only after persist succeeds (#1535)
+
 ## @lunora/seed [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/seed@1.0.0-alpha.281...@lunora/seed@1.0.0-alpha.282) (2026-11-03)
 
 - fix: resolve open review defects across agent, client, codegen and SDKs (#1460)

@@ -106,6 +106,15 @@ describe("argument-taint", () => {
             // Only identifiers hop; a member access is already its own root.
             expect(singleHopInitializer(sinkArgument(`SINK(args.key);`))).toBeUndefined();
         });
+
+        it("skips a same-named binding in a sibling block, which the use cannot see", () => {
+            expect.assertions(2);
+
+            const source = `const url = args.url;\nif (flag) {\n    const { url } = trustedConfig;\n}\nSINK(url);`;
+
+            expect(singleHopInitializer(sinkArgument(source))?.getText()).toBe("args.url");
+            expect(isArgumentDerived(sinkArgument(source))).toBe(true);
+        });
     });
 
     describe("isArgumentDerived", () => {
@@ -120,11 +129,44 @@ describe("argument-taint", () => {
             expect(isArgumentDerived(sinkArgument(`const key = "static";\nSINK(key);`))).toBe(false);
         });
 
+        it("sees an args-derived default on a destructured binding", () => {
+            expect.assertions(3);
+
+            expect(isArgumentDerived(sinkArgument(`const { network: { url } = args.network } = config;\nSINK(url);`))).toBe(true);
+
+            expect(isArgumentDerived(sinkArgument(`const { url = args.url } = config;\nSINK(url);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const { url = "https://fixed.example" } = config;\nSINK(url);`))).toBe(false);
+        });
+
         it("stays fail-open through a helper call embedding args", () => {
             expect.assertions(2);
 
             expect(isArgumentDerived(sinkArgument(`SINK(hash(args.key));`))).toBe(true);
             expect(isArgumentDerived(sinkArgument(`SINK(new URL(args.url));`))).toBe(true);
+        });
+
+        it("follows a binding destructured from args at the body level, renames and nesting included", () => {
+            expect.assertions(3);
+
+            expect(isArgumentDerived(sinkArgument(`const { url } = args;\nSINK(url);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const { target: url } = args;\nSINK(url);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const { page: { id } } = args;\nSINK(id);`))).toBe(true);
+        });
+
+        it("follows a local composed into a larger expression, one hop per identifier", () => {
+            expect.assertions(2);
+
+            expect(isArgumentDerived(sinkArgument(`const host = args.host;\nSINK(\`https://\${host}/x\`);`))).toBe(true);
+            expect(isArgumentDerived(sinkArgument(`const body = args.payload;\nSINK(body.url);`))).toBe(true);
+        });
+
+        it("does not follow a destructure from a non-args source, or a second hop through a composed local", () => {
+            expect.assertions(4);
+
+            expect(isArgumentDerived(sinkArgument(`const { userId } = ctx.auth;\nSINK(\`users/\${userId}\`);`))).toBe(false);
+            expect(isArgumentDerived(sinkArgument(`const host = "example.com";\nSINK(\`https://\${host}/x\`);`))).toBe(false);
+            expect(isArgumentDerived(sinkArgument(`const first = args.key;\nconst second = first;\nSINK(\`k/\${second}\`);`))).toBe(false);
+            expect(isArgumentDerived(sinkArgument(`const { url } = config;\nSINK(url);`))).toBe(false);
         });
     });
 
@@ -138,6 +180,21 @@ describe("argument-taint", () => {
             // call in between recomputed it from data the server already trusts.
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`SINK(storeFile(args.bytes));`))).toBe(false);
             expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const key = storeFile(args.bytes);\nSINK(key);`))).toBe(false);
+        });
+
+        it("rejects a composed key whose only args-derived part a call recomputed, and keeps one that forwards an arg", () => {
+            expect.assertions(8);
+
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const digest = sha256Hex(args.bytes);\nSINK(\`blobs/\${digest}\`);`))).toBe(false);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const digest = await sha256Hex(args.bytes);\nSINK(\`blobs/\${digest}\`);`))).toBe(false);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const key = await storeFile(args.bytes);\nSINK(key);`))).toBe(false);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const name = args.name;\nSINK(\`blobs/\${name}\`);`))).toBe(true);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const name = args.name;\nSINK(\`blobs/\${sha256Hex(name)}\`);`))).toBe(false);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const { key = args.key } = config;\nSINK(key);`))).toBe(true);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const { key = args.key } = config;\nSINK(\`prefix/\${key}\`);`))).toBe(true);
+            expect(isUnmodifiedArgumentPassthrough(sinkArgument(`const digest = sha256Hex(args.bytes);\nSINK(\`blobs/\${digest}/\${args.name}\`);`))).toBe(
+                true,
+            );
         });
     });
 

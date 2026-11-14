@@ -42,8 +42,9 @@ const PAGE_FIELD = "page";
  * Opt-in, and it has to be: an unmergeable delta is not ignored by a client that
  * predates this — the merge bails and the caller replaces the whole query value
  * with the raw delta object. A client that never announces this keeps receiving
- * full snapshots, which is what every client did before, and what the non-JS
- * SDKs still do (they send `connect` with no `caps` at all).
+ * full snapshots, and so does a non-JS SDK released before this capability existed.
+ * The current non-JS SDKs all announce it; a client that builds its own `connect`
+ * frame without the capability also keeps receiving full snapshots.
  */
 const PAGE_DELTA_CAPABILITY = "pageDelta";
 

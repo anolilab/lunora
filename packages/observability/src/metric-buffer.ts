@@ -22,6 +22,7 @@ import { stableStringify } from "@lunora/wire";
 
 import type { LogFields } from "../../../shared/log-fields";
 import type { MetricEvent, MetricKind } from "../../../shared/metric-event";
+import { normalizeCapacity } from "./log-buffer";
 
 /** Default number of distinct series retained; least-recently-updated evicted first. */
 const DEFAULT_CAPACITY = 256;
@@ -96,7 +97,7 @@ export class MetricBuffer {
     private readonly series = new Map<string, MetricSeries>();
 
     public constructor(capacity: number = DEFAULT_CAPACITY) {
-        this.capacity = capacity > 0 ? Math.trunc(capacity) : DEFAULT_CAPACITY;
+        this.capacity = normalizeCapacity(capacity, DEFAULT_CAPACITY);
     }
 
     /** Number of distinct series currently aggregated. */

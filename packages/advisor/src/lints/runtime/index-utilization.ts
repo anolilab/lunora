@@ -20,8 +20,8 @@ const HOT_SCAN_THRESHOLD = 25;
  * (`context.indexHits`); a declared index whose recorded `reads` is `0` is dead.
  * The runtime records this in the durable `__lunora_metrics_index` table (every
  * index use stamps a per-`(table, index)` counter via `onIndexUse`) and surfaces
- * it through the `getMetrics` admin RPC; the studio sums the per-shard arrays
- * into `context.indexHits` (see `AdvisorIndexHit`). The counter is cumulative and
+ * it through the `getMetrics` admin RPC; the studio passes the counters of the
+ * shard being inspected as `context.indexHits` (see `AdvisorIndexHit`). The counter is cumulative and
  * never decays, so a non-zero index never reverts to "dead" — `reads: 0` means
  * the index has not been used once since the counter was created.
  *
@@ -40,7 +40,7 @@ const indexUtilization: Lint = {
     level: "INFO",
     name: "index_utilization",
     remediation:
-        "Drop a dead index so writes stop maintaining it; add an index covering the hot full-scanned table's read predicate so the read stops scanning every row.",
+        "Before dropping an index that reads as dead, check it is unused on every shard; then drop it so writes stop maintaining it. Add an index covering the hot full-scanned table's read predicate so the read stops scanning every row.",
     run: (context) => {
         const findings = [];
 
@@ -54,7 +54,7 @@ const indexUtilization: Lint = {
             findings.push(
                 emit(indexUtilization, {
                     cacheKey: `index_utilization:dead_index:${hit.table}:${hit.index}`,
-                    detail: `Index "${hit.index}" on table "${hit.table}" has recorded no reads since its counter was created — it's dead overhead: every write maintains it and nothing reads through it.`,
+                    detail: `Index "${hit.index}" on table "${hit.table}" has recorded no reads on the inspected shard since its counter was created — every write maintains it and nothing on this shard reads through it.`,
                     metadata: { index: hit.index, kind: "dead_index", reads: hit.reads, table: hit.table },
                 }),
             );

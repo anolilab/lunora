@@ -106,13 +106,25 @@ describe("userSecurityPanel API keys", () => {
 
         const { rerender } = render(
             <LunoraProvider client={mock.asClient}>
-                <UserSecurityPanel busy={false} capabilities={CAPABILITIES} runAction={vi.fn()} userId="u1" version={0} />
+                <UserSecurityPanel
+                    busy={false}
+                    capabilities={CAPABILITIES}
+                    runAction={vi.fn<(action: () => Promise<void>) => void>()}
+                    userId="u1"
+                    version={0}
+                />
             </LunoraProvider>,
         );
 
         rerender(
             <LunoraProvider client={mock.asClient}>
-                <UserSecurityPanel busy={false} capabilities={CAPABILITIES} runAction={vi.fn()} userId="u2" version={0} />
+                <UserSecurityPanel
+                    busy={false}
+                    capabilities={CAPABILITIES}
+                    runAction={vi.fn<(action: () => Promise<void>) => void>()}
+                    userId="u2"
+                    version={0}
+                />
             </LunoraProvider>,
         );
 
@@ -145,13 +157,25 @@ describe("userSecurityPanel API keys", () => {
 
         const { rerender } = render(
             <LunoraProvider client={mock.asClient}>
-                <UserSecurityPanel busy={false} capabilities={CAPABILITIES} runAction={vi.fn()} userId="u1" version={0} />
+                <UserSecurityPanel
+                    busy={false}
+                    capabilities={CAPABILITIES}
+                    runAction={vi.fn<(action: () => Promise<void>) => void>()}
+                    userId="u1"
+                    version={0}
+                />
             </LunoraProvider>,
         );
 
         rerender(
             <LunoraProvider client={mock.asClient}>
-                <UserSecurityPanel busy={false} capabilities={CAPABILITIES} runAction={vi.fn()} userId="u1" version={1} />
+                <UserSecurityPanel
+                    busy={false}
+                    capabilities={CAPABILITIES}
+                    runAction={vi.fn<(action: () => Promise<void>) => void>()}
+                    userId="u1"
+                    version={1}
+                />
             </LunoraProvider>,
         );
 

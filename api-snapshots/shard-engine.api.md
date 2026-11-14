@@ -118,6 +118,12 @@ const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 const ADMIN_TOKEN_TABLE = "__lunora_admin_tokens__";
 ```
 
+### `ADMIN_WILDCARD` (const)
+
+```ts
+const ADMIN_WILDCARD = "*";
+```
+
 ### `AGGREGATE_SQL_FUNCTION` (const)
 
 ```ts
@@ -629,6 +635,12 @@ const DEFAULT_PROMOTION_THRESHOLDS: PromotionThresholds;
 
 ```ts
 const DEFAULT_TRANSACTION_LIMITS: TransactionLimits;
+```
+
+### `DELTA_PLACEHOLDER_TABLE` (const)
+
+```ts
+const DELTA_PLACEHOLDER_TABLE = "__lunora__";
 ```
 
 ### `DOC_COLUMN` (const)
@@ -4266,6 +4278,12 @@ const deleteShapePokeCursorsForConnection: (sql: SqlExec, connectionId: string) 
 
 ```ts
 const deleteStreamRun: (sql: SqlExec, runKey: string) => void;
+```
+
+### `deltaTableFor` (const)
+
+```ts
+const deltaTableFor: (tables: Iterable<string>) => string;
 ```
 
 ### `depKey` (const)

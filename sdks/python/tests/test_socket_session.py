@@ -30,6 +30,8 @@ from tests._manifest import covers
 
 FRAMES = load("ws-frames.json")
 CLIENT_FRAMES = FRAMES["clientFrames"]
+# This port announces `pageDelta` (only), so every connect golden it emits carries the token.
+PAGE_DELTA = {"caps": ["pageDelta"]}
 
 
 def _client(**options) -> LunoraClient:
@@ -46,9 +48,9 @@ class TestSocketSession(unittest.TestCase):
         sent: list = []
         client.attach_socket(sent.append)
 
-        self.assertEqual(sent[0], CLIENT_FRAMES["connect-with-token"])
+        self.assertEqual(sent[0], {**CLIENT_FRAMES["connect-with-token"], **PAGE_DELTA})
         self.assertEqual(sent[1], CLIENT_FRAMES["whisper-subscribe"])
-        self.assertEqual(build_connect_frame("client-test", None, "session-token"), CLIENT_FRAMES["connect-with-token"])
+        self.assertEqual(build_connect_frame("client-test", None, "session-token"), {**CLIENT_FRAMES["connect-with-token"], **PAGE_DELTA})
         # The RPC bearer is never a socket credential, and neither credential rides the URL.
         self.assertNotIn("rpc-bearer", json.dumps(sent[0]))
         self.assertNotIn("session-token", client.ws_url_for(None, None))
@@ -56,7 +58,7 @@ class TestSocketSession(unittest.TestCase):
 
         bare: list = []
         _client().attach_socket(bare.append)
-        self.assertEqual(bare[0], CLIENT_FRAMES["connect"])
+        self.assertEqual(bare[0], {**CLIENT_FRAMES["connect"], **PAGE_DELTA})
         self.assertNotIn("token", bare[0])
 
     def test_ws_url_carries_only_the_admin_ticket(self):
@@ -76,16 +78,16 @@ class TestSocketSession(unittest.TestCase):
 
         sent: list = []
         _client(ws_token="session-token").attach_socket(sent.append, context=context)
-        self.assertEqual(sent[0], FRAMES["clientFrames"]["connect-with-token-and-context"])
+        self.assertEqual(sent[0], {**FRAMES["clientFrames"]["connect-with-token-and-context"], **PAGE_DELTA})
 
         bare: list = []
         _client().attach_socket(bare.append, context=context)
-        self.assertEqual(bare[0], CLIENT_FRAMES["connect-with-context"])
+        self.assertEqual(bare[0], {**CLIENT_FRAMES["connect-with-context"], **PAGE_DELTA})
 
         omitted: list = []
         _client().attach_socket(omitted.append)
         self.assertNotIn("context", omitted[0])
-        self.assertEqual(omitted[0], CLIENT_FRAMES["connect"])
+        self.assertEqual(omitted[0], {**CLIENT_FRAMES["connect"], **PAGE_DELTA})
 
     def test_close_codes_drive_token_expiry(self):
         covers("close_codes_drive_token_expiry")

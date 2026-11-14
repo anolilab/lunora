@@ -28,7 +28,7 @@ export default defineSchema({
 }).extend(paymentExtension);
 ```
 
-The tables ship with `@lunora/payment` and merge namespaced as `payment_customers`, `payment_events`, `payment_sessions`, `payment_subscriptions` and `payment_usageEvents`. Codegen reads them from the installed package, so upgrading `@lunora/payment` brings new columns and indexes with no schema edit.
+The tables ship with `@lunora/payment` and merge namespaced as `payment_customers`, `payment_events`, `payment_referenceRevisions`, `payment_sessions`, `payment_subscriptions` and `payment_usageEvents`. Codegen reads them from the installed package, so upgrading `@lunora/payment` brings new columns and indexes with no schema edit.
 
 ## 2. Wire the adapter
 

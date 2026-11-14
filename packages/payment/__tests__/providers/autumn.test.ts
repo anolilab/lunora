@@ -259,6 +259,28 @@ describe("autumn adapter", () => {
         expect(calls.find((call) => call.name === "attach")?.args[0]).toMatchObject({ planId: "enterprise" });
     });
 
+    it("refuses a seat-count change without reaching billing.attach", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createAutumnAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
+
+        await expect(adapter.updateSubscription("user_1::pro", { quantity: 5 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(calls.find((call) => call.name === "attach")).toBeUndefined();
+    });
+
+    it.each([[{}], [{ priceId: "pro" }]])("treats the patch %j as a no-op and never calls billing.attach", async (patch) => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createAutumnAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
+
+        const subscription = await adapter.updateSubscription("user_1::pro", patch);
+
+        expect(subscription.id).toBe("user_1::pro");
+        expect(calls.find((call) => call.name === "attach")).toBeUndefined();
+    });
+
     it("resumes by uncancelling via billing.update", async () => {
         expect.assertions(2);
 

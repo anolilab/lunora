@@ -72,6 +72,25 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("flags an args value destructured from args at the body level", () => {
+        expect.assertions(1);
+
+        write("destructure.ts", `export const save = mutation(async ({ ctx, args }) => { const { key } = args; await ctx.kv.get(key); });`);
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores a body-destructured args value composed after a ctx-scoped prefix", () => {
+        expect.assertions(1);
+
+        write(
+            "destructure-scoped.ts",
+            `export const read = query(async ({ ctx, args }) => { const { key } = args; await ctx.kv.get(\`\${ctx.auth.userId}/\${key}\`); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("ignores a key scoped by a server-trusted ctx value", () => {
         expect.assertions(1);
 

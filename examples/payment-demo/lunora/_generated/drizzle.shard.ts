@@ -27,6 +27,15 @@ export const payment_events = sqliteTable("payment_events", {
     by_provider_event: uniqueIndex("by_provider_event").on(t.provider, t.providerEventId),
 }));
 
+export const payment_referenceRevisions = sqliteTable("payment_referenceRevisions", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    referenceId: text("referenceId").notNull(),
+    revision: real("revision").notNull(),
+}, (t) => ({
+    by_reference: uniqueIndex("by_reference").on(t.referenceId),
+}));
+
 export const payment_sessions = sqliteTable("payment_sessions", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),

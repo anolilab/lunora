@@ -254,6 +254,20 @@ describe("database payment store on workerd", () => {
         });
     });
 
+    it("lets only one of two interleaved first bumps of a reference's counter win, and none moves it twice", async () => {
+        expect.assertions(4);
+
+        await withStore(async (store) => {
+            // Both read 0 before either writes, so the first bump is an insert race the unique `by_reference` index decides.
+            const results = await Promise.all([store.bumpReferenceRevision("user_1", 0), store.bumpReferenceRevision("user_1", 0)]);
+
+            expect(results.toSorted()).toStrictEqual([false, true]);
+            await expect(store.getReferenceRevision("user_1")).resolves.toBe(1);
+            await expect(store.bumpReferenceRevision("user_1", 0)).resolves.toBe(false);
+            await expect(store.bumpReferenceRevision("user_1", 1)).resolves.toBe(true);
+        });
+    });
+
     it("records usage exactly once per provider and key, and sums it over a window", async () => {
         expect.assertions(6);
 

@@ -1,6 +1,7 @@
 import emit from "../../finding";
 import type { AdvisorShape } from "../../shapes";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a replication shape whose `table` names a table that does not exist in
@@ -41,7 +42,7 @@ const shapeUnknownTable: Lint = {
                 emit(shapeUnknownTable, {
                     cacheKey: `shape_unknown_table:${shape.exportName}`,
                     detail: `Shape \`${shape.exportName}\` (${shape.file}) replicates from table \`${shape.table}\`, which is not declared in the schema. The shape can never resolve a rowset.`,
-                    metadata: { exportName: shape.exportName, file: shape.file, table: shape.table },
+                    metadata: { exportName: shape.exportName, ...declarationSiteFields(shape), table: shape.table },
                 }),
             );
     },

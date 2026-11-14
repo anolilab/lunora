@@ -20,6 +20,7 @@ import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, 
 const PAYMENT_TABLES = {
     customers: "payment_customers",
     events: "payment_events",
+    referenceRevisions: "payment_referenceRevisions",
     sessions: "payment_sessions",
     subscriptions: "payment_subscriptions",
     usageEvents: "payment_usageEvents",
@@ -438,6 +439,39 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             // reported, or add a `(provider, reportedToProvider, createdAt)` index
             // so the scan starts past them.
             return events;
+        },
+
+        getReferenceRevision: async (referenceId) => {
+            const row = await database.findFirst(PAYMENT_TABLES.referenceRevisions, { referenceId });
+
+            return row === null ? 0 : readNumber(row, "revision");
+        },
+
+        // Same shape as `upsertRevisioned`: an existing counter moves by one conditional patch, and an absent one by an
+        // insert that the unique `by_reference` index arbitrates, so a loser reports `false` rather than throwing.
+        bumpReferenceRevision: async (referenceId, ifRevision) => {
+            const row = await database.findFirst(PAYMENT_TABLES.referenceRevisions, { referenceId });
+            const current = row === null ? 0 : readNumber(row, "revision");
+
+            if (current !== ifRevision) {
+                return false;
+            }
+
+            if (row === null) {
+                try {
+                    await database.insert(PAYMENT_TABLES.referenceRevisions, { referenceId, revision: 1 });
+                } catch (error) {
+                    if ((await database.findFirst(PAYMENT_TABLES.referenceRevisions, { referenceId })) !== null) {
+                        return false;
+                    }
+
+                    throw error;
+                }
+
+                return true;
+            }
+
+            return database.patchIf(PAYMENT_TABLES.referenceRevisions, row._id, { revision: ifRevision }, { revision: ifRevision + 1 });
         },
 
         markEventProcessed: async (provider, eventId, type) => {

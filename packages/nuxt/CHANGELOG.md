@@ -1,3 +1,7 @@
+## @lunora/nuxt [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.304...@lunora/nuxt@1.0.0-alpha.305) (2026-11-14)
+
+- fix: land five small audit fixes (#1538)
+
 ## @lunora/nuxt [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/nuxt@1.0.0-alpha.303...@lunora/nuxt@1.0.0-alpha.304) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

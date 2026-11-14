@@ -67,7 +67,81 @@ public final class GeneratedSmoke {
                 "{\"args\":{\"channelId\":\"chan_1\",\"kind\":\"text\",\"tags\":{\"topic\":\"release\"},"
                     + "\"text\":\"hi\"},\"functionPath\":\"messages:send\"}");
 
-        System.out.println("OK — the generated surface reaches the wire");
+        // The generated watch member reaches the primitive with the right function path. The
+        // subscribe frame is sent at call time, the first data frame is decoded through the
+        // iterator, and closing the watch sends the unsubscribe for the same id.
+        java.util.List<java.util.Map<String, Object>> watchFrames = new java.util.ArrayList<>();
+        Client watchClient =
+                new Client(
+                        "https://app.example",
+                        (url, headers, body) ->
+                                new Client.Response(200, "{\"result\":{\"ok\":true}}"));
+
+        watchClient.attachSocket(watchFrames::add, null);
+
+        var watch =
+                new lunoraapi.Api(watchClient)
+                        .messages.watchList(new MessagesListArgs("chan_1", null), null);
+
+        java.util.Map<String, Object> subscribe = framesOfType(watchFrames, "subscribe");
+        java.util.Map<?, ?> query = (java.util.Map<?, ?>) subscribe.get("query");
+
+        if (!"messages:list".equals(query.get("functionPath"))) {
+            throw new AssertionError(
+                    "watch subscribed to " + query.get("functionPath") + ", want messages:list");
+        }
+
+        String sentArgs = Key.stableStringify(query.get("args"));
+
+        if (!sentArgs.equals("{\"channelId\":\"chan_1\"}")) {
+            throw new AssertionError("watch sent args " + sentArgs);
+        }
+
+        String id = (String) subscribe.get("id");
+
+        watchClient.handleFrame(
+                "{\"cursor\":1,\"data\":{\"ok\":true},\"id\":\"" + id + "\",\"type\":\"data\"}");
+
+        var event = watch.iterator().next();
+
+        if (event.error() != null) {
+            throw new AssertionError("watch delivered an error: " + event.error());
+        }
+
+        String decoded = Key.stableStringify(event.value());
+
+        if (!decoded.equals("{\"ok\":true}")) {
+            throw new AssertionError("watch yielded " + decoded + ", want {\"ok\":true}");
+        }
+
+        watch.close();
+
+        if (!id.equals(framesOfType(watchFrames, "unsubscribe").get("id"))) {
+            throw new AssertionError("closing the watch did not unsubscribe " + id);
+        }
+
+        System.out.println(
+                "OK — the generated surface reaches the wire, and the watch member reaches the"
+                        + " primitive");
+    }
+
+    /** The single frame of {@code kind} that was sent; fails when none or several were. */
+    private static java.util.Map<String, Object> framesOfType(
+            java.util.List<java.util.Map<String, Object>> frames, String kind) {
+        java.util.List<java.util.Map<String, Object>> found = new java.util.ArrayList<>();
+
+        for (java.util.Map<String, Object> frame : frames) {
+            if (kind.equals(frame.get("type"))) {
+                found.add(frame);
+            }
+        }
+
+        if (found.size() != 1) {
+            throw new AssertionError(
+                    "sent " + found.size() + " " + kind + " frames, want exactly one");
+        }
+
+        return found.get(0);
     }
 
     /** Normalises key order out of the comparison, so only the keys and values are asserted. */

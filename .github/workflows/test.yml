@@ -728,6 +728,71 @@
                       tests/e2e/playwright-report-saas
                   "retention-days": 7
 
+    # The production build the template, Worker-size and Worker-startup jobs consume, built
+    # once per run instead of once per job (17 jobs, ~34 runner-minutes per run). Not the
+    # vis cache: Tests never runs on `push`, so `alpha` never saves one and a PR's first run
+    # starts cold, and parallel jobs in one run cannot warm each other. The artifact belongs
+    # to this run and this commit and is built from scratch here, so it cannot carry a stale
+    # build; `dist:check` rejects a development build before upload.
+    #
+    # Everything publishable, and `:prod`: the template harness packs every `packages/*/dist`
+    # into tarballs and shells out to the built CLI, and the Worker-size and Worker-startup apps
+    # bundle the workspace `dist/`. Users install the production build; the development build
+    # keeps `react/jsx-dev-runtime` (a Next prerender dies with `jsxDEV is not a function`) and
+    # measures ~25% heavier. tar keeps the CLI's executable bit, which a plain artifact drops.
+    #
+    # Keep "if" equal to the OR of its consumers' conditions (templates, templates-expo,
+    # worker-size, worker-startup): a consumer whose condition holds while this job is
+    # skipped is skipped too, silently.
+    "build-prod":
+        "name": "Build packages (production artifacts)"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.templates_expo == 'true' || needs.files-changed.outputs.worker_size == 'true' || needs.files-changed.outputs.worker_startup == 'true'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "build-prod"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Build packages (production artifacts)"
+              "run": "pnpm run build:packages:prod"
+
+            - "name": "Check dist/ is production-clean"
+              "run": "pnpm run dist:check"
+
+            # Every `tag=type:package` project lives under packages/, and `build:prod` writes only to dist/.
+            - "name": "Pack the production dist/ directories"
+              "run": |
+                  tar -cf "${RUNNER_TEMP}/packages-dist-prod.tar" packages/*/dist
+
+            # 3 days so re-running one failed leg the next day can still download it; `overwrite`
+            # so "Re-run all jobs" can replace the earlier attempt's upload.
+            - "name": "Upload the production dist/ directories"
+              "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
+              "with":
+                  "name": "packages-dist-prod"
+                  "path": "${{ runner.temp }}/packages-dist-prod.tar"
+                  "retention-days": 3
+                  "if-no-files-found": "error"
+                  "overwrite": true
+
     # Scaffold every template, install it, add the auth-ui payload, build, typecheck.
     # Path-gated because a real `pnpm install` per template is slow, but it is the only
     # gate proving a `lunora init` scaffold still installs, and the only one that puts a
@@ -767,7 +832,7 @@
         "name": "Template scaffold (${{ matrix.template }})"
         # An empty matrix is an error in its own right: when no template is listed, the listing step has already failed, so skip here.
         "if": "needs.files-changed.outputs.templates == 'true' && needs.templates-matrix.outputs.list != '[]'"
-        "needs": ["files-changed", "templates-matrix"]
+        "needs": ["files-changed", "templates-matrix", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 60
         "strategy":
@@ -797,13 +862,16 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # The matrix packs `packages/*/dist` into tarballs and shells out to the
-            # built CLI, so everything publishable must be built — and built `:prod`:
-            # the development build keeps `react/jsx-dev-runtime`, which kills a Next
-            # production prerender with `jsxDEV is not a function`. Users install the
-            # production build, so that is what to test.
-            - "name": "Build packages (production artifacts)"
-              "run": "pnpm run build:packages:prod"
+            # Built once by `build-prod` (see the comment there).
+            - "name": "Download the production dist/ directories"
+              "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
+              "with":
+                  "name": "packages-dist-prod"
+                  "path": "${{ runner.temp }}"
+
+            - "name": "Unpack the production dist/ directories"
+              "run": |
+                  tar -xf "${RUNNER_TEMP}/packages-dist-prod.tar"
 
             # Expo runs in its own leg below, on a narrower filter: its `pnpm install`
             # pulls the react-native/expo graph that no other template shares, and
@@ -834,7 +902,7 @@
     "templates-expo":
         "name": "Template scaffold matrix (expo)"
         "if": "needs.files-changed.outputs.templates_expo == 'true'"
-        "needs": "files-changed"
+        "needs": ["files-changed", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
         "steps":
@@ -858,10 +926,16 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # Same prerequisite as the matrix job: the harness packs `packages/*/dist`
-            # into tarballs, and the production build is what users install.
-            - "name": "Build packages (production artifacts)"
-              "run": "pnpm run build:packages:prod"
+            # Built once by `build-prod` (see the comment there).
+            - "name": "Download the production dist/ directories"
+              "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
+              "with":
+                  "name": "packages-dist-prod"
+                  "path": "${{ runner.temp }}"
+
+            - "name": "Unpack the production dist/ directories"
+              "run": |
+                  tar -xf "${RUNNER_TEMP}/packages-dist-prod.tar"
 
             - "name": "Run the expo scaffold leg"
               "run": "pnpm run test:templates expo"
@@ -885,7 +959,7 @@
     "worker-size":
         "name": "Worker size budget"
         "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_size == 'true'"
-        "needs": "files-changed"
+        "needs": ["files-changed", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
         "steps":
@@ -909,10 +983,16 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `:prod` because the reference app bundles the workspace `dist/`, and the
-            # development build measures ~25% heavier — a number nobody deploys.
-            - "name": "Build packages (production artifacts)"
-              "run": "pnpm run build:packages:prod"
+            # Built once by `build-prod` (see the comment there).
+            - "name": "Download the production dist/ directories"
+              "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
+              "with":
+                  "name": "packages-dist-prod"
+                  "path": "${{ runner.temp }}"
+
+            - "name": "Unpack the production dist/ directories"
+              "run": |
+                  tar -xf "${RUNNER_TEMP}/packages-dist-prod.tar"
 
             - "name": "Weigh the reference Worker"
               "run": "pnpm run worker-size:check"
@@ -1004,7 +1084,7 @@
     "worker-startup":
         "name": "Worker startup budget"
         "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_startup == 'true'"
-        "needs": "files-changed"
+        "needs": ["files-changed", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
         "steps":
@@ -1028,9 +1108,16 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `:prod` for the same reason as the size gate: users install the production build.
-            - "name": "Build packages (production artifacts)"
-              "run": "pnpm run build:packages:prod"
+            # Built once by `build-prod` (see the comment there).
+            - "name": "Download the production dist/ directories"
+              "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
+              "with":
+                  "name": "packages-dist-prod"
+                  "path": "${{ runner.temp }}"
+
+            - "name": "Unpack the production dist/ directories"
+              "run": |
+                  tar -xf "${RUNNER_TEMP}/packages-dist-prod.tar"
 
             - "name": "Count what the reference Worker evaluates at startup"
               "run": "pnpm run worker-startup:check"
@@ -1300,6 +1387,7 @@
                 "test-celld",
                 "test-mysql",
                 "e2e",
+                "build-prod",
                 "templates-matrix",
                 "templates",
                 "templates-expo",

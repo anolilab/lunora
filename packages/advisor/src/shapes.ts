@@ -14,6 +14,9 @@ export interface AdvisorShape {
     /** File the shape is declared in (relative, for the operator to open). */
     file: string;
 
+    /** 1-based start line of the declaring statement, when the feeder recorded it. */
+    line?: number;
+
     /**
      * The `table` string literal the shape replicates from, or `undefined` when
      * the feeder could not read it as a plain string literal — tier-sensitive

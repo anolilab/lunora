@@ -55,12 +55,16 @@ describe("discover/workflows", () => {
             {
                 className: "EtlWorkflow",
                 exportName: "etl",
+                file: "workflows",
+                line: 8,
                 name: "nightly-etl",
                 steps: [],
             },
             {
                 className: "OrderPipelineWorkflow",
                 exportName: "orderPipeline",
+                file: "workflows",
+                line: 4,
                 name: "order-pipeline",
                 steps: [],
             },

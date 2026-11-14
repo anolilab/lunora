@@ -2369,6 +2369,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `requireAdminAuthClient` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ## `lunorash/client/auth`
 
 ### `ADMIN_AUTH_DEFAULT_PAGE_SIZE` (const)
@@ -2380,6 +2384,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `AdminAuthList` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AdminAuthListQueryOptions` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2395,11 +2403,23 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `adminAuthImpersonateMutation` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `adminAuthListHasMore` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `adminAuthListPlaceholder` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `adminAuthListQueryKey` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `adminAuthListQueryOptions` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2428,6 +2448,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `isLoadingStatus` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `nextAdminAuthLimit` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 

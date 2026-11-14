@@ -23,6 +23,7 @@
       "file": "channels",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 17,
       "visibility": "public"
     },
     {
@@ -48,6 +49,7 @@
       "file": "channels",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 30,
       "visibility": "public"
     },
     {
@@ -73,6 +75,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 47,
       "visibility": "public"
     },
     {
@@ -98,6 +101,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 64,
       "visibility": "public"
     },
     {
@@ -123,6 +127,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 94,
       "visibility": "public"
     },
     {
@@ -148,6 +153,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 123,
       "visibility": "public"
     },
     {
@@ -173,6 +179,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 162,
       "visibility": "public"
     },
     {
@@ -198,6 +205,7 @@
       "file": "presence",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 27,
       "visibility": "public"
     },
     {
@@ -223,6 +231,7 @@
       "file": "presence",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 61,
       "visibility": "public"
     },
     {
@@ -248,6 +257,7 @@
       "file": "presence",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 86,
       "visibility": "public"
     },
     {
@@ -273,6 +283,7 @@
       "file": "profiles",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 45,
       "visibility": "public"
     },
     {
@@ -298,6 +309,7 @@
       "file": "profiles",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 66,
       "visibility": "public"
     },
     {
@@ -323,6 +335,7 @@
       "file": "profiles",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 96,
       "visibility": "public"
     },
     {
@@ -348,6 +361,7 @@
       "file": "profiles",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 124,
       "visibility": "public"
     }
   ]

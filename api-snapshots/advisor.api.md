@@ -21,6 +21,7 @@ const ALL_LINTS: ReadonlyArray<Lint>;
 interface AdvisorAdminRoute {
     exportName: string;
     file: string;
+    line?: number;
     method: string;
     path: string;
     usesGuard: boolean;
@@ -167,12 +168,14 @@ interface AdvisorConfigCall {
 interface AdvisorContainer {
     enableInternet?: boolean;
     exportName: string;
+    file?: string;
     hardTimeout?: number | string;
     instanceType?: string | {
         diskMb?: number;
         memoryMib?: number;
         vcpu?: number;
     };
+    line?: number;
     maxInstances?: number;
     sleepAfter?: number | string;
 }
@@ -219,7 +222,9 @@ interface AdvisorCountRead {
 ```ts
 interface AdvisorCron {
     cron: string;
+    file?: string;
     functionPath?: string;
+    line?: number;
     name: string;
     workflow?: {
         exportName: string;
@@ -351,7 +356,9 @@ interface AdvisorImageDeliveryUrlAccess {
 ```ts
 interface AdvisorIndex {
     fields: ReadonlyArray<string>;
+    file?: string;
     kind: "geo" | "index" | "rank" | "search" | "vector";
+    line?: number;
     name: string;
     unique?: boolean;
 }
@@ -383,7 +390,9 @@ interface AdvisorInsertWrite {
 ```ts
 interface AdvisorKeyedRelation {
     field: string;
+    file?: string;
     kind: "many" | "one";
+    line?: number;
     name: string;
     onDelete?: "cascade" | "restrict" | "set null";
     references: string;
@@ -615,6 +624,7 @@ interface AdvisorProcedureProtection {
     handlesErrors?: boolean;
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    line?: number;
     reachesOutbound?: boolean;
     runsAiGeneration?: boolean;
     throwsBareError?: boolean;
@@ -661,6 +671,7 @@ interface AdvisorQueue {
         exportName: string;
         file: string;
     };
+    line?: number;
     mode: "pull" | "push";
     name: string;
     topic?: string;
@@ -740,6 +751,7 @@ interface AdvisorRelationLoad {
 interface AdvisorRlsProcedure {
     exportName: string;
     file: string;
+    line?: number;
     rlsTables: ReadonlyArray<string>;
     tablesRead: ReadonlyArray<string>;
     tablesWritten: ReadonlyArray<string>;
@@ -786,6 +798,7 @@ interface AdvisorSecretLiteral {
 interface AdvisorShape {
     exportName: string;
     file: string;
+    line?: number;
     table?: string;
 }
 ```
@@ -870,8 +883,10 @@ interface AdvisorTable {
     externallyManaged?: boolean;
     externalSource?: AdvisorExternalSource;
     fields: ReadonlyArray<string>;
+    file?: string;
     indexes: ReadonlyArray<AdvisorIndex>;
     isPublic?: boolean;
+    line?: number;
     name: string;
     relations: ReadonlyArray<AdvisorRelation>;
     shardKind?: "global" | "root" | "shardBy";
@@ -907,7 +922,9 @@ interface AdvisorTableWrite extends AdvisorInsertWrite {
 
 ```ts
 interface AdvisorThroughRelation {
+    file?: string;
     kind: "many";
+    line?: number;
     name: string;
     table: string;
     through: {
@@ -915,6 +932,16 @@ interface AdvisorThroughRelation {
         table: string;
         to: string;
     };
+}
+```
+
+### `AdvisorTopic` (interface)
+
+```ts
+interface AdvisorTopic {
+    exportName: string;
+    file?: string;
+    line?: number;
 }
 ```
 
@@ -945,7 +972,9 @@ interface AdvisorVectorNamespaceAccess {
 ```ts
 interface AdvisorWorkflow {
     exportName: string;
+    file?: string;
     handlerFile?: string;
+    line?: number;
     steps?: ReadonlyArray<AdvisorWorkflowStep>;
 }
 ```
@@ -968,6 +997,7 @@ interface AdvisorWranglerVariable {
     file: string;
     key: string;
     kind: string;
+    line?: number;
     preview: string;
 }
 ```
@@ -1176,6 +1206,7 @@ interface LintContext {
     storageUploads?: ReadonlyArray<AdvisorStorageUpload>;
     tableScans?: ReadonlyArray<AdvisorTableScan>;
     tableWrites?: ReadonlyArray<AdvisorTableWrite>;
+    topics?: ReadonlyArray<AdvisorTopic>;
     unboundedLoops?: ReadonlyArray<AdvisorUnboundedLoop>;
     unrestrictedWhereBranches?: ReadonlyArray<AdvisorUnrestrictedWhereBranch>;
     vectorNamespaceAccesses?: ReadonlyArray<AdvisorVectorNamespaceAccess>;

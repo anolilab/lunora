@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags an `action` that reaches an outbound surface with no `try`/`catch`
@@ -34,7 +35,7 @@ const actionWithoutErrorHandling: Lint = {
                 emit(actionWithoutErrorHandling, {
                     cacheKey: `action_without_error_handling:${procedure.file}:${procedure.exportName}`,
                     detail: `Action \`${procedure.exportName}\` (${procedure.file}) calls an outbound surface with no \`try\`/\`catch\`. A dependency failure will surface to the caller unexplained.`,
-                    metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
+                    metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), kind: procedure.kind },
                 }),
             );
     },

@@ -11,6 +11,9 @@ export interface AdvisorRlsProcedure {
     /** Source file relative to the lunora dir, no extension. */
     file: string;
 
+    /** 1-based start line of the declaring statement, when the feeder recorded it. */
+    line?: number;
+
     /**
      * Tables explicitly named in the `rls(policies)` array passed to `.use(rls(...))`
      * in this procedure's builder chain. Empty when the policies argument is not a
@@ -19,6 +22,7 @@ export interface AdvisorRlsProcedure {
     rlsTables: ReadonlyArray<string>;
     /** Tables read by the procedure via `ctx.db.query("table")` / `ctx.db.findMany(...)` etc. */
     tablesRead: ReadonlyArray<string>;
+
     /** Tables written by the procedure via `ctx.db.insert("table", …)` / `ctx.db.patch(...)` etc. */
     tablesWritten: ReadonlyArray<string>;
 
