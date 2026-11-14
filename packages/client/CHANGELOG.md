@@ -1,3 +1,23 @@
+## @lunora/client [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.295...@lunora/client@1.0.0-alpha.296) (2026-11-14)
+
+- fix(client): restamp offline writes that are mid-replay (#1534)
+
+## @lunora/client [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.294...@lunora/client@1.0.0-alpha.295) (2026-11-13)
+
+- feat(codegen): emit a watch stream form for every query (#1598)
+
+## @lunora/client [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.293...@lunora/client@1.0.0-alpha.294) (2026-11-13)
+
+- fix(client): record baseIncomplete in the api snapshot (#1600)
+
+## @lunora/client [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.292...@lunora/client@1.0.0-alpha.293) (2026-11-13)
+
+- fix(sdk): hold delta runs until their last frame in every port (#1596)
+
+## @lunora/client [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.291...@lunora/client@1.0.0-alpha.292) (2026-11-13)
+
+- fix(do): name a delta's table only for a single-table query (#1595)
+
 ## @lunora/client [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.290...@lunora/client@1.0.0-alpha.291) (2026-11-11)
 
 - feat(client): move admin auth hook logic into @lunora/client (#1552)

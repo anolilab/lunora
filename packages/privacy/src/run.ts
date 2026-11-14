@@ -354,8 +354,8 @@ const failStep = async (
         return "failed" as const;
     });
 
-/** The erasure statuses that block an export of the subject: its data may be partly gone, or the subject was erased. */
-const ERASURE_BLOCKING: ReadonlySet<RequestStatus> = new Set(["completed", "failed", "processing"]);
+/** The erasure statuses that block an export of the subject: its data may be partly gone, or the subject was erased (again, for `restored`). */
+const ERASURE_BLOCKING: ReadonlySet<RequestStatus> = new Set(["completed", "failed", "processing", "restored"]);
 
 /**
  * Whether an erasure request blocks exports of its subject. A failure that stopped before the tombstone erased nothing, so it
@@ -625,10 +625,9 @@ const failOpenRequest = async (ports: PrivacyPorts, request: RequestRecord, deta
 };
 
 /**
- * Complete an erasure and drop the raw subject id from the request log: every request of the subject,
- * this one last, takes the tombstone key as its `subjectId`, so the log keeps the link the tombstone
- * keeps and nothing more. A retry finds the requests already rewritten and only completes this one.
- * The subject's own lookups by their id stop finding these requests, which is the point.
+ * Retire the subject's requests other than `keepRequestId`, the same way for a completed erasure and a restore:
+ * a backup restored after an erasure brings back requests that still hold data the erasure removed and files it
+ * wrote, so they must be failed, expired or deleted again, not only rekeyed.
  *
  * An export not yet finished, queued or processing, is failed in the same write: its later steps would read
  * the tombstone key as the subject and assemble an archive missing the data not yet collected. The claim
@@ -636,9 +635,9 @@ const failOpenRequest = async (ports: PrivacyPorts, request: RequestRecord, deta
  * too, so whichever claim lands first wins: an export failed here never turns ready, and one that turned
  * ready first is expired here. A queued export's run then finds the erasure and stops (see `exportRun`).
  */
-const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId: string, key: string): Promise<void> => {
+const retireSubjectRequests = async (ports: PrivacyPorts, subjectId: string, key: string, keepRequestId?: string): Promise<void> => {
     const requests = await ports.store.listForSubject(subjectId);
-    const others = requests.filter((request) => request.id !== requestId);
+    const others = requests.filter((request) => request.id !== keepRequestId);
 
     // The rekey is each request's last write: until its cleanup has succeeded the request stays under the subject's
     // id, so a retried erasure lists it again and finishes the cleanup, which is safe to repeat.
@@ -677,6 +676,16 @@ const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId
             }
         }),
     );
+};
+
+/**
+ * Complete an erasure and drop the raw subject id from the request log: every request of the subject,
+ * this one last, takes the tombstone key as its `subjectId`, so the log keeps the link the tombstone
+ * keeps and nothing more. A retry finds the requests already rewritten and only completes this one.
+ * The subject's own lookups by their id stop finding these requests, which is the point.
+ */
+const completeErasure = async (ports: PrivacyPorts, requestId: string, subjectId: string, key: string): Promise<void> => {
+    await retireSubjectRequests(ports, subjectId, key, requestId);
     await setStatus(ports, requestId, { from: "processing", patch: { subjectId: key }, to: "completed" });
 };
 
@@ -819,6 +828,7 @@ export {
     exportRun,
     inlineSteps,
     requireTombstones,
+    retireSubjectRequests,
     type RunScope,
     setStatus,
     type StepRunner,

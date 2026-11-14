@@ -1,3 +1,15 @@
+## @lunora/codegen [1.0.0-alpha.411](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.410...@lunora/codegen@1.0.0-alpha.411) (2026-11-14)
+
+- security(storage): add authorizeSignedGet for serveStorageObject (#1542)
+
+## @lunora/codegen [1.0.0-alpha.410](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.409...@lunora/codegen@1.0.0-alpha.410) (2026-11-13)
+
+- feat(codegen): emit a watch stream form for every query (#1598)
+
+## @lunora/codegen [1.0.0-alpha.409](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.408...@lunora/codegen@1.0.0-alpha.409) (2026-11-13)
+
+- security(payment)!: owner-checked subscription changes, replace the raw adapter with provider (#1544)
+
 ## @lunora/codegen [1.0.0-alpha.408](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.407...@lunora/codegen@1.0.0-alpha.408) (2026-11-11)
 
 - feat(auth): add API keys via the apiKey() plugin (#1526)

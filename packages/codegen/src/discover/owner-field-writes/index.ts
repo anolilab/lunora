@@ -3,9 +3,10 @@ import { Node } from "ts-morph";
 
 import { isArgumentDerived } from "../../argument-taint";
 import type { CallSiteScope, FunctionIR, MutatorIR, OwnerFieldWriteIR } from "../../ir";
-import { bindingKeyName, collectCallRows, isConstDeclaration, memberAccessOf, propertyKeyName, unwrapExpression } from "../ast";
+import { bindingKeyName, collectCallRows, findObjectProperty, isConstDeclaration, memberAccessOf, propertyKeyName, unwrapExpression } from "../ast";
 import { callSiteScopeOf, completeCallersOf, declarationOf, withCallerVisibility } from "../attribution";
 import { denotesContextDatabase, isContextRooted } from "../context-root";
+import { facadeWriteOf } from "../write-target";
 import type { MutatorImplScope } from "./args-pristine";
 import { mutatorImplScopeOf } from "./args-pristine";
 import isGuardedWrite from "./guarded-args";
@@ -36,12 +37,36 @@ const IDENTITY_FIELDS = new Set<string>([
 
 /**
  * `ctx.db` write surfaces whose document / partial (the object whose identity
- * columns this feeder inspects) is the argument after the table: `insert(table, doc)`
- * and `insertManyUnsafe(table, rows)` (`rows` an array of documents) take it at
+ * columns this feeder inspects) is the argument after the table: `insert(table, doc)`,
+ * `insertMany(table, rows)` and `insertManyUnsafe(table, rows)` (`rows` an array of documents) take it at
  * `arg[1]`, while `patch(table, id, partial)` and `replace(table, id, doc)` take it at
  * `arg[2]`, after the id.
  */
-const IDENTITY_WRITE_METHODS = new Set<string>(["insert", "insertManyUnsafe", "patch", "replace"]);
+const IDENTITY_WRITE_METHODS = new Set<string>(["insert", "insertMany", "insertManyUnsafe", "patch", "replace"]);
+
+/**
+ * The `ctx.db.<table>.<method>` facade writes whose document carries identity columns. `upsert` carries two, in its
+ * `create` and `update` objects, and both are inspected: an `update` can re-own an existing row just as a `create`
+ * can own a new one.
+ */
+const FACADE_IDENTITY_WRITE_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "patch", "patchMany", "replace", "upsert", "upsertMany"]);
+
+/** The initializers of `names` in `object`, when it is an object literal: the documents an upsert row or a batch patch writes. */
+const propertyInitializers = (object: TsNode | undefined, names: ReadonlyArray<string>): TsNode[] => {
+    if (object === undefined || !Node.isObjectLiteralExpression(object)) {
+        return [];
+    }
+
+    return names.flatMap((name) => {
+        const property = findObjectProperty(object, name);
+        const initializer = Node.isPropertyAssignment(property) ? property.getInitializer() : undefined;
+
+        return initializer === undefined ? [] : [initializer];
+    });
+};
+
+/** The object-literal elements of `node` when it is an array literal. */
+const arrayElements = (node: TsNode | undefined): TsNode[] => (node !== undefined && Node.isArrayLiteralExpression(node) ? node.getElements() : []);
 
 /**
  * When `node` is a `<ctx>.db.<method>` member access for one of the
@@ -60,13 +85,73 @@ const contextDatabaseWriteMethod = (node: TsNode): string | undefined => {
     return IDENTITY_WRITE_METHODS.has(method) && denotesContextDatabase(node.getExpression()) ? method : undefined;
 };
 
+/** A write that may carry identity columns: its method, and the argument(s) holding its document(s). */
+interface IdentityWrite {
+    documentArguments: TsNode[];
+    method: string;
+}
+
+/**
+ * The document arguments of a facade `ctx.db.<table>.<method>(…)` call. `patch` and `replace` take the id first, so
+ * their document is at `arg[1]`; `insert` and `insertMany` take the document at `arg[0]`. `upsert` takes
+ * `{ target, create, update }`, and both document objects are returned; `upsertMany` takes `{ target, rows }` of
+ * those pairs. `patchMany` takes `[{ id, values }]` or `{ where, values }`, and each `values` is returned.
+ */
+const facadeDocumentArguments = (method: string, call: CallExpression): TsNode[] => {
+    const [first] = call.getArguments();
+
+    if (method === "upsert") {
+        return propertyInitializers(first, ["create", "update"]);
+    }
+
+    if (method === "upsertMany") {
+        return propertyInitializers(first, ["rows"]).flatMap((rows) => arrayElements(rows).flatMap((row) => propertyInitializers(row, ["create", "update"])));
+    }
+
+    if (method === "patchMany") {
+        const patches = first !== undefined && Node.isArrayLiteralExpression(first) ? arrayElements(first) : [first];
+
+        return patches.flatMap((patch) => propertyInitializers(patch, ["values"]));
+    }
+
+    const document = method === "patch" || method === "replace" ? call.getArguments()[1] : first;
+
+    return document === undefined ? [] : [document];
+};
+
+/**
+ * The identity-bearing write `call` makes, through the by-name `ctx.db.<method>(table, …)` form or the
+ * `ctx.db.<table>.<method>(…)` facade (directly or through a `const` alias). `undefined` for any other call.
+ */
+const identityWriteOf = (call: CallExpression): IdentityWrite | undefined => {
+    const callee = call.getExpression();
+    const byName = contextDatabaseWriteMethod(callee);
+
+    if (byName !== undefined) {
+        // `patch` and `replace` take the table and the id before the document; `insert` takes the table before it.
+        const documentIndex = byName === "patch" || byName === "replace" ? 2 : 1;
+        const documentArgument = call.getArguments()[documentIndex];
+
+        return documentArgument === undefined ? undefined : { documentArguments: [documentArgument], method: byName };
+    }
+
+    const facade = facadeWriteOf(call, FACADE_IDENTITY_WRITE_METHODS);
+
+    // The facade is trusted only when its database is `ctx.db` itself, as the by-name form requires.
+    if (facade === undefined || !denotesContextDatabase(facade.database)) {
+        return undefined;
+    }
+
+    return { documentArguments: facadeDocumentArguments(facade.method, call), method: facade.method };
+};
+
 /**
  * The object literals whose identity columns a write's document argument
  * contributes: the argument itself for the single-document writes, and each
- * array element for `insertManyUnsafe`'s row list.
+ * array element for the batch writes' row lists (`insertManyUnsafe`, and the facade's `insertMany`).
  */
 const documentObjectLiterals = (documentArgument: TsNode, method: string): ObjectLiteralExpression[] => {
-    if (method !== "insertManyUnsafe") {
+    if (method !== "insertManyUnsafe" && method !== "insertMany") {
         return Node.isObjectLiteralExpression(documentArgument) ? [documentArgument] : [];
     }
 
@@ -220,18 +305,43 @@ const identityWritesInObjectLiteral = (
     return rows;
 };
 
+/** One finding per column: proven owner-scoped or guarded only when every copy of it is. */
+const mergeByField = (rows: OwnerFieldWriteIR[]): OwnerFieldWriteIR[] => {
+    const byField = new Map<string, OwnerFieldWriteIR>();
+
+    for (const row of rows) {
+        const seen = byField.get(row.field);
+
+        if (seen === undefined) {
+            byField.set(row.field, row);
+        } else {
+            const merged: OwnerFieldWriteIR = { ...seen };
+
+            if (row.ownerScoped !== true) {
+                delete merged.ownerScoped;
+            }
+
+            if (row.guarded !== true) {
+                delete merged.guarded;
+            }
+
+            byField.set(row.field, merged);
+        }
+    }
+
+    return [...byField.values()];
+};
+
 /** Identity columns written from `args` by a single `ctx.db` write call. */
 const ownerFieldWritesInCall = (call: CallExpression, relativePath: string, ownerFieldOf: (exportName: string) => string | undefined): OwnerFieldWriteIR[] => {
-    const method = contextDatabaseWriteMethod(call.getExpression());
-    // `patch` and `replace` take the table and the id before the document; `insert` takes the table before it.
-    const documentIndex = method === "patch" || method === "replace" ? 2 : 1;
-    const documentArgument = method === undefined ? undefined : call.getArguments()[documentIndex];
+    const identityWrite = identityWriteOf(call);
 
-    if (method === undefined || documentArgument === undefined) {
+    if (identityWrite === undefined) {
         return [];
     }
 
-    const objectLiterals = documentObjectLiterals(documentArgument, method);
+    const { method } = identityWrite;
+    const objectLiterals = identityWrite.documentArguments.flatMap((documentArgument) => documentObjectLiterals(documentArgument, method));
 
     if (objectLiterals.length === 0) {
         return [];
@@ -242,7 +352,11 @@ const ownerFieldWritesInCall = (call: CallExpression, relativePath: string, owne
     const implScope = mutatorImplScopeOf(call);
     const write = { call, method, ownerField: implScope === undefined ? undefined : ownerFieldOf(implScope.mutatorName), relativePath, scope };
 
-    return objectLiterals.flatMap((objectLiteral) => identityWritesInObjectLiteral(objectLiteral, write, implScope));
+    const rows = objectLiterals.flatMap((objectLiteral) => identityWritesInObjectLiteral(objectLiteral, write, implScope));
+
+    // An upsert's `create` and `update` are one write: the same column tainted in both is one finding, proven only
+    // when both copies are.
+    return method === "upsert" ? mergeByField(rows) : rows;
 };
 
 /**

@@ -693,7 +693,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     // The fake scheduler is created once per harness (not per makeHarness view).
     // The top-level dispatch and mutationContext are not available yet at
     // construction time, so we use thunks to resolve them lazily.
-    type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown) => Promise<unknown>;
+    type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown, nowMs: number) => Promise<unknown>;
 
     let scheduledDispatchRef: ScheduledDispatch | undefined;
     let mutationContextRef: unknown;
@@ -923,13 +923,17 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // call. A scheduled action runs unwrapped (no rollback semantics), exactly
         // as `runInternal` would. `internal*` targets are reachable here because the
         // scheduler is the trusted server-dispatch surface (allowInternal = true).
-        scheduledDispatchRef ??= (kind, reference, context, args) => {
+        const runScheduledJob = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown): Promise<unknown> => {
             if (kind === "mutation") {
                 return runInTransaction(() => runRegisteredFunction("mutation", reference as never, context, args, true)).then(notifyAfter);
             }
 
             return runWithBudget(() => runInternal("action", reference, context, args));
         };
+
+        // The whole job runs under the fire time's clock, so `ctx.now` and every composed
+        // `ctx.runQuery` / `ctx.runMutation` read the same virtual instant.
+        scheduledDispatchRef ??= (kind, reference, context, args, nowMs) => runClock.run(nowMs, () => runScheduledJob(kind, reference, context, args));
 
         const query = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             if (registeredFunctionKind(referenceOrInline)) {

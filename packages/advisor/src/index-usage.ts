@@ -1,7 +1,7 @@
 /**
  * Observed read signal over a table — the input the `index_utilization` runtime
- * lint consumes. Produced by the studio backend from each shard's recorded
- * metrics.
+ * lint consumes. Produced by the studio from the recorded metrics of the shard
+ * being inspected.
  *
  * `AdvisorTableScan` comes straight from the per-`(function, table)` full-scan
  * attribution the runtime already records (`__lunora_metrics_scans`, surfaced as
@@ -11,17 +11,18 @@
  * `AdvisorIndexHit` is the per-declared-index hit count. The runtime now records
  * this in the durable `__lunora_metrics_index` table (stamped on every index use
  * via `onIndexUse`) and surfaces it through the `getMetrics` admin RPC; the
- * studio sums the per-shard arrays and feeds them as `context.indexHits`, and the
- * lint flags a declared index with zero recorded reads as dead. When the feed is
+ * studio passes the counters of the shard being inspected as `context.indexHits`,
+ * so an index used only on other shards reads as dead there. The lint flags a
+ * declared index with zero recorded reads as dead. When the feed is
  * absent (a static caller, or a shard that recorded nothing) the dead-index half
  * is a no-op and only the hot-scan half runs off the scan attribution.
  */
 
 /**
  * Per-table full-scan volume observed over the window — a read that hit no
- * index. Sourced from `FunctionCallStat.scannedTables` aggregated across
- * functions and shards. Runtime callers supply this; static callers don't, so
- * the hot-scan half of the lint finds nothing there.
+ * index. Sourced from `FunctionCallStat.scannedTables` aggregated across the
+ * functions of the shard being inspected. Runtime callers supply this; static
+ * callers don't, so the hot-scan half of the lint finds nothing there.
  */
 export interface AdvisorTableScan {
     /** Total full-scans of `table` over the observed window. */

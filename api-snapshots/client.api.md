@@ -1375,6 +1375,7 @@ interface SubscriptionState {
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
     awaitingSnapshot?: boolean;
+    baseIncomplete?: boolean;
     readonly callbacks: Set<SubscriptionCallback>;
     readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
@@ -1386,6 +1387,7 @@ interface SubscriptionState {
     pendingDeltaRun?: {
         payload: unknown;
     };
+    refusal?: SubscriptionError;
     serverBase: unknown;
     serverBaseCommitted?: boolean;
     serverClaims?: string;

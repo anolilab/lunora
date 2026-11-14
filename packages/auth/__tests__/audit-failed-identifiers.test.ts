@@ -56,6 +56,19 @@ describe("failed-attempt identifiers are keyed digests, not the caller's text", 
         expect(JSON.stringify(row)).not.toContain(PASTED);
     });
 
+    it("never stores the hash key's own MAC of the caller's text, which would sign whatever the caller sends", async () => {
+        expect.assertions(1);
+
+        await appendAuthAuditEntry(executor, failedEntry(PASTED), { hashKey: "auth-secret-one" });
+
+        const [row] = await readAuthAuditLog(executor, {});
+        const encoder = new TextEncoder();
+        const rootKey = await crypto.subtle.importKey("raw", encoder.encode("auth-secret-one"), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
+        const rootMac = Buffer.from(await crypto.subtle.sign("HMAC", rootKey, encoder.encode(PASTED))).toString("hex");
+
+        expect(row?.detail?.["clientId"]).not.toBe(`hmac-sha256:${rootMac}`);
+    });
+
     it("gives the same digest for the same value under the same key, and a different one under another key", async () => {
         expect.assertions(2);
 

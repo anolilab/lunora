@@ -181,10 +181,11 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
 
     /**
      * The flag as this isolate last saw it, re-read once the cache window lapses.
-     * Fails open: when the scheduler cannot be reached the deployment is treated
-     * as running, because a scheduler outage that took every function down with
-     * it is the worse failure. The failed read is cached too, so an outage costs
-     * one attempt per window rather than one per request.
+     * A failed or abandoned read keeps the last state this isolate trusted; only an
+     * isolate that never read the flag treats the deployment as running, because a
+     * scheduler outage that took every function down with it is the worse failure.
+     * The failed read is cached too, so an outage costs one attempt per window
+     * rather than one per request.
      */
     const read = async (): Promise<DeploymentPauseState> => {
         const stub = options.stub();
@@ -203,11 +204,13 @@ const createDeploymentPause = (options: DeploymentPauseOptions): DeploymentPause
             pending ??
             fetchState(stub)
                 .catch(() => {
+                    const fallback = cached?.state ?? NOT_PAUSED;
+
                     if (generation === startedAt) {
-                        cached = { readAt: now(), state: NOT_PAUSED };
+                        cached = { readAt: now(), state: fallback };
                     }
 
-                    return NOT_PAUSED;
+                    return fallback;
                 })
                 .finally(() => {
                     if (pending === shared) {

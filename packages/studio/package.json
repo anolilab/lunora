@@ -1,6 +1,6 @@
 {
     "name": "@lunora/studio",
-    "version": "1.0.0-alpha.382",
+    "version": "1.0.0-alpha.383",
     "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
     "keywords": [
         "admin-ui",
@@ -101,7 +101,7 @@
         "@lunora/mail": "1.0.0-alpha.138",
         "@lunora/notify": "^1.0.0-alpha.113",
         "@lunora/platform": "1.0.0-alpha.80",
-        "@lunora/runtime": "^1.0.0-alpha.285",
+        "@lunora/runtime": "^1.0.0-alpha.287",
         "@lunora/shard-engine": "^1.0.0-alpha.194",
         "@tailwindcss/cli": "catalog:vite",
         "@testing-library/dom": "catalog:frontend",

@@ -8,8 +8,8 @@
  *
  * Codegen resolves the extension from the installed package, so a column or index added here
  * reaches an app by upgrading `@lunora/payment` — no schema edit. Tables are namespaced with the
- * `payment` key (`payment_customers`, `payment_events`, `payment_sessions`, `payment_subscriptions`,
- * `payment_usageEvents`), the names `PAYMENT_TABLES` in `./database-store` reads and writes.
+ * `payment` key (`payment_customers`, `payment_events`, `payment_referenceRevisions`, `payment_sessions`,
+ * `payment_subscriptions`, `payment_usageEvents`), the names `PAYMENT_TABLES` in `./database-store` reads and writes.
  *
  * Money is stored as `(amountMinor: number, currency: string)` columns. A double holds every
  * integer up to 2^53 exactly — about 90 trillion dollars in cents — and the row codec in
@@ -110,6 +110,15 @@ const events = defineTable({
     type: v.string(),
 }).index("by_provider_event", ["provider", "providerEventId"], { unique: true });
 
+// One counter per reference that orders access-granting subscription writes under `singleSubscriptionPerReference`. The
+// store cannot write two subscription rows atomically, so a grant bumps this row with a conditional patch after its write:
+// of two grants that read the same value only one bump lands, and the other re-checks and steps back. The unique index
+// decides the race for a reference that has no row yet.
+const referenceRevisions = defineTable({
+    referenceId: v.string(),
+    revision: v.number(),
+}).index("by_reference", ["referenceId"], { unique: true });
+
 // Append-only metered-usage ledger: `track` writes, `check` sums over the current period. The
 // unique `by_idempotency` index makes recording exactly-once under concurrent/retried writes.
 const usageEvents = defineTable({
@@ -130,10 +139,10 @@ const usageEvents = defineTable({
 // The table names and key stay literal so `.extend(paymentExtension)` adds exactly
 // `payment_customers | … | payment_usageEvents`; row types come from codegen.
 const paymentExtension: SchemaExtension<
-    Record<"customers" | "events" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>,
+    Record<"customers" | "events" | "referenceRevisions" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>,
     "payment"
 > = defineSchemaExtension("payment", {
-    tables: { customers, events, sessions, subscriptions, usageEvents },
+    tables: { customers, events, referenceRevisions, sessions, subscriptions, usageEvents },
 });
 
 export default paymentExtension;

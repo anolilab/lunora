@@ -705,6 +705,66 @@ const unwrapExpression = (node: Node | undefined): Node | undefined => {
     return current;
 };
 
+/**
+ * The numeric value of `node` when the source states it outright: a numeric
+ * literal (`604_800`), a sign on one, or `+ - *` over two such values
+ * (`7 * 24 * 60 * 60`, the way durations are written). Identifiers and calls are
+ * not followed — a binding can be reassigned or read from the environment.
+ */
+const staticNumberValue = (node: Node | undefined): number | undefined => {
+    const current = unwrapExpression(node);
+
+    if (current === undefined) {
+        return undefined;
+    }
+
+    if (Node.isNumericLiteral(current)) {
+        return current.getLiteralValue();
+    }
+
+    if (Node.isPrefixUnaryExpression(current)) {
+        const operand = staticNumberValue(current.getOperand());
+
+        if (operand === undefined) {
+            return undefined;
+        }
+
+        const operator = current.getOperatorToken();
+
+        if (operator === SyntaxKind.MinusToken) {
+            return -operand;
+        }
+
+        return operator === SyntaxKind.PlusToken ? operand : undefined;
+    }
+
+    if (Node.isBinaryExpression(current)) {
+        const left = staticNumberValue(current.getLeft());
+        const right = staticNumberValue(current.getRight());
+
+        if (left === undefined || right === undefined) {
+            return undefined;
+        }
+
+        switch (current.getOperatorToken().getKind()) {
+            case SyntaxKind.AsteriskToken: {
+                return left * right;
+            }
+            case SyntaxKind.MinusToken: {
+                return left - right;
+            }
+            case SyntaxKind.PlusToken: {
+                return left + right;
+            }
+            default: {
+                return undefined;
+            }
+        }
+    }
+
+    return undefined;
+};
+
 /** Where {@link walkChain} stopped: at the chain's root, or at a call `settle` decided. */
 type ChainEnd = { root: Node | undefined; verdict?: never } | { root?: never; verdict: boolean };
 
@@ -960,6 +1020,7 @@ export {
     propertyInitializer,
     returningFunctionOf,
     RUN_METHODS,
+    staticNumberValue,
     stringPropertyFor,
     stringPropertyOf,
     symbolConstInitializer,

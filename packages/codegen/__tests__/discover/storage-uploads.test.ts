@@ -75,6 +75,56 @@ describe("discoverStorageUploads", () => {
         expect(row).toMatchObject({ expiresInSeconds: 604_800, method: "getPresignedUrl", presentKeys: ["expiresInSeconds"] });
     });
 
+    it("folds a product of literals into expiresInSeconds", () => {
+        expect.assertions(1);
+
+        write("week.ts", `export const url = action(async ({ ctx }) => ctx.storage.docs.getPresignedUrl("k", { expiresInSeconds: 7 * 24 * 60 * 60 }));`);
+
+        const [row] = discoverStorageUploads(project, join(workdir, "lunora"));
+
+        expect(row?.expiresInSeconds).toBe(604_800);
+    });
+
+    it("reads a numeric separator literal as its value", () => {
+        expect.assertions(1);
+
+        write("sep.ts", `export const url = action(async ({ ctx }) => ctx.storage.docs.getPresignedUrl("k", { expiresInSeconds: 604_800 }));`);
+
+        const [row] = discoverStorageUploads(project, join(workdir, "lunora"));
+
+        expect(row?.expiresInSeconds).toBe(604_800);
+    });
+
+    it("folds parenthesised arithmetic into expiresInSeconds", () => {
+        expect.assertions(1);
+
+        write("day.ts", `export const url = action(async ({ ctx }) => ctx.storage.docs.getPresignedUrl("k", { expiresInSeconds: (60 * 60) * 24 }));`);
+
+        const [row] = discoverStorageUploads(project, join(workdir, "lunora"));
+
+        expect(row?.expiresInSeconds).toBe(86_400);
+    });
+
+    it("leaves expiresInSeconds undefined for an env read", () => {
+        expect.assertions(1);
+
+        write("env.ts", `export const url = action(async ({ ctx, env }) => ctx.storage.docs.getPresignedUrl("k", { expiresInSeconds: env.TTL }));`);
+
+        const [row] = discoverStorageUploads(project, join(workdir, "lunora"));
+
+        expect(row?.expiresInSeconds).toBeUndefined();
+    });
+
+    it("leaves expiresInSeconds undefined for arithmetic over an identifier", () => {
+        expect.assertions(1);
+
+        write("ttl.ts", `export const url = action(async ({ ctx, ttl }) => ctx.storage.docs.getPresignedUrl("k", { expiresInSeconds: 60 * ttl }));`);
+
+        const [row] = discoverStorageUploads(project, join(workdir, "lunora"));
+
+        expect(row?.expiresInSeconds).toBeUndefined();
+    });
+
     it("marks a spread options object as not analyzable", () => {
         expect.assertions(1);
 
