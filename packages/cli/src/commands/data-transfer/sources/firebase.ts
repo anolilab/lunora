@@ -295,7 +295,8 @@ const toDocument = (
         ? decodeFields((raw["fields"] ?? {}) as Record<string, FirestoreValue>, path)
         : decodeFields(withoutResourceName(raw) as unknown as Record<string, FirestoreValue>, path);
 
-    const name = raw["name"] ?? raw["__name__"];
+    // A bare document's `name` is an ordinary typed field, so only `__name__` carries its resource path.
+    const name = wrapped ? raw["name"] : raw["__name__"];
     const id = typeof name === "string" ? documentIdFromName(name) : fallbackId;
 
     if (id === undefined) {

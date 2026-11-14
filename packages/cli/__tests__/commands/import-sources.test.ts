@@ -508,6 +508,18 @@ describe("lunora import --from firebase", () => {
         ]);
     });
 
+    it("takes a bare document's id from __name__ even when it has a typed name field", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({
+            "t.ndjson": JSON.stringify({ __name__: "projects/p/databases/(default)/documents/t/x1", name: { stringValue: "Ada" } }),
+        });
+
+        const { imported } = await runImport(root, "firebase");
+
+        expect(imported.map((row) => row.doc)).toStrictEqual([{ _id: "x1", name: "Ada" }]);
+    });
+
     it("imports bare array documents carrying __name__, taking the id from it", async () => {
         expect.assertions(1);
 
