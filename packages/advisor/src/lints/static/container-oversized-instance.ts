@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /** Named instance sizes we consider "large" — a deliberate, cost-significant choice. */
 const LARGE_NAMED = new Set(["standard-3", "standard-4"]);
@@ -46,7 +47,7 @@ const containerOversizedInstance: Lint = {
                 emit(containerOversizedInstance, {
                     cacheKey: `container_oversized_instance:${container.exportName}`,
                     detail: `Container "${container.exportName}" uses a large instance type (${size}); its memory + disk are billed while any instance runs.`,
-                    metadata: { container: container.exportName, instanceType },
+                    metadata: { ...declarationSiteFields(container), container: container.exportName, instanceType },
                 }),
             );
         }

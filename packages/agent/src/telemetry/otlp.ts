@@ -15,6 +15,15 @@ const MAX_BATCH_BYTES = 256 * 1024;
 /** UTF-8 encoder for the encoded-size counter; `Buffer` does not exist on Workers. */
 const UTF8_ENCODER = new TextEncoder();
 
+/** Host of an endpoint for the rejection report; the path can carry a secret, so it is never logged. */
+const hostOf = (url: string): string => {
+    try {
+        return new URL(url).host;
+    } catch {
+        return "the collector";
+    }
+};
+
 /** A {@link Telemetry} that buffers and exports on `flush()`; the agent loop calls it once per run. */
 type FlushableTelemetry = Telemetry & { flush: () => void };
 
@@ -179,11 +188,33 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
     }
 
     const tracesUrl = `${base}/v1/traces`;
+    const collectorHost = hostOf(tracesUrl);
     // `token` last so it wins over any authorization in `headers`.
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
 
     let buffer: unknown[] = [];
     let bufferBytes = 0;
+    // Set while exports are being rejected, so a rejecting collector logs once per streak, not per flush.
+    let rejecting = false;
+
+    /** Clear the streak on a success; report the first rejection of each streak, never the endpoint path. */
+    const observeResponse = (response: Response): void => {
+        if (response.ok) {
+            rejecting = false;
+
+            return;
+        }
+
+        if (rejecting) {
+            return;
+        }
+
+        rejecting = true;
+        // eslint-disable-next-line no-console -- a rejected export is otherwise invisible; reported once per streak so a bad token does not flood logs
+        console.error(
+            `[lunora] OTLP export to ${collectorHost} was rejected with HTTP ${String(response.status)}; not reported again until an export succeeds.`,
+        );
+    };
 
     /** POST every buffered span as ONE export, fire-and-forget, kept alive past the turn when a `waitUntil` is present. */
     const flush = (): void => {
@@ -201,9 +232,11 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
                 body: JSON.stringify(wrapResourceSpans(spans, "@lunora/agent", serviceName)),
                 headers: mergedHeaders,
                 method: "POST",
-            }).catch(() => {
-                // Network error / non-OK — intentionally ignored.
-            });
+            })
+                .then(observeResponse)
+                .catch(() => {
+                    // Network error stays silent — the collector being unreachable is not a configuration fault to report per flush.
+                });
 
             waitUntil?.(sent);
         } catch {

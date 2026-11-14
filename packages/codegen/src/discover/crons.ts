@@ -8,7 +8,7 @@ import { Node, SyntaxKind } from "ts-morph";
 import { CodegenDiagnosticError, diagnosticAt } from "../diagnostics";
 import type { AgentIR, CronJobIR, WorkflowIR } from "../ir";
 import { isCronSourceModule } from "../module-specifiers";
-import { functionKeyOf, listLunoraSourceFiles, propertyKeyName } from "./ast";
+import { declarationLineOf, functionKeyOf, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);
@@ -495,7 +495,7 @@ const discoverCrons = (
             const cron = cronFromCall(call, callee, builderNames, workflowsByName, agentsByName);
 
             if (cron) {
-                crons.push(cron);
+                crons.push({ ...cron, file: lunoraRelativePath(lunoraDirectory, filePath), line: declarationLineOf(call) });
             }
         }
     }
