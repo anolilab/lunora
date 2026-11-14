@@ -34,15 +34,19 @@ const lunoraRelativePath = (lunoraDirectory: string, filePath: string): string =
 
 /**
  * The 1-based line an advisor finding points at for a declaration: the statement that
- * declares it (`export const …`, `export function …`, or the expression statement that
- * registers a call), so a JSDoc block above it is excluded. A node with no such statement
+ * declares it (`export const …`, `export function …`, or the expression or `return` statement
+ * that registers a call), so a JSDoc block above it is excluded. A node with no such statement
  * above it (or a function declaration itself) falls back to its own start line.
  */
 const declarationLineOf = (node: Node): number => {
     const statement = Node.isFunctionDeclaration(node)
         ? node
         : node.getFirstAncestor(
-              (ancestor) => Node.isVariableStatement(ancestor) || Node.isFunctionDeclaration(ancestor) || Node.isExpressionStatement(ancestor),
+              (ancestor) =>
+                  Node.isVariableStatement(ancestor) ||
+                  Node.isFunctionDeclaration(ancestor) ||
+                  Node.isExpressionStatement(ancestor) ||
+                  Node.isReturnStatement(ancestor),
           );
 
     return (statement ?? node).getStartLineNumber();
