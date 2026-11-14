@@ -316,8 +316,8 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         capturePayment: (_input: CaptureInput) => notSupported("manual capture"),
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
-            const client = await loadClient();
             const seats = checkoutSeats(input.quantity);
+            const client = await loadClient();
 
             const checkout = await client.checkouts.create({
                 // Bind the checkout to the customer the facade already reused/minted for this reference,

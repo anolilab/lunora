@@ -197,6 +197,28 @@ describe("polar adapter", () => {
         expect(created).toHaveLength(0);
     });
 
+    it("reports an invalid quantity even when the Polar client cannot load", async () => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({
+            client: () => {
+                throw new Error("client unavailable");
+            },
+            webhookSecret: SECRET,
+        });
+
+        await expect(
+            adapter.createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "subscription",
+                priceId: "prod_1",
+                quantity: 0,
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
     it("omits seats for a single-unit checkout so non-seat products are unchanged", async () => {
         expect.assertions(2);
 
