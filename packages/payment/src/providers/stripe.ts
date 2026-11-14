@@ -426,6 +426,12 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
+// Checkout keys are derived from the request, so a repeat of a finished checkout inside Stripe's
+// idempotency window can be answered with that earlier session. Only an `open` session is payable,
+// so the session's current `status` (typed by the SDK, read fresh) identifies it; the replay header
+// is not relied on.
+const isFinishedSession = (session: Stripe.Checkout.Session): boolean => session.status === "complete" || session.status === "expired";
+
 export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the loaded client as the real `Stripe` internally so every call below is checked against
@@ -468,24 +474,38 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
             const client = await loadClient();
 
-            const session = await client.checkout.sessions.create(
-                {
-                    cancel_url: input.cancelUrl,
-                    client_reference_id: input.referenceId,
-                    customer: input.customerId,
-                    expires_at: input.expiresAt === undefined ? undefined : Math.floor(input.expiresAt / 1000),
-                    line_items: [{ price: input.priceId, quantity: input.quantity ?? 1 }],
-                    // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
-                    metadata: { ...input.metadata, referenceId: input.referenceId },
-                    mode: input.mode,
-                    // The PaymentIntent needs the reference too: `payment_intent.succeeded` can land
-                    // before `checkout.session.completed` and is mapped from the intent alone.
-                    payment_intent_data: input.mode === "payment" ? { metadata: { ...input.metadata, referenceId: input.referenceId } } : undefined,
-                    subscription_data: input.mode === "subscription" ? { metadata: { referenceId: input.referenceId } } : undefined,
-                    success_url: input.successUrl,
-                },
-                { idempotencyKey: input.idempotencyKey },
-            );
+            const params: Stripe.Checkout.SessionCreateParams = {
+                cancel_url: input.cancelUrl,
+                client_reference_id: input.referenceId,
+                customer: input.customerId,
+                expires_at: input.expiresAt === undefined ? undefined : Math.floor(input.expiresAt / 1000),
+                line_items: [{ price: input.priceId, quantity: input.quantity ?? 1 }],
+                // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
+                metadata: { ...input.metadata, referenceId: input.referenceId },
+                mode: input.mode,
+                // The PaymentIntent needs the reference too: `payment_intent.succeeded` can land
+                // before `checkout.session.completed` and is mapped from the intent alone.
+                payment_intent_data: input.mode === "payment" ? { metadata: { ...input.metadata, referenceId: input.referenceId } } : undefined,
+                subscription_data: input.mode === "subscription" ? { metadata: { referenceId: input.referenceId } } : undefined,
+                success_url: input.successUrl,
+            };
+
+            let session = await client.checkout.sessions.create(params, { idempotencyKey: input.idempotencyKey });
+
+            // A replay returns the body Stripe stored at creation, whose status is still `open`
+            // after the customer finished; only a fresh read shows the session's current status.
+            if (input.idempotencyKey !== undefined && isFinishedSession(await client.checkout.sessions.retrieve(session.id))) {
+                // The retry key embeds the replayed session id: a double-click after the first session
+                // finished still collapses onto one new session, and no clock is needed.
+                session = await client.checkout.sessions.create(params, { idempotencyKey: `${input.idempotencyKey}:${session.id}` });
+
+                if (isFinishedSession(await client.checkout.sessions.retrieve(session.id))) {
+                    throw new LunoraPaymentError(
+                        "PROVIDER_ERROR",
+                        "stripe replayed a finished checkout session for this request twice; pass a distinct idempotencyKey to start a new one",
+                    );
+                }
+            }
 
             return { id: session.id, provider: "stripe", url: session.url ?? "" };
         },

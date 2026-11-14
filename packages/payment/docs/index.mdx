@@ -303,6 +303,8 @@ one only on first checkout (the customer is never caller-supplied), and attaches
 an outbound idempotency key automatically (override via `input.idempotencyKey`).
 A key you pass is hashed and namespaced to the authorized reference before it
 reaches the provider, so two tenants choosing the same key never collide.
+On Stripe, a replay of a completed or expired session is retried once under a
+derived key, so a repeat checkout gets a payable session.
 
 Pass `expiresAt` (epoch ms) to stop the hosted checkout being payable after
 that time — for example, so a session abandoned for a later one cannot be paid
