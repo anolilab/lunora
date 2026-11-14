@@ -340,7 +340,8 @@ const referencesScopedKeySource = (node: TsNode): boolean =>
             );
         }
 
-        const call = root === "db" ? invokedBy(outermost) : undefined;
+        // A fallback read (`args.key ?? (await ownedRead()).key`) is only taken when the caller sends nothing.
+        const call = root === "db" && !isAlternativeOf(identifier, node) ? invokedBy(outermost) : undefined;
 
         return call !== undefined && isIdentityBoundRead(call);
     });

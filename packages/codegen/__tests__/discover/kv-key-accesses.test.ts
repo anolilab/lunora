@@ -126,6 +126,17 @@ describe("discoverKvKeyAccesses", () => {
         expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("flags a caller key that only falls back to a key read off an owned row", () => {
+        expect.assertions(1);
+
+        write(
+            "row-fallback.ts",
+            `export const read = query(async ({ ctx, args }) => { return ctx.kv.get(args.key ?? (await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } })).key); });`,
+        );
+
+        expect(discoverKvKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("ignores a key read off an owned row through findFirstOrThrow", () => {
         expect.assertions(1);
 
