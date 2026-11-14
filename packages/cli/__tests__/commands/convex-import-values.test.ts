@@ -190,6 +190,17 @@ describe("convex export value handling", () => {
         await expect(collect(root, [])).rejects.toThrow(/users\/generated_schema\.jsonl/);
     });
 
+    it("imports a pre-2026 table whose only bytes token is a reference to a table named bytes", async () => {
+        expect.assertions(1);
+
+        const root = writeExport("users", ['{"_id":"u1","file":"b1"}'], sidecarLine("{_creationTime: normalfloat64, _id: id<users>, file: id<bytes>}"));
+        const rows: EmittedRow[] = [];
+
+        await collect(root, rows);
+
+        expect(rows).toHaveLength(1);
+    });
+
     it("imports a current export whose sidecar is the uniform marker", async () => {
         expect.assertions(2);
 
