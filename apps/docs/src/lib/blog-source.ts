@@ -1,4 +1,4 @@
-import { extname, join, relative } from "node:path";
+import { extname } from "node:path";
 
 import type { MetaData, PageData, Source, VirtualFile } from "fumadocs-core/source";
 import { loader } from "fumadocs-core/source";
@@ -23,7 +23,9 @@ const files: [string, string][] = Object.entries(
 
 const virtualFiles: VirtualFile[] = files.flatMap(([file, content]): VirtualFile[] => {
     const extension = extname(file);
-    const virtualPath = relative("src/content/blog", join(process.cwd(), file));
+    // Glob keys are root-relative (`/src/content/blog/...`), so the path is derived from
+    // the key itself. Resolving against `process.cwd()` breaks in the Worker prerender.
+    const virtualPath = file.slice("/src/content/blog/".length);
 
     if (extension === ".mdx" || extension === ".md") {
         const parsed = matter(content);

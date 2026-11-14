@@ -10,3 +10,21 @@ declare module "@icons-pack/react-simple-icons/icons/*.mjs" {
 }
 
 declare module "fumadocs-mdx:collections/browser";
+
+// `?module` imports compile the wasm at build time, so the default export is a
+// `WebAssembly.Module` (see `src/routes/api/og.tsx`).
+declare module "*.wasm?module" {
+    const module: WebAssembly.Module;
+
+    export default module;
+}
+
+// Minimal type for the Worker bindings this app reads. Declared here rather than
+// through `wrangler types`, whose global Cloudflare lib types change the DOM's
+// `fetch` signatures for the whole client bundle.
+declare module "cloudflare:workers" {
+    // eslint-disable-next-line unicorn/prevent-abbreviations -- `cloudflare:workers` exports `env` by that name
+    export const env: {
+        WAITLIST: { put: (key: string, value: string) => Promise<void> };
+    };
+}

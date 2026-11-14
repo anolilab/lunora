@@ -6,9 +6,8 @@ import { staticFunctionMiddleware } from "@tanstack/start-static-server-function
 import defaultMdxComponents from "fumadocs-ui/mdx";
 
 import ContentPage from "@/components/sections/content-page";
-// Bundle the markdown at build time via Vite's `?raw` loader. Reading it from
-// disk at request time (readFileSync) 404s in production because the source
-// `src/content/` tree isn't shipped inside the Netlify serverless function.
+// Bundle the markdown at build time via Vite's `?raw` loader. The Worker has no
+// access to the source tree at request time, so a readFileSync would fail.
 import codeOfConductSource from "@/content/code-of-conduct.md?raw";
 import { createSeoHead } from "@/lib/seo";
 

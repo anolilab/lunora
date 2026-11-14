@@ -1,0 +1,17 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    "name": "lunora-docs",
+    "main": "@tanstack/react-start/server-entry",
+    "compatibility_date": "2026-10-01",
+    "compatibility_flags": ["nodejs_compat"],
+    "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
+    // Local dev only: `wrangler dev` and the Vite plugin use this binding. Deploys
+    // come from alchemy.run.ts, which provisions the namespace itself, so the `id`
+    // here is never used for a deployed Worker.
+    "kv_namespaces": [
+        {
+            "binding": "WAITLIST",
+            "id": "<replace-with-kv-create-id>",
+        },
+    ],
+}

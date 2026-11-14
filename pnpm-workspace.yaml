@@ -485,6 +485,8 @@ catalogs:
     # silently disabling `no-unsafe-*` on exactly the two globals most likely to be
     # absent at runtime. The patch drops both declarations so @types/node wins.
     "@cloudflare/workers-types": 5.20261004.1
+    # Deploys the docs Worker from apps/docs/alchemy.run.ts, the same tool `lunora deploy` targets.
+    alchemy: 0.93.12
     # >= 4.131.0 for the containers `durable_object` scheduling policy and its
     # `images` map, >= 4.142.0 for Workflows declared in `exports` (and run on
     # `ctx.exports` locally), >= 4.145.0 for the Analytics SQL `analytics` binding
@@ -840,7 +842,6 @@ catalogs:
     "@fuma-comment/react": 1.6.0
     "@fumadocs/mdx-remote": 1.5.2
     "@icons-pack/react-simple-icons": 13.15.1
-    "@netlify/vite-plugin-tanstack-start": 1.3.19
     "@radix-ui/react-icons": 1.3.2
     "@radix-ui/react-presence": ^1.1.11
     "@radix-ui/react-slot": ^1.5.0
