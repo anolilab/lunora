@@ -3301,6 +3301,9 @@ class LunoraClient {
 
         // Only a snapshot actually asked for may hold joiners off the stale value. Without an open
         // socket (a cross-tab follower, or a dropped connection) nothing is coming to replace it.
+        // This subscribe supersedes a pending hinted retry; left armed, the timer would send a second one.
+        this.cancelSubscriptionRetry(state.id);
+
         if (this.resnapshotSubscription(state)) {
             state.awaitingSnapshot = true;
         }
@@ -7491,8 +7494,9 @@ class LunoraClient {
             // Marked before fanning, so a callback that resets the session (see above) is not undone by it.
             this.markQueryRejected(state);
 
-            failSubscription(state, subscriptionError);
+            // Armed before fanning, so a callback that closes the client or drops the last subscriber cancels it.
             this.scheduleSubscriptionRetry(state, (message.error as { retryAfterMs?: unknown } | undefined)?.retryAfterMs);
+            failSubscription(state, subscriptionError);
 
             // Fan it to follower tabs too. `broadcastSubscriptionError` existed
             // with no caller, so the follower error handler wired to it
@@ -7623,15 +7627,17 @@ class LunoraClient {
     private scheduleSubscriptionRetry(state: SubscriptionState, retryAfterMs: unknown): void {
         this.cancelSubscriptionRetry(state.id);
 
-        if (typeof retryAfterMs !== "number" || !Number.isFinite(retryAfterMs) || retryAfterMs < 0) {
+        if (this.closed || typeof retryAfterMs !== "number" || !Number.isFinite(retryAfterMs) || retryAfterMs < 0) {
             return;
         }
 
         const timer = setTimeout(() => {
             this.pendingSubscriptionRetries.delete(state.id);
 
-            if (this.subscriptions.getById(state.id) === state) {
-                this.resnapshotSubscription(state);
+            // A joiner waits for the retry's snapshot rather than taking the value the failure left behind.
+            if (!this.closed && this.subscriptions.getById(state.id) === state && this.resnapshotSubscription(state)) {
+                // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
+                state.awaitingSnapshot = true;
             }
         }, retryAfterMs);
 
@@ -7661,12 +7667,13 @@ class LunoraClient {
             return;
         }
 
-        this.cancelSubscriptionRetry(state.id);
-
         // The older of two seeds from a re-sent `subscribe`, arriving last: it would roll the value and the resume cursor back.
+        // It answers nothing, so a pending hinted retry stays armed.
         if (message.type === "data" && isStaleDataFrame(state, message)) {
             return;
         }
+
+        this.cancelSubscriptionRetry(state.id);
 
         let payload: unknown;
         const pendingRun = state.pendingDeltaRun;

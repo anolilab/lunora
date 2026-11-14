@@ -254,4 +254,31 @@ final class SubscriptionRetryTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(due, t0 + 60, "a hint above the 60000ms cap must wait the cap")
         XCTAssertLessThanOrEqual(due, t1 + 60, "a hint above the 60000ms cap must not wait longer than it")
     }
+
+    func testUnsubscribeThatOvertakesRetryIsFollowedByAnother() throws {
+        let retry = try retryGolden()
+        let recorder = Recorder()
+        let client = LunoraClient(url: "https://app.example")
+        var unsubscribe: LunoraUnsubscribe?
+        var armed = false
+
+        client.attachSocket { frame in
+            // Another thread unsubscribes after the retry was selected but before its frame is written.
+            if armed, frame["type"] as? String == "subscribe" {
+                armed = false
+                unsubscribe?()
+            }
+            recorder.frames.append(frame)
+        }
+        unsubscribe = client.subscribe("messages:list", args: ["channel": "general"], onData: nil)
+        _ = client.handleFrame(try json(try XCTUnwrap(retry["seedFrame"])))
+        _ = client.handleFrame(try json(try XCTUnwrap(retry["hintFrame"])))
+        let due = try XCTUnwrap(client.nextSubscriptionRetryAt)
+        recorder.frames.removeAll()
+        armed = true
+
+        client.retryDueSubscriptions(now: due)
+
+        XCTAssertEqual(recorder.frames.map { $0["type"] as? String }, ["unsubscribe", "subscribe", "unsubscribe"])
+    }
 }

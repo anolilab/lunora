@@ -1682,3 +1682,18 @@ fn a_shape_error_never_schedules() {
 fn the_hint_is_clamped() {
     retry_cases::the_hint_is_clamped();
 }
+
+#[test]
+fn a_data_frame_that_cannot_be_applied_keeps_the_retry() {
+    retry_cases::a_data_frame_that_cannot_be_applied_keeps_the_retry();
+}
+
+#[test]
+fn a_cold_retry_forgets_the_confirmed_cursor() {
+    retry_cases::a_cold_retry_forgets_the_confirmed_cursor();
+}
+
+#[test]
+fn a_slow_error_handler_does_not_push_the_retry_later() {
+    retry_cases::a_slow_error_handler_does_not_push_the_retry_later();
+}

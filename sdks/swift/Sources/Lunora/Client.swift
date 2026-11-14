@@ -1173,6 +1173,15 @@ public final class LunoraClient {
             sender(frame)
         }
 
+        // The frames went out after the lock was released, so an unsubscribe on another thread
+        // may have reached the socket first; follow it with another, or the server keeps a
+        // subscription this client no longer holds.
+        let dropped = withLock { frames.compactMap { $0["id"] as? String }.filter { subscriptions[$0] == nil } }
+
+        for id in dropped {
+            sender(LunoraClient.buildUnsubscribeFrame(id: id))
+        }
+
         return frames.count
     }
 

@@ -1534,6 +1534,7 @@ public final class Client {
     public int retryDueSubscriptions(long nowNanos) {
         FrameSender socket;
         List<Map<String, Object>> frames = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
 
         // Built under the lock for the same reason as resendSubscriptions: each cold frame
         // reads the entry the frame handler writes.
@@ -1563,6 +1564,7 @@ public final class Client {
 
                 subscription.cursor = null;
                 subscription.epoch = null;
+                ids.add(retry.getKey());
                 frames.add(
                         buildSubscribeFrame(
                                 retry.getKey(),
@@ -1574,8 +1576,43 @@ public final class Client {
             }
         }
 
-        for (Map<String, Object> frame : frames) {
-            socket.send(frame);
+        int sent = 0;
+
+        try {
+            for (; sent < frames.size(); sent++) {
+                socket.send(frames.get(sent));
+            }
+        } catch (RuntimeException failure) {
+            // The frames not written yet stay due, unless a newer hint, an unsubscribe or a new
+            // socket has decided their fate since.
+            synchronized (lock) {
+                if (sender == socket) {
+                    for (String id : ids.subList(sent, ids.size())) {
+                        if (subscriptions.containsKey(id)) {
+                            pendingRetries.putIfAbsent(id, nowNanos);
+                        }
+                    }
+                }
+            }
+
+            throw failure;
+        }
+
+        // The frames went out after the lock was released, so an unsubscribe on another thread
+        // may have reached the socket first; follow it with another, or the server keeps a
+        // subscription this client no longer holds.
+        List<String> dropped = new ArrayList<>();
+
+        synchronized (lock) {
+            for (String id : ids) {
+                if (!subscriptions.containsKey(id)) {
+                    dropped.add(id);
+                }
+            }
+        }
+
+        for (String id : dropped) {
+            socket.send(buildUnsubscribeFrame(id));
         }
 
         return frames.size();
