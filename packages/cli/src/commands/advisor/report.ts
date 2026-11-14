@@ -56,9 +56,14 @@ const comparisonLines = (comparison: BaselineComparison): string[] => {
     return lines;
 };
 
-/** `[LEVEL] name (suppressed: reason) — detail`, one per accepted finding. */
+/** `[LEVEL] name (suppressed at file:line: reason) — detail`, one per accepted finding, naming the directive to edit. */
 const suppressedLines = (findings: ReadonlyArray<Finding>): string[] =>
-    findings.map((finding) => `    [${finding.level}] ${finding.name} (suppressed: ${finding.suppressed?.reason ?? ""}) — ${finding.detail}`);
+    findings.map((finding) => {
+        const { suppressed } = finding;
+        const site = suppressed === undefined ? "" : ` at ${suppressed.file}:${String(suppressed.line)}`;
+
+        return `    [${finding.level}] ${finding.name} (suppressed${site}: ${suppressed?.reason ?? ""}) — ${finding.detail}`;
+    });
 
 /**
  * The default view: headline score, coverage tallies, and only the procedures

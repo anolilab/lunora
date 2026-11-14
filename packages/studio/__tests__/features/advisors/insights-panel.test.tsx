@@ -188,7 +188,7 @@ describe("insightsPanel", () => {
         await screen.findByText("Unindexed foreign key");
 
         expect(screen.getByTestId("advisor-suppressed-badge").textContent).toBe("Suppressed");
-        expect(screen.getByTestId("advisor-suppressed-reason").textContent).toBe("Suppressed: posts are append-only");
+        expect(screen.getByTestId("advisor-suppressed-reason").textContent).toBe("Suppressed at lunora/schema.ts:12: posts are append-only");
         expect(screen.getByTestId("lunora-insights-suppressed-count").textContent).toBe("1 suppressed");
     });
 

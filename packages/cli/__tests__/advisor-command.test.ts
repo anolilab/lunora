@@ -111,7 +111,7 @@ describe("lunora advisor", () => {
 
         expect(output).toContain("1 suppressed");
         expect(output).toContain("suppressed (accepted by an inline directive):");
-        expect(output).toContain("unindexed_foreign_key (suppressed: posts are append-only)");
+        expect(output).toMatch(/unindexed_foreign_key \(suppressed at lunora\/schema\.ts:\d+: posts are append-only\)/u);
     });
 
     it("rejects a --min-score outside 0-100 rather than silently skipping the gate", () => {

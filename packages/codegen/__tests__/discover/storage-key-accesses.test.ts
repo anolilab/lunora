@@ -41,6 +41,50 @@ describe("discoverStorageKeyAccesses", () => {
         expect(found[0]).toMatchObject({ scope: { kind: "export", name: "read" }, file: "read", line: 1, method: "get" });
     });
 
+    it("flags a key destructured from an owned row with a caller-controlled default", () => {
+        expect.assertions(1);
+
+        write(
+            "row-default.ts",
+            `export const read = query(async ({ ctx, args }) => { const { storageKey = args.key } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }); return ctx.storage.files.get(storageKey); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags an owned-row key whose default forwards args through a local", () => {
+        expect.assertions(1);
+
+        write(
+            "local-default.ts",
+            `export const read = query(async ({ ctx, args }) => { const requestedKey = args.key; const { storageKey = requestedKey } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }); return ctx.storage.files.get(\`\${storageKey}/\${args.name}\`); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a stored key that falls back to the caller's key", () => {
+        expect.assertions(1);
+
+        write(
+            "stored-fallback.ts",
+            `export const read = query(async ({ ctx, args }) => { const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }); return ctx.storage.files.get(row?.storageKey ?? args.key); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("flags a bare key destructured from a row the caller picked by id", () => {
+        expect.assertions(1);
+
+        write(
+            "picked-row.ts",
+            `export const read = query(async ({ ctx, args }) => { const { storageKey } = await ctx.db.get("files", args.id); return ctx.storage.files.get(storageKey); });`,
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("flags a put with an args-derived key", () => {
         expect.assertions(2);
 
