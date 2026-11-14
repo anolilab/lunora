@@ -121,6 +121,20 @@ export interface Finding {
     name: string;
     /** How to fix it — a doc URL or short imperative guidance. */
     remediation: string;
+
+    /**
+     * Set when an inline `// lunora-advisor-exempt <rule> -- <reason>` directive
+     * accepts this finding. The finding stays in the list so every surface can show
+     * it and its reason, but the gate, the health map and the blocking check ignore it.
+     */
+    suppressed?: {
+        /** The directive's site, relative to the project root. */
+        file: string;
+        /** 1-based line of the directive. */
+        line: number;
+        /** The directive's trimmed reason, required to be non-empty. */
+        reason: string;
+    };
     /** Short headline for the finding. */
     title: string;
 }

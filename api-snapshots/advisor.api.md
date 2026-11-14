@@ -444,6 +444,7 @@ interface AdvisorMap {
 interface AdvisorMaskProcedure {
     exportName: string;
     file: string;
+    line?: number;
     maskColumns: ReadonlyArray<{
         column: string;
         table: string;
@@ -1107,6 +1108,11 @@ interface Finding {
     metadata: Record<string, unknown>;
     name: string;
     remediation: string;
+    suppressed?: {
+        file: string;
+        line: number;
+        reason: string;
+    };
     title: string;
 }
 ```
@@ -1237,6 +1243,7 @@ interface MapSummary {
     failing: number;
     procedures: number;
     rulesFired: number;
+    suppressed: number;
     warned: number;
 }
 ```

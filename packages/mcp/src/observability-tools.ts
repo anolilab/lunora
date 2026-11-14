@@ -162,7 +162,11 @@ const ISSUES_OUTPUT_SCHEMA: ToolInputSchema = {
 
 const ADVISORIES_OUTPUT_SCHEMA: ToolInputSchema = {
     properties: {
-        advisories: { description: "Schema/query advisories: { id, level, title, detail, … }.", type: "array" },
+        advisories: {
+            description:
+                "Schema/query advisories: { id, level, title, detail, … }. An advisory accepted by an inline `// lunora-advisor-exempt <rule> -- <reason>` directive also carries `suppressed: { reason, file, line }` (the directive's site); it stays listed and does not fail the ERROR gate.",
+            type: "array",
+        },
         total: { description: "Advisories available before `limit` narrowed them.", type: "number" },
     },
     required: ["advisories", "total"],

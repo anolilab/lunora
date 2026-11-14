@@ -217,6 +217,11 @@ interface AdvisoryFinding {
     metadata: Record<string, unknown>;
     name: string;
     remediation: string;
+    suppressed?: {
+        file: string;
+        line: number;
+        reason: string;
+    };
     title: string;
 }
 ```

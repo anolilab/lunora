@@ -126,5 +126,7 @@ import { runAdvisor, STATIC_LINTS, RUNTIME_LINTS, ALL_LINTS } from "@lunora/advi
 const findings = runAdvisor(context, { source: "static" }); // or "runtime"
 ```
 
-Each finding carries a stable `cacheKey` so the Studio can dedup across runs and
-let you dismiss a specific finding without silencing the whole rule.
+Each finding carries a stable `cacheKey`, which dedupes findings across runs. To
+accept a single finding, put an inline `// lunora-advisor-exempt <rule> -- <reason>`
+directive above the code it concerns; the [advisor reference](/docs/packages/advisor#suppressing-one-finding)
+explains how it attaches and what it changes.
