@@ -87,6 +87,9 @@ const nextKeyLine = (lines: ReadonlyArray<string>, line: number): number | undef
     return undefined;
 };
 
+/** The wrangler config names, in the order the config reader resolves them. */
+const WRANGLER_FILES: ReadonlyArray<string> = ["wrangler.jsonc", "wrangler.json"];
+
 /** The first quoted key a JSONC line opens with. */
 const LEADING_KEY = /^\s*"((?:[^"\\]|\\.)*)"\s*:/u;
 
@@ -208,7 +211,7 @@ const lineCommentOffsetsOf = (text: string): ReadonlySet<number> => {
  * the next line holding one. `.jsonc` wins over `.json`, the order the config reader resolves them in.
  */
 const wranglerDirectivesOf = (projectRoot: string): ParsedDirective[] => {
-    const name = ["wrangler.jsonc", "wrangler.json"].find((candidate) => existsSync(join(projectRoot, candidate)));
+    const name = WRANGLER_FILES.find((candidate) => existsSync(join(projectRoot, candidate)));
 
     if (name === undefined) {
         return [];
@@ -352,7 +355,8 @@ const applySuppressions = (project: Project, projectRoot: string, lunoraDirector
                 directive.rule === finding.name &&
                 directive.key === normaliseFile(file) &&
                 directive.span !== undefined &&
-                (directive.variable === undefined || directive.variable === key) &&
+                // A wrangler directive whose key could not be read accepts nothing rather than every key on its line.
+                (!WRANGLER_FILES.includes(directive.key) || directive.variable === key) &&
                 directive.span.first <= line &&
                 line <= directive.span.last,
         );
