@@ -241,13 +241,25 @@ const isRecomputed = (node: TsNode): boolean => {
     return Node.isCallExpression(current) || Node.isNewExpression(current);
 };
 
-/** The default of the destructured element of `variable` that binds `name` (`const { url = args.url } = config`). */
-const bindingDefaultOf = (variable: VariableDeclaration | undefined, name: string): TsNode | undefined =>
-    variable
+/**
+ * The defaults on the path to the destructured element of `variable` that binds `name`: its own
+ * (`const { url = args.url } = config`) and every enclosing element's
+ * (`const { network: { url } = args.network } = config`), each of which can supply the value.
+ */
+const bindingDefaultsOf = (variable: VariableDeclaration | undefined, name: string): TsNode[] => {
+    const element = variable
         ?.getNameNode()
         .getDescendantsOfKind(SyntaxKind.BindingElement)
-        .find((candidate) => Node.isIdentifier(candidate.getNameNode()) && candidate.getNameNode().getText() === name)
-        ?.getInitializer();
+        .find((candidate) => Node.isIdentifier(candidate.getNameNode()) && candidate.getNameNode().getText() === name);
+
+    if (element === undefined) {
+        return [];
+    }
+
+    return [element, ...element.getAncestors().filter((ancestor) => Node.isBindingElement(ancestor))]
+        .map((node) => (Node.isBindingElement(node) ? node.getInitializer() : undefined))
+        .filter((initializer) => initializer !== undefined);
+};
 
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
@@ -330,9 +342,10 @@ export const isArgumentDerived = (expression: TsNode): boolean => {
     const reachesArgs = (node: TsNode): boolean => {
         const variable = singleHopDeclaration(node);
         const initializer = variable?.getInitializer();
-        const fallback = bindingDefaultOf(variable, node.getText());
-
-        return (initializer !== undefined && referencesArgs(initializer)) || (fallback !== undefined && referencesArgs(fallback));
+        return (
+            (initializer !== undefined && referencesArgs(initializer)) ||
+            bindingDefaultsOf(variable, node.getText()).some((fallback) => referencesArgs(fallback))
+        );
     };
 
     return reachesArgs(expression) || valueIdentifiersIn(expression).some((identifier) => reachesArgs(identifier));
@@ -362,9 +375,7 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
     }
 
     // A default that forwards args reaches the sink whenever the object lacks the field.
-    const fallback = bindingDefaultOf(singleHopDeclaration(node), node.getText());
-
-    if (fallback !== undefined && referencesArgs(fallback) && !isRecomputed(fallback)) {
+    if (bindingDefaultsOf(singleHopDeclaration(node), node.getText()).some((fallback) => referencesArgs(fallback) && !isRecomputed(fallback))) {
         return true;
     }
 
@@ -394,7 +405,7 @@ export const isUnmodifiedArgumentPassthrough = (node: TsNode): boolean => {
         const declaration = singleHopDeclaration(identifier);
         const forwards = (source: TsNode | undefined): boolean => source !== undefined && referencesArgs(source) && !isRecomputed(source);
 
-        return forwards(declaration?.getInitializer()) || forwards(bindingDefaultOf(declaration, identifier.getText()));
+        return forwards(declaration?.getInitializer()) || bindingDefaultsOf(declaration, identifier.getText()).some((fallback) => forwards(fallback));
     });
 };
 

@@ -130,7 +130,9 @@ describe("argument-taint", () => {
         });
 
         it("sees an args-derived default on a destructured binding", () => {
-            expect.assertions(2);
+            expect.assertions(3);
+
+            expect(isArgumentDerived(sinkArgument(`const { network: { url } = args.network } = config;\nSINK(url);`))).toBe(true);
 
             expect(isArgumentDerived(sinkArgument(`const { url = args.url } = config;\nSINK(url);`))).toBe(true);
             expect(isArgumentDerived(sinkArgument(`const { url = "https://fixed.example" } = config;\nSINK(url);`))).toBe(false);
