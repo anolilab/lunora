@@ -18,7 +18,7 @@ import { join, relative, sep } from "node:path";
 import type { Finding } from "@lunora/advisor";
 import { RUNTIME_LINTS, STATIC_LINTS } from "@lunora/advisor";
 import type { Project, SourceFile } from "ts-morph";
-import { Node } from "ts-morph";
+import { Node, ts } from "ts-morph";
 
 /** A directive line: the word starts a comment line and is not a prefix of a longer token. */
 const DIRECTIVE_LINE = /^\s*\/\/\s*lunora-advisor-exempt(?![\w-])(.*)$/u;
@@ -63,23 +63,23 @@ interface ParsedDirective {
     rule: string;
     /** 1-based first and last line of the code the directive attaches to; `undefined` when no code follows. */
     span: { first: number; last: number } | undefined;
+    /** For a `wrangler.jsonc` directive, the first `vars` key on the line it attaches to. */
+    variable?: string;
 }
 
 /** `file` with a leading `lunora/` and a source extension removed, so `shapes`, `shapes.ts` and `lunora/shapes.ts` agree. */
 const LUNORA_PREFIX = /^lunora\//u;
 const SOURCE_EXTENSION = /\.(?:ts|tsx|js|mts)$/u;
-const BLOCK_COMMENT_BODY = /^\*(?:\s|$)/u;
 
 const normaliseFile = (file: string): string => file.replace(LUNORA_PREFIX, "").replace(SOURCE_EXTENSION, "");
 
-/** A line that holds no code: blank, a line comment, or a block comment's delimiter or body line. */
-const isNonCodeLine = (trimmed: string): boolean =>
-    trimmed === "" || trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed === "*/" || BLOCK_COMMENT_BODY.test(trimmed);
+/** A JSONC line that holds no key: blank or a line comment. */
+const isNonKeyLine = (trimmed: string): boolean => trimmed === "" || trimmed.startsWith("//");
 
-/** 1-based index of the first line after `line` that holds code, or `undefined`. */
-const nextCodeLine = (lines: ReadonlyArray<string>, line: number): number | undefined => {
+/** 1-based index of the first line after `line` that is not blank or a line comment, or `undefined`. */
+const nextKeyLine = (lines: ReadonlyArray<string>, line: number): number | undefined => {
     for (let index = line; index < lines.length; index += 1) {
-        if (!isNonCodeLine((lines[index] ?? "").trim())) {
+        if (!isNonKeyLine((lines[index] ?? "").trim())) {
             return index + 1;
         }
     }
@@ -87,30 +87,17 @@ const nextCodeLine = (lines: ReadonlyArray<string>, line: number): number | unde
     return undefined;
 };
 
+/** The first quoted key a JSONC line opens with. */
+const LEADING_KEY = /^\s*"((?:[^"\\]|\\.)*)"\s*:/u;
+
 /**
- * The span a `.ts` directive attaches to: the smallest node starting at the first token of the
- * next code line, climbed while its parent starts at the same position. The climb stops below the
+ * The span a `.ts` directive attaches to: the smallest node starting at the next token after the
+ * comment, climbed while its parent starts at the same position. The climb stops below the
  * `SourceFile` and any `SyntaxList`, so a directive above a file's first statement attaches to that
  * statement and not to the whole file.
  */
-const tsSpanOf = (sourceFile: SourceFile, lines: ReadonlyArray<string>, directiveLine: number): ParsedDirective["span"] => {
-    const first = nextCodeLine(lines, directiveLine);
-
-    if (first === undefined) {
-        return undefined;
-    }
-
-    let offset = 0;
-
-    for (let index = 0; index < first - 1; index += 1) {
-        offset += (lines[index] ?? "").length + 1;
-    }
-
-    const text = lines[first - 1] ?? "";
-    const position = offset + (text.length - text.trimStart().length);
-    const token = sourceFile.getDescendantAtPos(position);
-
-    if (token === undefined) {
+const tsSpanOf = (token: Node): ParsedDirective["span"] => {
+    if (token.getKind() === ts.SyntaxKind.EndOfFileToken) {
         return undefined;
     }
 
@@ -127,15 +114,55 @@ const tsSpanOf = (sourceFile: SourceFile, lines: ReadonlyArray<string>, directiv
         node = parent;
     }
 
-    return { first, last: node.getEndLineNumber() };
+    return { first: token.getStartLineNumber(), last: node.getEndLineNumber() };
+};
+
+const isCommentNode = (node: Node): boolean =>
+    node.getKind() === ts.SyntaxKind.SingleLineCommentTrivia || node.getKind() === ts.SyntaxKind.MultiLineCommentTrivia;
+
+/**
+ * The first code token after a `//` comment starting at `offset`, or `undefined` when no line comment
+ * starts there, such as text inside a block comment, a string or a template. ts-morph returns a
+ * comment that sits between statements as a node of its own, and the next token for one anywhere else.
+ */
+const tokenAfterLineComment = (sourceFile: SourceFile, offset: number): Node | undefined => {
+    const at = sourceFile.getDescendantAtPos(offset) ?? sourceFile.getLastToken();
+    let token = at;
+
+    if (isCommentNode(at)) {
+        if (at.getKind() !== ts.SyntaxKind.SingleLineCommentTrivia || at.getStart() !== offset) {
+            return undefined;
+        }
+
+        while (isCommentNode(token)) {
+            token = sourceFile.getDescendantAtPos(token.getEnd()) ?? sourceFile.getLastToken();
+        }
+
+        return token;
+    }
+
+    if (at.getStart() <= offset) {
+        return undefined;
+    }
+
+    const isLineComment = (ts.getLeadingCommentRanges(sourceFile.getFullText(), at.getPos()) ?? []).some(
+        (range) => range.pos === offset && range.kind === ts.SyntaxKind.SingleLineCommentTrivia,
+    );
+
+    return isLineComment ? at : undefined;
 };
 
 /** Every rule-form directive in one `.ts` source file, with the code it attaches to. */
 const tsDirectivesOf = (sourceFile: SourceFile, display: string, key: string): ParsedDirective[] => {
     const lines = sourceFile.getFullText().split("\n");
     const directives: ParsedDirective[] = [];
+    let offset = 0;
 
     lines.forEach((text, index) => {
+        const lineOffset = offset;
+
+        offset += text.length + 1;
+
         const match = DIRECTIVE_LINE.exec(text.trimEnd());
         const rest = match?.[1];
 
@@ -144,27 +171,33 @@ const tsDirectivesOf = (sourceFile: SourceFile, display: string, key: string): P
         }
 
         const rule = suppressionRuleOf(rest);
+        const token = rule === undefined ? undefined : tokenAfterLineComment(sourceFile, lineOffset + text.indexOf("//"));
 
-        if (rule === undefined) {
+        if (rule === undefined || token === undefined) {
             return;
         }
 
         const separator = rest.indexOf("--");
         const reason = separator === -1 ? "" : rest.slice(separator + 2).trim();
 
-        directives.push({ display, key, line: index + 1, reason, rule, span: tsSpanOf(sourceFile, lines, index + 1) });
+        directives.push({ display, key, line: index + 1, reason, rule, span: tsSpanOf(token) });
     });
 
     return directives;
 };
 
-/** Every rule-form directive in `wrangler.jsonc`: a JSONC line comment attaches to the next line holding a key. */
+/**
+ * Every rule-form directive in the wrangler config: a JSONC line comment attaches to the first key on
+ * the next line holding one. `.jsonc` wins over `.json`, the order the config reader resolves them in.
+ */
 const wranglerDirectivesOf = (projectRoot: string): ParsedDirective[] => {
-    const path = join(projectRoot, "wrangler.jsonc");
+    const name = ["wrangler.jsonc", "wrangler.json"].find((candidate) => existsSync(join(projectRoot, candidate)));
 
-    if (!existsSync(path)) {
+    if (name === undefined) {
         return [];
     }
+
+    const path = join(projectRoot, name);
 
     const lines = readFileSync(path, "utf8").split("\n");
     const directives: ParsedDirective[] = [];
@@ -185,15 +218,17 @@ const wranglerDirectivesOf = (projectRoot: string): ParsedDirective[] => {
 
         const separator = rest.indexOf("--");
         const reason = separator === -1 ? "" : rest.slice(separator + 2).trim();
-        const first = nextCodeLine(lines, index + 1);
+        const first = nextKeyLine(lines, index + 1);
+        const variable = first === undefined ? undefined : LEADING_KEY.exec(lines[first - 1] ?? "")?.[1];
 
         directives.push({
-            display: "wrangler.jsonc",
-            key: "wrangler.jsonc",
+            display: name,
+            key: name,
             line: index + 1,
             reason,
             rule,
             span: first === undefined ? undefined : { first, last: first },
+            ...(variable === undefined ? {} : { variable }),
         });
     });
 
@@ -243,21 +278,25 @@ const invalidityOf = (directive: ParsedDirective): string | undefined => {
 
 /**
  * Mark each finding that a valid directive accepts, and add the two WARN findings for
- * directives that cannot apply or apply to nothing. Runs on the post-policy list so the
- * severity floor cannot hide a directive that does apply, and never on a `lint: false` run.
+ * directives that cannot apply or apply to nothing. Runs before the advisor policy, so a finding
+ * the severity floor later drops still uses its directive, and the floor applies to the two WARNs
+ * as to any other finding. Never runs on a `lint: false` run.
  */
 const applySuppressions = (project: Project, projectRoot: string, lunoraDirectory: string, advisories: ReadonlyArray<Finding>): Finding[] => {
     const parsed: ParsedDirective[] = [...wranglerDirectivesOf(projectRoot)];
 
+    // The project holds the `lunora/` tree plus the worker-entry files the security lints scan
+    // (`listSecurityScanFiles`), which report their file relative to the project root.
     for (const sourceFile of project.getSourceFiles()) {
         const absolute = sourceFile.getFilePath();
         const inside = relative(lunoraDirectory, absolute);
+        const display = relativeDisplay(projectRoot, absolute);
 
-        if (inside === "" || inside.startsWith("..")) {
-            continue;
+        if (inside !== "" && !inside.startsWith("..")) {
+            parsed.push(...tsDirectivesOf(sourceFile, display, normaliseFile(inside.split(sep).join("/"))));
+        } else if (!display.startsWith("..") && !display.split("/").includes("node_modules") && !sourceFile.isDeclarationFile()) {
+            parsed.push(...tsDirectivesOf(sourceFile, display, normaliseFile(display)));
         }
-
-        parsed.push(...tsDirectivesOf(sourceFile, relativeDisplay(projectRoot, absolute), normaliseFile(inside.split(sep).join("/"))));
     }
 
     const valid: ParsedDirective[] = [];
@@ -280,7 +319,7 @@ const applySuppressions = (project: Project, projectRoot: string, lunoraDirector
             return finding;
         }
 
-        const { file, line } = finding.metadata;
+        const { file, key, line } = finding.metadata;
 
         if (typeof file !== "string" || typeof line !== "number") {
             return finding;
@@ -291,6 +330,7 @@ const applySuppressions = (project: Project, projectRoot: string, lunoraDirector
                 directive.rule === finding.name &&
                 directive.key === normaliseFile(file) &&
                 directive.span !== undefined &&
+                (directive.variable === undefined || directive.variable === key) &&
                 directive.span.first <= line &&
                 line <= directive.span.last,
         );

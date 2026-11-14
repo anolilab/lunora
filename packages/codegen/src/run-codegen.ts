@@ -606,11 +606,9 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
     const advisories =
         advisorContext === undefined
             ? []
-            : applySuppressions(
-                  project,
+            : applyAdvisorPolicy(
                   options.projectRoot,
-                  lunoraDirectory,
-                  applyAdvisorPolicy(options.projectRoot, [
+                  applySuppressions(project, options.projectRoot, lunoraDirectory, [
                       ...runAdvisor(advisorContext, { source: "static" }),
                       ...discoverUnregisteredProcedures(project, lunoraDirectory, {
                           // Workflows, queues, agents and containers record no file in

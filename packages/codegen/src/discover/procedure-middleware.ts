@@ -714,8 +714,9 @@ const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemp
             continue;
         }
 
-        // A rule-scoped directive is an inline finding suppression (advisor-suppressions.ts), not a procedure exemption.
-        if (suppressionRuleOf(rest) !== undefined) {
+        // A rule-scoped `//` directive is an inline finding suppression (advisor-suppressions.ts), not a procedure
+        // exemption. That pass reads only `//` lines, so a block or JSDoc directive keeps the exemption meaning.
+        if (line.trimStart().startsWith("//") && suppressionRuleOf(rest) !== undefined) {
             continue;
         }
 
