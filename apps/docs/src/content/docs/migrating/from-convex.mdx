@@ -263,12 +263,13 @@ so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
     **`lunora import` refuses values it would change.** It stops at the first
     one, naming the table, line and field: an Int64 outside ±(2^53−1), which a
     JavaScript number would round; bytes and NaN/Infinity floats, which the
-    export encodes as `{"$bytes": …}` or `{"$float": …}`; and any table of a
-    pre-2026 export whose `generated_schema.jsonl` declares Int64, bytes or
-    non-finite floats. Re-exporting with a current Convex keeps an Int64 within
-    ±(2^53−1) exact; a larger Int64, bytes and NaN/Infinity floats are refused
-    in either format, so store them as strings in Convex (or drop them) before
-    exporting.
+    export encodes as `{"$bytes": …}` or `{"$float": …}`; a `-0.0` float, which
+    JSON would write back as `0`; a number literal past the Float64 range (such
+    as `1e309`), which would become `null`; and any table of a pre-2026 export
+    whose `generated_schema.jsonl` declares Int64, bytes or non-finite floats.
+    Re-exporting with a current Convex keeps an Int64 within ±(2^53−1) exact; a
+    larger Int64, bytes, NaN/Infinity and `-0.0` floats are refused in either
+    format, so store them as strings in Convex (or drop them) before exporting.
 
     **File storage needs the opt-in.** `lunora import` skips the `_storage`
     table by default (those rows describe blobs, not application data). To
