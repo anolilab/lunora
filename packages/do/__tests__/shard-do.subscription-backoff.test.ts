@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/errors";
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
+import { encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
@@ -109,8 +110,35 @@ class FlakyShard extends ShardDO {
     }
 }
 
+/** Holds the next run until `release`, then answers it cleanly: a seed still in flight when later frames arrive. */
+class HeldSeedShard extends FlakyShard {
+    public hold: Promise<void> | undefined;
+
+    protected override async executeSubscription(): Promise<SubscriptionOutcome | null> {
+        const { hold } = this;
+
+        if (hold === undefined) {
+            return super.executeSubscription();
+        }
+
+        this.hold = undefined;
+        await hold;
+        this.runs += 1;
+
+        return { result: [{ _id: "held" }], tables: new Set(["messages"]) };
+    }
+}
+
 const frames = (ws: FakeWebSocket, type: string): { code?: string; id: string }[] =>
     ws.sent.map((line) => JSON.parse(line) as { code?: string; id: string; type: string }).filter((frame) => frame.type === type);
+
+interface ErrorFrame {
+    error?: { code: string; retryAfterMs?: number };
+    id: string;
+    type: string;
+}
+
+const errorFrames = (ws: FakeWebSocket): ErrorFrame[] => ws.sent.map((line) => JSON.parse(line) as ErrorFrame).filter((frame) => frame.type === "error");
 
 describe("shardDO: failing subscription backoff", () => {
     let shard: FlakyShard;
@@ -229,5 +257,222 @@ describe("shardDO: failing subscription backoff", () => {
         await shard.write();
 
         expect(shard.runs).toBe(runsBefore + 1);
+    });
+
+    it("hints the client on the first failure and stays silent while the streak continues", async () => {
+        expect.assertions(2);
+
+        await shard.write();
+        await shard.write();
+
+        const errors = errorFrames(ws);
+
+        expect(errors).toHaveLength(1);
+        expect(errors[0]?.error?.retryAfterMs).toBe(1000);
+    });
+
+    it("re-runs a same-args re-subscribe of a failing query and starts a new streak once it has healed", async () => {
+        expect.assertions(3);
+
+        await shard.write();
+
+        shard.failing = false;
+        shard.value = 2;
+        const runsBefore = shard.runs;
+
+        await shard.subscribeFlaky(ws);
+
+        expect(shard.runs).toBe(runsBefore + 1);
+        expect(frames(ws, "data")).toHaveLength(2);
+
+        // The seed succeeded, so the streak is over: the next failure is a first failure again, with the first hint.
+        shard.failing = true;
+        await shard.write();
+
+        const errors = errorFrames(ws);
+
+        expect(errors.at(-1)?.error?.retryAfterMs).toBe(1000);
+    });
+
+    it("keeps a failing re-subscribe registered and answers with the next, longer hint", async () => {
+        expect.assertions(5);
+
+        await shard.write();
+        await shard.subscribeFlaky(ws);
+
+        const afterRetry = errorFrames(ws);
+
+        expect(afterRetry.map((frame) => frame.error?.code)).toStrictEqual(["SUBSCRIPTION_REFRESH_FAILED", "SUBSCRIPTION_REFRESH_FAILED"]);
+        expect(afterRetry[1]?.error?.retryAfterMs).toBe(1000);
+
+        await shard.subscribeFlaky(ws);
+
+        expect(errorFrames(ws).at(-1)?.error?.retryAfterMs).toBe(2000);
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "sub")).toBe(true);
+
+        shard.failing = false;
+        vi.setSystemTime(Date.now() + 120_000);
+        const runsBefore = shard.runs;
+        await shard.write();
+
+        expect(shard.runs).toBe(runsBefore + 1);
+    });
+
+    it("keeps retrying a failing same-args re-subscribe after the object hibernates and forgets the streak", async () => {
+        expect.assertions(4);
+
+        const state = createFakeState();
+        const before = new FlakyShard(state, {});
+        const socket = createFakeWebSocket();
+
+        before.registerSocket(socket);
+        await before.subscribeFlaky(socket);
+        before.failing = true;
+        await before.write();
+
+        // A cold wake: the subscription comes back from the socket attachment, the in-memory streak does not.
+        const woken = new FlakyShard(state, {});
+
+        woken.failing = true;
+        await woken.subscribeFlaky(socket);
+
+        const last = errorFrames(socket).at(-1);
+
+        expect(last?.error?.code).toBe("SUBSCRIPTION_REFRESH_FAILED");
+        expect(last?.error?.retryAfterMs).toBe(1000);
+        expect(Object.hasOwn(socket.attachment?.subs ?? {}, "sub")).toBe(true);
+
+        await woken.subscribeFlaky(socket);
+
+        expect(errorFrames(socket).at(-1)?.error?.retryAfterMs).toBe(1000);
+    });
+
+    it("keeps a delta-merge re-snapshot registered when its seed fails", async () => {
+        expect.assertions(2);
+
+        // No flush has failed yet: the client re-subscribes because it could not merge a delta.
+        await shard.subscribeFlaky(ws);
+
+        expect(errorFrames(ws).at(-1)?.error?.retryAfterMs).toBe(1000);
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "sub")).toBe(true);
+    });
+
+    it("runs a backed-off subscription zero times across writes inside its window", async () => {
+        expect.assertions(1);
+
+        await shard.write();
+        await shard.write();
+
+        const latchedRuns = shard.runs;
+
+        await shard.write();
+        await shard.write();
+        await shard.write();
+
+        expect(shard.runs).toBe(latchedRuns);
+    });
+
+    it("ends a retried subscription whose re-run throws a result too large to deliver", async () => {
+        expect.assertions(3);
+
+        await shard.write();
+
+        shard.failure = new LunoraError("SUBSCRIPTION_RESULT_TOO_LARGE", "this result is over the size limit");
+        await shard.subscribeFlaky(ws);
+
+        const last = errorFrames(ws).at(-1);
+
+        expect(last?.error?.code).toBe("SUBSCRIPTION_RESULT_TOO_LARGE");
+        expect(last?.error?.retryAfterMs).toBeUndefined();
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "sub")).toBe(false);
+    });
+
+    it("clears the streak on a re-subscribe with different args, so a failing seed is refused as a seed failure", async () => {
+        expect.assertions(3);
+
+        await shard.write();
+        await shard.subscribeFlaky(ws, "sub", { other: true });
+
+        const last = errorFrames(ws).at(-1);
+
+        expect(last?.error?.code).toBe("SUBSCRIPTION_SEED_FAILED");
+        expect(last?.error?.retryAfterMs).toBeUndefined();
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "sub")).toBe(false);
+    });
+
+    it("treats a failing re-subscribe with wire-encoded args as a retry instead of throwing", async () => {
+        expect.assertions(3);
+
+        const args = encodeWire({ at: new Date(0), n: 1n }) as Record<string, unknown>;
+
+        shard.failing = false;
+        await shard.subscribeFlaky(ws, "wire", args);
+        shard.failing = true;
+        await shard.write();
+
+        await expect(shard.subscribeFlaky(ws, "wire", args)).resolves.toBeUndefined();
+
+        const last = errorFrames(ws).findLast((frame) => frame.id === "wire");
+
+        expect(last?.error?.retryAfterMs).toBe(1000);
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "wire")).toBe(true);
+    });
+
+    it("keeps a failure recorded while an older seed was in flight", async () => {
+        expect.assertions(2);
+
+        const held = new HeldSeedShard(createFakeState(), {});
+        const socket = createFakeWebSocket();
+
+        held.registerSocket(socket);
+        await held.subscribeFlaky(socket);
+        held.failing = true;
+        await held.write();
+
+        let release: () => void = () => undefined;
+
+        held.hold = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+
+        const retry = held.subscribeFlaky(socket);
+
+        // The flush fails while the retry's seed is still running.
+        await held.write();
+        release();
+        await retry;
+
+        await held.subscribeFlaky(socket);
+
+        const last = errorFrames(socket).at(-1);
+
+        expect(last?.error?.code).toBe("SUBSCRIPTION_REFRESH_FAILED");
+        expect(Object.hasOwn(socket.attachment?.subs ?? {}, "sub")).toBe(true);
+    });
+});
+
+describe("shardDO: failing subscription retry on a guarded socket", () => {
+    it("answers a failing same-args re-subscribe with a seed error rather than nothing", async () => {
+        expect.assertions(2);
+
+        const shard = new FlakyShard(
+            createFakeState(),
+            {},
+            {
+                deliveryAuthorization: async ({ functionPath }) => {
+                    return { epoch: 0, scope: functionPath };
+                },
+            },
+        );
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await shard.subscribeFlaky(ws);
+        shard.failing = true;
+        await shard.write();
+        await shard.subscribeFlaky(ws);
+
+        expect(errorFrames(ws).at(-1)?.error?.code).toBe("SUBSCRIPTION_SEED_FAILED");
+        expect(Object.hasOwn(ws.attachment?.subs ?? {}, "sub")).toBe(false);
     });
 });
