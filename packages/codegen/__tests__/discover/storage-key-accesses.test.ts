@@ -417,6 +417,39 @@ export const send = mutation(async ({ ctx, args }) => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("reports a helper function declaration that is reassigned before the call", () => {
+        expect.assertions(1);
+
+        const helper = `async function requireMember(ctx, channelId) {
+    const userId = ctx.auth.userId;
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+}
+requireMember = async () => {};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts a helper written as a function declaration", () => {
+        expect.assertions(1);
+
+        const helper = `async function requireMember(ctx, channelId) {
+    const userId = ctx.auth.userId;
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+}`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("reports a helper guard whose argument does not reference the row", () => {
         expect.assertions(1);
 

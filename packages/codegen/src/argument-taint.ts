@@ -391,8 +391,9 @@ const appFunctionOf = (callee: TsNode | undefined): FunctionNode | undefined => 
         return undefined;
     }
 
+    // A reassigned function declaration may not run the body inspected here.
     if (Node.isFunctionDeclaration(declaration)) {
-        return declaration.getBody() === undefined ? undefined : declaration;
+        return declaration.getBody() === undefined || isReassignedBinding(declaration) ? undefined : declaration;
     }
 
     if (!isConstDeclaration(declaration)) {
