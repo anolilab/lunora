@@ -176,7 +176,7 @@
                   "COVERAGE": "${{ matrix.node_version == '22.22' && github.event_name != 'merge_group' }}"
               "run": |
                   if [ "${COVERAGE}" = "true" ]; then
-                      pnpm exec vis affected test:coverage --query "project!=lunora-e2e && project!=codegen && project!=cli && project!=hyperdrive"
+                      pnpm exec vis affected test:coverage --if-present --query "project!=lunora-e2e && project!=codegen && project!=cli && project!=hyperdrive"
                   else
                       pnpm run test:affected
                   fi
