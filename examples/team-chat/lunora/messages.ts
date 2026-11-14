@@ -126,7 +126,6 @@ export const attachmentUrl = action
         ctx.log.info("attachment url requested", { channelId: message.channelId });
 
         try {
-            // lunora-advisor-exempt storage_key_from_user_args -- every channel is public to signed-in users in this example, so a message id is no private capability; private channels are listed as not included in the README
             return await ctx.storage.getSignedUrl(message.attachmentKey, { expiresInSeconds: ATTACHMENT_TTL_SECONDS });
         } catch (error) {
             throw new LunoraError("INTERNAL", "could not sign a download URL: object storage did not answer", { cause: error });
