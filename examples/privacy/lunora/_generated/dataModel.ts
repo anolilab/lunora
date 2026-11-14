@@ -88,7 +88,7 @@ export interface Doc_privacy_requests {
     reason?: string;
     receivedAt: number;
     requestId: string;
-    status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired";
+    status: "received" | "grace" | "processing" | "ready" | "completed" | "restored" | "failed" | "cancelled" | "expired";
     storageKey?: string;
     subjectId: string;
     type: "export" | "erasure";
@@ -230,7 +230,7 @@ export interface Insert_privacy_requests {
     reason?: string;
     receivedAt: number;
     requestId: string;
-    status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired";
+    status: "received" | "grace" | "processing" | "ready" | "completed" | "restored" | "failed" | "cancelled" | "expired";
     storageKey?: string;
     subjectId: string;
     type: "export" | "erasure";

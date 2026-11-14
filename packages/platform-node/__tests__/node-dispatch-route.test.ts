@@ -1,16 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { signCanonical } from "../../../shared/hmac-url";
+import { SCHEDULER_SIGNATURE_TOLERANCE_MS, signSchedulerDispatch } from "../../../shared/scheduler-dispatch";
 import type { NodeDispatchInvocation } from "../src/node-dispatch-route";
 import { createNodeDispatchRoute, createShardInvoke, NODE_SCHEDULER_DISPATCH_PATH } from "../src/node-dispatch-route";
 
 const TOKEN = "admin-token-for-tests";
 const SECRET = "scheduler-secret-for-tests";
+const NOW = 1_700_000_000_000;
 
 const build = (invoke = vi.fn<(call: NodeDispatchInvocation) => Promise<Response>>(async () => Response.json({ ok: true }))) => {
     return {
         invoke,
-        route: createNodeDispatchRoute({ adminToken: TOKEN, defaultShardKey: "__root__", invoke, schedulerSecret: SECRET }),
+        route: createNodeDispatchRoute({ adminToken: TOKEN, defaultShardKey: "__root__", invoke, now: () => NOW, schedulerSecret: SECRET }),
     };
 };
 
@@ -73,12 +74,12 @@ describe("createNodeDispatchRoute", () => {
         expect(invoke).not.toHaveBeenCalled();
     });
 
-    it("accepts an HMAC over the exact body when the scheduler secret is set", async () => {
+    it("accepts an HMAC over the exact body and a fresh timestamp when the scheduler secret is set", async () => {
         expect.assertions(2);
 
         const { invoke, route } = build();
-        const signature = await signCanonical(SECRET, payload);
-        const response = await route(post(payload, { "x-lunora-scheduler-signature": signature }));
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: NOW });
+        const response = await route(post(payload, { "x-lunora-scheduler-signature": signature, "x-lunora-scheduler-timestamp": String(NOW) }));
 
         expect(response.status).toBe(200);
         expect(invoke).toHaveBeenCalledTimes(1);
@@ -88,11 +89,68 @@ describe("createNodeDispatchRoute", () => {
         expect.assertions(2);
 
         const { invoke, route } = build();
-        const signature = await signCanonical(SECRET, '{"functionPath":"other:fn"}');
+        const signature = await signSchedulerDispatch(SECRET, { body: '{"functionPath":"other:fn"}', timestamp: NOW });
+        const response = await route(post(payload, { "x-lunora-scheduler-signature": signature, "x-lunora-scheduler-timestamp": String(NOW) }));
+
+        expect(response.status).toBe(403);
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("refuses a signature older than the tolerance", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const stamp = NOW - SCHEDULER_SIGNATURE_TOLERANCE_MS - 1;
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: stamp });
+        const response = await route(post(payload, { "x-lunora-scheduler-signature": signature, "x-lunora-scheduler-timestamp": String(stamp) }));
+
+        expect(response.status).toBe(403);
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("refuses a signed request with an identity header the signature did not cover", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: NOW });
+        const response = await route(
+            post(payload, {
+                "x-lunora-scheduler-signature": signature,
+                "x-lunora-scheduler-timestamp": String(NOW),
+                "x-lunora-userid": "u2",
+            }),
+        );
+
+        expect(response.status).toBe(403);
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("refuses a signature without a timestamp header", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: NOW });
         const response = await route(post(payload, { "x-lunora-scheduler-signature": signature }));
 
         expect(response.status).toBe(403);
         expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("accepts a signature that covers the forwarded identity and forwards it", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: NOW, userId: "u1" });
+        const response = await route(
+            post(payload, {
+                "x-lunora-scheduler-signature": signature,
+                "x-lunora-scheduler-timestamp": String(NOW),
+                "x-lunora-userid": "u1",
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ identity: { userId: "u1" } }));
     });
 
     it("answers 400 BAD_REQUEST when functionPath is missing", async () => {

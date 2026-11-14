@@ -1,3 +1,7 @@
+## @lunora/privacy [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.57...@lunora/privacy@1.0.0-alpha.58) (2026-11-14)
+
+- fix(privacy): retire restored requests like a completed erasure (#1533)
+
 ## @lunora/privacy [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.56...@lunora/privacy@1.0.0-alpha.57) (2026-11-03)
 
 - fix(ci): mark test fixtures so the secrets scan passes (#1470)

@@ -17,27 +17,6 @@ interface ModuleOptions {
 }
 ```
 
-### `ResolvedNuxtPlugin` (interface)
-
-```ts
-interface ResolvedNuxtPlugin {
-    mode?: "all" | "client" | "server";
-    src: string;
-}
-```
-
-### `checkClientOnlyProvider` (const)
-
-```ts
-const checkClientOnlyProvider: (plugins: ReadonlyArray<ResolvedNuxtPlugin>, warn: (message: string) => void) => void;
-```
-
-### `checkWorkerEntry` (const)
-
-```ts
-const checkWorkerEntry: (rootDirectory: string, warn: (message: string) => void) => void;
-```
-
 ### `default` (const)
 
 ```ts

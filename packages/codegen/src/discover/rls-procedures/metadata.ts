@@ -5,30 +5,21 @@ import type { RlsMetadataIR, RlsPolicyIR, RlsRoleIR } from "../../ir";
 import { findObjectProperty, listLunoraSourceFiles, lunoraRelativePath, stringPropertyOf } from "../ast";
 import exportedProcedureChains from "../functions/exported-procedure-chains";
 import { rlsCallsInChain } from "./internal/chain";
+import policyObjectLiterals from "./internal/policies";
 
 /** The operations `definePolicy({ on })` accepts; anything else is ignored as malformed. */
 const POLICY_OPERATIONS = new Set<RlsPolicyIR["on"]>(["delete", "insert", "read", "update"]);
 
 /**
- * Extract `{ table, on }` from each object-literal element of an `rls(policies)`
- * array literal — the read-only metadata the studio's RLS inspector lists. The
- * `when` predicate is intentionally NOT read: it's an opaque closure whose logic
- * lives in code, not the UI. A non-literal policies argument yields `[]`.
+ * Extract `{ table, on }` from each policy object of an `rls(...)` call — the
+ * read-only metadata the studio's RLS inspector lists. The `when` predicate is
+ * intentionally NOT read: it's an opaque closure whose logic lives in code, not
+ * the UI. Policies that cannot be enumerated statically yield `[]`.
  */
 const extractPolicies = (rlsCall: CallExpression, file: string, procedure: string): RlsPolicyIR[] => {
-    const argument = rlsCall.getArguments()[0];
-
-    if (!argument || !Node.isArrayLiteralExpression(argument)) {
-        return [];
-    }
-
     const policies: RlsPolicyIR[] = [];
 
-    for (const element of argument.getElements()) {
-        if (!Node.isObjectLiteralExpression(element)) {
-            continue;
-        }
-
+    for (const element of policyObjectLiterals(rlsCall)) {
         const on = stringPropertyOf(element, "on");
 
         if (on === undefined || !POLICY_OPERATIONS.has(on as RlsPolicyIR["on"])) {

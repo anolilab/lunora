@@ -146,6 +146,9 @@ export interface ShapeIR {
     /** Path relative to `<projectRoot>/lunora/` without extension — always `"shapes"`. */
     filePath: string;
 
+    /** 1-based start line of the `export const` declaring the shape, without leading comments. */
+    line?: number;
+
     /**
      * The shape's `where` may read `ctx.ip`, decided statically and failing closed (same rule as {@link FunctionIR.readsIp}),
      * so the shard never resumes it warm.
@@ -353,6 +356,8 @@ export interface ProcedureMiddlewareIR {
      */
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    /** 1-based start line of the declaring statement (the `export const`), without leading comments. */
+    line?: number;
     /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
     reachesOutbound?: boolean;
     /** `true` when the handler runs any AI generation, bounded or not. */

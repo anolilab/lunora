@@ -29,8 +29,8 @@ const expressionOf = (text: string, preamble = ""): TsNode => {
  * `.query(...)` / `.mutation(...)` call, which is exactly the node
  * `classifyProcedureCall` hands to `rlsCallsInChain`.
  */
-const receiverOf = (chain: string): TsNode =>
-    expressionOf(chain).asKindOrThrow(SyntaxKind.CallExpression).getExpressionIfKindOrThrow(SyntaxKind.PropertyAccessExpression).getExpression();
+const receiverOf = (chain: string, preamble = ""): TsNode =>
+    expressionOf(chain, preamble).asKindOrThrow(SyntaxKind.CallExpression).getExpressionIfKindOrThrow(SyntaxKind.PropertyAccessExpression).getExpression();
 
 describe("rls internal chain", () => {
     beforeEach(() => {
@@ -183,6 +183,32 @@ describe("rls internal chain", () => {
 
             expect(calls[0]?.getArguments()[0]?.getText()).toBe(`[{ table: "documents" }]`);
             expect(calls[0]?.getArguments()[1]?.getText()).toBe("{ roles: [admin] }");
+        });
+
+        it("resolves a `.use(alias)` whose same-file const is initialised by an rls call", () => {
+            expect.assertions(2);
+
+            // The apps write `const ownRead = rls(ownNotes); query.use(ownRead)`;
+            // the inline-only reader saw no policy there at all.
+            const calls = rlsCallsInChain(receiverOf(`c.query.use(r).query(handler)`, `const r = rls(policies);`));
+
+            expect(calls).toHaveLength(1);
+            expect(calls[0]?.getText()).toBe("rls(policies)");
+        });
+
+        it("follows a `const` base builder that carries `.use(rls(...))`", () => {
+            expect.assertions(2);
+
+            const calls = rlsCallsInChain(receiverOf(`base.query(handler)`, `const base = c.query.use(rls(policies));`));
+
+            expect(calls).toHaveLength(1);
+            expect(calls[0]?.getText()).toBe("rls(policies)");
+        });
+
+        it("ignores a `.use(alias)` whose const is initialised by a non-rls call", () => {
+            expect.assertions(1);
+
+            expect(rlsCallsInChain(receiverOf(`c.query.use(notRls).query(handler)`, `const notRls = other(policies);`))).toStrictEqual([]);
         });
     });
 });

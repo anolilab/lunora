@@ -121,11 +121,16 @@ const aggregateTableScans = (functions: ReadonlyArray<FunctionCallStat>): Adviso
  * Flatten one table's `listTableIndexes` result into `{ table, index }` pairs.
  * Exposed so the panel can build {@link RuntimeAdvisoryInputs.declaredIndexes}
  * from its best-effort per-table fan-out without re-deriving the shape.
+ * Vector indexes and `unique` indexes are left out: the runtime never stamps a
+ * read on them (no `"vector"` read kind; a unique index exists for its constraint,
+ * not its reads), so they would always read as dead.
  */
 const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo>): DeclaredIndex[] =>
-    indexes.map((index) => {
-        return { index: index.name, table };
-    });
+    indexes
+        .filter((index) => index.type !== "vector" && index.unique !== true)
+        .map((index) => {
+            return { index: index.name, table };
+        });
 
 /* eslint-disable jsdoc/check-indentation -- intentional nested bullet list documenting the inputs */
 
