@@ -2,7 +2,9 @@
 
 # Automatic runs on PRs and the merge queue only, never `push`: a release branch only
 # moves via a merged PR that already ran this suite. `workflow_dispatch` stays for
-# manual runs.
+# manual runs. The merge queue runs only the unit tests and the production build:
+# every queued PR already ran the full matrix, and the queue is there to catch two
+# PRs that break each other, which those two catch.
 "on": # yamllint disable-line rule:truthy
     "pull_request":
         "types": ["opened", "synchronize", "reopened"]
@@ -393,7 +395,7 @@
     # package so a slow suite cannot starve the others.
     "test-workerd":
         "name": "Workerd integration (${{ matrix.package }})"
-        "if": "needs.files-changed.outputs.packages == 'true'"
+        "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20
@@ -503,7 +505,7 @@
     # and on CI a missing endpoint fails the test rather than skipping it.
     "test-celld":
         "name": "celld integration (@lunora/platform-celld)"
-        "if": "needs.files-changed.outputs.celld == 'true'"
+        "if": "needs.files-changed.outputs.celld == 'true' && github.event_name != 'merge_group'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20
@@ -575,7 +577,7 @@
     # here instead of passing quietly.
     "test-mysql":
         "name": "MySQL integration (@lunora/hyperdrive)"
-        "if": "needs.files-changed.outputs.packages == 'true'"
+        "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20
@@ -654,7 +656,7 @@
 
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
-        "if": "needs.files-changed.outputs.e2e == 'true'"
+        "if": "needs.files-changed.outputs.e2e == 'true' && github.event_name != 'merge_group'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         # 30 covered the playground and examples suites; the saas kit adds a cold boot of
@@ -806,7 +808,7 @@
     # read from templates/ by `templates-matrix`, so a new template gets one without an edit here.
     "templates-matrix":
         "name": "Template matrix"
-        "if": "needs.files-changed.outputs.templates == 'true'"
+        "if": "needs.files-changed.outputs.templates == 'true' && github.event_name != 'merge_group'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 10
@@ -832,7 +834,7 @@
     "templates":
         "name": "Template scaffold (${{ matrix.template }})"
         # An empty matrix is an error in its own right: when no template is listed, the listing step has already failed, so skip here.
-        "if": "needs.files-changed.outputs.templates == 'true' && needs.templates-matrix.outputs.list != '[]'"
+        "if": "needs.files-changed.outputs.templates == 'true' && needs.templates-matrix.outputs.list != '[]' && github.event_name != 'merge_group'"
         "needs": ["files-changed", "templates-matrix", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 60
@@ -902,7 +904,7 @@
     # overlapping, and `templates/expo` is covered by exactly one of them.
     "templates-expo":
         "name": "Template scaffold matrix (expo)"
-        "if": "needs.files-changed.outputs.templates_expo == 'true'"
+        "if": "needs.files-changed.outputs.templates_expo == 'true' && github.event_name != 'merge_group'"
         "needs": ["files-changed", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -959,7 +961,7 @@
     # in its setup step, with the cause invisible in the job that reports it.
     "worker-size":
         "name": "Worker size budget"
-        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_size == 'true'"
+        "if": "(needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_size == 'true') && github.event_name != 'merge_group'"
         "needs": ["files-changed", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -1003,7 +1005,7 @@
     # ceiling in `client-size.json`. The browser twin of the Worker size gate above.
     "client-size":
         "name": "Client size budget"
-        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.client_size == 'true'"
+        "if": "(needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.client_size == 'true') && github.event_name != 'merge_group'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -1041,7 +1043,7 @@
     # dependency (charts, motion, the diagram) slipping out from behind a lazy boundary.
     "studio-size":
         "name": "Studio size budget"
-        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.studio_size == 'true'"
+        "if": "(needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.studio_size == 'true') && github.event_name != 'merge_group'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -1084,7 +1086,7 @@
     # in its setup step, with the cause invisible in the job that reports it.
     "worker-startup":
         "name": "Worker startup budget"
-        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_startup == 'true'"
+        "if": "(needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.worker_startup == 'true') && github.event_name != 'merge_group'"
         "needs": ["files-changed", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -1133,7 +1135,7 @@
     # with nothing to install. One leg per language so a failure names the language.
     "sdk-conformance":
         "name": "SDK conformance (${{ matrix.sdk.language }})"
-        "if": "needs.files-changed.outputs.sdks == 'true'"
+        "if": "needs.files-changed.outputs.sdks == 'true' && github.event_name != 'merge_group'"
         "needs": "files-changed"
         "runs-on": "${{ matrix.sdk.runner }}"
         # Per-leg, not one shared ceiling: the Linux legs finish in ~3 minutes, while
