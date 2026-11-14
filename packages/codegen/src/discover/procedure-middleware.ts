@@ -9,6 +9,7 @@ import { calleeName } from "./callee";
 import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
 import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
+import { facadeWriteOf } from "./write-target";
 
 /**
  * Middleware factory names mapped to the protection flag they set. Matched by the
@@ -225,11 +226,14 @@ const protectionsInChain = (receiver: TsNode): Protections => {
     return protections;
 };
 
-/** `ctx.db` write methods that create/replace a row wholesale — the ones a user/session-creating write can arrive through. */
+/** `ctx.db` by-name write methods that create/replace a row wholesale — the ones a user/session-creating write can arrive through. */
 const USER_TABLE_INSERT_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "insertManyUnsafe", "replace"]);
 
-/** True when `call` is a `ctx.db.insert("table", …)` / `db.insertMany("table", …)` / … write into a user-shaped table. */
-const isUserTableInsert = (call: CallExpression): boolean => {
+/** The `ctx.db.<table>.<method>` facade writes that create/replace a row wholesale. */
+const FACADE_USER_TABLE_INSERT_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "replace", "upsert", "upsertMany"]);
+
+/** True when `call` is a by-name `ctx.db.insert("table", …)` / `db.insertMany("table", …)` / … write into a user-shaped table. */
+const isByNameUserTableInsert = (call: CallExpression): boolean => {
     const callee = call.getExpression();
 
     if (!Node.isPropertyAccessExpression(callee) || !USER_TABLE_INSERT_METHODS.has(callee.getName())) {
@@ -254,6 +258,17 @@ const isUserTableInsert = (call: CallExpression): boolean => {
     }
 
     return isUserTableName(tableArgument.getLiteralText());
+};
+
+/** True when `call` writes a user-shaped table, by name or through the `ctx.db.<table>` facade. */
+const isUserTableInsert = (call: CallExpression): boolean => {
+    if (isByNameUserTableInsert(call)) {
+        return true;
+    }
+
+    const facade = facadeWriteOf(call, FACADE_USER_TABLE_INSERT_METHODS);
+
+    return facade !== undefined && isUserTableName(facade.table);
 };
 
 /** Method names that dispatch privileged, billable async work (fan-out surfaces). */

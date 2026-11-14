@@ -165,6 +165,30 @@ const REPLACE_USER_TABLE = `
     });
 `;
 
+/** A bare-factory public mutation writing a user table through the `ctx.db.<table>` facade, which has no table argument. */
+const FACADE_USER_TABLE_INSERT = `
+    import { mutation } from "@lunora/server";
+
+    export const signUpFacade = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.users.insert({ email: "a@example.com" });
+        },
+    });
+`;
+
+/** The same facade write into a table that is not user-shaped. */
+const FACADE_POSTS_INSERT = `
+    import { mutation } from "@lunora/server";
+
+    export const createPost = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.posts.insert({ title: "hello" });
+        },
+    });
+`;
+
 /** A bare-factory public mutation writing a user table via a no-substitution template literal table name — `isUserTableInsert` used to only match a string literal. */
 const TEMPLATE_LITERAL_USER_TABLE = `
     import { mutation } from "@lunora/server";
@@ -755,6 +779,43 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "restoreUser", writesUserTable: true });
+    });
+
+    it("recognizes a facade `ctx.db.users.insert(...)` as a user-table write", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "facade.ts"), FACADE_USER_TABLE_INSERT, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "signUpFacade", writesUserTable: true });
+    });
+
+    it("recognizes a facade `ctx.db.users.upsertMany(...)` as a user-table write", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "facade.ts"),
+            FACADE_USER_TABLE_INSERT.replace(
+                `ctx.db.users.insert({ email: "a@example.com" })`,
+                `ctx.db.users.upsertMany({ target: "email", rows: [{ create: { email: "a@example.com" } }] })`,
+            ),
+            "utf8",
+        );
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "signUpFacade", writesUserTable: true });
+    });
+
+    it("does not treat a facade `ctx.db.posts.insert(...)` as a user-table write", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "posts.ts"), FACADE_POSTS_INSERT, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "createPost", writesUserTable: false });
     });
 
     it("recognizes a user-table write whose table name is a no-substitution template literal", () => {
