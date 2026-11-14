@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.494](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.493...@lunora/cli@1.0.0-alpha.494) (2026-11-14)
+
+- security(storage): add authorizeSignedGet for serveStorageObject (#1542)
+
 ## @lunora/cli [1.0.0-alpha.493](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.492...@lunora/cli@1.0.0-alpha.493) (2026-11-13)
 
 - security(cli): keep convex table reads inside the snapshot directory (#1543)

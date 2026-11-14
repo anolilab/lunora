@@ -1,3 +1,7 @@
+## @lunora/server [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.274...@lunora/server@1.0.0-alpha.275) (2026-11-14)
+
+- security(storage): add authorizeSignedGet for serveStorageObject (#1542)
+
 ## @lunora/server [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/server@1.0.0-alpha.273...@lunora/server@1.0.0-alpha.274) (2026-11-08)
 
 - feat(bench): add a realistic benchmark app built on the saas kit (#1420)
