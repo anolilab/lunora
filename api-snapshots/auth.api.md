@@ -53,6 +53,7 @@ interface AppendAuthAuditEntry {
 
 ```ts
 interface AppendAuthAuditOptions {
+    hashKey?: string;
     redactDetail?: boolean;
     retention?: number;
 }
@@ -123,6 +124,9 @@ interface AuthAdmin {
         password?: string;
         role?: string | string[];
     }) => Promise<AuthAdminUser>;
+    deleteApiKey: (input: {
+        apiKeyId: string;
+    }) => Promise<void>;
     deleteOrganization: (input: {
         organizationId: string;
     }) => Promise<void>;
@@ -147,6 +151,9 @@ interface AuthAdmin {
     listAccounts: (input: {
         userId: string;
     }) => Promise<AuthAccount[]>;
+    listApiKeys: (input: {
+        userId: string;
+    }) => Promise<AuthApiKey[]>;
     listInvitations: (options: {
         limit?: number;
         offset?: number;
@@ -285,6 +292,23 @@ interface AuthAdminUser {
 }
 ```
 
+### `AuthApiKey` (interface)
+
+```ts
+interface AuthApiKey {
+    [key: string]: unknown;
+    createdAt?: AuthTimestamp;
+    enabled?: boolean;
+    expiresAt?: AuthTimestamp | null;
+    id: string;
+    lastRequest?: AuthTimestamp | null;
+    name?: null | string;
+    prefix?: null | string;
+    referenceId: string;
+    start?: null | string;
+}
+```
+
 ### `AuthAuditEntry` (interface)
 
 ```ts
@@ -305,7 +329,7 @@ interface AuthAuditEntry {
 ### `AuthAuditEvent` (type)
 
 ```ts
-type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
+type AuthAuditEvent = "account-link" | "account-unlink" | "admin-impersonate-start" | "admin-impersonate-stop" | "admin-password-set" | "admin-role-change" | "admin-session-revoke" | "admin-user-ban" | "admin-user-create" | "admin-user-remove" | "admin-user-unban" | "admin-user-update" | "api-key-create" | "api-key-delete" | "api-key-update" | "device-approve" | "device-deny" | "email-change" | "email-change-request" | "email-verification" | "mfa-backup-codes-regenerate" | "mfa-disable" | "mfa-enable" | "oauth-client-create" | "oauth-client-delete" | "oauth-client-keys-rotate" | "oauth-client-secret-rotate" | "oauth-client-update" | "oauth-consent" | "oauth-consent-revoke" | "oauth-consent-update" | "oauth-resource-client-link" | "oauth-resource-client-unlink" | "oauth-resource-create" | "oauth-resource-delete" | "oauth-resource-update" | "oauth-token-issue" | "oauth-token-revoke" | "one-time-token-create" | "org-create" | "org-delete" | "org-invitation-accept" | "org-invitation-cancel" | "org-invitation-create" | "org-invitation-reject" | "org-member-leave" | "org-member-remove" | "org-member-role-change" | "org-role-change" | "org-switch" | "org-team-create" | "org-team-member-add" | "org-team-member-remove" | "org-team-remove" | "org-team-switch" | "org-team-update" | "org-update" | "passkey-add" | "passkey-remove" | "passkey-rename" | "password-change" | "password-reset" | "password-reset-request" | "phone-verification" | "scim-group-create" | "scim-group-delete" | "scim-group-update" | "scim-user-create" | "scim-user-delete" | "scim-user-update" | "session-revoke" | "session-switch" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "sso-provider-delete" | "sso-provider-register" | "sso-provider-update" | "token-refresh" | "user-delete" | "user-delete-request" | (string & {});
 ```
 
 ### `AuthAuditHookConfig` (interface)
@@ -338,6 +362,7 @@ interface AuthAuditReader {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    apiKey: boolean;
     inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
@@ -647,6 +672,7 @@ interface DoAuthWiring {
 
 ```ts
 interface DoAuthWiringOptions {
+    claims?: ReadonlyArray<string>;
     discoveryPaths?: ReadonlyArray<string>;
     internalSecret: string | undefined;
     jurisdiction?: AuthJurisdiction;
@@ -1063,7 +1089,7 @@ const ensureAuthAuditTable: (executor: SqlExecutor) => Promise<void>;
 ### `eventForPath` (const)
 
 ```ts
-const eventForPath: (path: string) => AuthAuditEvent | undefined;
+const eventForPath: (path: string, method?: string, grantType?: string) => AuthAuditEvent | undefined;
 ```
 
 ### `handleAuthDiscoveryRequest` (const)
@@ -1154,7 +1180,7 @@ const resolveAuthOptions: (options: LunoraAuthOptions) => LunoraAuthOptions;
 ### `resolveSessionIdentity` (const)
 
 ```ts
-const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers) => Promise<SessionIdentity | null>;
+const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers, claims?: ReadonlyArray<string>) => Promise<SessionIdentity | null>;
 ```
 
 ### `revokeSignUpInvitation` (const)
@@ -1605,6 +1631,7 @@ type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
 interface LunoraAuthPluginToggles {
     admin?: boolean;
     anonymous?: boolean;
+    apiKey?: boolean;
     deviceAuthorization?: boolean;
     emailOtp?: boolean;
     lastLoginMethod?: boolean;
@@ -1939,6 +1966,8 @@ interface AuditHookContext {
     context?: {
         newSession?: {
             session?: {
+                activeOrganizationId?: string;
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
@@ -1946,9 +1975,13 @@ interface AuditHookContext {
                 id?: string;
             };
         } | null;
+        responseHeaders?: Headers;
         returned?: unknown;
+        secret?: string;
         session?: {
             session?: {
+                activeOrganizationId?: string;
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
@@ -1958,6 +1991,8 @@ interface AuditHookContext {
         } | null;
     };
     headers?: Headers;
+    method?: string;
+    params?: Record<string, unknown>;
     path?: string;
     request?: Request;
 }

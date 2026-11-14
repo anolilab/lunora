@@ -352,7 +352,7 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
             {/* --- Related data (capability-gated) ----------------------------- */}
             <UserSessionsPanel busy={busy} runAction={runAction} userId={user.id} version={version} />
             {capabilities.accounts && <UserAccountsPanel busy={busy} runAction={runAction} userId={user.id} version={version} />}
-            {(capabilities.twoFactor || capabilities.passkey) && (
+            {(capabilities.twoFactor || capabilities.passkey || capabilities.apiKey) && (
                 <UserSecurityPanel busy={busy} capabilities={capabilities} runAction={runAction} userId={user.id} version={version} />
             )}
 

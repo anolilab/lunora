@@ -2442,6 +2442,10 @@ const MESSAGE_IDS: readonly [
     "Security",
     "Disable two-factor",
     "No passkeys.",
+    "API keys",
+    "No API keys.",
+    "Could not load API keys.",
+    "Never",
     "Operations",
     "Toggle operation console",
     "Organizations",
@@ -3074,6 +3078,7 @@ const REQUEST_STATUSES: readonly [
     "processing",
     "ready",
     "completed",
+    "restored",
     "failed",
     "cancelled",
     "expired"

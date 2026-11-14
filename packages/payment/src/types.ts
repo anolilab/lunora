@@ -473,5 +473,14 @@ export interface WebhookAction {
  */
 export interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
+    readonly reason?:
+        | "duplicate"
+        | "duplicate_subscription"
+        | "illegal_transition"
+        | "invalid_refund_amount"
+        | "ok"
+        | "orphaned"
+        | "stale"
+        | "unhandled"
+        | "unstorable";
 }

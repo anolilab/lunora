@@ -11,7 +11,7 @@ import useStudioClient from "./use-studio-client";
  * selector reuses the `capabilities` slice of this constant as its own fallback.
  */
 export const DEFAULT_AUTH_CONFIG: AuthConfigInfo = {
-    capabilities: { accounts: true, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
+    capabilities: { accounts: true, apiKey: false, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
     emailAndPassword: false,
     organization: { enabled: false, roles: false, teams: false },
     plugins: [],

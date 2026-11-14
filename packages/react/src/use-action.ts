@@ -5,7 +5,7 @@ import { createCallRunner } from "@lunora/client";
 import { useMutation as useTanStackMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { useLunora } from "./lunora-provider";
+import { useLunora, useLunoraQueryClient } from "./lunora-provider";
 
 type CallVariables<F extends FunctionReference> = { args: ArgsOf<F>; options?: ActionCallOptions };
 
@@ -78,17 +78,21 @@ interface ActionHook<F extends FunctionReference> {
  */
 const useAction = <F extends FunctionReference>(function_: F): ActionHook<F> => {
     const client = useLunora();
+    const queryClient = useLunoraQueryClient();
 
     const [data, setData] = useState<ReturnOf<F> | undefined>(undefined);
     const [error, setError] = useState<Error | undefined>(undefined);
     const [pending, setPending] = useState(false);
 
-    const { mutateAsync, reset: resetMutation } = useTanStackMutation<ReturnOf<F>, Error, CallVariables<F>>({
-        mutationFn: async ({ args, options }) => client.action(function_, args, options),
-        // See the "why the two TanStack defaults are overridden" note above.
-        networkMode: "always",
-        retry: 0,
-    });
+    const { mutateAsync, reset: resetMutation } = useTanStackMutation<ReturnOf<F>, Error, CallVariables<F>>(
+        {
+            mutationFn: async ({ args, options }) => client.action(function_, args, options),
+            // See the "why the two TanStack defaults are overridden" note above.
+            networkMode: "always",
+            retry: 0,
+        },
+        queryClient,
+    );
 
     // One runner per hook instance, built lazily so its in-flight ref-count and
     // latest-invocation token survive re-renders. `mutateAsync` and `reset` are

@@ -311,6 +311,12 @@ const exportSqlGlobalRows: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDi
 const facetSqlGlobalColumn: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect, options: FacetGlobalColumnOptions) => Promise<GlobalFacetResult>;
 ```
 
+### `globalColumnBackfill` (const)
+
+```ts
+const globalColumnBackfill: (schema: SchemaLike, tableName: string, column: string) => SQL | undefined;
+```
+
 ### `importSqlGlobalRows` (const)
 
 ```ts

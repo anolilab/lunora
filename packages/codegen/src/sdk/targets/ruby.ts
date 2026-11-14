@@ -162,9 +162,24 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
+/**
+ * A query's stream form: the live query as an Enumerator with a stop callable. Calling stop unsubscribes, and so does leaving the loop.
+ */
+const renderWatch = (method: SdkMethod): string => {
+    const parameters = method.argsType === undefined && !method.takesArgs ? "shard_key: nil" : "args, shard_key: nil";
+    const payload = rubyPayload(method);
+
+    return [
+        `    # live ${commentText(method.summary)}, as an Enumerator — call \`stop\` on the pair to unsubscribe.`,
+        `    def watch_${memberName(method.functionName)}(${parameters})`,
+        `      @client.watch("${rubyLiteral(method.functionPath)}", ${payload}, shard_key)`,
+        `    end`,
+    ].join("\n");
+};
+
 const renderNamespaceClass = (namespace: SdkNamespace): string => {
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}\n\n${renderWatch(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [
@@ -241,7 +256,11 @@ const structsOnly = (namespaces: ReadonlyArray<SdkNamespace>, models: string): R
 };
 
 const render = ({ models, namespaces: declared }: SdkRenderInput): Record<string, string> => {
-    assertDistinctMembers(declared, "Ruby", (method) => [memberName(method.functionName), `subscribe_${memberName(method.functionName)}`]);
+    assertDistinctMembers(declared, "Ruby", (method) => [
+        memberName(method.functionName),
+        `subscribe_${memberName(method.functionName)}`,
+        `watch_${memberName(method.functionName)}`,
+    ]);
     const namespaces = structsOnly(declared, models);
     const readers = namespaces.map((namespace) => `:${memberName(namespace.name)}`).join(", ");
     const assignments = namespaces.map((namespace) => `      @${memberName(namespace.name)} = ${toPascalCase(namespace.name)}Api.new(client)`).join("\n");

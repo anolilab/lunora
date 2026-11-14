@@ -13,6 +13,20 @@ import (
 	"testing"
 )
 
+// withPageDeltaCaps is a connect golden plus the capability the port announces on
+// every open. Only the plain, context and token goldens exist in the fixture and the
+// port always adds pageDelta, so the expectation is derived rather than duplicated.
+func withPageDeltaCaps(golden any) map[string]any {
+	object, _ := golden.(map[string]any)
+	out := map[string]any{"caps": []any{"pageDelta"}}
+
+	for key, value := range object {
+		out[key] = value
+	}
+
+	return out
+}
+
 // fakeSocket records every frame the client writes to it, connect included.
 type fakeSocket struct {
 	frames []map[string]any
@@ -61,7 +75,7 @@ func TestConnectFrameFirstAndCarriesSessionToken(t *testing.T) {
 		t.Fatalf("first frame of an open = %v, want connect", bare.frames)
 	}
 
-	if got, want := canonical(t, bare.frames[0]), canonical(t, goldens["connect"]); got != want {
+	if got, want := canonical(t, bare.frames[0]), canonical(t, goldens["connect-with-page-delta-caps"]); got != want {
 		t.Errorf("connect without a session credential:\n got: %s\nwant: %s", got, want)
 	}
 
@@ -75,7 +89,7 @@ func TestConnectFrameFirstAndCarriesSessionToken(t *testing.T) {
 		t.Fatalf("frames after attach and resend = %v, want [connect, subscribe]", open.frames)
 	}
 
-	if got, want := canonical(t, open.frames[0]), canonical(t, goldens["connect-with-token"]); got != want {
+	if got, want := canonical(t, open.frames[0]), canonical(t, withPageDeltaCaps(goldens["connect-with-token"])); got != want {
 		t.Errorf("connect with a session credential:\n got: %s\nwant: %s", got, want)
 	}
 
@@ -169,7 +183,7 @@ func TestAttachSocketCarriesConnectionContext(t *testing.T) {
 				t.Fatalf("attach sent %d frames, want only connect", len(socket.frames))
 			}
 
-			if got, want := canonical(t, socket.frames[0]), canonical(t, goldens[step.golden]); got != want {
+			if got, want := canonical(t, socket.frames[0]), canonical(t, withPageDeltaCaps(goldens[step.golden])); got != want {
 				t.Errorf("connect:\n got: %s\nwant: %s", got, want)
 			}
 		})
@@ -428,7 +442,7 @@ func TestWhisperTopicsRejoinAfterReconnect(t *testing.T) {
 			t.Fatalf("open %d sent %d frames, want connect then whisper_subscribe", open, len(socket.frames))
 		}
 
-		if got, want := canonical(t, socket.frames[0]), canonical(t, goldens["connect"]); got != want {
+		if got, want := canonical(t, socket.frames[0]), canonical(t, withPageDeltaCaps(goldens["connect"])); got != want {
 			t.Errorf("open %d: first frame:\n got: %s\nwant: %s", open, got, want)
 		}
 
@@ -487,5 +501,52 @@ func TestAFailedConnectNeverMakesA4003ARefusal(t *testing.T) {
 
 	if notified != 0 {
 		t.Fatalf("token-expiry notified %d times for a socket that never attached, want 0", notified)
+	}
+}
+
+// A resend that cannot reach the socket leaves the subscription frozen: the replay that
+// would re-apply the dropped change never went out, so a later delta must still be ignored
+// rather than moving the resume cursor past it.
+func TestAFailedResendKeepsTheSubscriptionFrozen(t *testing.T) {
+	var published int
+
+	client := NewClient("https://app.example", nil)
+	client.AttachSocket(func(map[string]any) error { return nil }, nil)
+	client.Subscribe("messages:list", map[string]any{}, func(any) { published++ }, nil, "")
+
+	deliverAll(t, client, []any{
+		map[string]any{"id": "sub_1", "type": "data", "data": []any{map[string]any{"_id": "m1", "text": "one"}}, "cursor": float64(5), "epoch": "e1"},
+		// An update without its row cannot merge, so the subscription freezes.
+		map[string]any{"id": "sub_1", "type": "delta", "delta": map[string]any{"key": "m1", "op": "update", "table": "messages"}},
+	})
+
+	client.AttachSocket(func(frame map[string]any) error {
+		if frame["type"] == "connect" {
+			return nil
+		}
+
+		return errors.New("socket closed")
+	}, nil)
+
+	if err := client.ResendSubscriptions(); err == nil {
+		t.Fatal("resend succeeded over a socket that refuses the frame")
+	}
+
+	published = 0
+
+	deliverAll(t, client, []any{
+		map[string]any{"id": "sub_1", "type": "delta", "delta": map[string]any{"key": "m1", "op": "update", "row": map[string]any{"_id": "m1", "text": "ONE"}, "table": "messages"}, "cursor": float64(9), "epoch": "e1"},
+	})
+
+	if published != 0 {
+		t.Errorf("a delta after a failed resend published %d times, want 0 — the freeze was lost", published)
+	}
+
+	client.mu.Lock()
+	cursor := client.subscriptions["sub_1"].cursor
+	client.mu.Unlock()
+
+	if cursor != float64(5) {
+		t.Errorf("resume cursor = %v after the failed resend, want 5", cursor)
 	}
 }

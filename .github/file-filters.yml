@@ -110,6 +110,8 @@ dependency_manifests:
     - "pnpm-workspace.yaml"
     - "scripts/check-catalog-drift.js"
     - "scripts/check-peer-catalog-refs.js"
+    # Both scripts above read the workspace globs and catalogs through this parser.
+    - "scripts/workspace-config.js"
     # The same job also holds the PR-title/commitlint type-list comparison, so its
     # three inputs gate it. Without them a PR that edits only the workflow's `types:`
     # block matches `yaml_lintable` (yamllint still runs) and nothing that would

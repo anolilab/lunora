@@ -44,6 +44,7 @@ describe("discover/queues", () => {
                 bindingName: "QUEUE_EMAIL_QUEUE",
                 exportName: "emailQueue",
                 filePath: "queues",
+                line: 4,
                 mode: "push",
                 name: "email-queue",
                 tuning: {},
@@ -145,12 +146,13 @@ describe("discover/queues", () => {
         `);
 
         expect(discoverQueues(newProject(), workdir)).toEqual([
-            { bindingName: "QUEUE_AUDIT", exportName: "audit", filePath: "queues", mode: "push", name: "signup-audit", topic: "signups", tuning: {} },
-            { bindingName: "QUEUE_EMAIL_QUEUE", exportName: "emailQueue", filePath: "queues", mode: "push", name: "email-queue", tuning: {} },
+            { bindingName: "QUEUE_AUDIT", exportName: "audit", filePath: "queues", line: 8, mode: "push", name: "signup-audit", topic: "signups", tuning: {} },
+            { bindingName: "QUEUE_EMAIL_QUEUE", exportName: "emailQueue", filePath: "queues", line: 9, mode: "push", name: "email-queue", tuning: {} },
             {
                 bindingName: "QUEUE_WELCOME",
                 exportName: "welcome",
                 filePath: "queues",
+                line: 7,
                 mode: "push",
                 name: "welcome",
                 topic: "signups",
@@ -158,8 +160,8 @@ describe("discover/queues", () => {
             },
         ]);
         expect(discoverQueueDeclarations(newProject(), workdir).topics).toEqual([
-            { exportName: "orders", filePath: "queues" },
-            { exportName: "signups", filePath: "queues" },
+            { exportName: "orders", filePath: "queues", line: 5 },
+            { exportName: "signups", filePath: "queues", line: 4 },
         ]);
     });
 
@@ -222,7 +224,7 @@ describe("discover/queues", () => {
 
         const { queues, topics } = discoverQueueDeclarations(newProject(), workdir);
 
-        expect(topics).toEqual([{ exportName: "signups", filePath: "queues" }]);
+        expect(topics).toEqual([{ exportName: "signups", filePath: "queues", line: 4 }]);
         expect(queues[0]?.topic).toBe("signups");
     });
 
@@ -249,9 +251,9 @@ describe("discover/queues", () => {
             const { queues, topics } = discoverQueueDeclarations(newProject(), workdir);
 
             expect(queues).toEqual([
-                { bindingName: "QUEUE_INVOICES", exportName: "invoices", filePath: "billing/queues", mode: "push", name: "invoices", tuning: {} },
+                { bindingName: "QUEUE_INVOICES", exportName: "invoices", filePath: "billing/queues", line: 4, mode: "push", name: "invoices", tuning: {} },
             ]);
-            expect(topics).toEqual([{ exportName: "paid", filePath: "billing/queues" }]);
+            expect(topics).toEqual([{ exportName: "paid", filePath: "billing/queues", line: 5 }]);
         });
 
         it("ignores a queues.ts in a folder that is not a module", () => {

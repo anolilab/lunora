@@ -69,7 +69,7 @@ const TRIVIA_SOURCE = String.raw`(?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)`;
  * Unlike {@link TRIVIA_SOURCE} this position CAN run to end-of-input — a file of
  * nothing but a comment is all trivia — hence the extra `$` alternative.
  */
-const LEADING_TRIVIA_RE = /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u;
+const LEADING_TRIVIA_RE = /(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/uy;
 
 /**
  * `CREATE [TEMP|TEMPORARY] TRIGGER` at the head of a migration — the one
@@ -81,7 +81,7 @@ const LEADING_TRIVIA_RE = /^(?:\s|--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/)*/u;
  * read the body's first `;` as a statement boundary and rejected the trailing
  * `END`, telling the author to split a statement SQLite cannot have split.
  */
-const CREATE_TRIGGER_RE = new RegExp(String.raw`^CREATE${TRIVIA_SOURCE}+(?:TEMP${TRIVIA_SOURCE}+|TEMPORARY${TRIVIA_SOURCE}+)?TRIGGER\b`, "iu");
+const CREATE_TRIGGER_RE = new RegExp(String.raw`CREATE${TRIVIA_SOURCE}+(?:TEMP${TRIVIA_SOURCE}+|TEMPORARY${TRIVIA_SOURCE}+)?TRIGGER\b`, "iuy");
 
 /** Lowercase hex SHA-256 shape guard before inlining the hash into SQL. Hoisted to avoid per-call recompilation. */
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/u;
@@ -160,6 +160,8 @@ interface StatementScan {
      * (`DROP TABLE"users"`).
      */
     code: string;
+    /** Where the next statement starts: just past this statement's `;`, or the end of the text when there is none. */
+    end: number;
 
     /**
      * Each `--` comment, from its `--` to the end of its line, with where it starts in `code` and whether nothing
@@ -199,10 +201,20 @@ const lineComment = (code: string, codeIndex: number, text: string): StatementSc
  *
  * Callers wanting multiple statements per migration should split them into
  * separate `Migration` entries — `batch()` runs them atomically anyway.
+ *
+ * `multi` reads one statement starting at `start` and stops at its `;`, so a
+ * file of several statements is read by calling this again at {@link StatementScan.end}.
+ * It is how a generated file is split, and the one place the single-statement
+ * rule above is relaxed.
  */
 // eslint-disable-next-line sonarjs/cognitive-complexity -- a single-pass SQL lexer: its mode branching is the grammar, and split helpers would all share the cursor and mode state
-const scanStatement = (text: string, label: string): StatementScan => {
-    const isTrigger = CREATE_TRIGGER_RE.test(text.slice(LEADING_TRIVIA_RE.exec(text)?.[0].length ?? 0));
+const scanStatement = (text: string, label: string, start = 0, multi = false): StatementScan => {
+    // Both probes are sticky, so they read from `start` without copying the rest of the file. Copying it per statement made a
+    // file of many short statements quadratic.
+    LEADING_TRIVIA_RE.lastIndex = start;
+    LEADING_TRIVIA_RE.exec(text);
+    CREATE_TRIGGER_RE.lastIndex = LEADING_TRIVIA_RE.lastIndex;
+    const isTrigger = CREATE_TRIGGER_RE.test(text);
     const lineComments: StatementScan["lineComments"] = [];
     let code = "";
     // The character that ends the string or quoted identifier being read, and the comment being read.
@@ -218,7 +230,7 @@ const scanStatement = (text: string, label: string): StatementScan => {
     let endClosesBody = false;
     let afterBodySemicolon = false;
 
-    for (let index = 0; index < text.length; index += 1) {
+    for (let index = start; index < text.length; index += 1) {
         const character = text.charAt(index);
         const next = text.charAt(index + 1);
 
@@ -320,6 +332,10 @@ const scanStatement = (text: string, label: string): StatementScan => {
                 afterBodySemicolon = true;
             } else {
                 terminatorIndex = index;
+
+                if (multi) {
+                    break;
+                }
             }
         }
     }
@@ -328,22 +344,19 @@ const scanStatement = (text: string, label: string): StatementScan => {
         lineComments.push(lineComment(code, commentCodeIndex, text.slice(commentStart)));
     }
 
-    return { code, lineComments, statementText: text.slice(0, terminatorIndex ?? text.length).trim() };
+    return {
+        code,
+        end: terminatorIndex === undefined ? text.length : terminatorIndex + 1,
+        lineComments,
+        statementText: text.slice(start, terminatorIndex ?? text.length).trim(),
+    };
 };
 
-/**
- * Refuse transaction control, and a destructive statement without {@link ALLOW_DESTRUCTIVE_MARKER}. Both are decided
- * from {@link StatementScan.code}, so a keyword inside a literal or a comment never counts.
- */
-const assertAllowedStatement = (label: string, scan: StatementScan): void => {
-    if (TRANSACTION_CONTROL_RE.test(scan.code)) {
-        throw new LunoraError(
-            "INTERNAL",
-            `${label} is transaction control (BEGIN/COMMIT/END/ROLLBACK/SAVEPOINT/RELEASE). Each migration already runs atomically with its tracking row in one batch(); remove it.`,
-        );
-    }
+/** Does the statement open with transaction control (BEGIN/COMMIT/END/ROLLBACK/SAVEPOINT/RELEASE)? */
+const isTransactionControl = (scan: StatementScan): boolean => TRANSACTION_CONTROL_RE.test(scan.code);
 
-    // The destructive statement whose keyword comes first, past the whitespace a `^\s*` pattern also matched.
+/** The destructive statement whose keyword comes first in `scan`, past the whitespace a `^\s*` pattern also matched. */
+const firstDestructive = (scan: StatementScan): { index: number; statement: string } | undefined => {
     let first: { index: number; statement: string } | undefined;
 
     for (const [statement, pattern] of DESTRUCTIVE_STATEMENTS) {
@@ -354,6 +367,23 @@ const assertAllowedStatement = (label: string, scan: StatementScan): void => {
             first = { index, statement };
         }
     }
+
+    return first;
+};
+
+/**
+ * Refuse transaction control, and a destructive statement without {@link ALLOW_DESTRUCTIVE_MARKER}. Both are decided
+ * from {@link StatementScan.code}, so a keyword inside a literal or a comment never counts.
+ */
+const assertAllowedStatement = (label: string, scan: StatementScan): void => {
+    if (isTransactionControl(scan)) {
+        throw new LunoraError(
+            "INTERNAL",
+            `${label} is transaction control (BEGIN/COMMIT/END/ROLLBACK/SAVEPOINT/RELEASE). Each migration already runs atomically with its tracking row in one batch(); remove it.`,
+        );
+    }
+
+    const first = firstDestructive(scan);
 
     if (first === undefined) {
         return;
@@ -687,7 +717,7 @@ class MigrationRunner {
     }
 }
 
-export { MigrationRunner, TRACKING_TABLE_NAME };
+export { firstDestructive, isTransactionControl, MigrationRunner, normalizeMigrationText, scanStatement, sha256Hex, TRACKING_TABLE_NAME };
 export type { Migration, MigrationRunnerResult };
 
 export { ALLOW_DESTRUCTIVE_MARKER } from "../../../shared/allow-destructive-marker";

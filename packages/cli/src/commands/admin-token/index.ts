@@ -12,6 +12,7 @@ const adminTokenCommand: Command = {
     examples: [
         ["lunora admin-token create ci-deploy --prod --url https://app.example.com", "Create a token; the secret is printed once"],
         ["lunora admin-token create nightly --expires-days 30", "Create a token that stops working after 30 days"],
+        ["lunora admin-token create ci-migrate --scope migrations", "Create a token that can run additive SQL migrations, and nothing else root-only"],
         ["lunora admin-token list", "List tokens with created / last-used / expiry"],
         ["lunora admin-token revoke ci-deploy", "Revoke a token (refused everywhere within 30 seconds)"],
     ],
@@ -23,6 +24,7 @@ const adminTokenCommand: Command = {
     name: "admin-token",
     options: [
         { description: "For `create` — days until the token expires (default: never)", name: "expires-days", type: Number },
+        { description: "For `create` — a scope the token gets, comma-separated: `migrations` runs additive SQL migrations", name: "scope", type: String },
         OUTPUT_FORMAT_OPTION,
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (defaults to the running dev server)", name: "url", type: String },
@@ -36,6 +38,7 @@ export type AdminTokenOptions = CreateOptions<{
     "expires-days": number | undefined;
     format: string | undefined;
     prod: boolean | undefined;
+    scope: string | undefined;
     token: string | undefined;
     url: string | undefined;
 }>;

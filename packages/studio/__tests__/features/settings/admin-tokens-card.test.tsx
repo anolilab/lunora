@@ -164,7 +164,7 @@ describe("adminTokensCard", () => {
 
         const first = createMockClient({});
 
-        first.listAdminTokens.mockResolvedValue([{ createdAt: 1, name: "from-first" }]);
+        first.listAdminTokens.mockResolvedValue([{ createdAt: 1, name: "from-first", scopes: [] }]);
 
         const second = createMockClient({});
 
@@ -249,14 +249,14 @@ describe("adminTokensCard", () => {
         const second = createMockClient({});
         const pending: { release?: () => void } = {};
 
-        first.listAdminTokens.mockResolvedValue([{ createdAt: 1, name: "old" }]);
+        first.listAdminTokens.mockResolvedValue([{ createdAt: 1, name: "old", scopes: [] }]);
         first.revokeAdminToken.mockImplementation(
             async () =>
                 new Promise<void>((resolve) => {
                     pending.release = resolve;
                 }),
         );
-        second.listAdminTokens.mockResolvedValue([{ createdAt: 2, name: "fresh" }]);
+        second.listAdminTokens.mockResolvedValue([{ createdAt: 2, name: "fresh", scopes: [] }]);
 
         const { rerender } = render(
             <LunoraProvider client={first.asClient}>
@@ -292,7 +292,7 @@ describe("adminTokensCard", () => {
 
         const mock = createMockClient({});
 
-        mock.listAdminTokens.mockResolvedValueOnce([{ createdAt: 1, name: "ci" }]).mockResolvedValue([]);
+        mock.listAdminTokens.mockResolvedValueOnce([{ createdAt: 1, name: "ci", scopes: [] }]).mockResolvedValue([]);
         mock.revokeAdminToken.mockRejectedValue(new Error("token table write failed"));
 
         render(
@@ -318,7 +318,7 @@ describe("adminTokensCard", () => {
 
         const mock = createMockClient({});
 
-        mock.listAdminTokens.mockResolvedValue([{ createdAt: 1, name: "ci", revoked: true }]);
+        mock.listAdminTokens.mockResolvedValue([{ createdAt: 1, name: "ci", revoked: true, scopes: [] }]);
 
         render(
             <LunoraProvider client={mock.asClient}>

@@ -424,10 +424,10 @@ export const checkout = action.input({ priceId: v.string().max(512) }).action(as
     // The hold below stops a second purchase only because the provider expires
     // the first session when the hold ends. A provider that cannot is refused
     // here, before a hold is taken, rather than by the facade after it.
-    if (!ctx.payments.adapter.capabilities.checkoutExpiry) {
+    if (!ctx.payments.provider.capabilities.checkoutExpiry) {
         throw new LunoraError(
             "NOT_IMPLEMENTED",
-            `checkout needs a payment provider that can expire a session (capabilities.checkoutExpiry); ${ctx.payments.adapter.identifier} cannot`,
+            `checkout needs a payment provider that can expire a session (capabilities.checkoutExpiry); ${ctx.payments.provider.identifier} cannot`,
         );
     }
 

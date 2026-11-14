@@ -25,6 +25,7 @@
  * client plugin without its server half (or vice-versa) leaves those actions
  * untyped/unavailable.
  */
+import { apiKeyClient } from "@better-auth/api-key/client";
 import { oauthProviderClient } from "@better-auth/oauth-provider/client";
 import { passkeyClient } from "@better-auth/passkey/client";
 import {
@@ -58,6 +59,7 @@ import { notifySessionChanged } from "../../../shared/session-change";
 interface LunoraAuthPluginToggles {
     admin?: boolean;
     anonymous?: boolean;
+    apiKey?: boolean;
     deviceAuthorization?: boolean;
     emailOtp?: boolean;
     lastLoginMethod?: boolean;
@@ -96,6 +98,7 @@ const PLUGIN_FACTORIES: Record<keyof LunoraAuthPluginToggles, () => LunoraAuthCl
     deviceAuthorization: deviceAuthorizationClient,
     lastLoginMethod: lastLoginMethodClient,
     oauthProvider: oauthProviderClient,
+    apiKey: apiKeyClient,
 };
 
 const lunoraAuthPlugins = (toggles: LunoraAuthPluginToggles = {}): LunoraAuthClientPlugin[] => {

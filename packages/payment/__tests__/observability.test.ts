@@ -91,7 +91,7 @@ describe("observability hook", () => {
             identifier: "stripe",
         } as unknown as PaymentAdapter;
 
-        await reconcile({ adapter, observability: (event) => events.push(event), store, subscriptionIds: ["sub_1"] });
+        await reconcile({ singleSubscriptionPerReference: false, adapter, observability: (event) => events.push(event), store, subscriptionIds: ["sub_1"] });
 
         expect(events.map((event) => event.type)).toEqual(["reconcile.drift", "reconcile.completed"]);
         expect(events[1]).toMatchObject({ type: "reconcile.completed", updatedSubscriptions: 1 });

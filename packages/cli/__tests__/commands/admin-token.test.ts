@@ -141,4 +141,62 @@ describe("lunora admin-token", () => {
         expect(result.code).toBe(0);
         expect(lines.filter((line) => line.includes("ci ") && line.includes("revoked"))).toHaveLength(1);
     });
+
+    it("creates a token with the migrations scope, and sends the scope only when one is asked for", async () => {
+        expect.assertions(2);
+
+        const calls: Call[] = [];
+        const { logger } = capturingLogger();
+
+        await runAdminTokenCommand({
+            ...BASE,
+            fetchImpl: answering({ createdAt: 1, name: "ci", scopes: ["migrations"], token: "lnat.ci.secret" }, 201, calls),
+            logger,
+            name: "ci",
+            scope: "migrations",
+            subcommand: "create",
+        });
+
+        expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({ name: "ci", scopes: ["migrations"] });
+
+        await runAdminTokenCommand({
+            ...BASE,
+            fetchImpl: answering({ createdAt: 1, name: "plain", token: "lnat.plain.secret" }, 201, calls),
+            logger,
+            name: "plain",
+            subcommand: "create",
+        });
+
+        expect(JSON.parse(calls[1]?.body ?? "{}")).not.toHaveProperty("scopes");
+    });
+
+    it("refuses an unknown scope before sending anything, and refuses --scope on a verb other than create", async () => {
+        expect.assertions(4);
+
+        const calls: Call[] = [];
+        const { logger } = capturingLogger();
+
+        const unknown = await runAdminTokenCommand({
+            ...BASE,
+            fetchImpl: answering({}, 201, calls),
+            logger,
+            name: "ci",
+            scope: "migration",
+            subcommand: "create",
+        });
+
+        expect(unknown.code).toBe(EXIT_CODE.USAGE);
+        expect(unknown.error).toMatch(/unknown scope migration/u);
+
+        const list = await runAdminTokenCommand({
+            ...BASE,
+            fetchImpl: answering({ tokens: [] }, 200, calls),
+            logger,
+            scope: "migrations",
+            subcommand: "list",
+        });
+
+        expect(list.code).toBe(EXIT_CODE.USAGE);
+        expect(calls).toHaveLength(0);
+    });
 });

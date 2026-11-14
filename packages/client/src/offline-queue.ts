@@ -196,8 +196,11 @@ class OfflineQueue {
 
     private readonly items: QueuedMutation[] = [];
 
-    /** Ids of writes a flush has {@link OfflineQueue.drain}ed and neither requeued nor discarded yet, which are on the wire or about to be. */
-    private readonly replayingIds = new Set<string>();
+    /**
+     * Writes a flush has {@link OfflineQueue.drain}ed and neither requeued nor discarded yet, by id, which are on the wire or about
+     * to be. The objects are kept so a restamp can reach them: a replay that fails transiently requeues these same objects.
+     */
+    private readonly replayingIds = new Map<string, QueuedMutation>();
 
     /** Appends still in flight, by write id, each resolving to whether the record landed. Anything that touches a record durably waits on its append first. */
     private readonly appending = new Map<string, Promise<boolean>>();
@@ -417,7 +420,7 @@ class OfflineQueue {
      * {@link OfflineQueue.rewriteStamp}.
      */
     public restampIdentity(from: string | null, to: string | null): void {
-        for (const item of this.items) {
+        for (const item of [...this.items, ...this.replayingIds.values()]) {
             if (item.identity !== from) {
                 continue;
             }
@@ -719,7 +722,7 @@ class OfflineQueue {
     private markReplaying(drained: QueuedMutation[]): void {
         for (const item of drained) {
             if (item.id !== undefined) {
-                this.replayingIds.add(item.id);
+                this.replayingIds.set(item.id, item);
             }
         }
     }

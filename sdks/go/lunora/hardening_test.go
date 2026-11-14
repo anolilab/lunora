@@ -785,7 +785,7 @@ func TestAStreamEndsWhenTheClientCloses(t *testing.T) {
 	client := NewClient("https://app.example", nil)
 	client.AttachSocket(func(map[string]any) error { return nil }, nil)
 
-	events, unsubscribe := client.Stream("messages:list", map[string]any{}, "")
+	events, unsubscribe := client.Watch("messages:list", map[string]any{}, "")
 	defer unsubscribe()
 
 	deliverAll(t, client, []any{map[string]any{"id": "sub_1", "type": "data", "data": map[string]any{"n": 1}}})
@@ -822,7 +822,7 @@ func TestUnsubscribingAStreamRacesNoInFlightFrame(t *testing.T) {
 
 	for range 2000 {
 		client := NewClient("https://app.example", nil)
-		_, unsubscribe := client.Stream("messages:list", nil, "")
+		_, unsubscribe := client.Watch("messages:list", nil, "")
 
 		var (
 			wait     sync.WaitGroup

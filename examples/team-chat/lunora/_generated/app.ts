@@ -4,7 +4,7 @@
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
 import type * as LunoraAuthModule from "./authModule.js";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
-import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
+import { applyCdcChanges, applySqlMigrationFiles, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";
 import type { R2BucketLike, R2S3Credentials, Storage } from "@lunora/storage";
 import { createBucketStorage, createStorage } from "@lunora/storage";
 import type { ExecutionContextLike, GlobalIntrospector, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, SecurityOptions, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "lunorash/runtime";
@@ -620,6 +620,11 @@ class AppBuilder<Env extends object> {
                 options.exportGlobals = buildGlobalExporter(database);
                 options.syncGlobals = buildGlobalCdcSync(database);
                 options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);
+                // `lunora migrate apply` runs the generated SQL files against this binding, recording each in
+                // `__lunora_sql_migrations`. A file runs once per stage, and nothing else runs it. The schema lets a
+                // column a file adds be filled the way the runtime fills it, so its rows never read NULL.
+                options.applySqlMigrations = (request) =>
+                    applySqlMigrationFiles(database, request.files, { ...request, schema: schema as unknown as D1CtxDbOptions["schema"] });
             }
         }
 
@@ -766,9 +771,16 @@ class AppBuilder<Env extends object> {
                 memo = memoizeIdentity(options.resolveIdentity, {
                     // better-auth resolves the session from ALL request headers, so the key
                     // must cover every header a supported plugin authenticates on: the
-                    // session cookie, `Authorization` (bearer / jwt) and `x-api-key` (apiKey).
+                    // session cookie and `Authorization` (bearer / jwt). `x-api-key` requests are never keyed (see below).
                     cacheKey: (request: Request) => {
-                        const parts = ["authorization", "cookie", "x-api-key"].map((name) => request.headers.get(name) ?? "");
+                        // A revoked API key must stop resolving on its next call. Revocation is a row
+                        // delete with nothing in the cookie to change, so a key request is never
+                        // memoised across requests; the lookup is one row read per call.
+                        if (request.headers.get("x-api-key") !== null) {
+                            return undefined;
+                        }
+
+                        const parts = ["authorization", "cookie"].map((name) => request.headers.get(name) ?? "");
 
                         if (parts.every((part) => part === "")) {
                             return undefined;

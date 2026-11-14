@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { tokenize } from "../../../../src/features/api/openapi/json-highlight";
+import { tokenize } from "../../../../src/features/api/openapi/json-tokenize";
 
 /** Re-join every token's text — the highlighter must never drop or reorder characters. */
 const joined = (source: string): string =>

@@ -4,7 +4,7 @@ A **protocol-conformant** Swift client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, which hands back an `AsyncStream` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, which hands back an `AsyncStream` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -162,7 +162,7 @@ while !Task.isCancelled {
 Every RPC failure is a `LunoraAPIError`: a body that is not JSON or not an object
 is `INTERNAL`, and a success whose `result` does not decode is
 `WIRE_DECODE_FAILED` (the call committed). `close()` also ends every live
-`stream(...)`. `dump(client)` shows the bearer token only as `<redacted>`.
+`watch(...)`. `dump(client)` shows the bearer token only as `<redacted>`.
 
 ## Optimistic updates and offline writes
 

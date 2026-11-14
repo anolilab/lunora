@@ -1,4 +1,5 @@
 import { digestAdminTokenSecret, parseAdminTokenHeader } from "../../../shared/admin-token";
+import type { AdminTokenScope } from "../../../shared/admin-token-scope";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 
 /**
@@ -83,12 +84,14 @@ interface AdminTokenVerifierOptions {
  * answered garbage): it fails closed but is not remembered, so the real token
  * works again as soon as the store does.
  */
-type AdminTokenLookup = { expiresAt?: number; live: true } | { live: false; nameKnown: boolean; transient?: boolean };
+type AdminTokenLookup = { expiresAt?: number; live: true; scopes?: ReadonlyArray<AdminTokenScope> } | { live: false; nameKnown: boolean; transient?: boolean };
 
 interface AdminTokenGrant {
     /** The token's own expiry, when it has one. Unlike `until`, which is only the cache window. */
     expiresAt?: number;
     name: string;
+    /** What the token may do beyond the admin plane, as the store recorded it when the token was minted. */
+    scopes: ReadonlyArray<AdminTokenScope>;
     until: number;
 }
 
@@ -203,7 +206,8 @@ const createAdminTokenVerifier = ({ listNames, lookup, now = Date.now }: AdminTo
         }
 
         evictOldestEntry(refusedUntil, ADMIN_TOKEN_REFUSAL_CAPACITY);
-        refusedUntil.set(nameKnown ? key : nameKey, { name, until: now() + ADMIN_TOKEN_REFUSAL_TTL_MS });
+        // A refusal is never returned as a grant, so it carries no scopes.
+        refusedUntil.set(nameKnown ? key : nameKey, { name, scopes: [], until: now() + ADMIN_TOKEN_REFUSAL_TTL_MS });
     };
 
     return {
@@ -286,7 +290,12 @@ const createAdminTokenVerifier = ({ listNames, lookup, now = Date.now }: AdminTo
 
             rememberName(name);
 
-            const grant: AdminTokenGrant = { name, until, ...(live.expiresAt === undefined ? {} : { expiresAt: live.expiresAt }) };
+            const grant: AdminTokenGrant = {
+                name,
+                scopes: live.scopes ?? [],
+                until,
+                ...(live.expiresAt === undefined ? {} : { expiresAt: live.expiresAt }),
+            };
 
             verifiedUntil.set(key, grant);
 

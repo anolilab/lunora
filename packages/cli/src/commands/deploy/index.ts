@@ -10,7 +10,11 @@ const deployCommand: Command = {
         ["lunora deploy", "Deploy to Cloudflare"],
         ["lunora deploy --env production", "Deploy to a named environment"],
         ["lunora deploy --dry-run", "Validate + bundle without publishing"],
-        ["lunora deploy --migrate --migrate-yes --migrate-url <url>", "Deploy, then run pending data migrations"],
+        ["lunora deploy --migrate --migrate-yes --migrate-url <url>", "Deploy, then apply pending SQL and run the data migrations"],
+        [
+            "lunora deploy --migrate --migrate-yes --migrate-allow-destructive --migrate-url <url>",
+            "Same, and also apply a committed file that drops, renames or replaces data",
+        ],
     ],
     group: "Deploy",
     loader: () =>
@@ -68,7 +72,16 @@ const deployCommand: Command = {
             name: "migrate-url",
             type: String,
         },
-        { description: "Confirm running the production data migration triggered by --migrate (required with --migrate)", name: "migrate-yes", type: Boolean },
+        {
+            description: "Confirm the production target for --migrate: its SQL files and its data migrations (required with --migrate)",
+            name: "migrate-yes",
+            type: Boolean,
+        },
+        {
+            description: "With --migrate: confirm a committed SQL file that drops, renames, truncates or replaces data. --migrate-yes does not cover it",
+            name: "migrate-allow-destructive",
+            type: Boolean,
+        },
         // Both the positive AND the `no-*` form are declared explicitly, same as
         // `lunora codegen`'s identically-named flag (#285): relying on cerebro to
         // synthesize `--strict-advisories` from only the `no-*` declaration clones
@@ -130,6 +143,7 @@ export type DeployOptions = CreateOptions<{
     "health-check": boolean | undefined;
     "lazy-functions": boolean | undefined;
     migrate: boolean | undefined;
+    "migrate-allow-destructive": boolean | undefined;
     "migrate-token": string | undefined;
     "migrate-url": string | undefined;
     "migrate-yes": boolean | undefined;

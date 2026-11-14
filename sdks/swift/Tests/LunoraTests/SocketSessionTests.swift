@@ -34,7 +34,7 @@ extension ConformanceTests {
         client.resendSubscriptions()
 
         XCTAssertEqual(frameTypes(sent), ["connect", "subscribe"])
-        XCTAssertEqual(canonical(sent.first), canonical(frames["connect-with-token"]))
+        XCTAssertEqual(canonical(sent.first), canonical(withPageDeltaCaps(frames["connect-with-token"])))
         XCTAssertEqual(canonical(LunoraClient.buildConnectFrame(clientID: "client-test", token: "session-token")), canonical(frames["connect-with-token"]))
 
         XCTAssertFalse(canonical(sent).contains("bearer-rpc-secret"), "the RPC bearer must never ride a socket frame")
@@ -53,7 +53,7 @@ extension ConformanceTests {
 
         bare.attachSocket { bareSent.append($0) }
 
-        XCTAssertEqual(canonical(bareSent.first), canonical(frames["connect"]))
+        XCTAssertEqual(canonical(bareSent.first), canonical(frames["connect-with-page-delta-caps"]))
         XCTAssertNil(bareSent.first?["token"], "no session credential means no token key")
     }
 
@@ -88,7 +88,7 @@ extension ConformanceTests {
 
         client.attachSocket({ sent.append($0) }, context: ["roomId": "general"])
 
-        XCTAssertEqual(canonical(sent.first), canonical(frames["connect-with-token-and-context"]))
+        XCTAssertEqual(canonical(sent.first), canonical(withPageDeltaCaps(frames["connect-with-token-and-context"])))
 
         let bare = LunoraClient(url: "https://app.example")
         bare.clientID = "client-test"
@@ -98,7 +98,7 @@ extension ConformanceTests {
         bare.attachSocket { bareSent.append($0) }
 
         XCTAssertNil(bareSent.first?["context"], "no context given means no context key")
-        XCTAssertEqual(canonical(bareSent.first), canonical(frames["connect"]))
+        XCTAssertEqual(canonical(bareSent.first), canonical(frames["connect-with-page-delta-caps"]))
     }
 
     func testCloseCodesDriveTokenExpiry() throws {
@@ -184,7 +184,7 @@ extension ConformanceTests {
 
         // Whole-array comparison: an index into a short array would trap instead of failing.
         let expected: [Any] = [
-            frames["connect"] as Any,
+            frames["connect-with-page-delta-caps"] as Any,
             frames["whisper-subscribe"] as Any,
             frames["whisper-send"] as Any,
             frames["whisper-unsubscribe"] as Any,

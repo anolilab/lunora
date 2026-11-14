@@ -1,3 +1,7 @@
+## @lunora/svelte [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.319...@lunora/svelte@1.0.0-alpha.320) (2026-11-10)
+
+- fix(react): pass the provider's query client to TanStack; extend the cross-copy fix to other frameworks (#1524)
+
 ## @lunora/svelte [1.0.0-alpha.319](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.318...@lunora/svelte@1.0.0-alpha.319) (2026-11-05)
 
 - fix(client): restart a paginated feed when the server refuses its cursor (#1496)

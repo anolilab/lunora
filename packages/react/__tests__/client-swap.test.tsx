@@ -5,7 +5,7 @@ import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
-import usePreloadedQuery from "../src/use-preloaded-query";
+import { usePreloadedQuery } from "../src/use-preloaded-query";
 import useQuery from "../src/use-query";
 import { createMockClient } from "./mock-client";
 

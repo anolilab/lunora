@@ -1,6 +1,7 @@
 # Nightly full-suite verification: PRs only run `vis affected`, so unchanged
 # packages go stale between merges. Everything here runs unfiltered — every
-# package's tests, all workerd suites, e2e. Never a required check; a nightly
+# package's tests, all workerd suites, the celld and MySQL suites, the SDK
+# conformance legs, e2e and the SaaS kit e2e. Never a required check; a nightly
 # failure is a canary, not a blocker.
 
 "name": "Nightly"
@@ -153,7 +154,9 @@
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
         "runs-on": "ubuntu-latest"
-        "timeout-minutes": 30
+        # 30 covered the playground and examples suites; the saas kit adds a cold boot of
+        # up to 4 minutes and a 3-minute test budget with two retries.
+        "timeout-minutes": 45
         "steps":
             - "name": "Harden Runner"
               "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
@@ -199,6 +202,16 @@
                   "CI": "true"
               "run": "pnpm run e2e:examples"
 
+            # The saas kit in a real browser. Its config materializes `templates/saas` from
+            # this checkout (`saas-app.mjs`: a symlink farm over the workspace's built
+            # packages and installed deps) and writes its own deterministic `.dev.vars`, so
+            # it needs nothing beyond the build and Chromium above — no secrets: the spec
+            # never reaches billing, and the Stripe client is only built on first use.
+            - "name": "Run SaaS kit E2E suite"
+              "env":
+                  "CI": "true"
+              "run": "pnpm run e2e:saas"
+
             - "name": "Upload Playwright report on failure"
               "if": "failure()"
               "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
@@ -207,7 +220,419 @@
                   "path": |
                       tests/e2e/playwright-report
                       tests/e2e/playwright-report-examples
+                      tests/e2e/playwright-report-saas
                   "retention-days": 7
+
+    # test.yml's `test-celld` without the paths-filter gate.
+    # The `@lunora/platform` and `@lunora/shard-engine` conformance suites against a
+    # live single-node celld (`@lunora/platform-celld`, project `celld`), gated
+    # behind LUNORA_CELLD_TESTS=1 for the workerd reasons: it needs the celld binary
+    # and localhost loopback, and contributes no coverage. The binary is a pinned
+    # release asset checked against its sha256 — the release publishes no checksum
+    # file or attestation of its own, so the pin is the integrity check. Bump
+    # CELLD_VERSION and CELLD_SHA256 together, alongside the ratings in
+    # CELLD_CAPABILITIES. With the gate on, a missing binary fails the spawn in
+    # `beforeAll`, so the job cannot go green having run nothing. The two-node
+    # fleet test needs an S3-compatible bucket; moto's server provides one (it
+    # implements the conditional writes celld's ownership records depend on),
+    # and on CI a missing endpoint fails the test rather than skipping it.
+    "test-celld":
+        "name": "celld integration (@lunora/platform-celld)"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "env":
+            "CELLD_VERSION": "v0.6.1"
+            "CELLD_SHA256": "79a8253cff5d4e8a4a9f7a2611e393390f7fe9025f00e88467875b007c44866b"
+            "MOTO_VERSION": "5.2.3"
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "test-celld"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Install celld"
+              "run": |
+                  curl -fsSL -o celld.gz "https://github.com/denoland/celld/releases/download/${CELLD_VERSION}/celld-x86_64-unknown-linux-gnu.gz"
+                  echo "${CELLD_SHA256}  celld.gz" | sha256sum --check --strict
+                  gunzip celld.gz
+                  install -m 0755 celld "${RUNNER_TEMP}/celld"
+                  echo "LUNORA_CELLD_BIN=${RUNNER_TEMP}/celld" >> "$GITHUB_ENV"
+
+            - "name": "Start an S3-compatible endpoint for the fleet test"
+              "run": |
+                  pipx install "moto[server]==${MOTO_VERSION}"
+                  moto_server -p 19000 > "${RUNNER_TEMP}/moto.log" 2>&1 &
+                  for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:19000/ && exit 0; sleep 1; done
+                  cat "${RUNNER_TEMP}/moto.log" >&2
+                  exit 1
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=platform-celld"
+
+            - "name": "Run celld suites"
+              "env":
+                  "LUNORA_CELLD_TESTS": "1"
+                  "LUNORA_CELLD_S3_ENDPOINT": "http://127.0.0.1:19000"
+                  # The runner's Docker engine, on its default socket, backs the containers check.
+                  "LUNORA_CELLD_CONTAINERS": "1"
+              "run": |
+                  pnpm --filter "@lunora/platform-celld" run test --project celld
+
+    # test.yml's `test-mysql` without the paths-filter gate.
+    # `@lunora/hyperdrive`'s MySQL suites — the only gate proving the SQL the store
+    # core renders for a `.global()` MySQL backend actually executes. mysqld comes
+    # from `mysql-memory-server`, provisioned from npm like pglite and workerd
+    # rather than from a service container, so the job needs no `services:` block.
+    #
+    # The point of the job is that the suites cannot report green having run
+    # nothing. They skip when the binary is unobtainable, and no CI job had ever
+    # declared that mysqld was expected — so a suite that had never been observed
+    # to run reported success on every PR. `LUNORA_MYSQL_TESTS=1` turns that skip
+    # into a failure (`__tests__/_helpers/mysql-mem.ts`), and the assertion below
+    # closes the other half: a run that executes zero cases, or skips any, fails
+    # here instead of passing quietly.
+    "test-mysql":
+        "name": "MySQL integration (@lunora/hyperdrive)"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 20
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+              "with":
+                  # `mysql-memory-server` fetches mysqld from cdn.mysql.com on first use.
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "test-mysql"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # The run step names its suites by path, so a fourth one added against the
+            # same harness would not be picked up and nothing else would notice — the
+            # same hazard the workerd matrix assertion above exists for.
+            - "name": "Assert the run covers every suite using the MySQL harness"
+              "run": |
+                  declared="$(grep -rl '_helpers/mysql-mem' packages/hyperdrive/__tests__/*.test.ts | sort | tr '\n' ' ')"
+                  expected='packages/hyperdrive/__tests__/create-hyperdrive.test.ts packages/hyperdrive/__tests__/global-atomic-writes.integration.test.ts packages/hyperdrive/__tests__/global-collation-parity.test.ts packages/hyperdrive/__tests__/global-json-paths.test.ts packages/hyperdrive/__tests__/global-mysql.integration.test.ts packages/hyperdrive/__tests__/global-null-placement.test.ts '
+                  if [ "$declared" != "$expected" ]; then
+                    echo "::error file=.github/workflows/test.yml::Suites using the MySQL harness are [$declared] but this job runs [$expected]. Update the run step below."
+                    exit 1
+                  fi
+
+            - "name": "Build package and dependencies"
+              "run": |
+                  pnpm exec vis run build --query "project=hyperdrive"
+
+            - "name": "Run the MySQL suites against a real mysqld"
+              "env":
+                  "LUNORA_MYSQL_TESTS": "1"
+              "run": |
+                  pnpm --filter "@lunora/hyperdrive" run test \
+                      __tests__/create-hyperdrive.test.ts \
+                      __tests__/global-atomic-writes.integration.test.ts \
+                      __tests__/global-collation-parity.test.ts \
+                      __tests__/global-json-paths.test.ts \
+                      __tests__/global-mysql.integration.test.ts \
+                      __tests__/global-null-placement.test.ts \
+                      --reporter=default --reporter=json --outputFile.json=test-results/mysql.json
+
+            # The node -e script is JavaScript, its `${}` is not shell.
+            # jactionlint ignore=SC2016
+            - "name": "Assert the suites executed their cases"
+              "run": |
+                  node -e '
+                      const { appendFileSync, readFileSync } = require("node:fs");
+
+                      const report = JSON.parse(readFileSync("packages/hyperdrive/test-results/mysql.json", "utf8"));
+                      const passed = report.numPassedTests;
+                      const skipped = report.numPendingTests + report.numTodoTests;
+
+                      appendFileSync(
+                          process.env.GITHUB_STEP_SUMMARY,
+                          `- MySQL parity on \`@lunora/hyperdrive\`: **${passed} cases executed** against a real mysqld (${skipped} skipped).\n`,
+                      );
+
+                      if (passed === 0 || skipped > 0) {
+                          console.error(`::error::The MySQL suites passed ${passed} and skipped ${skipped} cases. This job exists so the gate cannot pass by skipping.`);
+                          process.exit(1);
+                      }
+                  '
+
+    # test.yml's `sdk-conformance` without the paths-filter gate.
+    # The non-JS SDKs against `protocol/fixtures/*.json`, the same golden frames the
+    # TypeScript client is tested against. Nothing else runs them: `sdks/` is not a pnpm
+    # workspace, so `pnpm run test` cannot see it.
+    #
+    # Every SDK is dependency-free by design (its transport is injected), so each leg is
+    # just "install the toolchain, run the suite" — and then generates, builds and calls
+    # an SDK, which is the check that `lunora sdk generate` really does leave a consumer
+    # with nothing to install. One leg per language so a failure names the language.
+    "sdk-conformance":
+        "name": "SDK conformance (${{ matrix.sdk.language }})"
+        "runs-on": "${{ matrix.sdk.runner }}"
+        # Per-leg, not one shared ceiling: the Linux legs finish in ~3 minutes, while
+        # macOS does strictly more work on a slower runner and has ranged from 9m53s to
+        # 15m28s for the same commit. One shared value would either cancel macOS or let
+        # a genuinely hung Linux leg burn macOS-sized time.
+        "timeout-minutes": "${{ matrix.sdk.timeoutMinutes }}"
+        "strategy":
+            "fail-fast": false
+            "matrix":
+                "sdk":
+                    - "language": "python"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "go"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "ruby"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "rust"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "java"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "kotlin"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "dart"
+                      "runner": "ubuntu-latest"
+                      "timeoutMinutes": 15
+                    - "language": "swift"
+                      # Swift ships with the macOS image, so this leg needs no
+                      # third-party setup action.
+                      "runner": "macos-latest"
+                      # 30 against the Linux legs' 15 — see the spread noted above.
+                      # It also runs under the thread sanitizer (SDK_TEST_TSAN
+                      # below), which is most of the difference.
+                      "timeoutMinutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+
+            # A fourth hardcoded copy of the language list — `sdks/lint-all.sh`,
+            # `sdks/generated-check.sh` and `sdks/run-all.sh` hold the other three —
+            # and the only one no script can see. A ninth SDK missed here is never
+            # conformance-tested at all, with every leg green. `strategy.job-total` is
+            # this matrix's size, so compare it against what is on disk; the three
+            # scripts reconcile themselves against the same directories.
+            - "name": "Assert the matrix covers every SDK on disk"
+              "run": |
+                  on_disk="$(find sdks -mindepth 1 -maxdepth 1 -type d ! -name smoke | wc -l | tr -d ' ')"
+                  if [ "$on_disk" != "${{ strategy.job-total }}" ]; then
+                    echo "sdks/ holds $on_disk ports but the sdk-conformance matrix has ${{ strategy.job-total }} legs." >&2
+                    echo "Add the missing language to the matrix in .github/workflows/test.yml, and to ALL in" >&2
+                    echo "sdks/lint-all.sh, sdks/generated-check.sh and sdks/run-all.sh." >&2
+                    exit 1
+                  fi
+                  echo "matrix covers all $on_disk SDKs"
+
+            - "name": "Setup python"
+              "if": "matrix.sdk.language == 'python'"
+              "uses": "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0" # v7.1.0
+              "with":
+                  "python-version": "3.13"
+
+            - "name": "Setup go"
+              "if": "matrix.sdk.language == 'go'"
+              "uses": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e" # v7.0.0
+              "with":
+                  "go-version": "1.22"
+
+            # The Ruby transport is dependency-free like the others, but quicktype's
+            # Ruby backend renders Dry::Struct models with no option to avoid it, so
+            # the generated-code check alone needs the gems.
+            - "name": "Setup java"
+              "if": "matrix.sdk.language == 'java'"
+              "uses": "actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad" # v6.1.0
+              "with":
+                  "distribution": "temurin"
+                  "java-version": "21"
+
+            # setup-java gives the JVM; the compiler comes straight from the pinned
+            # JetBrains release, keeping a third-party action SHA out of the chain.
+            - "name": "Setup java for kotlin"
+              "if": "matrix.sdk.language == 'kotlin'"
+              "uses": "actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad" # v6.1.0
+              "with":
+                  "distribution": "temurin"
+                  "java-version": "21"
+
+            - "name": "Install the Kotlin compiler"
+              "if": "matrix.sdk.language == 'kotlin'"
+              "run": |
+                  curl -fsSL -o /tmp/kotlin.zip https://github.com/JetBrains/kotlin/releases/download/v2.1.0/kotlin-compiler-2.1.0.zip
+                  # JetBrains' published checksum, verified by hand against a
+                  # downloaded copy — a tampered or truncated archive must not
+                  # reach `unzip`.
+                  echo 'b6698d5728ad8f9edcdd01617d638073191d8a03139cc538a391b4e3759ad297  /tmp/kotlin.zip' | sha256sum --check --strict
+                  unzip -q /tmp/kotlin.zip -d /tmp/kotlin
+                  echo "/tmp/kotlin/kotlinc/bin" >> "$GITHUB_PATH"
+
+            # An exact SDK version, not "stable": `dart format`'s style follows the
+            # language version, so a moving toolchain reformats the transport out from
+            # under a green PR. This is the whole dart install — format and analyze
+            # ship with the SDK, so it has no linter step below.
+            - "name": "Setup dart"
+              "if": "matrix.sdk.language == 'dart'"
+              "uses": "dart-lang/setup-dart@6afc89df92d6eb3834022f73cd65adc8cdfcb92d" # v1.8.1
+              "with":
+                  "sdk": "3.13.0"
+
+            - "name": "Setup ruby"
+              "if": "matrix.sdk.language == 'ruby'"
+              "uses": "ruby/setup-ruby@de492cf36cbab201753d720ce4f4e336cd688c94" # v1.336.0
+              "with":
+                  "ruby-version": "3.3"
+
+            - "name": "Install the gems the generated ruby models require"
+              "if": "matrix.sdk.language == 'ruby'"
+              "run": "gem install dry-struct dry-types --no-document"
+
+            # Each leg installs its own linter, pinned by version (or SHA-256 where the
+            # tool ships as a downloaded artifact) so a new release cannot change the
+            # rule set under a green PR.
+            #
+            # Two legs install nothing here, for opposite reasons. Dart's linter IS the
+            # SDK, already pinned above. swift-format publishes no binary and no
+            # versioned package, so that leg uses the toolchain's own copy and asserts
+            # the version against SWIFT_FORMAT_VERSION in `sdks/lint-all.sh` — a runner
+            # image whose Swift moves then fails by name rather than silently linting
+            # against a rule set nobody chose.
+            - "name": "Install ruff"
+              "if": "matrix.sdk.language == 'python'"
+              "run": "python -m pip install --disable-pip-version-check ruff==0.16.2"
+
+            - "name": "Install rubocop"
+              "if": "matrix.sdk.language == 'ruby'"
+              "run": "gem install rubocop -v 1.89.0 --no-document"
+
+            - "name": "Install rustfmt and clippy"
+              "if": "matrix.sdk.language == 'rust'"
+              "run": "rustup component add rustfmt clippy"
+
+            - "name": "Install ktlint"
+              "if": "matrix.sdk.language == 'kotlin'"
+              "run": |
+                  curl -fsSL -o /tmp/ktlint https://github.com/pinterest/ktlint/releases/download/1.8.0/ktlint
+                  echo 'a3fd620207d5c40da6ca789b95e7f823c54e854b7fade7f613e91096a3706d75  /tmp/ktlint' | sha256sum --check --strict
+                  install -m 0755 /tmp/ktlint /usr/local/bin/ktlint
+
+            # Shipped as a jar; the wrapper is what puts the command on PATH for
+            # `lint-all.sh` and for a developer's shell alike.
+            - "name": "Install google-java-format"
+              "if": "matrix.sdk.language == 'java'"
+              "run": |
+                  curl -fsSL -o /tmp/google-java-format.jar \
+                    https://repo1.maven.org/maven2/com/google/googlejavaformat/google-java-format/1.36.1/google-java-format-1.36.1-all-deps.jar
+                  echo '25b400f003089d23cc5320cdaf1a16cabee19b8aa3434d0ff021b3d9f42154b4  /tmp/google-java-format.jar' | sha256sum --check --strict
+                  printf '#!/usr/bin/env bash\nexec java -jar /tmp/google-java-format.jar "$@"\n' > /usr/local/bin/google-java-format
+                  chmod +x /usr/local/bin/google-java-format
+
+            # The same script a developer runs: a command list kept in this matrix
+            # instead drifts from the local check, which is how conformance coverage
+            # drifted before `protocol/conformance-cases.json` existed.
+            - "name": "Lint and format-check the ${{ matrix.sdk.language }} SDK"
+              # SDK_LINT_REQUIRE_TOOLS turns "tool not installed" from a SKIP into a
+              # failure. A SKIP is honest locally; here the install steps just ran, so
+              # a missing tool means one broke — and a check that did not run must not
+              # report green.
+              "env":
+                  "SDK_LINT_REQUIRE_TOOLS": "1"
+              "run": "bash sdks/lint-all.sh ${{ matrix.sdk.language }}"
+
+            - "name": "Run the ${{ matrix.sdk.language }} conformance suite"
+              # The same script a developer runs, for the same reason the lint step
+              # above runs `lint-all.sh`. A per-language command list kept in this
+              # matrix instead drifts from the local one — this one already had, in
+              # three places — and a guard added to the runner then protects local
+              # runs only. `run-all.sh` is what fails a leg that exited 0 having
+              # executed no cases; invoked this way, that assertion is live here.
+              #
+              # One language per leg, so the eight still run in parallel and a
+              # failure still names the language.
+              #
+              # SDK_TEST_TSAN is the swift leg's thread sanitizer — the one flag CI
+              # wants and a local run does not, expressed as a switch rather than as
+              # a second command. The script prints it on the summary line, so a
+              # green leg says which build ran. Harmless on the other seven.
+              "env":
+                  "SDK_TEST_TSAN": "1"
+              "run": "bash sdks/run-all.sh ${{ matrix.sdk.language }}"
+
+            # The generated surface hardcodes the runtime's call signatures, and nothing
+            # else pins that coupling: change a signature and every suite above still
+            # passes while every generated SDK is broken.
+            #
+            # So every leg generates, builds AND calls. Building alone is demonstrably
+            # not enough: Java once emitted a surface that compiled and threw `cannot
+            # encode` on first invocation, Ruby one whose every method raised
+            # NoMethodError — both with the compile gate green throughout.
+            - "name": "Setup node"
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "sdk-generate"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            # vis, not `pnpm --filter '@lunora/cli...'`: the CLI closure includes studio,
+            # whose bundle imports `@lunora/bindings/analytics`, and under the pnpm
+            # filter that bundle ran before bindings' dist existed. vis orders the
+            # closure from `dependsOn: ["^build"]`.
+            - "name": "Build the generator"
+              "run": |
+                  pnpm exec vis run build --query "project=cli"
+
+            # One script, the same one a developer runs — same drift argument as the
+            # lint step above.
+            #
+            # It generates into `mktemp -d`, outside the checkout: the generator copies
+            # the transport into its output, and that promise cannot be tested anywhere
+            # the repo's own `sdks/<lang>` is resolvable. It then assembles the consumer
+            # project a real user writes (a go.mod `replace`, a cargo path dependency,
+            # `.package(path:)`) and runs a call through it.
+            #
+            # The script passes `--from sdks` because the default fetch is pinned to the
+            # CLI's release tag, and most transports do not exist at any released tag.
+            - "name": "Generate a self-contained ${{ matrix.sdk.language }} SDK and call it"
+              "run": "bash sdks/generated-check.sh ${{ matrix.sdk.language }}"
 
     # On PRs this matrix is path-gated, but the `templates` filter DOES include
     # `packages/**` (see .github/file-filters.yml) — a package change that breaks every
@@ -270,7 +695,7 @@
         "name": "Report nightly failure"
         "runs-on": "ubuntu-latest"
         "if": "always() && github.event_name == 'schedule'"
-        "needs": ["test-full", "test-workerd", "e2e", "templates-full"]
+        "needs": ["test-full", "test-workerd", "e2e", "templates-full", "test-celld", "test-mysql", "sdk-conformance"]
         "permissions":
             "issues": "write"
         "steps":
@@ -314,6 +739,9 @@
                       "| Workerd integration | ${{ needs.test-workerd.result }} |" \
                       "| E2E | ${{ needs.e2e.result }} |" \
                       "| Template scaffold matrix | ${{ needs.templates-full.result }} |" \
+                      "| celld integration | ${{ needs.test-celld.result }} |" \
+                      "| MySQL integration | ${{ needs.test-mysql.result }} |" \
+                      "| SDK conformance | ${{ needs.sdk-conformance.result }} |" \
                       "" \
                       "The nightly is unfiltered, so a failure here is usually either a break" \
                       "already on \`alpha\` that the path-gated PR jobs did not reach, or drift" \

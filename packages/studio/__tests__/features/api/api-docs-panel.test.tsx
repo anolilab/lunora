@@ -3,7 +3,8 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import ApiDocsPanel, { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, splitPath } from "../../../src/features/api/api-docs-panel";
+import ApiDocsPanel from "../../../src/features/api/api-docs-panel";
+import { buildClientSnippet, buildCliSnippet, buildReactSnippet, buildTableSnippet, splitPath } from "../../../src/features/api/api-documentation-snippets";
 import type { FunctionDescriptor } from "../../../src/index";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";

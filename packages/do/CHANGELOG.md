@@ -1,3 +1,11 @@
+## @lunora/do [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.284...@lunora/do@1.0.0-alpha.285) (2026-11-13)
+
+- fix(do): name a delta's table only for a single-table query (#1595)
+
+## @lunora/do [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.283...@lunora/do@1.0.0-alpha.284) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
 ## @lunora/do [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.282...@lunora/do@1.0.0-alpha.283) (2026-11-05)
 
 - fix(server): guard httpRoute cache headers and keep error causes in logs (#1488)

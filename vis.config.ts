@@ -207,7 +207,12 @@ export default defineConfig({
         // `dependsOn` builds the staged packages' dependencies before eslint starts.
         // Unbuilt, those types resolve to `any`, which gives false errors and lets
         // `--fix` rewrite code against the wrong types (#1456).
-        "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": [{ command: "pnpm exec eslint --fix", perPackage: true, dependsOn: ["^build"] }],
+        // `eslint --fix` rewrites code the formatter had already laid out (arrow bodies, member order), and the repo gate
+        // is `oxfmt --check`, so oxfmt runs again after it. Without that, a committed file fails Lint (oxfmt) in CI.
+        "packages/**/*.{cjs,js,mjs,cts,ts,mts,jsx,tsx}": [
+            { command: "pnpm exec eslint --fix", perPackage: true, dependsOn: ["^build"] },
+            "pnpm exec oxfmt --no-error-on-unmatched-pattern",
+        ],
         "**/*.{md,mdx}": ["pnpm exec prettier --write"],
     },
     secrets: {

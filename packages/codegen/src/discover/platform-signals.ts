@@ -384,4 +384,4 @@ const discoverPlatformSignals = (project: Project, lunoraDirectory: string, proj
 };
 
 export type { PlatformCodeSignals };
-export { discoverPlatformSignals };
+export { discoverPlatformSignals, isAppBuilderReceiver, isAppBuilderType };

@@ -129,6 +129,12 @@ interface DeployCommandOptions {
      */
     migrate?: boolean;
 
+    /**
+     * Confirm a committed SQL file that drops, renames, truncates or replaces data. Separate from `migrateYes`, so a
+     * production confirmation never confirms a DROP by itself.
+     */
+    migrateAllowDestructive?: boolean;
+
     /** Admin bearer token for `--migrate` (falls back to `LUNORA_ADMIN_TOKEN`). */
     migrateToken?: string;
 

@@ -151,9 +151,9 @@ const renderCreateTable = (table: TableSnapshot): string => {
 };
 
 /**
- * `wrangler d1 execute` ignores the marker; it matters only to a user who splits the file at each `;` into
- * `MigrationRunner` entries by hand. On the line before the statement, so the split keeps it with its `DROP` rather than
- * handing it to the next statement.
+ * `lunora migrate apply` gates a destructive file on `--yes`, not on this marker, so the marker matters only to
+ * `MigrationRunner`, when a user splits the file at each `;` into its entries by hand. On the line before the statement,
+ * so the split keeps it with its `DROP` rather than handing it to the next statement.
  */
 const renderDropTable = (tableName: string): string => `${ALLOW_DESTRUCTIVE_MARKER}\nDROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
 

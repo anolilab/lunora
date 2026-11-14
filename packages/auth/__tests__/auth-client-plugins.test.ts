@@ -41,6 +41,14 @@ vi.mock("@better-auth/passkey/client", () => {
     };
 });
 // eslint-disable-next-line vitest/prefer-import-in-mock -- stub, not a re-export
+vi.mock("@better-auth/api-key/client", () => {
+    return {
+        apiKeyClient: () => {
+            return { id: "api-key" };
+        },
+    };
+});
+// eslint-disable-next-line vitest/prefer-import-in-mock -- stub, not a re-export
 vi.mock("@better-auth/oauth-provider/client", () => {
     return {
         oauthProviderClient: () => {
@@ -63,6 +71,7 @@ describe("lunoraAuthPlugins", () => {
         const allOn = {
             admin: true,
             anonymous: true,
+            apiKey: true,
             deviceAuthorization: true,
             emailOtp: true,
             lastLoginMethod: true,
@@ -94,6 +103,7 @@ describe("lunoraAuthPlugins", () => {
             "deviceAuthorization",
             "lastLoginMethod",
             "oauthProvider",
+            "api-key",
         ]);
     });
 

@@ -247,11 +247,33 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
+/**
+ * A query's stream form: the live query as a `LunoraWatch`, so `for await` binds it and `cancel()`
+ * unsubscribes. Leaving the loop does not, so the doc says so. Wraps `client.watch` the way
+ * `subscribe` wraps `client.subscribe`.
+ *
+ * Untyped arguments are encoded here, with a throw: the transport's own encode would be swallowed
+ * and leave the watch waiting for a subscribe frame that is never sent.
+ */
+const renderWatch = (method: SdkMethod): string => {
+    const argument = argsChoice(method, { none: "", typed: (type) => `_ args: ${type}, `, untyped: "_ args: Any, " });
+    const payload = argsChoice(method, { none: "nil", typed: () => swiftPayload(method), untyped: "try Wire.encode(args)" });
+
+    return [
+        `    /// live ${commentText(method.summary)}, as a \`LunoraWatch\` — \`for await\` over it; \`cancel()\` unsubscribes, since leaving the loop does not.`,
+        `    public func watch${toPascalCase(method.functionName)}(`,
+        `        ${argument}shardKey: String? = nil`,
+        `    ) throws -> LunoraClient.LunoraWatch {`,
+        `        client.watch("${stringLiteral(method.functionPath)}", args: ${payload}, shardKey: shardKey)`,
+        `    }`,
+    ].join("\n");
+};
+
 const renderNamespaceStruct = (namespace: SdkNamespace): string => {
     const typeName = `${toPascalCase(namespace.name)}API`;
 
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}\n\n${renderWatch(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [`/// Functions declared in \`${commentText(namespace.name)}\`.`, `public struct ${typeName} {`, `    let client: LunoraClient`, ``, body, `}`].join(

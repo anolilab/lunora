@@ -125,7 +125,7 @@ export type { MutatorHandle, MutatorHook, MutatorTransaction } from "./use-mutat
 export { useMutator } from "./use-mutator";
 export type { PageItemOf, PaginatedArgs } from "./use-paginated-query";
 export { usePaginatedQuery } from "./use-paginated-query";
-export { hydratePreloaded, default as usePreloadedQuery } from "./use-preloaded-query";
+export { hydratePreloaded, usePreloadedQuery } from "./use-preloaded-query";
 export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence";
 export { usePresence } from "./use-presence";
 export { default as useQuery } from "./use-query";

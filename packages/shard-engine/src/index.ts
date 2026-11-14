@@ -324,7 +324,7 @@ export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from 
 export type { ReactorDispatchResult, ReactorState, ReactorStats } from "./reactor-state";
 export { listReactorStates, migrateReactorState, REACTOR_STATE_TABLE, reactorNeedsRun, readReactorState, writeReactorState } from "./reactor-state";
 export type { ReadFootprint } from "./read-footprint";
-export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "./read-footprint";
+export { ADMIN_WILDCARD, createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "./read-footprint";
 export type { IndexKeyEntry, KeyRange } from "./read-write-set";
 export { buildIndexRange, indexKeysForRow, keysTouchRanges } from "./read-write-set";
 export type { WhereFilter } from "./reader-where-filter";
@@ -468,7 +468,7 @@ export { lintReadonlySql } from "./sql-console";
 // compared by a parity test, so there must be exactly one encoder and one
 // decoder of each.
 export { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey, decodeFloat64SqlKey, float64SqlKey } from "./sql-projection"; // secret-scanner:allow -- export list of codec names, not a credential
-export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
+export { awaitWsDrain, DELTA_PLACEHOLDER_TABLE, deltaTableFor, subscriptionFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ChangedKeys, SubscriptionReadFootprint } from "./subscription-range-gate";
 export { mergeChangedKeys, recordChangedKeys, writeTouchesMemo } from "./subscription-range-gate";
 export type {

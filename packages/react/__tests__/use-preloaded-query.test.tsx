@@ -5,7 +5,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
-import usePreloadedQuery, { hydratePreloaded } from "../src/use-preloaded-query";
+import { hydratePreloaded, usePreloadedQuery } from "../src/use-preloaded-query";
 import { createMockClient } from "./mock-client";
 
 const preloaded = <T,>(functionPath: string, value: T, args: Record<string, unknown> = {}): Preloaded<T> => {

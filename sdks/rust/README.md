@@ -4,7 +4,7 @@ A **protocol-conformant** Rust client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, which hands back an `mpsc::Receiver` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, which hands back an `mpsc::Receiver` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribe_shape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -205,7 +205,7 @@ An RPC reply the call cannot read — a body that is not JSON, or JSON that is n
 an object (`null`, `[]`, a string), at any status — fails with
 `ClientError::Api` coded `INTERNAL`, never a success with a null result; `{}` is
 the void result. `close()` also drops every subscription, which ends every
-`stream()` receiver after the values already delivered.
+`watch()` receiver after the values already delivered.
 
 ## Optimistic updates and offline writes
 

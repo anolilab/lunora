@@ -13,6 +13,7 @@
  */
 export type { ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult } from "./admin-export-import";
 export { exportSqlGlobalRows, importSqlGlobalRows, selectGlobalTables } from "./admin-export-import";
+export { globalColumnBackfill } from "./column-provisioning";
 export type { SqlCtxDbOptions, SqlCtxExec } from "./ctx-db";
 export {
     createSqlCtxDb,

@@ -37,7 +37,7 @@ const buildGlobalImports = (hasGlobal: boolean): string[] =>
     hasGlobal
         ? [
               `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-              `import { applyCdcChanges, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
+              `import { applyCdcChanges, applySqlMigrationFiles, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec } from "@lunora/d1";`,
           ]
         : [];
 

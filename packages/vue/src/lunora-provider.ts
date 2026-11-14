@@ -8,7 +8,8 @@ import { inject, provide } from "vue";
  * Exported so advanced consumers can inject it by hand; most apps use
  * {@link createLunora} or {@link provideLunora}.
  */
-export const LUNORA_INJECTION_KEY: InjectionKey<LunoraClient> = Symbol("lunora.client");
+// A registered symbol, not a fresh one: a second copy of this package must inject the key the first copy provided.
+export const LUNORA_INJECTION_KEY: InjectionKey<LunoraClient> = Symbol.for("@lunora/vue/client");
 
 /**
  * Vue plugin form: `app.use(createLunora(client))`. Mirrors the React

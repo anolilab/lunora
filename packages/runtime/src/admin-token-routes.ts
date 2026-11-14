@@ -10,6 +10,8 @@
  * one place the secret appears.
  */
 import { digestAdminTokenSecret, generateAdminToken, isValidAdminTokenName } from "../../../shared/admin-token";
+import type { AdminTokenScope } from "../../../shared/admin-token-scope";
+import { ADMIN_TOKEN_SCOPES, isAdminTokenScope } from "../../../shared/admin-token-scope";
 import type { AdminRevocations } from "./admin-revocations";
 import { LunoraError } from "./errors";
 
@@ -52,6 +54,9 @@ interface AdminTokenSummary {
      * name: revoke it again to clear the row. A revoked token is refused regardless.
      */
     revoked?: boolean;
+
+    /** What the token may do beyond the admin plane. Empty for an ordinary token. */
+    scopes: AdminTokenScope[];
 }
 
 /** The answer to `POST /_lunora/admin/tokens` — the only response that ever carries the secret. */
@@ -65,6 +70,16 @@ interface CreatedAdminToken {
 
 const NO_STORE = { "cache-control": "no-store" };
 
+/**
+ * Whether the store kept the scopes a create asked for. A shard on an older build ignores `scopes` and still
+ * answers success, and an unscoped create's reply may omit the field, so a missing list counts as none.
+ */
+const scopesKept = (requested: AdminTokenScope[], reply: unknown): boolean => {
+    const kept: unknown[] = Array.isArray(reply) ? reply : [];
+
+    return kept.length === requested.length && requested.every((scope) => kept.includes(scope));
+};
+
 const requireName = (name: unknown): string => {
     if (typeof name !== "string" || !isValidAdminTokenName(name)) {
         throw new LunoraError("admin token `name` must match /^[a-z0-9][a-z0-9_-]{0,63}$/", { code: "BAD_REQUEST", status: 400 });
@@ -73,12 +88,26 @@ const requireName = (name: unknown): string => {
     return name;
 };
 
+/** The scopes a create asks for. Absent is none; an unknown scope is refused rather than minted without it. */
+const requireScopes = (scopes: unknown): AdminTokenScope[] => {
+    if (scopes === undefined) {
+        return [];
+    }
+
+    if (!Array.isArray(scopes) || !scopes.every(isAdminTokenScope)) {
+        throw new LunoraError(`admin token \`scopes\` must be a list of ${ADMIN_TOKEN_SCOPES.join(", ")}`, { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return [...new Set(scopes)];
+};
+
 const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (request: Request) => Promise<Response>> => {
     const now = deps.now ?? Date.now;
 
     const create = async (request: Request): Promise<Response> => {
         const body = await deps.readJsonBody(request);
         const name = requireName(body.name);
+        const scopes = requireScopes(body.scopes);
         const { expiresAt } = body;
 
         if (expiresAt !== undefined && (typeof expiresAt !== "number" || !Number.isFinite(expiresAt) || expiresAt <= now())) {
@@ -99,10 +128,41 @@ const buildAdminTokenRoutes = (deps: AdminTokenRouteDeps): Record<string, (reque
         const latestRevoked = await deps.revocations.latestRevoked(name);
         const createdAt = latestRevoked === undefined ? now() : Math.max(now(), latestRevoked + 1);
 
-        const stored = (await deps.callStore(CREATE_ADMIN_TOKEN_OP, { createdAt, digest: await digestAdminTokenSecret(secret), expiresAt, name })) as Record<
-            string,
-            unknown
-        >;
+        const stored = (await deps.callStore(CREATE_ADMIN_TOKEN_OP, {
+            createdAt,
+            digest: await digestAdminTokenSecret(secret),
+            expiresAt,
+            name,
+            scopes,
+        })) as Record<string, unknown>;
+
+        if (!scopesKept(scopes, stored.scopes)) {
+            // The secret was never returned, so the row holds only the name: remove it and the refused create leaves nothing behind.
+            let removed: boolean;
+
+            try {
+                await deps.revocations.revoke(name, createdAt);
+                const { revoked } = (await deps.callStore(REVOKE_ADMIN_TOKEN_OP, { createdAt, name })) as { revoked?: unknown };
+
+                removed = revoked === true;
+            } catch (error) {
+                removed = false;
+                // The response says what to do; the cause is only here, in the Worker logs. The secret is never in this path.
+                // eslint-disable-next-line no-console -- the Worker log is the only place this cause is recorded
+                console.warn(
+                    `[lunora] admin token "${name}" was refused for its dropped scopes and its row was not removed: ${error instanceof Error ? error.message : String(error)}`,
+                );
+            } finally {
+                deps.evict(name);
+            }
+
+            const recovery = removed ? "the token was removed, so retry" : `it could not be removed, so revoke "${name}" to free the name`;
+
+            throw new LunoraError(`the store did not keep the scopes for admin token "${name}" (a shard on an older build ignores them); ${recovery}`, {
+                code: "CONFLICT",
+                status: 409,
+            });
+        }
 
         deps.evict(name);
 

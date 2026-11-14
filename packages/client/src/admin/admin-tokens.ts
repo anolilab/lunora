@@ -11,7 +11,10 @@ export const listAdminTokens = async (host: AdminHost): Promise<AdminTokenSummar
     return body.tokens ?? [];
 };
 
-export const createAdminToken = async (host: AdminHost, options: { expiresAt?: number; name: string }): Promise<CreatedAdminToken> => {
+export const createAdminToken = async (
+    host: AdminHost,
+    options: { expiresAt?: number; name: string; scopes?: ReadonlyArray<string> },
+): Promise<CreatedAdminToken> => {
     host.assertOpen();
 
     return (await host.adminFetch(ADMIN_TOKENS_PATH, "POST", options)) as CreatedAdminToken;

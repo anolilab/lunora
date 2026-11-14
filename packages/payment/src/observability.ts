@@ -11,6 +11,7 @@ import type { ApplyResult, ProviderId, WebhookActionType } from "./types";
 export type PaymentEvent =
     | { action: WebhookActionType; eventId: string; provider: ProviderId; reason: ApplyResult["reason"]; type: "webhook.applied" }
     | { eventId: string; provider: ProviderId; type: "webhook.duplicate" }
+    | { provider: ProviderId; subscriptionId: string; type: "subscription.duplicate" }
     | { error: unknown; id: string; kind: "payment" | "subscription"; provider: ProviderId; type: "reconcile.error" }
     | { id: string; kind: "payment" | "subscription"; provider: ProviderId; type: "reconcile.drift" }
     | { provider: ProviderId; referenceId?: string; sessionId?: string; type: "payment.failed" }
@@ -23,6 +24,7 @@ export type PaymentEvent =
           updatedPayments: number;
           updatedSubscriptions: number;
       }
+    | { provider: ProviderId; referenceId?: string; refundId: string; sessionId: string; type: "refund.replayed" }
     | { featureId: string; provider: ProviderId; referenceId: string; type: "usage.report_failed" };
 
 export type PaymentObserver = (event: PaymentEvent) => void;

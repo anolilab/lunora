@@ -1,7 +1,7 @@
 import { isLunoraError } from "@lunora/errors";
 import { describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike } from "../src/ctx-db";
+import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import { TransactionHeadroomTracker } from "../src/transaction-headroom";
 import messagesSchema from "./_helpers/messages-schema";
@@ -131,6 +131,38 @@ describe("ctx-db.deleteAll", () => {
 
         // And the loop terminated (it would spin forever on a no-op delete).
         await expect(writer.deleteAll("profiles")).resolves.toStrictEqual({ deleted: 0 });
+    });
+
+    it("a hard deleteAll on a .global() table asks the global writer for soft-deleted rows too", async () => {
+        expect.assertions(2);
+
+        const rows = new Map<string, Record<string, unknown>>([["p1", { _id: "p1", userId: "u1" }]]);
+        const listOptions: (Record<string, unknown> | undefined)[] = [];
+        const globalDb = {
+            delete: async (_table: string, id: string) => {
+                rows.delete(id);
+            },
+            findMany: async (_table: string, options?: Record<string, unknown>) => {
+                listOptions.push(options);
+
+                return { continueCursor: null, isDone: true, page: [...rows.values()] };
+            },
+        } as unknown as DatabaseWriterLike;
+
+        const { sql } = createSqliteExec();
+
+        runShardMigrations(sql, messagesSchema);
+
+        const writer = createShardContextDatabase({
+            broadcast: () => undefined,
+            clock: () => fixedTime,
+            globalDb,
+            schema: messagesSchema,
+            sql,
+        }) as EraseWriter;
+
+        await expect(writer.deleteAll("profiles", { hard: true })).resolves.toStrictEqual({ deleted: 1 });
+        expect(listOptions.some((options) => options?.["includeDeleted"] === true)).toBe(true);
     });
 
     it("never runs the shard-local row probe for a .global() deleteAll / deleteWhere", async () => {
@@ -424,5 +456,85 @@ describe("ctx-db.asId", () => {
         expect(() => writer.asId("messages", "")).toThrow('is not a valid id for table "messages"');
         expect(() => writer.asId("messages", "has space")).toThrow('is not a valid id for table "messages"');
         expect(() => writer.asId("messages", "\tid")).toThrow('is not a valid id for table "messages"');
+    });
+});
+
+describe("ctx-db.deleteAll on a .softDelete() table", () => {
+    const notesSchema: SchemaLike = {
+        tables: {
+            notes: {
+                indexes: [],
+                relationMap: {},
+                shape: { body: { kind: "string" }, deletedAt: { kind: "number" } },
+                softDeleteMode: { field: "deletedAt" },
+            },
+        },
+    };
+
+    const setupNotes = (): EraseWriter => {
+        const { sql } = createSqliteExec();
+
+        runShardMigrations(sql, notesSchema);
+
+        return createShardContextDatabase({
+            broadcast: () => undefined,
+            clock: () => fixedTime,
+            schema: notesSchema,
+            sql,
+        }) as EraseWriter;
+    };
+
+    const seedNotes = async (writer: EraseWriter): Promise<string[]> => {
+        const ids = await writer.insertMany("notes", [{ body: "a" }, { body: "b" }, { body: "c" }, { body: "d" }, { body: "e" }]);
+
+        // A row soft-deleted before the erasure is the case under test.
+        await writer.delete("notes", String(ids[0]));
+        await writer.delete("notes", String(ids[1]));
+
+        return ids.map(String);
+    };
+
+    it("hard deleteAll erases rows that were soft-deleted beforehand", async () => {
+        expect.assertions(2);
+
+        const writer = setupNotes();
+
+        await seedNotes(writer);
+
+        await expect(writer.deleteAll("notes", { hard: true, chunkSize: 2 })).resolves.toStrictEqual({ deleted: 5 });
+        await expect(writer.findMany("notes", { includeDeleted: true, limit: 100 })).resolves.toMatchObject({ page: [] });
+    });
+
+    it("wipeShard leaves no soft-deleted row behind", async () => {
+        expect.assertions(1);
+
+        const writer = setupNotes();
+
+        await seedNotes(writer);
+
+        await writer.wipeShard();
+
+        await expect(writer.findMany("notes", { includeDeleted: true, limit: 100 })).resolves.toMatchObject({ page: [] });
+    });
+
+    it("a non-hard deleteAll still soft-deletes and terminates past one chunk", async () => {
+        expect.assertions(4);
+
+        const writer = setupNotes();
+
+        await writer.insertMany("notes", [{ body: "a" }, { body: "b" }, { body: "c" }, { body: "d" }, { body: "e" }]);
+
+        await expect(writer.deleteAll("notes", { chunkSize: 2 })).resolves.toStrictEqual({ deleted: 5 });
+
+        // The default read hides every marked row.
+        const visible = await writer.findMany("notes", { limit: 100 });
+
+        expect(visible.page).toHaveLength(0);
+
+        // Marked, not removed: all five remain, each with its marker set.
+        const marked = await writer.findMany("notes", { includeDeleted: true, limit: 100 });
+
+        expect(marked.page).toHaveLength(5);
+        expect(marked.page.every((row) => row["deletedAt"] !== null && row["deletedAt"] !== undefined)).toBe(true);
     });
 });

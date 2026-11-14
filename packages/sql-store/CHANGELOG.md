@@ -1,3 +1,7 @@
+## @lunora/sql-store [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.236...@lunora/sql-store@1.0.0-alpha.237) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
 ## @lunora/sql-store [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.235...@lunora/sql-store@1.0.0-alpha.236) (2026-11-05)
 
 - feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)

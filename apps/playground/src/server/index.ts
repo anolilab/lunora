@@ -1,5 +1,5 @@
 import type { LunoraAuthOptions } from "@lunora/auth";
-import { admin, organization, passkey, twoFactor } from "@lunora/auth/plugins";
+import { admin, apiKey, organization, passkey, twoFactor } from "@lunora/auth/plugins";
 import type { D1DatabaseLike } from "@lunora/d1";
 import { createMailerFromEnv } from "@lunora/mail";
 import type { ForwardableEmailMessageLike, ShardNamespaceLike as InboundShardNamespaceLike } from "@lunora/mail/inbound";
@@ -121,7 +121,7 @@ const mirrorOnSignIn =
  * The full plugin set is what the studio's auth dashboard adapts to
  * (capability-detected by `createAuthAdmin`): `admin` → user management;
  * `organization` → the Organizations section; `twoFactor` → 2FA disable;
- * `passkey` → passkey list.
+ * `passkey` → passkey list; `apiKey` → the user drawer's API key list.
  */
 const authOptions = (env: Env): LunoraAuthOptions => {
     if (!env.AUTH_SECRET) {
@@ -153,7 +153,13 @@ const authOptions = (env: Env): LunoraAuthOptions => {
             session: { create: { after: mirrorOnSignIn(env) } },
             user: { create: { after: mirrorUser(env) }, update: { after: mirrorUser(env) } },
         },
-        plugins: [admin({ defaultRole: "user" }), organization({ allowUserToCreateOrganization: true }), twoFactor(), passkey()],
+        plugins: [
+            admin({ defaultRole: "user" }),
+            apiKey({ enableSessionForAPIKeys: true }),
+            organization({ allowUserToCreateOrganization: true }),
+            twoFactor(),
+            passkey(),
+        ],
         secret: env.AUTH_SECRET,
     };
 };

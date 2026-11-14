@@ -1,3 +1,33 @@
+## @lunora/auth [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.264...@lunora/auth@1.0.0-alpha.265) (2026-11-14)
+
+- security(auth)!: audit organization, oauth provider, scim and sso management (#1549)
+
+## @lunora/auth [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.263...@lunora/auth@1.0.0-alpha.264) (2026-11-14)
+
+- security(auth)!: audit plugin sign-ins, admin actions and account changes (#1546)
+- fix(auth): stop finished tables from spending the move's page budget (#1554)
+
+## @lunora/auth [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.262...@lunora/auth@1.0.0-alpha.263) (2026-11-14)
+
+- security(auth): run the email gate on address changes (#1545)
+
+## @lunora/auth [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.261...@lunora/auth@1.0.0-alpha.262) (2026-11-13)
+
+- security(auth)!: admit invited oauth and sso accounts only with a verified email (#1547)
+
+## @lunora/auth [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.260...@lunora/auth@1.0.0-alpha.261) (2026-11-11)
+
+- feat(auth): add API keys via the apiKey() plugin (#1526)
+
+## @lunora/auth [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.259...@lunora/auth@1.0.0-alpha.260) (2026-11-10)
+
+- feat(codegen): type user-column claims on ctx.auth from the auth config (#1525)
+
+## @lunora/auth [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.258...@lunora/auth@1.0.0-alpha.259) (2026-11-10)
+
+- feat(auth): forward declared identity claims through the auth object route (#1521)
+- feat(auth): forward declared app user columns onto the session identity (#1520)
+
 ## @lunora/auth [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.257...@lunora/auth@1.0.0-alpha.258) (2026-11-05)
 
 - feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)

@@ -81,5 +81,4 @@ const MethodBadge = ({ kind, method, testId }: MethodBadgeProps): ReactElement =
     );
 };
 
-export { kindTone, methodTone };
 export default MethodBadge;

@@ -162,6 +162,47 @@ describe("createDoAuthWiring", () => {
             // traffic that has nothing to do with auth.
             await expect(resolveIdentity(new Request("https://example.test/documents/list"))).resolves.toBeNull();
         });
+
+        it("asks only for the declared claims that are each one well-formed name", async () => {
+            expect.assertions(1);
+
+            const { namespace, requests } = createNamespace(() => ok({ userId: "u1" }));
+            const { resolveIdentity } = createDoAuthWiring({ claims: ["plan", "tier,privateNote", "bad-name"], internalSecret: SECRET, namespace });
+
+            await resolveIdentity(new Request("https://example.test/documents/list"));
+
+            // `"tier,privateNote"` is one malformed entry, not two declared names.
+            expect(new URL(requests[0]?.url ?? "").searchParams.get("claims")).toBe("plan");
+        });
+
+        it("copies an empty-string claim, as the D1 wiring does", async () => {
+            expect.assertions(1);
+
+            const { namespace } = createNamespace(() => ok({ nickname: "", userId: "u1" }));
+            const { resolveIdentity } = createDoAuthWiring({ claims: ["nickname"], internalSecret: SECRET, namespace });
+
+            await expect(resolveIdentity(new Request("https://example.test/documents/list"))).resolves.toStrictEqual({ nickname: "", userId: "u1" });
+        });
+
+        it("copies a claim named like an inherited Object property", async () => {
+            expect.assertions(1);
+
+            const { namespace } = createNamespace(() => ok({ constructor: "acme", toString: "x", userId: "u1" }));
+            const { resolveIdentity } = createDoAuthWiring({ claims: ["constructor", "toString"], internalSecret: SECRET, namespace });
+
+            const identity = await resolveIdentity(new Request("https://example.test/documents/list"));
+
+            expect({ ...identity }).toStrictEqual({ constructor: "acme", toString: "x", userId: "u1" });
+        });
+
+        it("never overwrites a claim the session already set", async () => {
+            expect.assertions(1);
+
+            const { namespace } = createNamespace(() => ok({ role: "user", userId: "u1" }));
+            const { resolveIdentity } = createDoAuthWiring({ claims: ["role", "userId"], internalSecret: SECRET, namespace });
+
+            await expect(resolveIdentity(new Request("https://example.test/documents/list"))).resolves.toStrictEqual({ role: "user", userId: "u1" });
+        });
     });
 
     describe("auditReader", () => {

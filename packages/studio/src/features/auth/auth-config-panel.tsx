@@ -15,6 +15,7 @@ import { useT } from "../../i18n/i18n-context";
  */
 const CAPABILITY_ROWS: ReadonlyArray<{ key: keyof AuthCapabilities; label: MessageId }> = [
     { key: "accounts", label: "Accounts" },
+    { key: "apiKey", label: "API keys" },
     { key: "admin", label: "Admin" },
     { key: "organization", label: "Organizations" },
     { key: "passkey", label: "Passkeys" },

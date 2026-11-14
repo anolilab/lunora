@@ -67,10 +67,13 @@ export interface AdvisorProcedureProtection {
     hasEmailArg?: boolean;
     /** Registration kind — `query` is read-only; `mutation`/`action` are write-shaped. */
     kind: "action" | "mutation" | "query";
+    /** 1-based start line of the declaring statement, when the feeder recorded it. */
+    line?: number;
     /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
     reachesOutbound?: boolean;
     /** `true` when the handler runs any AI generation, bounded or not. */
     runsAiGeneration?: boolean;
+
     /** `true` when the handler throws a bare `new Error(...)` rather than a coded `LunoraError`. */
     throwsBareError?: boolean;
 
@@ -86,6 +89,7 @@ export interface AdvisorProcedureProtection {
     unboundedAiGeneration?: boolean;
     /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */
     usesCaptcha: boolean;
+
     /** `true` when the chain carries `.use(emailGateMiddleware(...))` from `@lunora/auth`. Read by the `signup_mutation_without_disposable_gating` lint (paired with public visibility + a user-table write). */
     usesEmailGate: boolean;
 
@@ -102,6 +106,7 @@ export interface AdvisorProcedureProtection {
     usesRateLimit: boolean;
     /** `true` when the chain carries `.use(rls(...))`. */
     usesRls: boolean;
+
     /** `"internal"` when the procedure uses `internalQuery` / `internalMutation` / `internalAction`. */
     visibility: "internal" | "public";
 

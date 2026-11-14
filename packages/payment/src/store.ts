@@ -25,11 +25,24 @@ const applyRevisioned = <T extends { readonly revision?: number }>(rows: Map<str
 };
 
 export interface PaymentStore {
+    /**
+     * Moves `referenceId`'s counter from `ifRevision` to the next value, in one atomic step, and says whether it did.
+     * `false` means another writer moved it first, and nothing changed. A reference with no counter yet is at `0`.
+     */
+    bumpReferenceRevision: (referenceId: string, ifRevision: number) => Promise<boolean>;
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
     /** A payment session for `subscriptionId` that names an owner (non-blank `referenceId`), if any. */
     getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
+
+    /**
+     * The counter that orders access-granting writes for `referenceId`, `0` before the first. It exists because the store
+     * has no write that spans two subscription rows: `singleSubscriptionPerReference` has to read a reference's other
+     * rows and then write one, and two writers can both pass that read. See {@link PaymentStore.bumpReferenceRevision}.
+     */
+    getReferenceRevision: (referenceId: string) => Promise<number>;
     getSubscription: (provider: ProviderId, id: string) => Promise<Subscription | undefined>;
+
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
 
     /**
@@ -164,6 +177,8 @@ export class MemoryPaymentStore implements PaymentStore {
 
     private readonly processedEvents = new Set<string>();
 
+    private readonly referenceRevisions = new Map<string, number>();
+
     private readonly sessions = new Map<string, PaymentSession>();
 
     private readonly subscriptions = new Map<string, Subscription>();
@@ -200,6 +215,22 @@ export class MemoryPaymentStore implements PaymentStore {
             .toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
 
         return Promise.resolve(pending.slice(0, Math.max(0, limit)));
+    }
+
+    public getReferenceRevision(referenceId: string): Promise<number> {
+        return Promise.resolve(this.referenceRevisions.get(referenceId) ?? 0);
+    }
+
+    public bumpReferenceRevision(referenceId: string, ifRevision: number): Promise<boolean> {
+        const current = this.referenceRevisions.get(referenceId) ?? 0;
+
+        if (current !== ifRevision) {
+            return Promise.resolve(false);
+        }
+
+        this.referenceRevisions.set(referenceId, current + 1);
+
+        return Promise.resolve(true);
     }
 
     public markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean> {

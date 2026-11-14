@@ -19,6 +19,37 @@ import { DEFAULT_AUTH_BASE_PATH, isAuthRoutePath } from "./handler";
 import type { AuthJurisdictionMove } from "./jurisdiction-move";
 import { createAuthJurisdictionMove, MOVE_PATH } from "./jurisdiction-move";
 import type { SessionIdentity } from "./session-identity";
+import { validClaimNames } from "./session-identity";
+
+/**
+ * Copy the declared claims the object answered with onto the identity. The reply is a
+ * JSON body, so each value is narrowed here rather than trusted — to the same
+ * string / boolean / finite-number set `resolveSessionIdentity` emits, the empty
+ * string included, so both wirings return the same identity. A name the session
+ * already sets is left alone; only own properties count, so a column named
+ * `constructor` or `toString` is not mistaken for one.
+ * @param identity The identity built from the session claims.
+ * @param body The object's reply.
+ * @param claims The declared column names the object was asked for.
+ * @returns The identity, with the declared claims added.
+ */
+const copyDeclaredClaims = (identity: SessionIdentity, body: Record<string, unknown>, claims: ReadonlyArray<string>): SessionIdentity => {
+    const extra: Record<string, string | number | boolean> = {};
+
+    for (const claim of claims) {
+        const value = body[claim];
+
+        if (Object.hasOwn(identity, claim)) {
+            continue;
+        }
+
+        if (typeof value === "boolean" || typeof value === "string" || (typeof value === "number" && Number.isFinite(value))) {
+            extra[claim] = value;
+        }
+    }
+
+    return Object.assign(identity, extra);
+};
 
 /** The slice of a Durable Object namespace this needs — structural, so tests need no runtime. */
 /* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (a real `DurableObjectNamespace.get` takes a `DurableObjectId`, not `unknown`), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
@@ -38,6 +69,13 @@ export type AuthJurisdiction = "eu" | "fedramp" | "us";
 
 /** What {@link createDoAuthWiring} needs, already resolved against `env`. */
 export interface DoAuthWiringOptions {
+    /**
+     * App-declared user columns to forward onto the identity, the same names the D1
+     * wiring passes to `resolveSessionIdentity`. Sent to the object as the `claims`
+     * query parameter on the internal session route. Empty or absent: none forwarded.
+     */
+    claims?: ReadonlyArray<string>;
+
     /**
      * The OAuth discovery paths the object serves outside `/api/auth` —
      * `authDiscoveryPaths(options)` over the same auth options the object builds.
@@ -130,6 +168,7 @@ export interface DoAuthWiring {
  */
 export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring => {
     const { internalSecret, jurisdiction, objectName = "auth" } = options;
+    const claims: ReadonlyArray<string> = validClaimNames(options.claims);
     const discoveryPaths: ReadonlySet<string> = new Set(options.discoveryPaths);
     const unpinned = options.namespace;
     let { namespace } = options;
@@ -260,7 +299,13 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
 
             headers.set(INTERNAL_SECRET_HEADER, internalSecret);
 
-            const response = await target.fetch(new Request(new URL(RESOLVE_SESSION_PATH, request.url), { headers }));
+            const sessionUrl = new URL(RESOLVE_SESSION_PATH, request.url);
+
+            if (claims.length > 0) {
+                sessionUrl.searchParams.set("claims", claims.join(","));
+            }
+
+            const response = await target.fetch(new Request(sessionUrl, { headers }));
 
             if (!response.ok) {
                 return null;
@@ -290,7 +335,7 @@ export const createDoAuthWiring = (options: DoAuthWiringOptions): DoAuthWiring =
                 identity.expiresAtMs = body["expiresAtMs"];
             }
 
-            return identity;
+            return copyDeclaredClaims(identity, body, claims);
         },
     };
 };
