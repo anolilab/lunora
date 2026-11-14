@@ -42,6 +42,7 @@ beside it. So the transport is fetched from the git tag matching the CLI you ran
 ```json title="sdk/python/lunora-transport.json"
 {
     "cliVersion": "1.0.0-alpha.159",
+    "format": 2,
     "ref": "@lunora/cli@1.0.0-alpha.159",
     "source": "gh:anolilab/lunora/sdks/python",
     "versionMatched": true
@@ -53,8 +54,19 @@ If the exact tag has no transport for that language, the CLI falls back to the
 release branch, says so loudly, and records `versionMatched: false`, so a copy is
 never silently a different vintage than the surface next to it.
 
-The stamp also records the vendored `files` and the `language`, with a `note` on
-what the match means. The example above shows only the fields that identify the source.
+The stamp also records the `language`, a `note` on what the match means, two
+sorted lists: `transportFiles` (the vendored copy) and `generatedFiles` (what the
+generator wrote), and a sha256 `hashes` entry for each file written. The example
+above shows only the fields that identify the source.
+
+Regeneration removes the files the previous run produced and this one does not, so
+a file the upstream transport dropped, or a generated file a newer CLI no longer
+writes, does not linger. It only removes a file whose content still matches the hash
+the stamp recorded, so a file you edited, or one a hand-edited stamp names, stays. It
+never removes a file the stamp did not list, and it refuses a listed path that
+escapes the output directory or runs through a symlink, reporting each refusal as a
+warning. A stamp from an older CLI has no hashes, so its stale files are reported
+and left for you to remove.
 
 | Flag            | For                                                                |
 | --------------- | ------------------------------------------------------------------ |

@@ -17,7 +17,7 @@
  * I hold" answerable from the stamp this module writes.
  */
 
-import { cpSync, existsSync, lstatSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import type { SdkTarget } from "@lunora/codegen";
@@ -25,15 +25,14 @@ import { LunoraError } from "@lunora/errors";
 
 import { resolveCliVersion } from "../../util/cli-manifest";
 import type { Logger } from "../../util/logger";
-import { resolveCliVersionRef, resolvePinnedSourceRef } from "../../util/source-ref";
+import { resolveCliVersionRef, resolvePinnedSourceRef, resolveSourceRef } from "../../util/source-ref";
 import { resolveItemDirectory } from "../registry/resolve";
 import type { AddCommandOptions } from "../registry/types";
+import type { VendorResult } from "./stamp";
+import { STAMP_FILE } from "./stamp";
 
 /** The giget base the transports are fetched from, mirroring the registry's. */
 const SDK_SOURCE_BASE = "gh:anolilab/lunora/sdks";
-
-/** The sidecar recording which transport vintage the output holds. */
-const STAMP_FILE = "lunora-transport.json";
 
 /**
  * Test-suite filenames, excluded from the copy in every language.
@@ -48,9 +47,15 @@ const TEST_SUFFIX = /_test\.|Tests?\./u;
 
 const isTestFile = (name: string): boolean => name.startsWith("test_") || TEST_SUFFIX.test(name);
 
-/** Every file under `directory`, as paths relative to it, sorted. */
+/**
+ * Every vendored file under `directory`, as paths relative to it, sorted.
+ *
+ * Skips the same names the copy's filter does, so the list describes what lands
+ * on disk: a test file or test directory is never copied and never listed.
+ */
 const walk = (directory: string, prefix = ""): string[] =>
     readdirSync(directory)
+        .filter((entry) => !isTestFile(entry))
         .toSorted((a, b) => a.localeCompare(b))
         .flatMap((entry) => {
             const absolute = join(directory, entry);
@@ -58,18 +63,6 @@ const walk = (directory: string, prefix = ""): string[] =>
 
             return statSync(absolute).isDirectory() ? walk(absolute, relativePath) : [relativePath];
         });
-
-/** What a completed vendoring recorded, for the stamp and the CLI's report. */
-interface VendorResult {
-    /** Paths written, relative to the output directory, sorted. */
-    files: ReadonlyArray<string>;
-    /** The ref the transport actually came from. */
-    ref: string;
-    /** Where it came from: the giget base, or the local `--from` directory. */
-    source: string;
-    /** True when the ref above is the running CLI's own release tag. */
-    versionMatched: boolean;
-}
 
 /**
  * Refuse a transport that contains a symlink, BEFORE anything is copied.
@@ -108,31 +101,60 @@ const assertNoSymlinks = (sourceRoot: string, current: string): void => {
 };
 
 /**
- * Copy one `vendor` entry. Returns the destination paths written.
+ * Refuse the whole transport before any entry is copied.
+ *
+ * Every entry is checked, not just the one about to be copied: a Rust or Ruby
+ * transport has two, and a refusal in the second must not leave the first
+ * already written into the project.
+ */
+const assertEntriesVendorable = (sourceRoot: string, vendor: SdkTarget["vendor"]): void => {
+    for (const entry of vendor) {
+        const source = join(sourceRoot, entry.from);
+
+        if (!existsSync(source)) {
+            throw new LunoraError("NOT_FOUND", `transport is missing ${entry.from}`);
+        }
+
+        assertNoSymlinks(sourceRoot, source);
+    }
+};
+
+/**
+ * The destination paths one `vendor` entry will produce, from its SOURCE.
+ *
+ * Listed from the source rather than read back from the destination: the stamp
+ * records what the transport contributed, and a destination that already holds
+ * files from a previous run would otherwise be recorded as transport.
+ */
+const listEntry = (sourceRoot: string, entry: SdkTarget["vendor"][number]): string[] => {
+    const source = join(sourceRoot, entry.from);
+
+    // `to` is a file when the source was; only a directory has children to walk.
+    return statSync(source).isDirectory() ? walk(source).map((child) => `${entry.to}/${child}`) : [entry.to];
+};
+
+/**
+ * Copy every `vendor` entry of a transport into `outputDirectory`, and return
+ * the destination paths they produced.
  *
  * `cpSync` rather than a hand-rolled copy: it already creates parents, copies
  * recursively and preserves file modes, and a filter returning `false` for a
  * directory prunes the whole subtree.
  */
-const copyEntry = (sourceRoot: string, outputDirectory: string, from: string, to: string): string[] => {
-    const source = join(sourceRoot, from);
+const copyEntries = (sourceRoot: string, outputDirectory: string, vendor: SdkTarget["vendor"]): string[] => {
+    assertEntriesVendorable(sourceRoot, vendor);
 
-    if (!existsSync(source)) {
-        throw new LunoraError("NOT_FOUND", `transport is missing ${from}`);
+    const files = vendor.flatMap((entry) => listEntry(sourceRoot, entry));
+
+    for (const entry of vendor) {
+        cpSync(join(sourceRoot, entry.from), join(outputDirectory, entry.to), {
+            filter: (candidate) => !isTestFile(candidate.slice(candidate.lastIndexOf(sep) + 1)),
+            force: true,
+            recursive: true,
+        });
     }
 
-    assertNoSymlinks(sourceRoot, source);
-
-    const destination = join(outputDirectory, to);
-
-    cpSync(source, destination, {
-        filter: (candidate) => !isTestFile(candidate.slice(candidate.lastIndexOf(sep) + 1)),
-        force: true,
-        recursive: true,
-    });
-
-    // `to` is a file when the source was; only a directory has children to walk.
-    return statSync(destination).isDirectory() ? walk(destination).map((child) => `${to}/${child}`) : [to];
+    return files.toSorted((a, b) => a.localeCompare(b));
 };
 
 /**
@@ -155,22 +177,22 @@ const carriesTransport = (directory: string, target: SdkTarget): boolean => targ
  */
 const vendorAtRef = async (
     ref: string,
-    options: { language: string; logger: Logger; outputDirectory: string; registryOptions: AddCommandOptions; target: SdkTarget },
+    options: { base: string; language: string; logger: Logger; outputDirectory: string; registryOptions: AddCommandOptions; target: SdkTarget },
 ): Promise<VendorResult | undefined> => {
-    const { language, logger, outputDirectory, registryOptions, target } = options;
-    const { cleanup, directory } = await resolveItemDirectory(language, { ...registryOptions, ref }, SDK_SOURCE_BASE);
+    const { base, language, logger, outputDirectory, registryOptions, target } = options;
+    const { cleanup, directory } = await resolveItemDirectory(language, { ...registryOptions, ref }, base);
 
     try {
         if (!carriesTransport(directory, target)) {
-            logger.warn(`${SDK_SOURCE_BASE}/${language} does not exist at ${ref}.`);
+            logger.warn(`${base}/${language} does not exist at ${ref}.`);
 
             return undefined;
         }
 
         return {
-            files: target.vendor.flatMap((entry) => copyEntry(directory, outputDirectory, entry.from, entry.to)).toSorted((a, b) => a.localeCompare(b)),
+            transportFiles: copyEntries(directory, outputDirectory, target.vendor),
             ref,
-            source: `${SDK_SOURCE_BASE}/${language}`,
+            source: `${base}/${language}`,
             versionMatched: ref === resolveCliVersionRef(),
         };
     } finally {
@@ -194,7 +216,7 @@ const vendorFromLocal = (from: string, options: { language: string; outputDirect
     }
 
     return {
-        files: target.vendor.flatMap((entry) => copyEntry(directory, outputDirectory, entry.from, entry.to)).toSorted((a, b) => a.localeCompare(b)),
+        transportFiles: copyEntries(directory, outputDirectory, target.vendor),
         // Deliberately not a git ref. The stamp's job is to say what the output
         // holds, and a working copy is whatever it is on disk — recording the
         // checkout's HEAD would claim a provenance the files may not have.
@@ -237,12 +259,18 @@ const vendorTransport = async (options: {
     // pinning. `names` is the registry command's positional list and has no
     // meaning for a transport.
     const registryOptions: AddCommandOptions = { allowUnsafeSource, logger, names: [], source };
+    const base = source ?? SDK_SOURCE_BASE;
 
     // `candidate` is optional because that is how the fallback is spelt: passing
-    // no ref is what makes `resolvePinnedSourceRef` derive the version's release
-    // BRANCH (and pin it to a SHA), which is precisely the fallback target.
-    const attempt = async (candidate: string | undefined): Promise<VendorResult | undefined> =>
-        vendorAtRef(await resolvePinnedSourceRef(candidate, logger), { language, logger, outputDirectory, registryOptions, target });
+    // no ref is what makes the resolver derive the version's release BRANCH, which
+    // is precisely the fallback target. A custom source is resolved unpinned:
+    // `resolvePinnedSourceRef` pins against `anolilab/lunora`, and a SHA from that
+    // repo may not exist in the fork the transport is fetched from.
+    const attempt = async (candidate: string | undefined): Promise<VendorResult | undefined> => {
+        const resolved = source === undefined ? await resolvePinnedSourceRef(candidate, logger) : resolveSourceRef(candidate);
+
+        return vendorAtRef(resolved, { base, language, logger, outputDirectory, registryOptions, target });
+    };
 
     if (ref !== undefined && ref.length > 0) {
         const pinned = await attempt(ref);
@@ -291,29 +319,5 @@ const vendorTransport = async (options: {
     return fallback;
 };
 
-/**
- * Write the vintage stamp beside the copy.
- *
- * Copy-in trades upgrades for independence: there is no version to bump, so the
- * only way to know which protocol a vendored transport speaks is to record it at
- * copy time. `versionMatched` is the field that matters — it answers whether the
- * transport and the surface above it came from one release, which is exactly what
- * the fallback path can silently break.
- */
-const writeStamp = (outputDirectory: string, language: string, result: VendorResult): void => {
-    const stamp = {
-        cliVersion: resolveCliVersion(),
-        files: result.files,
-        language,
-        note: result.versionMatched
-            ? "Vendored by `lunora sdk generate` at the ref matching the CLI that generated the surface beside it. Regenerate with a newer CLI to upgrade."
-            : "Vendored by `lunora sdk generate` from a ref that is NOT this CLI's release tag, so the transport and the generated surface may be different protocol vintages.",
-        ref: result.ref,
-        source: result.source,
-        versionMatched: result.versionMatched,
-    };
-
-    writeFileSync(join(outputDirectory, STAMP_FILE), `${JSON.stringify(stamp, undefined, 4)}\n`, "utf8");
-};
-
-export { STAMP_FILE, vendorTransport, writeStamp };
+// eslint-disable-next-line import/prefer-default-export -- imported by name by the handler and the vendor tests; a default would split the import style
+export { vendorTransport };

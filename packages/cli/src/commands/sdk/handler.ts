@@ -7,12 +7,32 @@ import { LunoraError } from "@lunora/errors";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
 import { sourceGateError } from "../registry/resolve";
 import type { SdkOptions } from "./index";
-import { STAMP_FILE, vendorTransport, writeStamp } from "./vendor";
+import type { PruneResult } from "./stamp";
+import { pruneStale, readStamp, STAMP_FILE, writeStamp } from "./stamp";
+import { vendorTransport } from "./vendor";
 
 /** Where `lunora codegen --api-spec openrpc` writes the document by default. */
 const DEFAULT_SPEC_PATH = join("lunora", "_generated", "openrpc.json");
+
+/**
+ * Say what regeneration removed, and why it kept what it refused to remove.
+ *
+ * A refusal is a warning, not a failure: the generated surface is still correct,
+ * and failing the run would leave the user with no way to regenerate past a stale
+ * path they did not write.
+ */
+const reportPruned = (logger: Logger, pruned: PruneResult): void => {
+    for (const path of pruned.deleted) {
+        logger.info(`Removed ${path}: the previous generation wrote it and this one does not.`);
+    }
+
+    for (const { path, reason } of pruned.refused) {
+        logger.warn(`refusing to delete ${path}: it ${reason}. Remove it by hand if it is stale.`);
+    }
+};
 
 /**
  * Read and shallow-validate the OpenRPC document. A missing file is the common
@@ -78,6 +98,10 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
 
     const document = readOpenRpcDocument(specPath);
 
+    // Read before anything is written: the directory's own stamp is what the
+    // previous run left behind, and writing the new one overwrites it.
+    const previous = readStamp(outputDirectory);
+
     if (document.methods.every((method) => method["x-lunora-function-kind"] === "stream")) {
         // Warn but keep going. Returning here would leave the PREVIOUS
         // generation's files on disk, so removing every RPC function would ship
@@ -105,7 +129,7 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
         target,
     });
 
-    writeStamp(outputDirectory, language, vendored);
+    const generatedFiles = Object.keys(files);
 
     for (const [relativePath, contents] of Object.entries(files)) {
         const destination = join(outputDirectory, relativePath);
@@ -113,6 +137,12 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
         mkdirSync(dirname(destination), { recursive: true });
         writeFileSync(destination, contents, "utf8");
     }
+
+    reportPruned(logger, pruneStale(outputDirectory, previous, { generatedFiles, transportFiles: vendored.transportFiles }));
+
+    // Last, so a run that fails anywhere above keeps the previous stamp and the
+    // next run can still prune what this one left behind.
+    writeStamp(outputDirectory, language, vendored, generatedFiles);
 
     // How many functions still return the untyped placeholder — i.e. declare no
     // `.output()`. Uses the same predicate the emitter does, so the warning can
@@ -128,7 +158,7 @@ const execute: CommandHandler<SdkOptions> = defineHandler<SdkOptions>(async ({ a
     // `versionMatched` is the part a reader needs, since the fallback path can
     // pair a new surface with an older transport.
     logger.info(
-        `Vendored the ${language} transport (${String(vendored.files.length)} file(s)) from ${vendored.source} @ ${vendored.ref}` +
+        `Vendored the ${language} transport (${String(vendored.transportFiles.length)} file(s)) from ${vendored.source} @ ${vendored.ref}` +
             `${vendored.versionMatched ? " — version-matched to this CLI" : ""}; see ${STAMP_FILE}.`,
     );
 
