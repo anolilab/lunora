@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.417](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.416...@lunora/codegen@1.0.0-alpha.417) (2026-11-14)
+
+- fix(codegen): accept an identity-bound guard that dominates an IDOR sink (#1592)
+
 ## @lunora/codegen [1.0.0-alpha.416](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.415...@lunora/codegen@1.0.0-alpha.416) (2026-11-14)
 
 - fix(codegen): scope kv, storage and container keys by identity only (#1588)
