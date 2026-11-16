@@ -116,12 +116,22 @@ const memoizeDocument = (load: DocumentLoader | undefined): DocumentLoader => {
     let loaded: Promise<unknown> | undefined;
 
     return async () => {
-        // A failed load is not kept: the next request tries again instead of replaying the rejection for the isolate's life.
-        loaded ??= load?.().catch((error: unknown) => {
-            loaded = undefined;
+        // Neither a failed load nor a missing document is kept: an asset read answers `undefined` for a transient
+        // asset-worker error or a read mid-rollout, and caching that would blank the view for the isolate's life.
+        loaded ??= load?.().then(
+            (document) => {
+                if (document === undefined) {
+                    loaded = undefined;
+                }
 
-            throw error;
-        });
+                return document;
+            },
+            (error: unknown) => {
+                loaded = undefined;
+
+                throw error;
+            },
+        );
 
         return loaded;
     };

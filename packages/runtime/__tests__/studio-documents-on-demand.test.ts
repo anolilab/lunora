@@ -116,4 +116,29 @@ describe("createWorker — Studio documents load on their route only", () => {
         expect(load).toHaveBeenCalledTimes(2);
         await expect(retried.json()).resolves.toStrictEqual(document);
     });
+
+    it.each(routes)("loads the $option document again after a load that found none", async ({ document, option, path }) => {
+        expect.assertions(2);
+
+        // `loadStudioDocument` answers `undefined` for a non-2xx or non-JSON read, such as a transient asset-worker error.
+        const load = vi.fn<() => Promise<unknown>>().mockResolvedValueOnce(undefined).mockResolvedValue(document);
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            [option]: load,
+            shardDO: {
+                get: () => {
+                    return { fetch: async () => new Response("not used") };
+                },
+                idFromName: (name) => {
+                    return { __name: name };
+                },
+            },
+        });
+
+        await worker.fetch(adminGet(path), {}, fakeContext);
+        const retried = await worker.fetch(adminGet(path), {}, fakeContext);
+
+        expect(load).toHaveBeenCalledTimes(2);
+        await expect(retried.json()).resolves.toStrictEqual(document);
+    });
 });
