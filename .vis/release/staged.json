@@ -3,6 +3,34 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-16T16:14:22.591Z",
+      "key": "@lunora/auth@1.0.0-alpha.267"
+    },
+    {
+      "at": "2026-11-16T16:14:22.591Z",
+      "key": "@lunora/shard-engine@1.0.0-alpha.199"
+    },
+    {
+      "at": "2026-11-16T16:14:22.591Z",
+      "key": "@lunora/codegen@1.0.0-alpha.419"
+    },
+    {
+      "at": "2026-11-16T16:14:22.591Z",
+      "key": "@lunora/cli@1.0.0-alpha.497"
+    },
+    {
+      "at": "2026-11-16T16:14:22.591Z",
+      "key": "@lunora/client@1.0.0-alpha.299"
+    },
+    {
+      "at": "2026-11-16T16:14:22.591Z",
+      "key": "@lunora/do@1.0.0-alpha.287"
+    },
+    {
+      "at": "2026-11-16T16:14:22.591Z",
+      "key": "@lunora/payment@1.0.0-alpha.274"
+    },
+    {
       "at": "2026-11-16T16:08:40.953Z",
       "key": "@lunora/auth@1.0.0-alpha.266"
     },
@@ -373,36 +401,8 @@
     {
       "at": "2026-11-09T21:49:52.787Z",
       "key": "@lunora/do@1.0.0-alpha.284"
-    },
-    {
-      "at": "2026-11-09T21:49:52.787Z",
-      "key": "@lunora/studio@1.0.0-alpha.380"
-    },
-    {
-      "at": "2026-11-08T20:27:33.758Z",
-      "key": "@lunora/payment@1.0.0-alpha.271"
-    },
-    {
-      "at": "2026-11-08T10:56:05.300Z",
-      "key": "@lunora/runtime@1.0.0-alpha.282"
-    },
-    {
-      "at": "2026-11-08T10:56:05.300Z",
-      "key": "@lunora/server@1.0.0-alpha.274"
-    },
-    {
-      "at": "2026-11-07T13:00:15.344Z",
-      "key": "@lunora/advisor@1.0.0-alpha.290"
-    },
-    {
-      "at": "2026-11-07T13:00:15.344Z",
-      "key": "@lunora/codegen@1.0.0-alpha.405"
-    },
-    {
-      "at": "2026-11-07T13:00:15.344Z",
-      "key": "@lunora/notify@1.0.0-alpha.113"
     }
   ],
-  "updatedAt": "2026-11-16T16:08:40.954Z",
+  "updatedAt": "2026-11-16T16:14:22.592Z",
   "version": 1
 }
