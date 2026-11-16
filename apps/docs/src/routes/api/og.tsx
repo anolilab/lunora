@@ -7,6 +7,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import yogaWasm from "satori/yoga.wasm?module";
 
 import { getPackageBySlug } from "@/data/packages";
+import plainOgText from "@/lib/og-text";
 
 let wasmReady: Promise<void> | null = null;
 let yogaReady: Promise<void> | null = null;
@@ -146,9 +147,9 @@ export const Route = createFileRoute("/api/og")({
 
                 if (titleParameter) {
                     // Direct mode: blog posts (and any page) pass their own title/description.
-                    title = titleParameter;
-                    description = url.searchParams.get("description") ?? "";
-                    eyebrow = url.searchParams.get("eyebrow") ?? "Lunora";
+                    title = plainOgText(titleParameter);
+                    description = plainOgText(url.searchParams.get("description") ?? "");
+                    eyebrow = plainOgText(url.searchParams.get("eyebrow") ?? "Lunora");
                     accentColor = url.searchParams.get("accent") ?? "royal-amethyst";
                 } else if (slug) {
                     const pkg = getPackageBySlug(slug);
