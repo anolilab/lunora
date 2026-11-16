@@ -36,7 +36,8 @@ workspace packages via `project.json` `category:*` tags, merges
 `scripts/check-doc-imports.mjs` (fails the build on a code sample importing a
 symbol nothing exports; not run in `dev`) → `scripts/fetch-stats.js`
 (network-bound; skipped by `dev`) → `scripts/generate-og-images.mjs` (reads the
-Geist fonts from jsDelivr, so it needs the network in `dev` too).
+Geist fonts from the `@fontsource/geist` and `@fontsource/geist-mono` devDependencies,
+so it runs offline).
 
 ## Adding a package to the site
 

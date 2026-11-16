@@ -25,7 +25,8 @@ const EMAIL_RE = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/;
 type Status = "error" | "idle" | "sending" | "success";
 
 // A deploy sets the real key (alchemy.run.ts refuses to run without it); the test
-// key keeps local builds working against the test secret in wrangler.jsonc.
+// key keeps local builds working against the test secret in `.dev.vars` (see
+// `.dev.vars.example`). It stays out of wrangler.jsonc, whose vars a plain deploy would bind.
 const TURNSTILE_SITE_KEY =
     typeof import.meta.env.VITE_TURNSTILE_SITE_KEY === "string" && import.meta.env.VITE_TURNSTILE_SITE_KEY !== ""
         ? import.meta.env.VITE_TURNSTILE_SITE_KEY
