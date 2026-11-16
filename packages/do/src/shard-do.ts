@@ -509,6 +509,10 @@ const wireEncodeFailure = (error: unknown): LunoraError =>
  * has since turned unencodable (a bigint) would fail the reply of a write that
  * already stands.
  */
+/** Whether a re-subscribe asks for the subscription already registered. Args are wire-decoded (bigint, Date, bytes), which `stableStringify` refuses. */
+const isSameSubscription = (previous: SubscriptionQuery | undefined, query: SubscriptionQuery): boolean =>
+    previous !== undefined && previous.functionPath === query.functionPath && stableWireKey(previous.args ?? {}) === stableWireKey(query.args ?? {});
+
 const encodeDispatchResult = (result: unknown): unknown => {
     try {
         return encodeWire(result);
@@ -6533,8 +6537,7 @@ abstract class ShardDO {
         // discarded) and the client never gets the snapshot it asked for. The new
         // subscription has no memo yet, so the socket is visited on every flush until one indexes it.
         this.socketIndex.resubscribed(ws, subId);
-        // New args or a re-snapshot request: a subscription that was failing is retried at once.
-        this.subscriptionFailures.clear(ws, subId);
+        this.restartFailureStreakUnlessRetry(ws, subId, previous, query);
 
         return "ok";
     }
@@ -8776,6 +8779,8 @@ abstract class ShardDO {
                 }
             }
 
+            const registered = this.readAttachment(ws).subs;
+            const isRetry = Object.hasOwn(registered, envelope.id) && isSameSubscription(registered[envelope.id], query);
             const status = this.subscribe(ws, envelope.id, query);
 
             if (status !== "ok") {
@@ -8806,7 +8811,7 @@ abstract class ShardDO {
             // subclass doesn't support re-execution (base default), this is a
             // no-op and the subscriber relies on its initial HTTP query.
             if (functionPath) {
-                await this.seedSubscriptionGuarded(ws, envelope.id, query, functionPath, isAdmin);
+                await this.seedSubscriptionGuarded(ws, envelope.id, query, functionPath, isAdmin, isRetry);
             }
 
             return;
@@ -14724,6 +14729,25 @@ abstract class ShardDO {
         return this.subscriptionFailures.hasFailures(ws) ? subscriptionIdentityKey(socketIdentity(attachment)) : "";
     }
 
+    /** A same-args re-subscribe is the client's retry at the hint and keeps the streak; new args start afresh. */
+    private restartFailureStreakUnlessRetry(ws: ShardSocketLike, subId: string, previous: SubscriptionQuery | undefined, query: SubscriptionQuery): void {
+        if (!isSameSubscription(previous, query)) {
+            this.subscriptionFailures.clear(ws, subId);
+        }
+    }
+
+    /**
+     * A failure no retry can change: an access denial (revoked), a result past the size cap, and on a guarded socket a
+     * persist failure. A subscription hitting one ends rather than latching for backoff.
+     */
+    private isDeterministicSubscriptionFailure(error: unknown): boolean {
+        return (
+            isDeliveryAccessDenied(error) ||
+            (isLunoraError(error) &&
+                (error.code === "SUBSCRIPTION_RESULT_TOO_LARGE" || (this.deliveryAuthorization !== undefined && error.code === "SUBSCRIPTION_PERSIST_FAILED")))
+        );
+    }
+
     /**
      * A subscription's refresh threw: count and log it, latch it for backoff, and
      * tell the client the first time of a streak. The subscription stays
@@ -14742,7 +14766,8 @@ abstract class ShardDO {
 
         const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
 
-        this.sendSubscriptionError(ws, subId, body.code, body.message, body);
+        // The hint tells a client that honours it when to re-subscribe; a client that ignores it sees the frame it always did.
+        this.sendSubscriptionError(ws, subId, body.code, body.message, body, this.subscriptionFailures.retryHintMs(ws, subId));
     }
 
     /**
@@ -14873,20 +14898,18 @@ abstract class ShardDO {
                     // retried — but not on every flush: a failure that repeats
                     // (a bad handler cast, say) is latched with a growing backoff
                     // and announced to the client once. See `noteFailingSubscription`.
-                    if (isDeliveryAccessDenied(error)) {
-                        this.revokeSubscription(ws, subId);
-                        return;
-                    }
-                    // A result that grew past the cap will not shrink by retrying: end the subscription as the seed does, on
-                    // guarded sockets too (the refusal names a size and a limit, never data).
-                    if (
-                        isLunoraError(error) &&
-                        (error.code === "SUBSCRIPTION_RESULT_TOO_LARGE" || (this.deliveryAuthorization && error.code === "SUBSCRIPTION_PERSIST_FAILED"))
-                    ) {
+                    // Errors a retry cannot fix end the subscription rather than latch it.
+                    if (this.isDeterministicSubscriptionFailure(error)) {
+                        if (isDeliveryAccessDenied(error)) {
+                            this.revokeSubscription(ws, subId);
+                            return;
+                        }
                         this.unsubscribe(ws, subId);
                         // `toErrorBody` resolves the catalog hint (and redacts as the other paths do); the client no longer
                         // falls back to one when it rebuilds the error.
-                        this.sendSubscriptionError(ws, subId, error.code, error.message, toErrorBody(error).body);
+                        const { body } = toErrorBody(error);
+
+                        this.sendSubscriptionError(ws, subId, body.code, body.message, body);
                         this.recordSubscriptionRefreshError(functionPath, error, { subId });
                         return;
                     }
@@ -14959,6 +14982,16 @@ abstract class ShardDO {
         await runSocketPool(sockets, (ws) => this.inRefreshBatch(ws, () => refreshOne(ws)));
     }
 
+    /** A retried seed that failed again: the subscription stays registered and is answered with the next hint. */
+    private retryFailedSeed(ws: ShardSocketLike, subId: string, functionPath: string, error: unknown): void {
+        this.recordSubscriptionRefreshError(functionPath, error, { subId });
+        this.subscriptionFailures.recordFailure(ws, subId, subscriptionIdentityKey(socketIdentity(this.readAttachment(ws))), Date.now());
+
+        const { body } = toErrorBody(error, { fallbackCode: "SUBSCRIPTION_REFRESH_FAILED", redactedMessage: "subscription refresh failed" });
+
+        this.sendSubscriptionError(ws, subId, body.code, body.message, body, this.subscriptionFailures.retryHintMs(ws, subId));
+    }
+
     /**
      * Run {@link ShardDO.seedSubscription} and fail the ONE subscription — never
      * the socket — when its handler throws.
@@ -14974,15 +15007,51 @@ abstract class ShardDO {
      * spins at the initial delay for the life of the page.
      *
      * So: drop the just-registered subscription from the attachment and answer
-     * with a structured `error` frame carrying the thrown error's code. Mirrors
+     * with a structured `error` frame carrying the thrown error's code. The one
+     * exception is a retry on an unguarded socket: a same-args re-subscribe of an
+     * already-registered subscription stays registered and is answered with the
+     * next retry hint (see {@link ShardDO.retryFailedSeed}). Mirrors
      * `refreshSubscriptions`' per-`(socket, sub)` catch on the write-flush half
      * of the same path, and `handleShapeSubscribe`'s rollback-then-error on a
      * failed shape seed.
      */
-    private async seedSubscriptionGuarded(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
+    private async seedSubscriptionGuarded(
+        ws: ShardSocketLike,
+        subId: string,
+        query: SubscriptionQuery,
+        functionPath: string,
+        isAdmin: boolean,
+        isRetry: boolean,
+    ): Promise<void> {
+        // A failure recorded while this seed ran (a flush, or a newer retry of the same id) is newer than its success.
+        const streakAtStart = this.subscriptionFailures.streakMark(ws, subId);
+
         try {
             await this.seedSubscription(ws, subId, query, functionPath, isAdmin);
+            this.subscriptionFailures.clearIfUnchanged(ws, subId, streakAtStart);
         } catch (error: unknown) {
+            // A same-args re-subscribe of a registered subscription is the client's retry at the hint (or a delta-merge
+            // re-snapshot): it stays registered and answers with the next hint. The registration, not the in-memory
+            // streak, is what marks it, because the registration survives hibernation and the streak does not; after a
+            // wake the backoff restarts at its base delay rather than ending. Only a first seed is refused.
+            // A guarded socket is never sent a hint, so its re-subscribe is refused as a first seed is, never left unanswered.
+            if (isRetry) {
+                if (this.deliveryAuthorization === undefined && !this.isDeterministicSubscriptionFailure(error)) {
+                    this.retryFailedSeed(ws, subId, functionPath, error);
+
+                    return;
+                }
+
+                // A retry cannot fix this error (or no hint can be sent), so the streak ends here and the seed is refused.
+                this.subscriptionFailures.clear(ws, subId);
+
+                if (isDeliveryAccessDenied(error)) {
+                    this.revokeSubscription(ws, subId);
+
+                    return;
+                }
+            }
+
             // Deregister first: a subscription that never seeded must not be
             // refreshed by the next write flush either.
             this.unsubscribe(ws, subId);
@@ -15164,9 +15233,18 @@ abstract class ShardDO {
     }
 
     /** Send a structured `error` frame for a failed `subscribe`/`shape_subscribe`, swallowing a send on an already-closed socket. */
-    private sendSubscriptionError(ws: ShardSocketLike, subId: string, code: string, message: string, detail: ErrorBodyDetail = {}): void {
+    private sendSubscriptionError(
+        ws: ShardSocketLike,
+        subId: string,
+        code: string,
+        message: string,
+        detail: ErrorBodyDetail = {},
+        retryAfterMs?: number,
+    ): void {
+        const retry = retryAfterMs === undefined ? {} : { retryAfterMs };
+
         try {
-            this.sendFrame(ws, JSON.stringify({ code, error: { code, message, ...errorBodyDetail(detail) }, id: subId, type: "error" }), "control");
+            this.sendFrame(ws, JSON.stringify({ code, error: { code, message, ...errorBodyDetail(detail), ...retry }, id: subId, type: "error" }), "control");
         } catch {
             /* socket may already be closed; never throw out of webSocketMessage */
         }
