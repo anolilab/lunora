@@ -3345,7 +3345,7 @@ const withheldBindings: (config: RemoteOnlyBindings | undefined, hasCredentials:
 ### `wranglerCodegenInputs` (const)
 
 ```ts
-const wranglerCodegenInputs: (projectRoot: string) => WranglerCodegenInputs;
+const wranglerCodegenInputs: (projectRoot: string, target?: string) => WranglerCodegenInputs;
 ```
 
 ### `wranglerToAlchemy` (const)
