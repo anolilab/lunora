@@ -1,3 +1,7 @@
+## @lunora/platform-node [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.217...@lunora/platform-node@1.0.0-alpha.218) (2026-11-14)
+
+- security(scheduler): sign the timestamp and forwarded identity on dispatch (#1541)
+
 ## @lunora/platform-node [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.216...@lunora/platform-node@1.0.0-alpha.217) (2026-11-03)
 
 - fix(ci): mark test fixtures so the secrets scan passes (#1470)

@@ -2,7 +2,7 @@ import emit from "../../finding";
 import type { AdvisorProcedureProtection } from "../../procedure-protections";
 import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
-import { isPublicWrite } from "../helpers";
+import { declarationSiteFields, isPublicWrite } from "../helpers";
 
 /**
  * The human-readable reason a procedure trips this lint, from the same two
@@ -83,7 +83,7 @@ const userCreatingMutationWithoutCaptcha: Lint = {
                     metadata: {
                         callsMail: procedure.callsMail,
                         exportName: procedure.exportName,
-                        file: procedure.file,
+                        ...declarationSiteFields(procedure),
                         kind: procedure.kind,
                         writesUserTable: procedure.writesUserTable,
                     },

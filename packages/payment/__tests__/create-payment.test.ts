@@ -7,6 +7,8 @@ import { LunoraPaymentError } from "../src/errors";
 import { derivedIdempotencyKey } from "../src/idempotency";
 import { money } from "../src/money";
 import type { PaymentObserver } from "../src/observability";
+import type { StripeClientLike } from "../src/providers/stripe";
+import { createStripeAdapter } from "../src/providers/stripe";
 import type { PaymentStore, RevisionGuard } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
@@ -965,6 +967,81 @@ describe("createPayment", () => {
         await expect(store.getPaymentSession("stripe", "pi_1").then((row) => row?.refundedAmount.minorUnits)).resolves.toBe(10_000n);
     });
 
+    it("reports a replayed refund to the observer and returns the session unchanged", async () => {
+        expect.assertions(3);
+
+        // Same setup as the test above: the provider replays the first refund under the shared key and
+        // moves no money. The second call must still return the row as it stands, and the observer is
+        // told the refund never happened.
+        const store = new MemoryPaymentStore();
+        const captured = { ...paymentSession("user_1"), amount: money(10_000, "USD"), capturedAmount: money(10_000, "USD") };
+
+        await store.upsertPaymentSession(captured);
+
+        const byKey = new Map<string, { amount: bigint; refundId: string }>();
+        const issued: bigint[] = [];
+        const adapter = fakeAdapter({
+            refundPayment: async (input) => {
+                const key = input.idempotencyKey ?? "";
+                const replayed = byKey.get(key);
+
+                if (replayed) {
+                    return { ...captured, refundedAmount: money(replayed.amount, "USD"), refundId: replayed.refundId };
+                }
+
+                const amount = input.amount?.minorUnits ?? captured.capturedAmount.minorUnits;
+
+                issued.push(amount);
+                byKey.set(key, { amount, refundId: `re_${String(issued.length)}` });
+
+                return { ...captured, refundedAmount: money(amount, "USD"), refundId: `re_${String(issued.length)}` };
+            },
+        });
+        const observer = vi.fn<PaymentObserver>();
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", observability: observer, store });
+
+        await payment.refundPayment({ amount: money(2000, "USD"), sessionId: "pi_1" });
+        const replayed = await payment.refundPayment({ amount: money(2000, "USD"), sessionId: "pi_1" });
+
+        expect(replayed.refundedAmount.minorUnits).toBe(2000n);
+        expect(observer).toHaveBeenCalledTimes(1);
+        expect(observer).toHaveBeenCalledWith({ provider: "stripe", referenceId: "user_1", refundId: "re_1", sessionId: "pi_1", type: "refund.replayed" });
+    });
+
+    it("does not report a replay when the confirming webhook booked the refund first", async () => {
+        expect.assertions(2);
+
+        // The provider settles the refund and its webhook claims the marker while the facade still waits
+        // on the refund response: the facade's own claim then fails, but money did move.
+        const store = new MemoryPaymentStore();
+        const polarSession = { ...paymentSession("user_1"), id: "ord_1", provider: "polar" as const };
+
+        await store.upsertPaymentSession(polarSession);
+
+        const adapter = fakeAdapter({
+            identifier: "polar",
+            refundPayment: async () => {
+                await applyWebhookAction(store, {
+                    amount: money(250, "USD"),
+                    eventId: "evt_1",
+                    provider: "polar",
+                    refundId: "ref_1",
+                    sessionId: "ord_1",
+                    type: "payment.refunded",
+                });
+
+                return { ...polarSession, refundedAmount: money(250, "USD"), refundId: "ref_1" };
+            },
+        });
+        const observer = vi.fn<PaymentObserver>();
+        const payment = createPayment({ adapter, authorize: (referenceId) => referenceId === "user_1", observability: observer, store });
+
+        const refunded = await payment.refundPayment({ amount: money(250, "USD"), sessionId: "ord_1" });
+
+        expect(refunded.refundedAmount.minorUnits).toBe(250n);
+        expect(observer).not.toHaveBeenCalledWith(expect.objectContaining({ type: "refund.replayed" }));
+    });
+
     it("books the amount the provider reports refunding, not the amount asked for", async () => {
         expect.assertions(2);
 
@@ -1750,6 +1827,29 @@ describe("createPayment — attach / check / track", () => {
         });
         expect(events).toContain("usage.report_failed");
         await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(5);
+    });
+
+    it("track keeps a Stripe usage row unreported when no customer is stored", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const events: string[] = [];
+        const meterCreate = vi.fn<() => Promise<{ identifier: string }>>(async () => {
+            return { identifier: "mev_1" };
+        });
+        const stripe = createStripeAdapter({
+            client: () => ({ billing: { meterEvents: { create: meterCreate } } }) as unknown as StripeClientLike,
+            webhookSecret: "whsec",
+        });
+        const payment = createPayment({ adapter: stripe, authorize: () => true, observability: (event) => events.push(event.type), store });
+
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 5, referenceId: "user_1" })).resolves.toEqual({
+            recorded: true,
+            reportedToProvider: false,
+        });
+        expect(events).toContain("usage.report_failed");
+        expect(meterCreate).not.toHaveBeenCalled();
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toHaveLength(1);
     });
 
     it("track skips provider reporting when the adapter has no reportUsage", async () => {

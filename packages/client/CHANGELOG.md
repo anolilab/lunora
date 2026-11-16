@@ -1,3 +1,19 @@
+## @lunora/client [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.298...@lunora/client@1.0.0-alpha.299) (2026-11-16)
+
+- fix(do): keep broadcast deltas off subscriptions served by re-execution (#1597)
+
+## @lunora/client [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.297...@lunora/client@1.0.0-alpha.298) (2026-11-16)
+
+- fix(do): let a backed-off live query retry on a server hint (#1550)
+
+## @lunora/client [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.296...@lunora/client@1.0.0-alpha.297) (2026-11-14)
+
+- fix(client): replay a subscription refusal to late subscribers (#1530)
+
+## @lunora/client [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.295...@lunora/client@1.0.0-alpha.296) (2026-11-14)
+
+- fix(client): restamp offline writes that are mid-replay (#1534)
+
 ## @lunora/client [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.294...@lunora/client@1.0.0-alpha.295) (2026-11-13)
 
 - feat(codegen): emit a watch stream form for every query (#1598)

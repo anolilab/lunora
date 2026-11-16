@@ -1,6 +1,7 @@
 import emit from "../../finding";
 import type { AdvisorIndex } from "../../schema";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /** True when `a`'s columns are a leading prefix of `b`'s (so `b` already serves every lookup `a` does). */
 const isLeadingPrefix = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): boolean => {
@@ -48,6 +49,7 @@ const duplicateIndex: Lint = {
                 // Find another index that strictly covers this one. When two indexes
                 // are exact duplicates, the tie is broken by name so exactly one of
                 // the pair is reported (the later-sorted one is the "redundant" side).
+                // A unique index always wins the tie, since it is the one that must survive.
                 const cover = secondary.find((other) => {
                     if (other === candidate) {
                         return false;
@@ -59,7 +61,7 @@ const duplicateIndex: Lint = {
 
                     const sameLength = candidate.fields.length === other.fields.length;
 
-                    return sameLength ? candidate.name > other.name : true;
+                    return sameLength ? other.unique === true || candidate.name > other.name : true;
                 });
 
                 if (!cover) {
@@ -71,6 +73,7 @@ const duplicateIndex: Lint = {
                         cacheKey: `duplicate_index:${table.name}:${candidate.name}`,
                         detail: `Index "${candidate.name}" on table "${table.name}" (${candidate.fields.join(", ")}) is redundant — index "${cover.name}" (${cover.fields.join(", ")}) already covers its lookups.`,
                         metadata: {
+                            ...declarationSiteFields(candidate),
                             coveredBy: { fields: cover.fields, name: cover.name },
                             fields: candidate.fields,
                             index: candidate.name,

@@ -518,6 +518,105 @@ describe("offlineQueue — persistence error reporting", () => {
         expect(persisted[0]?.identity).toBe("new");
     });
 
+    it("restampIdentity relabels a write a flush has drained but not settled", async () => {
+        expect.assertions(4);
+
+        const base = createInMemoryPersistence();
+
+        await base.append({ args: {}, functionPath: "posts:create", id: "1", identity: "old" });
+
+        // `replace` is reached after `rewriteStamp` awaits the append, so the test waits on the call itself.
+        let onReplace: ((call: { write: Promise<void> }) => void) | undefined;
+        const replaceCalled = new Promise<{ write: Promise<void> }>((resolve) => {
+            onReplace = resolve;
+        });
+        const persistence: PersistenceAdapter = {
+            ...base,
+            replace: (mutation) => {
+                const write = base.replace(mutation);
+
+                onReplace?.({ write });
+
+                return write;
+            },
+        };
+        const queue = new OfflineQueue({}, { persistence });
+
+        await queue.hydrate();
+
+        const drained = queue.drain();
+
+        queue.restampIdentity("old", "new");
+
+        expect(drained[0]?.identity).toBe("new");
+
+        const call = await replaceCalled;
+
+        await call.write;
+
+        queue.requeue(drained);
+
+        expect(drained[0]?.identity).toBe("new");
+
+        const persisted = await base.load();
+
+        expect(persisted[0]?.identity).toBe("new");
+        expect(queue.drain()[0]?.identity).toBe("new");
+    });
+
+    it("restampIdentity leaves a drained write that was then discarded alone", async () => {
+        expect.assertions(2);
+
+        const base = createInMemoryPersistence();
+        const replaced: string[] = [];
+        let onReplace: ((call: { write: Promise<void> }) => void) | undefined;
+        const firstReplaceCalled = new Promise<{ write: Promise<void> }>((resolve) => {
+            onReplace = resolve;
+        });
+        const persistence: PersistenceAdapter = {
+            ...base,
+            replace: (mutation) => {
+                replaced.push(mutation.id);
+
+                const write = base.replace(mutation);
+
+                onReplace?.({ write });
+
+                return write;
+            },
+        };
+        const queue = new OfflineQueue({}, { persistence });
+
+        queue.enqueue({
+            args: {},
+            functionPath: "posts:create",
+            id: "2",
+            identity: "old",
+            reject: () => undefined,
+            resolve: () => undefined,
+        });
+        queue.enqueue({
+            args: {},
+            functionPath: "posts:create",
+            id: "3",
+            identity: "old",
+            reject: () => undefined,
+            resolve: () => undefined,
+        });
+
+        const [discarded] = queue.drain((item) => item.id === "2");
+
+        queue.discard("2");
+        queue.restampIdentity("old", "new");
+
+        const call = await firstReplaceCalled;
+
+        await call.write;
+
+        expect(replaced).toStrictEqual(["3"]);
+        expect(discarded?.identity).toBe("old");
+    });
+
     it("restampIdentity keeps the record's place in FIFO order", async () => {
         expect.assertions(1);
 

@@ -170,6 +170,13 @@ class ReexecShard extends ShardDO {
     /** When set alongside `changedTableOnRpc`, threaded through as the write's index position. */
     public changedIndexKeysOnRpc: ReadonlyArray<IndexKeyEntry> | undefined;
 
+    /** functionPath -> the error `executeSubscription` throws, standing in for an auth refusal. */
+    public readonly refusals = new Map<string, Error>();
+
+    public emit(delta: MutationDelta): void {
+        this.broadcastDelta(delta);
+    }
+
     public override async handleRpc(): Promise<unknown> {
         this.userIdDuringRpc = this.getCurrentUserId();
 
@@ -212,6 +219,12 @@ class ReexecShard extends ShardDO {
         // anonymous identity, so a concurrent RPC's `currentRequestUserId` can
         // never leak in.
         this.userIdDuringExec = identity?.userId;
+
+        const refusal = this.refusals.get(functionPath);
+
+        if (refusal !== undefined) {
+            return Promise.reject(refusal);
+        }
 
         const outcome = this.outcomes.get(functionPath);
 
@@ -399,6 +412,136 @@ describe("shardDO", () => {
         expect(other.sent).toHaveLength(1);
         expect(unrelated.sent).toHaveLength(0);
         expect(JSON.parse(matching.sent[0]!)).toMatchObject({ delta: { op: "insert", table: "messages" }, id: "a", type: "delta" });
+    });
+
+    it("broadcastDelta still reaches a table-only subscription on a shard that re-executes", () => {
+        expect.assertions(2);
+
+        const reexec = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        reexec.registerSocket(ws, { subs: { t: { table: "messages" } } });
+        reexec.emit({
+            key: "m1",
+            op: "insert",
+            row: { _id: "m1" },
+            table: "messages",
+        });
+
+        expect(ws.sent).toHaveLength(1);
+        expect(JSON.parse(ws.sent[0]!)).toMatchObject({ delta: { table: "messages" }, id: "t", type: "delta" });
+    });
+
+    describe("broadcastDelta on a shard that overrides executeSubscription", () => {
+        const stray: MutationDelta = { key: "m1", op: "insert", row: { _id: "m1" }, table: "messages:list" };
+        const subscribe = { id: "s", query: { args: {}, functionPath: "messages:list", table: "messages:list" }, type: "subscribe" } as const;
+        const deltaFrames = (ws: FakeWebSocket): unknown[] =>
+            ws.sent.map((frame) => JSON.parse(frame) as { type: string }).filter((frame) => frame.type === "delta");
+
+        it("reaches a subscription whose seed resolved to null", async () => {
+            expect.assertions(1);
+
+            const reexec = new ReexecShard(state, {});
+            const ws = createFakeWebSocket();
+
+            reexec.registerSocket(ws);
+            await reexec.driveMessage(ws, subscribe);
+            reexec.emit(stray);
+
+            expect(deltaFrames(ws)).toStrictEqual([{ delta: stray, id: "s", type: "delta" }]);
+        });
+
+        it("still reaches a null-seeded subscription after the shard wakes from hibernation", async () => {
+            expect.assertions(1);
+
+            const ws = createFakeWebSocket();
+            const before = new ReexecShard(state, {});
+
+            before.registerSocket(ws);
+            await before.driveMessage(ws, subscribe);
+
+            // A fresh instance over the same state keeps only what the attachment persisted.
+            new ReexecShard(state, {}).emit(stray);
+
+            expect(deltaFrames(ws)).toHaveLength(1);
+        });
+
+        it("does not reach a subscription whose seed was refused", async () => {
+            expect.assertions(2);
+
+            const reexec = new ReexecShard(state, {});
+            const ws = createFakeWebSocket();
+
+            reexec.refusals.set("messages:list", new LunoraError("UNAUTHORIZED", "sign in"));
+            reexec.registerSocket(ws);
+            await reexec.driveMessage(ws, subscribe);
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            reexec.emit(stray);
+            warn.mockRestore();
+
+            expect(deltaFrames(ws)).toStrictEqual([]);
+            expect(ws.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)).toContain("error");
+        });
+
+        it("does not reach a function-path subscription that has not been seeded", () => {
+            expect.assertions(1);
+
+            const reexec = new ReexecShard(state, {});
+            const ws = createFakeWebSocket();
+
+            reexec.registerSocket(ws, { subs: { s: { args: {}, functionPath: "messages:list", table: "messages:list" } } });
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            reexec.emit(stray);
+            warn.mockRestore();
+
+            expect(deltaFrames(ws)).toStrictEqual([]);
+        });
+
+        it("stops reaching a null-seeded subscription for good once a re-run returns a result", async () => {
+            expect.assertions(1);
+
+            const ws = createFakeWebSocket();
+            const before = new ReexecShard(state, {});
+
+            before.registerSocket(ws);
+            await before.driveMessage(ws, subscribe);
+            before.outcomes.set("messages:list", { result: [], tables: new Set(["messages"]) });
+            before.changedTableOnRpc = "messages";
+            await before.writeRpc();
+
+            const start = ws.sent.length;
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            // After a wake the diff baseline is gone; only the persisted attachment says the subscription switched.
+            new ReexecShard(state, {}).emit(stray);
+            warn.mockRestore();
+
+            expect(ws.sent.slice(start)).toStrictEqual([]);
+        });
+
+        it("stops reaching a subscription once a resubscribe seeds it with a result", async () => {
+            expect.assertions(1);
+
+            const reexec = new ReexecShard(state, {});
+            const ws = createFakeWebSocket();
+
+            reexec.registerSocket(ws);
+            await reexec.driveMessage(ws, subscribe);
+            reexec.outcomes.set("messages:list", { result: [], tables: new Set(["messages"]) });
+            await reexec.driveMessage(ws, subscribe);
+
+            const start = ws.sent.length;
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            reexec.emit(stray);
+            warn.mockRestore();
+
+            expect(ws.sent.slice(start)).toStrictEqual([]);
+        });
     });
 
     it("broadcastDelta does not deliver to a socket whose credential expired", () => {
@@ -1864,6 +2007,51 @@ describe("shardDO subscription delta push", () => {
 
         expect(last).toMatchObject({ id: "sub-1", type: "delta" });
         expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: DELTA_PLACEHOLDER_TABLE });
+    });
+
+    it("a subscription served by re-execution never receives a broadcast delta", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        const tables = new Set(["members", "messages"]);
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables });
+
+        await shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "messages:list", table: "messages:list" }, type: "subscribe" });
+
+        const start = ws.sent.length;
+
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })], tables });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        shard.emit({
+            key: "x",
+            op: "insert",
+            row: idRow("x", { text: "stray" }),
+            table: "messages:list",
+        });
+
+        shard.outcomes.set("messages:list", {
+            result: [...filler(16), idRow("a"), idRow("b", { text: "hi" }), idRow("c")],
+            tables,
+        });
+        await shard.writeRpc();
+
+        const keys = ws.sent
+            .slice(start)
+            .map((frame) => JSON.parse(frame) as { delta?: { key: string }; type: string })
+            .filter((frame) => frame.type === "delta")
+            .map((frame) => frame.delta?.key);
+
+        expect(keys).toStrictEqual(["b", "c"]);
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
     });
 
     it("a single-table query still names its table alongside an unvouchable read", async () => {

@@ -1,3 +1,24 @@
+## @lunora/cli [1.0.0-alpha.497](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.496...@lunora/cli@1.0.0-alpha.497) (2026-11-16)
+
+- fix(cli): resolve sdk generate refs against a custom --source (#1561)
+
+## @lunora/cli [1.0.0-alpha.496](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.495...@lunora/cli@1.0.0-alpha.496) (2026-11-14)
+
+- feat(advisor): suppress one finding at one site with an inline directive (#1587)
+
+## @lunora/cli [1.0.0-alpha.495](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.494...@lunora/cli@1.0.0-alpha.495) (2026-11-14)
+
+- fix(cli): refuse convex values the import would change (#1585)
+- fix(cli): refuse non-finite doubles and _id fields in Firestore imports (#1560)
+- fix: land five small audit fixes (#1538)
+- fix(cli): size analyze modules from the esbuild metafile (#1570)
+- fix(cli): write ai-gateway vars into the chosen wrangler env (#1568)
+- fix(cli): stop promising a safe import re-run for rows without _id (#1559)
+
+## @lunora/cli [1.0.0-alpha.494](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.493...@lunora/cli@1.0.0-alpha.494) (2026-11-14)
+
+- security(storage): add authorizeSignedGet for serveStorageObject (#1542)
+
 ## @lunora/cli [1.0.0-alpha.493](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.492...@lunora/cli@1.0.0-alpha.493) (2026-11-13)
 
 - security(cli): keep convex table reads inside the snapshot directory (#1543)

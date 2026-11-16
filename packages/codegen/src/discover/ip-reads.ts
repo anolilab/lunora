@@ -1,6 +1,8 @@
-import type { CallExpression, Node as TsNode } from "ts-morph";
+import type { CallExpression, Node as TsNode, ParameterDeclaration, ts } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { appFunctionOf } from "../argument-taint";
+import { declarationOf } from "./attribution";
 import { isContextIdentifier } from "./context-root";
 
 /**
@@ -95,18 +97,61 @@ const namesIp = (node: TsNode): boolean => {
 };
 
 /**
- * Whether a registration (its handler and the builder chain in front of it) may read `ctx.ip`, decided statically
- * and failing CLOSED: anything this analysis cannot rule out counts as a read.
- *
- * It says "reads" when the source names `ip` on anything, destructures a rest (which could hold it), indexes the ctx by
- * a computed key, passes the ctx (or a piece it cannot follow) to another function or onto another caller
- * (`ctx.runQuery`), or uses a `.use()` middleware that is not a framework one known not to key on the address.
- * The shard learns the same fact at runtime, from the first read; this is what it knows before one.
- * @returns whether the registration may read the caller's address
+ * Whether `identifier` is an argument of a call to an app function this analysis can read, and that function's
+ * body, with the matching parameter as its ctx, cannot read the address. `visiting` holds the functions already
+ * on the stack: a recursive call adds nothing the outer pass is not already reading.
  */
-const mayReadIp = (registration: CallExpression): boolean => {
-    for (const node of registration.getDescendants()) {
-        if (namesIp(node)) {
+const isHandedToAddressFreeHelper = (identifier: TsNode, visiting: Set<ts.Node>): boolean => {
+    const call = identifier.getParent();
+
+    if (!Node.isCallExpression(call) || call.getExpression() === identifier) {
+        return false;
+    }
+
+    const index = call.getArguments().indexOf(identifier);
+    const helper = appFunctionOf(call.getExpression());
+    const parameter = index === -1 || helper === undefined ? undefined : helper.getParameters()[index];
+
+    if (helper === undefined || parameter === undefined || parameter.isRestParameter() || !Node.isIdentifier(parameter.getNameNode())) {
+        return false;
+    }
+
+    if (visiting.has(helper.compilerNode)) {
+        return true;
+    }
+
+    visiting.add(helper.compilerNode);
+
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- a helper's body is read by the same walk as the registration
+    return !mayReadIpIn(helper, parameter, visiting);
+};
+
+/** Whether `node` is `parameter` itself, by symbol: a helper's ctx under any name. */
+const isParameterUse = (node: TsNode, parameter: ParameterDeclaration | undefined): boolean =>
+    parameter !== undefined && Node.isIdentifier(node) && declarationOf(node)?.compilerNode === parameter.compilerNode;
+
+const isFunctionLike = (node: TsNode): boolean =>
+    Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isFunctionDeclaration(node) || Node.isMethodDeclaration(node);
+
+/**
+ * Whether `node` is a rest element in a parameter of a function nested inside another function under `root`, such as
+ * `rows.map(({ secret, ...row }) => row)`. The ctx reaches such a callback only as a value passed in, which this walk
+ * already counts as a read, so the rest collects a row's fields and cannot hold the address.
+ */
+const isNestedCallbackRest = (node: TsNode, root: TsNode): boolean => {
+    if (!Node.isBindingElement(node) || node.getDotDotDotToken() === undefined) {
+        return false;
+    }
+
+    const parameter = node.getFirstAncestorByKind(SyntaxKind.Parameter);
+    const callback = parameter?.getParent();
+
+    return callback?.getAncestors().some((ancestor) => ancestor !== root && isFunctionLike(ancestor) && ancestor.getAncestors().includes(root)) === true;
+};
+
+const mayReadIpIn = (root: TsNode, contextParameter: ParameterDeclaration | undefined, visiting: Set<ts.Node>): boolean => {
+    for (const node of root.getDescendants()) {
+        if (namesIp(node) && !isNestedCallbackRest(node, root)) {
             return true;
         }
 
@@ -114,11 +159,14 @@ const mayReadIp = (registration: CallExpression): boolean => {
             return true;
         }
 
-        if (Node.isIdentifier(node) && isContextIdentifier(node) && !isReadableContextUse(node)) {
+        if (Node.isIdentifier(node) && (isContextIdentifier(node) || isParameterUse(node, contextParameter)) && !isReadableContextUse(node)) {
             // A declaration of the ctx binding itself (a parameter or a destructuring name) is not a use.
             const parent = node.getParent();
 
-            if (!(Node.isParameterDeclaration(parent) || Node.isBindingElement(parent) || Node.isVariableDeclaration(parent))) {
+            if (
+                !(Node.isParameterDeclaration(parent) || Node.isBindingElement(parent) || Node.isVariableDeclaration(parent)) &&
+                !isHandedToAddressFreeHelper(node, visiting)
+            ) {
                 return true;
             }
         }
@@ -126,5 +174,18 @@ const mayReadIp = (registration: CallExpression): boolean => {
 
     return false;
 };
+
+/**
+ * Whether a registration (its handler and the builder chain in front of it) may read `ctx.ip`, decided statically
+ * and failing CLOSED: anything this analysis cannot rule out counts as a read.
+ *
+ * It says "reads" when the source names `ip` on anything, destructures a rest (which could hold it), indexes the ctx by
+ * a computed key, passes the ctx (or a piece it cannot follow) to a function whose body it cannot read or onto another
+ * caller (`ctx.runQuery`), or uses a `.use()` middleware that is not a framework one known not to key on the address.
+ * A ctx handed to an app helper is followed into the helper's body, which is read the same way.
+ * The shard learns the same fact at runtime, from the first read; this is what it knows before one.
+ * @returns whether the registration may read the caller's address
+ */
+const mayReadIp = (registration: CallExpression): boolean => mayReadIpIn(registration, undefined, new Set());
 
 export default mayReadIp;

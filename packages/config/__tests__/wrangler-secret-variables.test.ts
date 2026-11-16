@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { isPublicKeyName, isSecretKeyName } from "../../../shared/secret-key";
 import { wranglerCodegenInputs } from "../src/cloudflare/wrangler-codegen-inputs";
-import { scanWranglerVariablesForSecrets } from "../src/cloudflare/wrangler-secret-variables";
+import { scanWranglerVariablesForSecrets, variableKeyLines } from "../src/cloudflare/wrangler-secret-variables";
 
 /**
  * The key-name classifier is `shared/secret-key.ts` — the SAME function
@@ -140,6 +140,19 @@ describe("scanWranglerVariablesForSecrets", () => {
     });
 });
 
+describe(variableKeyLines, () => {
+    it("counts CRLF, lone CR and LF as one line break each, as the JSONC parser does", () => {
+        expect.assertions(1);
+
+        const text = '{\r\n"vars": {\r"A": "1",\n"B": "2"\r\n}\r}';
+
+        expect([...variableKeyLines(text)]).toStrictEqual([
+            ["A", 3],
+            ["B", 4],
+        ]);
+    });
+});
+
 describe("wranglerCodegenInputs — wranglerVariables", () => {
     let root: string;
 
@@ -172,6 +185,47 @@ describe("wranglerCodegenInputs — wranglerVariables", () => {
 
         expect(findings).toHaveLength(1);
         expect(findings[0]).toMatchObject({ file: "wrangler.jsonc", key: "STRIPE_SECRET_KEY", kind: "stripe_live_key" });
+    });
+
+    it("reports the line of each flagged vars key inside wrangler.jsonc", () => {
+        expect.assertions(1);
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a fake committed secret fixture (the footgun this lint catches), not a real credential
+        const secretLine = `"STRIPE_SECRET_KEY": "sk_live_ABCDEFGHIJKLMNOPQRSTUV",`; // gitleaks:allow -- a fake committed secret fixture (the footgun this lint catches), not a real credential
+        const source = `{
+            // a comment naming "STRIPE_SECRET_KEY" must not be the match
+            "name": "app",
+            "vars": {
+                "PUBLIC_URL": "https://example.com",
+                ${secretLine}
+            },
+        }`;
+
+        writeFileSync(join(root, "wrangler.jsonc"), source, "utf8");
+
+        const [finding] = wranglerCodegenInputs(root).wranglerVariables;
+
+        expect(finding?.line).toBe(source.split("\n").findIndex((line) => line.includes('"STRIPE_SECRET_KEY": "sk_live')) + 1);
+    });
+
+    it("reports the line of the repeated vars key whose value wrangler keeps", () => {
+        expect.assertions(1);
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a fake committed secret fixture (the footgun this lint catches), not a real credential
+        const secretLine = `"STRIPE_SECRET_KEY": "sk_live_ABCDEFGHIJKLMNOPQRSTUV",`; // gitleaks:allow -- a fake committed secret fixture (the footgun this lint catches), not a real credential
+        const source = `{
+            "vars": { "STRIPE_SECRET_KEY": "<your-key>" },
+            "vars": {
+                "STRIPE_SECRET_KEY": "<your-key>",
+                ${secretLine}
+            },
+        }`;
+
+        writeFileSync(join(root, "wrangler.jsonc"), source, "utf8");
+
+        const [finding] = wranglerCodegenInputs(root).wranglerVariables;
+
+        expect(finding?.line).toBe(source.split("\n").findIndex((line) => line.includes('"STRIPE_SECRET_KEY": "sk_live')) + 1);
     });
 
     it("returns [] when no wrangler config exists", () => {

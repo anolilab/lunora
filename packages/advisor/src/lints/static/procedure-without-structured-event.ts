@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a public `mutation`/`action` whose handler emits no structured
@@ -38,7 +39,7 @@ const procedureWithoutStructuredEvent: Lint = {
                 emit(procedureWithoutStructuredEvent, {
                     cacheKey: `procedure_without_structured_event:${procedure.file}:${procedure.exportName}`,
                     detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) emits no structured event. Add a \`ctx.log\` line or a \`ctx.span\` so a failure carries its request context.`,
-                    metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
+                    metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), kind: procedure.kind },
                 }),
             );
     },

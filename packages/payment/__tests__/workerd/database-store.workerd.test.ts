@@ -320,17 +320,17 @@ describe("database payment store on workerd", () => {
             await store.recordUsage(usage({ createdAt: 20, idempotencyKey: "a2", quantity: 1 }));
             await store.recordUsage(usage({ createdAt: 21, idempotencyKey: "zero", quantity: 0 }));
 
-            const first = await store.listUnreportedUsage("stripe", 2);
+            const first = await store.listUnreportedUsage("stripe", 2, Number.POSITIVE_INFINITY);
 
             expect(first.map((event) => event.idempotencyKey)).toEqual(["a1", "a2"]);
 
             await store.markUsageReported("stripe", "a1");
             await store.markUsageReported("stripe", "a2");
 
-            const rest = await store.listUnreportedUsage("stripe", 2);
+            const rest = await store.listUnreportedUsage("stripe", 2, Number.POSITIVE_INFINITY);
 
             expect(rest.map((event) => event.idempotencyKey)).toEqual(["a3"]);
-            await expect(store.listUnreportedUsage("polar", 2)).resolves.toEqual([]);
+            await expect(store.listUnreportedUsage("polar", 2, Number.POSITIVE_INFINITY)).resolves.toEqual([]);
         });
     });
 

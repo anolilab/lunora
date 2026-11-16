@@ -390,19 +390,19 @@ Every protection above has a matching [advisor](/docs/concepts/advisors) lint, s
 an app that opts out, or never opted in, is warned at build time. The static
 lints run on every `lunora dev` save and on deploy.
 
-| Lint                                     | Level | Remediation                                                                           |
-| ---------------------------------------- | ----- | ------------------------------------------------------------------------------------- |
-| `hardcoded_secret`                       | error | Rotate the leaked value and move it to a `wrangler secret` / binding, never source.   |
-| `sql_injection_risk`                     | error | Pass request input through a bound `ctx.sql` placeholder, never string concatenation. |
-| `rls_uncovered_table`                    | warn  | Add `.use(rls(...))` to the public procedure, matching the policy used elsewhere.     |
-| `mask_uncovered_pii_column`              | warn  | Add `.use(mask(...))` so the public read redacts the same columns as elsewhere.       |
-| `auth_api_call_without_headers`          | warn  | Pass `headers` to `ctx.authApi.<method>(...)` so better-auth authorizes the session.  |
-| `public_mutation_without_ratelimit`      | warn  | Wrap the public write with `protectPublic({ rateLimit })` or attach `rateLimit(...)`. |
-| `user_creating_mutation_without_captcha` | warn  | Add `verifyTurnstile` / `protectPublic({ captcha })` to the user-creating procedure.  |
-| `public_arg_uses_any`                    | warn  | Replace the `v.any()` argument with a concrete validator.                             |
-| `admin_route_without_guard`              | warn  | Reference an auth/admin guard in the privileged `httpRoute` handler.                  |
-| `unbounded_string_arg`                   | info  | Add a max-length `.check` to the public string argument.                              |
-| `container_public_internet`              | info  | Set `enableInternet: false` on the container if it needs no outbound egress.          |
+| Lint                                     | Level | Remediation                                                                                        |
+| ---------------------------------------- | ----- | -------------------------------------------------------------------------------------------------- |
+| `hardcoded_secret`                       | error | Rotate the leaked value and move it to a `wrangler secret` / binding, never source.                |
+| `sql_injection_risk`                     | error | Keep `ctx.sql` text constant and pass request input in the `params` array, never by concatenation. |
+| `rls_uncovered_table`                    | warn  | Add `.use(rls(...))` to the public procedure, matching the policy used elsewhere.                  |
+| `mask_uncovered_pii_column`              | warn  | Add `.use(mask(...))` so the public read redacts the same columns as elsewhere.                    |
+| `auth_api_call_without_headers`          | warn  | Pass `headers` to `ctx.authApi.<method>(...)` so better-auth authorizes the session.               |
+| `public_mutation_without_ratelimit`      | warn  | Wrap the public write with `protectPublic({ rateLimit })` or attach `rateLimit(...)`.              |
+| `user_creating_mutation_without_captcha` | warn  | Add `verifyTurnstile` / `protectPublic({ captcha })` to the user-creating procedure.               |
+| `public_arg_uses_any`                    | warn  | Replace the `v.any()` argument with a concrete validator.                                          |
+| `admin_route_without_guard`              | warn  | Reference an auth/admin guard in the privileged `httpRoute` handler.                               |
+| `unbounded_string_arg`                   | info  | Add a max-length `.check` to the public string argument.                                           |
+| `container_public_internet`              | info  | Set `enableInternet: false` on the container if it needs no outbound egress.                       |
 
 ### Deployment-level findings
 

@@ -706,8 +706,11 @@ access. The lists (~3 MB) are not evaluated when `@lunora/auth` is imported; the
 load on the first gated check, so their cost is paid there instead of during
 Worker startup. They are still part of the bundle, so upload size is unaffected.
 
-Wire it into better-auth's native `/sign-up/email` endpoint with `withEmailGate`
-(or spread `emailGateDatabaseHooks(...)` into `createAuth({ databaseHooks })`):
+Wire it into better-auth with `withEmailGate` (or spread `emailGateDatabaseHooks(...)`
+into `createAuth({ databaseHooks })`). The gate runs when a user is created (the native
+`/sign-up/email` endpoint) **and** when an address changes (`/change-email`, the email-OTP
+change, and admin updates, including `AuthAdmin.updateUser`), so an account cannot move to a
+blocked domain after sign-up. `onClassify` fires only at creation.
 
 ```ts
 import { createAuth, lunoraD1Adapter, withEmailGate } from "@lunora/auth";
@@ -798,11 +801,13 @@ public account-creating mutation with no email gate (pairs with the existing
 Record authentication and security events to a durable, queryable audit trail:
 sign-in, sign-up, password change, multi-factor authentication (MFA) enable/disable, token refresh, session
 revoke, account link/unlink. That is the compliance/forensics surface Supabase
-and Firebase expose. Install the better-auth `hooks.after` recorder with
-`authAuditHook` (or compose via `withAuthAudit`):
+and Firebase expose. Install the better-auth `hooks.after` recorder
+`authAuditHook` with its `hooks.before` companion `authAuditBeforeHook`, which
+reads the owner of a session an admin revokes before the revoke deletes it (or
+compose both onto existing hooks via `withAuthAudit`):
 
 ```ts
-import { authAuditHook, createAuth, d1Executor, lunoraD1Adapter, readAuthAuditLog } from "@lunora/auth";
+import { authAuditBeforeHook, authAuditHook, createAuth, d1Executor, lunoraD1Adapter, readAuthAuditLog } from "@lunora/auth";
 
 const executor = d1Executor(env.DB); // same D1 as the auth tables
 
@@ -810,6 +815,8 @@ const auth = createAuth({
     secret: env.AUTH_SECRET,
     database: lunoraD1Adapter(env.DB),
     hooks: {
+        // reads the owner of a session an admin revokes, which the revoke itself deletes
+        before: authAuditBeforeHook(),
         after: authAuditHook({
             executor,
             retention: 100_000, // CONFIGURABLE, NOT capped — omit for an unbounded (compliance) trail

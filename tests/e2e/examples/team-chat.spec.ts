@@ -48,6 +48,10 @@ test("signs up, creates a channel, and delivers a message and an attachment to a
 
     await signUp(grace, `Grace${unique()}`);
     await grace.getByRole("button", { exact: true, name: `#${channel}` }).click();
+    // Channels are member-only: Grace joins before she can read it.
+    await grace.getByRole("button", { name: `Join #${channel}` }).click();
+    // The composer renders only for a member, alongside her live message subscription.
+    await expect(grace.getByLabel(`Message #${channel}`)).toBeVisible();
 
     const body = `hello-${unique()}`;
 

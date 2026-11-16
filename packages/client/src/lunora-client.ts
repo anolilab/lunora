@@ -83,7 +83,15 @@ import { registerSnapshotSource, snapshotSourceOf } from "./snapshot-preconditio
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
-import { failSubscription, fanSubscriptionError, releaseSubscribeFrame, setSubscriptionAck, SubscriptionRegistry, wrapSubscriber } from "./subscription";
+import {
+    failSubscription,
+    fanSubscriptionError,
+    releaseSubscribeFrame,
+    replaySubscriptionRefusal,
+    setSubscriptionAck,
+    SubscriptionRegistry,
+    wrapSubscriber,
+} from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isNonFinalRunFrame, isStaleDataFrame, replayableValue } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
 import {
@@ -877,6 +885,9 @@ class LunoraClient {
     private cacheFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
     private readonly subscriptions = new SubscriptionRegistry();
+
+    /** The re-subscribe a server retry hint asked for, per subscription id, until any frame for it shows the server has answered. */
+    private readonly pendingSubscriptionRetries = new Map<string, ReturnType<typeof setTimeout>>();
 
     /**
      * Cross-tab coordinator; created only when `crossTabSync: true`. When the
@@ -3298,6 +3309,9 @@ class LunoraClient {
 
         // Only a snapshot actually asked for may hold joiners off the stale value. Without an open
         // socket (a cross-tab follower, or a dropped connection) nothing is coming to replace it.
+        // This subscribe supersedes a pending hinted retry; left armed, the timer would send a second one.
+        this.cancelSubscriptionRetry(state.id);
+
         if (this.resnapshotSubscription(state)) {
             state.awaitingSnapshot = true;
         }
@@ -3425,6 +3439,8 @@ class LunoraClient {
             }
         }
 
+        replaySubscriptionRefusal(state, errorCallback);
+
         this.ensureSocket(options.shardKey);
         this.sendSubscribeIfOpen(state);
 
@@ -3453,6 +3469,7 @@ class LunoraClient {
                 this.sendOrQueueUnsubscribe(subscriptionState.shardKey, subscriptionState.id, "unsubscribe");
                 this.returnCacheSeed(SubscriptionRegistry.keyOf(subscriptionState));
                 this.subscriptions.remove(subscriptionState);
+                this.cancelSubscriptionRetry(subscriptionState.id);
 
                 // Its frame will never be answered now: stand the watchdog down and free the pacing slot it holds.
                 const conn = this.getConnection(subscriptionState.shardKey);
@@ -3849,6 +3866,12 @@ class LunoraClient {
 
     public close(): void {
         this.closed = true;
+
+        for (const timer of this.pendingSubscriptionRetries.values()) {
+            clearTimeout(timer);
+        }
+
+        this.pendingSubscriptionRetries.clear();
 
         for (const key of this.whisperJoins.keys()) {
             this.dropWhisperJoinWaiters(key);
@@ -5529,7 +5552,8 @@ class LunoraClient {
             } else {
                 // A refusal answers the request, as for a refused slot below.
                 this.markQueryRejected(state, true);
-                failSubscription(state, { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" });
+                state.refusal = { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" };
+                failSubscription(state, state.refusal);
             }
         }
 
@@ -5578,10 +5602,8 @@ class LunoraClient {
             if (!slot.ok) {
                 // A refusal answers the request: without this a denied query on a polling shard stays pending forever.
                 this.markQueryRejected(state, true);
-                failSubscription(state, {
-                    code: slot.error.code,
-                    message: slot.error.message,
-                });
+                state.refusal = { code: slot.error.code, message: slot.error.message };
+                failSubscription(state, state.refusal);
 
                 continue;
             }
@@ -7003,6 +7025,7 @@ class LunoraClient {
 
         for (const state of this.subscriptions.all()) {
             if (connectionKey(state.shardKey) === key) {
+                this.cancelSubscriptionRetry(state.id);
                 setSubscriptionAck(state, "idle");
                 // A delta run is one socket's stream: whatever of it arrived ends with that socket.
                 state.pendingDeltaRun = undefined;
@@ -7479,7 +7502,11 @@ class LunoraClient {
             // A refusal answers the request: the subscription stops counting as pending on this connection.
             // Marked before fanning, so a callback that resets the session (see above) is not undone by it.
             this.markQueryRejected(state);
+            // After `markQueryRejected`, whose `"acked"` write clears the refusal.
+            state.refusal = subscriptionError;
 
+            // Armed before fanning, so a callback that closes the client or drops the last subscriber cancels it.
+            this.scheduleSubscriptionRetry(state, (message.error as { retryAfterMs?: unknown } | undefined)?.retryAfterMs);
             failSubscription(state, subscriptionError);
 
             // Fan it to follower tabs too. `broadcastSubscriptionError` existed
@@ -7604,6 +7631,42 @@ class LunoraClient {
     }
 
     /**
+     * Re-subscribe once after the server's retry hint. The server keeps the failure streak across this re-subscribe, so
+     * a re-run that fails again is answered with a longer hint rather than retried on every write. An error without a
+     * usable hint cancels a pending retry: the server sends one when it has ended the subscription.
+     */
+    private scheduleSubscriptionRetry(state: SubscriptionState, retryAfterMs: unknown): void {
+        this.cancelSubscriptionRetry(state.id);
+
+        if (this.closed || typeof retryAfterMs !== "number" || !Number.isFinite(retryAfterMs) || retryAfterMs < 0) {
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            this.pendingSubscriptionRetries.delete(state.id);
+
+            // A joiner waits for the retry's snapshot rather than taking the value the failure left behind.
+            if (!this.closed && this.subscriptions.getById(state.id) === state && this.resnapshotSubscription(state)) {
+                // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
+                state.awaitingSnapshot = true;
+            }
+        }, retryAfterMs);
+
+        this.pendingSubscriptionRetries.set(state.id, timer);
+    }
+
+    private cancelSubscriptionRetry(id: string): void {
+        const timer = this.pendingSubscriptionRetries.get(id);
+
+        if (timer === undefined) {
+            return;
+        }
+
+        clearTimeout(timer);
+        this.pendingSubscriptionRetries.delete(id);
+    }
+
+    /**
      * Discard a held delta run and ask for a full snapshot. The run's rows are lost, so the cursor
      * and epoch stay where the committed base left them: the snapshot request omits them, but a
      * reconnect before it lands still resumes from before the run. Deltas are refused until the
@@ -7659,6 +7722,7 @@ class LunoraClient {
         }
 
         // The older of two seeds from a re-sent `subscribe`, arriving last: it would roll the value and the resume cursor back.
+        // It answers nothing, so a pending hinted retry stays armed.
         if (message.type === "data" && isStaleDataFrame(state, message)) {
             return;
         }
@@ -7667,6 +7731,8 @@ class LunoraClient {
         if (message.type === "delta" && state.baseIncomplete === true) {
             return;
         }
+
+        this.cancelSubscriptionRetry(state.id);
 
         let payload: unknown;
         const pendingRun = state.pendingDeltaRun;
@@ -7720,6 +7786,8 @@ class LunoraClient {
         const firstPolledValue = snapshotMark !== undefined && !state.valueReceived;
 
         commitDataFrame(state, payload, { claims: this.frameClaims, cursor: message.cursor, epoch: message.epoch });
+        // A value has landed, so the refusal a late subscriber would be handed is no longer the answer.
+        state.refusal = undefined;
 
         if (firstPolledValue) {
             state.valueReceived = true;
@@ -8112,6 +8180,8 @@ class LunoraClient {
      * status is only recomputed when this is the acknowledgement that changes it.
      */
     private ackAndAdvanceCursor(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined): void {
+        this.cancelSubscriptionRetry(state.id);
+
         /* eslint-disable no-param-reassign -- advance the shared subscription state in place (same pattern as the optimistic-update path above) */
         const newlyAcked = state.ack !== "acked";
 
