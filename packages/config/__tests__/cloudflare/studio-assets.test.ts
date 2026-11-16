@@ -80,6 +80,9 @@ describe("studio documents as Workers Static Assets", () => {
             ["an environment's own assets block", {}, { env: { staging: { assets: { directory: "./dist" } } } }],
             ["a KV namespace already bound as ASSETS", {}, { kv_namespaces: [{ binding: "ASSETS", id: "abc" }] }],
             ["a service already bound as ASSETS, beside the block Lunora wrote", {}, { assets: OWNED, services: [{ binding: "ASSETS", service: "cdn" }] }],
+            // The top-level block is inheritable, so production would get a second `ASSETS`.
+            ["an environment's KV namespace bound as ASSETS", {}, { env: { production: { kv_namespaces: [{ binding: "ASSETS", id: "abc" }] } } }],
+            ["an environment's var named ASSETS, beside the block Lunora wrote", {}, { assets: OWNED, env: { staging: { vars: { ASSETS: "cdn" } } } }],
         ])("keeps them in the bundle for %s", (_label, dependencies: Record<string, string>, wrangler: Record<string, unknown>) => {
             expect.assertions(1);
 
@@ -94,6 +97,15 @@ describe("studio documents as Workers Static Assets", () => {
             writeProject({});
 
             expect(studioAssetsPlan(root, { main: "src/server.ts" }, target)).toBeUndefined();
+        });
+
+        it("keeps them in the bundle when lunora.config.* declares another target and none is passed", () => {
+            expect.assertions(1);
+
+            writeProject({});
+            writeFileSync(join(root, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+
+            expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
         });
 
         it("keeps them in the bundle for a root it cannot read as a project", () => {
@@ -165,6 +177,32 @@ describe("studio documents as Workers Static Assets", () => {
 
             expect(readWrangler()["assets"]).toBeUndefined();
         });
+
+        // `lunora dev --no-codegen` writes the block here and nothing writes the documents; wrangler refuses a missing directory.
+        it("creates the assets directory the block points at, also when the block is already there", () => {
+            expect.assertions(4);
+
+            writeProject({});
+            reconcileWranglerBindings(root, inferred());
+
+            expect(readWrangler()["assets"]).toStrictEqual(OWNED);
+            expect(existsSync(join(root, STUDIO_ASSETS_DIRECTORY))).toBe(true);
+
+            // A fresh clone: the block is committed, `.lunora/` is gitignored.
+            rmSync(join(root, ".lunora"), { force: true, recursive: true });
+
+            expect(reconcileWranglerBindings(root, inferred()).changed).toBe(false);
+            expect(existsSync(join(root, STUDIO_ASSETS_DIRECTORY))).toBe(true);
+        });
+
+        it("creates no assets directory when the documents stay bundled", () => {
+            expect.assertions(1);
+
+            writeProject({}, { "@lunora/vite": "*" });
+            reconcileWranglerBindings(root, inferred());
+
+            expect(existsSync(join(root, STUDIO_ASSETS_DIRECTORY))).toBe(false);
+        });
     });
 
     describe(wranglerCodegenInputs, () => {
@@ -228,6 +266,19 @@ describe("studio documents as Workers Static Assets", () => {
             const before = readFileSync(wranglerPath(), "utf8");
 
             reconcileStudioAssets(root, "node", logger);
+
+            expect(readFileSync(wranglerPath(), "utf8")).toBe(before);
+        });
+
+        it("writes nothing when no target is passed and lunora.config.* declares another", () => {
+            expect.assertions(1);
+
+            writeProject({});
+            writeFileSync(join(root, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+
+            const before = readFileSync(wranglerPath(), "utf8");
+
+            reconcileStudioAssets(root, undefined, logger);
 
             expect(readFileSync(wranglerPath(), "utf8")).toBe(before);
         });

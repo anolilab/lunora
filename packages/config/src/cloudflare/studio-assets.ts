@@ -22,6 +22,8 @@
  * Reconcile (which writes the block) and codegen (which writes the files and the
  * loaders) both decide through {@link studioAssetsPlan}, so they cannot disagree.
  */
+import { resolveCodegenTarget } from "@lunora/codegen";
+
 import { detectFramework } from "../detect-framework";
 import { readProjectDependencyNames, readProjectManifest } from "../project-manifest";
 import bindingNameOwner from "./binding-name-owner";
@@ -86,10 +88,14 @@ const bundledByWrangler = (projectRoot: string, parsed: StudioAssetsShape): bool
  * Worker bundle. Assets only for a Cloudflare Worker wrangler bundles, with no
  * `assets` block of its own anywhere (an `env.<name>` block replaces the
  * top-level one whole), or only the one Lunora wrote, and no other binding
- * named `ASSETS`.
+ * named `ASSETS` in any environment.
+ *
+ * An omitted `target` resolves the way codegen does (`lunora.config.*`, then
+ * Cloudflare), so a caller that has no `--target` cannot write a block for a
+ * Node or celld project whose directory codegen never fills.
  */
 const studioAssetsPlan = (projectRoot: string, parsed: StudioAssetsShape | undefined, target?: string): StudioAssetsPlan | undefined => {
-    if (parsed === undefined || (target !== undefined && target !== "cloudflare")) {
+    if (parsed === undefined || resolveCodegenTarget(projectRoot, target) !== "cloudflare") {
         return undefined;
     }
 
@@ -99,7 +105,10 @@ const studioAssetsPlan = (projectRoot: string, parsed: StudioAssetsShape | undef
         environments.some((block) => isPlainObject(block) && block["assets"] !== undefined);
 
     // Another binding already named `ASSETS` (a KV namespace, a service, …) would make the block a duplicate wrangler rejects.
-    const nameTaken = bindingNameOwner({ ...(parsed as WranglerShape), assets: undefined }, STUDIO_ASSETS_BINDING) !== undefined;
+    // The top-level block is inherited by every environment, so an environment's own bindings count too.
+    const nameTaken = [{ ...(parsed as WranglerShape), assets: undefined }, ...environments].some(
+        (block) => isPlainObject(block) && bindingNameOwner(block, STUDIO_ASSETS_BINDING) !== undefined,
+    );
 
     if (ownAssets || nameTaken || !bundledByWrangler(projectRoot, parsed)) {
         return undefined;

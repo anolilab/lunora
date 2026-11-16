@@ -105,6 +105,8 @@ interface WranglerBindingsPlan extends Omit<ReconcileBindingsResult, "changed" |
     devConfig?: DevConfigServicesPlan;
 
     edit?: {
+        /** The Studio assets directory the planned config points at, relative to `wrangler.jsonc`; created on apply. */
+        assetsDirectory?: string;
         manifest: Manifest | undefined;
         original: string;
         /** The ownership each step claims, written once the config is. */
@@ -1148,7 +1150,9 @@ const planWranglerBindings = (
     // only step that emits this label.
     warnings.push(...placeholderWarnings(added, target));
 
-    return { added, devConfig, edit: { manifest, original, records, text }, exportGaps, updated, warnings, wranglerPath };
+    const assetsDirectory = studioAssetsPlan(projectRoot, parsed, target)?.directory;
+
+    return { added, devConfig, edit: { assetsDirectory, manifest, original, records, text }, exportGaps, updated, warnings, wranglerPath };
 };
 
 export type { ExportGap, ReconcileBindingsResult, WranglerBindingsPlan };
