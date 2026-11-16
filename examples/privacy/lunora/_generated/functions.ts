@@ -130,7 +130,7 @@ return { "title": source["title"] };
  * address-keyed from its first run, so it never resumes one warm: its rows can depend on the address the cursor
  * was read at, which a claims fingerprint leaves out.
  */
-export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["admin:listOpenPrivacyRequests", "requests:exportFile", "requests:myRequests", "tasks:myTasks"]);
+export const LUNORA_IP_READER_PATHS: ReadonlySet<string> = new Set(["admin:listOpenPrivacyRequests", "requests:exportFile", "requests:myRequests"]);
 
 /**
  * Lifecycle manifest: the function paths the generated ShardDO dispatches when a
@@ -191,15 +191,15 @@ export interface Caller {
         retryPrivacyRequest: (args: { requestId: string }) => Promise<{ requestId: string; status: "restarted"; }>;
     };
     requests: {
-        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
+        cancelRequest: (args: { requestId: string }) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "restored" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
         downloadLink: (args: { requestId: string }) => Promise<string>;
         exportFile: (args: { key: string }) => Promise<null | import("../privacy-files.js").StoredFile>;
-        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }[]>;
+        myRequests: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "restored" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }[]>;
         privacyPort: (args: { method: string; payload: string }) => Promise<string>;
         privacySweep: (args?: {}) => Promise<{ expired: string[]; purged: number; }>;
         privacyTick: (args?: {}) => Promise<{ approaching: string[]; overdue: string[]; }>;
-        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
-        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
+        requestErasure: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "restored" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
+        requestExport: (args?: {}) => Promise<{ dueAt: number; expiresAt?: number; id: string; receivedAt: number; status: "received" | "grace" | "processing" | "ready" | "completed" | "restored" | "failed" | "cancelled" | "expired"; type: import("@lunora/privacy").RequestType }>;
     };
     tasks: {
         addTask: (args: { title: string }) => Promise<Id<"tasks">>;

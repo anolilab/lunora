@@ -23,6 +23,7 @@
       "file": "channels",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 18,
       "visibility": "public"
     },
     {
@@ -48,6 +49,111 @@
       "file": "channels",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 31,
+      "visibility": "public"
+    },
+    {
+      "callsMail": false,
+      "emitsEvent": true,
+      "fanOut": false,
+      "handlesErrors": false,
+      "reachesOutbound": false,
+      "runsAiGeneration": false,
+      "throwsBareError": false,
+      "unboundedAiGeneration": false,
+      "usesInsertManyUnsafe": false,
+      "writesUserTable": false,
+      "exempt": false,
+      "exemptReason": "",
+      "usesCaptcha": false,
+      "usesEmailGate": false,
+      "usesMask": false,
+      "usesRateLimit": true,
+      "usesRls": false,
+      "analyzableBody": true,
+      "exportName": "join",
+      "file": "channels",
+      "hasEmailArg": false,
+      "kind": "mutation",
+      "line": 89,
+      "visibility": "public"
+    },
+    {
+      "callsMail": false,
+      "emitsEvent": true,
+      "fanOut": false,
+      "handlesErrors": false,
+      "reachesOutbound": false,
+      "runsAiGeneration": false,
+      "throwsBareError": false,
+      "unboundedAiGeneration": false,
+      "usesInsertManyUnsafe": false,
+      "writesUserTable": false,
+      "exempt": false,
+      "exemptReason": "",
+      "usesCaptcha": false,
+      "usesEmailGate": false,
+      "usesMask": false,
+      "usesRateLimit": true,
+      "usesRls": false,
+      "analyzableBody": true,
+      "exportName": "leave",
+      "file": "channels",
+      "hasEmailArg": false,
+      "kind": "mutation",
+      "line": 103,
+      "visibility": "public"
+    },
+    {
+      "callsMail": false,
+      "emitsEvent": false,
+      "fanOut": false,
+      "handlesErrors": false,
+      "reachesOutbound": false,
+      "runsAiGeneration": false,
+      "throwsBareError": false,
+      "unboundedAiGeneration": false,
+      "usesInsertManyUnsafe": false,
+      "writesUserTable": false,
+      "exempt": false,
+      "exemptReason": "",
+      "usesCaptcha": false,
+      "usesEmailGate": false,
+      "usesMask": false,
+      "usesRateLimit": false,
+      "usesRls": false,
+      "analyzableBody": true,
+      "exportName": "membership",
+      "file": "channels",
+      "hasEmailArg": false,
+      "kind": "query",
+      "line": 135,
+      "visibility": "public"
+    },
+    {
+      "callsMail": false,
+      "emitsEvent": false,
+      "fanOut": false,
+      "handlesErrors": false,
+      "reachesOutbound": false,
+      "runsAiGeneration": false,
+      "throwsBareError": false,
+      "unboundedAiGeneration": false,
+      "usesInsertManyUnsafe": false,
+      "writesUserTable": false,
+      "exempt": false,
+      "exemptReason": "",
+      "usesCaptcha": false,
+      "usesEmailGate": false,
+      "usesMask": false,
+      "usesRateLimit": false,
+      "usesRls": false,
+      "analyzableBody": true,
+      "exportName": "members",
+      "file": "channels",
+      "hasEmailArg": false,
+      "kind": "query",
+      "line": 149,
       "visibility": "public"
     },
     {
@@ -73,6 +179,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 48,
       "visibility": "public"
     },
     {
@@ -98,6 +205,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 67,
       "visibility": "public"
     },
     {
@@ -123,6 +231,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 103,
       "visibility": "public"
     },
     {
@@ -148,6 +257,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 135,
       "visibility": "public"
     },
     {
@@ -173,6 +283,7 @@
       "file": "messages",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 176,
       "visibility": "public"
     },
     {
@@ -198,6 +309,7 @@
       "file": "presence",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 28,
       "visibility": "public"
     },
     {
@@ -223,6 +335,7 @@
       "file": "presence",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 68,
       "visibility": "public"
     },
     {
@@ -248,6 +361,7 @@
       "file": "presence",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 95,
       "visibility": "public"
     },
     {
@@ -273,6 +387,7 @@
       "file": "profiles",
       "hasEmailArg": false,
       "kind": "query",
+      "line": 45,
       "visibility": "public"
     },
     {
@@ -298,6 +413,7 @@
       "file": "profiles",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 66,
       "visibility": "public"
     },
     {
@@ -323,6 +439,7 @@
       "file": "profiles",
       "hasEmailArg": false,
       "kind": "mutation",
+      "line": 96,
       "visibility": "public"
     },
     {
@@ -348,6 +465,7 @@
       "file": "profiles",
       "hasEmailArg": false,
       "kind": "action",
+      "line": 124,
       "visibility": "public"
     }
   ]

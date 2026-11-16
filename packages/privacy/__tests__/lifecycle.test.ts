@@ -153,9 +153,22 @@ describe("the cancel rule and the transition table", () => {
         expect(canTransition("ready", "expired")).toBe(true);
     });
 
-    it("moves nothing out of a terminal status, failed included as a target", () => {
-        for (const from of REQUEST_STATUSES.filter((status) => isTerminal(status))) {
-            expect(REQUEST_STATUSES.filter((to) => canTransition(from, to))).toStrictEqual([]);
+    it("moves nothing out of a terminal status, except that a restore re-erases a completed erasure", () => {
+        const targetsOf = (from: (typeof REQUEST_STATUSES)[number]) => REQUEST_STATUSES.filter((to) => canTransition(from, to));
+
+        for (const from of REQUEST_STATUSES.filter((status) => isTerminal(status) && status !== "completed")) {
+            expect(targetsOf(from)).toStrictEqual([]);
         }
+
+        expect(targetsOf("completed")).toStrictEqual(["restored"]);
+    });
+});
+
+describe("restored", () => {
+    it("is reached from an erasure a restore re-erased, and is terminal", () => {
+        expect(canTransition("grace", "restored")).toBe(true);
+        expect(canTransition("completed", "restored")).toBe(true);
+        expect(canTransition("cancelled", "restored")).toBe(false);
+        expect(isTerminal("restored")).toBe(true);
     });
 });

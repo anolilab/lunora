@@ -239,6 +239,13 @@ const checkoutSessionAction = ({ base, currency, object }: StripeEvent): Webhook
         };
     }
 
+    // Only a payment-mode session moves money. A setup session (saving a card) has no PaymentIntent
+    // and settles as `no_payment_required`, so it would otherwise be recorded as a captured
+    // payment with no amount. Stripe sets `mode` on every Checkout Session.
+    if (readString(object, "mode") !== "payment") {
+        return { ...base, type: "unhandled" };
+    }
+
     const paymentIntentId = readString(object, "payment_intent");
 
     // Async payment methods can complete the session before a payment_intent id is attached.
@@ -419,6 +426,12 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
+// Checkout keys are derived from the request, so a repeat of a finished checkout inside Stripe's
+// idempotency window can be answered with that earlier session. Only an `open` session is payable,
+// so the session's current `status` (typed by the SDK, read fresh) identifies it; the replay header
+// is not relied on.
+const isFinishedSession = (session: Stripe.Checkout.Session): boolean => session.status === "complete" || session.status === "expired";
+
 export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
     // Use the loaded client as the real `Stripe` internally so every call below is checked against
@@ -461,24 +474,38 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
             const client = await loadClient();
 
-            const session = await client.checkout.sessions.create(
-                {
-                    cancel_url: input.cancelUrl,
-                    client_reference_id: input.referenceId,
-                    customer: input.customerId,
-                    expires_at: input.expiresAt === undefined ? undefined : Math.floor(input.expiresAt / 1000),
-                    line_items: [{ price: input.priceId, quantity: input.quantity ?? 1 }],
-                    // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
-                    metadata: { ...input.metadata, referenceId: input.referenceId },
-                    mode: input.mode,
-                    // The PaymentIntent needs the reference too: `payment_intent.succeeded` can land
-                    // before `checkout.session.completed` and is mapped from the intent alone.
-                    payment_intent_data: input.mode === "payment" ? { metadata: { ...input.metadata, referenceId: input.referenceId } } : undefined,
-                    subscription_data: input.mode === "subscription" ? { metadata: { referenceId: input.referenceId } } : undefined,
-                    success_url: input.successUrl,
-                },
-                { idempotencyKey: input.idempotencyKey },
-            );
+            const params: Stripe.Checkout.SessionCreateParams = {
+                cancel_url: input.cancelUrl,
+                client_reference_id: input.referenceId,
+                customer: input.customerId,
+                expires_at: input.expiresAt === undefined ? undefined : Math.floor(input.expiresAt / 1000),
+                line_items: [{ price: input.priceId, quantity: input.quantity ?? 1 }],
+                // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
+                metadata: { ...input.metadata, referenceId: input.referenceId },
+                mode: input.mode,
+                // The PaymentIntent needs the reference too: `payment_intent.succeeded` can land
+                // before `checkout.session.completed` and is mapped from the intent alone.
+                payment_intent_data: input.mode === "payment" ? { metadata: { ...input.metadata, referenceId: input.referenceId } } : undefined,
+                subscription_data: input.mode === "subscription" ? { metadata: { referenceId: input.referenceId } } : undefined,
+                success_url: input.successUrl,
+            };
+
+            let session = await client.checkout.sessions.create(params, { idempotencyKey: input.idempotencyKey });
+
+            // A replay returns the body Stripe stored at creation, whose status is still `open`
+            // after the customer finished; only a fresh read shows the session's current status.
+            if (input.idempotencyKey !== undefined && isFinishedSession(await client.checkout.sessions.retrieve(session.id))) {
+                // The retry key embeds the replayed session id: a double-click after the first session
+                // finished still collapses onto one new session, and no clock is needed.
+                session = await client.checkout.sessions.create(params, { idempotencyKey: `${input.idempotencyKey}:${session.id}` });
+
+                if (isFinishedSession(await client.checkout.sessions.retrieve(session.id))) {
+                    throw new LunoraPaymentError(
+                        "PROVIDER_ERROR",
+                        "stripe replayed a finished checkout session for this request twice; pass a distinct idempotencyKey to start a new one",
+                    );
+                }
+            }
 
             return { id: session.id, provider: "stripe", url: session.url ?? "" };
         },
@@ -599,6 +626,16 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         reportUsage: async (input: ReportUsageInput) => {
+            // Stripe attributes a meter event only by `stripe_customer_id`; with no customer the event cannot
+            // be billed to anyone, and the facade marks any forwarded row reported, so refuse before the call
+            // and leave the row for a later sweep.
+            if (input.customerId === undefined || input.customerId.trim() === "") {
+                throw new LunoraPaymentError(
+                    "NOT_FOUND",
+                    `stripe usage for reference "${input.referenceId}" has no Stripe customer to bill; it stays unreported until one exists`,
+                );
+            }
+
             const client = await loadClient();
 
             // Stripe v2 Meter Events: `event_name` is the meter, `value` a string, `identifier`
@@ -607,7 +644,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                 {
                     event_name: input.featureId,
                     identifier: input.idempotencyKey,
-                    payload: { stripe_customer_id: input.customerId ?? "", value: String(input.quantity) },
+                    payload: { stripe_customer_id: input.customerId, value: String(input.quantity) },
                     timestamp: input.timestamp === undefined ? undefined : Math.floor(input.timestamp / 1000),
                 },
                 { idempotencyKey: input.idempotencyKey },

@@ -1,7 +1,7 @@
 import emit from "../../finding";
 import { mightExhibit } from "../../procedure-protections";
 import type { Lint } from "../../types";
-import { isPublicWrite } from "../helpers";
+import { declarationSiteFields, isPublicWrite } from "../helpers";
 
 /**
  * Flags a public `mutation`/`action` that creates a user/session/account row but
@@ -78,7 +78,7 @@ const signupMutationWithoutDisposableGating: Lint = {
                     detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) writes a user/session/account table but has no disposable-email gate. Add \`.use(emailGateMiddleware(...))\` from \`@lunora/auth/email-guard\`.`,
                     metadata: {
                         exportName: procedure.exportName,
-                        file: procedure.file,
+                        ...declarationSiteFields(procedure),
                         kind: procedure.kind,
                         writesUserTable: procedure.writesUserTable,
                     },

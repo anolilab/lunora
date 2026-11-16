@@ -41,6 +41,7 @@ interface NodeDispatchRouteOptions {
     adminToken?: string;
     defaultShardKey: string;
     invoke: (call: NodeDispatchInvocation) => Promise<Response>;
+    now?: () => number;
     schedulerSecret?: string;
 }
 ```

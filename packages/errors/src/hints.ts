@@ -183,7 +183,7 @@ const ERROR_HINTS: Readonly<Partial<Record<LunoraErrorCode, ErrorHint>>> = {
     AUTH_MOVE_FAILED:
         "The message names the step, the table and the class of the SQLite error; the auth object's log has the full error. The copy resumes where it stopped once the cause is fixed.",
     DISPATCH_UNAUTHENTICATED:
-        "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.",
+        "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current. A signed dispatch is also refused when the scheduler's and the worker's clocks differ by more than five minutes.",
     DISPATCH_IN_PROGRESS:
         "A dispatch with this idempotency id is still running on the shard. Retry it; once the first attempt settles the same id is served from the replay cache.",
     TOKEN_EXPIRED: [

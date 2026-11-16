@@ -535,10 +535,17 @@ defaults to 1 MiB and closes with `1009`, on every reconnect) must raise it.
 
 `subscribe.query.args` is `encodeWire(args)`. `functionPath` selects the query
 the server re-executes; `table` addresses the legacy raw-delta fan-out
-(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A client
+(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A subscription
+the server serves by re-execution (every `__lunora_admin__:` and flag subscription,
+and, on a shard that re-runs queries, every subscription with a `functionPath` whose seed returned
+a result, is still in flight, or was refused) never receives a `broadcastDelta` frame. A seed that
+deliberately resolves to no result leaves its subscription to `broadcastDelta` until a later
+re-run returns one; that re-run sends a full snapshot and ends the broadcasts for good. At any
+moment one subscription id is fed by exactly one of the two paths. A client
 that has no table name to give sends the function path there — `@lunora/client`
 always does, because a function reference carries only its `namespace:fn` id — so
-those subscriptions are fed by re-execution alone. The non-JS SDKs carry `table`
+on a generated shard, whose seeds return results, those subscriptions are fed by re-execution
+alone. The non-JS SDKs carry `table`
 on their frame BUILDERS only (`build_subscribe_frame` / `BuildSubscribeFrame` /
 `buildSubscribeFrame`), where it likewise defaults to `functionPath`; no public
 `subscribe` in any of the eight takes it, and every one of them passes that
@@ -636,14 +643,18 @@ page deltas when every field outside `page` is byte-identical to the last
 delivered value, so a moved `continueCursor` or a flipped `isDone` always arrives
 as a full `data` snapshot instead.
 
-**`delta.table`.** A row delta's `table` is a real table name only when the query's read set is
-exactly one table and nothing else. A query that read several tables, read none, or depends on
-every table (the admin wildcard behind Studio's live views, whose result may depend on any table)
-gets the placeholder `"__lunora__"` instead (a leading `__` is reserved for framework tables, so
-no user table has that name). The server diffs the
-query's result, whose rows carry no record of their source table, so it cannot name the table
-of each row. A client MUST NOT route, key or filter by this field: the merge is by `key` / `_id`
-alone, and `table` only marks the payload as a row delta (it must be a string).
+**`delta.table`.** A **re-execution** row delta's `table` is a real table name only when the
+query's read set is exactly one table and nothing else. A query that read several tables, read
+none, or depends on every table (the admin wildcard behind Studio's live views, whose result may
+depend on any table) gets the placeholder `"__lunora__"` instead (a leading `__` is reserved for
+framework tables, so no user table has that name). The server diffs the query's result, whose rows
+carry no record of their source table, so it cannot name the table of each row. A
+`broadcastDelta` frame (§5.1, legacy raw-delta fan-out) carries the string the server stamped on
+the write, which under the default matcher equals the subscription's own registered `table` (the
+written table, on the `createShardCtxDb` route); its `row` is the written row as stored, not
+filtered by the subscriber's query, row-level security or column masks. A client MUST NOT route,
+key or filter by this field: the merge is by `key` / `_id` alone, and `table` only marks the
+payload as a row delta (it must be a string).
 
 **Insert placement.** An `insert` op carries no index, so a merging client
 decides the position itself: if the new row and its neighbours all carry a
@@ -677,13 +688,24 @@ Run `pageDeltaFrames` only once you announce the token.
 | `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId?, more? }`                   | merge delta into server base; the LAST frame of a run carries the cursor                                                                                                                                                                                           |
 | `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                                         | nothing changed; keep value, advance cursor                                                                                                                                                                                                                        |
 | `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                                         | write touched tables, byte-identical result; advance only                                                                                                                                                                                                          |
-| `error`              | `{ type, id?, error: { code?, message?, hint?, why? }, message? }`                       | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                                                                                                                          |
+| `error`              | `{ type, id?, error: { code?, message?, hint?, why?, retryAfterMs? }, message? }`        | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                                                                                                                          |
 | `complete`           | `{ type, id }`                                                                           | subscription/stream closed server-side                                                                                                                                                                                                                             |
 | `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                                          | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                                                                                                                         |
 | `whisper`            | `{ type, topic, data: <wire>, from? }`                                                   | ephemeral relay                                                                                                                                                                                                                                                    |
 | `live`               | `{ type, stream, topic, data: <wire> }`                                                  | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused)                                                                                                                                                     |
 | `identity`           | `{ type, connectionId, subject: <string \| null>, whisperAck?, revalidateMs?, claims? }` | the user this socket is authenticated as (`null` = anonymous); `connectionId` names the socket for live control; `whisperAck` advertises the live-join ack; `revalidateMs` is the re-auth window (§6.1); `claims` fingerprints the socket's verified claims (§6.1) |
 | `whisper_subscribed` | `{ type, topic }`                                                                        | a live (non-room) `whisper_subscribe` was processed, admitted or not (server-only; additive, an unknown frame is a no-op)                                                                                                                                          |
+
+The server sets `error.retryAfterMs` (milliseconds) on a live subscription's refresh-failure
+frame and on the answer to a failed retry. A client that ignores it sees the same frames as before.
+A client that honours it re-subscribes that id once, at the hint; a newer hint replaces the
+pending re-subscribe. Any `data` (other than a stale seed older than the held cursor), `ack`,
+`resume` or `settled` frame for the id, an `error` frame for the id without `retryAfterMs` (the
+server sends one when it has ended the subscription), an unsubscribe, a disconnect or closing the
+client cancels it. The server treats a same-args re-subscribe of a registered subscription as a
+retry: a re-run that fails again keeps the subscription registered and is answered with the next
+hint in the sequence 1 s, 1 s, 2 s, 4 s, … capped at 60 s. The streak lives in memory, so after
+the Durable Object hibernates the sequence restarts at 1 s rather than ending.
 
 `identity` is sent in reply to every `connect` frame (§5.1), including a re-sent
 one, and only after the socket has passed the §6 gate. `subject` is the resolved

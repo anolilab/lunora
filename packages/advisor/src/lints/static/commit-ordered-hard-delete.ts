@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * `.commitOrdered()` gives a table `_commitSeq`, and the point of `_commitSeq` is
@@ -44,7 +45,7 @@ const commitOrderedHardDelete: Lint = {
                 emit(commitOrderedHardDelete, {
                     cacheKey: `commit_ordered_hard_delete:${table.name}`,
                     detail: `Table "${table.name}" is \`.commitOrdered()\` but not \`.softDelete()\`. A hard delete removes the row and its \`_commitSeq\` together, so a changefeed paging on the sequence never learns the row is gone.`,
-                    metadata: { table: table.name },
+                    metadata: { ...declarationSiteFields(table), table: table.name },
                 }),
             );
         }

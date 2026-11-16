@@ -52,10 +52,20 @@ describe("discoverPaymentWebhooks", () => {
         expect(row?.toleranceSeconds).toBeUndefined();
     });
 
-    it("leaves toleranceSeconds undefined when the value is a non-literal expression", () => {
+    it("folds arithmetic over literals into toleranceSeconds", () => {
         expect.assertions(1);
 
-        write("payment.ts", `export const adapter = createStripeAdapter({ client, webhookSecret, webhookToleranceSeconds: 60 * 60 });`);
+        write("payment.ts", `export const adapter = createStripeAdapter({ client, webhookSecret, webhookToleranceSeconds: 2 * 60 * 60 });`);
+
+        const [row] = discoverPaymentWebhooks(project, join(workdir, "lunora"));
+
+        expect(row?.toleranceSeconds).toBe(7200);
+    });
+
+    it("leaves toleranceSeconds undefined when the value is an expression over an identifier", () => {
+        expect.assertions(1);
+
+        write("payment.ts", `export const adapter = createStripeAdapter({ client, webhookSecret, webhookToleranceSeconds: 60 * ttl });`);
 
         const [row] = discoverPaymentWebhooks(project, join(workdir, "lunora"));
 

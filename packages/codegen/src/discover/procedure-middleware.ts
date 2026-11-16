@@ -1,14 +1,17 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import { suppressionRuleOf } from "../advisor-suppressions";
 import type { ProcedureMiddlewareIR } from "../ir";
 import { argumentNames, procedureArgumentObjects } from "../procedure-argument-objects";
-import { descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { declarationLineOf, descendantsOfKind, findObjectProperty, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
+import { builderChainSteps, resolveUseArgumentCall } from "./builder-chain";
 import { calleeName } from "./callee";
 import { contextSurfaceNodesIn, contextSurfacePathOf, isContextIdentifier } from "./context-root";
 import { isDatabaseAccessor } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
+import { facadeWriteOf } from "./write-target";
 
 /**
  * Middleware factory names mapped to the protection flag they set. Matched by the
@@ -139,31 +142,6 @@ const protectPublicFlags = (call: CallExpression): { usesCaptcha: boolean; usesR
     return { usesCaptcha: Boolean(findObjectProperty(argument, "captcha")), usesRateLimit: Boolean(findObjectProperty(argument, "rateLimit")) };
 };
 
-/**
- * Resolve a `.use(...)` argument to the middleware-factory call it ultimately
- * installs. A direct `.use(rateLimit(...))` is already that call; a `.use(mw)`
- * alias — `const mw = rateLimit(limiter, "bucket", …)` then `.use(mw)`, the shape
- * the storage/presence templates use — resolves through the local `const`'s
- * initializer. Resolution is by NAME within the same file (no cross-file/type
- * info), matching the feeder's name-based philosophy; an alias defined elsewhere
- * (import) or initialised by something other than a call returns `undefined`, so
- * the lint stays fail-closed.
- */
-const resolveUseArgumentCall = (argument: TsNode): CallExpression | undefined => {
-    if (Node.isCallExpression(argument)) {
-        return argument;
-    }
-
-    if (!Node.isIdentifier(argument)) {
-        return undefined;
-    }
-
-    const declaration = argument.getSourceFile().getVariableDeclaration(argument.getText());
-    const initializer = declaration?.getInitializer();
-
-    return initializer && Node.isCallExpression(initializer) ? initializer : undefined;
-};
-
 /** The protections a single `.use(...)` step installs (all `false` when it matches none). */
 const NO_PROTECTIONS: Protections = { usesCaptcha: false, usesEmailGate: false, usesMask: false, usesRateLimit: false, usesRls: false };
 
@@ -198,38 +176,34 @@ const useStepProtections = (useArgument: TsNode): Protections => {
  */
 const protectionsInChain = (receiver: TsNode): Protections => {
     const protections: Protections = { ...NO_PROTECTIONS };
-    let node: TsNode = receiver;
 
-    while (Node.isCallExpression(node)) {
-        const chainCallee = node.getExpression();
+    for (const step of builderChainSteps(receiver)) {
+        const useArgument = step.name === "use" ? step.call.getArguments()[0] : undefined;
 
-        if (!Node.isPropertyAccessExpression(chainCallee)) {
-            break;
+        if (!useArgument) {
+            continue;
         }
 
-        const useArgument = chainCallee.getName() === "use" ? node.getArguments()[0] : undefined;
+        const installed = useStepProtections(useArgument);
 
-        if (useArgument) {
-            const step = useStepProtections(useArgument);
-
-            protections.usesCaptcha ||= step.usesCaptcha;
-            protections.usesEmailGate ||= step.usesEmailGate;
-            protections.usesMask ||= step.usesMask;
-            protections.usesRateLimit ||= step.usesRateLimit;
-            protections.usesRls ||= step.usesRls;
-        }
-
-        node = chainCallee.getExpression();
+        protections.usesCaptcha ||= installed.usesCaptcha;
+        protections.usesEmailGate ||= installed.usesEmailGate;
+        protections.usesMask ||= installed.usesMask;
+        protections.usesRateLimit ||= installed.usesRateLimit;
+        protections.usesRls ||= installed.usesRls;
     }
 
     return protections;
 };
 
-/** `ctx.db` write methods that create/replace a row wholesale — the ones a user/session-creating write can arrive through. */
+/** `ctx.db` by-name write methods that create/replace a row wholesale — the ones a user/session-creating write can arrive through. */
 const USER_TABLE_INSERT_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "insertManyUnsafe", "replace"]);
 
-/** True when `call` is a `ctx.db.insert("table", …)` / `db.insertMany("table", …)` / … write into a user-shaped table. */
-const isUserTableInsert = (call: CallExpression): boolean => {
+/** The `ctx.db.<table>.<method>` facade writes that create/replace a row wholesale. */
+const FACADE_USER_TABLE_INSERT_METHODS: ReadonlySet<string> = new Set(["insert", "insertMany", "replace", "upsert", "upsertMany"]);
+
+/** True when `call` is a by-name `ctx.db.insert("table", …)` / `db.insertMany("table", …)` / … write into a user-shaped table. */
+const isByNameUserTableInsert = (call: CallExpression): boolean => {
     const callee = call.getExpression();
 
     if (!Node.isPropertyAccessExpression(callee) || !USER_TABLE_INSERT_METHODS.has(callee.getName())) {
@@ -254,6 +228,17 @@ const isUserTableInsert = (call: CallExpression): boolean => {
     }
 
     return isUserTableName(tableArgument.getLiteralText());
+};
+
+/** True when `call` writes a user-shaped table, by name or through the `ctx.db.<table>` facade. */
+const isUserTableInsert = (call: CallExpression): boolean => {
+    if (isByNameUserTableInsert(call)) {
+        return true;
+    }
+
+    const facade = facadeWriteOf(call, FACADE_USER_TABLE_INSERT_METHODS);
+
+    return facade !== undefined && isUserTableName(facade.table);
 };
 
 /** Method names that dispatch privileged, billable async work (fan-out surfaces). */
@@ -713,6 +698,12 @@ const exemptionOf = (declaration: VariableDeclaration): { exempt: boolean; exemp
             continue;
         }
 
+        // A rule-scoped `//` directive is an inline finding suppression (advisor-suppressions.ts), not a procedure
+        // exemption. That pass reads only `//` lines, so a block or JSDoc directive keeps the exemption meaning.
+        if (line.trimStart().startsWith("//") && suppressionRuleOf(rest) !== undefined) {
+            continue;
+        }
+
         const separator = rest.indexOf("--");
         // Stop at `*` so a directive inside a block comment cannot swallow its
         // closing delimiter into the reason.
@@ -902,6 +893,7 @@ const middlewareIrFromDeclaration = (declaration: VariableDeclaration, relativeP
         file: relativePath,
         hasEmailArg: declaresEmailArgument(initializer, classified.receiver),
         kind: classified.kind,
+        line: declarationLineOf(declaration),
         visibility: classified.visibility,
     };
 };

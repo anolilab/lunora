@@ -1,6 +1,6 @@
 import { DISPATCH_DECLINED_HEADER, DISPATCH_IN_PROGRESS } from "../../../shared/dispatch-claim";
-import { signCanonical } from "../../../shared/hmac-url";
 import { jsonResponse } from "../../../shared/json-response";
+import { SCHEDULER_SIGNATURE_HEADER, SCHEDULER_TIMESTAMP_HEADER, signSchedulerDispatch } from "../../../shared/scheduler-dispatch";
 import resolveScheduleId from "./resolve-schedule-id";
 import type { CronRunInFlight, CronRunRecord, RetryPolicy, ScheduledJobState, ScheduledJobView, ScheduleRecord } from "./types";
 
@@ -58,8 +58,10 @@ interface SchedulerEnv {
     LUNORA_ORIGIN_URL?: string;
 
     /**
-     * Shared secret used to HMAC-sign the dispatch body so the runtime receiver
-     * can authenticate the call (header `x-lunora-scheduler-signature`). Without
+     * Shared secret used to HMAC-sign each dispatch so the runtime receiver can
+     * authenticate the call (header `x-lunora-scheduler-signature`). The signature
+     * covers the body, the send time (`x-lunora-scheduler-timestamp`) and the
+     * forwarded identity headers, via the shared `schedulerDispatchCanonical`. Without
      * it the dispatch is sent unsigned (optionally bearer-authenticated via
      * {@link SchedulerEnv.LUNORA_ADMIN_TOKEN}).
      */
@@ -971,7 +973,8 @@ class SchedulerDO {
             // Authenticate the dispatch so the receiver route can reject anonymous
             // callers (an unauthenticated receiver would execute arbitrary
             // functions for anyone who can reach the origin). We HMAC-sign the
-            // exact JSON body with a shared secret and send it as a header; the
+            // exact JSON body together with the send time and the identity headers
+            // (see `schedulerDispatchCanonical`) and send it as a header; the
             // runtime-side receiver re-derives the HMAC and compares.
             //
             // Env vars (read at fire time, never from the request body):
@@ -985,10 +988,14 @@ class SchedulerDO {
             // escape drainRecord()/alarm() and orphan the job (its time-index entry
             // is already claimed/deleted by alarm() before dispatch runs, so an
             // un-retried throw leaves a header with no index that can never re-fire).
-            const signature = await this.signDispatch(body);
+            // Stamped per attempt, so a retry signs with a fresh timestamp the receiver
+            // still accepts.
+            const timestamp = Date.now();
+            const signature = await this.signDispatch(body, timestamp);
 
             if (signature !== undefined) {
-                headers["x-lunora-scheduler-signature"] = signature;
+                headers[SCHEDULER_SIGNATURE_HEADER] = signature;
+                headers[SCHEDULER_TIMESTAMP_HEADER] = String(timestamp);
             } else if (typeof this.env.LUNORA_ADMIN_TOKEN === "string" && this.env.LUNORA_ADMIN_TOKEN.length > 0) {
                 headers.authorization = `Bearer ${this.env.LUNORA_ADMIN_TOKEN}`;
             }
@@ -1581,12 +1588,12 @@ class SchedulerDO {
     }
 
     /**
-     * HMAC-SHA-256 sign the dispatch body with `env.LUNORA_SCHEDULER_SECRET`,
-     * returning a base64url signature, or `undefined` when no secret is
-     * configured. Mirrors `@lunora/storage`'s signed-URL HMAC pattern (WebCrypto
-     * `crypto.subtle`, available in workerd).
+     * HMAC-SHA-256 sign a dispatch with `env.LUNORA_SCHEDULER_SECRET`, returning a
+     * base64url signature, or `undefined` when no secret is configured. The signed
+     * string is the shared `schedulerDispatchCanonical`, which the receiver rebuilds
+     * from the body, the timestamp and the forwarded identity headers.
      */
-    private async signDispatch(body: string): Promise<string | undefined> {
+    private async signDispatch(body: string, timestamp: number): Promise<string | undefined> {
         const secret = typeof this.env.LUNORA_SCHEDULER_SECRET === "string" ? this.env.LUNORA_SCHEDULER_SECRET : undefined;
 
         if (!secret || secret.length === 0) {
@@ -1595,7 +1602,7 @@ class SchedulerDO {
 
         // The shared signer memoizes the imported key per secret: importing it
         // costs as much as the signature itself, and this runs on every dispatch.
-        return signCanonical(secret, body);
+        return signSchedulerDispatch(secret, { body, timestamp });
     }
 
     /**

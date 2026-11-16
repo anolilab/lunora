@@ -3285,7 +3285,7 @@ const resolveRemoteEnabled: (inputs: RemoteEnableInputs) => boolean;
 ### `scanWranglerVariablesForSecrets` (const)
 
 ```ts
-const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | undefined, file: string) => WranglerVariableIR[];
+const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | undefined, file: string, lineOf?: (key: string) => number | undefined) => WranglerVariableIR[];
 ```
 
 ### `startLocalHyperdrive` (const)

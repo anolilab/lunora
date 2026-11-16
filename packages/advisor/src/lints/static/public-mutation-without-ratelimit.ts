@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { isPublicWrite, matchesNamePhrase } from "../helpers";
+import { declarationSiteFields, isPublicWrite, matchesNamePhrase } from "../helpers";
 
 /**
  * Export-name phrases that strongly imply an abuse-sensitive endpoint —
@@ -65,7 +65,7 @@ const publicMutationWithoutRatelimit: Lint = {
                 return emit(publicMutationWithoutRatelimit, {
                     cacheKey: `public_mutation_without_ratelimit:${procedure.file}:${procedure.exportName}`,
                     detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) has no rate limit${sensitive ? " — its name suggests an auth/abuse-sensitive endpoint, so this is high-risk" : ""}. Add \`.use(rateLimit(...))\` or \`.use(protectPublic({ rateLimit }))\`.`,
-                    metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind, sensitive },
+                    metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), kind: procedure.kind, sensitive },
                 });
             });
     },

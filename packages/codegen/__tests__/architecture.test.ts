@@ -211,7 +211,7 @@ export const audits = defineQueue({ handler: async (ctx) => {
         const result = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
         expect(result.advisories.filter((finding) => finding.name === "cross_module_table_write").map((finding) => finding.metadata)).toStrictEqual([
-            { exportName: "touch", file: "accounts/users", owner: "chat", table: "messages", writer: "accounts" },
+            { exportName: "touch", file: "accounts/users", line: 8, owner: "chat", table: "messages", writer: "accounts" },
         ]);
     });
 
@@ -362,11 +362,11 @@ export default defineSchema({ invoices: defineTable({ amount: v.number() }) });
                 .map((finding) => finding.metadata)
                 .toSorted((a, b) => String(a["helper"] ?? a["exportName"]).localeCompare(String(b["helper"] ?? b["exportName"]))),
         ).toStrictEqual([
-            { ...signup, callers: ["signupTransitive", "signupViaHelper"], helper: "openInvoice" },
-            { ...signup, callers: ["signupCycle"], helper: "pong" },
-            { ...signup, exportName: "signupDirect" },
-            { ...signup, callers: ["signupTransitive", "signupViaHelper"], helper: "touchInvoice" },
-            { ...signup, callers: [], helper: "voidInvoice" },
+            { ...signup, callers: ["signupTransitive", "signupViaHelper"], helper: "openInvoice", line: 16 },
+            { ...signup, callers: ["signupCycle"], helper: "pong", line: 30 },
+            { ...signup, exportName: "signupDirect", line: 13 },
+            { ...signup, callers: ["signupTransitive", "signupViaHelper"], helper: "touchInvoice", line: 17 },
+            { ...signup, callers: [], helper: "voidInvoice", line: 36 },
         ]);
     });
 

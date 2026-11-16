@@ -265,6 +265,18 @@ export const callSiteFields = (row: CallSiteRow): CallSiteMetadata & { file: str
 };
 
 /**
+ * A declaration finding's location metadata: the `file` and `line` of the statement that
+ * declares the object, each present only when the feeder recorded it. The keys match
+ * {@link callSiteFields}, so plan 597's suppression matches a declaration and a call site the same way.
+ */
+export const declarationSiteFields = (site: { file?: string; line?: number }): { file?: string; line?: number } => {
+    return {
+        ...(site.file === undefined ? {} : { file: site.file }),
+        ...(site.line === undefined ? {} : { line: site.line }),
+    };
+};
+
+/**
  * Table name -> declared storage tier, for the query lints that word a finding
  * by where the rows actually live (`shardBy` reads one Durable Object, `global`
  * reads D1, `root` reads the single DO). A `Map` so a table named `toString`

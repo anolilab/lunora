@@ -1,3 +1,24 @@
+## @lunora/auth [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.266...@lunora/auth@1.0.0-alpha.267) (2026-11-16)
+
+- fix(auth): name the user whose session an admin revoked (#1604)
+
+## @lunora/auth [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.265...@lunora/auth@1.0.0-alpha.266) (2026-11-16)
+
+- fix(auth): guard the last owner in removeMember and updateMemberRole (#1557)
+
+## @lunora/auth [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.264...@lunora/auth@1.0.0-alpha.265) (2026-11-14)
+
+- security(auth)!: audit organization, oauth provider, scim and sso management (#1549)
+
+## @lunora/auth [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.263...@lunora/auth@1.0.0-alpha.264) (2026-11-14)
+
+- security(auth)!: audit plugin sign-ins, admin actions and account changes (#1546)
+- fix(auth): stop finished tables from spending the move's page budget (#1554)
+
+## @lunora/auth [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.262...@lunora/auth@1.0.0-alpha.263) (2026-11-14)
+
+- security(auth): run the email gate on address changes (#1545)
+
 ## @lunora/auth [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.261...@lunora/auth@1.0.0-alpha.262) (2026-11-13)
 
 - security(auth)!: admit invited oauth and sso accounts only with a verified email (#1547)
