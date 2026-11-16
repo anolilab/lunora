@@ -29,6 +29,7 @@
         "react-dom": "catalog:frontend"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/testing": "workspace:*",
         "@types/node": "catalog:types",
@@ -36,6 +37,7 @@
         "@types/react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
+        "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
     },
     "engines": {

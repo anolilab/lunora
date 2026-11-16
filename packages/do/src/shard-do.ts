@@ -997,6 +997,24 @@ interface SharedReactiveRun {
     pending: Promise<SubscriptionOutcome | null>;
 }
 
+/** Remove `key` from an optional attachment record, returning what it held so a failed write can put it back. */
+const takeEntry = <T>(record: Record<string, T> | undefined, key: string): T | undefined => {
+    const value = record?.[key];
+
+    if (record !== undefined) {
+        Reflect.deleteProperty(record, key);
+    }
+
+    return value;
+};
+
+/** Undo {@link takeEntry} after the attachment write it prepared failed. */
+const restoreEntry = <T>(record: Record<string, T> | undefined, key: string, value: T | undefined): void => {
+    if (record !== undefined && value !== undefined) {
+        Reflect.set(record, key, value);
+    }
+};
+
 /** The run key's identity slot for a path proven not to read its caller; a bare string never collides with an encoded identity object. */
 const IDENTITY_FREE_RUN = "identity-free";
 
@@ -2858,6 +2876,9 @@ abstract class ShardDO {
      * stays near a limit warns again after a wake.
      */
     private readonly rerunNearLimitWarned = new Set<string>();
+
+    /** One-shot warning for subscriptions `broadcastDelta` skips because re-execution serves them. */
+    private broadcastSkipWarned = false;
 
     /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
@@ -6503,6 +6524,8 @@ abstract class ShardDO {
         }
 
         attachment.subs[subId] = query;
+        // A replaced subscription is re-seeded, and that seed decides afresh whether it is left to broadcast.
+        const previousBroadcast = takeEntry(attachment.broadcastSubs, subId);
         const previousPermit = attachment.deliveryPermits?.[subId];
         if (this.deliveryAuthorization && attachment.deliveryPermits !== undefined) {
             Reflect.deleteProperty(attachment.deliveryPermits, subId);
@@ -6521,6 +6544,8 @@ abstract class ShardDO {
             } else {
                 attachment.subs[subId] = previous;
             }
+
+            restoreEntry(attachment.broadcastSubs, subId, previousBroadcast);
 
             if (previousPermit !== undefined && attachment.deliveryPermits !== undefined) {
                 attachment.deliveryPermits[subId] = previousPermit;
@@ -6551,6 +6576,7 @@ abstract class ShardDO {
         if (attachment.deliveryPermits !== undefined) {
             Reflect.deleteProperty(attachment.deliveryPermits, subId);
         }
+        const capturedBroadcast = takeEntry(attachment.broadcastSubs, subId);
 
         // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `subs` is a Record keyed by dynamic subscription id; removal is the intended unsubscribe
         delete attachment.subs[subId];
@@ -6565,6 +6591,7 @@ abstract class ShardDO {
             if (captured !== undefined) {
                 attachment.subs[subId] = captured;
             }
+            restoreEntry(attachment.broadcastSubs, subId, capturedBroadcast);
             if (capturedPermit !== undefined && attachment.deliveryPermits !== undefined) {
                 attachment.deliveryPermits[subId] = capturedPermit;
             }
@@ -6731,8 +6758,11 @@ abstract class ShardDO {
 
     /**
      * Broadcast a mutation delta to every subscriber whose registered query
-     * targets the affected table _and_ matches its args. The wire payload
-     * includes the per-socket subscription id, so we serialise once per
+     * targets the affected table _and_ matches its args. Subscriptions this
+     * shard serves by re-execution (see `servedByReexecution`) are skipped: the
+     * row sent is the written row, not filtered by RLS, masks or the
+     * subscriber's query, and `matchesSubscription` is its only filter. The wire
+     * payload includes the per-socket subscription id, so we serialise once per
      * `(socket, sub)` pair — but the structural delta body itself is
      * identical, so we build a payload keyed by `subId` lazily.
      */
@@ -6787,7 +6817,7 @@ abstract class ShardDO {
             for (const subId of Object.keys(subs)) {
                 const query = subs[subId];
 
-                if (query === undefined || !this.matchesSubscription(query, delta)) {
+                if (query === undefined || !this.matchesSubscription(query, delta) || this.skipsForReexecution(ws, subId, query, attachment)) {
                     continue;
                 }
 
@@ -6809,8 +6839,11 @@ abstract class ShardDO {
      * the set of tables it read. The base class can't dispatch user functions,
      * so it returns `null` — the codegen-generated subclass overrides this to
      * run the handler from the project's function registry. Returning `null`
-     * disables server re-execution and leaves the legacy `broadcastDelta`
-     * path as the only live-update mechanism.
+     * from the seed disables server re-execution for that subscription and
+     * leaves the legacy `broadcastDelta` path as its only live-update
+     * mechanism; a subscription whose seed returned a result never receives a
+     * broadcast. Refuse a subscriber by throwing, never by returning `null`:
+     * `null` opts the subscription into raw, unfiltered broadcast rows.
      *
      * `identity` is the EXPLICIT subscriber context the query runs under —
      * identity claims, userId, and the socket's own `ip`. It is passed by value
@@ -9769,6 +9802,100 @@ abstract class ShardDO {
         this.currentRequestTrace = scope.trace;
         this.currentRequestTraceparent = scope.traceparent;
         this.currentRequestUserId = scope.userId;
+    }
+
+    /**
+     * Whether a subscription gets its updates by re-execution, which diffs the
+     * query's own result. A broadcast row would bypass that diff baseline (no
+     * later delta removes it) and the subscriber's RLS, masks and query filter,
+     * so `broadcastDelta` must not reach such a subscription.
+     *
+     * Decided per subscription. On a shard that overrides `executeSubscription`,
+     * only a subscription whose seed resolved to `null` (recorded in
+     * `broadcastSubs`) and that has no diff baseline is left to broadcast. Fails
+     * closed: a seed still in flight, one that threw (an auth refusal unsubscribes
+     * it), and one that returned a result are all served by re-execution.
+     * @returns `true` when the shard re-runs this subscription's query
+     */
+    private servedByReexecution(ws: ShardSocketLike, subId: string, functionPath: string | undefined, attachment: SocketAttachment): boolean {
+        if (!functionPath) {
+            return false;
+        }
+
+        if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX) || functionPath.startsWith(FLAGS_FUNCTION_PREFIX)) {
+            return true;
+        }
+
+        if (this.executeSubscription === ShardDO.prototype.executeSubscription) {
+            return false;
+        }
+
+        return attachment.broadcastSubs?.[subId] !== functionPath || this.socketIndex.memo(ws, subId) !== undefined;
+    }
+
+    /**
+     * `broadcastDelta`'s skip for a subscription the shard re-runs, logging the
+     * one-time warning the first time it fires.
+     * @returns `true` when `broadcastDelta` must not send this subscription the delta
+     */
+    private skipsForReexecution(ws: ShardSocketLike, subId: string, query: SubscriptionQuery, attachment: SocketAttachment): boolean {
+        if (!this.servedByReexecution(ws, subId, query.functionPath, attachment)) {
+            return false;
+        }
+
+        if (!this.broadcastSkipWarned) {
+            this.broadcastSkipWarned = true;
+            // eslint-disable-next-line no-console -- a shard that mixes the two delivery mechanisms must hear about it once
+            console.warn(
+                "[@lunora/do] broadcastDelta skipped a subscription this shard serves by re-execution; re-execution delivers its updates. Broadcast reaches only subscriptions the shard does not re-run.",
+            );
+        }
+
+        return true;
+    }
+
+    /**
+     * Record that `subId`'s seed resolved to `null` through an overridden
+     * `executeSubscription`, which leaves it to `broadcastDelta`. Skipped while
+     * the subscription is gone or now names another function, so a seed that
+     * outlived its subscription cannot mark the one that replaced it.
+     */
+    private markBroadcastSubscription(ws: ShardSocketLike, subId: string, functionPath: string): void {
+        if (this.executeSubscription === ShardDO.prototype.executeSubscription) {
+            return;
+        }
+
+        const current = this.readAttachment(ws);
+
+        if (current.subs[subId]?.functionPath !== functionPath || current.broadcastSubs?.[subId] === functionPath) {
+            return;
+        }
+
+        const attachment = this.readAttachmentCopy(ws);
+
+        attachment.broadcastSubs = { ...attachment.broadcastSubs, [subId]: functionPath };
+
+        try {
+            this.writeAttachment(ws, attachment);
+        } catch {
+            // Unmarked, the subscription stays served by re-execution and gets no broadcast: the fail-closed side.
+        }
+    }
+
+    private unmarkBroadcastSubscription(ws: ShardSocketLike, subId: string): void {
+        if (this.readAttachment(ws).broadcastSubs?.[subId] === undefined) {
+            return;
+        }
+
+        const attachment = this.readAttachmentCopy(ws);
+
+        takeEntry(attachment.broadcastSubs, subId);
+
+        try {
+            this.writeAttachment(ws, attachment);
+        } catch {
+            // Still marked, the subscription is kept off broadcasts by its diff baseline until the shard hibernates.
+        }
     }
 
     private deliveryRoleSupported(): boolean {
@@ -14889,6 +15016,8 @@ abstract class ShardDO {
                     // stalls the others. Mirrors the `handleStream` gate.
                     await awaitWsDrain(ws);
 
+                    // A result moves a broadcast subscription to re-execution for good; this push is its full snapshot.
+                    this.unmarkBroadcastSubscription(ws, subId);
                     this.pushSubscriptionData(ws, subId, outcome, { cursor: frameCursor, epoch: frameEpoch, generation }, delivery, permit);
                     this.subscriptionFailures.clear(ws, subId);
                 } catch (error) {
@@ -15129,6 +15258,10 @@ abstract class ShardDO {
         );
 
         if (!outcome) {
+            if (!isAdmin && !functionPath.startsWith(FLAGS_FUNCTION_PREFIX)) {
+                this.markBroadcastSubscription(ws, subId, functionPath);
+            }
+
             return;
         }
 

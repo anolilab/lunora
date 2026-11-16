@@ -1,3 +1,23 @@
+## @lunora/codegen [1.0.0-alpha.418](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.417...@lunora/codegen@1.0.0-alpha.418) (2026-11-14)
+
+- feat(team-chat): gate channels on membership and drop the attachment suppression (#1593)
+
+## @lunora/codegen [1.0.0-alpha.417](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.416...@lunora/codegen@1.0.0-alpha.417) (2026-11-14)
+
+- fix(codegen): accept an identity-bound guard that dominates an IDOR sink (#1592)
+
+## @lunora/codegen [1.0.0-alpha.416](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.415...@lunora/codegen@1.0.0-alpha.416) (2026-11-14)
+
+- fix(codegen): scope kv, storage and container keys by identity only (#1588)
+
+## @lunora/codegen [1.0.0-alpha.415](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.414...@lunora/codegen@1.0.0-alpha.415) (2026-11-14)
+
+- feat(advisor): suppress one finding at one site with an inline directive (#1587)
+
+## @lunora/codegen [1.0.0-alpha.414](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.413...@lunora/codegen@1.0.0-alpha.414) (2026-11-14)
+
+- feat(advisor): report source locations on schema and config findings (#1586)
+
 ## @lunora/codegen [1.0.0-alpha.413](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.412...@lunora/codegen@1.0.0-alpha.413) (2026-11-14)
 
 - feat(advisor): report declaration file and line on declaration findings (#1584)

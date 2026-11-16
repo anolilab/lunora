@@ -19,8 +19,8 @@ interface AdvisoryGateOptions {
     strictAdvisories?: boolean;
 }
 
-interface AdvisoryGateResult<TAdvisory extends Pick<Finding, "level" | "name">> {
-    /** Every ERROR-level advisory found, regardless of `strict` — callers report the count even when not blocking. */
+interface AdvisoryGateResult<TAdvisory extends Pick<Finding, "level" | "name" | "suppressed">> {
+    /** Every unsuppressed ERROR-level advisory found, regardless of `strict` — callers report the count even when not blocking. */
     errorAdvisories: ReadonlyArray<TAdvisory>;
     /** Deduplicated, sorted names of `errorAdvisories`, ready to join into a message. */
     names: ReadonlyArray<string>;
@@ -46,11 +46,11 @@ const resolveStrictAdvisories = (options: AdvisoryGateOptions): boolean =>
  * `Finding` down to a plain `{ detail, level, name, remediation }` for its
  * JSON output — this only ever reads `level`/`name`, so it accepts either.
  */
-const evaluateAdvisoryGate = <TAdvisory extends Pick<Finding, "level" | "name">>(
+const evaluateAdvisoryGate = <TAdvisory extends Pick<Finding, "level" | "name" | "suppressed">>(
     advisories: ReadonlyArray<TAdvisory>,
     strict: boolean,
 ): AdvisoryGateResult<TAdvisory> => {
-    const errorAdvisories = advisories.filter((advisory) => advisory.level === "ERROR");
+    const errorAdvisories = advisories.filter((advisory) => advisory.level === "ERROR" && advisory.suppressed === undefined);
 
     return { errorAdvisories, names: errorAdvisoryNames(advisories), shouldBlock: errorAdvisories.length > 0 && strict };
 };

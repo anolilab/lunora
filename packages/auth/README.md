@@ -151,10 +151,10 @@ An uninvited signup fails with the coded error `SIGN_UP_INVITE_REQUIRED` (HTTP *
 
 ### Security / audit trail
 
-Record authentication & security events (sign-in, sign-up, password change, MFA enable/disable, token refresh, session revoke, …) to a durable, queryable audit trail. Install the better-auth `hooks.after` recorder with `authAuditHook` (or compose via `withAuthAudit`), backed by the same D1 database as the auth tables:
+Record authentication & security events (sign-in, sign-up, password change, MFA enable/disable, token refresh, session revoke, …) to a durable, queryable audit trail. Install the better-auth `hooks.after` recorder `authAuditHook` with its `hooks.before` companion `authAuditBeforeHook` (or compose both onto existing hooks via `withAuthAudit`), backed by the same D1 database as the auth tables:
 
 ```ts
-import { authAuditHook, createAuth, d1Executor, lunoraD1Adapter, readAuthAuditLog } from "@lunora/auth";
+import { authAuditBeforeHook, authAuditHook, createAuth, d1Executor, lunoraD1Adapter, readAuthAuditLog } from "@lunora/auth";
 
 const executor = d1Executor(env.DB);
 
@@ -162,6 +162,8 @@ const auth = createAuth({
     secret: env.AUTH_SECRET,
     database: lunoraD1Adapter(env.DB),
     hooks: {
+        // reads the owner of a session an admin revokes, which the revoke itself deletes
+        before: authAuditBeforeHook(),
         after: authAuditHook({
             executor,
             // retention is CONFIGURABLE and NOT capped — omit it for an unbounded, compliance-grade trail

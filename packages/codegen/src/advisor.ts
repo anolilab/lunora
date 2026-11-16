@@ -8,6 +8,7 @@ import type {
     AdvisorRelation,
     AdvisorSchema,
     AdvisorShape,
+    AdvisorTopic,
     Finding,
     LintContext,
 } from "@lunora/advisor";
@@ -30,6 +31,7 @@ import type {
     ContextPropertyCallIR,
     CountReadIR,
     CronJobIR,
+    DeclarationSiteIR,
     FailOpenGuardIR,
     FlagReadIR,
     FlagSecurityDefaultIR,
@@ -68,6 +70,7 @@ import type {
     StorageUploadIR,
     TableIR,
     TableWriteIR,
+    TopicIR,
     UnboundedLoopIR,
     UnrestrictedWhereBranchIR,
     VectorNamespaceAccessIR,
@@ -75,6 +78,10 @@ import type {
     WorkflowIR,
     WranglerVariableIR,
 } from "./ir";
+
+/** A declaration site as the advisor's flat `file` / `line` keys; empty when the object has no site under `lunora/`. */
+const siteFieldsOf = (site: DeclarationSiteIR | undefined): { file?: string; line?: number } =>
+    site === undefined ? {} : { file: site.file, line: site.line };
 
 /**
  * Flatten a table's per-kind index declarations into the advisor's unified
@@ -86,21 +93,26 @@ import type {
  */
 const flattenIndexes = (table: TableIR): AdvisorIndex[] => [
     ...table.indexes.map((index): AdvisorIndex => {
-        return { fields: index.fields, kind: "index", name: index.name, unique: index.unique };
+        return { fields: index.fields, kind: "index", name: index.name, unique: index.unique, ...siteFieldsOf(index.site) };
     }),
     ...table.searchIndexes.map((index): AdvisorIndex => {
-        return { fields: [index.field, ...(index.filterFields ?? [])], kind: "search", name: index.name };
+        return { fields: [index.field, ...(index.filterFields ?? [])], kind: "search", name: index.name, ...siteFieldsOf(index.site) };
     }),
     ...table.rankIndexes.map((index): AdvisorIndex => {
-        return { fields: [...index.sortBy.map((key) => key.field), ...(index.partitionBy ?? [])], kind: "rank", name: index.name };
+        return {
+            fields: [...index.sortBy.map((key) => key.field), ...(index.partitionBy ?? [])],
+            kind: "rank",
+            name: index.name,
+            ...siteFieldsOf(index.site),
+        };
     }),
     ...table.vectorIndexes
         .filter((index) => index.field !== undefined)
         .map((index): AdvisorIndex => {
-            return { fields: [index.field as string], kind: "vector", name: index.name };
+            return { fields: [index.field as string], kind: "vector", name: index.name, ...siteFieldsOf(index.site) };
         }),
     ...(table.geoIndexes ?? []).map((index): AdvisorIndex => {
-        return { fields: [index.field], kind: "geo", name: index.name };
+        return { fields: [index.field], kind: "geo", name: index.name, ...siteFieldsOf(index.site) };
     }),
 ];
 
@@ -137,6 +149,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                           unanalyzable: table.externalSource.unanalyzable,
                       }
                     : undefined,
+                ...siteFieldsOf(table.site),
                 columnKinds: columnKindsOf(table),
                 fields: Object.keys(table.shape),
                 indexes: flattenIndexes(table),
@@ -144,10 +157,11 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
                 name: table.name,
                 relations: table.relations.map((relation): AdvisorRelation => {
                     if (relation.through !== undefined) {
-                        return { kind: "many", name: relation.name, table: relation.table, through: { ...relation.through } };
+                        return { kind: "many", name: relation.name, table: relation.table, through: { ...relation.through }, ...siteFieldsOf(relation.site) };
                     }
 
                     return {
+                        ...siteFieldsOf(relation.site),
                         field: relation.field,
                         kind: relation.kind,
                         name: relation.name,
@@ -174,6 +188,15 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
 const toAdvisorShapes = (shapes: ReadonlyArray<ShapeIR>): AdvisorShape[] =>
     shapes.map((shape) => {
         return { exportName: shape.exportName, file: `lunora/${shape.filePath}.ts`, line: shape.line, table: shape.table };
+    });
+
+/**
+ * Map discovered {@link TopicIR}s to the advisor's {@link AdvisorTopic} evidence — the
+ * `topic_too_many_subscriptions` lint input, which reads each topic's declaration site.
+ */
+const toAdvisorTopics = (topics: ReadonlyArray<TopicIR>): AdvisorTopic[] =>
+    topics.map((topic) => {
+        return { exportName: topic.exportName, file: topic.filePath, line: topic.line };
     });
 
 /**
@@ -260,6 +283,7 @@ interface LintSchemaOptions {
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
     tableWrites?: ReadonlyArray<TableWriteIR>;
+    topics?: ReadonlyArray<TopicIR>;
     unboundedLoops?: ReadonlyArray<UnboundedLoopIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
@@ -284,7 +308,7 @@ interface LintSchemaOptions {
  * ```
  */
 const toAdvisorContext = (options: LintSchemaOptions): LintContext => {
-    const { argumentValidators, mutators, queries, schema, shapes, ...rest } = options;
+    const { argumentValidators, mutators, queries, schema, shapes, topics, ...rest } = options;
 
     return {
         ...rest,
@@ -293,6 +317,7 @@ const toAdvisorContext = (options: LintSchemaOptions): LintContext => {
         queries: queries ?? [],
         schema: toAdvisorSchema(schema),
         shapes: shapes === undefined ? undefined : toAdvisorShapes(shapes),
+        topics: topics === undefined ? undefined : toAdvisorTopics(topics),
     } satisfies LintContext;
 };
 

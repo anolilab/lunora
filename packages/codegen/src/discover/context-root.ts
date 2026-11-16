@@ -234,6 +234,9 @@ const identifierContextPath = (identifier: Identifier, policy: Policy, hops: num
 /** The ctx surface `node` denotes under the DISCOVERY policy (`["db"]` for `c.db`), or `undefined`. */
 const contextSurfacePathOf = (node: TsNode | undefined): ReadonlyArray<string> | undefined => contextPathOf(node, "discover");
 
+/** The ctx path `node` denotes under the TRUST policy (`["auth", "userId"]` for `ctx.auth.userId`), or `undefined`. */
+const contextTrustPathOf = (node: TsNode | undefined): ReadonlyArray<string> | undefined => contextPathOf(node, "trust");
+
 /** The `ctx.<a>.<b>` spelling of the ctx surface `node` denotes (`c.kv` → `ctx.kv`), or `undefined`. */
 const contextSurfaceText = (node: TsNode): string | undefined => {
     const path = contextPathOf(node);
@@ -444,6 +447,7 @@ export {
     contextSurfaceNodesIn,
     contextSurfacePathOf,
     contextSurfaceText,
+    contextTrustPathOf,
     denotesContextDatabase,
     ECHOING_CONTEXT_METHODS,
     isContextIdentifier,
