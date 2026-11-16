@@ -1,3 +1,7 @@
+## @lunora/config [1.0.0-alpha.463](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.462...@lunora/config@1.0.0-alpha.463) (2026-11-16)
+
+- perf(codegen)!: load studio documents on their routes and ship them as static assets (#1499)
+
 ## @lunora/config [1.0.0-alpha.462](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.461...@lunora/config@1.0.0-alpha.462) (2026-11-14)
 
 - feat(advisor): suppress one finding at one site with an inline directive (#1587)

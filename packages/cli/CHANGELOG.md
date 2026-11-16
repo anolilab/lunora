@@ -1,3 +1,7 @@
+## @lunora/cli [1.0.0-alpha.499](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.498...@lunora/cli@1.0.0-alpha.499) (2026-11-16)
+
+- perf(codegen)!: load studio documents on their routes and ship them as static assets (#1499)
+
 ## @lunora/cli [1.0.0-alpha.498](https://github.com/anolilab/lunora/compare/@lunora/cli@1.0.0-alpha.497...@lunora/cli@1.0.0-alpha.498) (2026-11-16)
 
 - fix(cli): remove sdk files a regeneration no longer produces (#1575)
