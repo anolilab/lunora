@@ -21,7 +21,9 @@ pnpm --filter "@lunora/docs" run serve     # preview the production build
 
 The site runs as a Cloudflare Worker. `pnpm --filter "@lunora/docs" run deploy`
 runs `alchemy.run.ts`, which builds the site and deploys the Worker with its
-bindings. It reads these from the environment:
+bindings. The script pins alchemy's stage to `prod`: without it alchemy derives
+the stage from `$USER`, so every person or CI runner deploying would create a
+Worker of its own. It reads these from the environment:
 
 | Variable                                        | What it is                                                                                     |
 | ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
