@@ -126,6 +126,20 @@ describe("sdk vendor — refuses to copy a transport symlink", () => {
         expect(existsSync(join(outputDirectory, "lunora"))).toBe(false);
     });
 
+    it("refuses an entry reached through a symlinked parent directory", async () => {
+        expect.assertions(2);
+
+        mkdirSync(join(scratchDir, "outside"), { recursive: true });
+        writeFileSync(join(scratchDir, "outside", "lunora.py"), "OUTSIDE = 1\n", "utf8");
+        symlinkSync(join(scratchDir, "outside"), join(transportRoot, "python", "lib"));
+
+        const nested = { ...target, vendor: [{ from: "lib/lunora.py", to: "lib/lunora.py" }] };
+
+        await expect(vendorTransport({ ...vendorOptions(), target: nested })).rejects.toThrow(`refusing to vendor "lib" — it is a symlink, not a directory`);
+
+        expect(existsSync(join(outputDirectory, "lib"))).toBe(false);
+    });
+
     it("a symlink-free transport still vendors correctly (regression guard)", async () => {
         expect.assertions(2);
 

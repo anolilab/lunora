@@ -115,6 +115,18 @@ const assertEntriesVendorable = (sourceRoot: string, vendor: SdkTarget["vendor"]
             throw new LunoraError("NOT_FOUND", `transport is missing ${entry.from}`);
         }
 
+        // An entry such as Ruby's `lib/lunora.rb` reaches through `lib`: a linked
+        // `lib` would let the walk below read outside the transport.
+        const parents = entry.from.split("/").slice(0, -1);
+
+        for (let depth = 1; depth <= parents.length; depth += 1) {
+            const parent = join(sourceRoot, ...parents.slice(0, depth));
+
+            if (lstatSync(parent).isSymbolicLink()) {
+                throw new LunoraError("INTERNAL", `refusing to vendor "${relative(sourceRoot, parent)}" — it is a symlink, not a directory`);
+            }
+        }
+
         assertNoSymlinks(sourceRoot, source);
     }
 };
