@@ -1,3 +1,7 @@
+## @lunora/auth [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.265...@lunora/auth@1.0.0-alpha.266) (2026-11-16)
+
+- fix(auth): guard the last owner in removeMember and updateMemberRole (#1557)
+
 ## @lunora/auth [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/auth@1.0.0-alpha.264...@lunora/auth@1.0.0-alpha.265) (2026-11-14)
 
 - security(auth)!: audit organization, oauth provider, scim and sso management (#1549)

@@ -1,3 +1,7 @@
+## @lunora/do [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.285...@lunora/do@1.0.0-alpha.286) (2026-11-16)
+
+- fix(do): let a backed-off live query retry on a server hint (#1550)
+
 ## @lunora/do [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/do@1.0.0-alpha.284...@lunora/do@1.0.0-alpha.285) (2026-11-13)
 
 - fix(do): name a delta's table only for a single-table query (#1595)

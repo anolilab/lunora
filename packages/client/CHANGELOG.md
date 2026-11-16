@@ -1,3 +1,7 @@
+## @lunora/client [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.297...@lunora/client@1.0.0-alpha.298) (2026-11-16)
+
+- fix(do): let a backed-off live query retry on a server hint (#1550)
+
 ## @lunora/client [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.296...@lunora/client@1.0.0-alpha.297) (2026-11-14)
 
 - fix(client): replay a subscription refusal to late subscribers (#1530)
