@@ -281,4 +281,22 @@ final class SubscriptionRetryTests: XCTestCase {
 
         XCTAssertEqual(recorder.frames.map { $0["type"] as? String }, ["unsubscribe", "subscribe", "unsubscribe"])
     }
+
+    func testSettledThatCutsOffRunKeepsRetry() throws {
+        let retry = try retryGolden()
+        let client = try openSubscribed(retry, Recorder())
+
+        _ = client.handleFrame(#"{"cursor":13,"data":[{"_id":"m1"}],"epoch":"e1","id":"sub_1","type":"data"}"#)
+        _ = client.handleFrame(try json(try XCTUnwrap(retry["hintFrame"])))
+        _ = client.handleFrame(
+            #"{"delta":{"key":"m2","op":"insert","row":{"_id":"m2"},"table":"messages"},"id":"sub_1","more":true,"type":"delta"}"#
+        )
+
+        // The settled freezes the subscription, so the retry's snapshot is the only thing that recovers it.
+        _ = client.handleFrame(#"{"cursor":14,"epoch":"e1","id":"sub_1","type":"settled"}"#)
+        XCTAssertNotNil(client.nextSubscriptionRetryAt, "a settled that freezes the subscription must keep the retry")
+
+        _ = client.handleFrame(#"{"cursor":14,"epoch":"e1","id":"sub_1","type":"resume"}"#)
+        XCTAssertNotNil(client.nextSubscriptionRetryAt, "a resume a frozen subscription ignores must keep the retry")
+    }
 }

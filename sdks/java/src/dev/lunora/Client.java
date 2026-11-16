@@ -1722,8 +1722,10 @@ public final class Client {
         String kind = frame.get("type") instanceof String text ? text : "";
         String id = frame.get("id") instanceof String text ? text : "";
 
-        // The server answered this subscription, so a retry it was waiting on is moot.
-        if (Set.of("ack", "data", "delta", "resume", "settled").contains(kind)) {
+        // The server answered this subscription, so a retry it was waiting on is moot. A `data`,
+        // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
+        // applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
+        if ("ack".equals(kind)) {
             synchronized (lock) {
                 pendingRetries.remove(id);
             }
@@ -1858,6 +1860,7 @@ public final class Client {
 
                     // Advanced only once the frame is applied: a poisoned subscription returned
                     // above and leaves the resume cursor where it was.
+                    pendingRetries.remove(id);
                     advance(entry, frame);
 
                     // `cursor` is OPTIONAL on data/delta frames, so a frame without one LEAVES the
@@ -1912,6 +1915,7 @@ public final class Client {
                         discardRun(entry);
                     }
 
+                    pendingRetries.remove(id);
                     advance(entry, frame);
 
                     // A resume/settled frame advances the cursor without a value change — but a
