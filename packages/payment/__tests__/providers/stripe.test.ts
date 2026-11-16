@@ -895,6 +895,20 @@ describe("stripe adapter", () => {
         expect((meterEvent?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe("usage_1");
     });
 
+    it.each([undefined, "  "])("refuses to report usage without a Stripe customer (%j) instead of sending an empty customer id", async (customerId) => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
+
+        // Stripe attributes a meter event only by `stripe_customer_id`; an empty one is accepted and
+        // billed to nobody, and the facade would then mark the row as forwarded.
+        await expect(
+            adapter.reportUsage?.({ customerId, featureId: "api_calls", idempotencyKey: "usage_1", quantity: 5, referenceId: "user_1" }),
+        ).rejects.toBeInstanceOf(LunoraPaymentError);
+        expect(calls.some((call) => call.name === "meterEvent")).toBe(false);
+    });
+
     it("cancels immediately (no atPeriodEnd) via subscriptions.cancel", async () => {
         expect.assertions(3);
 

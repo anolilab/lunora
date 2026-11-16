@@ -30,7 +30,7 @@ describe("createWorker — openapi admin endpoint", () => {
     it("rejects without a valid admin bearer (403)", async () => {
         expect.assertions(1);
 
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, openApiSpec: SPEC, shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, openApiSpec: async () => SPEC, shardDO: noopNamespace });
 
         const response = await worker.fetch(new Request("https://app.example/_lunora/admin/openapi", { method: "GET" }), {}, fakeContext);
 
@@ -40,7 +40,7 @@ describe("createWorker — openapi admin endpoint", () => {
     it("serves the injected spec verbatim (200)", async () => {
         expect.assertions(2);
 
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, openApiSpec: SPEC, shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, openApiSpec: async () => SPEC, shardDO: noopNamespace });
 
         const response = await worker.fetch(
             new Request("https://app.example/_lunora/admin/openapi", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
@@ -76,7 +76,7 @@ describe("createWorker — openapi admin endpoint", () => {
     it("rejects non-GET (405)", async () => {
         expect.assertions(1);
 
-        const worker = createWorker({ adminToken: ADMIN_TOKEN, openApiSpec: SPEC, shardDO: noopNamespace });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, openApiSpec: async () => SPEC, shardDO: noopNamespace });
 
         const response = await worker.fetch(
             new Request("https://app.example/_lunora/admin/openapi", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),

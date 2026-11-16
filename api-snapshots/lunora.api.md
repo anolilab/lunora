@@ -5339,6 +5339,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `StudioDocumentName` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `TraceSamplingConfig` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -5528,6 +5532,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `isBackupManifestKey` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `loadStudioDocument` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 

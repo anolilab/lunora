@@ -23,6 +23,7 @@ import {
     describePreservedCrons,
     mergeWranglerEnvironment,
     readWranglerJsonc,
+    reconcileStudioAssets,
     reconcileWranglerBindings,
     reconcileWranglerCompatibilityDate,
     reconcileWranglerCrons,
@@ -263,7 +264,12 @@ const runCodegenStep = async (
     }
 
     try {
-        const result = runCodegen({ apiSpec, dryRun: !writeOutputs, lazyFunctions, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
+        const result = runCodegen({ apiSpec, dryRun: !writeOutputs, lazyFunctions, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd, target) });
+
+        if (writeOutputs) {
+            reconcileStudioAssets(cwd, target, logger);
+        }
+
         codegenSpinner?.succeed("codegen complete");
 
         if (!codegenSpinner) {

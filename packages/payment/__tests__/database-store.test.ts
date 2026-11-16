@@ -646,7 +646,7 @@ describe("createDatabasePaymentStore", () => {
             });
         }
 
-        const pending = await store.listUnreportedUsage("stripe", 10);
+        const pending = await store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY);
 
         expect(pending.map((event) => event.idempotencyKey)).toStrictEqual([
             "evt_0000",
@@ -665,6 +665,40 @@ describe("createDatabasePaymentStore", () => {
         // backlog. Before the fix this was `backlog`.
         expect(db.rowsRead()).toBeLessThanOrEqual(20);
         expect(db.rowsRead()).toBeLessThan(backlog);
+    });
+
+    it("listUnreportedUsage skips a deferred row until it is due, and pages past it", async () => {
+        expect.assertions(3);
+
+        // Regression: rows whose forward keeps failing filled every oldest-first batch, so
+        // a newer event was never forwarded. A deferred row must not take a batch slot.
+        const store = createDatabasePaymentStore(makeDb());
+
+        for (let index = 0; index < 4; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- seeding a deterministic ledger; order matters
+            await store.recordUsage({
+                createdAt: index,
+                featureId: "tokens",
+                idempotencyKey: `evt_${String(index)}`,
+                provider: "stripe",
+                quantity: 1,
+                referenceId: "user_1",
+                reportedToProvider: false,
+            });
+        }
+
+        await store.deferUsageReport("stripe", "evt_0", 1000);
+        await store.deferUsageReport("stripe", "evt_1", 1000);
+
+        const keys = async (now: number): Promise<string[]> => {
+            const pending = await store.listUnreportedUsage("stripe", 2, now);
+
+            return pending.map((event) => event.idempotencyKey);
+        };
+
+        await expect(keys(999)).resolves.toStrictEqual(["evt_2", "evt_3"]);
+        await expect(keys(1000)).resolves.toStrictEqual(["evt_0", "evt_1"]);
+        await expect(store.listUnreportedUsage("stripe", 1, 1000)).resolves.toMatchObject([{ idempotencyKey: "evt_0", reportRetryAt: 1000 }]);
     });
 
     it("listUnreportedUsage pages past non-candidate rows until it has `limit` of them", async () => {
@@ -692,7 +726,7 @@ describe("createDatabasePaymentStore", () => {
             });
         }
 
-        const pending = await store.listUnreportedUsage("stripe", 3);
+        const pending = await store.listUnreportedUsage("stripe", 3, Number.POSITIVE_INFINITY);
 
         expect(pending.map((event) => event.idempotencyKey)).toStrictEqual(["evt_0000", "evt_0010", "evt_0020"]);
         // Still bounded — chunks of 3, not the whole 60-row match set at once.

@@ -70,6 +70,22 @@ export const writeIfPresent = (filePath: string, content: string): void => {
 };
 
 /**
+ * Write Studio's documents into the assets directory the Worker reads them from
+ * (`RunCodegenOptions.studioAssets`), at `_lunora/studio/<name>.json`, and delete
+ * one this run did not emit. The directory is created even when nothing is in
+ * it, since wrangler refuses an `assets.directory` that does not exist.
+ */
+export const writeStudioAssets = (assetsDirectory: string, documents: Readonly<Record<"architecture" | "openapi" | "openrpc", string>>): void => {
+    const directory = join(assetsDirectory, "_lunora", "studio");
+
+    mkdirSync(directory, { recursive: true });
+
+    for (const [name, content] of Object.entries(documents)) {
+        writeIfPresent(join(directory, `${name}.json`), content);
+    }
+};
+
+/**
  * Write the RPC service declaration snapshots (`_generated/services/`, keyed
  * relative to `_generated/`) and delete any file there this run did not emit —
  * the whole folder once no RPC service is left.

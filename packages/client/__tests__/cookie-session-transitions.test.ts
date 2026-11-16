@@ -211,6 +211,37 @@ describe("cookie session: the server's answer drives every transition", () => {
         client.close();
     });
 
+    it("a → b: the outgoing user's pending optimistic write is not shown to the user who signs in next", async () => {
+        expect.assertions(3);
+
+        const { client, server, values } = await liveClient("user-a");
+
+        // A's send never answers, so its optimistic layer is still pending when the cookie changes hands.
+        server.fetchImpl.mockImplementationOnce(async () => new Promise<Response>(() => {}));
+        client
+            .mutation(
+                fnRef("notes:add"),
+                { text: "A's draft" },
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("notes:mine"), {}, [{ _id: "n2", owner: "user-a" }]);
+                    },
+                },
+            )
+            .catch(() => undefined);
+
+        expect(values.at(-1)).toStrictEqual([{ _id: "n2", owner: "user-a" }]);
+
+        server.state.user = "user-b";
+        await client.getCurrentUser();
+        await settle();
+
+        expect(client.currentIdentity()).toBe("subj:user-b");
+        expect(values.at(-1)).toBeUndefined();
+
+        client.close();
+    });
+
     it("nobody → b: a sign-in after a resolved sign-out retires the anonymous session", async () => {
         expect.assertions(5);
 
