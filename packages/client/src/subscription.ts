@@ -168,6 +168,13 @@ export interface SubscriptionState {
     refusal?: SubscriptionError;
 
     /**
+     * Bumped each time the identity whose layers this subscription carried is
+     * signed out, so a value fan already under way can stop handing out that
+     * identity's value (see `notifySubscription`). Absent until the first one.
+     */
+    retirements?: number;
+
+    /**
      * The authoritative server value the optimistic layers fold onto — the value
      * with NO optimistic overlay. Tracks `lastValue` exactly whenever no layers
      * are active; diverges only while a per-call optimistic write is pending. A

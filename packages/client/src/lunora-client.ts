@@ -830,6 +830,9 @@ class LunoraClient {
     /** Orders offline-queued writes by when they were issued; see {@link QueuedMutation.issueSeq}. */
     private mutationIssueCounter = 0;
 
+    /** Bumped each time an identity's optimistic layers are dropped, so a mutation can tell its user was signed out mid-update. */
+    private identityRetirements = 0;
+
     private readonly persistence: PersistenceAdapter | undefined;
 
     /** App/schema version stamped on persisted writes + cached reads; mismatches are purged. */
@@ -3989,6 +3992,15 @@ class LunoraClient {
      * left live. `true` when it evicted, which reconnects every socket cold.
      */
     private retirePreviousIdentity(previousIdentity: string | null, wasKnownNobody: boolean, previousToken: string | null, token: string | null): boolean {
+        const leaving = leavesSessionBehind(previousIdentity, wasKnownNobody, token);
+
+        // Before the rejections below: each rolls back synchronously, and a
+        // subscriber it notifies may already write as the incoming user,
+        // whose layer must survive.
+        if (leaving) {
+            this.discardOptimisticLayers();
+        }
+
         // Writes whose stamp still matches (or is still undecidable) are
         // kept: this path is reached on a plain sign-in too, where the
         // queue belongs to the very user who just signed in.
@@ -4013,7 +4025,7 @@ class LunoraClient {
         // its socket is authenticated by the cookie as it was at the
         // upgrade — anonymous — and keeps serving that, never the user
         // who signed in since, until it is replaced.
-        if (!leavesSessionBehind(previousIdentity, wasKnownNobody, token)) {
+        if (!leaving) {
             return false;
         }
 
@@ -4523,6 +4535,8 @@ class LunoraClient {
         // queue or a persistence adapter.
         this.refuseOnlineOnlyWhenDown(function_.__lunoraRef, options);
 
+        const retirements = this.identityRetirements;
+
         // Apply optimistic updates to any subscriber listening on this fn. Both
         // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
         // `optimistic` transform patches the matching (fn, args, shard)
@@ -4537,7 +4551,14 @@ class LunoraClient {
             options.optimistic,
         );
 
-        this.applyOptionalOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
+        this.applyOptionalOptimisticUpdate(
+            options.optimisticUpdate,
+            args,
+            options.shardKey,
+            optimisticRollbacks,
+            optimisticConfirms,
+            () => this.identityRetirements === retirements,
+        );
 
         // Ordering barrier: a post-reconnect replay of THIS shard's queued writes
         // may be in flight. `onOpen` sets `wsState = "open"` before it starts the
@@ -5760,9 +5781,10 @@ class LunoraClient {
         shardKey: string | undefined,
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+        identityInForce: () => boolean,
     ): void {
         if (optimisticUpdate) {
-            this.applyOptimisticUpdate(optimisticUpdate, args, shardKey, optimisticRollbacks, optimisticConfirms);
+            this.applyOptimisticUpdate(optimisticUpdate, args, shardKey, optimisticRollbacks, optimisticConfirms, identityInForce);
         }
     }
 
@@ -5783,8 +5805,9 @@ class LunoraClient {
         shardKey: string | undefined,
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+        identityInForce: () => boolean,
     ): void {
-        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey);
+        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey, identityInForce);
 
         try {
             optimisticUpdate(store, args);
@@ -9173,6 +9196,31 @@ class LunoraClient {
 
         if (queryCache) {
             this.queryCacheChain = this.queryCacheChain.then(async () => queryCache.clear()).catch(() => undefined);
+        }
+    }
+
+    /**
+     * Drop every pending optimistic layer, for a session that is changing hands.
+     *
+     * {@link evictPreviousIdentitySession} blanks each server base, but the
+     * re-fold runs the base back through the layers, and a layer is the
+     * outgoing user's predicted rows: a `setQuery` constant ignores the blank
+     * base entirely, so the incoming user was shown the previous one's pending
+     * message. The writes themselves are not settled here — a queued one is
+     * judged by the replay gate and an in-flight one settles on its own — and
+     * a later `confirm`/`rollback` on a dropped layer finds nothing to remove
+     * and re-folds from the base the new identity was served.
+     *
+     * Only where the user changes. A claims change ({@link retireChangedClaims})
+     * and a stale cookie socket retired by its `identity` frame keep the
+     * identity in force, and the pending writes are that user's own.
+     */
+    private discardOptimisticLayers(): void {
+        this.identityRetirements += 1;
+
+        for (const state of this.subscriptions.all()) {
+            state.optimisticLayers = [];
+            state.retirements = (state.retirements ?? 0) + 1;
         }
     }
 
