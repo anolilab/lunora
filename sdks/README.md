@@ -317,21 +317,23 @@ runs as. Each port states its own session credential, which §5.2 allows, so eac
 ¹³ **The live-query retry hint, where a port honours it.** A subscription whose re-run fails is
 backed off by the shard, and its `error` frame carries `error.retryAfterMs` (protocol/README.md
 §5.2). `@lunora/client` re-subscribes that id once at the hint, cold; a newer hint replaces the
-pending retry, and any `data` (other than a stale seed), `delta`, `ack`, `resume` or `settled` frame for the id, an `error`
-for it without a hint, an unsubscribe, a socket close or open, or `close()` cancels it. A client
-that ignores the field delivers the error as before, so the subscription stays on it until a write
-touches its tables after the backoff window or the socket reconnects. The goldens are
-`subscriptionRetry` in `protocol/fixtures/ws-frames.json`; it is not yet required by
-`conformance-cases.json`: the Go, Ruby, Kotlin and Dart ports were written without their toolchains,
-so the name is added once CI has run all eight suites green. Python, Ruby, Go, Rust, Java, Kotlin,
-Swift and Dart honour it through a pulled deadline: the client records one per subscription,
-`retry_due_subscriptions(now)` (Python, Ruby and Rust; Java and Kotlin `retryDueSubscriptions`, Go
-`RetryDueSubscriptions(now)`, Swift `retryDueSubscriptions(now:)`, Dart
-`retryDueSubscriptions(nowMs:)`) sends the due re-subscribes, and `next_subscription_retry_at()`
-(Python, Ruby and Rust; Java and Kotlin `nextSubscriptionRetryAtNanos()`, Go
-`NextSubscriptionRetryAt()`, Swift and Dart `nextSubscriptionRetryAt`, the Dart one on the clock `retryClockMs` reads) says when to call it next:
-the caller's timer, as for a flush's `retry_after_ms`. Python's `connect_and_run` arms that timer
-itself; Ruby, Go, Rust, Java, Kotlin, Swift and Dart callers arm their own.
+pending retry, and any `data` (other than a stale seed), `delta`, `ack`, `resume` or `settled`
+frame the client applies for the id (not one it drops while waiting for a replacement snapshot),
+an `error` for it without a hint, an unsubscribe, a socket close or open, or `close()` cancels it.
+A client that ignores the field delivers the error as before, so the subscription stays on it
+until, after the backoff window, a write lands in the ranges the query read, or the socket
+reconnects. The goldens are `subscriptionRetry` in `protocol/fixtures/ws-frames.json`; it is not
+yet required by `conformance-cases.json`: the Go, Ruby, Kotlin and Dart ports were written without
+their toolchains, so the name is added once CI has run all eight suites green. Python, Ruby, Go,
+Rust, Java, Kotlin, Swift and Dart honour it through a pulled deadline: the client records one per
+subscription, `retry_due_subscriptions(now)` (Python, Ruby and Rust; Java and Kotlin
+`retryDueSubscriptions`, Go `RetryDueSubscriptions(now)`, Swift `retryDueSubscriptions(now:)`,
+Dart `retryDueSubscriptions(nowMs:)`) sends the due re-subscribes, and
+`next_subscription_retry_at()` (Python, Ruby and Rust; Java and Kotlin
+`nextSubscriptionRetryAtNanos()`, Go `NextSubscriptionRetryAt()`, Swift and Dart
+`nextSubscriptionRetryAt`, the Dart one on the clock `retryClockMs` reads) says when to call it
+next: the caller's timer, as for a flush's `retry_after_ms`. Python's `connect_and_run` arms that
+timer itself; Ruby, Go, Rust, Java, Kotlin, Swift and Dart callers arm their own.
 
 **The two argument rows are one problem with two halves, and no port can pass
 both by a rule applied at the transport.** An unset `v.optional()` must reach the

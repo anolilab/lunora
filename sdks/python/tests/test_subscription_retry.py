@@ -182,6 +182,21 @@ class TestSubscriptionRetry(unittest.TestCase):
 
         self.assertIsNotNone(client.next_subscription_retry_at())
 
+    def test_a_settled_that_cuts_off_a_run_keeps_the_retry(self):
+        client, _sent, _errors, _unsubscribe = _open()
+        client.handle_frame({"id": RETRY["subscriptionId"], "type": "data", "data": [{"_id": "m1"}], "cursor": 13, "epoch": "e1"})
+        client.handle_frame(RETRY["hintFrame"])
+        row = {"key": "m2", "op": "insert", "table": "messages", "row": {"_id": "m2"}}
+        client.handle_frame({"id": RETRY["subscriptionId"], "type": "delta", "delta": row, "more": True})
+
+        # The settled freezes the subscription, so the retry's snapshot is the only thing that recovers it.
+        client.handle_frame({"id": RETRY["subscriptionId"], "type": "settled", "cursor": 14, "epoch": "e1"})
+        self.assertIsNotNone(client.next_subscription_retry_at())
+
+        # A frozen subscription ignores a resume too, so it answers nothing either.
+        client.handle_frame({"id": RETRY["subscriptionId"], "type": "resume", "cursor": 14, "epoch": "e1"})
+        self.assertIsNotNone(client.next_subscription_retry_at())
+
     def test_an_unsubscribe_that_overtakes_the_retry_is_followed_by_another(self):
         sent: list = []
         client = LunoraClient("https://app.example", client_id="client-test")

@@ -1366,8 +1366,10 @@ public final class LunoraClient {
         let kind = frame["type"] as? String
         let id = frame["id"] as? String
 
-        // The server answered this subscription, so a retry it was waiting on is moot.
-        if let id, let kind, ["ack", "data", "delta", "resume", "settled"].contains(kind) {
+        // The server answered this subscription, so a retry it was waiting on is moot. A `data`,
+        // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
+        // applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
+        if let id, kind == "ack" {
             withLock { pendingRetries[id] = nil }
         }
 
@@ -1461,6 +1463,7 @@ public final class LunoraClient {
                 }
 
                 entry.discardRun()
+                pendingRetries[id] = nil
                 advance(entry, frame)
 
                 var queued: LunoraOptimistic.Deferred = []
@@ -1510,6 +1513,7 @@ public final class LunoraClient {
                     return []
                 }
 
+                pendingRetries[id] = nil
                 advance(entry, frame)
 
                 // A resume/settled frame advances the cursor without a value

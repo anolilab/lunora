@@ -31,6 +31,32 @@ final class SubscriptionRetryTest {
         hintIsClampedToMaxRetryAfter(retry);
         unsubscribeThatOvertakesRetryIsFollowedByAnother(retry);
         failedSendKeepsUnsentRetriesDue(retry);
+        settledThatCutsOffRunKeepsRetry(retry);
+    }
+
+    private static void settledThatCutsOffRunKeepsRetry(Map<String, Object> retry)
+            throws IOException {
+        List<Map<String, Object>> sent = new ArrayList<>();
+        Client client = openSubscribed(retry, sent, new ArrayList<>());
+
+        client.handleFrame(
+                "{\"cursor\":13,\"data\":[{\"_id\":\"m1\"}],\"epoch\":\"e1\",\"id\":\"sub_1\",\"type\":\"data\"}");
+        client.handleFrame(Json.write(retry.get("hintFrame")));
+        client.handleFrame(
+                "{\"delta\":{\"key\":\"m2\",\"op\":\"insert\",\"row\":{\"_id\":\"m2\"},\"table\":\"messages\"},\"id\":\"sub_1\",\"more\":true,\"type\":\"delta\"}");
+
+        // The settled freezes the subscription, so the retry's snapshot is the only thing that
+        // recovers it.
+        client.handleFrame(
+                "{\"cursor\":14,\"epoch\":\"e1\",\"id\":\"sub_1\",\"type\":\"settled\"}");
+        check(
+                client.nextSubscriptionRetryAtNanos() != null,
+                "a settled that freezes the subscription must keep the retry");
+
+        client.handleFrame("{\"cursor\":14,\"epoch\":\"e1\",\"id\":\"sub_1\",\"type\":\"resume\"}");
+        check(
+                client.nextSubscriptionRetryAtNanos() != null,
+                "a resume a frozen subscription ignores must keep the retry");
     }
 
     @SuppressWarnings("unchecked")
