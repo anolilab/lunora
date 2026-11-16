@@ -2755,6 +2755,10 @@ interface WranglerCacheShape {
 ```ts
 interface WranglerCodegenInputs {
     spaAssetsBindings?: string[];
+    studioAssets?: {
+        binding: string;
+        directory: string;
+    };
     wranglerQueueProducers: WranglerQueueProducerIR[];
     wranglerVariables: WranglerVariableIR[];
 }
@@ -3168,6 +3172,12 @@ const injectRemoteFlags: (text: string, plans: ReadonlyArray<RemoteBindingPlan>)
 const isCacheEnabled: (parsed: WranglerCacheShape | null | undefined) => boolean;
 ```
 
+### `isOwnedStudioAssets` (const)
+
+```ts
+const isOwnedStudioAssets: (assets: unknown) => boolean;
+```
+
 ### `isRemoteEnvEnabled` (const)
 
 ```ts
@@ -3222,6 +3232,12 @@ const readWranglerJsonc: <T = unknown>(wranglerPath: string) => ReadWranglerResu
 
 ```ts
 const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogger, onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void) => Promise<void>;
+```
+
+### `reconcileStudioAssets` (const)
+
+```ts
+const reconcileStudioAssets: (projectRoot: string, target: string | undefined, logger: ReconcileLogger) => void;
 ```
 
 ### `reconcileWranglerBindings` (const)
@@ -3329,7 +3345,7 @@ const withheldBindings: (config: RemoteOnlyBindings | undefined, hasCredentials:
 ### `wranglerCodegenInputs` (const)
 
 ```ts
-const wranglerCodegenInputs: (projectRoot: string) => WranglerCodegenInputs;
+const wranglerCodegenInputs: (projectRoot: string, target?: string) => WranglerCodegenInputs;
 ```
 
 ### `wranglerToAlchemy` (const)

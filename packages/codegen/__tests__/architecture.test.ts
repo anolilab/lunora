@@ -157,7 +157,7 @@ describe("architecture manifest", () => {
             tags: { description: string; name: string }[];
         };
 
-        expect(app).toContain(`architecture: (await import("./architecture.js")).architecture,`);
+        expect(app).toContain(`architecture: () => import("./architecture.js").then((module) => module.architecture),`);
         expect(openApi.paths["/_lunora/rpc#chat_posts:feed"]?.post?.tags).toStrictEqual(["chat"]);
         expect(openApi.tags).toContainEqual({ description: "Channels and messages", name: "chat" });
     });

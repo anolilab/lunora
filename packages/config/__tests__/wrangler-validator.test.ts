@@ -2512,6 +2512,29 @@ export const schema = defineSchema({
             expect(result.report.warnings.join(" ")).toMatch(/assets\.directory.*does not exist yet/u);
         });
 
+        it("points a missing Studio assets directory at codegen, not the client build", () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "assets": { "binding": "ASSETS", "directory": ".lunora/studio-assets", "run_worker_first": true }
+}
+`,
+                "utf8",
+            );
+
+            const warnings = validateWranglerProject({ projectRoot: workdir }).report.warnings.join(" ");
+
+            expect(warnings).toMatch(/assets\.directory.*lunora codegen/u);
+            expect(warnings).not.toMatch(/client build/u);
+        });
+
         it("does not warn about assets.directory once the directory exists", () => {
             expect.assertions(1);
 

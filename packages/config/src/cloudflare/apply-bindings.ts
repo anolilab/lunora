@@ -4,7 +4,8 @@
  * sidecar's config, then the ownership records — and
  * {@link reconcileWranglerBindings} plans and applies in one pass.
  */
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import type { InferredBindings } from "../infer-bindings";
 import { readManifest } from "./lunora-manifest";
@@ -77,6 +78,12 @@ const applyWranglerBindings = (projectRoot: string, plan: WranglerBindingsPlan):
 
     const warnings = [...plan.warnings];
     const wranglerChanged = edit.text !== edit.original;
+
+    // Wrangler refuses an `assets` block whose directory is missing, and only codegen writes into it:
+    // `lunora dev --no-codegen`, or a fresh clone (`.lunora/` is gitignored), would otherwise not start.
+    if (edit.assetsDirectory !== undefined) {
+        mkdirSync(join(dirname(plan.wranglerPath), edit.assetsDirectory), { recursive: true });
+    }
 
     if (wranglerChanged) {
         writeFileSync(plan.wranglerPath, edit.text, "utf8");

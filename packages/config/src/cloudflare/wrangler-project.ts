@@ -18,6 +18,7 @@ import {
     MERGED_DURABLE_OBJECT,
     MERGED_ROLE_DURABLE_OBJECTS,
 } from "../worker-entry";
+import { isOwnedStudioAssets } from "./studio-assets";
 import { foldMigrationClasses, objectBindingEntries } from "./validate-bindings";
 import { validateSchedulerOrigin } from "./validate-settings";
 import type { CapabilityMethod, WorkerEntry, WorkerEntryLocation } from "./worker-entry-checks";
@@ -70,6 +71,25 @@ const namedImageErrors = (entry: WranglerContainerEntry | null | undefined, conf
 
         return [`containers images["${name}"] dockerfile "${dockerfile}" does not exist (resolved relative to ${wranglerPath}); create the Dockerfile`];
     });
+
+/**
+ * `assets.directory` may legitimately not exist at validation time (before the
+ * client build, or before codegen for the Lunora-owned Studio block), so a
+ * missing one is a warning, never an error.
+ */
+const collectMissingAssetsWarning = (assets: WranglerConfig["assets"], configDirectory: string): string[] => {
+    const directory = assets?.directory;
+
+    if (typeof directory !== "string" || directory.length === 0 || existsSync(directory.startsWith("/") ? directory : join(configDirectory, directory))) {
+        return [];
+    }
+
+    const createdBy = isOwnedStudioAssets(assets)
+        ? "it holds the Studio documents `lunora codegen` writes; run codegen before deploy"
+        : "it is created by the client build; run the build before deploy";
+
+    return [`assets.directory "${directory}" does not exist yet — ${createdBy}`];
+};
 
 /**
  * FS-aware existence check for local-path container images: every `./`, `../`,
@@ -476,19 +496,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // entry (class-A's virtual `main`) says nothing about the vector bindings.
     report.errors.push(...collectUnchainedCapabilityErrors(schemaInfo, options.projectRoot));
 
-    // FS-aware: `assets.directory` is created by the client build, so it may
-    // legitimately not exist at validation time (pre-build). Surface a *warning*
-    // (never an error) so pre-build validation flows aren't broken — mirrors the
-    // container-image existence check above, but downgraded to a warning.
-    const assetsDirectory = resolvedWrangler.assets?.directory;
-
-    if (typeof assetsDirectory === "string" && assetsDirectory.length > 0) {
-        const resolved = assetsDirectory.startsWith("/") ? assetsDirectory : join(configDirectory, assetsDirectory);
-
-        if (!existsSync(resolved)) {
-            report.warnings.push(`assets.directory "${assetsDirectory}" does not exist yet — it is created by the client build; run the build before deploy`);
-        }
-    }
+    report.warnings.push(...collectMissingAssetsWarning(resolvedWrangler.assets, configDirectory));
 
     report.valid = report.errors.length === 0;
 

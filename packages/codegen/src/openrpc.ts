@@ -157,7 +157,7 @@ const emitOpenRpc = (input: OpenRpcEmitInput): string => `${JSON.stringify(build
 
 /**
  * Emit the OpenRPC document as an importable TS module
- * (`_generated/openrpc.ts`) the worker entry imports and passes to
+ * (`_generated/openrpc.ts`) the worker entry loads with `import()` behind
  * `createWorker({ openRpcSpec })`. The document is inlined as a `JSON.parse`
  * string (see {@link renderJsonData}), so the `.ts` and `.json` carry the same
  * content and regenerate together; its `methods` array grows with every
