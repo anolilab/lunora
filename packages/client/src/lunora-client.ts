@@ -4017,6 +4017,7 @@ class LunoraClient {
             return false;
         }
 
+        this.discardOptimisticLayers();
         this.evictPreviousIdentitySession();
 
         return true;
@@ -9173,6 +9174,28 @@ class LunoraClient {
 
         if (queryCache) {
             this.queryCacheChain = this.queryCacheChain.then(async () => queryCache.clear()).catch(() => undefined);
+        }
+    }
+
+    /**
+     * Drop every pending optimistic layer, for a session that is changing hands.
+     *
+     * {@link evictPreviousIdentitySession} blanks each server base, but the
+     * re-fold runs the base back through the layers, and a layer is the
+     * outgoing user's predicted rows: a `setQuery` constant ignores the blank
+     * base entirely, so the incoming user was shown the previous one's pending
+     * message. The writes themselves are not settled here — a queued one is
+     * judged by the replay gate and an in-flight one settles on its own — and
+     * a later `confirm`/`rollback` on a dropped layer finds nothing to remove
+     * and re-folds from the base the new identity was served.
+     *
+     * Only where the user changes. A claims change ({@link retireChangedClaims})
+     * and a stale cookie socket retired by its `identity` frame keep the
+     * identity in force, and the pending writes are that user's own.
+     */
+    private discardOptimisticLayers(): void {
+        for (const state of this.subscriptions.all()) {
+            state.optimisticLayers = [];
         }
     }
 
