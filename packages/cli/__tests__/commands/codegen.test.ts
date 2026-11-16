@@ -256,6 +256,34 @@ describe("lunora codegen", () => {
             expect(advisoryWarnings[0]).toContain("advisory");
         });
 
+        it("lists a suppressed advisory with its reason, outside the warning", () => {
+            expect.assertions(4);
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const schema = readFileSync(schemaPath, "utf8");
+            const table = "    attachments: defineTable({";
+
+            expect(schema.split(table)).toHaveLength(2);
+
+            writeFileSync(
+                schemaPath,
+                schema.replace(table, `    // lunora-advisor-exempt unindexed_foreign_key -- fixture accepts the scan\n${table}`),
+                "utf8",
+            );
+
+            const warnings: string[] = [];
+            const infos: string[] = [];
+
+            runCodegenCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), info: (message) => infos.push(message), warn: (message) => warnings.push(message) },
+            });
+
+            expect(warnings.filter((message) => message.includes("unindexed_foreign_key"))).toHaveLength(0);
+            expect(infos).toContainEqual(expect.stringContaining("1 suppressed:"));
+            expect(infos).toContainEqual(expect.stringContaining("[INFO] unindexed_foreign_key (suppressed: fixture accepts the scan) — "));
+        });
+
         describe("--format json", () => {
             // Through `execute`, because the envelope is written by `defineHandler`:
             // `runCodegenCommand` is the library entry point and writes nothing.

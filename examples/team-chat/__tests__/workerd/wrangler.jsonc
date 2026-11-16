@@ -1,0 +1,28 @@
+// Wrangler config used ONLY by `@cloudflare/vitest-plugin` to boot the app's real Worker in
+// workerd. It is not deployed. `main` is the app's own entry, so `SELF` runs the production
+// `authorizeShard`, identity resolution and generated `ShardDO`; the bindings below mirror
+// `wrangler.jsonc` with local ids.
+// `AUTH_SECRET` and `STORAGE_SECRET` are read from the Worker env here instead of `.dev.vars`.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-example-team-chat-test",
+    "main": "../../src/server/index.ts",
+    "compatibility_date": "2026-10-01",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
+        ],
+    },
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
+    "d1_databases": [{ "binding": "DB", "database_name": "lunora-example-team-chat-test", "database_id": "lunora-example-team-chat-test" }],
+    "r2_buckets": [{ "binding": "FILES", "bucket_name": "lunora-example-team-chat-test-files" }],
+    "vars": {
+        "AUTH_SECRET": "workerd-test-auth-secret-0123456789abcdef",
+        "STORAGE_SECRET": "workerd-test-storage-secret",
+    },
+}

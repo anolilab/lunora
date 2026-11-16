@@ -19,8 +19,8 @@ import type { CodegenResult } from "./run-codegen";
 const sortedUniqueNames = (names: Iterable<string>): ReadonlyArray<string> => [...new Set(names)].toSorted((a, b) => a.localeCompare(b));
 
 /** Deduplicated, sorted names of every ERROR-level advisory in `advisories`. */
-const errorAdvisoryNames = (advisories: ReadonlyArray<Pick<Finding, "level" | "name">>): ReadonlyArray<string> =>
-    sortedUniqueNames(advisories.filter((advisory) => advisory.level === "ERROR").map((advisory) => advisory.name));
+const errorAdvisoryNames = (advisories: ReadonlyArray<Pick<Finding, "level" | "name" | "suppressed">>): ReadonlyArray<string> =>
+    sortedUniqueNames(advisories.filter((advisory) => advisory.level === "ERROR" && advisory.suppressed === undefined).map((advisory) => advisory.name));
 
 /** Deduplicated, sorted names of every error-level platform diagnostic in `platformDiagnostics`. */
 const errorPlatformDiagnosticNames = (platformDiagnostics: ReadonlyArray<Pick<PlatformDiagnostic, "level" | "name">>): ReadonlyArray<string> =>

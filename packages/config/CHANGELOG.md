@@ -1,3 +1,11 @@
+## @lunora/config [1.0.0-alpha.462](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.461...@lunora/config@1.0.0-alpha.462) (2026-11-14)
+
+- feat(advisor): suppress one finding at one site with an inline directive (#1587)
+
+## @lunora/config [1.0.0-alpha.461](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.460...@lunora/config@1.0.0-alpha.461) (2026-11-14)
+
+- feat(advisor): report source locations on schema and config findings (#1586)
+
 ## @lunora/config [1.0.0-alpha.460](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.459...@lunora/config@1.0.0-alpha.460) (2026-11-05)
 
 - feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)

@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 import { leadingIndexedColumns, PRIMARY_KEY, suggestIndexName } from "./fk-index";
 
 /**
@@ -51,6 +52,7 @@ const unindexedForeignKey: Lint = {
                         cacheKey: `unindexed_foreign_key:${table.name}:${fkColumn}`,
                         detail: `Relation "${relation.name}" on table "${table.name}" references "${relation.table}" via column "${fkColumn}", which is not the leading column of any index. Reads filtering or joining on "${fkColumn}" full-scan "${table.name}".`,
                         metadata: {
+                            ...declarationSiteFields(relation),
                             fkColumn,
                             references: { column: relation.references, table: relation.table },
                             relation: relation.name,

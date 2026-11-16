@@ -254,6 +254,39 @@ describe("discoverVectorNamespaceAccesses", () => {
         expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("flags an args namespace prefixed only by a server-trusted non-identity ctx value", () => {
+        expect.assertions(1);
+
+        write(
+            "env-prefix.ts",
+            `export const search = query(async ({ ctx, args }) => { return ctx.vectors.query(idx, { namespace: \`\${ctx.env.PREFIX}/\${args.tenant}\` }); });`,
+        );
+
+        expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("ignores an args namespace scoped by the caller's own identity", () => {
+        expect.assertions(1);
+
+        write(
+            "own-prefix.ts",
+            `export const search = query(async ({ ctx, args }) => { return ctx.vectors.query(idx, { namespace: \`\${ctx.auth.userId}/\${args.tenant}\` }); });`,
+        );
+
+        expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("flags an upsertMany element namespace prefixed only by ctx.env", () => {
+        expect.assertions(1);
+
+        write(
+            "env-many.ts",
+            `export const indexMany = mutation(async ({ ctx, args }) => { await ctx.vectors.upsertMany(idx, args.rows.map((row) => ({ namespace: \`\${ctx.env.PREFIX}/\${row.tenant}\`, embed, id: row.id }))); });`,
+        );
+
+        expect(discoverVectorNamespaceAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("ignores a namespace scoped by a server-trusted ctx value", () => {
         expect.assertions(1);
 

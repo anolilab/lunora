@@ -1,7 +1,7 @@
 import type { CodegenResult } from "@lunora/codegen";
 import { describe, expect, it } from "vitest";
 
-import { blockingFindingsMessage } from "../src/log-badge";
+import { blockingFindingsMessage, reportCodegenFindings } from "../src/log-badge";
 
 const errorAdvisory = (name: string): CodegenResult["advisories"][number] => {
     return {
@@ -31,5 +31,23 @@ describe("blockingFindingsMessage", () => {
         expect(
             blockingFindingsMessage({ advisories: [errorAdvisory("unindexed_scan")], platformDiagnostics: [] }, { strictAdvisories: false }),
         ).toBeUndefined();
+    });
+});
+
+describe("reportCodegenFindings", () => {
+    it("logs an ERROR accepted by an inline directive as a warning with its reason", () => {
+        expect.assertions(2);
+
+        const errors: string[] = [];
+        const warnings: string[] = [];
+        const accepted = { ...errorAdvisory("accepted_rule"), suppressed: { file: "lunora/a.ts", line: 1, reason: "single-tenant demo" } };
+
+        reportCodegenFindings(
+            { advisories: [accepted], platformDiagnostics: [] },
+            { error: (message) => errors.push(message), warn: (message) => warnings.push(message) },
+        );
+
+        expect(errors).toStrictEqual([]);
+        expect(warnings[0]).toContain("suppressed: single-tenant demo");
     });
 });

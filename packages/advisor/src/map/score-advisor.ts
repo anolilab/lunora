@@ -89,7 +89,7 @@ const attributeFindings = (
 };
 
 /** Count each coverage verdict in one pass. */
-const summarise = (scored: ReadonlyArray<ProcedureScore>, project: ProjectScore): MapSummary => {
+const summarise = (scored: ReadonlyArray<ProcedureScore>, project: ProjectScore, suppressed: number): MapSummary => {
     const tally: Record<Coverage, number> = { clean: 0, exempt: 0, failing: 0, warned: 0 };
     let rulesFired = project.checks.length;
 
@@ -98,7 +98,15 @@ const summarise = (scored: ReadonlyArray<ProcedureScore>, project: ProjectScore)
         rulesFired += entry.checks.length;
     }
 
-    return { clean: tally.clean, exempt: tally.exempt, failing: tally.failing, procedures: scored.length, rulesFired, warned: tally.warned };
+    return {
+        clean: tally.clean,
+        exempt: tally.exempt,
+        failing: tally.failing,
+        procedures: scored.length,
+        rulesFired,
+        suppressed,
+        warned: tally.warned,
+    };
 };
 
 /**
@@ -144,7 +152,10 @@ const scoreAdvisor = (
     options: ScoreAdvisorOptions = {},
 ): AdvisorMap => {
     const exempt = new Set(options.exempt);
-    const attributed = attributeFindings(procedures, findings);
+    // A suppressed finding is accepted at its site, so it neither fails nor warns its procedure. It is still
+    // counted in the summary, so a reader sees how much is being accepted.
+    const unsuppressed = findings.filter((finding) => finding.suppressed === undefined);
+    const attributed = attributeFindings(procedures, unsuppressed);
 
     const scored: ProcedureScore[] = procedures
         .map((procedure) => {
@@ -186,7 +197,7 @@ const scoreAdvisor = (
         procedures: scored,
         project,
         score: globalScore,
-        summary: summarise(scored, project),
+        summary: summarise(scored, project, findings.length - unsuppressed.length),
         version: MAP_VERSION,
     };
 };
