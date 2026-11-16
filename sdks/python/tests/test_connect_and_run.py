@@ -1000,6 +1000,36 @@ class TestConnectAndRun(unittest.IsolatedAsyncioTestCase):
         socket.close()
         await asyncio.wait_for(run, TIMEOUT)
 
+    async def test_a_slow_error_callback_does_not_postpone_the_retry(self):
+        """The retry fires at the deadline the error frame recorded, not a full hint after its callbacks return."""
+
+        socket = _FakeSocket()
+        self._install(socket)
+        clock = _FakeClock()
+        patcher = unittest.mock.patch("lunora.client.time", types.SimpleNamespace(monotonic=clock.monotonic))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        client = LunoraClient("https://app.example", client_id="client-test")
+        client._call_later = clock.call_later
+
+        def slow_callback(_error) -> None:
+            clock.now += 2.0
+
+        client.subscribe("messages:list", {"channel": "general"}, lambda _value: None, slow_callback)
+        run = asyncio.ensure_future(client.connect_and_run())
+        await asyncio.wait_for(socket.sent_at_least(2).wait(), TIMEOUT)
+        subscribed = len(socket.sent)
+
+        socket.inbound.put_nowait(json.dumps(RETRY["hintFrame"]))
+        await _wait_for(lambda: clock.delays)
+
+        clock.advance(3.0)
+        await _wait_for(lambda: len(socket.sent) == subscribed + 1)
+        self.assertEqual(socket.sent[-1], RETRY["retryFrame"])
+
+        socket.close()
+        await asyncio.wait_for(run, TIMEOUT)
+
     async def test_a_retry_timer_that_fires_early_still_re_subscribes(self):
         """A retry whose timer runs before its deadline still re-subscribes, since a loop may run a handle up to its clock resolution early.
 

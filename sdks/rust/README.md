@@ -194,6 +194,8 @@ loop {
                         if client.retry_due_subscriptions(at).is_err() {
                             break;
                         }
+                        // An error only arms the earliest deadline, so chain on to the next one.
+                        schedule_retry(tx.clone(), client.next_subscription_retry_at());
                     }
                     Event::Closed(code, reason) => {
                         close = (code, reason);
