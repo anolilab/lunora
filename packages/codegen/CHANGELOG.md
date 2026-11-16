@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.419](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.418...@lunora/codegen@1.0.0-alpha.419) (2026-11-16)
+
+- security(codegen): accept only identity fields as an owner-field guard (#1603)
+
 ## @lunora/codegen [1.0.0-alpha.418](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.417...@lunora/codegen@1.0.0-alpha.418) (2026-11-14)
 
 - feat(team-chat): gate channels on membership and drop the attachment suppression (#1593)
