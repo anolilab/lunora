@@ -963,6 +963,12 @@ const appendAuthAuditEntry: (executor: SqlExecutor, entry: AppendAuthAuditEntry,
 const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<EmailClassification>;
 ```
 
+### `authAuditBeforeHook` (const)
+
+```ts
+const authAuditBeforeHook: () => ReturnType<typeof createAuthMiddleware>;
+```
+
 ### `authAuditHook` (const)
 
 ```ts
@@ -1221,6 +1227,7 @@ const verifyTurnstileMiddleware: <Context>(options: VerifyTurnstileMiddlewareOpt
 const withAuthAudit: <Options extends {
     hooks?: {
         after?: unknown;
+        before?: unknown;
     };
 }>(options: Options, config: AuthAuditHookConfig) => Options;
 ```
