@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.288...@lunora/runtime@1.0.0-alpha.289) (2026-11-16)
+
+- fix(auth): guard the last owner in removeMember and updateMemberRole (#1557)
+
 ## @lunora/runtime [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.287...@lunora/runtime@1.0.0-alpha.288) (2026-11-14)
 
 - fix(runtime): keep a seen pause when a later flag read fails (#1528)

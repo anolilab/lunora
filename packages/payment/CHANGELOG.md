@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.273...@lunora/payment@1.0.0-alpha.274) (2026-11-16)
+
+- fix(payment)!: keep Stripe usage unreported when no customer exists (#1567)
+
 ## @lunora/payment [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.272...@lunora/payment@1.0.0-alpha.273) (2026-11-14)
 
 - fix(payment): send checkout quantity to Polar as seats (#1563)

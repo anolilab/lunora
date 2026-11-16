@@ -22,6 +22,7 @@ import { Route as LlmsDottxtRouteImport } from './routes/llms[.]txt'
 import { Route as McpRouteImport } from './routes/mcp'
 import { Route as PressRouteImport } from './routes/press'
 import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as SponsorsRouteImport } from './routes/sponsors'
 import { Route as StartRouteImport } from './routes/start'
 import { Route as StudioRouteImport } from './routes/studio'
 import { Route as ApiOgRouteImport } from './routes/api/og'
@@ -102,6 +103,11 @@ const PressRoute = PressRouteImport.update({
 const PrivacyRoute = PrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SponsorsRoute = SponsorsRouteImport.update({
+  id: '/sponsors',
+  path: '/sponsors',
   getParentRoute: () => rootRouteImport,
 } as any)
 const StartRoute = StartRouteImport.update({
@@ -199,6 +205,7 @@ export interface FileRoutesByFullPath {
   '/mcp': typeof McpRoute
   '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
+  '/sponsors': typeof SponsorsRoute
   '/start': typeof StartRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
@@ -230,6 +237,7 @@ export interface FileRoutesByTo {
   '/mcp': typeof McpRoute
   '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
+  '/sponsors': typeof SponsorsRoute
   '/start': typeof StartRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
@@ -262,6 +270,7 @@ export interface FileRoutesById {
   '/mcp': typeof McpRoute
   '/press': typeof PressRoute
   '/privacy': typeof PrivacyRoute
+  '/sponsors': typeof SponsorsRoute
   '/start': typeof StartRoute
   '/studio': typeof StudioRoute
   '/api/og': typeof ApiOgRoute
@@ -295,6 +304,7 @@ export interface FileRouteTypes {
     | '/mcp'
     | '/press'
     | '/privacy'
+    | '/sponsors'
     | '/start'
     | '/studio'
     | '/api/og'
@@ -326,6 +336,7 @@ export interface FileRouteTypes {
     | '/mcp'
     | '/press'
     | '/privacy'
+    | '/sponsors'
     | '/start'
     | '/studio'
     | '/api/og'
@@ -357,6 +368,7 @@ export interface FileRouteTypes {
     | '/mcp'
     | '/press'
     | '/privacy'
+    | '/sponsors'
     | '/start'
     | '/studio'
     | '/api/og'
@@ -389,6 +401,7 @@ export interface RootRouteChildren {
   McpRoute: typeof McpRoute
   PressRoute: typeof PressRoute
   PrivacyRoute: typeof PrivacyRoute
+  SponsorsRoute: typeof SponsorsRoute
   StartRoute: typeof StartRoute
   StudioRoute: typeof StudioRoute
   ApiOgRoute: typeof ApiOgRoute
@@ -498,6 +511,13 @@ declare module '@tanstack/react-router' {
       path: '/privacy'
       fullPath: '/privacy'
       preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sponsors': {
+      id: '/sponsors'
+      path: '/sponsors'
+      fullPath: '/sponsors'
+      preLoaderRoute: typeof SponsorsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/start': {
@@ -629,6 +649,7 @@ const rootRouteChildren: RootRouteChildren = {
   McpRoute: McpRoute,
   PressRoute: PressRoute,
   PrivacyRoute: PrivacyRoute,
+  SponsorsRoute: SponsorsRoute,
   StartRoute: StartRoute,
   StudioRoute: StudioRoute,
   ApiOgRoute: ApiOgRoute,
