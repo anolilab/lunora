@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -364,6 +364,15 @@ describe("lunora codegen", () => {
             runCodegenCommand({ cwd: workdir, logger: silentLogger() });
 
             expect(readFileSync(wranglerPath(), "utf8")).toBe(wrangler);
+        });
+
+        it("fails when it cannot write the binding its loaders need, instead of reporting success", () => {
+            expect.assertions(1);
+
+            writeWorkerProject();
+            chmodSync(wranglerPath(), 0o444);
+
+            expect(() => runCodegenCommand({ cwd: workdir, logger: silentLogger() })).toThrow(/EACCES|EPERM/);
         });
 
         it("leaves a project's own assets block alone and keeps the documents in the bundle", () => {

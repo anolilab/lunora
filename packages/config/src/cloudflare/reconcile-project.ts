@@ -199,35 +199,32 @@ const STUDIO_DOCUMENTS: ReadonlyArray<string> = ["architecture.json", "openapi.j
  * wrote into the owned directory are deleted, because a block the user edited
  * (or their own `directory` pointing there) may serve that directory ahead of
  * the Worker's admin check.
+ *
+ * A failed write throws: the loaders codegen just emitted need the binding, so
+ * the run must fail rather than report success with documents that never load.
  */
 const reconcileStudioAssets = (projectRoot: string, target: string | undefined, logger: ReconcileLogger): void => {
-    try {
-        const wranglerPath = findWranglerFile(projectRoot);
-        const read = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerShape>(wranglerPath);
+    const wranglerPath = findWranglerFile(projectRoot);
+    const read = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerShape>(wranglerPath);
 
-        if (wranglerPath === undefined || read?.parsed === undefined) {
-            return;
+    if (wranglerPath === undefined || read?.parsed === undefined) {
+        return;
+    }
+
+    const plan = studioAssetsPlan(projectRoot, read.parsed, target);
+    const step = reconcileStudioAssetsBlock(read.text, read.parsed, plan);
+
+    if (step.text !== read.text) {
+        writeFileSync(wranglerPath, step.text, "utf8");
+        logger.info?.(`${LUNORA_TAG} ${[...step.added, ...step.updated].join(", ")} → ${wranglerPath}`);
+    }
+
+    if (plan === undefined) {
+        const documents = join(dirname(wranglerPath), STUDIO_ASSETS_DIRECTORY, "_lunora", "studio");
+
+        for (const name of STUDIO_DOCUMENTS) {
+            rmSync(join(documents, name), { force: true });
         }
-
-        const plan = studioAssetsPlan(projectRoot, read.parsed, target);
-        const step = reconcileStudioAssetsBlock(read.text, read.parsed, plan);
-
-        if (step.text !== read.text) {
-            writeFileSync(wranglerPath, step.text, "utf8");
-            logger.info?.(`${LUNORA_TAG} ${[...step.added, ...step.updated].join(", ")} → ${wranglerPath}`);
-        }
-
-        if (plan === undefined) {
-            const documents = join(dirname(wranglerPath), STUDIO_ASSETS_DIRECTORY, "_lunora", "studio");
-
-            for (const name of STUDIO_DOCUMENTS) {
-                rmSync(join(documents, name), { force: true });
-            }
-        }
-    } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        logger.warn(`${LUNORA_TAG} Studio assets block sync skipped: ${message}`);
     }
 };
 
