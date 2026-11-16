@@ -46,13 +46,13 @@ is the through-line of both; if you unify them, unify toward the token ramp.
 
 ### Assets
 
-| File                                                                                                              | Purpose                                                                                                |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| [`../.github/assets/lunora.svg`](../.github/assets/lunora.svg)                                                    | Canonical mark — ink, `viewBox 543×446`. Source of truth for geometry.                                 |
-| `apps/docs/src/assets/lunora_logo.svg`                                                                            | Docs mark — same path, `currentColor` fill (used by the navbar/footer React components).               |
-| `apps/docs/public/favicon.svg`                                                                                    | Favicon — moon filled with the animated aurora gradient.                                               |
-| `apps/docs/public/og-default.jpg`                                                                                 | Default Open Graph card. Per-page OG is generated at `apps/docs/src/routes/api/og.ts`.                 |
-| `videos/public/brand/lunora.svg` (in the [`lunora-marketing`](https://github.com/anolilab/lunora-marketing) repo) | Mark mirrored for the Remotion video project (+ `cloudflare.svg` for the "Built for Cloudflare" beat). |
+| File                                                                                                              | Purpose                                                                                                        |
+| ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| [`../.github/assets/lunora.svg`](../.github/assets/lunora.svg)                                                    | Canonical mark — ink, `viewBox 543×446`. Source of truth for geometry.                                         |
+| `apps/docs/src/assets/lunora_logo.svg`                                                                            | Docs mark — same path, `currentColor` fill (used by the navbar/footer React components).                       |
+| `apps/docs/public/favicon.svg`                                                                                    | Favicon — moon filled with the animated aurora gradient.                                                       |
+| `apps/docs/public/og-default.jpg`                                                                                 | Default Open Graph card. Per-page OG is generated at build time by `apps/docs/scripts/generate-og-images.mjs`. |
+| `videos/public/brand/lunora.svg` (in the [`lunora-marketing`](https://github.com/anolilab/lunora-marketing) repo) | Mark mirrored for the Remotion video project (+ `cloudflare.svg` for the "Built for Cloudflare" beat).         |
 
 There is **no separate wordmark/lockup SVG today** — the wordmark is set in live
 text next to the mark (see Typography). Generate a static lockup only if a context

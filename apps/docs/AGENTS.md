@@ -4,7 +4,7 @@ The Lunora documentation & marketing site (`@lunora/docs`) — TanStack Start on
 Vite, file-based routing via TanStack Router, Fumadocs/MDX content, Tailwind v4
 with shadcn/ui, prerendered to static HTML.
 
-> Deployed as a Cloudflare Worker (`wrangler.jsonc`, `@cloudflare/vite-plugin`, `alchemy.run.ts`). workerd forbids runtime code generation, which shapes two choices. Wasm is imported as a precompiled `?module` (`/api/og`), and satori stays below 0.33, whose HarfBuzz compiles wasm from bytes. MDX is compiled at build time by importing the `.md`/`.mdx` file (the code of conduct, blog posts); `@fumadocs/mdx-remote`'s `executeMdx*` needs `new Function` and answers 500. Prerendering runs in workerd too, so a route that breaks there is silently left out of `dist/client`. Verify a change with `pnpm run build` then `wrangler dev -c dist/server/wrangler.json`.
+> Deployed as a Cloudflare Worker (`wrangler.jsonc`, `@cloudflare/vite-plugin`, `alchemy.run.ts`). workerd forbids runtime code generation, which shapes two choices. OG cards are rendered in Node at build time (`scripts/generate-og-images.mjs` → `public/og/`), not by a route: satori >= 0.33 compiles HarfBuzz wasm from bytes, and the last release that ran on workerd has an SVG-escaping advisory. A page that wants a card adds it there and points `og:image` at `ogImagePath()`. MDX is compiled at build time by importing the `.md`/`.mdx` file (the code of conduct, blog posts); `@fumadocs/mdx-remote`'s `executeMdx*` needs `new Function` and answers 500. Prerendering runs in workerd too, so a route that breaks there is silently left out of `dist/client`. Verify a change with `pnpm run build` then `wrangler dev -c dist/server/wrangler.json`.
 
 Writing rules for every docs page (voice, page types, code samples, agent
 readability): [`STYLE.md`](STYLE.md).
@@ -23,8 +23,8 @@ no category sub-folders.
 ## Commands
 
 ```bash
-pnpm dev               # generate-packages + copy-docs, then the dev server
-pnpm build             # + check-doc-imports + fetch-stats + vite build
+pnpm dev               # generate-packages + copy-docs + OG cards, then the dev server
+pnpm build             # + check-doc-imports + fetch-stats + OG cards + vite build
 pnpm lint:doc-imports  # code samples in docs import real, exported symbols
 pnpm lint:types        # fumadocs-mdx codegen, then tsc --noEmit
 ```
@@ -35,7 +35,8 @@ workspace packages via `project.json` `category:*` tags, merges
 `packages/*/docs/`, sanitises MDX, builds a categorised `packages/meta.json`) →
 `scripts/check-doc-imports.mjs` (fails the build on a code sample importing a
 symbol nothing exports; not run in `dev`) → `scripts/fetch-stats.js`
-(network-bound; skipped by `dev`).
+(network-bound; skipped by `dev`) → `scripts/generate-og-images.mjs` (reads the
+Geist fonts from jsDelivr, so it needs the network in `dev` too).
 
 ## Adding a package to the site
 

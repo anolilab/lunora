@@ -7,7 +7,7 @@ import type { MDXContent } from "mdx/types";
 import type { ComponentProps } from "react";
 import { use } from "react";
 
-import { coverImageUrl, createSeoHead, SITE_URL } from "@/lib/seo";
+import { coverImageUrl, createSeoHead, ogImagePath, SITE_URL } from "@/lib/seo";
 import type { BlogPostMeta, PostLink, RelatedPost } from "@/pages/blog/content";
 import BlogPost from "@/pages/blog/content";
 
@@ -226,16 +226,10 @@ export const Route = createFileRoute("/blog/$slug")({
             return {};
         }
 
-        const ogParameters = new URLSearchParams({
-            description: loaderData.meta.description ?? "",
-            eyebrow: loaderData.meta.category ?? "Blog",
-            title: loaderData.meta.title,
-        });
-
         // A post that ships real cover art should share it. The generated card is
         // the fallback for the posts that have none — which was every post until
         // now, because this ignored `meta.image` entirely.
-        const cover = coverImageUrl(loaderData.meta.image) ?? `${SITE_URL}/api/og?${ogParameters.toString()}`;
+        const cover = coverImageUrl(loaderData.meta.image) ?? `${SITE_URL}${ogImagePath(`blog/${loaderData.slug}`)}`;
 
         const seo = createSeoHead({
             description: loaderData.meta.description ?? `${loaderData.meta.title} — Lunora blog`,

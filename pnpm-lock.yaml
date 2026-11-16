@@ -950,8 +950,8 @@ catalogs:
       specifier: 6.1.3
       version: 6.1.3
     satori:
-      specifier: 0.32.0
-      version: 0.32.0
+      specifier: 0.35.0
+      version: 0.35.0
     secretlint:
       specifier: 13.0.7
       version: 13.0.7
@@ -1509,9 +1509,6 @@ importers:
       '@react-three/fiber':
         specifier: catalog:web
         version: 9.8.1(@types/react@19.3.0)(expo-asset@57.0.18(expo@57.0.26)(react-native@0.86.3(@babel/core@8.1.0)(@types/react@19.3.0)(react@19.3.1)(supports-color@10.2.2))(react@19.3.1)(supports-color@10.2.2)(typescript@6.0.3))(expo-file-system@57.0.7(expo@57.0.26)(react-native@0.86.3(@babel/core@8.1.0)(@types/react@19.3.0)(react@19.3.1)(supports-color@10.2.2)))(expo@57.0.26)(immer@11.1.8)(react-dom@19.3.1(react@19.3.1))(react-native@0.86.3(@babel/core@8.1.0)(@types/react@19.3.0)(react@19.3.1)(supports-color@10.2.2))(react@19.3.1)(three@0.186.1)
-      '@resvg/resvg-wasm':
-        specifier: catalog:web
-        version: 2.6.2
       '@rolldown/plugin-babel':
         specifier: catalog:web
         version: 0.2.4(@babel/core@8.1.0)(@babel/plugin-transform-runtime@7.29.7(@babel/core@8.1.0)(supports-color@10.2.2))(@babel/runtime@7.29.7)(rolldown@1.2.15)(vite@8.3.5(@types/node@26.6.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(yaml@2.9.1))
@@ -1638,9 +1635,6 @@ importers:
       react-remove-scroll:
         specifier: catalog:web
         version: 2.7.2(@types/react@19.3.0)(react@19.3.1)
-      satori:
-        specifier: catalog:web
-        version: 0.32.0
       shiki:
         specifier: catalog:web
         version: 4.6.0
@@ -1693,6 +1687,9 @@ importers:
       '@eslint/css':
         specifier: catalog:web
         version: 2.0.0
+      '@resvg/resvg-wasm':
+        specifier: catalog:web
+        version: 2.6.2
       '@secretlint/secretlint-rule-preset-recommend':
         specifier: catalog:web
         version: 13.0.7
@@ -1753,6 +1750,9 @@ importers:
       rimraf:
         specifier: catalog:web
         version: 6.1.3
+      satori:
+        specifier: catalog:web
+        version: 0.35.0
       secretlint:
         specifier: catalog:web
         version: 13.0.7(supports-color@10.2.2)
@@ -20948,6 +20948,9 @@ packages:
     resolution: {integrity: sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw==}
     engines: {node: '>=20.0.0'}
 
+  harfbuzzjs@0.10.0:
+    resolution: {integrity: sha512-SN8LVwCOzvTq3OPNd0+EAghgXugItz56wst567D1vs7LnnKGWprhi3EG58aVOBwhN8HEbQxL4I9NDWkcXUutRw==}
+
   has-bigints@1.1.0:
     resolution: {integrity: sha512-R3pbpkcIqv2Pm3dUwgjclDRVmWpTJW2DcMzcIhEXEx1oh/CEMObMm3KLmRJOdvhM7o4uQBnwr8pzRK2sJWIqfg==}
     engines: {node: '>= 0.4'}
@@ -24242,8 +24245,8 @@ packages:
     engines: {node: '>=18.18'}
     hasBin: true
 
-  satori@0.32.0:
-    resolution: {integrity: sha512-WwYeCWKjxfXvk7SsLSLTJhcPOrB2HCxbptqGIiYor0yqaPu3xA5uMTQ/4Dan5mxClhhk2Wn9ZE1pLGIlGdUxFQ==}
+  satori@0.35.0:
+    resolution: {integrity: sha512-YyoP7axF2T93XOWXQXLH4t+cvLgZ+MeYV/xruXJfPa/czpcRqaG41/8Bz3mzgYj/7NxdrqJOx3YtzWy1MLtG5g==}
     engines: {node: '>=16'}
 
   satteri@0.10.5:
@@ -44020,6 +44023,8 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
+  harfbuzzjs@0.10.0: {}
+
   has-bigints@1.1.0: {}
 
   has-flag@3.0.0: {}
@@ -48425,7 +48430,7 @@ snapshots:
 
   sandbox-cli-detector@0.2.0: {}
 
-  satori@0.32.0:
+  satori@0.35.0:
     dependencies:
       '@shuding/opentype.js': 1.4.0-beta.0
       css-background-parser: 0.1.0
@@ -48434,6 +48439,8 @@ snapshots:
       css-to-react-native: 3.2.0
       emoji-regex-xs: 2.0.1
       escape-html: 1.0.3
+      fflate: 0.7.5
+      harfbuzzjs: 0.10.0
       linebreak: 1.1.0
       parse-css-color: 0.2.1
       postcss-value-parser: 4.2.0

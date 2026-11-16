@@ -25,7 +25,6 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SponsorsRouteImport } from './routes/sponsors'
 import { Route as StartRouteImport } from './routes/start'
 import { Route as StudioRouteImport } from './routes/studio'
-import { Route as ApiOgRouteImport } from './routes/api/og'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
 import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
@@ -122,11 +121,6 @@ const StudioRoute = StudioRouteImport.update({
   path: '/studio',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiOgRoute = ApiOgRouteImport.update({
-  id: '/api/og',
-  path: '/api/og',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiSearchRoute = ApiSearchRouteImport.update({
   id: '/api/search',
   path: '/api/search',
@@ -220,7 +214,6 @@ export interface FileRoutesByFullPath {
   '/sponsors': typeof SponsorsRoute
   '/start': typeof StartRoute
   '/studio': typeof StudioRoute
-  '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/blog/$slug': typeof BlogSlugRoute
@@ -254,7 +247,6 @@ export interface FileRoutesByTo {
   '/sponsors': typeof SponsorsRoute
   '/start': typeof StartRoute
   '/studio': typeof StudioRoute
-  '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/blog/$slug': typeof BlogSlugRoute
@@ -289,7 +281,6 @@ export interface FileRoutesById {
   '/sponsors': typeof SponsorsRoute
   '/start': typeof StartRoute
   '/studio': typeof StudioRoute
-  '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/blog/$slug': typeof BlogSlugRoute
@@ -325,7 +316,6 @@ export interface FileRouteTypes {
     | '/sponsors'
     | '/start'
     | '/studio'
-    | '/api/og'
     | '/api/search'
     | '/api/waitlist'
     | '/blog/$slug'
@@ -359,7 +349,6 @@ export interface FileRouteTypes {
     | '/sponsors'
     | '/start'
     | '/studio'
-    | '/api/og'
     | '/api/search'
     | '/api/waitlist'
     | '/blog/$slug'
@@ -393,7 +382,6 @@ export interface FileRouteTypes {
     | '/sponsors'
     | '/start'
     | '/studio'
-    | '/api/og'
     | '/api/search'
     | '/api/waitlist'
     | '/blog/$slug'
@@ -428,7 +416,6 @@ export interface RootRouteChildren {
   SponsorsRoute: typeof SponsorsRoute
   StartRoute: typeof StartRoute
   StudioRoute: typeof StudioRoute
-  ApiOgRoute: typeof ApiOgRoute
   ApiSearchRoute: typeof ApiSearchRoute
   ApiWaitlistRoute: typeof ApiWaitlistRoute
   BlogSlugRoute: typeof BlogSlugRoute
@@ -560,13 +547,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StudioRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/og': {
-      id: '/api/og'
-      path: '/api/og'
-      fullPath: '/api/og'
-      preLoaderRoute: typeof ApiOgRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/search': {
       id: '/api/search'
       path: '/api/search'
@@ -692,7 +672,6 @@ const rootRouteChildren: RootRouteChildren = {
   SponsorsRoute: SponsorsRoute,
   StartRoute: StartRoute,
   StudioRoute: StudioRoute,
-  ApiOgRoute: ApiOgRoute,
   ApiSearchRoute: ApiSearchRoute,
   ApiWaitlistRoute: ApiWaitlistRoute,
   BlogSlugRoute: BlogSlugRoute,
