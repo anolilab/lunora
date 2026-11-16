@@ -206,6 +206,32 @@ class TestSubscriptionRetry(unittest.TestCase):
 
         self.assertEqual([frame["type"] for frame in sent], ["unsubscribe", "subscribe", "unsubscribe"])
 
+    def test_a_sender_that_raises_keeps_the_retry_pending(self):
+        sent: list = []
+        failing: list = []
+        client = LunoraClient("https://app.example", client_id="client-test")
+
+        def sender(frame: dict) -> None:
+            if failing and frame.get("type") == "subscribe":
+                raise OSError("socket write failed")
+            sent.append(frame)
+
+        client.attach_socket(sender)
+        client.subscribe("messages:list", {"channel": "general"}, lambda _value: None)
+        client.handle_frame(RETRY["seedFrame"])
+        client.handle_frame(RETRY["hintFrame"])
+        d = client.next_subscription_retry_at()
+        failing.append(True)
+
+        with self.assertRaises(OSError):
+            client.retry_due_subscriptions(d)
+
+        self.assertEqual(client.next_subscription_retry_at(), d, "the unsent retry is still pending")
+        failing.clear()
+        sent.clear()
+        self.assertEqual(client.retry_due_subscriptions(d), 1)
+        self.assertEqual(sent, [RETRY["retryFrame"]])
+
 
 if __name__ == "__main__":
     unittest.main()

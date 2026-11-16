@@ -1269,7 +1269,7 @@ class LunoraClient:
             if sender is None:
                 return 0
             current = time.monotonic() if now is None else now
-            due = [sub_id for sub_id, deadline in self._pending_retries.items() if deadline <= current]
+            due = {sub_id: deadline for sub_id, deadline in self._pending_retries.items() if deadline <= current}
             for sub_id in due:
                 del self._pending_retries[sub_id]
             frames = []
@@ -1282,8 +1282,19 @@ class LunoraClient:
                 sub.server_epoch = None
                 frames.append(build_subscribe_frame(sub.id, sub.function_path, sub.args))
 
-        for frame in frames:
-            sender(frame)
+        sent = 0
+        try:
+            for frame in frames:
+                sender(frame)
+                sent += 1
+        except BaseException:
+            # Put back every retry that did not go out, so the caller can pull it again; a
+            # newer hint recorded meanwhile wins.
+            with self._lock:
+                for unsent in frames[sent:]:
+                    if unsent["id"] in self._subs:
+                        self._pending_retries.setdefault(unsent["id"], due[unsent["id"]])
+            raise
         # The frames went out after the lock was released, so an unsubscribe on another thread
         # may have reached the socket first; follow it with another, or the server keeps a
         # subscription this client no longer holds.
@@ -1811,13 +1822,16 @@ class LunoraClient:
                         _log.exception("lunora: frame handler raised")
                         continue
                     hint = descriptor.get("retryAfterMs")
-                    if hint is not None:
+                    # Arm for the deadline the error recorded before its callbacks ran, so a slow
+                    # callback does not add its own duration to the server's hint.
+                    armed = self._pending_retries.get(descriptor.get("id")) if hint is not None else None
+                    if armed is not None:
                         # Pass the deadline this timer stands for: a loop may run a handle up to its
                         # clock resolution early, and re-reading the clock then would find nothing
                         # due and lose the retry. A later frame that replaced or cancelled the
                         # deadline still makes this a no-op.
-                        armed = time.monotonic() + hint / 1000
-                        (self._call_later or loop.call_later)(hint / 1000, partial(self.retry_due_subscriptions, armed))
+                        delay = max(0.0, armed - time.monotonic())
+                        (self._call_later or loop.call_later)(delay, partial(self.retry_due_subscriptions, armed))
                     # Only a frame the client recognised proves a live server;
                     # `null` or an unknown `type` must not reset the backoff. An
                     # `error` frame does not either: a TOKEN_EXPIRED arrives just before
