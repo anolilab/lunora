@@ -434,3 +434,46 @@ func TestSubscriptionRetryStopsWhenTheSocketDetachesMidBatch(t *testing.T) {
 		t.Fatalf("n=%d subscribes=%d, want 1 and 1: a detached socket takes no more retries", n, subscribes)
 	}
 }
+
+// handleRaw delivers one server frame given as JSON text.
+func handleRaw(t *testing.T, client *Client, raw string) {
+	t.Helper()
+
+	if _, err := client.HandleFrame([]byte(raw)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSubscriptionRetryUndecodableDeltaKeepsTheRetry(t *testing.T) {
+	var sent []map[string]any
+
+	client := hinted(t, subscriptionRetryFixture(t), &sent)
+	handleRaw(t, client, `{"cursor":13,"delta":["`+Tag+`","bigint","not-a-number"],"id":"sub_1","type":"delta"}`)
+
+	if _, ok := client.NextSubscriptionRetryAt(); !ok {
+		t.Fatal("a delta that was not applied answers nothing, so the retry must stay pending")
+	}
+}
+
+func TestSubscriptionRetrySettledThatCutsOffARunKeepsTheRetry(t *testing.T) {
+	var sent []map[string]any
+
+	retry := subscriptionRetryFixture(t)
+	client := openSubscribed(t, retry, &sent, nil)
+	handleRaw(t, client, `{"cursor":13,"data":[{"_id":"m1"}],"epoch":"e1","id":"sub_1","type":"data"}`)
+	feedFrame(t, client, retry["hintFrame"])
+	handleRaw(t, client, `{"delta":{"key":"m2","op":"insert","row":{"_id":"m2"},"table":"messages"},"id":"sub_1","more":true,"type":"delta"}`)
+
+	// The settled freezes the subscription, so the retry's snapshot is the only thing that recovers it.
+	handleRaw(t, client, `{"cursor":14,"epoch":"e1","id":"sub_1","type":"settled"}`)
+
+	if _, ok := client.NextSubscriptionRetryAt(); !ok {
+		t.Fatal("a settled that freezes the subscription must keep the retry")
+	}
+
+	handleRaw(t, client, `{"cursor":14,"epoch":"e1","id":"sub_1","type":"resume"}`)
+
+	if _, ok := client.NextSubscriptionRetryAt(); !ok {
+		t.Fatal("a resume a frozen subscription ignores must keep the retry")
+	}
+}

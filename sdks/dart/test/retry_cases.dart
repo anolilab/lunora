@@ -271,3 +271,34 @@ void caseSubscriptionRetryDeadlineIsOnThePublicClock() {
 
   check(wait > 4000 && wait <= 5000, 'the wait to the deadline must be the hint, got $wait');
 }
+
+/// A delta that cannot be decoded was not applied, so it answers nothing and the retry stays pending.
+void caseSubscriptionRetryKeptByAnUndecodableDelta() {
+  final client = _hinted(_retryGoldens(), <Map<String, Object?>>[]);
+
+  client.handleFrame(jsonEncode(<String, Object?>{
+    'cursor': 13,
+    'delta': <Object?>[wireTag, 'bigint', 'not-a-number'],
+    'id': 'sub_1',
+    'type': 'delta',
+  }));
+
+  check(client.nextSubscriptionRetryAt != null, 'a delta that was not applied answers nothing');
+}
+
+/// A settled that cuts off a held run freezes the subscription, and a frozen one ignores a resume:
+/// neither answers it, so the retry whose snapshot recovers it stays pending.
+void caseSubscriptionRetryKeptByASettledThatCutsOffARun() {
+  final retry = _retryGoldens();
+  final client = _openSubscribed(retry, <Map<String, Object?>>[], <LunoraSubscriptionError>[]);
+
+  client.handleFrame('{"cursor":13,"data":[{"_id":"m1"}],"epoch":"e1","id":"sub_1","type":"data"}');
+  client.handleFrame(jsonEncode(retry['hintFrame']));
+  client.handleFrame('{"delta":{"key":"m2","op":"insert","row":{"_id":"m2"},"table":"messages"},"id":"sub_1","more":true,"type":"delta"}');
+
+  client.handleFrame('{"cursor":14,"epoch":"e1","id":"sub_1","type":"settled"}');
+  check(client.nextSubscriptionRetryAt != null, 'a settled that freezes the subscription must keep the retry');
+
+  client.handleFrame('{"cursor":14,"epoch":"e1","id":"sub_1","type":"resume"}');
+  check(client.nextSubscriptionRetryAt != null, 'a resume a frozen subscription ignores must keep the retry');
+}

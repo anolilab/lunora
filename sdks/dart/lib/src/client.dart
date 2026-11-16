@@ -1053,9 +1053,11 @@ class LunoraClient {
     final kind = frame['type'] is String ? frame['type'] as String : null;
     final id = frame['id'] is String ? frame['id'] as String : null;
 
-    // The server answered this subscription, so a retry it was waiting on is moot. `error` is not in
-    // this set: it cancels only by carrying no hint, which the error case decides.
-    if (id != null && const <String>{'ack', 'data', 'delta', 'resume', 'settled'}.contains(kind)) {
+    // The server answered this subscription, so a retry it was waiting on is moot. A `data`, `delta`,
+    // `resume` or `settled` cancels it only once applied, below: one that cannot be applied answers
+    // nothing, and the retry's snapshot is what unfreezes the subscription. `error` cancels only by
+    // carrying no hint, which the error case decides.
+    if (id != null && kind == 'ack') {
       _pendingRetries.remove(id);
     }
 
@@ -1154,6 +1156,7 @@ class LunoraClient {
 
           entry.serverBase = value;
           entry.hasServerBase = true;
+          _pendingRetries.remove(id);
           _advance(entry, frame);
           dropConfirmedLayers(entry, entry.serverCursor);
           notifyTarget(entry, foldOptimistic(value, entry.layers));
@@ -1183,6 +1186,7 @@ class LunoraClient {
             return kind;
           }
 
+          _pendingRetries.remove(id);
           _advance(entry, frame);
 
           // A `resume`/`settled` frame advances the cursor without a value

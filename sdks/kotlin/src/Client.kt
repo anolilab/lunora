@@ -1253,8 +1253,10 @@ class Client(
         val kind = frame["type"] as? String ?: ""
         val id = frame["id"] as? String ?: ""
 
-        // The server answered this subscription, so a retry it was waiting on is moot.
-        if (kind == "ack" || kind == "data" || kind == "delta" || kind == "resume" || kind == "settled") {
+        // The server answered this subscription, so a retry it was waiting on is moot. A `data`,
+        // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
+        // applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
+        if (kind == "ack") {
             synchronized(lock) { pendingRetries.remove(id) }
         }
 
@@ -1352,6 +1354,7 @@ class Client(
                         // Advanced only once the frame is applied: an unmergeable row change returned above
                         // must leave the resume cursor where it was, and `poisoned` keeps later frames
                         // from moving it, so a reconnect replays the dropped change.
+                        pendingRetries.remove(id)
                         advance(entry, frame)
                         // `cursor` is OPTIONAL on data/delta frames, and a frame
                         // that omits it — or sends an explicit null — must LEAVE
@@ -1395,6 +1398,7 @@ class Client(
                         }
 
                         entry.heldRun = null
+                        pendingRetries.remove(id)
 
                         advance(entry, frame)
                         // A resume/settled frame advances the cursor without a

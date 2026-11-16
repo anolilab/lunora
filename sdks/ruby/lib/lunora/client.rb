@@ -1052,8 +1052,10 @@ module Lunora
     def dispatch(frame, deferred)
       kind = frame["type"]
       entry = @subscriptions[frame["id"]]
-      # The server answered the subscription, so a retry it was waiting on is moot.
-      @pending_retries.delete(frame["id"]) if %w[ack data delta resume settled].include?(kind)
+      # The server answered the subscription, so a retry it was waiting on is moot. A +data+,
+      # +delta+, +resume+ or +settled+ cancels it only once applied: one that cannot be applied
+      # answers nothing, and the retry's snapshot is what unfreezes the subscription.
+      @pending_retries.delete(frame["id"]) if kind == "ack"
 
       case kind
       when "ack" then kind
@@ -1159,6 +1161,7 @@ module Lunora
         end
 
         entry[:run] = nil
+        @pending_retries.delete(frame["id"])
         advance(entry, frame)
         state.server_base = value
         state.server_cursor = entry[:cursor] if entry[:cursor].is_a?(Integer)
@@ -1197,6 +1200,7 @@ module Lunora
       end
 
       if entry
+        @pending_retries.delete(frame["id"])
         advance(entry, frame)
         state = entry[:state]
         state.server_cursor = entry[:cursor] if entry[:cursor].is_a?(Integer)

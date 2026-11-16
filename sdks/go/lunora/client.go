@@ -1651,8 +1651,10 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 	entry := c.subscriptions[id]
 	shape := c.shapes[id]
 
-	// The server answered this subscription, so a retry an earlier hint scheduled is moot.
-	if kind == "ack" || kind == "data" || kind == "delta" || kind == "resume" || kind == "settled" {
+	// The server answered this subscription, so a retry an earlier hint scheduled is moot. A
+	// `data`, `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot
+	// be applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
+	if kind == "ack" {
 		delete(c.pendingRetries, id)
 	}
 
@@ -1752,6 +1754,7 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			}
 
 			entry.discardRun()
+			delete(c.pendingRetries, id)
 			c.advanceLocked(entry, frame)
 			entry.state.ServerBase = merged
 
@@ -1808,6 +1811,7 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 				return kind, nil
 			}
 
+			delete(c.pendingRetries, id)
 			c.advanceLocked(entry, frame)
 
 			// A resume/settled frame advances the cursor without a value change —

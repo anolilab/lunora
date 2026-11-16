@@ -242,6 +242,33 @@ private fun detachMidBatchStopsRetries() {
     check(sent == 1 && subscribes == 1, "a detached socket must take no more retries, sent=$sent subscribes=$subscribes")
 }
 
+private fun undecodableDeltaKeepsRetry(retry: Map<*, *>) {
+    val client = hintedRetryClient(retry, mutableListOf())
+
+    client.handleFrame(
+        Json.write(mapOf("cursor" to 13, "delta" to listOf(Wire.TAG, "bigint", "not-a-number"), "id" to "sub_1", "type" to "delta")),
+    )
+
+    check(client.nextSubscriptionRetryAtNanos() != null, "a delta that was not applied answers nothing")
+}
+
+private fun settledThatCutsOffRunKeepsRetry(retry: Map<*, *>) {
+    val client = openRetrySubscribed(retry, mutableListOf(), mutableListOf())
+
+    client.handleFrame("""{"cursor":13,"data":[{"_id":"m1"}],"epoch":"e1","id":"sub_1","type":"data"}""")
+    client.handleFrame(Json.write(retry["hintFrame"]))
+    client.handleFrame(
+        """{"delta":{"key":"m2","op":"insert","row":{"_id":"m2"},"table":"messages"},"id":"sub_1","more":true,"type":"delta"}""",
+    )
+
+    // The settled freezes the subscription, so the retry's snapshot is the only thing that recovers it.
+    client.handleFrame("""{"cursor":14,"epoch":"e1","id":"sub_1","type":"settled"}""")
+    check(client.nextSubscriptionRetryAtNanos() != null, "a settled that freezes the subscription must keep the retry")
+
+    client.handleFrame("""{"cursor":14,"epoch":"e1","id":"sub_1","type":"resume"}""")
+    check(client.nextSubscriptionRetryAtNanos() != null, "a resume a frozen subscription ignores must keep the retry")
+}
+
 /**
  * Subscription-retry cases: a subscription error's `retryAfterMs` schedules exactly one cold
  * re-subscribe, which the caller fires through [Client.retryDueSubscriptions]. Checked against the
@@ -260,4 +287,6 @@ internal fun runSubscriptionRetryCases() {
     hintIsClampedToMaxRetryAfter(retry)
     failedWriteKeepsUnsentRetriesDue()
     detachMidBatchStopsRetries()
+    undecodableDeltaKeepsRetry(retry)
+    settledThatCutsOffRunKeepsRetry(retry)
 }

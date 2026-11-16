@@ -221,4 +221,26 @@ class TestSubscriptionRetry < Minitest::Test
     assert_equal 1, client.retry_due_subscriptions(later)
     assert_equal 1, subscribes, "a detached socket takes no more retries"
   end
+
+  def test_an_undecodable_delta_keeps_the_retry
+    client, = pending_client
+    client.handle_frame(JSON.generate({ "cursor" => 13, "delta" => [Lunora::TAG, "bigint", "not-a-number"], "id" => "sub_1",
+                                        "type" => "delta" }))
+
+    refute_nil client.next_subscription_retry_at, "a delta that was not applied answers nothing"
+  end
+
+  def test_a_settled_that_cuts_off_a_run_keeps_the_retry
+    client, = subscribed_client
+    client.handle_frame('{"cursor":13,"data":[{"_id":"m1"}],"epoch":"e1","id":"sub_1","type":"data"}')
+    client.handle_frame(JSON.generate(retry_fixture["hintFrame"]))
+    client.handle_frame('{"delta":{"key":"m2","op":"insert","row":{"_id":"m2"},"table":"messages"},"id":"sub_1","more":true,"type":"delta"}')
+
+    # The settled freezes the subscription, so the retry's snapshot is the only thing that recovers it.
+    client.handle_frame('{"cursor":14,"epoch":"e1","id":"sub_1","type":"settled"}')
+    refute_nil client.next_subscription_retry_at, "a settled that freezes the subscription must keep the retry"
+
+    client.handle_frame('{"cursor":14,"epoch":"e1","id":"sub_1","type":"resume"}')
+    refute_nil client.next_subscription_retry_at, "a resume a frozen subscription ignores must keep the retry"
+  end
 end
