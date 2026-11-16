@@ -77,6 +77,26 @@ nothing addressed by a real table name reaches one. A subscription the shard ser
 re-execution never receives one, and the row it carries is not filtered by row-level security
 or masks.
 
+## When a re-run fails
+
+If a subscription's query throws when a write re-runs it, the subscriber receives an `error`
+for that subscription and the subscription stays registered. The error frame carries a retry
+delay as `retryAfterMs` (1 s, then 1 s, 2 s, 4 s and so on, doubling up to 60 seconds), and
+`@lunora/client` (and every framework binding built on it) re-subscribes once when it elapses.
+The shard backs the query off too: the first failure does not hold back the next write's re-run,
+but from the second consecutive failure on, writes skip the query until a doubling window has
+passed. A successful re-run ends the backoff and normally delivers data; a retry that fails
+again is answered with the next, longer delay. A data frame (other than a stale seed the client
+discards), an error that carries no delay, an unsubscribe or a reconnect cancels a pending retry.
+
+On a shard with delivery authorization, a re-run that fails with a retryable error sends no
+`error` and no delay: the subscriber keeps the value it last received, and later writes re-run
+the query.
+
+Errors a retry cannot fix (access denied, a result over the size limit) carry no delay and end
+the subscription. The non-JS SDKs differ per language; see the capability matrix in
+`sdks/README.md`.
+
 ## Reconnect
 
 The client (`@lunora/client`) uses exponential backoff with jitter and
