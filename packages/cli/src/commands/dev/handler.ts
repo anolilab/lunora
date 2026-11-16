@@ -449,7 +449,7 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
             lunoraDirectory: resolveSchemaDirectory(cwd),
             projectRoot: cwd,
             target,
-            ...wranglerCodegenInputs(cwd),
+            ...wranglerCodegenInputs(cwd, target),
         });
         reconcileStudioAssets(cwd, target, logger);
     } catch (error: unknown) {

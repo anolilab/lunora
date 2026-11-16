@@ -7,7 +7,7 @@
  * second copy of a routine that WRITES `wrangler.jsonc` is a bug that has to be
  * fixed twice.
  */
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import type { DiscoveryCache } from "../discovery-cache";
@@ -213,6 +213,12 @@ const reconcileStudioAssets = (projectRoot: string, target: string | undefined, 
 
     const plan = studioAssetsPlan(projectRoot, read.parsed, target);
     const step = reconcileStudioAssetsBlock(read.text, read.parsed, plan);
+
+    // Wrangler refuses an `assets` block whose directory is missing, and a caller whose codegen planned without this
+    // `target` wrote no documents into it.
+    if (plan !== undefined) {
+        mkdirSync(join(dirname(wranglerPath), plan.directory), { recursive: true });
+    }
 
     if (step.text !== read.text) {
         writeFileSync(wranglerPath, step.text, "utf8");

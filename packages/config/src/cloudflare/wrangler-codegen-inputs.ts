@@ -53,8 +53,11 @@ const producersOf = (queues: QueuesShape | null | undefined, env?: string): Wran
     );
 };
 
-/** Both inputs are empty when there is no wrangler config or it does not parse. */
-const wranglerCodegenInputs = (projectRoot: string): WranglerCodegenInputs => {
+/**
+ * Both inputs are empty when there is no wrangler config or it does not parse. Pass the `target` codegen runs with, so
+ * an explicit `--target` decides the Studio documents' placement the same way `reconcileStudioAssets` does.
+ */
+const wranglerCodegenInputs = (projectRoot: string, target?: string): WranglerCodegenInputs => {
     const wranglerPath = findWranglerFile(projectRoot);
     const read = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerCodegenShape>(wranglerPath);
     const parsed = read?.parsed;
@@ -68,7 +71,7 @@ const wranglerCodegenInputs = (projectRoot: string): WranglerCodegenInputs => {
         ...new Set([parsed.assets, ...Object.values(parsed.env ?? {}).map((block) => block?.assets)].flatMap((assets) => spaAssetsBindingOf(assets) ?? [])),
     ];
 
-    const studioAssets = studioAssetsPlan(projectRoot, parsed);
+    const studioAssets = studioAssetsPlan(projectRoot, parsed, target);
 
     return {
         ...(spaAssetsBindings.length === 0 ? {} : { spaAssetsBindings }),

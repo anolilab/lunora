@@ -233,7 +233,7 @@ const runOnce = (
             project: project.get(),
             projectRoot,
             target,
-            ...wranglerCodegenInputs(projectRoot),
+            ...wranglerCodegenInputs(projectRoot, target),
         });
 
         reconcileStudioAssets(projectRoot, target, logger);

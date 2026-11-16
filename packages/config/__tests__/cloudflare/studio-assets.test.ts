@@ -214,6 +214,16 @@ describe("studio documents as Workers Static Assets", () => {
             expect(wranglerCodegenInputs(root).studioAssets).toStrictEqual({ binding: "ASSETS", directory: STUDIO_ASSETS_DIRECTORY });
         });
 
+        it("follows an explicit target over the one lunora.config.* declares", () => {
+            expect.assertions(2);
+
+            writeProject({});
+            writeFileSync(join(root, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+
+            expect(wranglerCodegenInputs(root).studioAssets).toBeUndefined();
+            expect(wranglerCodegenInputs(root, "cloudflare").studioAssets).toStrictEqual({ binding: "ASSETS", directory: STUDIO_ASSETS_DIRECTORY });
+        });
+
         it("hands codegen nothing for a Vite project", () => {
             expect.assertions(1);
 
@@ -244,6 +254,18 @@ describe("studio documents as Workers Static Assets", () => {
             reconcileStudioAssets(root, "cloudflare", logger);
 
             expect(readFileSync(wranglerPath(), "utf8")).toBe(once);
+        });
+
+        it("creates the directory the block points at when lunora.config.* names another target and cloudflare is passed", () => {
+            expect.assertions(2);
+
+            writeProject({});
+            writeFileSync(join(root, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+
+            reconcileStudioAssets(root, "cloudflare", logger);
+
+            expect(readWrangler()["assets"]).toStrictEqual(OWNED);
+            expect(existsSync(join(root, STUDIO_ASSETS_DIRECTORY))).toBe(true);
         });
 
         it("leaves a user's own assets block byte for byte", () => {

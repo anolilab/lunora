@@ -97,7 +97,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         projectRoot,
         target,
-        ...wranglerCodegenInputs(projectRoot),
+        ...wranglerCodegenInputs(projectRoot, target),
     });
 
     // The emitted Studio loaders may read `ASSETS`; a plain `wrangler deploy` after this never reconciles it.
