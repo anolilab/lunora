@@ -101,6 +101,8 @@
         "@cloudflare/vite-plugin": "catalog:vite",
         "@eslint-react/eslint-plugin": "catalog:web",
         "@eslint/css": "catalog:web",
+        "@fontsource/geist": "catalog:ui",
+        "@fontsource/geist-mono": "catalog:ui",
         "@resvg/resvg-wasm": "catalog:web",
         "@secretlint/secretlint-rule-preset-recommend": "catalog:web",
         "@tanstack/eslint-plugin-router": "catalog:web",

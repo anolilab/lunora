@@ -35,24 +35,15 @@ const ACCENT_COLORS = {
     "sky-sapphire": "#31DAED",
 };
 
-const FONT_BASE = "https://cdn.jsdelivr.net/fontsource/fonts";
-
-const fetchFont = async (url) => {
-    const response = await fetch(url);
-
-    // A CDN error page handed to satori fails later with an opaque font-parse error.
-    if (!response.ok) {
-        throw new Error(`Fetching OG font ${url} failed: ${response.status} ${response.statusText}`);
-    }
-
-    return response.arrayBuffer();
-};
+// The static Geist builds from Fontsource, read from node_modules so the build and `pnpm dev` work offline.
+// `.woff`, not `.woff2`: satori cannot decode woff2, and the variable `@fontsource-variable/geist` ships only that.
+const fontFile = (pkg, file) => readFile(require.resolve(`${pkg}/files/${file}`));
 
 const loadFonts = async () => {
     const [regular, bold, mono] = await Promise.all([
-        fetchFont(`${FONT_BASE}/geist@latest/latin-400-normal.ttf`),
-        fetchFont(`${FONT_BASE}/geist@latest/latin-700-normal.ttf`),
-        fetchFont(`${FONT_BASE}/geist-mono@latest/latin-400-normal.ttf`),
+        fontFile("@fontsource/geist", "geist-latin-400-normal.woff"),
+        fontFile("@fontsource/geist", "geist-latin-700-normal.woff"),
+        fontFile("@fontsource/geist-mono", "geist-mono-latin-400-normal.woff"),
     ]);
 
     return [

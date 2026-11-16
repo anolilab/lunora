@@ -683,6 +683,12 @@ catalogs:
     '@fontsource-variable/geist':
       specifier: ^5.3.0
       version: 5.3.0
+    '@fontsource/geist':
+      specifier: ^5.3.0
+      version: 5.3.0
+    '@fontsource/geist-mono':
+      specifier: ^5.3.0
+      version: 5.3.0
     '@hugeicons/core-free-icons':
       specifier: ^4.4.0
       version: 4.4.0
@@ -1687,6 +1693,12 @@ importers:
       '@eslint/css':
         specifier: catalog:web
         version: 2.0.0
+      '@fontsource/geist':
+        specifier: catalog:ui
+        version: 5.3.0
+      '@fontsource/geist-mono':
+        specifier: catalog:ui
+        version: 5.3.0
       '@resvg/resvg-wasm':
         specifier: catalog:web
         version: 2.6.2
@@ -9141,6 +9153,12 @@ packages:
 
   '@fontsource-variable/geist@5.3.0':
     resolution: {integrity: sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA==}
+
+  '@fontsource/geist-mono@5.3.0':
+    resolution: {integrity: sha512-UtJ1BBBCVpMYdIcW7nEB45UAoAw5M53ZXs2t0ciPW+IokuAAIc56M8+kW5tXbRJCTpDw4XTtU7proT6NdQAHTg==}
+
+  '@fontsource/geist@5.3.0':
+    resolution: {integrity: sha512-u03ftlfVwb05uijq2jGDJ03/HKGqMKaNFk7KOhkpBUex8+BhrAOfMs/XciJ2UUNUX9fEsZbZQld/RWMA2oFU7g==}
 
   '@fuma-comment/react@1.6.0':
     resolution: {integrity: sha512-FTWRr3u+AIsg7b8XD5NGU/rvsN4zkKwW+fe9JoD5iwX5nbl1gOP4Pj3s1vMjoeB4pZfVGFt5hB91K8VXZatxgQ==}
@@ -29930,6 +29948,10 @@ snapshots:
   '@floating-ui/utils@0.2.12': {}
 
   '@fontsource-variable/geist@5.3.0': {}
+
+  '@fontsource/geist-mono@5.3.0': {}
+
+  '@fontsource/geist@5.3.0': {}
 
   '@fuma-comment/react@1.6.0(@floating-ui/dom@1.8.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(highlight.js@11.11.1)(lucide-react@1.52.0(@types/react@19.3.0)(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)':
     dependencies:
