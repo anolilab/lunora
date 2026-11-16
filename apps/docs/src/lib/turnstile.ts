@@ -3,6 +3,9 @@ const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverif
 /** Turnstile documents tokens as at most this long; anything longer is not one. */
 const MAX_TOKEN_LENGTH = 2048;
 
+/** A stalled `siteverify` must not hold the sign-up request open until the Worker is cut off. */
+const SITEVERIFY_TIMEOUT_MS = 5000;
+
 /**
  * Cloudflare's documented test keys: the site key always renders a passing widget
  * and the secret accepts its token. For local runs only; a deploy sets real keys.
@@ -12,7 +15,7 @@ const TEST_SITE_KEY = "1x00000000000000000000AA";
 
 /**
  * Asks Turnstile's `siteverify` whether `token` came from a solved widget. Any
- * failure — no token, a rejected token, an unreachable endpoint — is `false`, so a
+ * failure — no token, a rejected token, an unreachable or stalled endpoint — is `false`, so a
  * Turnstile outage closes the form rather than opening it to bots.
  */
 const verifyTurnstile = async (token: unknown, secret: string, remoteIp: string | null, fetcher: typeof fetch = fetch): Promise<boolean> => {
@@ -30,7 +33,7 @@ const verifyTurnstile = async (token: unknown, secret: string, remoteIp: string 
     }
 
     try {
-        const response = await fetcher(SITEVERIFY_URL, { body: form, method: "POST" });
+        const response = await fetcher(SITEVERIFY_URL, { body: form, method: "POST", signal: AbortSignal.timeout(SITEVERIFY_TIMEOUT_MS) });
 
         if (!response.ok) {
             return false;
@@ -44,4 +47,4 @@ const verifyTurnstile = async (token: unknown, secret: string, remoteIp: string 
     }
 };
 
-export { SITEVERIFY_URL, TEST_SITE_KEY, verifyTurnstile };
+export { SITEVERIFY_TIMEOUT_MS, SITEVERIFY_URL, TEST_SITE_KEY, verifyTurnstile };

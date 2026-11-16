@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { SITEVERIFY_URL, verifyTurnstile } from "../src/lib/turnstile";
+import { SITEVERIFY_TIMEOUT_MS, SITEVERIFY_URL, verifyTurnstile } from "../src/lib/turnstile";
 import { handleWaitlist } from "../src/lib/waitlist";
 
 const SECRET = "test-secret";
@@ -82,6 +82,29 @@ describe(verifyTurnstile, () => {
                 vi.fn<typeof fetch>(async () => new Response("down", { status: 503 })),
             ),
         ).resolves.toBe(false);
+    });
+
+    it("gives up on a siteverify call that never answers", async () => {
+        expect.assertions(2);
+
+        // An already-fired deadline stands in for the timeout, so the test waits on the abort rather than a clock.
+        const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(AbortSignal.abort());
+        const stalled = vi.fn<typeof fetch>(
+            (_url, init) =>
+                // Settles only through the abort signal; without one it hangs forever.
+                new Promise<Response>((_resolve, reject) => {
+                    if (init?.signal?.aborted) {
+                        reject(new Error("aborted", { cause: init.signal.reason }));
+                    }
+                }),
+        );
+
+        try {
+            await expect(verifyTurnstile("token", SECRET, null, stalled)).resolves.toBe(false);
+            expect(timeout).toHaveBeenCalledWith(SITEVERIFY_TIMEOUT_MS);
+        } finally {
+            timeout.mockRestore();
+        }
     });
 });
 

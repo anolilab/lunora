@@ -38,9 +38,10 @@ for `lunora.sh`). Never commit real keys.
 Locally, `pnpm run build` and then `wrangler dev -c dist/server/wrangler.json`
 serve the built Worker. Without `VITE_TURNSTILE_SITE_KEY` the form uses
 Cloudflare's always-passing
-[test site key](https://developers.cloudflare.com/turnstile/troubleshooting/testing/),
-and `wrangler.jsonc` binds the matching test secret, so sign-ups work locally
-with no setup.
+[test site key](https://developers.cloudflare.com/turnstile/troubleshooting/testing/).
+Copy `.dev.vars.example` to `.dev.vars` to bind the matching test secret; without
+it, sign-ups fail verification. The build copies `.dev.vars` next to the built
+Worker, so both `pnpm dev` and `wrangler dev` read it.
 
 ## How the docs are sourced
 

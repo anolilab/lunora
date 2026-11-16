@@ -5,12 +5,9 @@
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
-    // Cloudflare's documented always-passing Turnstile test secret, paired with the
-    // test site key the waitlist form falls back to. A deploy binds the real secret
-    // from TURNSTILE_SECRET_KEY (alchemy.run.ts); never put a real key here.
-    "vars": {
-        "TURNSTILE_SECRET_KEY": "1x0000000000000000000000000000000AA",
-    },
+    // TURNSTILE_SECRET_KEY is not a var: anything here ships in dist/server/wrangler.json,
+    // so a plain `wrangler deploy` would bind it. Locally it comes from `.dev.vars`
+    // (copy `.dev.vars.example`); a deploy binds the real one (alchemy.run.ts).
     // Local dev only: `wrangler dev` and the Vite plugin use this binding. Deploys
     // come from alchemy.run.ts, which provisions the namespace itself, so the `id`
     // here is never used for a deployed Worker.
