@@ -162,4 +162,48 @@ describe("an account switch and the outgoing user's pending optimistic writes", 
 
         client.close();
     });
+
+    it("refuses the rest of an optimistic update once a subscriber switches users partway through it", () => {
+        expect.hasAssertions();
+
+        const { client, socket } = signedInWithRow();
+        const counts: unknown[] = [];
+
+        client.subscribe(fnRef("messages.count"), { channelId: "c1" }, (value) => counts.push(value), { shardKey: "c1" });
+
+        const countId = socket?.sent.findLast((message) => message.type === "subscribe")?.id;
+
+        socket?.receive({ cursor: 4, data: 1, id: countId, type: "data" });
+
+        // Notified synchronously by the first setQuery, before the second one runs.
+        client.subscribe(
+            fnRef("messages.list"),
+            { channelId: "c1" },
+            (value) => {
+                if (Array.isArray(value) && value.includes("A: draft")) {
+                    client.setAuthToken("tok-b", "user-b");
+                }
+            },
+            { shardKey: "c1" },
+        );
+
+        client
+            .mutation(
+                fnRef("messages.send"),
+                { channelId: "c1", text: "A: draft" },
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("messages.list"), { channelId: "c1" }, ["A: private", "A: draft"]);
+                        store.setQuery(fnRef("messages.count"), { channelId: "c1" }, 2);
+                    },
+                    shardKey: "c1",
+                },
+            )
+            .catch(() => undefined);
+
+        expect(socket?.closed).toBe(true);
+        expect(counts).toStrictEqual([1, undefined]);
+
+        client.close();
+    });
 });

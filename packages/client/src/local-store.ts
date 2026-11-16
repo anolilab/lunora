@@ -51,10 +51,16 @@ export type OptimisticUpdate<Args> = (localStore: OptimisticLocalStore, args: Ar
  * the single-query per-call `optimistic` path. Returns the store plus the ordered
  * `confirm` (success) and `rollback` (failure) closures every `setQuery` produced,
  * so the caller settles the whole batch when the mutation does.
+ *
+ * `identityInForce` turns `setQuery` into a no-op once the mutation's user has
+ * been signed out: a subscriber notified by an earlier `setQuery` can switch
+ * accounts synchronously, and the rest of the batch is the outgoing user's
+ * prediction, which must not land on the incoming user's queries.
  */
 export const createLocalStore = (
     subscriptions: SubscriptionRegistry,
     shardKey: string | undefined,
+    identityInForce: () => boolean = () => true,
 ): { confirms: ((commitCursor: number | undefined) => void)[]; rollbacks: (() => void)[]; store: OptimisticLocalStore } => {
     const confirms: ((commitCursor: number | undefined) => void)[] = [];
     const rollbacks: (() => void)[] = [];
@@ -90,7 +96,7 @@ export const createLocalStore = (
         setQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, value: ReturnOf<F> | undefined): void => {
             const state = findState(function_.__lunoraRef, args ?? {});
 
-            if (!state) {
+            if (!state || !identityInForce()) {
                 return;
             }
 

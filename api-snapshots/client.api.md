@@ -1624,7 +1624,7 @@ const createIndexedDbQueryCache: (options?: IndexedDbQueryCacheOptions) => Query
 ### `createLocalStore` (const)
 
 ```ts
-const createLocalStore: (subscriptions: SubscriptionRegistry, shardKey: string | undefined) => {
+const createLocalStore: (subscriptions: SubscriptionRegistry, shardKey: string | undefined, identityInForce?: () => boolean) => {
     confirms: ((commitCursor: number | undefined) => void)[];
     rollbacks: (() => void)[];
     store: OptimisticLocalStore;

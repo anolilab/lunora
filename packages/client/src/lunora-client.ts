@@ -830,6 +830,9 @@ class LunoraClient {
     /** Orders offline-queued writes by when they were issued; see {@link QueuedMutation.issueSeq}. */
     private mutationIssueCounter = 0;
 
+    /** Bumped each time an identity's optimistic layers are dropped, so a mutation can tell its user was signed out mid-update. */
+    private identityRetirements = 0;
+
     private readonly persistence: PersistenceAdapter | undefined;
 
     /** App/schema version stamped on persisted writes + cached reads; mismatches are purged. */
@@ -4524,6 +4527,8 @@ class LunoraClient {
         // queue or a persistence adapter.
         this.refuseOnlineOnlyWhenDown(function_.__lunoraRef, options);
 
+        const retirements = this.identityRetirements;
+
         // Apply optimistic updates to any subscriber listening on this fn. Both
         // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
         // `optimistic` transform patches the matching (fn, args, shard)
@@ -4538,7 +4543,14 @@ class LunoraClient {
             options.optimistic,
         );
 
-        this.applyOptionalOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
+        this.applyOptionalOptimisticUpdate(
+            options.optimisticUpdate,
+            args,
+            options.shardKey,
+            optimisticRollbacks,
+            optimisticConfirms,
+            () => this.identityRetirements === retirements,
+        );
 
         // Ordering barrier: a post-reconnect replay of THIS shard's queued writes
         // may be in flight. `onOpen` sets `wsState = "open"` before it starts the
@@ -5761,9 +5773,10 @@ class LunoraClient {
         shardKey: string | undefined,
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+        identityInForce: () => boolean,
     ): void {
         if (optimisticUpdate) {
-            this.applyOptimisticUpdate(optimisticUpdate, args, shardKey, optimisticRollbacks, optimisticConfirms);
+            this.applyOptimisticUpdate(optimisticUpdate, args, shardKey, optimisticRollbacks, optimisticConfirms, identityInForce);
         }
     }
 
@@ -5784,8 +5797,9 @@ class LunoraClient {
         shardKey: string | undefined,
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+        identityInForce: () => boolean,
     ): void {
-        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey);
+        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey, identityInForce);
 
         try {
             optimisticUpdate(store, args);
@@ -9194,6 +9208,8 @@ class LunoraClient {
      * identity in force, and the pending writes are that user's own.
      */
     private discardOptimisticLayers(): void {
+        this.identityRetirements += 1;
+
         for (const state of this.subscriptions.all()) {
             state.optimisticLayers = [];
         }
