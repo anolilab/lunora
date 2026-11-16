@@ -24,7 +24,9 @@
  */
 import { detectFramework } from "../detect-framework";
 import { readProjectDependencyNames, readProjectManifest } from "../project-manifest";
+import bindingNameOwner from "./binding-name-owner";
 import { isPlainObject } from "./guards";
+import type { WranglerShape } from "./wrangler-shape";
 
 /** The directory of the Lunora-owned `assets` block, relative to `wrangler.jsonc`. `.lunora/` is Lunora's gitignored state directory. */
 const STUDIO_ASSETS_DIRECTORY = ".lunora/studio-assets";
@@ -83,7 +85,8 @@ const bundledByWrangler = (projectRoot: string, parsed: StudioAssetsShape): bool
  * Where the Studio documents go as assets, or `undefined` to keep them in the
  * Worker bundle. Assets only for a Cloudflare Worker wrangler bundles, with no
  * `assets` block of its own anywhere (an `env.<name>` block replaces the
- * top-level one whole), or only the one Lunora wrote.
+ * top-level one whole), or only the one Lunora wrote, and no other binding
+ * named `ASSETS`.
  */
 const studioAssetsPlan = (projectRoot: string, parsed: StudioAssetsShape | undefined, target?: string): StudioAssetsPlan | undefined => {
     if (parsed === undefined || (target !== undefined && target !== "cloudflare")) {
@@ -95,7 +98,10 @@ const studioAssetsPlan = (projectRoot: string, parsed: StudioAssetsShape | undef
         (parsed.assets !== undefined && !isOwnedStudioAssets(parsed.assets)) ||
         environments.some((block) => isPlainObject(block) && block["assets"] !== undefined);
 
-    if (ownAssets || !bundledByWrangler(projectRoot, parsed)) {
+    // Another binding already named `ASSETS` (a KV namespace, a service, …) would make the block a duplicate wrangler rejects.
+    const nameTaken = bindingNameOwner({ ...(parsed as WranglerShape), assets: undefined }, STUDIO_ASSETS_BINDING) !== undefined;
+
+    if (ownAssets || nameTaken || !bundledByWrangler(projectRoot, parsed)) {
         return undefined;
     }
 

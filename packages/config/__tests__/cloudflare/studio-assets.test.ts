@@ -78,6 +78,8 @@ describe("studio documents as Workers Static Assets", () => {
             ["the composed Vite entry", {}, { main: "virtual:lunora/worker" }],
             ["its own assets block", {}, { assets: { binding: "ASSETS", directory: "./public", run_worker_first: true } }],
             ["an environment's own assets block", {}, { env: { staging: { assets: { directory: "./dist" } } } }],
+            ["a KV namespace already bound as ASSETS", {}, { kv_namespaces: [{ binding: "ASSETS", id: "abc" }] }],
+            ["a service already bound as ASSETS, beside the block Lunora wrote", {}, { assets: OWNED, services: [{ binding: "ASSETS", service: "cdn" }] }],
         ])("keeps them in the bundle for %s", (_label, dependencies: Record<string, string>, wrangler: Record<string, unknown>) => {
             expect.assertions(1);
 
