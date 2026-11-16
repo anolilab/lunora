@@ -7,6 +7,8 @@ import { LunoraPaymentError } from "../src/errors";
 import { derivedIdempotencyKey } from "../src/idempotency";
 import { money } from "../src/money";
 import type { PaymentObserver } from "../src/observability";
+import type { StripeClientLike } from "../src/providers/stripe";
+import { createStripeAdapter } from "../src/providers/stripe";
 import type { PaymentStore, RevisionGuard } from "../src/store";
 import { MemoryPaymentStore } from "../src/store";
 import applyWebhookAction from "../src/sync";
@@ -1825,6 +1827,29 @@ describe("createPayment — attach / check / track", () => {
         });
         expect(events).toContain("usage.report_failed");
         await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(5);
+    });
+
+    it("track keeps a Stripe usage row unreported when no customer is stored", async () => {
+        expect.assertions(4);
+
+        const store = new MemoryPaymentStore();
+        const events: string[] = [];
+        const meterCreate = vi.fn<() => Promise<{ identifier: string }>>(async () => {
+            return { identifier: "mev_1" };
+        });
+        const stripe = createStripeAdapter({
+            client: () => ({ billing: { meterEvents: { create: meterCreate } } }) as unknown as StripeClientLike,
+            webhookSecret: "whsec",
+        });
+        const payment = createPayment({ adapter: stripe, authorize: () => true, observability: (event) => events.push(event.type), store });
+
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 5, referenceId: "user_1" })).resolves.toEqual({
+            recorded: true,
+            reportedToProvider: false,
+        });
+        expect(events).toContain("usage.report_failed");
+        expect(meterCreate).not.toHaveBeenCalled();
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toHaveLength(1);
     });
 
     it("track skips provider reporting when the adapter has no reportUsage", async () => {
