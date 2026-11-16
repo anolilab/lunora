@@ -320,8 +320,8 @@ by the shard, and its `error` frame carries `error.retryAfterMs` (protocol/READM
 pending retry, and any `data` (other than a stale seed), `delta`, `ack`, `resume` or `settled`
 frame for the id, an `error` for the id without the field, an unsubscribe, a socket close or
 open, or `close()` cancels it. A port that ignores the field
-delivers the error as before, so the subscription stays on it until a write touches its
-tables after the backoff window or the socket reconnects. The goldens are `subscriptionRetry`
+delivers the error as before, so the subscription stays on it until, after the backoff window,
+a write lands in the ranges the query read, or the socket reconnects. The goldens are `subscriptionRetry`
 in `protocol/fixtures/ws-frames.json`; it is not in `conformance-cases.json`, which may only
 require behaviour every port has.
 
