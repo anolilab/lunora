@@ -78,6 +78,8 @@ describe("studio documents as Workers Static Assets", () => {
             ["the composed Vite entry", {}, { main: "virtual:lunora/worker" }],
             ["its own assets block", {}, { assets: { binding: "ASSETS", directory: "./public", run_worker_first: true } }],
             ["an environment's own assets block", {}, { env: { staging: { assets: { directory: "./dist" } } } }],
+            ["a legacy Workers Sites block", {}, { site: { bucket: "./public" } }],
+            ["an environment's legacy Workers Sites block", {}, { env: { staging: { site: { bucket: "./public" } } } }],
             ["a KV namespace already bound as ASSETS", {}, { kv_namespaces: [{ binding: "ASSETS", id: "abc" }] }],
             ["a service already bound as ASSETS, beside the block Lunora wrote", {}, { assets: OWNED, services: [{ binding: "ASSETS", service: "cdn" }] }],
             // The top-level block is inheritable, so production would get a second `ASSETS`.

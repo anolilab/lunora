@@ -54,6 +54,7 @@ interface StudioAssetsShape {
     assets?: unknown;
     env?: unknown;
     main?: unknown;
+    site?: unknown;
 }
 
 /** The block reconcile writes. */
@@ -87,7 +88,8 @@ const bundledByWrangler = (projectRoot: string, parsed: StudioAssetsShape): bool
  * Where the Studio documents go as assets, or `undefined` to keep them in the
  * Worker bundle. Assets only for a Cloudflare Worker wrangler bundles, with no
  * `assets` block of its own anywhere (an `env.<name>` block replaces the
- * top-level one whole), or only the one Lunora wrote, and no other binding
+ * top-level one whole), or only the one Lunora wrote, no legacy Workers Sites
+ * `site` block (wrangler refuses one beside `assets`), and no other binding
  * named `ASSETS` in any environment.
  *
  * An omitted `target` resolves the way codegen does (`lunora.config.*`, then
@@ -102,7 +104,8 @@ const studioAssetsPlan = (projectRoot: string, parsed: StudioAssetsShape | undef
     const environments = isPlainObject(parsed.env) ? Object.values(parsed.env) : [];
     const ownAssets =
         (parsed.assets !== undefined && !isOwnedStudioAssets(parsed.assets)) ||
-        environments.some((block) => isPlainObject(block) && block["assets"] !== undefined);
+        parsed.site !== undefined ||
+        environments.some((block) => isPlainObject(block) && (block["assets"] !== undefined || block["site"] !== undefined));
 
     // Another binding already named `ASSETS` (a KV namespace, a service, …) would make the block a duplicate wrangler rejects.
     // The top-level block is inherited by every environment, so an environment's own bindings count too.
