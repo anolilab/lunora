@@ -328,6 +328,8 @@ export interface TopicIR {
     exportName: string;
     /** The declaring file, as {@link QueueIR.filePath}. */
     filePath: string;
+    /** 1-based start line of the `defineTopic(...)` statement, when recorded. */
+    line?: number;
 }
 
 /** The queues published to through `ctx.queues` — every queue except a topic subscription. */
@@ -575,6 +577,8 @@ export interface WranglerVariableIR {
     key: string;
     /** Heuristic that matched, e.g. `stripe_live_key` / `private_key` / `secret_named_var`. */
     kind: string;
+    /** 1-based line of the key inside the `wrangler.jsonc` file, when the reader could locate it. */
+    line?: number;
     /** Redacted preview of the value (first few chars + length) for the finding detail — never the full secret. */
     preview: string;
 }

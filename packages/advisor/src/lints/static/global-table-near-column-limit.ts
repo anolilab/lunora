@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * D1 runs Workerd's SQLite build, which caps a table at 100 columns where stock
@@ -55,7 +56,7 @@ const globalTableNearColumnLimit: Lint = {
                 return emit(globalTableNearColumnLimit, {
                     cacheKey: `global_table_near_column_limit:${table.name}`,
                     detail: `Global table "${table.name}" needs ${String(columns)} columns (${String(table.fields.length)} fields plus id and _creationTime), against D1's limit of ${String(MAX_GLOBAL_TABLE_COLUMNS)}.`,
-                    metadata: { columns, limit: MAX_GLOBAL_TABLE_COLUMNS, table: table.name },
+                    metadata: { ...declarationSiteFields(table), columns, limit: MAX_GLOBAL_TABLE_COLUMNS, table: table.name },
                 });
             }),
     source: "static",

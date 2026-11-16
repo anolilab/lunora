@@ -12,6 +12,8 @@ export interface AdvisorWranglerVariable {
     key: string;
     /** Heuristic that matched, e.g. `stripe_live_key` / `private_key` / `secret_named_var`. */
     kind: string;
+    /** 1-based line of the key inside {@link AdvisorWranglerVariable.file}, when the reader could locate it. */
+    line?: number;
     /** Redacted preview (first few chars + length) — never the full secret. */
     preview: string;
 }

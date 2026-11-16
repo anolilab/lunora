@@ -107,7 +107,7 @@ describe("delivery authority caller context", () => {
         expect(test.authority.mock.calls[0]?.[0]).toMatchObject({ admin: false, system: false, transport: "subscription" });
     });
 
-    it("explicitly refuses guarded broadcasts and preserves the unguarded API", () => {
+    it("explicitly refuses guarded broadcasts; unguarded broadcasts skip subscriptions served by re-execution", () => {
         expect.hasAssertions();
 
         const test = setup();
@@ -121,8 +121,9 @@ describe("delivery authority caller context", () => {
         }).toThrow(expect.objectContaining({ code: "NOT_IMPLEMENTED" }));
         expect(test.socket.frames).toEqual([]);
 
-        unguarded.broadcast();
-
-        expect(test.socket.frames).toEqual([{ type: "delta", id: "view", delta: { table: "messages", op: "insert", key: "one", row: { _id: "one" } } }]);
+        expect(() => {
+            unguarded.broadcast();
+        }).not.toThrow();
+        expect(test.socket.frames).toEqual([]);
     });
 });

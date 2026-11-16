@@ -51,7 +51,7 @@ describe("mask_weak_hash_strategy_on_pii", () => {
             cacheKey: "mask_weak_hash_strategy_on_pii:listUsers:5",
             categories: ["SECURITY"],
             level: "WARN",
-            metadata: { column: "email", exportName: "listUsers", file: "listUsers", table: "users" },
+            metadata: { column: "email", exportName: "listUsers", file: "listUsers", line: 5, table: "users" },
             name: "mask_weak_hash_strategy_on_pii",
         });
         expect(findings[0]?.detail).toContain("email");
