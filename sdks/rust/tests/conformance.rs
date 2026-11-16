@@ -1807,6 +1807,11 @@ fn a_data_frame_that_cannot_be_applied_keeps_the_retry() {
 }
 
 #[test]
+fn a_settled_that_cuts_off_a_run_keeps_the_retry() {
+    retry_cases::a_settled_that_cuts_off_a_run_keeps_the_retry();
+}
+
+#[test]
 fn a_cold_retry_forgets_the_confirmed_cursor() {
     retry_cases::a_cold_retry_forgets_the_confirmed_cursor();
 }

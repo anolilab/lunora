@@ -1343,11 +1343,12 @@ class LunoraClient:
             return {"kind": "ignored", "type": None}
 
         kind = frame.get("type")
-        if kind in ("ack", "resume", "settled"):
-            # The server answered, so a retry this subscription was waiting on is moot. A `data`
-            # or `delta` cancels it only once applied (see `_handle_data`).
-            self._pending_retries.pop(_frame_key(frame.get("id")), None)
         if kind == "ack":
+            # The server answered, so a retry this subscription was waiting on is moot. A `data`,
+            # `delta`, `resume` or `settled` cancels it only once applied (see `_handle_data`,
+            # `_advance`): one that cannot be applied answers nothing, and the retry's snapshot is
+            # what unfreezes the subscription.
+            self._pending_retries.pop(_frame_key(frame.get("id")), None)
             sub = self._subs.get(_frame_key(frame.get("id")))
             if sub is not None:
                 sub.acked = True
@@ -1570,6 +1571,7 @@ class LunoraClient:
         # A poisoned subscription ignores these frames too: their cursor would move
         # the resume position past the dropped row change.
         if sub is not None and not sub.poisoned and not (kind == "settled" and held):
+            self._pending_retries.pop(sub.id, None)
             if isinstance(frame.get("cursor"), int) and not isinstance(frame["cursor"], bool):
                 sub.server_cursor = frame["cursor"]
             if "epoch" in frame:

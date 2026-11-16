@@ -1339,9 +1339,10 @@ impl Client {
         let kind = frame.get("type").and_then(Value::as_str).unwrap_or("").to_string();
         let id = frame.get("id").and_then(Value::as_str).unwrap_or("").to_string();
 
-        // The server answered, so a retry this subscription was waiting on is moot. A `data` or
-        // `delta` cancels it only once applied, below: one that cannot be applied answers nothing.
-        if matches!(kind.as_str(), "ack" | "resume" | "settled") {
+        // The server answered, so a retry this subscription was waiting on is moot. A `data`,
+        // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
+        // applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
+        if kind == "ack" {
             self.pending_retries.remove(&id);
         }
 
@@ -1487,6 +1488,7 @@ impl Client {
                         return Ok(Some(kind));
                     }
 
+                    self.pending_retries.remove(&id);
                     advance(entry, &frame);
 
                     // A resume/settled frame advances the cursor without a value

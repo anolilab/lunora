@@ -224,6 +224,27 @@ pub fn a_data_frame_that_cannot_be_applied_keeps_the_retry() {
     assert!(client.next_subscription_retry_at().is_some(), "a frame that was not applied answers nothing");
 }
 
+pub fn a_settled_that_cuts_off_a_run_keeps_the_retry() {
+    let retry = retry_fixture();
+    let (mut client, _sent, _codes, id) = open();
+
+    let list = format!(r#"{{"cursor":13,"data":[{{"_id":"m1"}}],"epoch":"e1","id":"{id}","type":"data"}}"#);
+    client.handle_frame(&list).expect("list frame");
+    client.handle_frame(&wire_text(&retry["hintFrame"])).expect("hint frame");
+    let held = format!(r#"{{"delta":{{"key":"m2","op":"insert","row":{{"_id":"m2"}},"table":"messages"}},"id":"{id}","more":true,"type":"delta"}}"#);
+    client.handle_frame(&held).expect("held run frame");
+
+    // The settled freezes the subscription, so the retry's snapshot is the only thing that recovers it.
+    let settled = format!(r#"{{"cursor":14,"epoch":"e1","id":"{id}","type":"settled"}}"#);
+    client.handle_frame(&settled).expect("settled frame");
+    assert!(client.next_subscription_retry_at().is_some(), "a settled that freezes answers nothing");
+
+    // A frozen subscription ignores a resume too, so it answers nothing either.
+    let resume = format!(r#"{{"cursor":14,"epoch":"e1","id":"{id}","type":"resume"}}"#);
+    client.handle_frame(&resume).expect("resume frame");
+    assert!(client.next_subscription_retry_at().is_some(), "an ignored resume answers nothing");
+}
+
 pub fn a_cold_retry_forgets_the_confirmed_cursor() {
     let retry = retry_fixture();
     let (mut client, _sent, _codes, id) = open();
