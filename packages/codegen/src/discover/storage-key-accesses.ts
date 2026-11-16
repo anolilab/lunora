@@ -35,10 +35,10 @@ const KEY_TAKING_METHODS = new Set<string>([
  * key is derived from the handler's `args` with no server-side scoping — the
  * `storage_key_from_user_args` lint input. An R2 key taken straight from request
  * input lets any caller read, overwrite, or delete another user's object
- * (object-level IDOR). A key prefixed with a server-trusted identity (a `ctx.*`
- * value such as `` `${ctx.auth.userId}/…` ``) is treated as scoped and is *not*
- * recorded; only an arg-derived key (directly, or through one local `const` hop)
- * that references no `ctx` reaches here. `list`/`bucket` are excluded — they take
+ * (object-level IDOR). A key prefixed with the caller's identity
+ * (`` `${ctx.auth.userId}/…` ``, or a field of a db read bound to it) is treated as
+ * scoped and is *not* recorded; an arg-derived key (directly, or through one local
+ * `const` hop) with no such scope reaches here, even behind `ctx.env.PREFIX`. `list`/`bucket` are excluded — they take
  * no per-object key.
  *
  * Two narrowings on top of the shared taint walk, both closing false positives
@@ -58,6 +58,7 @@ const KEY_TAKING_METHODS = new Set<string>([
 const discoverStorageKeyAccesses = (project: Project, lunoraDirectory: string, functions: ReadonlyArray<FunctionIR> = []): StorageKeyAccessIR[] => {
     const accesses = discoverArgumentDerivedAccesses(project, lunoraDirectory, {
         argIndex: 0,
+        scope: "identity",
         matchReceiver: (receiver) => receiver === "ctx.storage" || receiver.startsWith("ctx.storage."),
         methods: KEY_TAKING_METHODS,
         requireUnmodifiedReach: true,

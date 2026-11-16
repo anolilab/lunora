@@ -55,12 +55,29 @@ const argumentFieldOf = (node: TsNode): string | undefined => {
  */
 const IDENTITY_SURFACES = new Set<string>(["auth", "identity", "user"]);
 
-/** Whether `node` (or its one-hop local initializer) reads a caller-identity surface of the context. */
-const isIdentity = (node: TsNode): boolean => {
+/**
+ * The fields under an identity surface that name the caller or the caller's
+ * organization, as dotted paths below the surface. A display name, an email or a
+ * role is caller-controlled or shared by many callers, so an argument matching
+ * one proves nothing about whose record it is.
+ */
+const OWNERSHIP_FIELDS = new Set<string>(["activeOrganization.id", "activeOrganizationId", "id", "organizationId", "orgId", "subject", "userId"]);
+
+/**
+ * Whether `node` (or its one-hop local initializer) reads a caller-identity
+ * surface of the context: an ownership field (`ctx.user.id`,
+ * `ctx.user.activeOrganization?.id`) or, with `whole`, the surface itself, which a
+ * declared identity guard receives and checks field by field.
+ */
+const isIdentity = (node: TsNode, whole = false): boolean => {
     const readsIdentity = (candidate: TsNode): boolean => {
         const path = contextSurfacePathOf(candidate);
 
-        return path !== undefined && path.length > 0 && IDENTITY_SURFACES.has(path[0] ?? "");
+        if (path === undefined || !IDENTITY_SURFACES.has(path[0] ?? "")) {
+            return false;
+        }
+
+        return path.length === 1 ? whole : OWNERSHIP_FIELDS.has(path.slice(1).join("."));
     };
     const unwrapped = unwrapExpression(node) ?? node;
 
@@ -191,7 +208,7 @@ const assertedFields = (call: CallExpression): string[] => {
 
     return args.flatMap((argument, index) => {
         const field = argumentFieldOf(unwrapExpression(argument) ?? argument);
-        const hasIdentity = args.some((other, otherIndex) => otherIndex !== index && isIdentity(other));
+        const hasIdentity = args.some((other, otherIndex) => otherIndex !== index && isIdentity(other, true));
 
         return field !== undefined && hasIdentity ? [field] : [];
     });

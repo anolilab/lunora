@@ -545,10 +545,23 @@ const impersonatedUserId = (context: AuditHookContext, event: AuthAuditEvent | u
 };
 
 /**
+ * The owner of the session `/admin/revoke-user-session` is about to delete, keyed on the
+ * per-request auth context that the before and after hooks share. Neither the request (a
+ * session token) nor the response (`{ success: true }`) names the user, and once the session
+ * is deleted nothing can, so {@link authAuditBeforeHook} reads it first.
+ */
+const REVOKED_SESSION_OWNERS = new WeakMap<object, string>();
+
+/**
  * The subject of an admin action whose body names no `userId`: `create-user` acts on the
- * account its response returns, and `stop-impersonating` on the impersonated session's user.
+ * account its response returns, `stop-impersonating` on the impersonated session's user, and
+ * a single-session revoke on the owner the before hook read.
  */
 const adminSubject = (context: AuditHookContext, event: AuthAuditEvent): string | undefined => {
+    if (event === "admin-session-revoke") {
+        return context.context === undefined ? undefined : REVOKED_SESSION_OWNERS.get(context.context);
+    }
+
     if (event === "admin-user-create") {
         return detailId(fieldOf(fieldOf(context.context?.returned, "user"), "id"));
     }
@@ -1026,13 +1039,56 @@ const authAuditHook = (config: AuthAuditHookConfig): ReturnType<typeof createAut
     });
 
 /**
- * Merge the audit `hooks.after` middleware into a better-auth options object,
- * composing with any `hooks.after` the caller already set (theirs runs first,
- * then the audit record). Returns a new options object.
+ * Create the better-auth `hooks.before` middleware that reads what an audited endpoint
+ * destroys: the owner of the session `/admin/revoke-user-session` deletes, so the
+ * {@link authAuditHook} row can name the user as `detail.targetUserId`. Only the user id is
+ * kept, never the session token. Install it as `hooks.before` next to `authAuditHook`, or let
+ * {@link withAuthAudit} install both.
  */
-const withAuthAudit = <Options extends { hooks?: { after?: unknown } }>(options: Options, config: AuthAuditHookConfig): Options => {
+const authAuditBeforeHook = (): ReturnType<typeof createAuthMiddleware> =>
+    createAuthMiddleware(async (context) => {
+        try {
+            const { sessionToken } = (context.body ?? {}) as { sessionToken?: unknown };
+
+            if (eventForPath(context.path, context.method) === "admin-session-revoke" && typeof sessionToken === "string" && sessionToken !== "") {
+                const found = await context.context.internalAdapter.findSession(sessionToken);
+                const userId = stringOf(found?.session.userId);
+
+                if (userId !== undefined) {
+                    REVOKED_SESSION_OWNERS.set(context.context, userId);
+                }
+            }
+        } catch (error) {
+            // A failed lookup costs the row its subject, never the revoke itself.
+            // eslint-disable-next-line no-console -- no injected logger at this layer (workerd/Node both capture console)
+            console.error("@lunora/auth: audit hook failed to read the revoked session", error);
+        }
+
+        // Any other value would replace the request context or short-circuit the endpoint.
+        return undefined;
+    });
+
+/**
+ * Merge the audit middleware into a better-auth options object: `hooks.before`
+ * reads what a revoke is about to delete, then `hooks.after` records the row.
+ * Each composes with the hook the caller already set: the audit's before hook
+ * runs ahead of the caller's, which may end the request, and the caller's after
+ * hook runs ahead of the audit record. Returns a new options object.
+ */
+const withAuthAudit = <Options extends { hooks?: { after?: unknown; before?: unknown } }>(options: Options, config: AuthAuditHookConfig): Options => {
     const audit = authAuditHook(config);
+    const capture = authAuditBeforeHook() as unknown as (context: unknown) => Promise<unknown>;
     const existing = options.hooks?.after as ((context: unknown) => Promise<unknown>) | undefined;
+    const existingBefore = options.hooks?.before as ((context: unknown) => Promise<unknown>) | undefined;
+
+    // The caller's result is what better-auth acts on: a context patch, or a response that ends the request.
+    const before = existingBefore
+        ? async (context: unknown): Promise<unknown> => {
+              await capture(context);
+
+              return existingBefore(context);
+          }
+        : capture;
 
     const after = existing
         ? async (context: unknown): Promise<unknown> => {
@@ -1046,8 +1102,8 @@ const withAuthAudit = <Options extends { hooks?: { after?: unknown } }>(options:
           }
         : audit;
 
-    return { ...options, hooks: { ...options.hooks, after } };
+    return { ...options, hooks: { ...options.hooks, after, before } };
 };
 
-export { authAuditHook, buildAuditEntry, eventForPath, withAuthAudit };
+export { authAuditBeforeHook, authAuditHook, buildAuditEntry, eventForPath, withAuthAudit };
 export type { AuthAuditHookConfig };

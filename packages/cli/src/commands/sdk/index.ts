@@ -39,7 +39,12 @@ const sdkCommand: Command = {
             name: "ref",
             type: String,
         },
-        { description: "Override the remote transport source base (default gh:anolilab/lunora/sdks)", name: "source", type: String },
+        {
+            description:
+                "Override the remote transport source base (default gh:anolilab/lunora/sdks); the ref is pinned to a commit of that repository with git ls-remote",
+            name: "source",
+            type: String,
+        },
         // Offered because the shared gate's error names it. A refusal that
         // suggests a flag the command does not have sends the reader looking for
         // something that is not there.

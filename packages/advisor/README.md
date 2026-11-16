@@ -109,7 +109,7 @@ const findings = runAdvisor(context, { source: "static" });
 const map = scoreAdvisor(context.procedureProtections ?? [], findings);
 
 console.log(map.score, map.grade); // e.g. 84 "good"
-console.log(map.summary); // { clean: 9, exempt: 0, failing: 1, procedures: 12, rulesFired: 6, warned: 2 }
+console.log(map.summary); // { clean: 9, exempt: 0, failing: 1, procedures: 12, rulesFired: 6, suppressed: 0, warned: 2 }
 ```
 
 Each procedure starts at 100 and loses each fired **rule's** severity weight (`ERROR` 20 / `WARN` 10 / `INFO` 5 — severity is the only input; a lint carries no weight of its own) — charged once however many times that rule fires — then rolls up into a weighted global mean: public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket weighted against the procedure population, so schema debt genuinely moves the grade.
