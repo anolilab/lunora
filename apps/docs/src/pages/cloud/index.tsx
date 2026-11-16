@@ -39,7 +39,8 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     const [consent, setConsent] = useState(false);
     const [status, setStatus] = useState<Status>("idle");
     const [errorMessage, setErrorMessage] = useState("");
-    const [turnstileToken, setTurnstileToken] = useState("");
+    // Read only at submit time, so holding it in state would re-render for nothing.
+    const turnstileToken = useRef("");
     const turnstile = useRef<TurnstileInstance>(undefined);
 
     const fail = (message: string) => {
@@ -63,7 +64,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
             return;
         }
 
-        if (turnstileToken === "") {
+        if (turnstileToken.current === "") {
             fail("Please wait for the verification check to finish.");
 
             return;
@@ -73,7 +74,13 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
 
         try {
             const response = await fetch("/api/waitlist", {
-                body: JSON.stringify({ email, honeyField: new FormData(event.currentTarget).get("honeyField") ?? "", privacy: true, source, turnstileToken }),
+                body: JSON.stringify({
+                    email,
+                    honeyField: new FormData(event.currentTarget).get("honeyField") ?? "",
+                    privacy: true,
+                    source,
+                    turnstileToken: turnstileToken.current,
+                }),
                 headers: { "Content-Type": "application/json" },
                 method: "POST",
             });
@@ -91,7 +98,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
         }
 
         // A token is good for one siteverify call, so a retry needs a fresh one.
-        setTurnstileToken("");
+        turnstileToken.current = "";
         turnstile.current?.reset();
     };
 
@@ -164,12 +171,14 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
             </label>
             <Turnstile
                 onError={() => {
-                    setTurnstileToken("");
+                    turnstileToken.current = "";
                 }}
                 onExpire={() => {
-                    setTurnstileToken("");
+                    turnstileToken.current = "";
                 }}
-                onSuccess={setTurnstileToken}
+                onSuccess={(token) => {
+                    turnstileToken.current = token;
+                }}
                 options={{ size: "flexible", theme: "dark" }}
                 ref={turnstile}
                 siteKey={TURNSTILE_SITE_KEY}

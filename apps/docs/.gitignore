@@ -3,6 +3,7 @@
 .tanstack/tmp
 .wrangler
 .dev.vars
+.alchemy
 public/assets
 
 !src/data

@@ -19,7 +19,7 @@
         "lint:types": "fumadocs-mdx && tsrs --project tsconfig.json --noEmit",
         "serve": "vite preview",
         "deploy": "alchemy deploy --stage prod",
-        "start": "vite build && wrangler dev -c dist/server/wrangler.json",
+        "start": "pnpm run build && wrangler dev -c dist/server/wrangler.json",
         "fallow:audit": "fallow audit",
         "fallow:dead-code": "fallow dead-code",
         "fallow:health": "fallow health --score",

@@ -21,7 +21,7 @@ interface PostBody {
 // Compiled to components at build time by the fumadocs-mdx Vite plugin, one chunk
 // per post. Compiling at request time and running the result needs `new Function`,
 // which workerd forbids, so every post page answered 500 on the Worker.
-const postBodies = import.meta.glob<PostBody>("/src/content/blog/*.mdx");
+const postBodies = import.meta.glob<PostBody>("/src/content/blog/*.{md,mdx}");
 const loadedBodies = new Map<string, Promise<PostBody>>();
 
 /**
@@ -37,7 +37,9 @@ const loadBody = (slug: string): Promise<PostBody> => {
         return cached;
     }
 
-    const path = `/src/content/blog/${slug}.mdx`;
+    // blog-source lists `.md` posts too, so a body glob of `.mdx` alone would 404 them.
+    const mdxPath = `/src/content/blog/${slug}.mdx`;
+    const path = Object.hasOwn(postBodies, mdxPath) ? mdxPath : `/src/content/blog/${slug}.md`;
 
     if (!Object.hasOwn(postBodies, path)) {
         throw notFound();
@@ -201,19 +203,20 @@ export const Route = createFileRoute("/blog/$slug")({
     loader: async ({ params }) => {
         // In the browser this reads the prerendered result for the slug; every post
         // is prerendered, so a missing one means the post does not exist.
-        const data = await loadPost({ data: params.slug }).catch((error: unknown) => {
-            if (import.meta.env.SSR) {
-                throw error;
-            }
+        const [data] = await Promise.all([
+            loadPost({ data: params.slug }).catch((error: unknown) => {
+                if (import.meta.env.SSR) {
+                    throw error;
+                }
 
-            return null;
-        });
+                return null;
+            }),
+            loadBody(params.slug),
+        ]);
 
         if (!data) {
             throw notFound();
         }
-
-        await loadBody(params.slug);
 
         return { ...data, slug: params.slug };
     },
