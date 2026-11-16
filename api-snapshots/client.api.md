@@ -1388,6 +1388,7 @@ interface SubscriptionState {
         payload: unknown;
     };
     refusal?: SubscriptionError;
+    retirements?: number;
     serverBase: unknown;
     serverBaseCommitted?: boolean;
     serverClaims?: string;
@@ -1624,7 +1625,7 @@ const createIndexedDbQueryCache: (options?: IndexedDbQueryCacheOptions) => Query
 ### `createLocalStore` (const)
 
 ```ts
-const createLocalStore: (subscriptions: SubscriptionRegistry, shardKey: string | undefined) => {
+const createLocalStore: (subscriptions: SubscriptionRegistry, shardKey: string | undefined, identityInForce?: () => boolean) => {
     confirms: ((commitCursor: number | undefined) => void)[];
     rollbacks: (() => void)[];
     store: OptimisticLocalStore;

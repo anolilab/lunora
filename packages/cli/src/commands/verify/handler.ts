@@ -243,7 +243,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
             dryRun: true,
             projectRoot: cwd,
             target: resolvedTarget.target,
-            ...wranglerCodegenInputs(cwd),
+            ...wranglerCodegenInputs(cwd, resolvedTarget.target),
         });
 
         // The target is resolved and validated immediately above precisely so

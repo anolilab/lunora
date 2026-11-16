@@ -90,6 +90,7 @@ export const siteConfig = {
                     { title: "Compare", to: "/compare" },
                     { title: "Blog", to: "/blog" },
                     { title: "Changelog", to: "/changelog" },
+                    { title: "Sponsors", to: "/sponsors" },
                 ] as FooterEntry[],
                 title: "Developers",
             },

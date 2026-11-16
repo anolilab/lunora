@@ -108,7 +108,10 @@ CLI's own release tag (`@lunora/cli@<version>`) and every output carries a
 
 `versionMatched` is the field that matters — it says whether the transport and the
 surface above it came from one release. Regenerating with a newer CLI is the
-upgrade path. When the tag carries no transport for that language (a language
+upgrade path. The stamp also lists `transportFiles` and `generatedFiles`, with a sha256 per file in
+`hashes`. Regeneration removes the files the previous run listed that this one does not
+produce and whose content still matches the recorded hash, and never a file the stamp
+did not list. When the tag carries no transport for that language (a language
 added since the last release), the CLI falls back to the release branch, warns
 loudly naming both refs, and records `versionMatched: false`. `--ref <tag>` pins
 explicitly and never falls back; `--from <dir>` copies from a local checkout of

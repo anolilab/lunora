@@ -616,6 +616,19 @@ describe("lunora build — client build", () => {
             }
         });
 
+        it("reads the Studio documents' assets block as codegen output, not a client build, so `build: lunora build` cannot recurse", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                wranglerWith({ assets: { binding: "ASSETS", directory: ".lunora/studio-assets", run_worker_first: true }, main: "src/server.ts" }),
+                "utf8",
+            );
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ name: "app", scripts: { build: "lunora build" } }), "utf8");
+
+            expect(frameworkBuildFor(workdir)).toBeUndefined();
+        });
+
         it("builds a Vite-composed worker with vite even when an rsbuild config also exists", () => {
             expect.assertions(1);
 

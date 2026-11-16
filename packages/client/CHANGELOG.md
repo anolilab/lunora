@@ -1,3 +1,15 @@
+## @lunora/client [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.299...@lunora/client@1.0.0-alpha.300) (2026-11-16)
+
+- fix(client): drop pending optimistic layers on a user switch (#1608)
+
+## @lunora/client [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.298...@lunora/client@1.0.0-alpha.299) (2026-11-16)
+
+- fix(do): keep broadcast deltas off subscriptions served by re-execution (#1597)
+
+## @lunora/client [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.297...@lunora/client@1.0.0-alpha.298) (2026-11-16)
+
+- fix(do): let a backed-off live query retry on a server hint (#1550)
+
 ## @lunora/client [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/client@1.0.0-alpha.296...@lunora/client@1.0.0-alpha.297) (2026-11-14)
 
 - fix(client): replay a subscription refusal to late subscribers (#1530)

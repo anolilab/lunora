@@ -25,7 +25,8 @@
 <div align="center">
     <p>
         <sup>
-            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>.
+            See <a href="https://lunora.sh/sponsors">lunora.sh/sponsors</a> for what sponsorship funds.
         </sup>
     </p>
 </div>

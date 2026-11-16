@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.198...@lunora/shard-engine@1.0.0-alpha.199) (2026-11-16)
+
+- fix(do): keep broadcast deltas off subscriptions served by re-execution (#1597)
+
 ## @lunora/shard-engine [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.197...@lunora/shard-engine@1.0.0-alpha.198) (2026-11-14)
 
 - feat(advisor): suppress one finding at one site with an inline directive (#1587)

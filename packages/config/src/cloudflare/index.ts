@@ -45,7 +45,7 @@ export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-da
 export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";
 export { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
 export type { ReconcileProject } from "./reconcile-project";
-export { pendingBindingChanges, reconcileBindingsSafely, reconcileWranglerExtras } from "./reconcile-project";
+export { pendingBindingChanges, reconcileBindingsSafely, reconcileStudioAssets, reconcileWranglerExtras } from "./reconcile-project";
 export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemotePlan, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,
@@ -58,6 +58,7 @@ export {
 } from "./remote-bindings";
 export type { ServiceDevConfigs } from "./service-dev-config";
 export { materializeServiceDevConfigs } from "./service-dev-config";
+export { isOwnedStudioAssets } from "./studio-assets";
 export { default as CLOUDFLARE_TOOLCHAIN_VERSIONS } from "./toolchain-versions";
 export { withTailConsumer } from "./validate-settings";
 export type { WranglerCacheShape } from "./workers-cache";
