@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { inferLunoraBindings } from "@lunora/config";
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
+import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CodegenCommandData } from "../../src/commands/codegen/handler";
@@ -324,6 +325,58 @@ describe("lunora codegen", () => {
                 expect(document?.error).toContain("unknown deploy target");
                 expect(document?.data?.outputDirectory).toBe("");
             });
+        });
+    });
+
+    describe("studio documents as static assets", () => {
+        const wranglerPath = (): string => join(workdir, "wrangler.jsonc");
+
+        const writeWorkerProject = (assets?: Record<string, unknown>): void => {
+            writeFileSync(
+                join(workdir, "package.json"),
+                `${JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "app" })}\n`,
+                "utf8",
+            );
+            writeFileSync(
+                wranglerPath(),
+                `// kept\n{\n    "name": "app",\n    "main": "src/server.ts",\n    "compatibility_date": "2026-04-07"${
+                    assets === undefined ? "" : `,\n    "assets": ${JSON.stringify(assets)}`
+                }\n}\n`,
+                "utf8",
+            );
+        };
+
+        it("binds ASSETS in wrangler.jsonc for the loaders it emits, so a plain wrangler deploy serves the documents", () => {
+            expect.assertions(4);
+
+            writeWorkerProject();
+
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            const wrangler = readFileSync(wranglerPath(), "utf8");
+
+            expect(readFileSync(join(workdir, "lunora", "_generated", "app.ts"), "utf8")).toContain(
+                'loadStudioDocument((env as Record<string, unknown>)["ASSETS"]',
+            );
+            expect(wrangler.startsWith("// kept\n")).toBe(true);
+            expect(parseJsonc(wrangler)).toMatchObject({ assets: { binding: "ASSETS", directory: ".lunora/studio-assets", run_worker_first: true } });
+
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(readFileSync(wranglerPath(), "utf8")).toBe(wrangler);
+        });
+
+        it("leaves a project's own assets block alone and keeps the documents in the bundle", () => {
+            expect.assertions(2);
+
+            writeWorkerProject({ binding: "STATIC", directory: "./public" });
+
+            const before = readFileSync(wranglerPath(), "utf8");
+
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(readFileSync(wranglerPath(), "utf8")).toBe(before);
+            expect(readFileSync(join(workdir, "lunora", "_generated", "app.ts"), "utf8")).not.toContain("loadStudioDocument(");
         });
     });
 

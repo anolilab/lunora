@@ -45,7 +45,7 @@ export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-da
 export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";
 export { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
 export type { ReconcileProject } from "./reconcile-project";
-export { pendingBindingChanges, reconcileBindingsSafely, reconcileWranglerExtras } from "./reconcile-project";
+export { pendingBindingChanges, reconcileBindingsSafely, reconcileStudioAssets, reconcileWranglerExtras } from "./reconcile-project";
 export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemotePlan, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,

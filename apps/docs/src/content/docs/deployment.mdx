@@ -847,8 +847,8 @@ how the Worker is built:
 | `--target node` / `celld`                                                                                                          | in the Worker bundle, loaded with `import()` (no Workers Static Assets)                            |
 
 In the first case codegen writes each document to
-`.lunora/studio-assets/_lunora/studio/<name>.json`, and the dev server and
-`lunora deploy` add this block to `wrangler.jsonc`:
+`.lunora/studio-assets/_lunora/studio/<name>.json`, and `lunora codegen`, the
+dev server and `lunora deploy` add this block to `wrangler.jsonc`:
 
 ```jsonc
 {
@@ -866,8 +866,10 @@ reads a document at most once.
 
 The block is removed again when the project moves to a bundler plugin or a
 framework. Lunora recognises it by its exact shape, so a block you edit is left
-alone. Run `lunora build` or `lunora deploy` (or `lunora codegen` before a plain
-`wrangler deploy`): wrangler refuses an `assets.directory` that does not exist.
+alone, and codegen then deletes the documents it wrote there, since your edited
+block may serve that directory before the Worker checks the admin token. Run
+`lunora build` or `lunora deploy` (or `lunora codegen` before a plain `wrangler
+deploy`): wrangler refuses an `assets.directory` that does not exist.
 
 ## Non-goals
 

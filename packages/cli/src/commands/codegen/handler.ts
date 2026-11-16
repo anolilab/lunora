@@ -2,7 +2,7 @@ import type { Finding } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
 import { applyLintIgnores, detectLintTools, inferLunoraBindings, resolveLazyFunctions, resolveSchemaDirectory } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
-import { collectExportGaps, warnCloudflareCliConfigOnce, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { collectExportGaps, reconcileStudioAssets, warnCloudflareCliConfigOnce, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
@@ -99,6 +99,10 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
         target,
         ...wranglerCodegenInputs(projectRoot),
     });
+
+    // The emitted Studio loaders may read `ASSETS`; a plain `wrangler deploy` after this never reconciles it.
+    reconcileStudioAssets(projectRoot, target, logger);
+
     const commandResult: CodegenCommandResult = {
         advisories: result.advisories.map((advisory) => {
             return {

@@ -7,16 +7,21 @@
  * second copy of a routine that WRITES `wrangler.jsonc` is a bug that has to be
  * fixed twice.
  */
-import { basename } from "node:path";
+import { rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 
 import type { DiscoveryCache } from "../discovery-cache";
 import { inferLunoraBindings } from "../infer-bindings";
 import { LUNORA_TAG } from "../log-line";
 import { applyWranglerBindings } from "./apply-bindings";
+import { reconcileStudioAssetsBlock } from "./reconcile-assets";
 import type { ExportGap, WranglerBindingsPlan } from "./reconcile-bindings";
 import { planWranglerBindings } from "./reconcile-bindings";
 import { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 import { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
+import { STUDIO_ASSETS_DIRECTORY, studioAssetsPlan } from "./studio-assets";
+import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
+import type { WranglerShape } from "./wrangler-shape";
 
 /** The project coordinates every reconciler here needs. */
 interface ReconcileProject {
@@ -178,5 +183,53 @@ const reconcileWranglerExtras = (projectRoot: string, cronTriggers: ReadonlyArra
     }
 };
 
+/** The files codegen writes into the Lunora-owned assets directory (see `writeStudioAssets` in `@lunora/codegen`). */
+const STUDIO_DOCUMENTS: ReadonlyArray<string> = ["architecture.json", "openapi.json", "openrpc.json"];
+
+/**
+ * Bring the Studio documents' `assets` block in line with what codegen just
+ * emitted, with the same plan and edit `lunora deploy`'s reconcile uses: add the
+ * Lunora-owned block when codegen emitted loaders that read `ASSETS`, and remove
+ * it when it no longer does. Codegen calls this because a plain `wrangler
+ * deploy` after `lunora codegen` never runs reconcile, and without the binding
+ * Studio's routes serve empty documents.
+ *
+ * A block the user wrote is never touched: `studioAssetsPlan` sees it and keeps
+ * the documents in the bundle. Once that happens the documents an earlier run
+ * wrote into the owned directory are deleted, because a block the user edited
+ * (or their own `directory` pointing there) may serve that directory ahead of
+ * the Worker's admin check.
+ */
+const reconcileStudioAssets = (projectRoot: string, target: string | undefined, logger: ReconcileLogger): void => {
+    try {
+        const wranglerPath = findWranglerFile(projectRoot);
+        const read = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerShape>(wranglerPath);
+
+        if (wranglerPath === undefined || read?.parsed === undefined) {
+            return;
+        }
+
+        const plan = studioAssetsPlan(projectRoot, read.parsed, target);
+        const step = reconcileStudioAssetsBlock(read.text, read.parsed, plan);
+
+        if (step.text !== read.text) {
+            writeFileSync(wranglerPath, step.text, "utf8");
+            logger.info?.(`${LUNORA_TAG} ${[...step.added, ...step.updated].join(", ")} → ${wranglerPath}`);
+        }
+
+        if (plan === undefined) {
+            const documents = join(dirname(wranglerPath), STUDIO_ASSETS_DIRECTORY, "_lunora", "studio");
+
+            for (const name of STUDIO_DOCUMENTS) {
+                rmSync(join(documents, name), { force: true });
+            }
+        }
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.warn(`${LUNORA_TAG} Studio assets block sync skipped: ${message}`);
+    }
+};
+
 export type { ReconcileProject };
-export { pendingBindingChanges, reconcileBindingsSafely, reconcileWranglerExtras };
+export { pendingBindingChanges, reconcileBindingsSafely, reconcileStudioAssets, reconcileWranglerExtras };

@@ -43,7 +43,7 @@ import {
     runCodegen,
 } from "@lunora/codegen";
 import { resolveLazyFunctions } from "@lunora/config";
-import { WRANGLER_FILES, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { reconcileStudioAssets, WRANGLER_FILES, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 import { consumeStudioWrite, STUDIO_WRITE_TEMP_SUFFIX } from "@lunora/config/studio-host";
 import { LunoraError } from "@lunora/errors";
 import type { Project } from "ts-morph";
@@ -235,6 +235,8 @@ const runOnce = (
             target,
             ...wranglerCodegenInputs(projectRoot),
         });
+
+        reconcileStudioAssets(projectRoot, target, logger);
 
         logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
 

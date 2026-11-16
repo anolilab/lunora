@@ -1792,7 +1792,8 @@ describe("reconcileWranglerBindings", () => {
 
             seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
 
-            const manifest = `{ "name": "app", "lunora": {} }\n`;
+            // A Vite project, so the Studio documents' `assets` block stays out of the plan.
+            const manifest = `{ "name": "app", "devDependencies": { "@lunora/vite": "*" }, "lunora": {} }\n`;
 
             writeFileSync(join(root, "package.json"), manifest, "utf8");
 

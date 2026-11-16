@@ -3234,6 +3234,12 @@ const readWranglerJsonc: <T = unknown>(wranglerPath: string) => ReadWranglerResu
 const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogger, onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void) => Promise<void>;
 ```
 
+### `reconcileStudioAssets` (const)
+
+```ts
+const reconcileStudioAssets: (projectRoot: string, target: string | undefined, logger: ReconcileLogger) => void;
+```
+
 ### `reconcileWranglerBindings` (const)
 
 ```ts

@@ -33,7 +33,7 @@ import {
     writeCelldDevProjection,
 } from "@lunora/config";
 import type { LocalHyperdrive } from "@lunora/config/cloudflare";
-import { describeWithheld, resolveRemoteEnabled, startLocalHyperdrive, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { describeWithheld, reconcileStudioAssets, resolveRemoteEnabled, startLocalHyperdrive, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
@@ -451,6 +451,7 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
             target,
             ...wranglerCodegenInputs(cwd),
         });
+        reconcileStudioAssets(cwd, target, logger);
     } catch (error: unknown) {
         logger.warn(`codegen (pre-sidecar) failed: ${error instanceof Error ? error.message : String(error)} — the framework dev server will retry`);
     }

@@ -1,11 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { reconcileWranglerBindings } from "../../src/cloudflare/reconcile-bindings";
+import { reconcileWranglerBindings } from "../../src/cloudflare/apply-bindings";
+import { reconcileStudioAssets } from "../../src/cloudflare/reconcile-project";
 import { isOwnedStudioAssets, STUDIO_ASSETS_DIRECTORY, studioAssetsPlan } from "../../src/cloudflare/studio-assets";
 import { wranglerCodegenInputs } from "../../src/cloudflare/wrangler-codegen-inputs";
 import type { InferredBindings } from "../../src/infer-bindings";
@@ -179,6 +180,73 @@ describe("studio documents as Workers Static Assets", () => {
             writeProject({}, { "@lunora/vite": "*" });
 
             expect(wranglerCodegenInputs(root).studioAssets).toBeUndefined();
+        });
+    });
+
+    describe(reconcileStudioAssets, () => {
+        const logger = { info: () => {}, warn: () => {} };
+        const wranglerPath = (): string => join(root, "wrangler.jsonc");
+        const documentsDirectory = (): string => join(root, STUDIO_ASSETS_DIRECTORY, "_lunora", "studio");
+
+        it("adds the owned block a plain wrangler deploy needs, keeping the file's comments, and changes nothing on a second run", () => {
+            expect.assertions(3);
+
+            writeProject({});
+            writeFileSync(wranglerPath(), `// the app's Worker\n${readFileSync(wranglerPath(), "utf8")}`, "utf8");
+
+            reconcileStudioAssets(root, "cloudflare", logger);
+
+            const once = readFileSync(wranglerPath(), "utf8");
+
+            expect(once.startsWith("// the app's Worker\n")).toBe(true);
+            expect(readWrangler()["assets"]).toStrictEqual(OWNED);
+
+            reconcileStudioAssets(root, "cloudflare", logger);
+
+            expect(readFileSync(wranglerPath(), "utf8")).toBe(once);
+        });
+
+        it("leaves a user's own assets block byte for byte", () => {
+            expect.assertions(1);
+
+            writeProject({ assets: { binding: "STATIC", directory: "./public", not_found_handling: "single-page-application" } });
+
+            const before = readFileSync(wranglerPath(), "utf8");
+
+            reconcileStudioAssets(root, "cloudflare", logger);
+
+            expect(readFileSync(wranglerPath(), "utf8")).toBe(before);
+        });
+
+        it("writes nothing for another target", () => {
+            expect.assertions(1);
+
+            writeProject({});
+
+            const before = readFileSync(wranglerPath(), "utf8");
+
+            reconcileStudioAssets(root, "node", logger);
+
+            expect(readFileSync(wranglerPath(), "utf8")).toBe(before);
+        });
+
+        it("deletes the documents an earlier run wrote once the block is no longer Lunora's, and nothing else there", () => {
+            expect.assertions(4);
+
+            // The owned block, edited so the asset router answers `/_lunora/studio/*` before the Worker.
+            writeProject({ assets: { ...OWNED, run_worker_first: false } });
+            mkdirSync(documentsDirectory(), { recursive: true });
+
+            for (const name of ["architecture.json", "openapi.json", "openrpc.json", "notes.json"]) {
+                writeFileSync(join(documentsDirectory(), name), "{}", "utf8");
+            }
+
+            reconcileStudioAssets(root, "cloudflare", logger);
+
+            expect(existsSync(join(documentsDirectory(), "architecture.json"))).toBe(false);
+            expect(existsSync(join(documentsDirectory(), "openapi.json"))).toBe(false);
+            expect(existsSync(join(documentsDirectory(), "openrpc.json"))).toBe(false);
+            expect(existsSync(join(documentsDirectory(), "notes.json"))).toBe(true);
         });
     });
 });

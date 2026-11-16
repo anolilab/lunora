@@ -421,6 +421,7 @@ export {
     planRunWorkerFirst,
     planSpaRunWorkerFirst,
     reconcileAssetRouting,
+    reconcileStudioAssetsBlock,
     runWorkerFirstProblems,
     workerPathRules,
 };
