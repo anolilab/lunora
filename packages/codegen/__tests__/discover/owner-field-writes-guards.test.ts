@@ -123,6 +123,55 @@ export const assertOwnOrganizationId = defineIdentityGuard((user: unknown, organ
         expect(rowAt(found, 2)).not.toHaveProperty("guarded");
     });
 
+    // Only an identity field that names the caller proves ownership. A display
+    // name, an email or a role is caller-controlled or shared, so matching it says
+    // nothing about whether the argument is the caller's own.
+    it.each([
+        ["a destructured display name", `const { displayName } = ctx.user;\n  if (args.organizationId !== displayName) throw new Error("no");`],
+        ["a display name read inline", `if (args.organizationId !== ctx.user.displayName) throw new Error("no");`],
+        ["an auth email", `if (args.organizationId !== ctx.auth.user.email) throw new Error("no");`],
+        ["the whole identity object", `if (args.organizationId !== ctx.user) throw new Error("no");`],
+    ])("does not mark a write guarded by a comparison against %s", (_label, guard) => {
+        expect.assertions(2);
+
+        const found = discover(handler(`  ${guard}\n  await ctx.db.insert("prompts", { organizationId: args.organizationId });`));
+        const row = found.find((candidate) => candidate.field === "organizationId");
+
+        expect(row).toBeDefined();
+        expect(row).not.toHaveProperty("guarded");
+    });
+
+    it.each([
+        ["ctx.user.id", `ctx.user.id`],
+        ["ctx.auth.userId", `ctx.auth.userId`],
+        ["ctx.identity.subject", `ctx.identity.subject`],
+        ["ctx.identity.orgId", `ctx.identity.orgId`],
+        ["ctx.auth.activeOrganizationId", `ctx.auth.activeOrganizationId`],
+        ["a destructured activeOrganizationId", `activeOrganizationId`],
+    ])("marks a write guarded by a comparison against %s", (_label, identity) => {
+        expect.assertions(1);
+
+        const found = discover(
+            handler(`  const { activeOrganizationId } = ctx.auth;
+  if (args.organizationId !== ${identity}) throw new Error("no");
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`),
+        );
+
+        expect(rowAt(found, 4)).toMatchObject({ guarded: true });
+    });
+
+    it("does not mark a write guarded by a declared guard given only a display name", () => {
+        expect.assertions(1);
+
+        const found = discover(
+            `${handler(`  await assertOwnOrganizationId(ctx.user.displayName, args.organizationId);
+  await ctx.db.insert("prompts", { organizationId: args.organizationId });`)}
+${DECLARED_GUARD}`,
+        );
+
+        expect(rowAt(found, 3)).not.toHaveProperty("guarded");
+    });
+
     it("does not mark a write guarded on a different argument", () => {
         expect.assertions(1);
 

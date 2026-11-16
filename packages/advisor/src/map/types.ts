@@ -106,6 +106,8 @@ interface MapSummary {
     procedures: number;
     /** Findings attributed to a scored row, after per-rule deduplication. */
     rulesFired: number;
+    /** Findings accepted by an inline `lunora-advisor-exempt <rule>` directive. They score nothing and are not in `rulesFired`. */
+    suppressed: number;
     /** Procedures scoring at or above the failing floor, but not clean. */
     warned: number;
 }

@@ -14,6 +14,7 @@ import containerPublicInternet from "../src/lints/static/container-public-intern
 import cronEveryMinute from "../src/lints/static/cron-every-minute";
 import errorWithoutCatalog from "../src/lints/static/error-without-catalog";
 import insertManyUnsafeUserData from "../src/lints/static/insert-many-unsafe-user-data";
+import maskUncoveredPiiColumn from "../src/lints/static/mask-uncovered-pii-column";
 import policyReferencesUnknownTable from "../src/lints/static/policy-references-unknown-table";
 import privilegedFanoutFromPublicProcedure from "../src/lints/static/privileged-fanout-from-public-procedure";
 import procedureWithoutStructuredEvent from "../src/lints/static/procedure-without-structured-event";
@@ -338,6 +339,38 @@ const cases: ReadonlyArray<[string, Case]> = [
             },
             lint: rlsUncoveredTable,
             site: { file: "export", line: 19 },
+        },
+    ],
+    [
+        "mask_uncovered_pii_column",
+        {
+            context: {
+                maskProcedures: [
+                    {
+                        exportName: "listUsers",
+                        file: "users",
+                        line: 20,
+                        maskColumns: [{ column: "email", table: "users" }],
+                        tablesRead: ["users"],
+                        tablesWritten: [],
+                        usesMask: true,
+                        visibility: "public",
+                    },
+                    {
+                        exportName: "exportUsers",
+                        file: "export",
+                        line: 21,
+                        maskColumns: [],
+                        tablesRead: ["users"],
+                        tablesWritten: [],
+                        usesMask: false,
+                        visibility: "public",
+                    },
+                ],
+                schema,
+            },
+            lint: maskUncoveredPiiColumn,
+            site: { file: "export", line: 21 },
         },
     ],
 ];

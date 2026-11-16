@@ -1,3 +1,7 @@
+## @lunora/studio [1.0.0-alpha.385](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.384...@lunora/studio@1.0.0-alpha.385) (2026-11-14)
+
+- feat(advisor): suppress one finding at one site with an inline directive (#1587)
+
 ## @lunora/studio [1.0.0-alpha.384](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.383...@lunora/studio@1.0.0-alpha.384) (2026-11-14)
 
 - fix(studio): stop reporting unstampable indexes as dead (#1576)

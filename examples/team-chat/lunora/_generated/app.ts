@@ -575,6 +575,7 @@ class AppBuilder<Env extends object> {
             ["profiles", { mode: { kind: "global" } }],
             ["channels", { mode: { kind: "root" } }],
             ["messages", { mode: { field: "channelId", kind: "shardBy" } }],
+            ["members", { mode: { field: "channelId", kind: "shardBy" } }],
             ["presence", { mode: { field: "channelId", kind: "shardBy" } }],
             ["ratelimit_buckets", { mode: { kind: "root" } }],
         ]);

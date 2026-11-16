@@ -10,7 +10,7 @@ import type { WranglerQueueProducerIR, WranglerVariableIR } from "@lunora/codege
 import { isPlainObject } from "./guards";
 import { spaAssetsBinding as spaAssetsBindingOf } from "./spa-assets";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
-import { scanWranglerVariablesForSecrets } from "./wrangler-secret-variables";
+import { scanWranglerVariablesForSecrets, variableKeyLines } from "./wrangler-secret-variables";
 import type { QueuesShape } from "./wrangler-shape";
 
 /** The slices read here. Parsed from untrusted JSONC, so any level may be `null` or the wrong type. */
@@ -48,12 +48,14 @@ const producersOf = (queues: QueuesShape | null | undefined, env?: string): Wran
 /** Both inputs are empty when there is no wrangler config or it does not parse. */
 const wranglerCodegenInputs = (projectRoot: string): WranglerCodegenInputs => {
     const wranglerPath = findWranglerFile(projectRoot);
-    const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerCodegenShape>(wranglerPath).parsed;
+    const read = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerCodegenShape>(wranglerPath);
+    const parsed = read?.parsed;
 
-    if (wranglerPath === undefined || parsed === undefined) {
+    if (wranglerPath === undefined || read?.text === undefined || parsed === undefined) {
         return { wranglerQueueProducers: [], wranglerVariables: [] };
     }
 
+    const keyLines = variableKeyLines(read.text);
     const spaAssetsBindings = [
         ...new Set([parsed.assets, ...Object.values(parsed.env ?? {}).map((block) => block?.assets)].flatMap((assets) => spaAssetsBindingOf(assets) ?? [])),
     ];
@@ -61,7 +63,9 @@ const wranglerCodegenInputs = (projectRoot: string): WranglerCodegenInputs => {
     return {
         ...(spaAssetsBindings.length === 0 ? {} : { spaAssetsBindings }),
         wranglerQueueProducers: [...producersOf(parsed.queues), ...Object.entries(parsed.env ?? {}).flatMap(([env, block]) => producersOf(block?.queues, env))],
-        wranglerVariables: scanWranglerVariablesForSecrets(isPlainObject(parsed.vars) ? parsed.vars : undefined, relative(projectRoot, wranglerPath)),
+        wranglerVariables: scanWranglerVariablesForSecrets(isPlainObject(parsed.vars) ? parsed.vars : undefined, relative(projectRoot, wranglerPath), (key) =>
+            keyLines.get(key),
+        ),
     };
 };
 

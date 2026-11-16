@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a declared `.geoIndex(name, { field })` that no handler queries via
@@ -50,7 +51,7 @@ const geoIndexUnused: Lint = {
                     emit(geoIndexUnused, {
                         cacheKey: `geo_index_unused:${table.name}:${index.name}`,
                         detail: `No handler reads geo index "${index.name}" on table "${table.name}" via \`withGeoIndex("${index.name}", …)\` — it's declared but never queried, so its geohash companion is maintained on every write for nothing.`,
-                        metadata: { index: index.name, table: table.name },
+                        metadata: { ...declarationSiteFields(index), index: index.name, table: table.name },
                     }),
                 ),
         );

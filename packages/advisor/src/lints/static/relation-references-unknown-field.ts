@@ -1,7 +1,7 @@
 import emit from "../../finding";
 import type { AdvisorRelation, AdvisorTable } from "../../schema";
 import type { Lint } from "../../types";
-import { tableColumnSet } from "../helpers";
+import { declarationSiteFields, tableColumnSet } from "../helpers";
 
 /** One unresolved relation column: which side it was used on, the column, and the table it should belong to. */
 interface ColumnProblem {
@@ -90,7 +90,14 @@ const relationReferencesUnknownField: Lint = {
                     emit(relationReferencesUnknownField, {
                         cacheKey: `relation_references_unknown_field:${table.name}:${relation.name}:${problem.side}`,
                         detail: `Relation "${relation.name}" on table "${table.name}" uses ${problem.side} "${problem.column}", which is not declared on table "${problem.owner}".`,
-                        metadata: { column: problem.column, owner: problem.owner, relation: relation.name, side: problem.side, table: table.name },
+                        metadata: {
+                            ...declarationSiteFields(relation),
+                            column: problem.column,
+                            owner: problem.owner,
+                            relation: relation.name,
+                            side: problem.side,
+                            table: table.name,
+                        },
                     }),
                 ),
             ),

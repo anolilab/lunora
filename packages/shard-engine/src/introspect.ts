@@ -375,6 +375,15 @@ interface AdvisoryFinding {
     name: string;
     /** How to fix it. */
     remediation: string;
+    /** Set when an inline `lunora-advisor-exempt` directive accepts this finding. */
+    suppressed?: {
+        /** The directive's site, relative to the project root. */
+        file: string;
+        /** 1-based line of the directive. */
+        line: number;
+        /** The directive's trimmed reason, required to be non-empty. */
+        reason: string;
+    };
     /** Short headline. */
     title: string;
 }

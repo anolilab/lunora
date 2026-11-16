@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { columnKind } from "../helpers";
+import { columnKind, declarationSiteFields } from "../helpers";
 
 /**
  * A correctness lint exploiting Lunora's static edge: a `.geoIndex(name, { field })`
@@ -46,7 +46,7 @@ const geoIndexFieldNotGeopoint: Lint = {
                     emit(geoIndexFieldNotGeopoint, {
                         cacheKey: `geo_index_field_not_geopoint:${table.name}:${index.name}:${field}`,
                         detail: `Geo index "${index.name}" on table "${table.name}" indexes column "${field}", which is a ${kind}, not a v.geoPoint().`,
-                        metadata: { field, index: index.name, kind, table: table.name },
+                        metadata: { ...declarationSiteFields(index), field, index: index.name, kind, table: table.name },
                     }),
                 );
             }

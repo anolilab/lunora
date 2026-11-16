@@ -217,6 +217,11 @@ interface AdvisoryFinding {
     metadata: Record<string, unknown>;
     name: string;
     remediation: string;
+    suppressed?: {
+        file: string;
+        line: number;
+        reason: string;
+    };
     title: string;
 }
 ```
@@ -3031,6 +3036,7 @@ interface SocketAttachment {
     admin?: boolean;
     adminBinding?: string;
     authenticated?: boolean;
+    broadcastSubs?: Record<string, string>;
     clientId?: string;
     connected?: boolean;
     connectionId?: string;

@@ -102,3 +102,47 @@ describe("discoverContainerKeyAccesses", () => {
         expect(discoverContainerKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 });
+
+describe("discoverContainerKeyAccesses identity-bound guard", () => {
+    const HELPER = `const requireMember = async (ctx, channelId) => {
+  const member = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId } });
+  if (!member) {
+    throw new Error("forbidden");
+  }
+};`;
+    const handler = (guard: string): string => `${HELPER}
+export const start = mutation(async ({ ctx, args }) => {
+  const message = await ctx.db.get("messages", args.messageId);
+  if (!message) {
+    throw new Error("not found");
+  }
+  ${guard}
+  return ctx.containers.app.get(message.instanceId);
+});`;
+
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-container-guard-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    it("accepts a helper guard that checks the caller against the row before the sink", () => {
+        expect.assertions(1);
+
+        write("chat.ts", handler("await requireMember(ctx, message.channelId);"));
+
+        expect(discoverContainerKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a helper guard whose argument does not reference the row", () => {
+        expect.assertions(1);
+
+        write("chat.ts", handler("await requireMember(ctx, args.channelId);"));
+
+        expect(discoverContainerKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+});

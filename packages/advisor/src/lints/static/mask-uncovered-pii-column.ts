@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a public procedure that reads a table for which at least one other
@@ -106,7 +107,7 @@ const maskUncoveredPiiColumn: Lint = {
                     emit(maskUncoveredPiiColumn, {
                         cacheKey: `mask_uncovered_pii_column:${procedure.file}:${procedure.exportName}:${table}`,
                         detail: `\`${procedure.exportName}\` in ${procedure.file} reads table \`${table}\` without \`.use(mask(...))\` — its column${columns.length === 1 ? "" : "s"} ${columnList} ${columns.length === 1 ? "is" : "are"} masked elsewhere in the app but returned in the clear here.`,
-                        metadata: { columns, exportName: procedure.exportName, file: procedure.file, table },
+                        metadata: { columns, exportName: procedure.exportName, ...declarationSiteFields(procedure), table },
                     }),
                 );
             }
