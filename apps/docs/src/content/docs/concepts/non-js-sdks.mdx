@@ -65,8 +65,8 @@ writes, does not linger. It only removes a file whose content still matches the 
 the stamp recorded, so a file you edited, or one a hand-edited stamp names, stays. It
 never removes a file the stamp did not list, and it refuses a listed path that
 escapes the output directory or runs through a symlink, reporting each refusal as a
-warning. A stamp from an older CLI has no hashes, so its stale files are reported
-and left for you to remove.
+warning. A stamp from an older CLI does not record what it generated, so the first
+regeneration after an upgrade removes nothing; delete any leftover files by hand.
 
 | Flag            | For                                                                |
 | --------------- | ------------------------------------------------------------------ |
