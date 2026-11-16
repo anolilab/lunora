@@ -3,6 +3,10 @@
   "recentlyNotified": [],
   "recentlyWalked": [
     {
+      "at": "2026-11-16T23:36:46.236Z",
+      "key": "@lunora/client@1.0.0-alpha.300"
+    },
+    {
       "at": "2026-11-16T23:19:05.075Z",
       "key": "@lunora/cli@1.0.0-alpha.498"
     },
@@ -397,12 +401,8 @@
     {
       "at": "2026-11-09T21:49:52.787Z",
       "key": "@lunora/cli@1.0.0-alpha.490"
-    },
-    {
-      "at": "2026-11-09T21:49:52.787Z",
-      "key": "@lunora/client@1.0.0-alpha.289"
     }
   ],
-  "updatedAt": "2026-11-16T23:19:05.076Z",
+  "updatedAt": "2026-11-16T23:36:46.236Z",
   "version": 1
 }
