@@ -1,46 +1,21 @@
-import { createCompiler } from "@fumadocs/mdx-remote";
-import { executeMdxSync } from "@fumadocs/mdx-remote/client";
 import { createFileRoute } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start";
-import { staticFunctionMiddleware } from "@tanstack/start-static-server-functions";
 import defaultMdxComponents from "fumadocs-ui/mdx";
 
 import ContentPage from "@/components/sections/content-page";
-// Bundle the markdown at build time via Vite's `?raw` loader. The Worker has no
-// access to the source tree at request time, so a readFileSync would fail.
-import codeOfConductSource from "@/content/code-of-conduct.md?raw";
+// Compiled to a component at build time by the fumadocs-mdx Vite plugin. Compiling
+// at request time and running the result needs `new Function`, which workerd
+// forbids, so the page would answer 500 on the Worker.
+import CodeOfConduct from "@/content/code-of-conduct.md";
 import { createSeoHead } from "@/lib/seo";
 
-const compiler = createCompiler({
-    development: false,
-});
-
-const loader = createServerFn({
-    method: "GET",
-})
-    .middleware([staticFunctionMiddleware])
-    .handler(async () => {
-        const result = await compiler.compile({ source: codeOfConductSource });
-
-        return {
-            compiled: result.compiled,
-        };
-    });
-
-const RouteComponent = () => {
-    const { compiled } = Route.useLoaderData();
-    const { default: MdxContent } = executeMdxSync(compiled);
-
-    return (
-        <ContentPage>
-            <MdxContent components={defaultMdxComponents} />
-        </ContentPage>
-    );
-};
+const RouteComponent = () => (
+    <ContentPage>
+        <CodeOfConduct components={defaultMdxComponents} />
+    </ContentPage>
+);
 
 export const Route = createFileRoute("/code-of-conduct")({
     component: RouteComponent,
-    loader: () => loader(),
     head: () => {
         return {
             ...createSeoHead({

@@ -68,7 +68,7 @@ export default defineConfig(async ({ mode }) => {
         optimizeDeps: {
             // @resvg/resvg-wasm (server-side OG route) ships a .wasm asset; keep it out of
             // the dep optimizer so it doesn't try to pre-bundle it.
-            exclude: ["scripts/*", "@fumadocs/mdx-remote", "@fumadocs/mdx-remote/client", "@resvg/resvg-wasm"],
+            exclude: ["scripts/*", "@resvg/resvg-wasm"],
         },
         plugins: [
             // Must come first so it owns the `ssr` environment before `tanstackStart()` configures it.
@@ -160,7 +160,7 @@ export default defineConfig(async ({ mode }) => {
             // paths) cannot be resolved there at request time.
             noExternal: ["@c15t/react", "@c15t/ui", "@icons-pack/react-simple-icons"],
             optimizeDeps: {
-                exclude: ["fumadocs-ui", "fumadocs-core", "@fumadocs/mdx-remote", "@resvg/resvg-wasm"],
+                exclude: ["fumadocs-ui", "fumadocs-core", "@resvg/resvg-wasm"],
                 include: ["react", "react-dom"],
             },
         },

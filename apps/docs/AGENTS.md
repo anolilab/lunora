@@ -4,7 +4,7 @@ The Lunora documentation & marketing site (`@lunora/docs`) — TanStack Start on
 Vite, file-based routing via TanStack Router, Fumadocs/MDX content, Tailwind v4
 with shadcn/ui, prerendered to static HTML.
 
-> Deployed as a Cloudflare Worker (`wrangler.jsonc`, `@cloudflare/vite-plugin`). The Worker cannot compile wasm from bytes at runtime, so `/api/og` does not render under workerd yet (satori's harfbuzz), and `/code-of-conduct` is not prerendered and returns 500 live. Verify a change with `pnpm run build` then `wrangler dev -c dist/server/wrangler.json`.
+> Deployed as a Cloudflare Worker (`wrangler.jsonc`, `@cloudflare/vite-plugin`, `alchemy.run.ts`). workerd forbids runtime code generation, which shapes two choices. Wasm is imported as a precompiled `?module` (`/api/og`), and satori stays below 0.33, whose HarfBuzz compiles wasm from bytes. MDX is compiled at build time by importing the `.md`/`.mdx` file (the code of conduct, blog posts); `@fumadocs/mdx-remote`'s `executeMdx*` needs `new Function` and answers 500. Prerendering runs in workerd too, so a route that breaks there is silently left out of `dist/client`. Verify a change with `pnpm run build` then `wrangler dev -c dist/server/wrangler.json`.
 
 Writing rules for every docs page (voice, page types, code samples, agent
 readability): [`STYLE.md`](STYLE.md).

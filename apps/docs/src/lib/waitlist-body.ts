@@ -4,9 +4,10 @@ interface WaitlistBody {
     honeyField?: unknown;
     privacy?: unknown;
     source?: unknown;
+    turnstileToken?: unknown;
 }
 
-/** An address and three short fields fit many times over; anything larger is not the form. */
+/** An address, three short fields and a Turnstile token (at most 2 KiB) fit with room to spare; anything larger is not the form. */
 const MAX_WAITLIST_BODY_BYTES = 4096;
 
 /**

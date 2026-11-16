@@ -754,12 +754,12 @@ catalogs:
     '@fuma-comment/react':
       specifier: 1.6.0
       version: 1.6.0
-    '@fumadocs/mdx-remote':
-      specifier: 1.5.2
-      version: 1.5.2
     '@icons-pack/react-simple-icons':
       specifier: 13.15.1
       version: 13.15.1
+    '@marsidev/react-turnstile':
+      specifier: 1.6.3
+      version: 1.6.3
     '@radix-ui/react-icons':
       specifier: 1.3.2
       version: 1.3.2
@@ -950,8 +950,8 @@ catalogs:
       specifier: 6.1.3
       version: 6.1.3
     satori:
-      specifier: 0.35.0
-      version: 0.35.0
+      specifier: 0.32.0
+      version: 0.32.0
     secretlint:
       specifier: 13.0.7
       version: 13.0.7
@@ -1479,9 +1479,6 @@ importers:
       '@fuma-comment/react':
         specifier: catalog:web
         version: 1.6.0(@floating-ui/dom@1.8.0)(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(highlight.js@11.11.1)(lucide-react@1.52.0(@types/react@19.3.0)(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(typescript@6.0.3)
-      '@fumadocs/mdx-remote':
-        specifier: catalog:web
-        version: 1.5.2(@types/mdx@2.0.14)(@types/react@19.3.0)(fumadocs-core@16.16.1(@mdx-js/mdx@3.1.1(supports-color@10.2.2))(@modelcontextprotocol/server@2.4.0)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@types/estree-jsx@1.0.5)(@types/hast@3.0.5)(@types/mdast@4.0.4)(@types/react@19.3.0)(lucide-react@1.52.0(@types/react@19.3.0)(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@10.2.2)(zod@4.6.6))(react@19.3.1)(supports-color@10.2.2)
       '@icons-pack/react-simple-icons':
         specifier: catalog:web
         version: 13.15.1(react@19.3.1)
@@ -1497,6 +1494,9 @@ importers:
       '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../../packages/ratelimit
+      '@marsidev/react-turnstile':
+        specifier: catalog:web
+        version: 1.6.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@radix-ui/react-icons':
         specifier: catalog:web
         version: 1.3.2(react@19.3.1)
@@ -1640,7 +1640,7 @@ importers:
         version: 2.7.2(@types/react@19.3.0)(react@19.3.1)
       satori:
         specifier: catalog:web
-        version: 0.35.0
+        version: 0.32.0
       shiki:
         specifier: catalog:web
         version: 4.6.0
@@ -9165,19 +9165,6 @@ packages:
       '@types/react':
         optional: true
 
-  '@fumadocs/mdx-remote@1.5.2':
-    resolution: {integrity: sha512-2hgci6IUxZriNrd5w3ADCZn2q8YQ2yRkeKZEGIkoe/qRb46ijLAsZ0yBcosWk7pkXeNQ5sDLdeCmA3Mw21N4Fg==}
-    peerDependencies:
-      '@types/mdx': '*'
-      '@types/react': '*'
-      fumadocs-core: ^15.0.0 || ^16.0.0
-      react: 19.3.1
-    peerDependenciesMeta:
-      '@types/mdx':
-        optional: true
-      '@types/react':
-        optional: true
-
   '@fumadocs/tailwind@0.1.2':
     resolution: {integrity: sha512-VppeXgIRXjZMgpf2qijj1hcfxyeYl1s0ok8k6N3jyjiX64M7sDwnt2zGPd6dbfDybgbBvDw6C6J1e42gB5NzsA==}
     peerDependencies:
@@ -9605,6 +9592,12 @@ packages:
     resolution: {integrity: sha512-uwPAhccfFJlsfCxMYTwOdVfOz3xqyj8xYL3zJj8f0pb30tLohnnFPhLuqp4/qoEz8sNxe4SESZedcBojRefIzg==}
     engines: {node: '>=18'}
     hasBin: true
+
+  '@marsidev/react-turnstile@1.6.3':
+    resolution: {integrity: sha512-JdMMArjEVDMs5jnGMBeXl3y6dkMuIXPG4Tu88Uo2Rkf8ujEw/iJ2Yp/3n4kDF3BjJ+bJB9WC19LPWc5a7/4srA==}
+    peerDependencies:
+      react: 19.3.1
+      react-dom: 19.3.1
 
   '@mdn/browser-compat-data@5.7.6':
     resolution: {integrity: sha512-7xdrMX0Wk7grrTZQwAoy1GkvPMFoizStUoL+VmtUkAxegbCCec+3FKwOM6yc/uGU5+BEczQHXAlWiqvM8JeENg==}
@@ -20955,9 +20948,6 @@ packages:
     resolution: {integrity: sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw==}
     engines: {node: '>=20.0.0'}
 
-  harfbuzzjs@0.10.0:
-    resolution: {integrity: sha512-SN8LVwCOzvTq3OPNd0+EAghgXugItz56wst567D1vs7LnnKGWprhi3EG58aVOBwhN8HEbQxL4I9NDWkcXUutRw==}
-
   has-bigints@1.1.0:
     resolution: {integrity: sha512-R3pbpkcIqv2Pm3dUwgjclDRVmWpTJW2DcMzcIhEXEx1oh/CEMObMm3KLmRJOdvhM7o4uQBnwr8pzRK2sJWIqfg==}
     engines: {node: '>= 0.4'}
@@ -24252,8 +24242,8 @@ packages:
     engines: {node: '>=18.18'}
     hasBin: true
 
-  satori@0.35.0:
-    resolution: {integrity: sha512-YyoP7axF2T93XOWXQXLH4t+cvLgZ+MeYV/xruXJfPa/czpcRqaG41/8Bz3mzgYj/7NxdrqJOx3YtzWy1MLtG5g==}
+  satori@0.32.0:
+    resolution: {integrity: sha512-WwYeCWKjxfXvk7SsLSLTJhcPOrB2HCxbptqGIiYor0yqaPu3xA5uMTQ/4Dan5mxClhhk2Wn9ZE1pLGIlGdUxFQ==}
     engines: {node: '>=16'}
 
   satteri@0.10.5:
@@ -29989,20 +29979,6 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.3.0
 
-  '@fumadocs/mdx-remote@1.5.2(@types/mdx@2.0.14)(@types/react@19.3.0)(fumadocs-core@16.16.1(@mdx-js/mdx@3.1.1(supports-color@10.2.2))(@modelcontextprotocol/server@2.4.0)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@types/estree-jsx@1.0.5)(@types/hast@3.0.5)(@types/mdast@4.0.4)(@types/react@19.3.0)(lucide-react@1.52.0(@types/react@19.3.0)(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@10.2.2)(zod@4.6.6))(react@19.3.1)(supports-color@10.2.2)':
-    dependencies:
-      '@mdx-js/mdx': 3.1.1(supports-color@10.2.2)
-      fumadocs-core: 16.16.1(@mdx-js/mdx@3.1.1(supports-color@10.2.2))(@modelcontextprotocol/server@2.4.0)(@tanstack/react-router@1.170.46(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@types/estree-jsx@1.0.5)(@types/hast@3.0.5)(@types/mdast@4.0.4)(@types/react@19.3.0)(lucide-react@1.52.0(@types/react@19.3.0)(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(supports-color@10.2.2)(zod@4.6.6)
-      react: 19.3.1
-      unified: 11.0.5
-      vfile: 6.0.3
-      yaml: 2.9.1
-    optionalDependencies:
-      '@types/mdx': 2.0.14
-      '@types/react': 19.3.0
-    transitivePeerDependencies:
-      - supports-color
-
   '@fumadocs/tailwind@0.1.2(tailwindcss@4.3.3)':
     optionalDependencies:
       tailwindcss: 4.3.3
@@ -30386,6 +30362,11 @@ snapshots:
     transitivePeerDependencies:
       - encoding
       - supports-color
+
+  '@marsidev/react-turnstile@1.6.3(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+    dependencies:
+      react: 19.3.1
+      react-dom: 19.3.1(react@19.3.1)
 
   '@mdn/browser-compat-data@5.7.6': {}
 
@@ -34030,8 +34011,8 @@ snapshots:
 
   '@smithy/credential-provider-imds@4.5.2':
     dependencies:
-      '@smithy/core': 3.38.1
-      '@smithy/types': 4.19.0
+      '@smithy/core': 3.40.0
+      '@smithy/types': 4.20.0
       tslib: 2.8.1
 
   '@smithy/fetch-http-handler@5.8.0':
@@ -44039,8 +44020,6 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  harfbuzzjs@0.10.0: {}
-
   has-bigints@1.1.0: {}
 
   has-flag@3.0.0: {}
@@ -48446,7 +48425,7 @@ snapshots:
 
   sandbox-cli-detector@0.2.0: {}
 
-  satori@0.35.0:
+  satori@0.32.0:
     dependencies:
       '@shuding/opentype.js': 1.4.0-beta.0
       css-background-parser: 0.1.0
@@ -48455,8 +48434,6 @@ snapshots:
       css-to-react-native: 3.2.0
       emoji-regex-xs: 2.0.1
       escape-html: 1.0.3
-      fflate: 0.7.5
-      harfbuzzjs: 0.10.0
       linebreak: 1.1.0
       parse-css-color: 0.2.1
       postcss-value-parser: 4.2.0

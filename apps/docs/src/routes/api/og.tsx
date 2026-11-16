@@ -1,12 +1,15 @@
-// resvg-wasm (no native binary) so this works in a Worker, where the native
-// @resvg/resvg-js addon cannot load. The wasm is imported as a compiled module at
-// build time: Workers cannot compile wasm fetched at runtime.
+// Both renderers take their wasm as a module compiled at build time: workerd
+// refuses to compile wasm from bytes at runtime. resvg-wasm stands in for the
+// native @resvg/resvg-js addon, and satori's standalone entry takes Yoga from the
+// caller instead of inlining it as bytes.
 import resvgWasm from "@resvg/resvg-wasm/index_bg.wasm?module";
 import { createFileRoute } from "@tanstack/react-router";
+import yogaWasm from "satori/yoga.wasm?module";
 
 import { getPackageBySlug } from "@/data/packages";
 
 let wasmReady: Promise<void> | null = null;
+let yogaReady: Promise<void> | null = null;
 
 /** `initWasm` rejects with this once the module has been initialised. */
 const ALREADY_INITIALIZED = /already initialized/i;
@@ -83,13 +86,18 @@ const loadFonts = () => {
 const truncate = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1).trimEnd()}…` : text);
 
 const renderPng = async (title: string, description: string, eyebrow: string, accent: string): Promise<Uint8Array<ArrayBuffer>> => {
-    // Imported here, not at the top of the module. This file is part of the route
-    // tree, so a top-level import would load satori on every request the Worker
-    // serves. satori statically imports harfbuzzjs, which compiles its wasm from
-    // bytes on load; workerd rejects that ("Wasm code generation disallowed by
-    // embedder"), so this endpoint fails under `wrangler dev` until the renderer
-    // is replaced or the wasm is precompiled.
-    const [{ default: satori }, { initWasm, Resvg }] = await Promise.all([import("satori"), import("@resvg/resvg-wasm")]);
+    // Imported here, not at the top of the module: this file is part of the route
+    // tree, so a top-level import would load both renderers on every request.
+    const [{ default: satori, init: initYoga }, { initWasm, Resvg }] = await Promise.all([import("satori/standalone"), import("@resvg/resvg-wasm")]);
+
+    // Cleared on failure so a later request retries rather than reusing a rejection.
+    yogaReady ??= initYoga(yogaWasm).catch((error: unknown) => {
+        yogaReady = null;
+
+        throw error;
+    });
+
+    await yogaReady;
 
     const svg = await satori(
         <div style={{ backgroundColor: "#0e0e11", display: "flex", fontFamily: "Geist", height: "630px", width: "1200px" }}>

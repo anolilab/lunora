@@ -1,15 +1,18 @@
 "use client";
 
+import type { TurnstileInstance } from "@marsidev/react-turnstile";
+import { Turnstile } from "@marsidev/react-turnstile";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Check } from "lucide-react";
 import type { FC, SyntheticEvent } from "react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Action } from "@/kit/action";
 import { Kicker, Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
 import { posthog } from "@/lib/posthog";
+import { TEST_SITE_KEY } from "@/lib/turnstile";
 
 /**
  * Lunora Cloud landing — the managed tier (still in progress), behind an
@@ -21,6 +24,13 @@ const EMAIL_RE = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/;
 
 type Status = "error" | "idle" | "sending" | "success";
 
+// A deploy sets the real key (alchemy.run.ts refuses to run without it); the test
+// key keeps local builds working against the test secret in wrangler.jsonc.
+const TURNSTILE_SITE_KEY =
+    typeof import.meta.env.VITE_TURNSTILE_SITE_KEY === "string" && import.meta.env.VITE_TURNSTILE_SITE_KEY !== ""
+        ? import.meta.env.VITE_TURNSTILE_SITE_KEY
+        : TEST_SITE_KEY;
+
 const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     const instance = useId();
     const consentId = `privacy-consent-${instance}`;
@@ -29,6 +39,8 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     const [consent, setConsent] = useState(false);
     const [status, setStatus] = useState<Status>("idle");
     const [errorMessage, setErrorMessage] = useState("");
+    const [turnstileToken, setTurnstileToken] = useState("");
+    const turnstile = useRef<TurnstileInstance>(undefined);
 
     const fail = (message: string) => {
         setErrorMessage(message);
@@ -51,11 +63,17 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
             return;
         }
 
+        if (turnstileToken === "") {
+            fail("Please wait for the verification check to finish.");
+
+            return;
+        }
+
         setStatus("sending");
 
         try {
             const response = await fetch("/api/waitlist", {
-                body: JSON.stringify({ email, honeyField: new FormData(event.currentTarget).get("honeyField") ?? "", privacy: true, source }),
+                body: JSON.stringify({ email, honeyField: new FormData(event.currentTarget).get("honeyField") ?? "", privacy: true, source, turnstileToken }),
                 headers: { "Content-Type": "application/json" },
                 method: "POST",
             });
@@ -63,12 +81,18 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
             if (response.ok) {
                 posthog.capture("waitlist_joined", { source });
                 setStatus("success");
-            } else {
-                fail("Something went wrong. Please try again.");
+
+                return;
             }
+
+            fail(response.status === 403 ? "We couldn't verify you're human. Please try again." : "Something went wrong. Please try again.");
         } catch {
             fail("Something went wrong. Please try again.");
         }
+
+        // A token is good for one siteverify call, so a retry needs a fresh one.
+        setTurnstileToken("");
+        turnstile.current?.reset();
     };
 
     if (status === "success") {
@@ -138,6 +162,18 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                     and to receiving one email when Lunora Cloud opens. No spam; unsubscribe any time.
                 </span>
             </label>
+            <Turnstile
+                onError={() => {
+                    setTurnstileToken("");
+                }}
+                onExpire={() => {
+                    setTurnstileToken("");
+                }}
+                onSuccess={setTurnstileToken}
+                options={{ size: "flexible", theme: "dark" }}
+                ref={turnstile}
+                siteKey={TURNSTILE_SITE_KEY}
+            />
             <p className={`text-xs ${status === "error" ? "text-red-400" : "text-ink-faint"}`}>
                 {status === "error" ? errorMessage : "Your email is only used to notify you. You can self-host the open-source framework any time."}
             </p>

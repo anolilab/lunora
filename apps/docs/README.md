@@ -17,6 +17,29 @@ pnpm --filter "@lunora/docs" run build     # production build (generate-packages
 pnpm --filter "@lunora/docs" run serve     # preview the production build
 ```
 
+## Deploying
+
+The site runs as a Cloudflare Worker. `pnpm --filter "@lunora/docs" run deploy`
+runs `alchemy.run.ts`, which builds the site and deploys the Worker with its
+bindings. It reads these from the environment:
+
+| Variable                                        | What it is                                                                                     |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN` | The account to deploy to.                                                                      |
+| `ALCHEMY_PASSWORD`                              | Encrypts secrets in alchemy's state.                                                           |
+| `VITE_TURNSTILE_SITE_KEY`                       | Public Turnstile site key, built into the waitlist form. The deploy refuses to run without it. |
+| `TURNSTILE_SECRET_KEY`                          | Turnstile secret, bound to the Worker; `/api/waitlist` sends it to `siteverify`.               |
+
+Create both Turnstile keys in the Cloudflare dashboard (Turnstile, add a widget
+for `lunora.sh`). Never commit real keys.
+
+Locally, `pnpm run build` and then `wrangler dev -c dist/server/wrangler.json`
+serve the built Worker. Without `VITE_TURNSTILE_SITE_KEY` the form uses
+Cloudflare's always-passing
+[test site key](https://developers.cloudflare.com/turnstile/troubleshooting/testing/),
+and `wrangler.jsonc` binds the matching test secret, so sign-ups work locally
+with no setup.
+
 ## How the docs are sourced
 
 Documentation lives **next to the code it documents**. Each package keeps a
