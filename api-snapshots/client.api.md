@@ -1388,6 +1388,7 @@ interface SubscriptionState {
         payload: unknown;
     };
     refusal?: SubscriptionError;
+    retirements?: number;
     serverBase: unknown;
     serverBaseCommitted?: boolean;
     serverClaims?: string;

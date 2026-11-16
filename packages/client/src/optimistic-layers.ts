@@ -127,7 +127,17 @@ export const notifySubscription = (state: SubscriptionState, value: unknown): vo
     state.lastValue = value;
 
     if (deferredNotifications === undefined) {
-        fanValue(state.callbacks, value);
+        const { retirements } = state;
+
+        for (const callback of state.callbacks) {
+            // A callback that signed the user out has already fanned the
+            // blanked value to every listener; the rest must not get this one after it.
+            if (state.retirements !== retirements && state.lastValue !== value) {
+                return;
+            }
+
+            fanValue([callback], value);
+        }
     } else {
         deferredNotifications.add(state);
     }

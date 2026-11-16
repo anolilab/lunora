@@ -3992,6 +3992,15 @@ class LunoraClient {
      * left live. `true` when it evicted, which reconnects every socket cold.
      */
     private retirePreviousIdentity(previousIdentity: string | null, wasKnownNobody: boolean, previousToken: string | null, token: string | null): boolean {
+        const leaving = leavesSessionBehind(previousIdentity, wasKnownNobody, token);
+
+        // Before the rejections below: each rolls back synchronously, and a
+        // subscriber it notifies may already write as the incoming user,
+        // whose layer must survive.
+        if (leaving) {
+            this.discardOptimisticLayers();
+        }
+
         // Writes whose stamp still matches (or is still undecidable) are
         // kept: this path is reached on a plain sign-in too, where the
         // queue belongs to the very user who just signed in.
@@ -4016,11 +4025,10 @@ class LunoraClient {
         // its socket is authenticated by the cookie as it was at the
         // upgrade — anonymous — and keeps serving that, never the user
         // who signed in since, until it is replaced.
-        if (!leavesSessionBehind(previousIdentity, wasKnownNobody, token)) {
+        if (!leaving) {
             return false;
         }
 
-        this.discardOptimisticLayers();
         this.evictPreviousIdentitySession();
 
         return true;
@@ -9212,6 +9220,7 @@ class LunoraClient {
 
         for (const state of this.subscriptions.all()) {
             state.optimisticLayers = [];
+            state.retirements = (state.retirements ?? 0) + 1;
         }
     }
 

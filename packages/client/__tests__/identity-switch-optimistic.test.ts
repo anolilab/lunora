@@ -206,4 +206,109 @@ describe("an account switch and the outgoing user's pending optimistic writes", 
 
         client.close();
     });
+
+    it("keeps a write the incoming user starts while the outgoing user's queued writes are rejected", () => {
+        expect.hasAssertions();
+
+        sockets.length = 0;
+
+        const client = new LunoraClient({
+            fetch: pendingMutationFetch(),
+            heartbeatIntervalMs: 0,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            persistence: false,
+            url: "http://app.test",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.setAuthToken("tok-a", "user-a");
+
+        const seen: unknown[] = [];
+
+        client.subscribe(fnRef("messages.list"), { channelId: "c1" }, (value) => seen.push(value), { shardKey: "c1" });
+
+        // The socket never opens, so A's write is queued rather than sent.
+        client
+            .mutation(
+                fnRef("messages.send"),
+                { channelId: "c1", text: "A: draft" },
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("messages.list"), { channelId: "c1" }, ["A: draft"]);
+                    },
+                    shardKey: "c1",
+                },
+            )
+            .catch(() => undefined);
+
+        let startedB = false;
+
+        // Rejecting A's queued write rolls its prediction back; B writes from that notification.
+        client.subscribe(
+            fnRef("messages.list"),
+            { channelId: "c1" },
+            (value) => {
+                if (value === undefined && !startedB) {
+                    startedB = true;
+                    client
+                        .mutation(
+                            fnRef("messages.send"),
+                            { channelId: "c1", text: "B: draft" },
+                            {
+                                optimisticUpdate: (store) => {
+                                    store.setQuery(fnRef("messages.list"), { channelId: "c1" }, ["B: draft"]);
+                                },
+                                shardKey: "c1",
+                            },
+                        )
+                        .catch(() => undefined);
+                }
+            },
+            { shardKey: "c1" },
+        );
+
+        expect(seen).toStrictEqual([["A: draft"]]);
+
+        client.setAuthToken("tok-b", "user-b");
+
+        expect(seen.at(-1)).toStrictEqual(["B: draft"]);
+
+        client.close();
+    });
+
+    it("does not hand the outgoing user's prediction to a callback after an earlier one switched users", () => {
+        expect.hasAssertions();
+
+        const { client } = signedInWithRow();
+        const later: unknown[] = [];
+
+        client.subscribe(
+            fnRef("messages.list"),
+            { channelId: "c1" },
+            (value) => {
+                if (Array.isArray(value) && value.includes("A: draft")) {
+                    client.setAuthToken("tok-b", "user-b");
+                }
+            },
+            { shardKey: "c1" },
+        );
+        client.subscribe(fnRef("messages.list"), { channelId: "c1" }, (value) => later.push(value), { shardKey: "c1" });
+
+        client
+            .mutation(
+                fnRef("messages.send"),
+                { channelId: "c1", text: "A: draft" },
+                {
+                    optimisticUpdate: (store) => {
+                        store.setQuery(fnRef("messages.list"), { channelId: "c1" }, ["A: private", "A: draft"]);
+                    },
+                    shardKey: "c1",
+                },
+            )
+            .catch(() => undefined);
+
+        expect(later.at(-1)).toBeUndefined();
+
+        client.close();
+    });
 });
