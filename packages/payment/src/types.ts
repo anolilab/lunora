@@ -220,9 +220,11 @@ export interface UsageEvent {
     readonly reportedToProvider: boolean;
 
     /**
-     * Epoch ms before which the reconcile sweep does not retry the forward. Set when a retry
-     * fails, so an event that keeps failing (a reference with no provider customer) steps
-     * aside for newer events instead of holding the oldest-first batch forever. Absent means due.
+     * Epoch ms from which the reconcile sweep may retry the forward. A store stamps it when it
+     * records the event (`createdAt` for an event that owes a forward, `USAGE_NEVER_DUE` for
+     * one that never does), and a failed retry pushes it later, so an event that keeps failing
+     * (a reference with no provider customer) steps aside for others. Absent on an event
+     * recorded before stores stamped it, which the sweep treats as due from `createdAt`.
      */
     readonly reportRetryAt?: number;
 }

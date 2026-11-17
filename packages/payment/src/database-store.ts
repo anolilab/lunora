@@ -12,6 +12,7 @@ import { money } from "./money";
 import type { PaymentStore, RevisionGuard } from "./store";
 import { foldUsage } from "./store";
 import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
+import { usageFirstDueAt } from "./usage-due";
 
 /**
  * The physical table names `paymentExtension` merges into an app's schema — its `payment` key
@@ -402,29 +403,51 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
                 return [];
             }
 
-            // The port's `where` is equality-only, so the additive/positive
-            // predicate (see `PaymentStore.listUnreportedUsage`) still has to be
-            // applied in memory — but the READ is bounded. Order and limit are
-            // pushed DOWN via `PaymentPageArgs` and the keyset `cursor` walks the
-            // rest, so a provider that has been down for a day costs `wanted`-sized
-            // chunks instead of materialising its whole backlog in a 128 MiB
-            // isolate to take `limit` rows off the front.
-            //
-            // `orderBy` reproduces the previous in-memory sort exactly (createdAt
-            // asc, then idempotencyKey as the tiebreak) so "oldest first" and the
-            // memory store's ordering still agree.
-            const orderBy: Record<string, "asc" | "desc">[] = [{ createdAt: "asc" }, { idempotencyKey: "asc" }];
+            // Rows written before `recordUsage` stamped `reportRetryAt` have none, and the due read
+            // below cannot see them. Stamp one page per sweep through the same index (an absent
+            // column matches `null`), so the backlog drains without an app-side migration. The
+            // explicit order is the index's next columns: the default `_creationTime` order is not,
+            // and would sort the whole legacy backlog before the limit applies.
+            const legacy = await database.findMany(
+                PAYMENT_TABLES.usageEvents,
+                // eslint-disable-next-line unicorn/no-null -- `null` is how ctx.db matches a column the row never wrote
+                { provider, reportedToProvider: false, reportRetryAt: null },
+                { limit: wanted, orderBy: [{ createdAt: "asc" }, { idempotencyKey: "asc" }] },
+            );
+
+            for (const row of legacy.rows) {
+                // Guarded: a concurrent sweep may have stamped and then deferred this row since the
+                // read above, and an unconditional write would make it due again at `createdAt`.
+                // eslint-disable-next-line no-await-in-loop -- one bounded page, serial like the sweep that reads it
+                await database.patchIf(
+                    PAYMENT_TABLES.usageEvents,
+                    row._id,
+                    // eslint-disable-next-line unicorn/no-null -- `null` is how ctx.db matches a column the row never wrote
+                    { reportedToProvider: false, reportRetryAt: null },
+                    { reportRetryAt: usageFirstDueAt(rowToUsageEvent(row)) },
+                );
+            }
+
+            // `by_provider_unreported_due` serves this as one range: the read starts at the most overdue
+            // row and stops at `now`, so rows deferred into the future, and never-forwardable rows
+            // (`USAGE_NEVER_DUE`), are never fetched. Earliest-due first, then oldest.
+            const orderBy: Record<string, "asc" | "desc">[] = [{ reportRetryAt: "asc" }, { createdAt: "asc" }, { idempotencyKey: "asc" }];
             const events: UsageEvent[] = [];
             let cursor: string | undefined;
 
             do {
                 // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently serial: the next cursor is only known once this page returns
-                const page = await database.findMany(PAYMENT_TABLES.usageEvents, { provider, reportedToProvider: false }, { cursor, limit: wanted, orderBy });
+                const page = await database.findMany(
+                    PAYMENT_TABLES.usageEvents,
+                    { provider, reportedToProvider: false, reportRetryAt: { lte: now } },
+                    { cursor, limit: wanted, orderBy },
+                );
 
                 for (const row of page.rows) {
                     const event = rowToUsageEvent(row);
 
-                    if (event.mode !== "set" && event.quantity > 0 && (event.reportRetryAt === undefined || event.reportRetryAt <= now)) {
+                    // Kept for a `now` at or past `USAGE_NEVER_DUE`, which the range above then admits.
+                    if (event.mode !== "set" && event.quantity > 0) {
                         events.push(event);
 
                         if (events.length === wanted) {
@@ -436,13 +459,6 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
                 cursor = page.cursor;
             } while (cursor !== undefined);
 
-            // ponytail: memory is bounded, total scan length is not. A `"set"` row
-            // (and a non-positive `"add"`) never becomes reported, so it is a
-            // permanent non-match this walk re-reads on every sweep, and a deferred
-            // row is re-read until it is due. Upgrade path
-            // when that prefix gets long: record never-forwardable rows as already
-            // reported, or add a `(provider, reportedToProvider, createdAt)` index
-            // so the scan starts past them.
             return events;
         },
 
@@ -529,7 +545,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             // The unique `by_idempotency` index is the real race guard in the DO: a concurrent
             // insert of the same key fails its OCC commit, so at most one caller wins.
-            await database.insert(PAYMENT_TABLES.usageEvents, usageEventToRow(event));
+            await database.insert(PAYMENT_TABLES.usageEvents, usageEventToRow({ ...event, reportRetryAt: event.reportRetryAt ?? usageFirstDueAt(event) }));
 
             return true;
         },

@@ -96,6 +96,7 @@ export const payment_usageEvents = sqliteTable("payment_usageEvents", {
     by_idempotency: uniqueIndex("by_idempotency").on(t.provider, t.idempotencyKey),
     by_reference_feature_created: index("by_reference_feature_created").on(t.referenceId, t.featureId, t.createdAt),
     by_reference_created: index("by_reference_created").on(t.referenceId, t.createdAt),
+    by_provider_unreported_due: index("by_provider_unreported_due").on(t.provider, t.reportedToProvider, t.reportRetryAt, t.createdAt, t.idempotencyKey),
 }));
 
 export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
