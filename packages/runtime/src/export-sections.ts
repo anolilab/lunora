@@ -615,7 +615,9 @@ const parseStorageRecord = (document: Record<string, unknown>): StorageRecord | 
     const { bucket, contentType, customMetadata, key } = document;
     const chunk = parseChunk(document);
 
-    if (typeof key !== "string" || !chunk || (bucket !== undefined && typeof bucket !== "string")) {
+    // A reserved key is never exported, so a backup that holds one was crafted: writing it
+    // could land on this or another restore's staging objects.
+    if (typeof key !== "string" || key.startsWith(RESERVED_STORAGE_PREFIX) || !chunk || (bucket !== undefined && typeof bucket !== "string")) {
         return undefined;
     }
 
@@ -766,7 +768,12 @@ const importStorageRow = async (options: WorkerOptions, row: SectionRow, totals:
     const record = parseStorageRecord(row.doc);
 
     if (!record) {
-        rowError(totals, row, "BAD_ROW", "a `$storage` record needs a string `key` and base64 `data`, an integer `offset`, and a `size` on its last chunk");
+        rowError(
+            totals,
+            row,
+            "BAD_ROW",
+            "a `$storage` record needs a string `key` outside `_lunora/` and base64 `data`, an integer `offset`, and a `size` on its last chunk",
+        );
 
         return;
     }

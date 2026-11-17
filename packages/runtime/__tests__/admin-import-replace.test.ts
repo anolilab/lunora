@@ -844,6 +844,29 @@ describe("admin import — staged replace of chunked sections", () => {
         expect(storageUpload).not.toHaveBeenCalled();
     });
 
+    it("refuses a record under the reserved `_lunora/` prefix, and never commits it over restore staging", async () => {
+        expect.assertions(4);
+
+        await seed();
+
+        const target = createStores();
+        const storageUpload = vi.fn<NonNullable<WorkerOptions["storageUpload"]>>(target.options.storageUpload);
+        const worker = workerWith({ ...target.options, storageUpload });
+        const data = Buffer.from("hello").toString("base64");
+        const staging = "_lunora/restore-session/victim/0/chunk";
+        const response = await postImport(worker, "?mode=replace&tables=messages&stage=reserved", [
+            { doc: { format: 2, sections: ["storage"] }, table: "$lunora" },
+            { doc: { data, key: staging, last: true, offset: 0, size: 5 }, table: "$storage" },
+        ]);
+        const answer: { errors: { code: string }[] } = await response.json();
+        const committed = await postSession(worker, "commit", "reserved");
+
+        expect(answer.errors.map((error) => error.code)).toStrictEqual(["BAD_ROW"]);
+        expect(committed.status).toBe(409);
+        expect(storageUpload).not.toHaveBeenCalledWith(staging, expect.anything(), expect.anything());
+        expect(target.buckets.get("default")!.has(staging)).toBe(false);
+    });
+
     it("refuses a chunked value it has no staging for, and so never commits the session", async () => {
         expect.assertions(2);
 

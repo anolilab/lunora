@@ -389,6 +389,24 @@ describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, 
         expect(storageUpload).not.toHaveBeenCalled();
     });
 
+    it("refuses records under the reserved `_lunora/` prefix, uploading nothing over restore staging", async () => {
+        expect.hasAssertions();
+
+        const stores = createStores();
+        const storageUpload = vi.fn<NonNullable<WorkerOptions["storageUpload"]>>(stores.options.storageUpload);
+        const data = Buffer.from("hello").toString("base64");
+        const staging = stagedKey("a", 0);
+        const summary = await importInto(workerFor({ ...stores.options, storageUpload }), [
+            JSON.stringify({ doc: { data, key: staging, last: true, offset: 0, size: 5 }, table: "$storage" }),
+            JSON.stringify({ doc: { data, key: "_lunora/uploads/state", last: true, offset: 0, size: 5 }, table: "$storage" }),
+        ]);
+
+        expect(summary.errors.map((error) => error.code)).toStrictEqual(["BAD_ROW", "BAD_ROW"]);
+        expect(storageUpload).not.toHaveBeenCalled();
+        expect(stores.buckets.get("default")!.has(staging)).toBe(false);
+        expect(stores.buckets.get("default")!.has("_lunora/uploads/state")).toBe(false);
+    });
+
     it("keeps two interleaved imports of the same key apart, each restoring its own bytes", async () => {
         expect.hasAssertions();
 

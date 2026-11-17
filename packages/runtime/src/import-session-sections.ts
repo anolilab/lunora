@@ -245,7 +245,12 @@ const stageStorageRow = async (options: WorkerOptions, ref: SessionRef, row: Sec
     const record: StorageRecord | undefined = parseStorageRecord(row.doc);
 
     if (!record) {
-        stageError(errors, row, "BAD_ROW", "a `$storage` record needs a string `key` and base64 `data`, an integer `offset`, and a `size` on its last chunk");
+        stageError(
+            errors,
+            row,
+            "BAD_ROW",
+            "a `$storage` record needs a string `key` outside `_lunora/` and base64 `data`, an integer `offset`, and a `size` on its last chunk",
+        );
 
         return undefined;
     }
