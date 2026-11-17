@@ -113,6 +113,16 @@ export default createConfig(
             "unicorn/prevent-abbreviations": "off",
         },
     },
+    // `this: void` on a structural binding member says the member is safe to call
+    // unbound — tests and callers pass it as a bare reference — which is what
+    // typescript-eslint's `allowAsThisParameter` exists for. Every other misplaced
+    // `void` is still reported.
+    {
+        files: ["src/**/*.ts"],
+        rules: {
+            "@typescript-eslint/no-invalid-void-type": ["warn", { allowAsThisParameter: true }],
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code (loose
     // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
     // describe titles). Source files still enforce all of these.
