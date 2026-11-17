@@ -8,8 +8,12 @@
 import type { NotificationEvent, NotificationKind } from "../notifications/events";
 import { channelsForEvent, renderNotification } from "../notifications/events";
 import { pendingDeliveryRow } from "../notifications/outbox";
+import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
+import type { TargetDriver } from "../targets/driver";
+import type { Placement } from "../targets/placement";
+import { placementOfDeployment, storeRowReader } from "../targets/placement";
 import { domainNotificationDetail, reconcileDomain } from "./check";
 import type { DnsResolve } from "./verify";
 import { verifyDomain } from "./verify";
@@ -45,11 +49,35 @@ interface ProjectRow {
 }
 
 export interface DomainSweepOptions {
-    /** The platform's app domain, which a verified hostname must CNAME toward. */
-    appDomain: string;
     now: number;
+
+    /**
+     * The CNAME targets a domain of project `projectId` must point at — its placement's, as the
+     * Verify button checks them — or `undefined` when the project is not placed anywhere reachable.
+     */
+    platformTargets: (projectId: string) => Promise<ReadonlyArray<string> | undefined>;
     resolve: DnsResolve;
 }
+
+/**
+ * The sweep's `platformTargets` over the control-plane rows: the project's placement, then
+ * its driver's targets. A box-hosted domain points at the box, not the cell apex, so
+ * checking every domain against the apex failed each one of those.
+ */
+export const projectPlatformTargets =
+    (database: { get: (table: string, id: string) => Promise<unknown> }, driverFor: (placement: Placement) => Pick<TargetDriver, "domains">) =>
+    async (projectId: string): Promise<ReadonlyArray<string> | undefined> => {
+        const project = (await database.get("projects", projectId)) as null | { placementRef?: null | string; target?: null | string };
+        const target = project === null ? undefined : storedTarget(project.target);
+
+        if (project === null || target === undefined) {
+            return undefined;
+        }
+
+        const placed = await placementOfDeployment({ placementRef: project.placementRef, target }, storeRowReader(database));
+
+        return "placement" in placed ? driverFor(placed.placement).domains.platformTargets() : undefined;
+    };
 
 export interface DomainSweepResult {
     checked: number;
@@ -110,11 +138,15 @@ export const runDomainSweep = async (database: ControlPlaneDatabase, options: Do
 
     const verdicts = await Promise.all(
         domains.map(async (domain) => {
-            const result = await verifyDomain(domain.hostname, {
-                platformTargets: [options.appDomain],
-                resolve: options.resolve,
-                txtToken: domain.txtToken,
-            });
+            const platformTargets = await options.platformTargets(domain.projectId).catch(() => undefined);
+
+            // No placement to check against: an empty target list would accept any CNAME, and the
+            // apex would fail a box-hosted domain, so neither verdict is honest. Skipped this tick.
+            if (platformTargets === undefined) {
+                return { domain, verified: undefined };
+            }
+
+            const result = await verifyDomain(domain.hostname, { platformTargets, resolve: options.resolve, txtToken: domain.txtToken });
 
             return { domain, verified: result.verified };
         }),
@@ -123,6 +155,13 @@ export const runDomainSweep = async (database: ControlPlaneDatabase, options: Do
     const result: DomainSweepResult = { checked: domains.length, failed: 0, verified: 0 };
 
     for (const { domain, verified } of verdicts) {
+        if (verified === undefined) {
+            // Stamped all the same, so an unplaced domain rotates to the back rather than holding the batch.
+            // eslint-disable-next-line no-await-in-loop -- one write per checked domain; the batch is small
+            await database.patch("domains", domain._id, { updatedAt: options.now });
+            continue;
+        }
+
         const outcome = reconcileDomain(domain, verified, options.now);
 
         // eslint-disable-next-line no-await-in-loop -- one write per checked domain; the batch is small

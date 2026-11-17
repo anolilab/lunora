@@ -36,7 +36,7 @@ import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
 import { runCertificateSweep } from "../domains/certificate-sweep";
 import { localIssuer } from "../domains/issuers";
-import { expireUnverifiedDomains, runDomainSweep } from "../domains/sweep";
+import { expireUnverifiedDomains, projectPlatformTargets, runDomainSweep } from "../domains/sweep";
 import { createDohResolver } from "../domains/verify";
 import { edgeBudget } from "../edge/protection";
 import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../edge/rules";
@@ -584,8 +584,8 @@ const sweepNotifications = async (database: ControlPlaneStore, env: ControlPlane
  */
 const sweepDomains = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
     await runDomainSweep(database, {
-        appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
         now: Date.now(),
+        platformTargets: projectPlatformTargets(database, (placement) => resolveTargetDriver(placement, env)),
         resolve: createDohResolver(),
     });
 };

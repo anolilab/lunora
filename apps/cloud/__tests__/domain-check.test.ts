@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import { FAILURES_BEFORE_UNVERIFIED, reconcileDomain } from "../src/domains/check";
-import { expireUnverifiedDomains, runDomainSweep } from "../src/domains/sweep";
+import { expireUnverifiedDomains, projectPlatformTargets, runDomainSweep } from "../src/domains/sweep";
 import type { DnsAnswer } from "../src/domains/verify";
 import type { ControlPlaneDatabase } from "../src/store";
 
 const NOW = 1_700_000_000_000;
 const APP = "lunora.app";
+/** A box domain outside the apex, as `LUNORA_BOX_DOMAIN` may set it. */
+const BOX_DOMAIN = "boxes.example.net";
 
 describe(reconcileDomain, () => {
     it("announces the first passing check and stamps verifiedAt", () => {
@@ -76,6 +78,9 @@ const resolverFor =
     (records: Record<string, DnsAnswer[]>) =>
     (name: string): Promise<DnsAnswer[]> =>
         Promise.resolve(records[name] ?? []);
+
+/** Every project on the cell apex, as a `cloudflare-wfp` placement answers. */
+const apexTargets = async (): Promise<string[]> => [APP];
 
 const txt = (token: string): DnsAnswer[] => [{ data: `"${token}"`, type: 16 }];
 const cname = (target: string): DnsAnswer[] => [{ data: `${target}.`, type: 5 }];
@@ -149,7 +154,7 @@ describe(runDomainSweep, () => {
             "app.example.com": cname(`proj.${APP}`),
         });
 
-        const result = await runDomainSweep(database, { appDomain: APP, now: NOW, resolve });
+        const result = await runDomainSweep(database, { now: NOW, platformTargets: apexTargets, resolve });
 
         expect(result).toStrictEqual({ checked: 1, failed: 0, verified: 1 });
         expect(database.rows["domains"]?.[0]).toMatchObject({ failedChecks: 0, lastCheckedAt: NOW, updatedAt: NOW, verifiedAt: NOW });
@@ -171,15 +176,57 @@ describe(runDomainSweep, () => {
         });
         const resolve = resolverFor({});
 
-        await runDomainSweep(database, { appDomain: APP, now: NOW, resolve });
+        await runDomainSweep(database, { now: NOW, platformTargets: apexTargets, resolve });
 
         expect(database.rows["domains"]?.[0]).toMatchObject({ failedChecks: 1, lastCheckedAt: NOW, verifiedAt: 5 });
         expect(database.rows["notificationDeliveries"] ?? []).toHaveLength(0);
 
-        const second = await runDomainSweep(database, { appDomain: APP, now: NOW + 1000, resolve });
+        const second = await runDomainSweep(database, { now: NOW + 1000, platformTargets: apexTargets, resolve });
 
         expect(second).toStrictEqual({ checked: 1, failed: 1, verified: 0 });
         expect(database.rows["domains"]?.[0]).toMatchObject({ failedChecks: 0, verifiedAt: null });
         expect(database.rows["notificationDeliveries"]).toMatchObject([{ event: "domain.failed", status: "pending" }]);
+    });
+
+    /**
+     * A box answers a custom domain on its own hostname, so its domains CNAME there. Checked
+     * against the cell apex they missed every tick and lost their verified status on the second.
+     */
+    it("keeps a box-hosted domain that points at its box verified across repeated checks", async () => {
+        const database = fakeDatabase({
+            boxes: [{ _id: "box_1", organizationId: "org", slug: "edge-1", status: "online" }],
+            domains: [domainRow({ _id: "dom_1", verifiedAt: 5 })],
+            projects: [{ _id: "proj", name: "Acme", organizationId: "org", placementRef: "box_1", target: "celld-vps" }],
+        });
+        const read = {
+            get: async (table: string, id: string): Promise<unknown> => database.rows[table]?.find((row) => row._id === id) ?? null,
+        };
+        const platformTargets = projectPlatformTargets(read, (placement) => {
+            return {
+                domains: {
+                    issue: async () => undefined,
+                    platformTargets: () => ("host" in placement && "slug" in placement.host ? [`${placement.host.slug}.${BOX_DOMAIN}`] : [APP]),
+                },
+            };
+        });
+        const resolve = resolverFor({
+            "_lunora.app.example.com": txt("tok"),
+            "app.example.com": cname(`edge-1.${BOX_DOMAIN}`),
+        });
+
+        await runDomainSweep(database, { now: NOW, platformTargets, resolve });
+        await runDomainSweep(database, { now: NOW + 1000, platformTargets, resolve });
+
+        expect(database.rows["domains"]?.[0]).toMatchObject({ failedChecks: 0, verifiedAt: 5 });
+    });
+
+    it("leaves a domain whose project has no reachable placement unjudged", async () => {
+        const database = fakeDatabase({ domains: [domainRow({ _id: "dom_1", verifiedAt: 5 })] });
+
+        await runDomainSweep(database, { now: NOW, platformTargets: async () => undefined, resolve: resolverFor({}) });
+        await runDomainSweep(database, { now: NOW + 1000, platformTargets: async () => undefined, resolve: resolverFor({}) });
+
+        expect(database.rows["domains"]?.[0]).toMatchObject({ updatedAt: NOW + 1000, verifiedAt: 5 });
+        expect(database.rows["domains"]?.[0]?.["failedChecks"]).toBeUndefined();
     });
 });
