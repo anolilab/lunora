@@ -1546,8 +1546,11 @@ impl Client {
 
                 if self.subscriptions.contains_key(&id) {
                     match retry_after(envelope) {
+                        // A late frame from a detached or closed socket must not arm a retry no sender can fire.
                         Some(delay) => {
-                            self.pending_retries.insert(id.clone(), received + delay);
+                            if self.send.is_some() {
+                                self.pending_retries.insert(id.clone(), received + delay);
+                            }
                         }
                         // A hint-less error is how the server ends a subscription, so a retry an earlier hint scheduled is cancelled.
                         None => {

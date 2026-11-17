@@ -1235,9 +1235,10 @@ module Lunora
       # a retry an earlier hint scheduled for it is cancelled rather than sent.
       if @subscriptions.key?(id)
         delay = retry_after_seconds(envelope)
+        # A late frame from a detached or closed socket must not arm a retry no sender can fire.
         if delay.nil?
           @pending_retries.delete(id)
-        else
+        elsif @send
           @pending_retries[id] = Lunora.monotonic_now + delay
         end
       end

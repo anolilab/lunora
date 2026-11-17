@@ -1867,13 +1867,14 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 		c.mu.Lock()
 
 		if c.subscriptions[id] != nil {
-			if hasHint {
+			// A late frame from a detached or closed socket must not arm a retry no sender can fire.
+			if hasHint && c.send != nil {
 				if c.pendingRetries == nil {
 					c.pendingRetries = map[string]time.Time{}
 				}
 
 				c.pendingRetries[id] = time.Now().Add(delay)
-			} else {
+			} else if !hasHint {
 				delete(c.pendingRetries, id)
 			}
 		}

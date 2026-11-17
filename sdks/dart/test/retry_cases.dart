@@ -162,6 +162,25 @@ void caseSubscriptionRetryCancelledByUnsubscribeSocketAndClose() {
   equals(closed.nextSubscriptionRetryAt, null, 'closing the client must cancel the pending retry');
 }
 
+/// A late hint from a detached or closed socket arms nothing: no sender could fire it, and the
+/// deadline would stay due until the next attach, or forever after close.
+void caseSubscriptionRetryLateHintAfterDetachOrCloseSchedulesNothing() {
+  final retry = _retryGoldens();
+  final detached = _openSubscribed(retry, <Map<String, Object?>>[], <LunoraSubscriptionError>[]);
+
+  detached.detachSocket();
+  detached.handleFrame(jsonEncode(retry['hintFrame']));
+
+  equals(detached.nextSubscriptionRetryAt, null, 'a hint arriving after detach must not arm a retry');
+
+  final closed = _openSubscribed(retry, <Map<String, Object?>>[], <LunoraSubscriptionError>[]);
+
+  closed.close();
+  closed.handleFrame(jsonEncode(retry['hintFrame']));
+
+  equals(closed.nextSubscriptionRetryAt, null, 'a hint arriving after close must not arm a retry');
+}
+
 /// A shape view's error is never a query re-run: it reaches the shape's callback and schedules nothing.
 void caseSubscriptionRetryIgnoresShapeErrors() {
   final sent = <Map<String, Object?>>[];

@@ -274,6 +274,22 @@ private fun settledThatCutsOffRunKeepsRetry(retry: Map<*, *>) {
  * re-subscribe, which the caller fires through [Client.retryDueSubscriptions]. Checked against the
  * `subscriptionRetry` golden in `protocol/fixtures/ws-frames.json`.
  */
+private fun lateHintAfterDetachOrCloseSchedulesNothing(retry: Map<*, *>) {
+    val detached = openRetrySubscribed(retry, mutableListOf(), mutableListOf())
+
+    detached.detachSocket()
+    detached.handleFrame(Json.write(retry["hintFrame"]))
+
+    check(detached.nextSubscriptionRetryAtNanos() == null, "a hint arriving after detach must not arm a retry")
+
+    val closed = openRetrySubscribed(retry, mutableListOf(), mutableListOf())
+
+    closed.close()
+    closed.handleFrame(Json.write(retry["hintFrame"]))
+
+    check(closed.nextSubscriptionRetryAtNanos() == null, "a hint arriving after close must not arm a retry")
+}
+
 internal fun runSubscriptionRetryCases() {
     val retry = fixture("ws-frames.json")["subscriptionRetry"] as Map<*, *>
 
@@ -289,4 +305,5 @@ internal fun runSubscriptionRetryCases() {
     detachMidBatchStopsRetries()
     undecodableDeltaKeepsRetry(retry)
     settledThatCutsOffRunKeepsRetry(retry)
+    lateHintAfterDetachOrCloseSchedulesNothing(retry)
 }

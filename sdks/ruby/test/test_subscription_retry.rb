@@ -136,6 +136,20 @@ class TestSubscriptionRetry < Minitest::Test
     assert_nil client.next_subscription_retry_at
   end
 
+  def test_a_hint_after_detach_or_close_schedules_nothing
+    detached, = subscribed_client
+    detached.detach_socket
+    detached.handle_frame(JSON.generate(retry_fixture["hintFrame"]))
+
+    assert_nil detached.next_subscription_retry_at, "a hint arriving after detach must not arm a retry"
+
+    closed, = subscribed_client
+    closed.close
+    closed.handle_frame(JSON.generate(retry_fixture["hintFrame"]))
+
+    assert_nil closed.next_subscription_retry_at, "a hint arriving after close must not arm a retry"
+  end
+
   def test_close_cancels_the_pending_retry
     client, = pending_client
 

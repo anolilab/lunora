@@ -1445,10 +1445,11 @@ class Client(
                     // Only a query subscription is re-run at the hint. A hint-less error ends
                     // it, so an earlier hint's retry for it is dropped too.
                     if (subscriptions.containsKey(id)) {
-                        if (delay != null) {
-                            pendingRetries[id] = System.nanoTime() + delay
-                        } else {
+                        // A late frame from a detached or closed socket must not arm a retry no sender can fire.
+                        if (delay == null) {
                             pendingRetries.remove(id)
+                        } else if (send != null) {
+                            pendingRetries[id] = System.nanoTime() + delay
                         }
                     }
 

@@ -140,26 +140,43 @@ func TestSubscriptionRetryColdResubscribeAtTheHint(t *testing.T) {
 	}
 }
 
-func TestSubscriptionRetryNothingDroppedWithoutASocket(t *testing.T) {
+func TestSubscriptionRetryLateHintWithoutASocketSchedulesNothing(t *testing.T) {
 	retry := subscriptionRetryFixture(t)
 
+	// Attach clears pending retries, so one armed with no socket could never fire and would keep
+	// NextSubscriptionRetryAt reporting a passed deadline.
 	client := NewClient("https://app.example", nil)
 	client.Subscribe("messages:list", map[string]any{"channel": "general"}, func(any) {}, nil, "")
 	feedFrame(t, client, retry["seedFrame"])
 	feedFrame(t, client, retry["hintFrame"])
 
-	due, ok := client.NextSubscriptionRetryAt()
-	if !ok {
-		t.Fatal("the hint must schedule a retry even with no socket")
+	if _, ok := client.NextSubscriptionRetryAt(); ok {
+		t.Fatal("a hint with no socket attached must not arm a retry")
 	}
 
-	if n, err := client.RetryDueSubscriptions(due.Add(time.Second)); err != nil || n != 0 {
-		t.Fatalf("no socket: n=%d err=%v, want 0 and nil", n, err)
-	}
+	t.Run("detach", func(t *testing.T) {
+		var sent []map[string]any
 
-	if _, ok := client.NextSubscriptionRetryAt(); !ok {
-		t.Fatal("a retry due with no socket attached must not be dropped")
-	}
+		client := openSubscribed(t, retry, &sent, nil)
+		client.DetachSocket(0, "")
+		feedFrame(t, client, retry["hintFrame"])
+
+		if _, ok := client.NextSubscriptionRetryAt(); ok {
+			t.Fatal("a hint arriving after detach must not arm a retry")
+		}
+	})
+
+	t.Run("close", func(t *testing.T) {
+		var sent []map[string]any
+
+		client := openSubscribed(t, retry, &sent, nil)
+		client.Close()
+		feedFrame(t, client, retry["hintFrame"])
+
+		if _, ok := client.NextSubscriptionRetryAt(); ok {
+			t.Fatal("a hint arriving after close must not arm a retry")
+		}
+	})
 }
 
 func TestSubscriptionRetryHintLeavesErrorCallbackAsBefore(t *testing.T) {

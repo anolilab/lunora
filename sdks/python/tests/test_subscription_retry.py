@@ -135,6 +135,17 @@ class TestSubscriptionRetry(unittest.TestCase):
         self.assertEqual(client.retry_due_subscriptions(time.monotonic() + FAR_FUTURE), 0)
         self.assertEqual(_subscribes(second), [])
 
+    def test_a_hint_after_detach_or_close_schedules_nothing(self):
+        detached, _sent, _errors, _unsubscribe = _open()
+        detached.detach_socket()
+        detached.handle_frame(RETRY["hintFrame"])
+        self.assertIsNone(detached.next_subscription_retry_at(), "a hint arriving after detach must not arm a retry")
+
+        closed, _sent, _errors, _unsubscribe = _open()
+        closed.close()
+        closed.handle_frame(RETRY["hintFrame"])
+        self.assertIsNone(closed.next_subscription_retry_at(), "a hint arriving after close must not arm a retry")
+
     def test_close_cancels(self):
         client, _sent, _errors, _unsubscribe = _open()
         client.handle_frame(RETRY["hintFrame"])

@@ -1228,9 +1228,10 @@ class LunoraClient {
           if (_subscriptions.containsKey(id)) {
             final delay = _retryHintMs(coded);
 
+            // A late frame from a detached or closed socket must not arm a retry no sender can fire.
             if (delay == null) {
               _pendingRetries.remove(id);
-            } else {
+            } else if (_send != null) {
               _pendingRetries[id] = _retryClock.elapsedMilliseconds + delay;
             }
           }

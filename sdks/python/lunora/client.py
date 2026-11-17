@@ -1550,7 +1550,9 @@ class LunoraClient:
         if shape is not None:
             deferred.extend(partial(cb, error) for cb in shape.error_callbacks)
         if sub is not None and (hint := _retry_after_ms(env)) is not None:
-            self._pending_retries[sub_id] = time.monotonic() + hint / 1000
+            # A late frame from a detached or closed socket must not arm a retry no sender can fire.
+            if self._send is not None:
+                self._pending_retries[sub_id] = time.monotonic() + hint / 1000
             return {"kind": "error", "id": sub_id, "code": code, "message": message, "retryAfterMs": hint}
         if sub is not None:
             # A hint-less error is how the server ends a subscription, so a retry an earlier hint scheduled is cancelled.
