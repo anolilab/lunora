@@ -326,6 +326,14 @@ const isUndefinedGlobal = (node: TsNode | undefined): boolean => {
     return declaration === undefined || declaration.getSourceFile().isDeclarationFile();
 };
 
+/** The operators that compare (`row === null`, `m.userId === uid`): they change nothing and yield a boolean. */
+const EQUALITY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+    SyntaxKind.EqualsEqualsEqualsToken,
+    SyntaxKind.EqualsEqualsToken,
+    SyntaxKind.ExclamationEqualsEqualsToken,
+    SyntaxKind.ExclamationEqualsToken,
+]);
+
 /**
  * Whether `node` is a value no caller can choose: a literal, `undefined`, or a module-level `const` holding one.
  */
@@ -353,11 +361,15 @@ const isFixedValue = (node: TsNode): boolean => {
 
 /**
  * Whether `node` sits beside a caller-choosable alternative on its way up to `within`: the fallback side of a `??` or
- * `||`, a left side whose fallback is not a fixed value, the left of a `&&`, or any part of a conditional. Stricter
- * than {@link isAlternativeOf}: the identity on the left of `ctx.auth.userId ?? args.victim` is null for an anonymous
- * caller, who then reads the victim's row. A fixed fallback (`ctx.auth.userId ?? "anon"`) is no one's choice.
+ * `||`, a left side whose fallback is not a fixed value, or any part of a conditional. Stricter than
+ * {@link isAlternativeOf}: the identity on the left of `ctx.auth.userId ?? args.victim` is null for an anonymous
+ * caller, who then reads the victim's row. A fixed fallback (`ctx.auth.userId ?? "anon"`) is no one's choice. A `&&`
+ * makes a compared identity a required condition (`m.userId === uid && m.channelId === id`), on either side; only
+ * an uncompared value on its left (`uid && args.victim`) yields the other operand instead of the identity.
  */
 const hasAlternativeWithin = (node: TsNode, within: TsNode): boolean => {
+    let compared = false;
+
     for (let child = node, parent = node.getParent(); parent !== undefined && child !== within; child = parent, parent = parent.getParent()) {
         if (Node.isConditionalExpression(parent)) {
             return true;
@@ -369,9 +381,11 @@ const hasAlternativeWithin = (node: TsNode, within: TsNode): boolean => {
             if (child !== parent.getLeft() || !isFixedValue(parent.getRight())) {
                 return true;
             }
-        } else if (Node.isBinaryExpression(parent) && child === parent.getLeft() && operator === SyntaxKind.AmpersandAmpersandToken) {
+        } else if (Node.isBinaryExpression(parent) && operator === SyntaxKind.AmpersandAmpersandToken && !compared && child === parent.getLeft()) {
             return true;
         }
+
+        compared ||= operator !== undefined && EQUALITY_OPERATORS.has(operator);
     }
 
     return false;
@@ -1040,14 +1054,6 @@ const overlaps = (path: RowPath, other: RowPath): boolean =>
 /** Whether `path` names an object that holds `other`, rather than `other` itself or a value below it. */
 const holds = (path: RowPath, other: RowPath): boolean => path.length < other.length && overlaps(path, other);
 
-/** The operators that only compare a holder (`row === null`), never change it. */
-const EQUALITY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
-    SyntaxKind.EqualsEqualsEqualsToken,
-    SyntaxKind.EqualsEqualsToken,
-    SyntaxKind.ExclamationEqualsEqualsToken,
-    SyntaxKind.ExclamationEqualsToken,
-]);
-
 /**
  * The longest property/element access chain `use` heads, through value-preserving wrappers, and the names it reads
  * (`undefined` for a computed key).
@@ -1095,20 +1101,10 @@ const isTestOf = (node: TsNode): boolean => {
  */
 const isBareRowTest = (node: TsNode, path: RowPath): boolean => path.length === 0 && isTestOf(node);
 
-/** Whether `node` is the argument of the platform's `JSON.stringify`, which only reads it. */
-const isStringified = (node: TsNode): boolean => {
-    const call = node.getParent();
-    const callee = Node.isCallExpression(call) && call.getArguments()[0] === node ? call.getExpression() : undefined;
-    const root = Node.isPropertyAccessExpression(callee) && callee.getName() === "stringify" ? callee.getExpression() : undefined;
-    const declaration = Node.isIdentifier(root) && root.getText() === "JSON" ? declarationOf(root) : undefined;
-
-    return declaration?.getSourceFile().isDeclarationFile() === true;
-};
-
 /**
  * Whether an object at `path` holding the guarded values at `heldPaths`, used as `node`, only has them read: tested,
- * returned from `owner` (the function that declares the binding), serialised with `JSON.stringify`, or copied by a
- * spread or a destructuring. A copy is shallow, so it is
+ * returned from `owner` (the function that declares the binding), or copied by a spread or a destructuring. Any call
+ * is an escape, `JSON.stringify` included: it runs the row's `toJSON` and its replacer, either of which can write. A copy is shallow, so it is
  * read-only only while every held value sits directly on the object: spreading `row` for a key at `row.meta.key`
  * shares `row.meta`, and `copy.meta.key = …` then changes the key unseen.
  */
@@ -1125,7 +1121,7 @@ const isReadOnlyHolderUse = (node: TsNode, path: RowPath, heldPaths: ReadonlyArr
     // hands its caller an alias this check never sees.
     const returnsFromOwner = Node.isReturnStatement(parent) && owner !== undefined && enclosingFunctionOf(parent)?.compilerNode === owner.compilerNode;
 
-    return isTestOf(node) || returnsFromOwner || isStringified(node);
+    return isTestOf(node) || returnsFromOwner;
 };
 
 /**
@@ -1375,6 +1371,19 @@ const tiedArgumentsOf = (
 };
 
 /**
+ * Whether a non-arrow `helper` reads its own `arguments` object, which aliases every parameter: `arguments[1].key = …`
+ * writes the row without naming the parameter its uses are followed through. An arrow function has no `arguments`
+ * of its own, and a nested non-arrow function reads its own.
+ */
+const readsOwnArguments = (helper: FunctionNode): boolean =>
+    !Node.isArrowFunction(helper) &&
+    valueIdentifiersIn(helper).some(
+        (identifier) =>
+            identifier.getText() === "arguments" &&
+            identifier.getFirstAncestor((ancestor) => isFunctionNode(ancestor) && !Node.isArrowFunction(ancestor))?.compilerNode === helper.compilerNode,
+    );
+
+/**
  * The row paths a helper call guards, and its uses of the row, when it is an identity guard for the row;
  * `undefined` otherwise. It is one when the handler's ctx is its only ctx-valued argument, another argument
  * references the row, and the helper's body enforces the identity read of {@link helperEnforcesRead}. A helper that
@@ -1413,7 +1422,12 @@ const helperGuardOf = (call: CallExpression, row: VariableDeclaration, awaited: 
     // `undefined` takes `channelId = "general"`, and `ctx = other` checks someone else's identity.
     const isReplaced = (candidate: ParameterDeclaration): boolean => candidate.hasInitializer() || isReassignedParameter(candidate, helper);
 
-    if (tiedParameters.length === 0 || (!awaited && mayBePromise) || [parameter, ...tiedParameters].some((candidate) => isReplaced(candidate))) {
+    if (
+        tiedParameters.length === 0 ||
+        (!awaited && mayBePromise) ||
+        readsOwnArguments(helper) ||
+        [parameter, ...tiedParameters].some((candidate) => isReplaced(candidate))
+    ) {
         return undefined;
     }
 

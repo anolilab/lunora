@@ -577,6 +577,128 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it.each([
+        ["the row", "console.log(JSON.stringify(message));"],
+        ["the row with a replacer that writes it", "JSON.stringify(message, (k, v) => {\n        v.attachmentKey = args.key;\n        return v;\n    });"],
+        [
+            "a row whose toJSON writes it",
+            "message.toJSON = function () {\n        this.attachmentKey = args.key;\n        return {};\n    };\n    JSON.stringify(message);",
+        ],
+    ])("reports a guarded row serialised with JSON.stringify: %s", (_label, use) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`await requireMember(ctx, message.channelId);\n    ${use}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a helper guard that serialises a nested holder of the key", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message);",
+                "return ctx.storage.attachments.getSignedUrl(message.meta.key, { expiresIn: 60 });",
+                `const requireMember = async (ctx, message) => {
+    const row = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId: message.channelId } });
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+    console.log(JSON.stringify(message.meta));
+};`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a function helper guard that writes the row through its arguments object", () => {
+        expect.assertions(1);
+
+        const helper = `async function requireMember(ctx, message) {
+    const row = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId: message.channelId } });
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+    arguments[1].attachmentKey = ctx.auth.userId;
+}`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts a function helper guard whose nested function reads its own arguments", () => {
+        expect.assertions(1);
+
+        const helper = `async function requireMember(ctx, message) {
+    const row = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId: message.channelId } });
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+    globalThis.log = function () {
+        return arguments.length;
+    };
+}`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["identity first", `(m) => m.userId === ctx.auth.userId && m.channelId === message.channelId`],
+        ["identity second", `(m) => m.channelId === message.channelId && m.userId === ctx.auth.userId`],
+    ])("accepts an inline guard whose filter requires the identity with &&, %s", (_label, filter) => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.query("members").filter(${filter}).first();
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["identity first", `(m) => m.userId === ctx.auth.userId && m.channelId === channelId`],
+        ["identity second", `(m) => m.channelId === channelId && m.userId === ctx.auth.userId`],
+    ])("accepts a helper guard whose filter requires the identity with &&, %s", (_label, filter) => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx, channelId) => {
+    const row = await ctx.db.query("members").filter(${filter}).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["an or of conditions", `(m) => m.userId === ctx.auth.userId || m.channelId === message.channelId`],
+        ["an uncompared && value", `(m) => m.userId === (ctx.auth.userId && args.victim) && m.channelId === message.channelId`],
+    ])("reports an inline guard whose filter has %s", (_label, filter) => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.query("members").filter(${filter}).first();
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("reports a guard that runs only inside a loop", () => {
         expect.assertions(1);
 
@@ -808,7 +930,6 @@ const requireMember = async (ctx, channelId) => {
 
     it.each([
         ["a destructuring read", "const { title } = message;\n    void title;"],
-        ["JSON.stringify", "console.log(JSON.stringify(message));"],
         ["an early return", "if (args.preview) {\n        return message;\n    }"],
     ])("accepts a guarded row also used by %s", (_label, use) => {
         expect.assertions(1);
@@ -1038,7 +1159,6 @@ const requireMember = async (ctx, channelId) => {
     });
 
     it.each([
-        ["serialises a nested holder", "console.log(JSON.stringify(message.meta));"],
         ["destructures a field of a nested holder", "const { label } = message.meta;\n    void label;"],
         ["reads the nested key", "void message.meta.key.length;"],
     ])("accepts a helper guard handed the row that only %s", (_label, extra) => {
