@@ -148,6 +148,15 @@ describe("tenant backup policy", () => {
         expect([later, earlier].toSorted((a, b) => a.localeCompare(b))).toStrictEqual([earlier, later]);
     });
 
+    it("gives two snapshots taken in the same millisecond distinct keys that still sort by time", () => {
+        const first = tenantBackupKey("org_1", "acme", NOW);
+        const second = tenantBackupKey("org_1", "acme", NOW);
+        const later = tenantBackupKey("org_1", "acme", NOW + 1);
+
+        expect(first).not.toBe(second);
+        expect([later, second, first].toSorted((a, b) => a.localeCompare(b)).at(-1)).toBe(later);
+    });
+
     it("reads retention from the plan catalog", () => {
         expect([backupRetentionFor("free"), backupRetentionFor("pro"), backupRetentionFor("enterprise"), backupRetentionFor(undefined)]).toStrictEqual([
             3, 14, 30, 3,

@@ -49,13 +49,16 @@ export const RECORD_RETENTION_MS = 30 * 24 * HOUR_MS;
 const DEFAULT_RETENTION = 3;
 
 /**
- * `tenant-backups/{organizationId}/{alias}/{timestamp}.ndjson.gz`.
+ * `tenant-backups/{organizationId}/{alias}/{timestamp}-{uuid}.ndjson.gz`.
  *
  * ISO-8601 with the punctuation stripped (milliseconds kept), so the keys under
- * one alias sort in the order the snapshots were taken.
+ * one alias sort in the order the snapshots were taken. The random suffix follows
+ * the timestamp because a manual or pre-restore backup can land in the same
+ * millisecond as the sweep's: sharing one object, pruning either row would delete
+ * the other's data.
  */
 export const tenantBackupKey = (organizationId: string, alias: string, now: number): string =>
-    `tenant-backups/${organizationId}/${alias}/${new Date(now).toISOString().replaceAll(/[.:-]/gu, "")}.ndjson.gz`;
+    `tenant-backups/${organizationId}/${alias}/${new Date(now).toISOString().replaceAll(/[.:-]/gu, "")}-${crypto.randomUUID()}.ndjson.gz`;
 
 /** How many successful snapshots a plan keeps per project (plan catalog `limits.backupRetention`). */
 export const backupRetentionFor = (plan: string | undefined): number =>
