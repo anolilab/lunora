@@ -414,8 +414,16 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             );
 
             for (const row of legacy.rows) {
+                // Guarded: a concurrent sweep may have stamped and then deferred this row since the
+                // read above, and an unconditional write would make it due again at `createdAt`.
                 // eslint-disable-next-line no-await-in-loop -- one bounded page, serial like the sweep that reads it
-                await database.patch(PAYMENT_TABLES.usageEvents, row._id, { reportRetryAt: usageFirstDueAt(rowToUsageEvent(row)) });
+                await database.patchIf(
+                    PAYMENT_TABLES.usageEvents,
+                    row._id,
+                    // eslint-disable-next-line unicorn/no-null -- `null` is how ctx.db matches a column the row never wrote
+                    { reportedToProvider: false, reportRetryAt: null },
+                    { reportRetryAt: usageFirstDueAt(rowToUsageEvent(row)) },
+                );
             }
 
             // `by_provider_unreported_due` serves this as one range: the read starts at the most overdue

@@ -787,6 +787,40 @@ describe("createDatabasePaymentStore", () => {
         await expect(db.findMany(PAYMENT_TABLES.usageEvents, { reportRetryAt: null })).resolves.toMatchObject({ rows: [] });
     });
 
+    it("listUnreportedUsage keeps a retry time a concurrent sweep set after the legacy read", async () => {
+        expect.assertions(2);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+        const id = await db.insert(PAYMENT_TABLES.usageEvents, {
+            createdAt: 1,
+            featureId: "tokens",
+            idempotencyKey: "old_add",
+            provider: "stripe",
+            quantity: 1,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+        const { findMany } = db;
+
+        // The other sweep stamps, fails to report and defers the row while this one holds the read.
+        db.findMany = async (table, where, page) => {
+            const result = await findMany(table, where, page);
+
+            if (where["reportRetryAt"] === null) {
+                await db.patch(PAYMENT_TABLES.usageEvents, id, { reportRetryAt: 5000 });
+            }
+
+            return result;
+        };
+
+        await expect(store.listUnreportedUsage("stripe", 10, 100)).resolves.toStrictEqual([]);
+
+        const { rows } = await findMany(PAYMENT_TABLES.usageEvents, { idempotencyKey: "old_add" });
+
+        expect(rows[0]?.["reportRetryAt"]).toBe(5000);
+    });
+
     it("releaseEvent rolls back a claim so the id can be re-processed", async () => {
         expect.assertions(3);
 
