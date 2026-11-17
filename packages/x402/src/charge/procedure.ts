@@ -12,7 +12,11 @@
  * ```ts
  * import { createProcedureChargeGate } from "@lunora/x402/charge";
  *
- * const gate = createProcedureChargeGate({ network: "base", recipient: { evm: env.PAYOUT } });
+ * const gate = createProcedureChargeGate({
+ *   facilitator: { url: "https://facilitator.example/x402" },
+ *   network: "base",
+ *   recipient: { evm: env.PAYOUT },
+ * });
  * // handed to createWorker({ x402Charge: gate })
  * ```
  */

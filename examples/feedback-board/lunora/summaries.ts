@@ -99,5 +99,5 @@ export const remove = mutation
     .input({ id: v.id("summaries") })
     .mutation(async ({ args: { id }, ctx }): Promise<void> => {
         ctx.log.info("summary removed", { id });
-        await ctx.db.delete(id);
+        await ctx.db.delete("summaries", id);
     });

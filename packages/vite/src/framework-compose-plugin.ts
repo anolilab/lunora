@@ -34,6 +34,10 @@ const LUNORA_WORKER_VIRTUAL_ID: string = "virtual:lunora/worker";
 const RESOLVED_VIRTUAL_PREFIX = "\0";
 const RESOLVED_LUNORA_WORKER_ID: string = `${RESOLVED_VIRTUAL_PREFIX}${LUNORA_WORKER_VIRTUAL_ID}`;
 
+/** Hook filters matching exactly the two ids above. */
+const LUNORA_WORKER_VIRTUAL_ID_RE = /^virtual:lunora\/worker$/u;
+const RESOLVED_LUNORA_WORKER_ID_RE = /^\0virtual:lunora\/worker$/u;
+
 /**
  * Stub emitted for the worker virtual in the *client* (browser) environment. The
  * composed entry pulls in worker-only runtime — `composeWorker`, `createShardDO`,
@@ -158,7 +162,7 @@ interface DurableObjectWiring {
     /** Extra imports the class export needs (none unless the app merges). */
     imports: string;
     /** The namespace expression a role module's builder call receives. */
-    namespace: (module: "scheduler" | "shardRegistry") => string;
+    namespace: (module: "adminRevocations" | "scheduler" | "shardRegistry") => string;
     /** Whether a generated class module is star-re-exported for wrangler. */
     reexported: (module: GeneratedClassModule) => boolean;
 }
@@ -169,12 +173,19 @@ interface DurableObjectWiring {
  * module the app has, named after that module. A merged role's class is
  * imported into `LunoraDO`, not re-exported, so wrangler binds one class.
  */
+/** The binding each role module's class is bound under when the app does not merge. */
+const BINDING_BY_MODULE = {
+    adminRevocations: DURABLE_OBJECT_BINDINGS.AdminRevocationDO,
+    scheduler: DURABLE_OBJECT_BINDINGS.SchedulerDO,
+    shardRegistry: DURABLE_OBJECT_BINDINGS.ShardRegistryDO,
+} as const;
+
 const durableObjectWiring = (base: string, classModules: ReadonlyArray<GeneratedClassModule>, merge: boolean): DurableObjectWiring => {
     if (!merge) {
         return {
             classExport: "export const ShardDO = app.ShardDO;",
             imports: "",
-            namespace: (module) => `env.${module === "scheduler" ? DURABLE_OBJECT_BINDINGS.SchedulerDO : DURABLE_OBJECT_BINDINGS.ShardRegistryDO}`,
+            namespace: (module) => `env.${BINDING_BY_MODULE[module]}`,
             reexported: () => true,
         };
     }
@@ -222,10 +233,14 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
     // exists (codegen only writes the file when the project declares that kind),
     // otherwise the import would fail to resolve.
     const durableObjects = durableObjectWiring(base, classModules, mergeDurableObjects);
-    const classReexports = classModules
-        .filter((module) => durableObjects.reexported(module))
-        .map((module) => `\nexport * from "${base}/${module}";\n`)
-        .join("");
+    // A merged app forwards only `LunoraDO`, so the registry module's RPC entrypoint is named here: a client worker binds it.
+    const registryEntrypoint =
+        mergeDurableObjects && classModules.includes("shardRegistry") ? `\nexport { ShardRegistryEntrypoint } from "${base}/shardRegistry";\n` : "";
+    const classReexports =
+        classModules
+            .filter((module) => durableObjects.reexported(module))
+            .map((module) => `\nexport * from "${base}/${module}";\n`)
+            .join("") + registryEntrypoint;
 
     // `ctx.scheduler.runAfter` / `runAt` need a `SchedulerDO` namespace on the
     // worker (`create-worker`'s `schedulerDO`), and this entry is generated — so
@@ -244,6 +259,11 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
     // `shardRegistry` module (a schema with `.shardBy()` tables), whose star
     // re-export forwards `ShardRegistryDO`.
     const shardRegistryCall = classModules.includes("shardRegistry") ? `\n    .shardRegistry((env) => ${durableObjects.namespace("shardRegistry")})` : "";
+
+    // The admin revocation store: every app has the module, and the builder always has the method.
+    const adminRevocationsCall = classModules.includes("adminRevocations")
+        ? `\n    .adminRevocations((env) => ${durableObjects.namespace("adminRevocations")})`
+        : "";
 
     // `configureApp` receives the builder and returns it, so the framework wiring
     // below (`.httpRouter`, `.build`) stays ours and the app's own capabilities
@@ -299,7 +319,7 @@ ${wiring.imports}
 import { defineApp } from "${base}/app";${durableObjects.imports}${appConfigImport}
 
 const app = ${configureOpen}defineApp()
-    .shard((env) => env.SHARD)${schedulerCall}${shardRegistryCall}${configureClose}
+    .shard((env) => env.SHARD)${schedulerCall}${shardRegistryCall}${adminRevocationsCall}${configureClose}
     .httpRouter(${wiring.handler})${shardCalls}${allowUnauthenticatedShardAccess ? "\n    .extend(() => ({ allowUnauthenticatedShardAccess: true }))" : ""}
     .build();
 
@@ -368,53 +388,63 @@ export const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, con
     // locate the files regardless of the virtual module's (non-existent) base dir.
     const generatedImportBase = resolve(options.projectRoot, options.generatedDir.replace(TRAILING_SLASH, ""));
 
+    // Both hooks declare `filter.id`, so Rolldown (and Vite's dev container) skip
+    // the JS call for every other module — without it every module in the graph
+    // paid an async `load` call that could only answer `undefined`. The id checks
+    // stay in the handlers for Vite versions that ignore `filter`.
     return {
-        async load(id) {
-            if (id === RESOLVED_LUNORA_WORKER_ID && isAutoComposable(context) && context.framework !== undefined) {
-                // `@cloudflare/vite-plugin` names the browser environment "client"
-                // and the worker environment after the worker; emit the stub there
-                // and the real entry everywhere else (worker/SSR). Vite 8 always
-                // runs hooks within an environment context, so `this.environment`
-                // is guaranteed present here.
-                if (this.environment.name === "client") {
-                    return CLIENT_WORKER_STUB;
+        load: {
+            filter: { id: RESOLVED_LUNORA_WORKER_ID_RE },
+            async handler(id) {
+                if (id === RESOLVED_LUNORA_WORKER_ID && isAutoComposable(context) && context.framework !== undefined) {
+                    // `@cloudflare/vite-plugin` names the browser environment "client"
+                    // and the worker environment after the worker; emit the stub there
+                    // and the real entry everywhere else (worker/SSR). Vite 8 always
+                    // runs hooks within an environment context, so `this.environment`
+                    // is guaranteed present here.
+                    if (this.environment.name === "client") {
+                        return CLIENT_WORKER_STUB;
+                    }
+
+                    // `_generated/{agents,containers,workflows}.ts` each exist only when
+                    // the project declares that kind; codegen has already run by load
+                    // time, so these fs checks decide which star re-exports the composed
+                    // entry carries.
+                    const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
+                    const mergeDurableObjects = isMergedProject(generatedImportBase);
+
+                    const { error, specifier } = await appConfigSpecifier(options.projectRoot);
+
+                    if (error !== undefined) {
+                        // Evaluated on the HOST, so a `cloudflare:*` import or a
+                        // tsconfig path alias (which `jiti` does not read) throws.
+                        // Swallowing it composed a worker with the user's `.auth()` /
+                        // `.global()` wiring silently missing.
+                        this.warn(`[lunora] lunora.config could not be loaded, so its \`app\` hook was not composed: ${error}`);
+                    }
+
+                    return buildWorkerEntrySource(context.framework.framework, generatedImportBase, {
+                        allowUnauthenticatedShardAccess: options.allowUnauthenticatedShardAccess,
+                        appConfigModule: specifier,
+                        classModules,
+                        mergeDurableObjects,
+                        shard: options.shard,
+                    });
                 }
 
-                // `_generated/{agents,containers,workflows}.ts` each exist only when
-                // the project declares that kind; codegen has already run by load
-                // time, so these fs checks decide which star re-exports the composed
-                // entry carries.
-                const classModules = GENERATED_CLASS_MODULES.filter((module) => existsSync(join(generatedImportBase, `${module}.ts`)));
-                const mergeDurableObjects = isMergedProject(generatedImportBase);
-
-                const { error, specifier } = await appConfigSpecifier(options.projectRoot);
-
-                if (error !== undefined) {
-                    // Evaluated on the HOST, so a `cloudflare:*` import or a
-                    // tsconfig path alias (which `jiti` does not read) throws.
-                    // Swallowing it composed a worker with the user's `.auth()` /
-                    // `.global()` wiring silently missing.
-                    this.warn(`[lunora] lunora.config could not be loaded, so its \`app\` hook was not composed: ${error}`);
-                }
-
-                return buildWorkerEntrySource(context.framework.framework, generatedImportBase, {
-                    allowUnauthenticatedShardAccess: options.allowUnauthenticatedShardAccess,
-                    appConfigModule: specifier,
-                    classModules,
-                    mergeDurableObjects,
-                    shard: options.shard,
-                });
-            }
-
-            return undefined;
+                return undefined;
+            },
         },
         name: "lunora:framework-compose",
-        resolveId(id) {
-            if (id === LUNORA_WORKER_VIRTUAL_ID && isAutoComposable(context)) {
-                return RESOLVED_LUNORA_WORKER_ID;
-            }
+        resolveId: {
+            filter: { id: LUNORA_WORKER_VIRTUAL_ID_RE },
+            handler(id) {
+                if (id === LUNORA_WORKER_VIRTUAL_ID && isAutoComposable(context)) {
+                    return RESOLVED_LUNORA_WORKER_ID;
+                }
 
-            return undefined;
+                return undefined;
+            },
         },
     };
 };

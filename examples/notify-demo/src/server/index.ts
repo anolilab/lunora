@@ -2,18 +2,24 @@ import type { D1Like } from "@lunora/notify";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 
-import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
 import notifyConfig from "../../lunora/notify.js";
 
+// A loader, not the document: only Studio's API route reads it, so no ordinary request evaluates it.
+const openApiSpec = (): Promise<unknown> => import("../../lunora/_generated/openapi.js").then((module) => module.openApiSpec);
+
 // The generated ShardDO wires `ctx.notify` / `ctx.push` from `lunora/notify.ts`
 // (codegen discovers the default export) onto every handler ctx.
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
+
 export const ShardDO = createShardDO();
 
 // Extends `Record<string, unknown>` so it satisfies `@lunora/notify`'s `NotifyEnv`
 // when handed to `notifyConfig.store(env)` below (the config factories read
 // bindings/secrets off a plain env record).
 interface Env extends Record<string, unknown> {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     DB: D1Like;
     SHARD: ShardNamespaceLike;
 }
@@ -32,6 +38,7 @@ export default {
         worker ??= createWorker({
             notifySubscriptionStore: notifyConfig.store?.(env),
             openApiSpec,
+            adminRevocations: env.ADMIN_REVOCATIONS,
             shardDO: env.SHARD,
         });
         return worker.fetch(request, env, ctx);

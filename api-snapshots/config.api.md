@@ -149,6 +149,24 @@ const BADGES: Record<BadgeName, BadgeSpec>;
 const BADGE_COLUMN_WIDTH: number;
 ```
 
+### `BUILD_ROOT_ENV` (const)
+
+```ts
+const BUILD_ROOT_ENV = "LUNORA_BUILD_ROOT";
+```
+
+### `BUILD_TARGET_ENV` (const)
+
+```ts
+const BUILD_TARGET_ENV = "LUNORA_BUILD_TARGET";
+```
+
+### `BUNDLE_META_PATH_ENV` (const)
+
+```ts
+const BUNDLE_META_PATH_ENV = "LUNORA_BUNDLE_META_PATH";
+```
+
 ### `BadgeName` (type)
 
 ```ts
@@ -192,6 +210,7 @@ interface CelldDevSession {
 interface CelldDevSessionOptions {
     log: (line: string, origin: CelldLineOrigin) => void;
     port: number;
+    probe?: () => Promise<CelldToolchainProbe>;
     projectRoot: string;
     spawn?: DevProcessSpawner;
 }
@@ -203,6 +222,26 @@ interface CelldDevSessionOptions {
 interface CelldLineOrigin {
     stream: "stderr" | "stdout";
     tag: string;
+}
+```
+
+### `CelldToolchainProbe` (interface)
+
+```ts
+interface CelldToolchainProbe {
+    errors: string[];
+    warnings: string[];
+}
+```
+
+### `CelldToolchainProbeOptions` (interface)
+
+```ts
+interface CelldToolchainProbeOptions {
+    dryRun?: boolean;
+    env?: Readonly<Record<string, string | undefined>>;
+    purpose: "deploy" | "dev";
+    run?: CelldCommandRunner;
 }
 ```
 
@@ -262,6 +301,18 @@ interface ContainerLogStreamOptions {
     onUnavailable?: (message: string) => void;
     pollIntervalMs?: number;
 }
+```
+
+### `D1_PLACEHOLDER_ID` (const)
+
+```ts
+const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
+```
+
+### `DEFAULT_BUNDLE_META_PATH` (const)
+
+```ts
+const DEFAULT_BUNDLE_META_PATH: string;
 ```
 
 ### `DEFAULT_DEPLOY_TARGET` (const)
@@ -346,6 +397,7 @@ const DEV_WORKER_ENV_VAR = "WORKER_ENV";
 
 ```ts
 const DURABLE_OBJECT_BINDINGS: {
+    readonly AdminRevocationDO: "ADMIN_REVOCATIONS";
     readonly LunoraDO: "SHARD";
     readonly SchedulerDO: "SCHEDULER";
     readonly SessionDO: "SESSION";
@@ -374,7 +426,9 @@ interface DeployRequest {
     entry?: string;
     environment?: string;
     outDir?: string;
+    outFile?: string;
     preview?: boolean;
+    secretsFile?: string;
     temporary?: boolean;
 }
 ```
@@ -405,6 +459,38 @@ interface DestructivePolicyEdit {
 
 ```ts
 type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid" | "vinext";
+```
+
+### `DevEnvCheck` (type)
+
+```ts
+type DevEnvCheck = {
+    error: string;
+    kind: "unloadable";
+} | {
+    failures: EnvKeyFailure[];
+    kind: "invalid";
+    sources: string[];
+} | {
+    kind: "absent";
+} | {
+    kind: "valid";
+};
+```
+
+### `DevEnvCheckOptions` (interface)
+
+```ts
+interface DevEnvCheckOptions {
+    configPath?: string;
+    environment?: string;
+    load?: (path: string) => Promise<unknown>;
+    processEnv?: Record<string, string | undefined>;
+    projectRoot: string;
+    schemaDirectory: string;
+    vars?: Readonly<Record<string, string>>;
+    withheld?: ReadonlyArray<string>;
+}
 ```
 
 ### `DevProcess` (interface)
@@ -482,6 +568,27 @@ interface DevServerState {
     studioUrl?: string;
     tunnelUrl?: string;
     url: string;
+}
+```
+
+### `DevTriggerHint` (interface)
+
+```ts
+interface DevTriggerHint {
+    label: "Crons" | "Queues";
+    text: string;
+}
+```
+
+### `DevTriggerHintOptions` (interface)
+
+```ts
+interface DevTriggerHintOptions {
+    environment?: string;
+    projectRoot: string;
+    scheduledUrl?: string;
+    schemaDirectory: string;
+    studioUrl?: string;
 }
 ```
 
@@ -574,6 +681,10 @@ interface DriverToolchain {
 }
 ```
 
+### `ENV_FILENAME` (const)
+
+Re-exported from `@lunora/codegen` — signature tracked at its source.
+
 ### `EnsureDevVariablesDeps` (interface)
 
 ```ts
@@ -582,6 +693,7 @@ interface EnsureDevVariablesDeps {
     cwd: string;
     info: (message: string) => void;
     randomHex?: (bytes: number) => string;
+    warn?: (message: string) => void;
     yes?: boolean;
 }
 ```
@@ -599,7 +711,16 @@ interface EnsureDevVariablesResult {
 ### `EnsureDevVariablesStatus` (type)
 
 ```ts
-type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists";
+type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists" | "unreadable";
+```
+
+### `EnvKeyFailure` (interface)
+
+```ts
+interface EnvKeyFailure {
+    key: string;
+    message: string;
+}
 ```
 
 ### `FillDevSecretsResult` (interface)
@@ -640,6 +761,7 @@ interface FrameworkDetection {
 
 ```ts
 const GENERATED_CLASS_MODULES: readonly [
+    "adminRevocations",
     "agents",
     "containers",
     "scheduler",
@@ -696,6 +818,7 @@ interface InferOptions {
     projectRoot: string;
     scanDirs?: ReadonlyArray<string>;
     schemaDir?: string;
+    skipCompanion?: boolean;
 }
 ```
 
@@ -715,6 +838,8 @@ interface InferredBindings {
     containers: InferredContainer[];
     durableObjects: DurableObjectSpec[];
     flagshipBinding?: string;
+    hostsEventLog: boolean;
+    hostsShardRegistry: boolean;
     jurisdiction?: SchemaInfo["jurisdiction"];
     needsD1: boolean;
     queues: InferredQueue[];
@@ -728,6 +853,7 @@ interface InferredBindings {
     usesAuth: boolean;
     usesBrowser: boolean;
     usesCimdWorkers: boolean;
+    usesEventLogClient: boolean;
     usesFlags: boolean;
     usesHyperdrive: boolean;
     usesImages: boolean;
@@ -735,6 +861,7 @@ interface InferredBindings {
     usesMail: boolean;
     usesNotify: boolean;
     usesNotifyFcm: boolean;
+    usesNotifyFcmTokenSource: boolean;
     usesNotifyWebPush: boolean;
     usesPaymentAutumn: boolean;
     usesPaymentCreem: boolean;
@@ -744,11 +871,13 @@ interface InferredBindings {
     usesPaymentStripe: boolean;
     usesPipelines: boolean;
     usesR2sql: boolean;
+    usesRequestSecretTool: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
     usesWorkerLoader: boolean;
     usesX402: boolean;
     usesX402Charge: boolean;
+    workerRoutes: string[] | undefined;
     workflows: InferredWorkflow[];
 }
 ```
@@ -767,6 +896,12 @@ type InferredContainer = ContainerIR & {
 interface InferredWorkflow extends WorkflowIR {
     exported: boolean;
 }
+```
+
+### `LAZY_FUNCTIONS_ENV` (const)
+
+```ts
+const LAZY_FUNCTIONS_ENV = "LUNORA_LAZY_FUNCTIONS";
 ```
 
 ### `LINKED_PROJECT_DIR` (const)
@@ -904,6 +1039,19 @@ class LunoraReporter {
 const MERGED_DURABLE_OBJECTS_MODULE: "durableObjects";
 ```
 
+### `MarkedApiSpec` (type)
+
+```ts
+type MarkedApiSpec = "both" | "none" | "openapi" | "openrpc";
+```
+
+### `MissingBuildOutputError` (class)
+
+```ts
+class MissingBuildOutputError extends Error {
+}
+```
+
 ### `MultiSelectOption` (type)
 
 ```ts
@@ -967,6 +1115,7 @@ interface PostCodegenHookResult {
 interface ProjectedConfig {
     configPath: string;
     dropped: ReadonlyArray<string>;
+    vars: Readonly<Record<string, unknown>>;
     write: () => void;
 }
 ```
@@ -993,6 +1142,12 @@ type RemotePreference = boolean | undefined;
 
 ```ts
 const STEP_BADGE_NAMES: ReadonlyArray<StepBadgeName>;
+```
+
+### `STRICT_ADVISORIES_ENV` (const)
+
+```ts
+const STRICT_ADVISORIES_ENV = "LUNORA_STRICT_ADVISORIES";
 ```
 
 ### `ScaffoldFileResult` (type)
@@ -1216,6 +1371,12 @@ const applyAdditiveEdit: (source: string, edit: SchemaEdit) => ApplyEditResult;
 const applyLintIgnores: (projectRoot: string, tools: ReadonlyArray<LintTool>) => LintIgnoreOutcome[];
 ```
 
+### `assertBuildTargetMatches` (const)
+
+```ts
+const assertBuildTargetMatches: (target: string, projectRoot: string) => void;
+```
+
 ### `badgeLead` (const)
 
 ```ts
@@ -1231,13 +1392,27 @@ const badgeWidth: (_spec: BadgeSpec) => number;
 ### `blockingFindingsMessage` (const)
 
 ```ts
-const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">) => string | undefined;
+const blockingFindingsMessage: (result: Pick<CodegenResult, "advisories" | "platformDiagnostics">, options?: {
+    strictAdvisories?: boolean;
+}) => string | undefined;
 ```
 
 ### `buildPackageSecretsBlock` (const)
 
 ```ts
 const buildPackageSecretsBlock: (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>) => string;
+```
+
+### `canonicalPath` (const)
+
+```ts
+const canonicalPath: (path: string) => string;
+```
+
+### `checkDevEnv` (const)
+
+```ts
+const checkDevEnv: (options: DevEnvCheckOptions) => Promise<DevEnvCheck>;
 ```
 
 ### `claimAgentRulesHint` (const)
@@ -1266,6 +1441,12 @@ const classifyEdit: (edit: SchemaEdit) => "additive" | "destructive";
 const classifyPolicyEdit: (edit: PolicyEdit) => "additive" | "destructive";
 ```
 
+### `clearApiSpecMarker` (const)
+
+```ts
+const clearApiSpecMarker: (projectRoot: string) => void;
+```
+
 ### `clearDevServerState` (const)
 
 ```ts
@@ -1288,6 +1469,17 @@ const createDiscoveryCache: () => DiscoveryCache;
 
 ```ts
 const deployTargetIds: () => ReadonlyArray<string>;
+```
+
+### `describeDevEnvCheck` (const)
+
+```ts
+const describeDevEnvCheck: (check: DevEnvCheck, schemaDirectory: string, { wasInvalid }?: {
+    wasInvalid?: boolean;
+}) => undefined | {
+    level: "info" | "warn";
+    message: string;
+};
 ```
 
 ### `detectAgentRules` (const)
@@ -1324,6 +1516,12 @@ const detectLintTools: (projectRoot: string) => LintTool[];
 
 ```ts
 const detectPackageManager: (startDirectory: string) => PackageManager;
+```
+
+### `devTriggerHints` (const)
+
+```ts
+const devTriggerHints: (options: DevTriggerHintOptions) => DevTriggerHint[];
 ```
 
 ### `discoverAgentInfo` (const)
@@ -1368,6 +1566,12 @@ const ensureDevVariablesExample: (cwd: string, packageNames: ReadonlyArray<strin
 const ensureDevWorkerEnv: (projectRoot: string, info: (message: string) => void) => void;
 ```
 
+### `ensureGitignoreEntries` (const)
+
+```ts
+const ensureGitignoreEntries: (directory: string, patterns: ReadonlyArray<string>) => string[];
+```
+
 ### `escapeRegExp` (const)
 
 ```ts
@@ -1390,7 +1594,17 @@ const fillDevSecrets: (deps: {
     cwd: string;
     info?: (message: string) => void;
     randomHex?: (bytes: number) => string;
+    secretSources?: ReadonlyArray<string>;
 }) => FillDevSecretsResult;
+```
+
+### `formatDevBannerRow` (const)
+
+```ts
+const formatDevBannerRow: (label: string, value: string, width: number, style?: {
+    arrow?: (text: string) => string;
+    label?: (text: string) => string;
+}) => string;
 ```
 
 ### `formatLunoraEvent` (const)
@@ -1444,6 +1658,12 @@ const isDevServerReady: (state: Pick<DevServerState, "readyAt"> | undefined) => 
 const isInteractive: () => boolean;
 ```
 
+### `isLazyFunctionsEnabled` (const)
+
+```ts
+const isLazyFunctionsEnabled: (value: string | undefined) => boolean;
+```
+
 ### `isMergedProject` (const)
 
 ```ts
@@ -1459,7 +1679,7 @@ const isMergedRoleModule: (module: string) => boolean;
 ### `isMintableSecretKey` (const)
 
 ```ts
-const isMintableSecretKey: (key: string) => boolean;
+const isMintableSecretKey: (key: string, value: string, mintable?: ReadonlySet<string>) => boolean;
 ```
 
 ### `isPlaceholderValue` (const)
@@ -1490,6 +1710,12 @@ const isRunnableTarget: (target: string) => boolean;
 
 ```ts
 const lunoraLine: (message: string) => string;
+```
+
+### `mintableSecretKeysFor` (const)
+
+```ts
+const mintableSecretKeysFor: (packageNames: ReadonlyArray<string>) => ReadonlySet<string>;
 ```
 
 ### `padBadge` (const)
@@ -1530,6 +1756,7 @@ const parseSchema: (source: string) => ParseSchemaResult;
 ```ts
 const planDevSecretsFill: (input: {
     existingContent: string;
+    mintable?: ReadonlySet<string>;
     randomHex?: (bytes: number) => string;
 }) => DevSecretsFillPlan;
 ```
@@ -1558,6 +1785,12 @@ const planDevVariablesScaffold: (input: {
 
 ```ts
 const planToolchainInvocation: (driver: DeployDriver, projectRoot: string, purpose: ProjectionPurpose, build: (configPath: string | undefined) => ToolchainCommand) => ToolchainInvocation;
+```
+
+### `probeCelldToolchain` (const)
+
+```ts
+const probeCelldToolchain: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
 ```
 
 ### `projectUsesUmbrella` (const)
@@ -1598,10 +1831,22 @@ const promptYesNo: (prompt: string, options?: {
 }) => Promise<boolean>;
 ```
 
+### `readApiSpecMarker` (const)
+
+```ts
+const readApiSpecMarker: (projectRoot: string) => MarkedApiSpec | undefined;
+```
+
 ### `readDevServerState` (const)
 
 ```ts
 const readDevServerState: (projectRoot: string) => DevServerState | undefined;
+```
+
+### `readDevVariablesRecord` (const)
+
+```ts
+const readDevVariablesRecord: (path: string) => Record<string, string> | undefined;
 ```
 
 ### `readLinkedProject` (const)
@@ -1668,6 +1913,12 @@ const requiredSecrets: (packageNames: ReadonlyArray<string>) => SecretEntry[];
 
 ```ts
 const resolveDeployDriver: (target?: string) => DeployDriver;
+```
+
+### `resolveLazyFunctions` (const)
+
+```ts
+const resolveLazyFunctions: (flag?: boolean) => boolean;
 ```
 
 ### `resolveProjectTarget` (const)
@@ -1795,6 +2046,27 @@ const upsertDevVariableLine: (content: string, key: string, value: string) => st
 
 ```ts
 const wireRlsIntoProcedure: (source: string, edit: WireRlsEdit, serverModule: string) => WireResult;
+```
+
+### `wranglerDotenvFiles` (const)
+
+```ts
+const wranglerDotenvFiles: (environment?: string) => string[];
+```
+
+### `writeApiSpecMarker` (const)
+
+```ts
+const writeApiSpecMarker: (projectRoot: string, apiSpec: MarkedApiSpec | undefined) => void;
+```
+
+### `writeCelldDevProjection` (const)
+
+```ts
+const writeCelldDevProjection: (options: {
+    probe?: () => Promise<CelldToolchainProbe>;
+    projectRoot: string;
+}) => Promise<string[]>;
 ```
 
 ### `writeDevServerState` (const)
@@ -1987,6 +2259,96 @@ const isReleaseAlias: (alias: string) => boolean;
 const releaseResourceName: (alias: string, binding: string) => string;
 ```
 
+## `@lunora/config/cli`
+
+### `AGENT_RULES_HINT` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `DEFAULT_DEPLOY_TARGET` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `LUNORA_TAG` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `LunoraReporter` (class)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `PackageManager` (type)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `PackageManagerProbe` (type)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `STEP_BADGE_NAMES` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `StepBadgeName` (type)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `addArgsFor` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `claimAgentRulesHint` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `deployTargetIds` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `detectAgentRules` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `detectInstalledManagers` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `detectPackageManager` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `execArgsFor` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `installArgsFor` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `isRunnableTarget` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `lunoraLine` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `readProjectManifest` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `runScriptCommand` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `runnableTargetIds` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
+### `toolchainExecArgs` (const)
+
+Re-exported from `@lunora/config` — signature tracked in that section.
+
 ## `@lunora/config/cloudflare`
 
 ### `AlchemyTranslation` (interface)
@@ -2002,8 +2364,37 @@ interface AlchemyTranslation {
 
 ```ts
 interface AssertWranglerOptions {
+    cache?: DiscoveryCache;
     projectRoot: string;
     schemaDir: string;
+}
+```
+
+### `AssetHeadersLogger` (interface)
+
+```ts
+interface AssetHeadersLogger {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+}
+```
+
+### `AssetHeadersOptions` (interface)
+
+```ts
+interface AssetHeadersOptions {
+    headers: boolean | SecurityHeadersOptions | undefined;
+    immutableDirectory?: string;
+}
+```
+
+### `AssetHeadersResult` (interface)
+
+```ts
+interface AssetHeadersResult {
+    deferred: string[];
+    path: string | undefined;
+    warnings: string[];
 }
 ```
 
@@ -2021,6 +2412,7 @@ interface BindingManifest {
     compatibilityDate?: string;
     compatibilityFlags?: ReadonlyArray<string>;
     crons: ReadonlyArray<string>;
+    malformed: ReadonlyArray<string>;
     name?: string;
     unknown: ReadonlyArray<string>;
     vars: ReadonlyArray<string>;
@@ -2084,6 +2476,7 @@ interface CloudflareCredentialProbe {
 const DEFAULT_OBSERVABILITY: Readonly<{
     enabled: true;
     head_sampling_rate: 1;
+    redact_query_string: true;
 }>;
 ```
 
@@ -2108,6 +2501,32 @@ interface ExportGap {
 
 ```ts
 const GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG = "global_fetch_strictly_public";
+```
+
+### `HYPERDRIVE_PLACEHOLDER_ID` (const)
+
+```ts
+const HYPERDRIVE_PLACEHOLDER_ID = "<replace-with-hyperdrive-create-id>";
+```
+
+### `LocalHyperdrive` (interface)
+
+```ts
+interface LocalHyperdrive {
+    bindings: string[];
+    stop: () => Promise<void>;
+}
+```
+
+### `Manifest` (interface)
+
+```ts
+interface Manifest {
+    lunora: Record<string, unknown> | undefined;
+    lunoraIsForeign: boolean;
+    path: string;
+    text: string;
+}
 ```
 
 ### `ManifestConfigShape` (interface)
@@ -2223,7 +2642,7 @@ interface MaterializeDevResult {
     configPath?: string;
     reason?: string;
     remoteBindings: RemoteBindingPlan[];
-    withheld: string[];
+    withheld: WithheldBinding[];
 }
 ```
 
@@ -2234,6 +2653,34 @@ interface ObservabilitySignalSampling {
     enabled: boolean;
     headSamplingRate: number;
 }
+```
+
+### `ProjectAssetHeadersInput` (interface)
+
+```ts
+interface ProjectAssetHeadersInput {
+    hashedDirectory?: string;
+    hashedNamePatterns?: ReadonlyArray<string>;
+    outputDirectory: string;
+    projectRoot: string;
+    publicDirectory?: string;
+    requireAssetsDirectory: boolean;
+    schemaDir?: string;
+    target?: string;
+    wranglerPath?: string;
+}
+```
+
+### `ProjectAssetHeadersOutcome` (type)
+
+```ts
+type ProjectAssetHeadersOutcome = {
+    reason: string;
+    written: false;
+} | {
+    result: AssetHeadersResult;
+    written: true;
+};
 ```
 
 ### `REMOTE_ELIGIBLE_KEYS` (const)
@@ -2350,6 +2797,7 @@ interface ReconcileResult {
 
 ```ts
 interface ReconcileProject {
+    cache?: DiscoveryCache;
     projectRoot: string;
     schemaDir: string;
     target?: string;
@@ -2377,6 +2825,19 @@ interface RemoteEnableInputs {
 }
 ```
 
+### `RemotePlan` (interface)
+
+```ts
+interface RemotePlan {
+    bindings: string[];
+    cleanup: () => void;
+    configPath?: string;
+    enabled: boolean;
+    reason?: string;
+    withheld: WithheldBinding[];
+}
+```
+
 ### `RemoteWranglerShape` (interface)
 
 ```ts
@@ -2385,6 +2846,7 @@ interface RemoteWranglerShape {
     ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
     ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     analytics?: BindingEntry | null;
+    artifacts?: ReadonlyArray<BindingEntry | null | undefined>;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: {
@@ -2402,7 +2864,7 @@ interface RemoteWranglerShape {
 interface ServiceDevConfigs {
     cleanup: () => void;
     configPaths: string[];
-    withheld: string[];
+    withheld: WithheldBinding[];
 }
 ```
 
@@ -2436,6 +2898,15 @@ const WRANGLER_FILES: readonly [
 ];
 ```
 
+### `WithheldBinding` (interface)
+
+```ts
+interface WithheldBinding {
+    binding: string;
+    kind: "ai" | "artifacts";
+}
+```
+
 ### `WranglerCacheShape` (interface)
 
 ```ts
@@ -2455,6 +2926,11 @@ interface WranglerCacheShape {
 
 ```ts
 interface WranglerCodegenInputs {
+    spaAssetsBindings?: string[];
+    studioAssets?: {
+        binding: string;
+        directory: string;
+    };
     wranglerQueueProducers: WranglerQueueProducerIR[];
     wranglerVariables: WranglerVariableIR[];
 }
@@ -2496,6 +2972,7 @@ interface WranglerConfig {
         directory?: string;
         html_handling?: string;
         not_found_handling?: string;
+        run_worker_first?: boolean | ReadonlyArray<string>;
     };
     browser?: {
         binding?: string;
@@ -2785,6 +3262,7 @@ interface WranglerObservabilityTraces {
 
 ```ts
 interface WranglerProjectValidationOptions {
+    cache?: DiscoveryCache;
     environment?: string;
     projectRoot: string;
     schemaDir?: string;
@@ -2837,6 +3315,12 @@ const applyModify: (text: string, path: ReadonlyArray<number | string>, value: u
 const assertWranglerSatisfiesSchema: (options: AssertWranglerOptions, warn: (message: string) => void, remedy: string) => void;
 ```
 
+### `bindingsNeedingDatabase` (const)
+
+```ts
+const bindingsNeedingDatabase: (projectRoot: string, env: NodeJS.ProcessEnv, wranglerEnvironment?: string | undefined, configPath?: string) => string[];
+```
+
 ### `buildBindingManifest` (const)
 
 ```ts
@@ -2855,16 +3339,22 @@ const collectExportGaps: (inferred: InferredBindings) => ExportGap[];
 const describePreservedCrons: (preserved: ReadonlyArray<string>) => string | undefined;
 ```
 
-### `describeWithheldWorkersAi` (const)
+### `describeWithheld` (const)
 
 ```ts
-const describeWithheldWorkersAi: (binding: string) => string;
+const describeWithheld: ({ binding, kind }: WithheldBinding) => string;
 ```
 
 ### `detectCloudflareCliConfig` (const)
 
 ```ts
 const detectCloudflareCliConfig: (projectRoot: string) => CloudflareCliConfigFinding | undefined;
+```
+
+### `emitProjectAssetHeaders` (const)
+
+```ts
+const emitProjectAssetHeaders: (input: ProjectAssetHeadersInput, logger: AssetHeadersLogger) => ProjectAssetHeadersOutcome;
 ```
 
 ### `findWranglerFile` (const)
@@ -2891,6 +3381,12 @@ const injectRemoteFlags: (text: string, plans: ReadonlyArray<RemoteBindingPlan>)
 const isCacheEnabled: (parsed: WranglerCacheShape | null | undefined) => boolean;
 ```
 
+### `isOwnedStudioAssets` (const)
+
+```ts
+const isOwnedStudioAssets: (assets: unknown) => boolean;
+```
+
 ### `isRemoteEnvEnabled` (const)
 
 ```ts
@@ -2915,10 +3411,24 @@ const materializeServiceDevConfigs: (wranglerPaths: ReadonlyArray<string>, optio
 const mergeWranglerEnvironment: (wrangler: WranglerConfig, environment: string | undefined) => WranglerEnvironmentMerge;
 ```
 
+### `pendingBindingChanges` (const)
+
+```ts
+const pendingBindingChanges: (options: ReconcileProject & {
+    cache: DiscoveryCache;
+}) => Promise<string[]>;
+```
+
 ### `planRemoteBindings` (const)
 
 ```ts
 const planRemoteBindings: (parsed: RemoteWranglerShape) => RemoteBindingPlan[];
+```
+
+### `readManifest` (const)
+
+```ts
+const readManifest: (projectRoot: string) => Manifest | undefined;
 ```
 
 ### `readWranglerJsonc` (const)
@@ -2933,10 +3443,16 @@ const readWranglerJsonc: <T = unknown>(wranglerPath: string) => ReadWranglerResu
 const reconcileBindingsSafely: (options: ReconcileProject, logger: ReconcileLogger, onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void) => Promise<void>;
 ```
 
+### `reconcileStudioAssets` (const)
+
+```ts
+const reconcileStudioAssets: (projectRoot: string, target: string | undefined, logger: ReconcileLogger) => void;
+```
+
 ### `reconcileWranglerBindings` (const)
 
 ```ts
-const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, { environment, target }?: {
+const reconcileWranglerBindings: (projectRoot: string, inferred: InferredBindings, options?: {
     environment?: string;
     target?: string;
 }) => ReconcileBindingsResult;
@@ -2960,6 +3476,12 @@ const reconcileWranglerCrons: (projectRoot: string, cronTriggers: ReadonlyArray<
 const reconcileWranglerExtras: (projectRoot: string, cronTriggers: ReadonlyArray<string>, logger: ReconcileLogger) => void;
 ```
 
+### `recordManifestKey` (const)
+
+```ts
+const recordManifestKey: (manifest: Manifest, key: string, value: unknown) => void;
+```
+
 ### `resolveObservabilitySampling` (const)
 
 ```ts
@@ -2978,7 +3500,19 @@ const resolveRemoteEnabled: (inputs: RemoteEnableInputs) => boolean;
 ### `scanWranglerVariablesForSecrets` (const)
 
 ```ts
-const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | undefined, file: string) => WranglerVariableIR[];
+const scanWranglerVariablesForSecrets: (variables: Record<string, unknown> | undefined, file: string, lineOf?: (key: string) => number | undefined) => WranglerVariableIR[];
+```
+
+### `startLocalHyperdrive` (const)
+
+```ts
+const startLocalHyperdrive: (options: StartLocalHyperdriveOptions) => Promise<LocalHyperdrive | undefined>;
+```
+
+### `toRemotePlan` (const)
+
+```ts
+const toRemotePlan: (result: MaterializeDevResult, enabled: boolean) => RemotePlan;
 ```
 
 ### `validateWrangler` (const)
@@ -3011,18 +3545,16 @@ const warnCloudflareCliConfigOnce: (projectRoot: string, warn: (message: string)
 const withTailConsumer: (wrangler: WranglerConfig, consumer: TailConsumer) => WranglerConfig;
 ```
 
-### `withheldWorkersAi` (const)
+### `withheldBindings` (const)
 
 ```ts
-const withheldWorkersAi: (ai: {
-    binding?: string;
-} | null | undefined, hasCredentials: () => boolean) => string | undefined;
+const withheldBindings: (config: RemoteOnlyBindings | undefined, hasCredentials: () => boolean) => WithheldBinding[];
 ```
 
 ### `wranglerCodegenInputs` (const)
 
 ```ts
-const wranglerCodegenInputs: (projectRoot: string) => WranglerCodegenInputs;
+const wranglerCodegenInputs: (projectRoot: string, target?: string) => WranglerCodegenInputs;
 ```
 
 ### `wranglerToAlchemy` (const)
@@ -3031,7 +3563,19 @@ const wranglerCodegenInputs: (projectRoot: string) => WranglerCodegenInputs;
 const wranglerToAlchemy: (config: WranglerConfigShape) => AlchemyTranslation;
 ```
 
+### `writeAssetHeaders` (const)
+
+```ts
+const writeAssetHeaders: (directory: string, options: AssetHeadersOptions) => AssetHeadersResult;
+```
+
 ## `@lunora/config/studio-host`
+
+### `ADVISOR_PROCEDURES_ENDPOINT` (const)
+
+```ts
+const ADVISOR_PROCEDURES_ENDPOINT = "/__lunora/advisor-procedures";
+```
 
 ### `ALLOW_FORWARDED_ENV` (const)
 
@@ -3044,6 +3588,7 @@ const ALLOW_FORWARDED_ENV = "LUNORA_STUDIO_ALLOW_FORWARDED";
 ```ts
 interface LocalEndpointContext {
     readonly apiSpec?: CodegenOptions["apiSpec"];
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     readonly schemaDirectory?: string;
 }
 ```
@@ -3051,7 +3596,7 @@ interface LocalEndpointContext {
 ### `LocalEndpointHandler` (type)
 
 ```ts
-type LocalEndpointHandler = (request: LocalEndpointRequest) => LocalEndpointResponse;
+type LocalEndpointHandler = (request: LocalEndpointRequest) => LocalEndpointResponse | Promise<LocalEndpointResponse>;
 ```
 
 ### `LocalEndpointRequest` (interface)
@@ -3091,6 +3636,7 @@ type PolicyScaffoldBody = DestructivePolicyEdit | ScaffoldPolicyEdit | WirePolic
 interface PolicyScaffoldRequest {
     readonly apiSpec?: CodegenOptions["apiSpec"];
     readonly body?: unknown;
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     readonly method: string;
     readonly projectRoot: string;
     readonly schemaDirectory?: string;
@@ -3136,12 +3682,19 @@ const STUDIO_SCRIPT_PATH: string;
 const STUDIO_STYLE_PATH: string;
 ```
 
+### `STUDIO_WRITE_TEMP_SUFFIX` (const)
+
+```ts
+const STUDIO_WRITE_TEMP_SUFFIX = ".lunora-tmp";
+```
+
 ### `SchemaEditRequest` (interface)
 
 ```ts
 interface SchemaEditRequest {
     readonly apiSpec?: CodegenOptions["apiSpec"];
     readonly body?: unknown;
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     readonly method: string;
     readonly projectRoot: string;
     readonly schemaDirectory?: string;
@@ -3202,6 +3755,7 @@ interface StudioAssets {
 ```ts
 interface StudioHtmlConfig {
     readonly adminToken?: string;
+    readonly advisorProcedures?: boolean;
     readonly basePath: string;
     readonly dataEditable?: boolean;
     readonly rulesInstalled?: boolean;
@@ -3239,22 +3793,40 @@ interface WirePolicyEdit extends WireRlsEdit {
 }
 ```
 
-### `applyStudioAssetCache` (const)
-
-```ts
-const applyStudioAssetCache: (request: IncomingMessage, response: ServerResponse, fileName: string, stamp: number | undefined) => boolean;
-```
-
 ### `assetContentType` (const)
 
 ```ts
 const assetContentType: (fileName: string) => string;
 ```
 
+### `consumeStudioWrite` (const)
+
+```ts
+const consumeStudioWrite: (path: string, now?: number) => boolean;
+```
+
+### `createStudioDocumentCache` (const)
+
+```ts
+const createStudioDocumentCache: <T>(root: string, render: () => T) => (() => T);
+```
+
 ### `createStudioMiddleware` (const)
 
 ```ts
 const createStudioMiddleware: (options: StudioMiddlewareOptions) => ((request: IncomingMessage, response: ServerResponse, next: () => void) => void);
+```
+
+### `devVariablesStamp` (const)
+
+```ts
+const devVariablesStamp: (root: string) => string;
+```
+
+### `handleAdvisorProceduresRequest` (const)
+
+```ts
+const handleAdvisorProceduresRequest: (request: LocalEndpointRequest) => Promise<LocalEndpointResponse>;
 ```
 
 ### `handlePolicyScaffoldRequest` (const)
@@ -3272,7 +3844,7 @@ const handleSchemaEditRequest: (request: SchemaEditRequest) => SchemaEditRespons
 ### `handleSeedRequest` (const)
 
 ```ts
-const handleSeedRequest: (request: SeedRequest) => SeedResponse;
+const handleSeedRequest: (request: SeedRequest) => Promise<SeedResponse>;
 ```
 
 ### `headerValue` (const)
@@ -3341,6 +3913,12 @@ const resolveAdminToken: (root: string) => string | undefined;
 const resolveStandaloneDirectory: (resolveFrom?: string) => string | undefined;
 ```
 
+### `sendStudioAsset` (const)
+
+```ts
+const sendStudioAsset: (request: IncomingMessage, response: ServerResponse, body: Buffer, contentType: string, fileName: string, stamp: number | undefined) => void;
+```
+
 ### `sendStudioDocument` (const)
 
 ```ts
@@ -3382,14 +3960,37 @@ public API and is gated as one. Listed once per package, sorted by name.
 ```ts
 interface BindingEntry {
     binding?: string;
+    id?: unknown;
     remote?: boolean;
 }
+```
+
+### `CelldCommandResult` (interface)
+
+```ts
+interface CelldCommandResult {
+    code: number;
+    error?: string;
+    stdout: string;
+}
+```
+
+### `CelldCommandRunner` (type)
+
+```ts
+type CelldCommandRunner = (command: string, args: ReadonlyArray<string>) => Promise<CelldCommandResult | undefined>;
 ```
 
 ### `Config` (type)
 
 ```ts
 type Config = Record<string, unknown>;
+```
+
+### `CrossOriginOpenerPolicy` (type)
+
+```ts
+type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "unsafe-none";
 ```
 
 ### `DockerLogStream` (interface)
@@ -3434,6 +4035,17 @@ type GlobalBackend = "d1" | "hyperdrive";
 type InferredQueue = QueueIR;
 ```
 
+### `PgliteRuntime` (interface)
+
+```ts
+interface PgliteRuntime {
+    createServer: (dataDirectory: string) => Promise<{
+        connectionString: string;
+        stop: () => Promise<void>;
+    }>;
+}
+```
+
 ### `ReconcileLogger` (interface)
 
 ```ts
@@ -3449,12 +4061,55 @@ interface ReconcileLogger {
 type RemoteEligibleKey = keyof typeof REMOTE_ELIGIBLE_KEYS;
 ```
 
+### `RemoteOnlyBindings` (interface)
+
+```ts
+interface RemoteOnlyBindings {
+    ai?: {
+        binding?: string;
+    } | null;
+    artifacts?: ReadonlyArray<{
+        binding?: string;
+    } | null | undefined> | null;
+}
+```
+
+### `SecurityHeadersOptions` (interface)
+
+```ts
+interface SecurityHeadersOptions {
+    crossOriginOpenerPolicy?: CrossOriginOpenerPolicy | false;
+    csp?: string | false;
+    frameAncestors?: ReadonlyArray<string>;
+    frameOptions?: "DENY" | "SAMEORIGIN" | false;
+    hsts?: boolean | {
+        includeSubDomains?: boolean;
+        maxAge?: number;
+        preload?: boolean;
+    };
+    permissionsPolicy?: string | false;
+    referrerPolicy?: string | false;
+}
+```
+
 ### `ServiceMaterializeOptions` (interface)
 
 ```ts
 interface ServiceMaterializeOptions {
     hasCredentials?: () => boolean;
     projectRoot: string;
+}
+```
+
+### `StartLocalHyperdriveOptions` (interface)
+
+```ts
+interface StartLocalHyperdriveOptions {
+    env?: NodeJS.ProcessEnv;
+    load?: () => Promise<PgliteRuntime | undefined>;
+    onWarning?: (message: string) => void;
+    projectRoot: string;
+    wranglerConfigPath?: string;
 }
 ```
 

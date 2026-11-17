@@ -14,7 +14,7 @@ related:
 
 Supabase and Lunora both give you a typed backend with auth, storage,
 functions, and realtime on top of a relational store, so much of your mental
-model carries over directly, and **both have RLS**. The differences are where
+model carries over directly, and **both have row-level security (RLS)**. The differences are where
 they sit: Supabase is a managed Postgres with an auto-generated REST/GraphQL
 API that clients query directly; Lunora is a **code-first** backend on your own
 Cloudflare account where reads and writes go through typed server functions and
@@ -242,7 +242,7 @@ refresh tokens inside a `SessionDO`. Inside functions you read `ctx.auth`
 `supabase.auth.getUser()` server-side. The client uses `useAuth` in place of
 `supabase.auth.onAuthStateChange`.
 
-If you'd rather keep an existing IdP, any provider that yields a verifiable
+If you'd rather keep an existing identity provider (IdP), any provider that yields a verifiable
 token works; see [`@lunora/cloudflare-access`](/docs/packages/cloudflare-access)
 for the Zero Trust path.
 
@@ -295,7 +295,7 @@ job for recurring work. Under the hood Lunora persists schedules in a
    `<LunoraProvider client={new LunoraClient({ url })}>` (`url` is your Worker's
    `*.workers.dev` hostname).
 9. **Deploy.** `lunora deploy` builds and calls `wrangler deploy` (data
-   migrations are opt-in: `--migrate`, plus `--migrate-yes` in production). Your data plane now lives in your own Cloudflare account.
+   migrations are opt-in: `--migrate`, which also requires `--migrate-url` and `--migrate-yes`). Your data plane now lives in your own Cloudflare account.
 
 ## Importing your data
 

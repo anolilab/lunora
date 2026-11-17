@@ -4,6 +4,8 @@ export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-s
 export { createAsyncStoragePersistence } from "./async-storage-persistence";
 export type { AsyncStorageQueryCacheOptions } from "./async-storage-query-cache";
 export { createAsyncStorageQueryCache } from "./async-storage-query-cache";
+export type { AuthTokenFetcher, AuthTokenProviderOptions } from "./auth-token-provider";
+export { setAuthTokenProvider } from "./auth-token-provider";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
 export { createCallRunner } from "./call-runner";
 export type { BatchSlot } from "./call-wire";
@@ -27,6 +29,10 @@ export {
 } from "./errors";
 export type { HttpStreamOptions } from "./http-stream";
 export { httpStream } from "./http-stream";
+export type { ConnectLiveStreamOptions, LiveStream, LiveStreamEvent, LiveStreamSubscribeError, LiveStreamSubscribeOptions } from "./live-stream";
+export { connectLiveStream } from "./live-stream";
+export type { LiveTopicOptions, LiveTopicRef, SubscribeLiveTopicOptions } from "./live-topic";
+export { liveTopicSubscription, subscribeLiveTopic } from "./live-topic";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
 export type {
@@ -38,6 +44,7 @@ export type {
     MutationSettledEvent,
     ReplayCredential,
     ReplayIdentityVerdict,
+    SyncStatus,
 } from "./lunora-client";
 export { LunoraClient } from "./lunora-client";
 export type { MutatorHandle, MutatorRunnerSinks, MutatorTransaction } from "./mutator-runner";
@@ -58,6 +65,7 @@ export type { SyncWatermark } from "./subscription";
 export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
 export { SubscriptionRegistry } from "./subscription";
 export type {
+    AdminTokenSummary,
     ArgsOf,
     AuthCapabilities,
     AuthConfigInfo,
@@ -71,7 +79,13 @@ export type {
     ClientMessage,
     ClientShapeSubscribeMessage,
     ClientShapeUnsubscribeMessage,
+    CreatedAdminToken,
     CronJobInfo,
+    CronRunInFlight,
+    CronRunRecord,
+    CronRunsResult,
+    CronRunStatus,
+    DeploymentPauseStatus,
     FunctionArgumentDescriptor,
     FunctionDescriptor,
     FunctionReference,
@@ -90,6 +104,7 @@ export type {
     KvValueResult,
     LunoraClientOptions,
     OfflineQueueOptions,
+    OnlineOnlyOption,
     OutboxMutation,
     OutboxSink,
     PersistedMutation,
@@ -104,9 +119,13 @@ export type {
     QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
+    RoomRef,
     RowOp,
     RpcEnvelope,
     RpcResponseBody,
+    ScheduledHistoryPage,
+    ScheduledJobState,
+    ScheduledJobView,
     ScheduleRecord,
     ScheduleRetryPolicy,
     SchedulerPoolStatus,
@@ -125,6 +144,7 @@ export type {
     VectorIndexSummary,
     VectorQueryMatch,
     WorkflowInstanceAction,
+    WorkflowInstanceCreated,
     WorkflowInstanceDetail,
     WorkflowInstancePage,
     WorkflowInstanceStatus,

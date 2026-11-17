@@ -178,7 +178,7 @@ describe("localTools", () => {
         const result = await listFunctions?.handle({});
 
         expect(result?.isError).toBe(true);
-        expect(result?.content[0]?.text).toBe(NO_DEPLOYMENT_MESSAGE);
+        expect(result?.content[0]?.text).toBe(`NO_DEPLOYMENT: ${NO_DEPLOYMENT_MESSAGE}`);
     });
 
     it("picks up a deployment that appears after the tools were built", async () => {
@@ -222,7 +222,12 @@ describe("localTools", () => {
         expect.assertions(1);
 
         const extra = {
-            definition: { description: "x", inputSchema: { properties: {}, type: "object" as const }, name: "custom" },
+            definition: {
+                annotations: { readOnlyHint: true as const },
+                description: "x",
+                inputSchema: { properties: {}, type: "object" as const },
+                name: "custom",
+            },
             handle: async () => {
                 return { content: [] };
             },
@@ -239,7 +244,7 @@ describe("deployment spec resources", () => {
         expect.assertions(1);
 
         const { asFetch } = stubFetch();
-        const server = createLocalMcpServer({ deployment: { url: "https://worker.example" }, fetch: asFetch });
+        const server = await createLocalMcpServer({ deployment: { url: "https://worker.example" }, fetch: asFetch });
 
         const listed = (await handlerFor(server, ListResourcesRequestSchema.shape.method.value)({ params: {} })) as {
             resources: { name: string; uri: string }[];
@@ -254,7 +259,7 @@ describe("deployment spec resources", () => {
         expect.assertions(2);
 
         const { asFetch } = stubFetch();
-        const server = createLocalMcpServer({ deployment: { url: "https://worker.example" }, fetch: asFetch });
+        const server = await createLocalMcpServer({ deployment: { url: "https://worker.example" }, fetch: asFetch });
 
         const read = (await handlerFor(server, ReadResourceRequestSchema.shape.method.value)({ params: { uri: OPENRPC_RESOURCE_URI } })) as {
             contents: { mimeType?: string; text: string }[];
@@ -267,7 +272,7 @@ describe("deployment spec resources", () => {
     it("omits the spec resources without error when the deployment doesn't serve them (404)", async () => {
         expect.assertions(2);
 
-        const server = createLocalMcpServer({ deployment: { url: "https://worker.example" }, fetch: stubFetchSpecNotFound() });
+        const server = await createLocalMcpServer({ deployment: { url: "https://worker.example" }, fetch: stubFetchSpecNotFound() });
 
         const listed = (await handlerFor(server, ListResourcesRequestSchema.shape.method.value)({ params: {} })) as {
             resources: { uri: string }[];
@@ -285,7 +290,7 @@ describe("deployment spec resources", () => {
         // capability exists via the docs provider; only the deployment side is
         // absent, and that's what this test asserts stays unlisted.
         const { asFetch } = stubFetch();
-        const server = createLocalMcpServer({ fetch: asFetch });
+        const server = await createLocalMcpServer({ fetch: asFetch });
 
         const listed = (await handlerFor(server, ListResourcesRequestSchema.shape.method.value)({ params: {} })) as {
             resources: { uri: string }[];
@@ -312,7 +317,7 @@ describe("deployment spec resources", () => {
             return new Response("[]", { headers: { "content-type": "application/json" }, status: 200 });
         }) as unknown as typeof fetch;
 
-        const server = createLocalMcpServer({ deployment: { token: "secret-token", url: "https://worker.example" }, fetch: asFetch });
+        const server = await createLocalMcpServer({ deployment: { token: "secret-token", url: "https://worker.example" }, fetch: asFetch });
 
         await handlerFor(server, ReadResourceRequestSchema.shape.method.value)({ params: { uri: OPENRPC_RESOURCE_URI } });
 
@@ -333,7 +338,7 @@ describe("shared client cache", () => {
         const { asFetch } = stubFetch();
         const setAuthTokenSpy = vi.spyOn(LunoraClient.prototype, "setAuthToken");
 
-        const server = createLocalMcpServer({ deployment: { token: "shared-token", url: "https://worker.example" }, fetch: asFetch });
+        const server = await createLocalMcpServer({ deployment: { token: "shared-token", url: "https://worker.example" }, fetch: asFetch });
 
         await handlerFor(server, CallToolRequestSchema.shape.method.value)({ params: { arguments: {}, name: "lunora_list_functions" } });
         await handlerFor(server, ReadResourceRequestSchema.shape.method.value)({ params: { uri: OPENRPC_RESOURCE_URI } });

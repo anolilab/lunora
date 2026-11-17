@@ -142,6 +142,16 @@ type QueueEnv = Record<string, unknown>;
 type QueueHandler<Body = unknown> = (context: QueueRunContext, batch: QueueMessageBatch<Body>) => Promise<void> | void;
 ```
 
+### `QueueLivePublisher` (interface)
+
+```ts
+interface QueueLivePublisher {
+    publish: <Payload>(topic: QueueLiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: {
+        shardKey?: string;
+    }) => Promise<void>;
+}
+```
+
 ### `QueueLogger` (interface)
 
 ```ts
@@ -203,6 +213,7 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 ```ts
 interface QueueRunContext {
     readonly env: Record<string, unknown>;
+    readonly live?: QueueLivePublisher;
     readonly log: DispatchLogger;
     readonly run: DispatchRunFunction;
 }
@@ -385,7 +396,19 @@ interface DispatchOptions {
     capture?: QueueCaptureSink;
     env: Record<string, unknown>;
     fetchImpl?: typeof fetch;
+    holdSeconds?: number;
+    live?: QueueLivePublisher;
     traceparent?: string;
+}
+```
+
+### `QueueLiveTopicRef` (interface)
+
+```ts
+interface QueueLiveTopicRef<Payload = unknown> {
+    readonly __lunoraLive: string;
+    readonly __payload?: Payload;
+    readonly topic: string;
 }
 ```
 
@@ -402,6 +425,7 @@ interface RunContextOptions {
     env: Record<string, unknown>;
     exportName: string;
     fetchImpl?: typeof fetch;
+    live?: QueueLivePublisher;
     traceparent?: string;
 }
 ```

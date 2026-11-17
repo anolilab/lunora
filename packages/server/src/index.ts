@@ -14,6 +14,7 @@ export type {
     MiddlewareContext,
     MiddlewareNext,
     MutationBuilder,
+    PolicyMiddleware,
     QueryBuilder,
     TerminalKind,
 } from "./builder/index";
@@ -28,22 +29,28 @@ export { defineDocumentHistory, DOCUMENT_HISTORY_REDACTED_FIELDS, DOCUMENT_HISTO
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
 export { defineEnv, LunoraEnvError, redactSecrets } from "./env";
 export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
-export { bindOrm, bindTableFacade } from "./facade";
+export { bindOrm, bindTableFacade, defineLazyFacade } from "./facade";
 export type {
     HttpActionCtx,
     HttpActionHandler,
     HttpMethod,
     HttpRoute,
     HttpRouteBuilder,
+    HttpRouteCacheOptions,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
     HttpRunners,
     HttpStreamHandlerOptions,
+    LivePublisher,
+    LivePublishOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ShardFetch,
+    ShardFetchInit,
+    SseEvent,
 } from "./http";
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue } from "./http";
+export { httpAction, httpRoute, httpRouter, isSafeHeaderValue, lastEventId, sseEvent } from "./http";
 export type { StorageServeAuthorizer, StorageServeAuthzContext } from "./http-storage";
 export { serveStorageObject } from "./http-storage";
 export type { DefineIdentityOptions, IdentityContract, IdentityRejectMode, IdentityValidation, InferIdentity } from "./identity";
@@ -53,9 +60,32 @@ export type { LifecycleHandler, ShardInitHandler } from "./lifecycle";
 export { onConnect, onDisconnect, onShardInit } from "./lifecycle";
 export type { DefineListArgsConfig, ListArgsSpec, ListArgsValidators, ListArgsValue, ListFilterOperators, ListOrderByEntry, ListWhere } from "./list-args";
 export { clampLimit, DEFAULT_LIMIT, DEFAULT_MAX_LIMIT, defineListArgs } from "./list-args";
+export type {
+    LiveRouterApp,
+    LiveRouterFallback,
+    LiveStream,
+    LiveStreamConfig,
+    LiveStreamMount,
+    LiveSubscribeHandler,
+    LiveSubscribeOptions,
+    LiveTopicDeclaration,
+    LiveTopicKey,
+    LiveTopicPayload,
+    LiveTopicRef,
+    LiveTopics,
+} from "./live-stream";
+export { defineLiveStream, liveStreamRouter } from "./live-stream";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskRegistry, MaskStrategy } from "./mask/index";
 export { buildMaskRegistry, mask } from "./mask/index";
-export type { MigrationCtx, MigrationDefinition, MigrationDocument, MigrationReader, MigrationTransform, RegisteredMigration } from "./migration";
+export type {
+    MigrationCovers,
+    MigrationCtx,
+    MigrationDefinition,
+    MigrationDocument,
+    MigrationReader,
+    MigrationTransform,
+    RegisteredMigration,
+} from "./migration";
 export { defineMigration } from "./migration";
 export type { ModuleConfig, ModuleDefinition } from "./module";
 export { defineModule } from "./module";
@@ -67,6 +97,7 @@ export type { Component, ComponentFunctions, DefineComponentOptions, DefinePlugi
 export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin";
 export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence";
 export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence";
+export { PROCEDURE_META, procedureMeta, UNLOADED_META } from "./procedure-meta";
 export type { ProtectPublicOptions } from "./protect-public";
 export { protectPublic } from "./protect-public";
 export type { ReactorHandler, ReactorOutcome, ReactorSelect, RegisteredReactor } from "./reactors";
@@ -79,6 +110,7 @@ export type {
     PolicyDecision,
     PolicyDecisionOf,
     PolicyOperation,
+    RlsContextIn,
     RlsOptions,
     RlsReadRegistry,
     Role,
@@ -102,6 +134,8 @@ export {
     rls,
     toWhereInput,
 } from "./rls/index";
+export type { DefineRoomOptions, RegisteredRoom, RoomJoinHandler, RoomLeaveHandler, RoomMessageHandler, RoomMessageOf, RoomSocket } from "./room";
+export { defineRoom } from "./room";
 export type {
     AggregateIndexOptions,
     ExtendableSchema,
@@ -121,6 +155,15 @@ export type { ServiceBindingSpec, ServiceFetcher, ServiceRpc } from "./services"
 export { createServices } from "./services";
 export type { RegisteredShape, ShapeDefinition } from "./shapes";
 export { defineShape } from "./shapes";
+export type {
+    DefineWebSocketOptions,
+    RegisteredWebSocket,
+    WebSocketCloseHandler,
+    WebSocketHandle,
+    WebSocketMessageHandler,
+    WebSocketOpenHandler,
+} from "./socket";
+export { defineWebSocket } from "./socket";
 export type { DefineStorageRuleInput, StorageOperation, StorageRule, StorageRuleContext, StorageRuleDecision, StorageRulesOptions } from "./storage/index";
 export { defineStorageRule, defineStorageRules, storageRules } from "./storage/index";
 export type {
@@ -164,6 +207,10 @@ export type {
     ReadOnlyStorage,
     RegisteredAction,
     RegisteredFunction,
+    RegisteredInternalAction,
+    RegisteredInternalMutation,
+    RegisteredInternalQuery,
+    RegisteredInternalStream,
     RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,
@@ -181,7 +228,10 @@ export type {
     RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
+    ScheduledJobState,
+    ScheduledJobView,
     Scheduler,
+    ScheduleRunOptions,
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,

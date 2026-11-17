@@ -2,9 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { resolveOptions, resolveRunnableTargetOrThrow } from "../src/options";
+
+const REMOVED_OPTION = /lazyFunctions. option was removed/u;
 
 let workdir: string;
 
@@ -14,7 +16,16 @@ describe(resolveOptions, () => {
     });
 
     afterEach(() => {
+        vi.unstubAllEnvs();
         rmSync(workdir, { force: true, recursive: true });
+    });
+
+    // The option moved to `codegen.lazyFunctions` in lunora.config. A plugin still passing it would otherwise regenerate the
+    // eager registry with no word, so the removed option is refused.
+    it("refuses the removed lazyFunctions option instead of ignoring it", () => {
+        expect.assertions(1);
+
+        expect(() => resolveOptions({ lazyFunctions: true, projectRoot: workdir } as unknown as Parameters<typeof resolveOptions>[0])).toThrow(REMOVED_OPTION);
     });
 
     it("defaults to the cloudflare target, the lunora schema dir, and openapi", () => {
@@ -22,11 +33,25 @@ describe(resolveOptions, () => {
 
         expect(resolveOptions({ projectRoot: workdir })).toStrictEqual({
             apiSpec: "openapi",
+            explicitTarget: undefined,
+            lazyFunctions: false,
             projectRoot: workdir,
             schemaDir: "lunora",
             target: "cloudflare",
             validateWrangler: true,
         });
+    });
+
+    it("opts into lazy functions through the dev child environment", () => {
+        expect.assertions(2);
+
+        vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "");
+
+        expect(resolveOptions({ projectRoot: workdir }).lazyFunctions).toBe(false);
+
+        vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "1");
+
+        expect(resolveOptions({ projectRoot: workdir }).lazyFunctions).toBe(true);
     });
 
     it("rejects a target with no command-line toolchain", () => {

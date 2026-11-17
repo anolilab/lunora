@@ -82,8 +82,15 @@ const writeBindingManifestFile = (options: {
     dev?: DevManifestSection;
     logger: Logger;
     projectRoot: string;
+
+    /**
+     * Skip the success line and the unmodelled-sections warning, for a write
+     * nobody asked for. A malformed section is still reported: it is a mistake
+     * in the user's config, not a gap in the manifest.
+     */
+    quiet?: boolean;
 }): { error?: string } => {
-    const { destination, dev, logger, projectRoot } = options;
+    const { destination, dev, logger, projectRoot, quiet = false } = options;
     const derived = deriveBindingManifest(projectRoot);
 
     if (derived.manifest === undefined) {
@@ -95,6 +102,17 @@ const writeBindingManifestFile = (options: {
 
     mkdirSync(dirname(target), { recursive: true });
     writeFileSync(target, `${JSON.stringify(manifest, undefined, 2)}\n`, "utf8");
+
+    if (manifest.malformed.length > 0) {
+        logger.warn(
+            `wrangler config: ${manifest.malformed.join(", ")} ${manifest.malformed.length === 1 ? "is" : "are"} not the shape wrangler expects, ` +
+                `so the binding manifest leaves ${manifest.malformed.length === 1 ? "it" : "them"} out. Wrangler reports the exact error when it loads the config.`,
+        );
+    }
+
+    if (quiet) {
+        return {};
+    }
 
     logger.success(`binding manifest written to ${target} (${manifest.bindings.length.toString()} bindings, ${manifest.crons.length.toString()} crons)`);
 

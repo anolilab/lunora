@@ -26,6 +26,36 @@ const Display = ({ args = EMPTY_ARGS }: { args?: Record<string, unknown> | "skip
 };
 
 describe("useSubscription", () => {
+    it("keeps the server why explanation on the surfaced Error", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        const Probe = (): ReactElement => {
+            const { error } = useSubscription(makeRef("messages:list"), EMPTY_ARGS);
+
+            return <div data-testid="probe">{error === undefined ? "ok" : ((error as { why?: string }).why ?? "no-why")}</div>;
+        };
+
+        render(
+            <LunoraProvider client={mock.asClient}>
+                <Probe />
+            </LunoraProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emitError("messages:list", { code: "CONFLICT", message: "stale", why: "row moved" });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("probe").textContent).toBe("row moved");
+        });
+    });
+
     it("keeps the server error code on the surfaced Error", async () => {
         expect.hasAssertions();
 

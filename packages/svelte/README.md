@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -104,6 +104,7 @@ All functions that require a component lifecycle (presence, rate-limit) return a
 | `query`            | `useQuery`            | Live readable store — updates on every server delta.                                   |
 | `mutation`         | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset` stores).     |
 | `subscription`     | `useSubscription`     | Raw subscription readable — unbounded live stream.                                     |
+| `liveTopic`        | `useLiveTopic`        | One declared live topic — readable of `{ lastEvent, error }`, no teardown.             |
 | `paginatedQuery`   | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, `results`, and `error` stores.       |
 | `infiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `paginatedQuery`.                                           |
 | `auth`             | `useAuth`             | Reactive auth stores (`user`, `token`, `status`) plus `setToken`.                      |
@@ -146,11 +147,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora svelte package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora svelte package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/svelte?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/svelte

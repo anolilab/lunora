@@ -7,9 +7,17 @@ import type { RateLimitStore, RateLimitValue } from "./types";
  * In-memory store. State lives for the lifetime of the process (or, inside a
  * Durable Object, the instance) — adequate for single-DO limits but not shared
  * across instances. Use {@link createSqlStore} for durable per-DO state.
+ *
+ * A store may be shared by several limiters: each sweep evicts only the keys its
+ * limiter owns, by that limiter's horizon (see `RateLimitStore.sweep`).
  */
 const createMemoryStore = (): RateLimitStore => {
     const map = new Map<string, RateLimitValue>();
+    // Whether every write so far carried a `ts` at least as large as the one before. Limiters
+    // sharing a store read their own clocks, and a window store keeps the window start as `ts`,
+    // so one inversion is enough to put an expired entry behind a live one for good.
+    let ordered = true;
+    let lastTs = Number.NEGATIVE_INFINITY;
 
     return {
         delete: (storageKey) => {
@@ -17,7 +25,52 @@ const createMemoryStore = (): RateLimitStore => {
         },
         get: (storageKey) => map.get(storageKey),
         set: (storageKey, value) => {
+            // Delete first so a rewritten key moves to the end: insertion order then
+            // tracks write time, and the oldest entries sit at the front for `sweep`.
+            map.delete(storageKey);
             map.set(storageKey, value);
+
+            // A NaN `ts` is ordered by no comparison, so it also counts as an inversion.
+            if (Number.isNaN(value.ts) || value.ts < lastTs) {
+                ordered = false;
+            }
+
+            lastTs = value.ts;
+        },
+        sweep: (olderThanTs, limit, owns) => {
+            let examined = 0;
+
+            for (const [storageKey, value] of map) {
+                if (examined >= limit) {
+                    break;
+                }
+
+                // While writes arrived in `ts` order, an owned live entry ends the sweep instead
+                // of rotating to the end: every entry behind it was written later. Rotating it
+                // would cost a delete and a set per live key on every consume. After an
+                // inversion that no longer holds, so live entries rotate like they used to.
+                if (ordered && value.ts > olderThanTs && owns?.(storageKey) !== false) {
+                    break;
+                }
+
+                examined += 1;
+                map.delete(storageKey);
+
+                // An entry is kept when it is a reserved debt (which outlives any age bound,
+                // since reserves stack), is still live, or belongs to another limiter sharing this store. A
+                // kept entry moves to the end, so it cannot stop the sweep from reaching the
+                // entries behind it. ponytail: a debt key stays until a consume rewrites it
+                // or reset; add a debt-aware bound if abandoned debts show up in memory profiles.
+                if (value.value < 0 || value.ts > olderThanTs || owns?.(storageKey) === false) {
+                    map.set(storageKey, value);
+
+                    // Rotating an older entry behind newer ones (another limiter's expired key, or
+                    // a debt) breaks the order the early break relies on.
+                    if (Number.isNaN(value.ts) || value.ts < lastTs) {
+                        ordered = false;
+                    }
+                }
+            }
         },
     };
 };
@@ -44,8 +97,75 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
 };
 
 /**
+ * Leads an escaped key; no key stored as-is starts with it. U+FFFF is a noncharacter that SQLite TEXT keeps intact
+ * (a NUL would end the string).
+ */
+const ESCAPED_KEY = "\uFFFF";
+
+/**
+ * The text a durable store keeps for `storageKey`. SQLite stores TEXT as UTF-8, and `TextEncoder` encodes the
+ * same way, so a lone UTF-16 surrogate is written as U+FFFD: `"a\uD800"` and `"a\uFFFD"` would share one row, and
+ * one caller's key could spend another's budget. A well-formed key is kept verbatim (the common case, no cost); any
+ * other key, and any key that starts with {@link ESCAPED_KEY}, is stored as that marker plus its JSON text, which
+ * escapes lone surrogates as ASCII. The mapping is one-to-one, so no two keys meet in a row.
+ */
+const encodeStorageKey = (storageKey: string): string =>
+    storageKey.isWellFormed() && !storageKey.startsWith(ESCAPED_KEY) ? storageKey : `${ESCAPED_KEY}${JSON.stringify(storageKey)}`;
+
+/**
+ * The caller's key for a stored key; the inverse of {@link encodeStorageKey}. A marker-prefixed row that is not
+ * JSON text was written verbatim before keys were escaped, and its stored text is its key, so a sweep over old rows
+ * never throws.
+ */
+const decodeStorageKey = (stored: string): string => {
+    if (!stored.startsWith(ESCAPED_KEY)) {
+        return stored;
+    }
+
+    try {
+        const decoded: unknown = JSON.parse(stored.slice(ESCAPED_KEY.length));
+
+        return typeof decoded === "string" ? decoded : stored;
+    } catch {
+        return stored;
+    }
+};
+
+/**
+ * A durable store whose keys round-trip exactly: every key is encoded on the way in, and a sweep's ownership test
+ * sees the caller's key, not its stored form, so a limiter still recognises its own escaped keys.
+ */
+const withLosslessKeys = (store: RateLimitStore): RateLimitStore => {
+    const wrapped: RateLimitStore = {
+        delete: (storageKey) => store.delete(encodeStorageKey(storageKey)),
+        get: (storageKey) => store.get(encodeStorageKey(storageKey)),
+        set: (storageKey, value) => store.set(encodeStorageKey(storageKey), value),
+    };
+    const { setIf, sweep } = store;
+
+    if (setIf) {
+        wrapped.setIf = (storageKey, value, prior) => setIf(encodeStorageKey(storageKey), value, prior);
+    }
+
+    if (sweep) {
+        wrapped.sweep = (olderThanTs, limit, owns) => sweep(olderThanTs, limit, owns === undefined ? undefined : (stored) => owns(decodeStorageKey(stored)));
+    }
+
+    return wrapped;
+};
+
+/**
  * SQLite-backed store for durable, per-DO rate-limit state. Persists each
  * `(name, key)` pair as one row so limits survive hibernation and eviction.
+ *
+ * **Retention:** the limiter calls `sweep` after each write, which deletes up to 32
+ * rows older than its horizon. The index on `ts` covers only rows with a
+ * non-negative `value`, so a reserved debt (never swept) adds nothing to the scan.
+ * The table holds the live keys plus the expired ones not yet swept. Limiters may
+ * share the table: each sweep deletes only the keys its own limiter owns, so a
+ * shorter-window limiter cannot evict a longer-window one's rows. A sweep reads
+ * candidates by `ts` before filtering by owner, so a long run of another limiter's
+ * expired rows can use up the window for a while.
  *
  * **Atomicity:** `exec` is synchronous and the limiter does not yield between a
  * synchronous store's read and its write, so one consume's read, decision and
@@ -54,15 +174,29 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
  * configured rate. Two isolates sharing one SQLite file (not a Durable Object
  * case) are not covered; serialize those yourself.
  */
-const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
+const createRawSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     const { sql } = options;
     const table = options.table ?? "_lunora_rate_limits";
 
     runSql(sql, `CREATE TABLE IF NOT EXISTS "${table}" (k TEXT PRIMARY KEY, value REAL NOT NULL, ts INTEGER NOT NULL, prev REAL)`);
+    // Table shape change: the sweep's range scan on `ts`. Partial on `value >= 0` so a debt row is never indexed.
+    runSql(sql, `CREATE INDEX IF NOT EXISTS "${table}_ts" ON "${table}" (ts) WHERE value >= 0`);
 
     return {
         delete: (storageKey) => {
             runSql(sql, `DELETE FROM "${table}" WHERE k = ?`, storageKey);
+        },
+        // The `value >= 0` must stay literal so the planner can use the partial index.
+        // The limit is a bound parameter, not inlined. Ownership is checked in JS, so a
+        // row another limiter wrote is never deleted. The owned keys go to one DELETE as
+        // a JSON array: one statement text however many rows, instead of one per row.
+        sweep: (olderThanTs, limit, owns) => {
+            const candidates = runSql<{ k: string }>(sql, `SELECT k FROM "${table}" WHERE ts <= ? AND value >= 0 ORDER BY ts LIMIT ?`, olderThanTs, limit);
+            const owned = candidates.map(({ k }) => k).filter((k) => owns?.(k) !== false);
+
+            if (owned.length > 0) {
+                runSql(sql, `DELETE FROM "${table}" WHERE k IN (SELECT value FROM json_each(?))`, JSON.stringify(owned));
+            }
         },
         get: (storageKey) => {
             const rows = runSql<{ prev: number | null; ts: number; value: number }>(sql, `SELECT value, ts, prev FROM "${table}" WHERE k = ?`, storageKey);
@@ -95,6 +229,9 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     };
 };
 
+/** Sql store, with keys stored losslessly; see {@link encodeStorageKey}. */
+const createSqlStore = (options: SqlStoreOptions): RateLimitStore => withLosslessKeys(createRawSqlStore(options));
+
 /**
  * The READ slice — everything the store needs to answer `RateLimiter.getValue`
  * and `check`, which the docs describe as projecting the stored value forward to
@@ -122,7 +259,18 @@ interface RateLimitDatabaseReader {
  * free of a runtime dependency on `@lunora/server`.
  */
 interface RateLimitDatabase extends RateLimitDatabaseReader {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
+
+    /**
+     * Used by `sweep` only: rows matching `where`, at most `limit`. Optional in the
+     * type because the public `DatabaseWriter` does not declare it; the framework's
+     * `ctx.db` implements it, and `sweep` throws if an adapter does not.
+     */
+    findMany?: (
+        table: string,
+        args: { limit?: number; orderBy?: Record<string, "asc" | "desc">[]; where?: Record<string, unknown> },
+    ) => Promise<{ page: Record<string, unknown>[] }>;
+
     insert: <T extends string>(table: T, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<Id<T>>;
     patchIf: <T extends string>(
         table: T,
@@ -184,8 +332,28 @@ const isConflict = (error: unknown): boolean => (error as { code?: unknown } | n
  *     ts: v.number(),
  *     value: v.number(),
  *     prev: v.optional(v.number()),
- * }).index("by_key", ["key"])
+ * })
+ *     .index("by_key", ["key"])
+ *     .index("by_ts", ["ts"])
  * ```
+ *
+ * **Table shape change:** `by_ts` is new. The sweep finds expired rows through it.
+ * A table declared without it still works, but each sweep scans every row. Apps
+ * that already declared the table add the index. The sweep deletes at most 32
+ * expired rows per write; a reserved debt (negative `value`) is never deleted.
+ * The ORM index cannot be partial, so debts stay in it: many old debts make each
+ * sweep read past them. Reserves are rare, so this is accepted.
+ *
+ * **Ceiling:** the sweep deletes only a row whose `ts`, `value` and `prev` still match
+ * what it read, but the framework resolves that match and deletes in two steps.
+ * On a `.global()` table another shard can rewrite the row between them, so the
+ * row is deleted live and its bucket resets. Closing that needs a conditional
+ * delete on `ctx.db`, which does not exist yet. A shard-local table is not exposed:
+ * the Durable Object's input gate holds across the sweep's storage operations.
+ *
+ * **Soft delete:** the sweep deletes with `ctx.db.delete`, which has no hard-delete
+ * option. Declare the table without `.softDelete()`: a tombstoned row keeps its
+ * deterministic id, so the next consume for that key conflicts forever.
  *
  * **Atomic against concurrent consumes.** `setIf` writes only if the row still
  * holds the value `get` returned: an existing row through `ctx.db.patchIf` with
@@ -204,7 +372,7 @@ const isConflict = (error: unknown): boolean => (error as { code?: unknown } | n
  * failure value from the mutation instead of throwing. A `.global()` table's
  * row lives in D1, outside the DO transaction, so there the unit stays spent.
  */
-const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
+const createRawDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     const { db } = options;
     const table = options.table ?? "rateLimits";
     const keyField = options.keyField ?? "key";
@@ -214,6 +382,9 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
     // write directly instead of repeating the lookup. A lost race or a write
     // drops the entry, so the next get() re-reads.
     const idCache = new Map<string, Id<string> | undefined>();
+
+    // Set once the sweep has found an adapter it cannot use; see `sweep`.
+    let warnedUnsweepable = false;
 
     const find = async (storageKey: string): Promise<Record<string, unknown> | null> => {
         const row = await db.findFirst(table, { where: { [keyField]: storageKey } });
@@ -264,7 +435,7 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
             const id = await resolveId(storageKey);
 
             if (id !== undefined) {
-                await db.delete(id);
+                await db.delete(table, id);
             }
 
             idCache.delete(storageKey);
@@ -328,8 +499,46 @@ const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => {
 
             return applied;
         },
+        sweep: async (olderThanTs, limit, owns) => {
+            if (db.findMany === undefined) {
+                // An adapter without a batch read cannot sweep. Say so once, not after every write.
+                if (!warnedUnsweepable) {
+                    warnedUnsweepable = true;
+                    // eslint-disable-next-line no-console -- intentional: the store has no logger; a missing sweep is a one-time configuration notice
+                    console.warn(`@lunora/ratelimit: table "${table}" is not swept: the adapter has no findMany. Pass the framework's ctx.db.`);
+                }
+
+                return;
+            }
+
+            const { page } = await db.findMany(table, {
+                limit,
+                orderBy: [{ ts: "asc" }],
+                where: { ts: { lte: olderThanTs }, value: { gte: 0 } },
+            });
+
+            const owned = page.filter((row) => owns?.(String(row[keyField])) !== false);
+
+            await Promise.all(
+                owned.map(async (row) => {
+                    // Delete only the row the sweep read: a consume that refreshed it since then
+                    // changed ts, value or prev, so the re-read finds nothing and the row is kept.
+                    // That is still a read followed by a delete, so on `.global()` a refresh
+                    // between the two steps is lost (see the JSDoc ceiling).
+                    // eslint-disable-next-line unicorn/no-null -- an absent `prev` is stored as SQL NULL, and only a null filter matches it
+                    const current = await db.findFirst(table, { where: { _id: row["_id"], prev: row["prev"] ?? null, ts: row["ts"], value: row["value"] } });
+
+                    if (current !== null) {
+                        await db.delete(table, row["_id"] as Id<string>);
+                    }
+                }),
+            );
+        },
     };
 };
+
+/** Database store, with keys stored losslessly; see {@link encodeStorageKey}. */
+const createDatabaseStore = (options: DatabaseStoreOptions): RateLimitStore => withLosslessKeys(createRawDatabaseStore(options));
 
 /**
  * Read-only counterpart to {@link createDatabaseStore}, for a query context.

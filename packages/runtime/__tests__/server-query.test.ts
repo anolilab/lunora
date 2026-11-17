@@ -217,7 +217,11 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
         expect(authorizeShard).toHaveBeenCalledTimes(1);
         // Full identity object (not just userId) + the resolved shardKey — exactly
         // the arguments the HTTP path passes.
-        expect(authorizeShard).toHaveBeenCalledWith({ identity: { email: "u@example.com", userId: "user_42" }, shardKey: "channel-7" });
+        expect(authorizeShard).toHaveBeenCalledWith({
+            functionPath: "messages:list",
+            identity: { email: "u@example.com", userId: "user_42" },
+            shardKey: "channel-7",
+        });
     });
 
     it("returns a BAD_REQUEST error Response (not a throw) for a non-reference, mirroring the HTTP catch", async () => {

@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -99,6 +99,8 @@ lunoraRsbuild({
 });
 ```
 
+`target` must match the target the CLI resolved for the run. `lunora build` and `lunora deploy` set `LUNORA_BUILD_TARGET`, and a plugin whose target differs fails the build rather than emit an artifact for another host. Set the same target in the plugin options and `lunora.config.*`, or leave it unset to use the project's.
+
 `LUNORA_CODEGEN=0` skips generation and the wrangler checks **in watch mode only**. A production build keeps generating: the ERROR-advisory gate is the only thing that fails it, so honouring the variable there would let an app ship against a surface its target cannot serve, green the whole way.
 
 ## How the Worker runs
@@ -163,11 +165,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora rspack package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora rspack package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/rspack?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/rspack

@@ -3,13 +3,19 @@ import { ensureMigrated } from "@lunora/auth/migrate";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 
-import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
 import { buildAuth, buildMigrationAuth } from "../../lunora/auth.js";
+
+// A loader, not the document: only Studio's API route reads it, so no ordinary request evaluates it.
+const openApiSpec = (): Promise<unknown> => import("../../lunora/_generated/openapi.js").then((module) => module.openApiSpec);
+
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
 
 export const ShardDO = createShardDO();
 
 interface Env {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     AUTH_SECRET: string;
     DB: unknown;
     SHARD: ShardNamespaceLike;
@@ -86,6 +92,7 @@ export default {
 
                 return session?.user.id ? { userId: session.user.id } : null;
             },
+            adminRevocations: env.ADMIN_REVOCATIONS,
             shardDO: env.SHARD,
         });
         return worker.fetch(request, env, ctx);

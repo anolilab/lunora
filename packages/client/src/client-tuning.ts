@@ -5,6 +5,14 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_CONNECT_TIMEOUT_MS = 10_000;
 
 /**
+ * Default deadline (ms) for one HTTP RPC round trip — see
+ * `LunoraClientOptions.rpcTimeoutMs`. Generous for a mutation (which commits in
+ * milliseconds) yet short enough that a stalled request cannot hold a shard's
+ * whole write chain for minutes.
+ */
+const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+
+/**
  * How often the HTTP polling fallback re-runs the live queries on a shard whose
  * socket will not open. Five seconds trades freshness against load deliberately:
  * a poll re-runs every subscribed query against the origin with no CDC cursor to
@@ -77,6 +85,13 @@ const RESUBSCRIBE_CONCURRENCY = 3;
 const RESUBSCRIBE_ACK_TIMEOUT_MS = 10_000;
 
 /**
+ * Replay attempts a write gets after its direct send failed ambiguously, before it
+ * is rejected and its optimistic update rolled back. The direct send itself is not
+ * counted. Few, because a caller is waiting on the answer.
+ */
+const MAX_AMBIGUOUS_SEND_ATTEMPTS = 5;
+
+/**
  * How many identities keep a cached mutator watermark. The nesting exists so
  * signing back into a previous identity recovers its watermark rather than
  * re-deriving `1` against a server watermark already past it (the `OUT_OF_ORDER`
@@ -90,7 +105,9 @@ export {
     DEFAULT_HEARTBEAT_INTERVAL_MS,
     DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS,
     DEFAULT_POLLING_FALLBACK_INTERVAL_MS,
+    DEFAULT_RPC_TIMEOUT_MS,
     IDLE_SHARD_CLOSE_MS,
+    MAX_AMBIGUOUS_SEND_ATTEMPTS,
     MAX_PENDING_STREAMS,
     MAX_WATERMARK_IDENTITIES,
     QUERY_CACHE_DEBOUNCE_MS,

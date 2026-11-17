@@ -7,6 +7,7 @@ import { defineApp } from "../../lunora/_generated/app.js";
 import { authOptions } from "../../lunora/auth.js";
 
 interface Env {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     AUTH_SECRET: string;
     DB: D1DatabaseLike;
     FILES: R2BucketLike;
@@ -37,6 +38,7 @@ const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
  */
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => env.ADMIN_REVOCATIONS)
     .global({ d1: (env) => env.DB })
     .auth({ d1: (env) => env.DB, options: authOptions })
     // No `publicBaseUrl`: an action signs object URLs against the origin its
@@ -62,6 +64,8 @@ const app = defineApp<Env>()
     .build();
 
 export const { ShardDO } = app;
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
 
 /**
  * Serve the signed object URLs that `ctx.storage.generateUploadUrl` /

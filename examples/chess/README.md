@@ -50,7 +50,7 @@ wrangler d1 create lunora-example-chess                         # paste the id i
 pnpm --filter @lunora-example/chess dev
 ```
 
-Open <http://localhost:5173> in two browser profiles, create two accounts, hit
+Open the URL the dev server prints (<http://localhost:5173> in the main checkout) in two browser profiles, create two accounts, hit
 **Quick match** in both, then **Start game**. Open a third window and watch it
 from the "Watch a game" list.
 

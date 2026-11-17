@@ -229,8 +229,10 @@ describe("resubscribe pacing", () => {
         vi.advanceTimersByTime(ACK_TIMEOUT_MS);
 
         // The watchdog released all three stalled slots, so the two stragglers
-        // went out. Without it those queries would sit dark forever.
-        expect(subscribeIds(second)).toHaveLength(5);
+        // went out. Without it those queries would sit dark forever. The three
+        // unanswered frames are also re-sent once (3 + 2 + 3), and every one of the
+        // five subscriptions has been sent.
+        expect(subscribeIds(second)).toHaveLength(8);
         expect(new Set(subscribeIds(second)).size).toBe(5);
 
         client.close();

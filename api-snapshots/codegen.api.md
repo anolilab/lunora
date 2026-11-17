@@ -15,6 +15,12 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 const AGENTS_FILENAME = "agents.ts";
 ```
 
+### `ALL_NOTIFY_CHANNELS` (const)
+
+```ts
+const ALL_NOTIFY_CHANNELS: NotifyChannels;
+```
+
 ### `AgentIR` (interface)
 
 ```ts
@@ -60,6 +66,18 @@ interface AuthApiCallIR {
 const CAPABILITY_PROBES: Readonly<Record<CapabilityKey, CapabilityProbe>>;
 ```
 
+### `COMPANION_BINDING` (const)
+
+```ts
+const COMPANION_BINDING = "ADVISOR_COMPANION";
+```
+
+### `COMPANION_SERVICE_NAME` (const)
+
+```ts
+const COMPANION_SERVICE_NAME = "advisorCompanion";
+```
+
 ### `CONTAINERS_FILENAME` (const)
 
 ```ts
@@ -98,12 +116,17 @@ class CodegenDiagnosticError extends LunoraError {
 interface CodegenOptions {
     apiSpec?: "both" | "none" | "openapi" | "openrpc";
     dryRun?: boolean;
+    lazyFunctions?: boolean;
     lint?: boolean;
     lunoraDirectory?: string;
     project?: Project;
     projectRoot: string;
+    spaAssetsBindings?: ReadonlyArray<string>;
+    studioAssets?: {
+        binding: string;
+        directory: string;
+    };
     target?: string;
-    updateSchemaBaseline?: boolean;
     wranglerQueueProducers: ReadonlyArray<WranglerQueueProducerIR>;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
@@ -120,17 +143,21 @@ interface CodegenResult {
     containers: ReadonlyArray<ContainerIR>;
     cronTriggers: ReadonlyArray<string>;
     generated: {
+        advisorProceduresJson: string;
         agents: string;
         api: string;
         app: string;
+        authModule: string;
         collections: string;
         containers: string;
         crons: string;
         dataModel: string;
         drizzleGlobal: string;
         drizzleShard: string;
+        functionModules: Record<string, string>;
         functions: string;
         internal: string;
+        live: string;
         openApi: string;
         openApiModule: string;
         openRpc: string;
@@ -142,12 +169,14 @@ interface CodegenResult {
         vectors: string;
         workflows: string;
     };
+    indexReferences: ReadonlyArray<IndexReference>;
     migrations: ReadonlyArray<MigrationIR>;
     outputDirectory: string;
     platformDiagnostics: ReadonlyArray<PlatformDiagnostic>;
     queues: ReadonlyArray<QueueIR>;
     schemaSnapshot: SchemaSnapshot;
     schemaSnapshotPath: string;
+    schemaTables: ReadonlyArray<TableIR>;
     workflows: ReadonlyArray<WorkflowIR>;
     writtenFiles: ReadonlyArray<string>;
 }
@@ -201,7 +230,9 @@ interface ContextPropertyCallIR {
 interface CronJobIR {
     args: Record<string, unknown>;
     cron: string;
+    file?: string;
     functionPath?: string;
+    line?: number;
     name: string;
     workflow?: {
         className: string;
@@ -238,7 +269,21 @@ interface DriftChange {
     scope: DriftScope;
     severity: "breaking" | "safe";
     summary: string;
+    field?: string;
     table?: string;
+    warning?: true;
+    identityRewrites?: true;
+    expiry?: {
+        after?: number;
+        field: string;
+        previous?: {
+            after?: number;
+            field: string;
+        };
+    };
+    coverage?: DriftCoverage;
+    index?: string;
+    uniqueOn?: ReadonlyArray<string>;
     type: "addedFieldConstraint" | "addedIndex" | "addedOptionalField" | "addedRelation" | "addedRequiredField" | "addedTable" | "changedCommitOrdering" | "changedFieldKind" | "changedFieldShape" | "changedIndex" | "changedJurisdiction" | "changedMemoryMode" | "changedShardMode" | "changedTtlPolicy" | "fieldOptionalToRequired" | "fieldRequiredToOptional" | "relaxedFieldConstraint" | "removedField" | "removedIndex" | "removedRelation" | "removedTable" | "widenedFieldShape";
 }
 ```
@@ -264,17 +309,27 @@ interface DurableObjectScheduledContainerIR extends ContainerIRBase {
 }
 ```
 
+### `ENV_FILENAME` (const)
+
+```ts
+const ENV_FILENAME = "env.ts";
+```
+
 ### `EmitAppOptions` (interface)
 
 ```ts
 interface EmitAppOptions {
+    agentWorkflows?: ReadonlyArray<string>;
+    authClaims?: ReadonlyArray<string>;
     capabilities: ReadonlySet<CapabilityKey>;
     emailAgents?: ReadonlyArray<{
         className: string;
         exportName: string;
     }>;
     hasAccess: boolean;
+    hasAdminRevocations?: boolean;
     hasAuth: boolean;
+    hasDeliveryAuthorization?: boolean;
     hasFramework: boolean;
     hasGlobal: boolean;
     hasHyperdriveGlobal: boolean;
@@ -289,6 +344,13 @@ interface EmitAppOptions {
     identity?: IdentityIR;
     jurisdiction?: JurisdictionIR;
     jurisdictionPinsAuth?: boolean;
+    lazyFunctions?: boolean;
+    liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
+    liveStreams?: boolean;
+    liveStreamsWithheld?: boolean;
+    securityHeaders?: boolean | SecurityHeadersOptions;
+    spaAssetsBindings?: ReadonlyArray<string>;
+    studioAssetsBinding?: string;
     tables: ReadonlyArray<Pick<TableIR, "name" | "shardMode">>;
     useUmbrella: boolean;
     vectorIndexCount?: number;
@@ -308,6 +370,12 @@ interface EmitAppOptions {
 const FLAGS_FILENAME = "flags.ts";
 ```
 
+### `FcmCredentials` (type)
+
+```ts
+type FcmCredentials = "absent" | "env" | "ownCredentials" | "ownToken";
+```
+
 ### `FieldSnapshot` (interface)
 
 ```ts
@@ -319,6 +387,7 @@ interface FieldSnapshot {
     members?: ReadonlyArray<FieldSnapshot>;
     nullable?: boolean;
     of?: FieldSnapshot;
+    output?: string;
     optional: boolean;
     ref?: string;
     refined?: boolean;
@@ -346,6 +415,11 @@ interface FlagsIR {
 interface FunctionIR {
     adminOnly?: true;
     args: Record<string, ValidatorIR>;
+    channel?: {
+        kind: "room";
+        name: string;
+    };
+    description?: string;
     exportName: string;
     expose?: {
         cache?: ExposeCacheIR;
@@ -353,10 +427,21 @@ interface FunctionIR {
     };
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
+    meta?: Record<string, unknown> | "unloaded";
     output?: ValidatorIR;
+    readsIp?: true;
     returnType: string;
+    socket?: {
+        auth: boolean;
+        origin?: string;
+        path: string;
+    };
+    typeDerivedArgs?: true;
     visibility?: "internal" | "public";
+    x402?: {
+        price?: number | string;
+    };
 }
 ```
 
@@ -389,7 +474,20 @@ interface HttpRouteIR {
 interface IndexIR {
     fields: ReadonlyArray<string>;
     name: string;
+    site?: DeclarationSiteIR;
     unique?: boolean;
+}
+```
+
+### `IndexReference` (interface)
+
+```ts
+interface IndexReference {
+    file: string;
+    function: string;
+    index: string | undefined;
+    line: number;
+    table: string;
 }
 ```
 
@@ -441,6 +539,7 @@ interface LintSchemaOptions {
     containerOverrides?: ReadonlyArray<ContainerOverrideIR>;
     containers?: ReadonlyArray<ContainerIR>;
     countReads?: ReadonlyArray<CountReadIR>;
+    crons?: ReadonlyArray<CronJobIR>;
     cronTargets?: ReadonlyArray<string>;
     exportSinks?: ReadonlyArray<AdvisorExportSink>;
     failOpenGuards?: ReadonlyArray<FailOpenGuardIR>;
@@ -485,6 +584,7 @@ interface LintSchemaOptions {
     storageKeyAccesses?: ReadonlyArray<StorageKeyAccessIR>;
     storageUploads?: ReadonlyArray<StorageUploadIR>;
     tableWrites?: ReadonlyArray<TableWriteIR>;
+    topics?: ReadonlyArray<TopicIR>;
     unboundedLoops?: ReadonlyArray<UnboundedLoopIR>;
     unrestrictedWhereBranches?: ReadonlyArray<UnrestrictedWhereBranchIR>;
     vectorNamespaceAccesses?: ReadonlyArray<VectorNamespaceAccessIR>;
@@ -512,6 +612,7 @@ interface LunoraProjectConfig {
     codegen?: unknown;
     durableObjects?: unknown;
     remote?: unknown;
+    security?: unknown;
     target?: unknown;
 }
 ```
@@ -536,6 +637,7 @@ const MUTATORS_FILENAME = "mutators.ts";
 interface MaskProcedureIR {
     exportName: string;
     file: string;
+    line?: number;
     maskColumns: {
         column: string;
         table: string;
@@ -551,9 +653,20 @@ interface MaskProcedureIR {
 
 ```ts
 interface MigrationIR {
+    covers?: {
+        jurisdiction?: string;
+        memory?: true;
+        shardMode?: string;
+        table?: string;
+        ttl?: {
+            after?: number;
+            field: string;
+        };
+    };
     exportName: string;
     filePath: string;
     id: string;
+    identity?: true;
     table: string;
 }
 ```
@@ -581,7 +694,7 @@ const NOTIFY_FILENAME = "notify.ts";
 
 ```ts
 interface NotifyChannels {
-    hasFcm: boolean;
+    fcm: FcmCredentials;
     hasWebPush: boolean;
 }
 ```
@@ -605,15 +718,7 @@ interface OpenApiEmitInput {
 
 ### `OpenRpcDocument` (interface)
 
-```ts
-interface OpenRpcDocument {
-    info?: {
-        title?: string;
-        version?: string;
-    };
-    methods: ReadonlyArray<OpenRpcMethod>;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `OpenRpcEmitInput` (interface)
 
@@ -627,21 +732,7 @@ interface OpenRpcEmitInput {
 
 ### `OpenRpcMethod` (interface)
 
-```ts
-interface OpenRpcMethod {
-    name: string;
-    params?: ReadonlyArray<{
-        name: string;
-        schema?: Record<string, unknown>;
-    }>;
-    result?: {
-        name: string;
-        schema?: Record<string, unknown>;
-    };
-    summary?: string;
-    "x-lunora-function-kind"?: string;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `PROJECT_CONFIG_FILENAMES` (const)
 
@@ -656,7 +747,7 @@ interface PlatformDiagnostic {
     feature?: CapabilityKey;
     level: "error" | "warn";
     message: string;
-    name: "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature" | "platform_vector_dimensions_out_of_range";
+    name: "platform_live_stream_delivery_authorization" | "platform_socket_delivery_authorization" | "platform_undeclared_feature" | "platform_unknown_target" | "platform_unreadable_target" | "platform_unsupported_feature" | "platform_vector_dimensions_out_of_range";
     remediation: string;
     target: string;
 }
@@ -674,6 +765,8 @@ interface ProjectConfigLiterals {
     };
     codegen?: {
         exclude?: string[];
+        lazyFunctions?: boolean;
+        lazyFunctionsUnreadable?: true;
         unreadable?: boolean;
     };
     durableObjects?: {
@@ -681,8 +774,16 @@ interface ProjectConfigLiterals {
         unreadable?: boolean;
     };
     remote?: boolean;
+    security?: {
+        headers?: unknown;
+        unreadable?: true;
+    };
     services?: {
         declared?: Record<string, ServiceLiteral>;
+        unreadable?: boolean;
+    };
+    studio?: {
+        companion?: boolean;
         unreadable?: boolean;
     };
     target?: string;
@@ -737,6 +838,7 @@ interface QueueIR {
     exportName: string;
     filePath: string;
     handlerSite?: HandlerSiteIR;
+    line?: number;
     mode: "pull" | "push";
     name: string;
     topic?: string;
@@ -797,6 +899,7 @@ interface RlsPolicyIR {
 interface RlsProcedureIR {
     exportName: string;
     file: string;
+    line?: number;
     rlsTables: string[];
     tablesRead: string[];
     tablesWritten: string[];
@@ -817,9 +920,7 @@ interface RlsRoleIR {
 
 ### `RuntimeVerb` (type)
 
-```ts
-type RuntimeVerb = "action" | "mutation" | "query";
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SCHEMA_SNAPSHOT_FILENAME` (const)
 
@@ -835,15 +936,11 @@ const SCHEMA_SNAPSHOT_VERSION: 1;
 
 ### `SDK_LANGUAGES` (const)
 
-```ts
-const SDK_LANGUAGES: ReadonlyArray<string>;
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SDK_TARGETS` (const)
 
-```ts
-const SDK_TARGETS: Readonly<Record<string, SdkTarget>>;
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SHAPES_FILENAME` (const)
 
@@ -878,6 +975,7 @@ interface SchemaDriftDecision {
     changes: ReadonlyArray<DriftChange>;
     newMigrationIds: ReadonlyArray<string>;
     reason: string;
+    uncovered: ReadonlyArray<DriftChange>;
 }
 ```
 
@@ -914,69 +1012,27 @@ class SchemaSnapshotParseError extends LunoraError {
 
 ### `SdkFiles` (type)
 
-```ts
-type SdkFiles = Record<string, string>;
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkMethod` (interface)
 
-```ts
-interface SdkMethod {
-    argsNullPaths: ModelNullPaths;
-    argsType: string | undefined;
-    functionName: string;
-    functionPath: string;
-    namespace: string;
-    resultType: string | undefined;
-    summary: string;
-    takesArgs: boolean;
-    verb: RuntimeVerb;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkNamespace` (interface)
 
-```ts
-interface SdkNamespace {
-    methods: ReadonlyArray<SdkMethod>;
-    name: string;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkRenderInput` (interface)
 
-```ts
-interface SdkRenderInput {
-    models: string;
-    namespaces: ReadonlyArray<SdkNamespace>;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkResult` (interface)
 
-```ts
-interface SdkResult {
-    files: SdkFiles;
-    undeclared: ReadonlyArray<string>;
-    unrepresentable: ReadonlyArray<string>;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `SdkTarget` (interface)
 
-```ts
-interface SdkTarget {
-    id: string;
-    quicktype?: {
-        lang: LanguageName;
-        rendererOptions?: Record<string, string>;
-    };
-    render: (input: SdkRenderInput) => Record<string, string>;
-    renderModels?: (document: OpenRpcDocument) => Record<string, string>;
-    requires: ReadonlyArray<string>;
-    vendor: ReadonlyArray<SdkVendorEntry>;
-}
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `ServiceBindingIR` (interface)
 
@@ -1011,6 +1067,8 @@ interface ShapeIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
     filePath: string;
+    line?: number;
+    readsIp?: true;
     table?: string;
 }
 ```
@@ -1021,6 +1079,7 @@ interface ShapeIR {
 interface SourceCapabilitySignals {
     contextReads: ReadonlySet<string>;
     dynamicImports: ReadonlySet<string>;
+    requestSecretTool: boolean;
     sandboxTools: Readonly<SandboxUsage>;
     valueImports: ReadonlySet<string>;
 }
@@ -1070,6 +1129,7 @@ interface TableIR {
         field: string;
         kind: "shardBy";
     };
+    site?: DeclarationSiteIR;
     softDelete?: {
         field: string;
     };
@@ -1086,9 +1146,18 @@ interface TableSnapshot {
     fields: Record<string, FieldSnapshot>;
     indexes: Record<string, IndexSnapshot>;
     memory?: boolean;
+    refinementsRecorded?: true;
     relations: Record<string, RelationSnapshot>;
     shardMode: string;
     ttl?: TtlSnapshot;
+}
+```
+
+### `TargetScope` (interface)
+
+```ts
+interface TargetScope {
+    readonly [targetScopeBrand]: true;
 }
 ```
 
@@ -1098,6 +1167,7 @@ interface TableSnapshot {
 interface TopicIR {
     exportName: string;
     filePath: string;
+    line?: number;
 }
 ```
 
@@ -1119,12 +1189,14 @@ interface ValidatorIR {
     kind: string;
     literalValue?: string;
     members?: ValidatorIR[];
+    sensitive?: boolean;
     shape?: Record<string, ValidatorIR>;
     sourceText?: string;
     stringMaxLength?: number;
     tableName?: string;
     tsType?: string;
     unmodelledRefinement?: boolean;
+    unresolvedShape?: boolean;
     valueType?: ValidatorIR;
 }
 ```
@@ -1138,6 +1210,7 @@ interface VectorIndexIR {
     metadata?: ReadonlyArray<string>;
     metric?: "cosine" | "dot-product" | "euclidean";
     name: string;
+    site?: DeclarationSiteIR;
     table: string;
 }
 ```
@@ -1158,11 +1231,13 @@ interface WorkflowIR {
         successRetention?: string;
     };
     exportName: string;
+    file?: string;
     handlerFile?: string;
     handlerSite?: HandlerSiteIR;
     limits?: {
         steps?: number;
     };
+    line?: number;
     name: string;
     schedules?: ReadonlyArray<string>;
     steps: ReadonlyArray<WorkflowStepIR>;
@@ -1186,6 +1261,7 @@ interface WranglerVariableIR {
     file: string;
     key: string;
     kind: string;
+    line?: number;
     preview: string;
 }
 ```
@@ -1214,10 +1290,22 @@ const buildSchemaSnapshot: (schema: SchemaIR, migrationIds: ReadonlyArray<string
 const capabilitiesUsedBy: (signals: Pick<SourceCapabilitySignals, "contextReads" | "valueImports">) => ReadonlySet<CapabilityKey>;
 ```
 
+### `companionServiceBinding` (const)
+
+```ts
+const companionServiceBinding: (projectRoot: string, lunoraDirectory?: string) => ServiceBindingIR | undefined;
+```
+
 ### `createCodegenProject` (const)
 
 ```ts
 const createCodegenProject: (lunoraDirectory: string) => Project;
+```
+
+### `createTargetScope` (const)
+
+```ts
+const createTargetScope: () => TargetScope;
 ```
 
 ### `describeErrorLevelFindings` (const)
@@ -1274,7 +1362,9 @@ const discoverFlags: (project: Project, lunoraDirectory: string) => FlagsIR | un
 ### `discoverFunctions` (const)
 
 ```ts
-const discoverFunctions: (project: Project, lunoraDirectory: string) => FunctionIR[];
+const discoverFunctions: (project: Project, lunoraDirectory: string, options?: {
+    lazyFunctions?: boolean;
+}) => FunctionIR[];
 ```
 
 ### `discoverHttpRoutes` (const)
@@ -1400,7 +1490,9 @@ const discoverWorkflows: (project: Project, lunoraDirectory: string) => Workflow
 ### `emitAgents` (const)
 
 ```ts
-const emitAgents: (agents: ReadonlyArray<AgentIR>) => string;
+const emitAgents: (agents: ReadonlyArray<AgentIR>, options?: {
+    lazy?: boolean;
+}) => string;
 ```
 
 ### `emitApi` (const)
@@ -1496,13 +1588,13 @@ const emitScheduler: (hasScheduler: boolean) => string;
 ### `emitServer` (const)
 
 ```ts
-const emitServer: ({ agents, capabilities, containers, env, hasVectors, hasFlags, hasNotify, identity, queues, schema, services, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
+const emitServer: ({ agents, authClaims, capabilities, containers, env, hasVectors, hasFlags, hasNotify, identity, queues, schema, services, storageRuleBuckets, topics, useUmbrella, workflows }?: EmitServerOptions) => string;
 ```
 
 ### `emitShard` (const)
 
 ```ts
-const emitShard: ({ advisories, advisorProcedures, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasVectors, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, services, topics, useUmbrella, workflows }: EmitShardOptions) => string;
+const emitShard: ({ advisories, agents, capabilities, containers, env, flagKeys, hasFlags, hasNotify, hasRooms, hasSecretValues, hasSensitiveArgs, hasSockets, lazyFunctions, hasVectors, liveStreamDeclarations, liveStreams, maskMetadata, mutators, queues, rlsMetadata, schema, schemaSnapshot, shapes, storageRules, studioFeatures, hasIpReaders, services, topics, useUmbrella, workflowEvents, workflows }: EmitShardOptions) => string;
 ```
 
 ### `emitVectors` (const)
@@ -1514,7 +1606,9 @@ const emitVectors: (vectorIndexes: ReadonlyArray<VectorIndexIR>) => string;
 ### `emitWorkflows` (const)
 
 ```ts
-const emitWorkflows: (workflows: ReadonlyArray<WorkflowIR>) => string;
+const emitWorkflows: (workflows: ReadonlyArray<WorkflowIR>, options?: {
+    lazy?: boolean;
+}) => string;
 ```
 
 ### `emitWranglerCronTriggers` (const)
@@ -1526,7 +1620,7 @@ const emitWranglerCronTriggers: (crons: ReadonlyArray<CronJobIR>) => string[];
 ### `errorAdvisoryNames` (const)
 
 ```ts
-const errorAdvisoryNames: (advisories: ReadonlyArray<Pick<Finding, "level" | "name">>) => ReadonlyArray<string>;
+const errorAdvisoryNames: (advisories: ReadonlyArray<Pick<Finding, "level" | "name" | "suppressed">>) => ReadonlyArray<string>;
 ```
 
 ### `errorPlatformDiagnosticNames` (const)
@@ -1543,8 +1637,15 @@ const evaluateSchemaDrift: (options: {
     baseline: SchemaSnapshot | undefined;
     command?: string;
     current: SchemaSnapshot;
-    migrations: ReadonlyArray<Pick<MigrationIR, "id" | "table">>;
+    indexReferences?: ReadonlyArray<IndexReference>;
+    migrations: ReadonlyArray<Pick<MigrationIR, "covers" | "id" | "identity" | "table">>;
 }) => SchemaDriftDecision;
+```
+
+### `findCodegenConfigFile` (const)
+
+```ts
+const findCodegenConfigFile: (lunoraDirectory: string) => string | undefined;
 ```
 
 ### `findLunoraSolution` (const)
@@ -1583,8 +1684,12 @@ const formatAdvisories: (findings: ReadonlyArray<Finding>) => string;
 
 ### `generateSdk` (const)
 
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
+
+### `indexReferencesOf` (const)
+
 ```ts
-const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>;
+const indexReferencesOf: (queries: ReadonlyArray<QueryReadIR>) => IndexReference[];
 ```
 
 ### `isD1GlobalTable` (const)
@@ -1607,9 +1712,7 @@ const isTestPath: (relativePath: string) => boolean;
 
 ### `isTypedSchema` (const)
 
-```ts
-const isTypedSchema: (schema: Record<string, unknown> | undefined) => boolean;
-```
+Re-exported from `@lunora/codegen/sdk` — signature tracked in that section.
 
 ### `lintSchema` (const)
 
@@ -1649,6 +1752,30 @@ const parseSchemaSnapshot: (content: string | undefined) => SchemaSnapshot | und
 const platformMatrixIds: () => ReadonlyArray<string>;
 ```
 
+### `projectConfigCandidatePaths` (const)
+
+```ts
+const projectConfigCandidatePaths: (lunoraDirectory: string) => string[];
+```
+
+### `readBoundServiceBindings` (const)
+
+```ts
+const readBoundServiceBindings: (projectRoot: string, lunoraDirectory?: string) => {
+    error?: string;
+    services: ServiceBindingIR[];
+};
+```
+
+### `readDevServiceBindings` (const)
+
+```ts
+const readDevServiceBindings: (projectRoot: string, lunoraDirectory?: string) => {
+    error?: string;
+    services: ServiceBindingIR[];
+};
+```
+
 ### `readPackageDependencies` (const)
 
 ```ts
@@ -1659,6 +1786,18 @@ const readPackageDependencies: (projectRoot: string) => Set<string> | undefined;
 
 ```ts
 const readProjectConfigLiterals: (projectRoot: string) => ProjectConfigLiterals;
+```
+
+### `readProjectLazyFunctions` (const)
+
+```ts
+const readProjectLazyFunctions: (lunoraDirectory: string) => boolean;
+```
+
+### `readProjectSecurityHeaders` (const)
+
+```ts
+const readProjectSecurityHeaders: (lunoraDirectory: string) => boolean | SecurityHeadersOptions | undefined;
 ```
 
 ### `readProjectTarget` (const)
@@ -1733,7 +1872,7 @@ const sortedUniqueNames: (names: Iterable<string>) => ReadonlyArray<string>;
 ### `sourceCapabilitySignals` (const)
 
 ```ts
-const sourceCapabilitySignals: (sourceFile: SourceFile) => SourceCapabilitySignals;
+const sourceCapabilitySignals: (sourceFile: SourceFile, scope?: TargetScope) => SourceCapabilitySignals;
 ```
 
 ### `toAdvisorContext` (const)
@@ -1742,10 +1881,144 @@ const sourceCapabilitySignals: (sourceFile: SourceFile) => SourceCapabilitySigna
 const toAdvisorContext: (options: LintSchemaOptions) => LintContext;
 ```
 
+### `tsconfigFingerprint` (const)
+
+```ts
+const tsconfigFingerprint: (tsconfigPath: string) => string;
+```
+
 ### `validatorIrToJsonSchema` (const)
 
 ```ts
 const validatorIrToJsonSchema: (validator: ValidatorIR) => JsonSchema;
+```
+
+## `@lunora/codegen/sdk`
+
+### `OpenRpcDocument` (interface)
+
+```ts
+interface OpenRpcDocument {
+    info?: {
+        title?: string;
+        version?: string;
+    };
+    methods: ReadonlyArray<OpenRpcMethod>;
+}
+```
+
+### `OpenRpcMethod` (interface)
+
+```ts
+interface OpenRpcMethod {
+    name: string;
+    params?: ReadonlyArray<{
+        name: string;
+        schema?: Record<string, unknown>;
+    }>;
+    result?: {
+        name: string;
+        schema?: Record<string, unknown>;
+    };
+    summary?: string;
+    "x-lunora-function-kind"?: string;
+}
+```
+
+### `RuntimeVerb` (type)
+
+```ts
+type RuntimeVerb = "action" | "mutation" | "query";
+```
+
+### `SDK_LANGUAGES` (const)
+
+```ts
+const SDK_LANGUAGES: ReadonlyArray<string>;
+```
+
+### `SDK_TARGETS` (const)
+
+```ts
+const SDK_TARGETS: Readonly<Record<string, SdkTarget>>;
+```
+
+### `SdkFiles` (type)
+
+```ts
+type SdkFiles = Record<string, string>;
+```
+
+### `SdkMethod` (interface)
+
+```ts
+interface SdkMethod {
+    argsNullPaths: ModelNullPaths;
+    argsType: string | undefined;
+    functionName: string;
+    functionPath: string;
+    namespace: string;
+    resultType: string | undefined;
+    summary: string;
+    takesArgs: boolean;
+    verb: RuntimeVerb;
+}
+```
+
+### `SdkNamespace` (interface)
+
+```ts
+interface SdkNamespace {
+    methods: ReadonlyArray<SdkMethod>;
+    name: string;
+}
+```
+
+### `SdkRenderInput` (interface)
+
+```ts
+interface SdkRenderInput {
+    models: string;
+    namespaces: ReadonlyArray<SdkNamespace>;
+}
+```
+
+### `SdkResult` (interface)
+
+```ts
+interface SdkResult {
+    files: SdkFiles;
+    undeclared: ReadonlyArray<string>;
+    unrepresentable: ReadonlyArray<string>;
+}
+```
+
+### `SdkTarget` (interface)
+
+```ts
+interface SdkTarget {
+    id: string;
+    quicktype?: {
+        lang: LanguageName;
+        rendererOptions?: Record<string, string>;
+    };
+    render: (input: SdkRenderInput) => Record<string, string>;
+    renderModels?: (document: OpenRpcDocument) => Record<string, string>;
+    requires: ReadonlyArray<string>;
+    vendor: ReadonlyArray<SdkVendorEntry>;
+}
+```
+
+### `generateSdk` (const)
+
+```ts
+const generateSdk: (document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>;
+```
+
+### `isTypedSchema` (const)
+
+```ts
+const isTypedSchema: (schema: Record<string, unknown> | undefined) => boolean;
 ```
 
 ## Referenced internal declarations
@@ -1771,6 +2044,7 @@ interface AcceptedFinding {
 interface AdminRouteIR {
     exportName: string;
     file: string;
+    line?: number;
     method: string;
     path: string;
     usesGuard: boolean;
@@ -1866,6 +2140,22 @@ interface ArgumentValidatorIR {
     line: number;
     unboundedStringArgs: string[];
 }
+```
+
+### `AuthClaim` (interface)
+
+```ts
+interface AuthClaim {
+    name: string;
+    type: AuthClaimType;
+    writable: boolean;
+}
+```
+
+### `AuthClaimType` (type)
+
+```ts
+type AuthClaimType = "boolean" | "number" | "string";
 ```
 
 ### `AuthConfigIR` (interface)
@@ -2060,7 +2350,7 @@ const CAPABILITY_ROWS: readonly [
     {
         readonly appMethod: {
             readonly configKey: "browser";
-            readonly doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, launch })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer.";
+            readonly doc: "Build the `ctx.browser` helper, e.g. `(env) => createBrowser({ binding: env.BROWSER, playwright: () => import('@cloudflare/playwright') })`. REQUIRED: unlike the binding-backed capabilities, `ctx.browser` is not auto-constructed — without this thunk every method throws, because the generated worker deliberately stays free of the optional `@cloudflare/playwright` peer. Load it through `playwright` rather than a static import, so it stays out of the Worker's startup graph.";
             readonly method: "browser";
         };
         readonly contextProperty: "browser";
@@ -2070,7 +2360,7 @@ const CAPABILITY_ROWS: readonly [
         readonly serverCtxField: "\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import(\"@lunora/browser\").Browser;";
         readonly shardBinding: {
             readonly clientType: "Browser";
-            readonly missingMessage: "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, launch })` with `import { launch } from '@cloudflare/playwright'`. Session reuse (connect/sessions) additionally needs those two exports passed the same way.";
+            readonly missingMessage: "ctx.browser: provide a `browser` config thunk, e.g. `browser: (env) => createBrowser({ binding: env.BROWSER, playwright: () => import('@cloudflare/playwright') })`.";
             readonly stubMethods: readonly [
                 "cancelCrawl",
                 "connect",
@@ -2111,7 +2401,7 @@ const CAPABILITY_ROWS: readonly [
         readonly shardBinding: {
             readonly clientType: "SqlClient";
             readonly instrument: "instrumentSql";
-            readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))`.";
+            readonly missingMessage: "ctx.sql: provide a `sql` config thunk that builds a SqlClient from your driver, e.g. `sql: (env) => fromPostgresJs(async () => (await import('postgres')).default(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))`.";
             readonly stubMethods: readonly [
                 "query"
             ];
@@ -2279,6 +2569,7 @@ const CAPABILITY_ROWS: readonly [
     },
     {
         readonly bindingFreeExports: readonly [
+            "authorizeSignedGet",
             "buildPresignedUrl",
             "buildSignedUrl",
             "scopeKey",
@@ -2359,12 +2650,14 @@ interface ContainerIRBase {
     className: string;
     enableInternet?: boolean;
     exportName: string;
+    file?: string;
     hardTimeout?: number | string;
     instanceType?: string | {
         diskMb?: number;
         memoryMib?: number;
         vcpu?: number;
     };
+    line?: number;
     name?: string;
     sandbox?: boolean;
     sleepAfter?: number | string;
@@ -2407,6 +2700,36 @@ interface CountReadIR {
 }
 ```
 
+### `CrossOriginOpenerPolicy` (type)
+
+```ts
+type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "unsafe-none";
+```
+
+### `DeclarationSiteIR` (interface)
+
+```ts
+interface DeclarationSiteIR {
+    file: string;
+    line: number;
+}
+```
+
+### `DriftCoverage` (interface)
+
+```ts
+interface DriftCoverage {
+    jurisdiction?: string;
+    memory?: true;
+    shardMode?: string;
+    table?: string;
+    ttl?: {
+        after?: number;
+        field: string;
+    };
+}
+```
+
 ### `EmitApiOptions` (interface)
 
 ```ts
@@ -2426,6 +2749,7 @@ interface EmitApiOptions {
 interface EmitFunctionsOptions {
     agents?: ReadonlyArray<AgentIR>;
     functions: ReadonlyArray<FunctionIR>;
+    lazyFunctions?: boolean;
     migrations?: ReadonlyArray<MigrationIR>;
     mutators?: ReadonlyArray<MutatorIR>;
     shapes?: ReadonlyArray<ShapeIR>;
@@ -2439,6 +2763,7 @@ interface EmitFunctionsOptions {
 ```ts
 interface EmitServerOptions {
     agents?: ReadonlyArray<AgentIR>;
+    authClaims?: ReadonlyArray<AuthClaim>;
     capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
     env?: EnvIR;
@@ -2461,7 +2786,6 @@ interface EmitServerOptions {
 ```ts
 interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
-    advisorProcedures?: ReadonlyArray<AdvisorProcedureProtection>;
     agents?: ReadonlyArray<AgentIR>;
     capabilities?: ReadonlySet<CapabilityKey>;
     containers?: ReadonlyArray<ContainerIR>;
@@ -2471,8 +2795,16 @@ interface EmitShardOptions {
         type: "boolean" | "number" | "object" | "string";
     }>;
     hasFlags?: boolean;
+    hasIpReaders?: boolean;
     hasNotify?: boolean;
+    hasRooms?: boolean;
+    hasSecretValues?: boolean;
+    hasSensitiveArgs?: boolean;
+    hasSockets?: boolean;
     hasVectors?: boolean;
+    lazyFunctions?: boolean;
+    liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
+    liveStreams?: boolean;
     maskMetadata?: MaskMetadataIR;
     mutators?: ReadonlyArray<MutatorIR>;
     queues?: ReadonlyArray<QueueIR>;
@@ -2485,6 +2817,7 @@ interface EmitShardOptions {
     studioFeatures?: StudioFeaturesResult;
     topics?: ReadonlyArray<TopicIR>;
     useUmbrella?: boolean;
+    workflowEvents?: ReadonlyArray<WorkflowEventIR>;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 ```
@@ -2501,6 +2834,7 @@ interface EnvIR {
 
 ```ts
 interface ExposeCacheIR {
+    credentialHeaders?: ReadonlyArray<string>;
     maxAge?: number;
     scope?: "private" | "public";
     staleWhileRevalidate?: number;
@@ -2568,6 +2902,7 @@ interface GeoIndexIR {
     field: string;
     name: string;
     precision?: number;
+    site?: DeclarationSiteIR;
 }
 ```
 
@@ -2651,6 +2986,7 @@ interface KeyedRelationIR {
     name: string;
     onDelete?: "cascade" | "restrict" | "set null";
     references: string;
+    site?: DeclarationSiteIR;
     table: string;
     through?: never;
 }
@@ -2665,6 +3001,26 @@ interface KvKeyAccessIR {
     method: string;
     scope: CallSiteScope;
     visibility?: "internal" | "public";
+}
+```
+
+### `LiveStreamIR` (interface)
+
+```ts
+interface LiveStreamIR {
+    exportName: string;
+    filePath: string;
+    id: string;
+    topics: ReadonlyArray<LiveTopicIR>;
+}
+```
+
+### `LiveTopicIR` (interface)
+
+```ts
+interface LiveTopicIR {
+    fields: ReadonlyArray<string>;
+    name: string;
 }
 ```
 
@@ -2824,6 +3180,7 @@ interface ProcedureMiddlewareIR {
     handlesErrors?: boolean;
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    line?: number;
     reachesOutbound?: boolean;
     runsAiGeneration?: boolean;
     throwsBareError?: boolean;
@@ -2845,6 +3202,7 @@ interface ProcedureMiddlewareIR {
 interface RankIndexIR {
     name: string;
     partitionBy?: ReadonlyArray<string>;
+    site?: DeclarationSiteIR;
     sortBy: ReadonlyArray<RankSortKeyIR>;
 }
 ```
@@ -2938,6 +3296,7 @@ interface SearchIndexIR {
     filterFields?: ReadonlyArray<string>;
     language?: string;
     name: string;
+    site?: DeclarationSiteIR;
     staged?: boolean;
     strategy?: string;
 }
@@ -2951,6 +3310,24 @@ interface SecretLiteralIR {
     kind: string;
     line: number;
     preview: string;
+}
+```
+
+### `SecurityHeadersOptions` (interface)
+
+```ts
+interface SecurityHeadersOptions {
+    crossOriginOpenerPolicy?: CrossOriginOpenerPolicy | false;
+    csp?: string | false;
+    frameAncestors?: ReadonlyArray<string>;
+    frameOptions?: "DENY" | "SAMEORIGIN" | false;
+    hsts?: boolean | {
+        includeSubDomains?: boolean;
+        maxAge?: number;
+        preload?: boolean;
+    };
+    permissionsPolicy?: string | false;
+    referrerPolicy?: string | false;
 }
 ```
 
@@ -3034,6 +3411,7 @@ interface TableWriteIR {
 interface ThroughRelationIR {
     kind: "many";
     name: string;
+    site?: DeclarationSiteIR;
     table: string;
     through: {
         from: string;
@@ -3115,6 +3493,16 @@ interface WorkflowCallIR {
     line: number;
     scope: CallSiteScope;
     workflow: string;
+}
+```
+
+### `WorkflowEventIR` (interface)
+
+```ts
+interface WorkflowEventIR {
+    exportName: string;
+    filePath: string;
+    type: string;
 }
 ```
 

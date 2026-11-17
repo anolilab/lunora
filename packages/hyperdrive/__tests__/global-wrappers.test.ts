@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createMysqlGlobalCtxDb, createPostgresGlobalCtxDb } from "../src/global";
 import { mysqlDialect, postgresDialect } from "../src/global-dialect";
-import type { Mysql2Execute } from "../src/global-exec";
+import type { Mysql2Client } from "../src/global-exec";
 import { buildMysqlExec } from "../src/global-exec";
 import type { PgliteHarness } from "./_helpers/pglite-exec";
 import createPgliteHarness from "./_helpers/pglite-exec";
@@ -66,15 +66,15 @@ describe("createPostgresGlobalCtxDb", () => {
 });
 
 /** A never-connected `mysql2/promise` double that records what it is asked to run. */
-const recordingConnection = (): { calls: string[]; connection: Mysql2Execute } => {
+const recordingConnection = (): { calls: string[]; connection: Mysql2Client } => {
     const calls: string[] = [];
 
     return {
         calls,
         connection: {
-            // `CLIENT_FOUND_ROWS`; without it `buildMysqlExec` throws before recording anything.
+            // `CLIENT_FOUND_ROWS`; without it `buildMysqlExec` fails each statement before recording it.
             config: { clientFlags: 0x00_00_00_02 },
-            execute: async (sql: string) => {
+            query: async (sql: string) => {
                 calls.push(sql);
 
                 return /^\s*select/i.test(sql)
@@ -90,7 +90,7 @@ describe("createMysqlGlobalCtxDb", () => {
         expect.assertions(3);
 
         const { calls, connection } = recordingConnection();
-        const writer = createMysqlGlobalCtxDb(connection, { clock: () => FIXED_CLOCK, schema: todosSchema });
+        const writer = createMysqlGlobalCtxDb(() => connection, { clock: () => FIXED_CLOCK, schema: todosSchema });
 
         await writer.insert("todos", { _id: "t1", done: false, title: "write tests" }, { allowExplicitId: true });
 
@@ -126,7 +126,11 @@ describe("mySQL unique indexes cover the whole value", () => {
 
         const { calls, connection } = recordingConnection();
 
-        await runSqlGlobalTableMigrations(buildMysqlExec(connection), schemaWithUniqueIndex, mysqlDialect);
+        await runSqlGlobalTableMigrations(
+            buildMysqlExec(() => connection),
+            schemaWithUniqueIndex,
+            mysqlDialect,
+        );
 
         const create = calls.find((sql) => /create table/i.test(sql));
         const index = calls.find((sql) => /create[\s\S]*index/i.test(sql) && sql.includes("by_email"));
@@ -153,6 +157,27 @@ describe("mySQL unique indexes cover the whole value", () => {
 
         // Bounding both to 768 characters would overflow InnoDB's 3072-byte key,
         // and prefixing them would silently constrain something else.
-        await expect(runSqlGlobalTableMigrations(buildMysqlExec(connection), composite, mysqlDialect)).rejects.toThrow(/composite unique index/);
+        await expect(
+            runSqlGlobalTableMigrations(
+                buildMysqlExec(() => connection),
+                composite,
+                mysqlDialect,
+            ),
+        ).rejects.toThrow(/composite unique index/);
+    });
+
+    describe("buildMysqlExec transactions", () => {
+        const flags = { config: { clientFlags: 2 } };
+
+        it("rejects a transaction on a single connection, which cannot be held apart from other writers", async () => {
+            expect.assertions(1);
+
+            const exec = buildMysqlExec(() => ({ ...flags, query: async () => [[], []] }) as never);
+
+            await expect(exec.transaction?.(async () => 1)).rejects.toMatchObject({
+                code: "GLOBAL_TRANSACTION_UNSUPPORTED",
+                message: expect.stringContaining("pool"),
+            });
+        });
     });
 });

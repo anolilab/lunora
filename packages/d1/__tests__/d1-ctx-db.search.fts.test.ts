@@ -82,9 +82,8 @@ const createRecordingFts = (matchRows: MatchRow[]): { exec: D1Exec; statements: 
         statements.push({ params: parameters, sql });
 
         // A vocabulary-scored search returns the canned result set so the reader can decode
-        // and order it. The id-probe and by-id reads resolve to the canned rows
-        // so the patch/delete table-resolution path (`tableNameFromId` +
-        // `rawRow`) reaches the FTS write-sync. The OCC-guarded UPDATE/DELETE
+        // and order it. The by-id reads resolve to the canned rows
+        // so the patch/delete path (`rawRow`) reaches the FTS write-sync. The OCC-guarded UPDATE/DELETE
         // (`RETURNING "id"`) reports one changed row so the CAS passes.
         const routes: { pattern: RegExp; rows: () => Record<string, unknown>[] }[] = [
             { pattern: /__fts_by_body__vocab/u, rows: () => matchRows as unknown as Record<string, unknown>[] },
@@ -230,7 +229,7 @@ describe("d1 ctx-db search — FTS5 path (emitted SQL)", () => {
 
         const before = statements.length;
 
-        await writer.delete("d1");
+        await writer.delete("docs", "d1");
 
         const ftsWritesAfter = statements.slice(before).filter((statement) => statement.sql.includes("docs__fts_by_body"));
 

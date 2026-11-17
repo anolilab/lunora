@@ -42,14 +42,14 @@ const storeOf = (database: MutationContext["db"]): ControlPlaneStore => {
         string,
         { findMany: (args: unknown) => Promise<{ continueCursor?: null | string; isDone?: boolean; page: unknown[] }> }
     > & {
-        delete: (id: string) => Promise<unknown>;
-        get: (id: string) => Promise<unknown>;
+        delete: (table: string, id: string) => Promise<unknown>;
+        get: (table: string, id: string) => Promise<unknown>;
         insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
-        patch: (id: string, patch: Record<string, unknown>) => Promise<unknown>;
+        patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<unknown>;
     };
 
     return {
-        delete: async (id: string) => generic.delete(id),
+        delete: async (table: string, id: string) => generic.delete(table, id),
         findMany: async (table: string, args?: unknown) => {
             const facade = generic[table] as (typeof generic)[string] | undefined;
 
@@ -59,9 +59,9 @@ const storeOf = (database: MutationContext["db"]): ControlPlaneStore => {
 
             return facade.findMany(args);
         },
-        get: async (id: string) => generic.get(id),
+        get: async (table: string, id: string) => generic.get(table, id),
         insert: async (table: string, document: Record<string, unknown>) => generic.insert(table, document),
-        patch: async (id: string, patch: Record<string, unknown>) => generic.patch(id, patch),
+        patch: async (table: string, id: string, patch: Record<string, unknown>) => generic.patch(table, id, patch),
     };
 };
 
@@ -276,7 +276,7 @@ const resumeOnto = async (
         throw new LunoraError("CONFLICT", `${alias} is not halted`);
     }
 
-    await context.db.patch((page[0] as { _id: Id<"halts"> })._id, {
+    await context.db.patch("halts", (page[0] as { _id: Id<"halts"> })._id, {
         attempts: 0,
         lastError: null,
         nextAttemptAt: null,
@@ -333,7 +333,7 @@ export const operatorHalt = internalMutation
             return resumeOnto(context, { deploymentId, organizationId });
         }
 
-        await context.db.patch(organizationId, { supportHaltedAt: null });
+        await context.db.patch("organizations", organizationId, { supportHaltedAt: null });
 
         return requestOrganizationResume(storeOf(context.db), { actor: SUPPORT_ACTOR, now: context.now, organizationId });
     });

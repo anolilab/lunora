@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -64,6 +64,8 @@ lunora codegen    # re-emit _generated/{api,server,dataModel}.ts
 lunora deploy     # codegen + validate wrangler.jsonc + wrangler deploy
 ```
 
+Set `codegen: { lazyFunctions: true }` in `lunora.config.ts` to enable lazy function imports for the project: codegen reads it itself, so CLI codegen, dev, build, prepare, verify and deploy and the Vite and Rspack plugins all agree. For one run, set `LUNORA_LAZY_FUNCTIONS=1` or `true`, or pass `--lazy-functions` to these commands. No setting overrides an enabled opt-in from another; without any, generation stays eager.
+
 The CLI also exposes a programmatic entry point:
 
 ```ts
@@ -102,11 +104,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora cli package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora cli package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/cli?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/cli

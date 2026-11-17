@@ -39,6 +39,8 @@ import {
 } from "@lunora/d1/dialect";
 import { LunoraError } from "@lunora/errors";
 
+import { ALLOW_DESTRUCTIVE_MARKER } from "../../../../shared/allow-destructive-marker";
+
 /** Compact snapshot of a single global table — what we persist + diff. */
 interface TableSnapshot {
     columns: Record<string, ColumnSnapshot>;
@@ -148,7 +150,12 @@ const renderCreateTable = (table: TableSnapshot): string => {
     return `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(table.name)} (\n${lines}\n);`;
 };
 
-const renderDropTable = (tableName: string): string => `DROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
+/**
+ * `lunora migrate apply` gates a destructive file on `--yes`, not on this marker, so the marker matters only to
+ * `MigrationRunner`, when a user splits the file at each `;` into its entries by hand. On the line before the statement,
+ * so the split keeps it with its `DROP` rather than handing it to the next statement.
+ */
+const renderDropTable = (tableName: string): string => `${ALLOW_DESTRUCTIVE_MARKER}\nDROP TABLE IF EXISTS ${quoteIdentifier(tableName)};`;
 
 /**
  * `ALTER TABLE … ADD COLUMN`, always nullable. SQLite rejects `ADD COLUMN … NOT NULL` without a default on a table
@@ -175,19 +182,23 @@ const renderCreateIndex = (tableName: string, index: IndexSnapshot): string => {
     return `CREATE ${uniqueClause}INDEX IF NOT EXISTS ${physicalIndexName(tableName, index.name)} ON ${quoteIdentifier(tableName)} (${fields});`;
 };
 
-const renderDropIndex = (tableName: string, indexName: string): string => `DROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)};`;
+/** Confirmed for `MigrationRunner` the same way as {@link renderDropTable}. */
+const renderDropIndex = (tableName: string, indexName: string): string =>
+    `${ALLOW_DESTRUCTIVE_MARKER}\nDROP INDEX IF EXISTS ${physicalIndexName(tableName, indexName)};`;
 
 /**
  * The column's shape with `optional` stripped — that flag is the same fact as
  * {@link ColumnSnapshot.nullable}, which is reported on its own line, so leaving
- * it in would make one nullability edit print twice. `undefined` for a snapshot
+ * it in would make one nullability edit print twice. `refined` is stripped too: a
+ * `.min()`/`.max()` changes no column, so "write SQL manually" has nothing to
+ * write — the deploy gate reports what it means for stored values. `undefined` for a snapshot
  * written before the shape was recorded.
  */
 const shapeForm = (column: ColumnSnapshot): string | undefined =>
     // `optional: undefined` drops that key from the JSON without moving any
     // other — `JSON.stringify` omits undefined values and a re-assignment keeps
     // the original key position, so the form stays order-stable.
-    column.field === undefined ? undefined : JSON.stringify({ ...column.field, optional: undefined });
+    column.field === undefined ? undefined : JSON.stringify({ ...column.field, optional: undefined, refined: undefined });
 
 /** Where the D1 table-rebuild recipe for dropping a `NOT NULL` lives. */
 const RELAX_NOT_NULL_DOCS = "https://lunora.sh/docs/concepts/migrations#relaxing-not-null-on-a-d1-table";

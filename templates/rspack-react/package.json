@@ -11,7 +11,7 @@
         "build": "rsbuild build",
         "preview": "rsbuild preview",
         "codegen": "lunora codegen",
-        "deploy": "rsbuild build && lunora deploy"
+        "deploy": "lunora deploy"
     },
     "dependencies": {
         "@lunora/ratelimit": "^0.0.0",
@@ -30,6 +30,6 @@
         "@types/react": "^19.2.18",
         "@types/react-dom": "^19.2.7",
         "typescript": "^6.0.3",
-        "wrangler": "^4.147.0"
+        "wrangler": "^4.156.1"
     }
 }

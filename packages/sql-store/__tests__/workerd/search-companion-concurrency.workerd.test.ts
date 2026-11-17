@@ -191,7 +191,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
             // Isolate B: its own cold start, then a write to the row A already read.
             const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
 
-            await isolateB.patch(target, { body: "freshword common" });
+            await isolateB.patch(table, target, { body: "freshword common" });
 
             hold.release();
             await isolateA;
@@ -229,7 +229,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         );
 
         await atRow.reached;
-        await createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) }).patch(target, {
+        await createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) }).patch(table, target, {
             body: "freshword common",
         });
         atRow.release();
@@ -266,7 +266,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
 
         const isolateB = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, staged) });
 
-        await isolateB.patch(target, { title: "renamed" });
+        await isolateB.patch(table, target, { title: "renamed" });
 
         hold.release();
         await isolateA;
@@ -331,10 +331,10 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
             const hold = atCompanionWrite(table, target);
             const [isolateA, isolateB] = await livePair(table, hold.gate);
 
-            const older = isolateA.patch(target, { body: "olderword common" });
+            const older = isolateA.patch(table, target, { body: "olderword common" });
 
             await hold.reached;
-            await isolateB.patch(target, { body: "newerword common" });
+            await isolateB.patch(table, target, { body: "newerword common" });
             hold.release();
             await older;
 
@@ -362,10 +362,10 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
                 }
             });
 
-            const older = isolateA.patch(target, { body: "olderword common" });
+            const older = isolateA.patch(table, target, { body: "olderword common" });
 
             await atWrite.reached;
-            await isolateB.patch(target, { body: "newerword common" });
+            await isolateB.patch(table, target, { body: "newerword common" });
             written = true;
             atWrite.release();
             await atRecheck.reached;
@@ -391,10 +391,10 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
             const hold = atCompanionWrite(table, target);
             const [isolateA, isolateB] = await livePair(table, hold.gate);
 
-            const writing = isolateA.patch(target, { body: "onlyword common" });
+            const writing = isolateA.patch(table, target, { body: "onlyword common" });
 
             await hold.reached;
-            await isolateB.patch(target, { title: "renamed" });
+            await isolateB.patch(table, target, { title: "renamed" });
             hold.release();
             await writing;
 
@@ -411,7 +411,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
             const hold = atCompanionWrite(table, target);
             const [isolateA, isolateB] = await livePair(table, hold.gate);
 
-            const deleting = isolateA.delete(target);
+            const deleting = isolateA.delete(table, target);
 
             await hold.reached;
             await isolateB.insert(table, { _id: target, body: "rebornword common", title: "t" }, { allowExplicitId: true });
@@ -461,8 +461,8 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
             await writer.count(table);
             rowsRead = 0;
 
-            await writer.patch("d00005", { body: "changed text" });
-            await writer.delete("d00007");
+            await writer.patch(table, "d00005", { body: "changed text" });
+            await writer.delete(table, "d00007");
 
             return rowsRead;
         };
@@ -493,13 +493,20 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
         // statements on each side can interleave at.
         const holdA = holdAt((text, parameters) => text.startsWith(`INSERT OR REPLACE INTO "${companion}" `) && parameters.includes(target));
         const holdB = holdAt((text, parameters) => text.startsWith(`DELETE FROM "${companion}__ids"`) && parameters.includes(target));
-        const patching = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(holdA.gate), schema: schemaFor(table, INDEX) }).patch(target, {
-            body: "patched common",
-        });
+        const patching = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(holdA.gate), schema: schemaFor(table, INDEX) }).patch(
+            table,
+            target,
+            {
+                body: "patched common",
+            },
+        );
 
         await holdA.reached;
 
-        const deleting = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(holdB.gate), schema: schemaFor(table, INDEX) }).delete(target);
+        const deleting = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(holdB.gate), schema: schemaFor(table, INDEX) }).delete(
+            table,
+            target,
+        );
 
         await holdB.reached;
         holdA.release();
@@ -554,8 +561,8 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
 
         const writer = createSqlCtxDb({ clock: CLOCK, dialect: d1FtsDialect, exec: d1Exec(), schema: schemaFor(table, INDEX) });
 
-        await writer.patch(pad(10), { body: "banana common" });
-        await writer.delete(pad(20));
+        await writer.patch(table, pad(10), { body: "banana common" });
+        await writer.delete(table, pad(20));
 
         await expect(companionRows(table, pad(10))).resolves.toBe(1);
         await expect(companionRows(table, pad(20))).resolves.toBe(0);
@@ -657,7 +664,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
 
         // And the current build rewriting that document drops the previous
         // build's row, as the previous build's own purge-by-id would have.
-        await writer.patch(pad(7), { body: "fresh common" });
+        await writer.patch(table, pad(7), { body: "fresh common" });
 
         await expect(search(table, "oldbuild")).resolves.toStrictEqual([]);
         await expect(search(table, "fresh")).resolves.toStrictEqual([pad(7)]);
@@ -687,7 +694,7 @@ describe("fts5 search companion across isolates on D1 in workerd", () => {
 
             if (text.startsWith(`DELETE FROM "${companion}" WHERE "${companion}"."rowid" IN`) && typeof id === "string") {
                 rewrites += 1;
-                await hotWriter.patch(id, { title: `t${String(rewrites)}` });
+                await hotWriter.patch(table, id, { title: `t${String(rewrites)}` });
             }
         };
 

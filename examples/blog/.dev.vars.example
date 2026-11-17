@@ -30,5 +30,6 @@ STORAGE_SECRET="replace-with-openssl-rand-hex-32"
 # dev server. The DO reads it off its own env only (a caller-supplied target
 # would be an SSRF vector), so it cannot follow the request the way the upload
 # URL does. wrangler.jsonc ships it empty; set the deployed worker's public URL
-# there before deploying.
+# there before deploying. In a linked git worktree the dev server serves a different
+# port (it prints it at startup, and warns when this line names another one).
 LUNORA_ORIGIN_URL="http://localhost:5175"

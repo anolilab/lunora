@@ -54,6 +54,8 @@ interface FromEnvOptions {
     queue?: QueueLike;
     /** Shard the captured-mail inbox lives on; override if your worker sets a custom `defaultShardKey`. */
     rootShard?: string;
+    /** `send()` deadline in milliseconds; see `LunoraMailOptions.sendTimeoutMs`. */
+    sendTimeoutMs?: number;
 }
 
 const requireStringEnv = (env: MailEnv, name: string): string => {
@@ -191,7 +193,12 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
     const from = requireStringEnv(env, "MAIL_FROM");
 
     if (shouldCaptureMail(env)) {
-        return createMailer({ from, queue: options.queue, transport: createCaptureTransport(createCaptureSink(env, options.rootShard, options.jurisdiction)) });
+        return createMailer({
+            from,
+            queue: options.queue,
+            sendTimeoutMs: options.sendTimeoutMs,
+            transport: createCaptureTransport(createCaptureSink(env, options.rootShard, options.jurisdiction)),
+        });
     }
 
     const { cloudflareSend } = options;
@@ -199,7 +206,7 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
 
     // With neither, a producer-only mailer (it has a `queue`) is still built and
     // only `send()` rejects; `createMailer` owns that rule.
-    return createMailer({ apiKey, cloudflareSend, from, queue: options.queue });
+    return createMailer({ apiKey, cloudflareSend, from, queue: options.queue, sendTimeoutMs: options.sendTimeoutMs });
 };
 
 export { createCaptureSink, createMailerFromEnv, shouldCaptureMail };

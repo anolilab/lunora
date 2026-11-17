@@ -17,7 +17,7 @@ const { actions, state } = useController(createResendVerificationController);
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
             <FormField :actions="actions" field="email" :fields="state.fields" :label="t.emailLabel" type="email" autoComplete="email" />
-            <SubmitButton :pending="state.status === 'submitting'">{{ t.verifyEmailResend }}</SubmitButton>
+            <SubmitButton :available-at="state.resendAvailableAt" :pending="state.status === 'submitting'">{{ t.verifyEmailResend }}</SubmitButton>
         </form>
     </AuthCard>
 </template>

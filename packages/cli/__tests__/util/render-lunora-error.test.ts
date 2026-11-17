@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/errors";
+import { LunoraError, resolveHint } from "@lunora/errors";
 import { isVisulimaError, renderError } from "@visulima/error";
 import { describe, expect, it } from "vitest";
 
@@ -13,6 +13,15 @@ describe("renderLunoraError", () => {
         expect(out).toContain("boom");
         // The CONFLICT catalog hint (flattened) is rendered underneath.
         expect(out).toContain("optimistic concurrency conflict");
+    });
+
+    it("renders the cause explanation on its own line, ahead of the fix", () => {
+        expect.hasAssertions();
+
+        const out = renderLunoraError(new LunoraError("CONFLICT", "boom", { why: "row moved" }));
+
+        expect(out).toContain("Why: row moved");
+        expect(out.indexOf("Why: row moved")).toBeLessThan(out.indexOf("optimistic concurrency conflict"));
     });
 
     it("tags the failure with a reason", () => {
@@ -40,10 +49,12 @@ describe("@visulima/error masquerade contract", () => {
     it("@visulima/error's renderError surfaces a raw LunoraError's message + hint", () => {
         expect.hasAssertions();
 
-        const out = renderError(new LunoraError("RLS_REQUIRED", "denied"), { filterStacktrace: () => false });
+        const error = new LunoraError("RLS_REQUIRED", "denied", { hint: resolveHint({ code: "RLS_REQUIRED" }) });
+        const out = renderError(error, { filterStacktrace: () => false });
 
         expect(out).toContain("denied");
-        // The RLS_REQUIRED catalog hint is carried on `error.hint` and rendered.
+        // A hint carried on `error.hint` is rendered. The constructor no longer copies the catalog
+        // hint on (it stays out of browser bundles), so a caller attaches it through `resolveHint`.
         expect(out).toContain("secure-by-default");
     });
 });

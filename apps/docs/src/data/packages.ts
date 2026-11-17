@@ -146,6 +146,7 @@ export const packages: PackageInfo[] = [
         accentColor: categoryColors["Core Runtime"]!,
         category: "Core Runtime",
         description: "Wire codec and stable keys shared by every Lunora tier",
+        docsPath: "/docs/packages/wire",
         features: [],
         name: "Wire",
         npmName: "@lunora/wire",
@@ -176,6 +177,7 @@ export const packages: PackageInfo[] = [
         category: "Platform Hosts",
         description:
             "celld implementation of the Lunora platform contracts: the Cloudflare host adapters recomposed for celld (self-hosted distributed Durable Objects) under an honest capability matrix",
+        docsPath: "/docs/packages/platform-celld",
         features: [],
         name: "Platform Celld",
         npmName: "@lunora/platform-celld",
@@ -480,6 +482,16 @@ export const packages: PackageInfo[] = [
         name: "Hyperdrive",
         npmName: "@lunora/hyperdrive",
         slug: "hyperdrive",
+    },
+    {
+        accentColor: categoryColors["Add-ons"]!,
+        category: "Add-ons",
+        description: "Bring your own auth: verify Clerk, WorkOS, Auth0, Supabase or any OIDC JWT against its JWKS and feed the identity into ctx.auth / RLS.",
+        docsPath: "/docs/packages/jwt-auth",
+        features: ["Clerk, WorkOS, Auth0, Supabase presets", "Any OIDC issuer via discovery", "Feeds ctx.auth & RLS"],
+        name: "JWT Auth",
+        npmName: "@lunora/jwt-auth",
+        slug: "jwt-auth",
     },
     {
         accentColor: categoryColors["Add-ons"]!,

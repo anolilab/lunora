@@ -1,9 +1,9 @@
-import type { LunoraClient } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 
 import { operationLog } from "./operation-log";
 
 /**
- * Wrap a {@link LunoraClient} so every admin RPC the Studio issues lands on the
+ * Wrap a {@link LunoraAdminClient} so every admin RPC the Studio issues lands on the
  * operation tape.
  *
  * **Why here and not at the call sites.** The first cut of this recorded inside a
@@ -28,8 +28,17 @@ import { operationLog } from "./operation-log";
 /** The reserved prefix every Studio-issued admin RPC path carries. */
 const ADMIN_PREFIX = "__lunora_admin__:";
 
-/** The three dispatch methods that take a `FunctionReference` and return a promise. */
-const RECORDED_METHODS = new Set(["action", "mutation", "query"]);
+/**
+ * The dispatch methods that take a `FunctionReference` and return a promise.
+ *
+ * `streamRpc` belongs here for the same reason the other three do, and the shape
+ * it shares with them is what makes it free: it takes the reference first and the
+ * options last, and it resolves with the whole result even though the answer
+ * arrived in pieces. So the tape records a streamed op exactly as it recorded it
+ * before it streamed — the intermediate frames are narration and were never the
+ * operation.
+ */
+const RECORDED_METHODS = new Set(["action", "mutation", "query", "streamRpc"]);
 
 /**
  * Symbol key under which a rejection is tagged with its operation-tape sequence,
@@ -102,7 +111,7 @@ const shardKeyOf = (options: unknown): string => {
  * Return a recording view of `client`. Non-admin traffic and every non-dispatch
  * member pass straight through.
  */
-const withOperationRecording = (client: LunoraClient): LunoraClient =>
+const withOperationRecording = (client: LunoraAdminClient): LunoraAdminClient =>
     new Proxy(client, {
         get(target, property, receiver): unknown {
             const value = Reflect.get(target, property, receiver) as unknown;
@@ -121,7 +130,14 @@ const withOperationRecording = (client: LunoraClient): LunoraClient =>
                 }
 
                 const args = (typeof parameters[1] === "object" && parameters[1] !== null ? parameters[1] : {}) as Record<string, unknown>;
-                const seq = operationLog.start(path, args, shardKeyOf(parameters[2]));
+                /*
+                 * `streamRpc` is worker-served, so its shard rides in the ARGS (the
+                 * tools it runs read that shard) and its options carry only the
+                 * frame callback and abort signal. Without the fallback every
+                 * recorded assistant turn lands on the root shard.
+                 */
+                const shardKey = shardKeyOf(parameters[2]) || (property === "streamRpc" ? shardKeyOf(args) : "");
+                const seq = operationLog.start(path, args, shardKey);
 
                 try {
                     const result = await dispatch.apply(target, parameters);

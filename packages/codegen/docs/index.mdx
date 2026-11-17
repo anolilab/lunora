@@ -18,7 +18,7 @@ typed access to its own queries, mutations, actions, and tables.
 You rarely call this package directly. The [`@lunora/vite`](/docs/packages/vite)
 plugin runs it on every schema change, and the [`lunora codegen`](/docs/packages/cli)
 command runs it once on demand. Both share this same core, so the output is
-identical regardless of how it was produced.
+consistent when they use the same options.
 
 ## What it generates
 
@@ -60,7 +60,7 @@ const rows = await drizzle(env.DB).select().from(users).where(eq(users.email, em
 ```
 
 `searchIndexes` are not emitted — Drizzle has no `sqliteTable` abstraction for
-FTS5 virtual tables, and the runtime handles that plumbing outside Drizzle.
+SQLite full-text search (FTS5) virtual tables, and the runtime handles that plumbing outside Drizzle.
 Nothing you write has to import these files; ignore them if you never reach for
 Drizzle directly.
 
@@ -78,6 +78,7 @@ export default defineConfig({ plugins: [lunora()] });
 ```bash tab="CLI"
 lunora codegen                 # one-shot
 lunora codegen --api-spec both # also emit OpenAPI + OpenRPC
+lunora codegen --lazy-functions # opt into per-module function imports
 ```
 
 </Tabs>
@@ -85,6 +86,23 @@ lunora codegen --api-spec both # also emit OpenAPI + OpenRPC
 Under `lunora dev`, codegen runs in watch mode: save a function or change the
 schema and the regenerated types are in the module graph before you switch
 windows.
+
+To use the lazy registry for good, set it in `lunora.config.ts`:
+
+```ts
+export default { codegen: { lazyFunctions: true } } satisfies LunoraConfig;
+```
+
+Codegen reads the key itself, so every entry point that writes or checks
+`_generated/` agrees: CLI `codegen`, `dev`, `prepare`, `build`, `deploy` and
+`verify`, dev watch runs, Studio edits, and the Vite and Rspack plugins. Write
+it as a boolean literal; a computed value logs a warning and stays eager.
+
+For a single run, pass `--lazy-functions` or set `LUNORA_LAZY_FUNCTIONS` to `1`
+or `true` in the shell. Any one opt-in enables lazy imports; a false flag value
+does not override the config or an enabled environment setting. With none
+enabled, generation stays eager. Lazy imports are the fix for a large app that fails to deploy with error 10021; see [Worker startup CPU limit](/docs/startup-cpu-limit) for when to use them and what they cost.
+`deploy --prebuilt` keeps the output from an earlier build without regenerating.
 
 ## Don't edit `_generated/`
 
@@ -146,7 +164,36 @@ Common options:
   `result.advisories` is empty. To keep the advisor but drop its lower levels,
   set `advisor.minSeverity` in `lunora.config.ts` instead (see below).
 - `apiSpec`: `"openapi"` (default), `"openrpc"`, `"both"`, or `"none"`.
+- `lazyFunctions`: set to `true` to emit per-module lazy imports. Omitted or
+  `false` keeps the eager registry unless `codegen.lazyFunctions` in
+  `lunora.config.ts` enables it.
 - `lunoraDirectory`: override the `lunora` subdirectory name.
+- `target`: the deploy target that tailors the emitted `ctx.*` surface. **Default:**
+  the `target` string in `lunora.config.ts`, then `"cloudflare"`. The registered
+  targets are `"cloudflare"`, `"node"` and `"celld"`; each gates the surface by
+  its capability matrix from `@lunora/platform`. Any other name emits the full
+  Cloudflare surface un-gated and a `platform_unknown_target` diagnostic.
+
+## API reference
+
+### `CodegenResult`
+
+**Type:** `interface`. The value `runCodegen` returns. Its `generated` field holds
+the generated file contents, keyed by name. `advisories` holds the static
+advisor findings, and `cronTriggers` lists the Cron trigger expressions.
+
+### `lintSchema(options)`
+
+**Type:** `(options: LintSchemaOptions) => Finding[]`. Runs the static schema advisor
+and returns its findings. Use it when you need the advisories without a full
+codegen run. Surfacing them (console, error overlay, Studio) is up to the caller.
+
+### `generateSdk(document, target)`
+
+**Type:** `(document: OpenRpcDocument, target: SdkTarget) => Promise<SdkResult>`.
+Generates a client SDK in the target's language from an OpenRPC document. Import it
+from `@lunora/codegen/sdk`. The `lunora sdk generate` command calls it. See the
+[`lunora sdk`](/docs/packages/cli#lunora-sdk) section for the command.
 
 ## Trimming advisories (`advisor.minSeverity`)
 

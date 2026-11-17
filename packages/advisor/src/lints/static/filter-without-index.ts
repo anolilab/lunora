@@ -33,7 +33,7 @@ const filterWithoutIndex: Lint = {
             }
 
             // A primary-key filter is reported by `filter_on_primary_key`, whose
-            // remediation is `ctx.db.get(id)` — not an index. Two findings on
+            // remediation is `ctx.db.get(table, id)` — not an index. Two findings on
             // one read, pointing at different fixes, is worse than one.
             if (read.filtersPrimaryKey === true) {
                 continue;

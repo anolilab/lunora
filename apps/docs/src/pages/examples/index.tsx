@@ -9,6 +9,7 @@ import { deployUrl, examples, sourceUrl } from "@/data/examples";
 import { Action } from "@/kit/action";
 import { Kicker, Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
+import { ogImagePath } from "@/lib/seo";
 import { cn } from "@/lib/utils";
 
 /**
@@ -114,18 +115,14 @@ const Fillers: FC<{ count: number }> = ({ count }) => <div aria-hidden="true" cl
  *
  * None of the examples ships a screenshot, and booting thirteen apps to take
  * one is not a docs build. The generated card is the same renderer the blog
- * uses for postser without art, so the gallery has a picture per row without
+ * uses for posts without art, so the gallery has a picture per row without
  * anything being invented about what the app looks like.
  */
-const Preview: FC<{ example: Example }> = ({ example }) => {
-    const parameters = new URLSearchParams({ description: example.what, eyebrow: "Example", title: example.dir });
-
-    return (
-        <div className="aspect-1200/630 w-full overflow-hidden border-b border-hairline bg-wash">
-            <img alt="" className="size-full object-cover" decoding="async" loading="lazy" src={`/api/og?${parameters.toString()}`} />
-        </div>
-    );
-};
+const Preview: FC<{ example: Example }> = ({ example }) => (
+    <div className="aspect-1200/630 w-full overflow-hidden border-b border-hairline bg-wash">
+        <img alt="" className="size-full object-cover" decoding="async" loading="lazy" src={ogImagePath(`examples/${example.dir}`)} />
+    </div>
+);
 
 const ExampleCell: FC<{ example: Example }> = ({ example }) => (
     <div className="flex h-full flex-col bg-canvas" data-example={example.dir}>

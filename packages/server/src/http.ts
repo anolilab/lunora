@@ -5,8 +5,12 @@ import { encodeWire } from "@lunora/wire";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
+import type { LiveTopicRef } from "../../../shared/live-stream";
+import { isHeaderName } from "../../../shared/rest-surface";
+import { isSafeHeaderValue, SSE_HEADERS, sseFrame } from "../../../shared/sse";
 import applyOutput from "./apply-output";
 import type { EmptyArgs } from "./builder/index";
+import routeCacheControl from "./cache-control";
 import { parseValidatorMap } from "./functions";
 import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types";
 
@@ -49,6 +53,14 @@ type HttpRunners = Pick<ActionContext, "runAction" | "runMutation" | "runQuery">
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 type HttpActionCtx = {
     /**
+     * Forward a server-to-server request to a shard Durable Object carrying the
+     * caller's resolved identity headers — the seam the live-stream primitive
+     * (`defineLiveStream`) uses to reach the shard's subscriber registry. See
+     * {@link ShardFetch}.
+     */
+    readonly fetchShard: ShardFetch;
+
+    /**
      * The same `run*` trio bound to `shardKey`, mirroring
      * `createShardClient(...).forShard(key)`:
      *
@@ -61,6 +73,10 @@ type HttpActionCtx = {
      * DO — silently, with no way to say otherwise.
      */
     readonly forShard: (shardKey: string) => HttpRunners;
+
+    /** Publish an arbitrary event to a live topic. See {@link LivePublisher}. */
+    readonly live: LivePublisher;
+
     readonly scheduler?: ActionContext["scheduler"];
     readonly storage?: ActionContext["storage"];
 
@@ -85,6 +101,62 @@ type HttpActionCtx = {
 /** A raw handler wrapped by {@link httpAction}. Receives the raw request, returns the raw response. */
 type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<Response> | Response;
 
+/** Init for {@link ShardFetch} — the fields the live-stream primitive needs. */
+interface ShardFetchInit {
+    /** Request body (already serialized). */
+    body?: string;
+    /** Extra headers merged over the forwarded identity headers. */
+    headers?: Record<string, string>;
+    /** HTTP method; defaults to `GET`. */
+    method?: string;
+}
+
+/**
+ * Forward a server-to-server request to a shard Durable Object, carrying the
+ * caller's resolved identity headers. This is the seam the live-stream
+ * primitive uses to reach the shard's subscriber registry: a worker-side
+ * `.stream()` handler cannot itself hold a connection-scoped subscription (the
+ * registry must be the single-actor DO), so the SSE stream is served by the DO
+ * and this is how the route reaches it.
+ *
+ * Not a general-purpose escape hatch: like `ctx.run*` it dispatches as trusted
+ * worker code, so a handler must have already run whatever authorization it
+ * requires before forwarding. An internal call has no client-reachable path of
+ * its own — the DO is never directly addressable.
+ *
+ * `shardKey === undefined` targets the app's default shard.
+ */
+type ShardFetch = (shardKey: string | undefined, path: string, init?: ShardFetchInit) => Promise<Response>;
+
+/** Where a {@link LivePublisher.publish} goes. */
+interface LivePublishOptions {
+    /** The shard to publish on. Defaults to the ctx's default shard. */
+    shardKey?: string;
+}
+
+/**
+ * `ctx.live` — publish an event to a declared live topic. The event reaches the
+ * SSE subscribers of the stream that declares the topic and followed it, and the
+ * WebSocket whisper members that hold a live grant for that stream and topic
+ * (see the live-stream docblock).
+ *
+ * Reachable from an HTTP-action ctx; an action (a scheduled job) publishes
+ * through the same surface in-process (see the live-stream docblock).
+ */
+interface LivePublisher {
+    /**
+     * Publish `payload` to the topic `ref` names, from `_generated/live.ts`
+     * (`live.posts.post({ postId })`). The stream comes from the ref, and the payload
+     * is checked against the validator the topic declares. Best-effort — a topic with
+     * no subscribers is a no-op. Rejects when the shard refuses the publish: a payload
+     * its validator rejects or an undeclared topic (400), a `room:` topic (403), or a
+     * payload over the publish cap (413), so a refused publish is not silently
+     * dropped. On a target that does not serve live streams it rejects with
+     * `LIVE_STREAMS_UNSUPPORTED`.
+     */
+    publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: LivePublishOptions) => Promise<void>;
+}
+
 /**
  * The hono {@link https://hono.dev | Hono} environment used by {@link httpRouter}.
  * The runtime injects the per-request {@link HttpActionCtx} on the private
@@ -92,7 +164,13 @@ type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<R
  * `c.var.lunora` so handlers can read it as a typed variable.
  */
 interface LunoraHttpEnv {
-    Bindings: Record<string, unknown> & { __lunoraCtx?: HttpActionCtx };
+    /**
+     * `__lunoraUnrouted` is how the runtime learns that no route matched (rather than a handler answering 404 on
+     * purpose): only the router's own not-found handler calls it. `__lunoraShellFirst` marks a page navigation the
+     * single-page app's assets binding answers with its shell (never a real file): when no route matches it, the
+     * router says so before any app middleware runs, so a blanket auth gate cannot turn a deep link into its 401.
+     */
+    Bindings: Record<string, unknown> & { __lunoraCtx?: HttpActionCtx; __lunoraShellFirst?: boolean; __lunoraUnrouted?: () => void };
     Variables: { lunora: HttpActionCtx };
 }
 
@@ -102,16 +180,104 @@ type LunoraHttpApp = Hono<LunoraHttpEnv>;
 /** A compiled route handler: a hono handler that resolves to a raw {@link Response}. */
 type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 
+/** Map a thrown error to its HTTP response, re-throwing anything unrecognised. */
+const errorResponse = (error: unknown): Response => {
+    if (error instanceof ValidationError) {
+        return Response.json({ code: "BAD_REQUEST", error: error.message }, { status: 400 });
+    }
+
+    // Structural, NOT `instanceof`: the errors that actually reach a route
+    // handler are minted by several classes (the facade's `@lunora/errors`
+    // `LunoraError`, the runtime's own subclass, a twin rebuilt from a shard-RPC
+    // error payload) and by other bundled copies of this package. An
+    // `instanceof` test against any single class misses all of those and falls
+    // through to the rethrow below, which escapes hono as a bare
+    // `500 text/plain` — losing the code, status, hint and `data`.
+    if (isLunoraError(error)) {
+        const { body, redacted, status } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "Internal error" });
+
+        if (redacted) {
+            // eslint-disable-next-line no-console -- log internal errors server-side; never echo raw details to the client
+            console.error("[lunora] http action error (redacted on the wire):", error);
+        }
+
+        return Response.json({ code: body.code, error: body.message, ...(body.why === undefined ? {} : { why: body.why }) }, { status });
+    }
+
+    throw error;
+};
+
 /**
  * Wrap a `(ctx, request) => Response` handler as a hono handler. The raw escape
  * hatch — mount it with `app.all(path, httpAction(fn))`. `ctx` is the
  * runtime-injected {@link HttpActionCtx} lifted into `c.var.lunora` by
  * {@link httpRouter}; `request` is the underlying `c.req.raw`.
+ *
+ * A thrown `LunoraError` answers with its own status and code, as it does from
+ * an {@link httpRoute}; anything else still escapes to the host's 500.
  */
 const httpAction =
     (handler: HttpActionHandler): LunoraRouteHandler =>
-    async (c) =>
-        handler(c.get("lunora"), c.req.raw);
+    async (c) => {
+        try {
+            return await handler(c.get("lunora"), c.req.raw);
+        } catch (error) {
+            return errorResponse(error);
+        }
+    };
+
+/** Requests whose handler or middleware called `c.notFound()` itself, which is never "no route matched". */
+const deliberateNotFound = new WeakSet<object>();
+
+/** Apps built by {@link httpRouter}: the only Hono apps known to lift `__lunoraCtx` into `c.var.lunora`. */
+const httpRouters = new WeakSet<object>();
+
+const isHttpRouter = (app: object): boolean => httpRouters.has(app);
+
+/**
+ * Handlers registered through an {@link httpRouter}'s blanket `use` (`"*"`, `"/*"` or no path), which run around
+ * every route. A `use` on a narrower path may own that path (a legacy handler that never calls `next()`), so it
+ * counts as a route.
+ */
+const middlewareHandlers = new WeakSet<object>();
+
+const BLANKET_PATHS: ReadonlySet<string> = new Set(["*", "/*"]);
+
+/** Where Hono keeps the handler it wrapped when `.route()` mounts an app with its own error handler. */
+const COMPOSED_HANDLER = "__COMPOSED_HANDLER";
+
+const unwrapHandler = (handler: object): object => (handler as Record<string, object | undefined>)[COMPOSED_HANDLER] ?? handler;
+
+/**
+ * Whether some route of `app` (middleware left out) matches `request`'s method and path, by replaying the routes
+ * into a router that answers `204` for each. Rebuilt when routes are added. A handler that is not known to be
+ * middleware (a `use` on a `basePath()` view, or on a plain Hono app mounted with `.route()`) counts as a route, so
+ * an unknown case keeps today's answer rather than serving the shell over it.
+ */
+const routeMatcher = (app: LunoraHttpApp): ((request: Request) => Promise<boolean>) => {
+    let probe: Hono | undefined;
+    let built = -1;
+
+    return async (request) => {
+        if (probe === undefined || built !== app.routes.length) {
+            const next = new Hono();
+
+            for (const route of app.routes) {
+                if (!middlewareHandlers.has(unwrapHandler(route.handler))) {
+                    // eslint-disable-next-line unicorn/no-null -- the Fetch API requires `null` (not `undefined`) for an empty 204 body
+                    next.on(route.method, route.path, () => new Response(null, { status: 204 }));
+                }
+            }
+
+            probe = next;
+            built = app.routes.length;
+        }
+
+        const response = await probe.fetch(new Request(request.url, { method: request.method }));
+
+        return response.status === 204;
+    };
+};
 
 /**
  * Create the hono app for HTTP actions. Pre-wired with a middleware that lifts
@@ -127,6 +293,11 @@ const httpAction =
  * export default createWorker({ httpRouter: app, ... });
  * ```
  *
+ * A request no route matched answers Hono's plain 404 and tells the runtime, which
+ * may serve a single-page app's shell for it (`spaAssets` in `@lunora/runtime`).
+ * That holds for a not-found handler the app sets with `app.notFound(…)` too. A
+ * `c.notFound()` a handler or middleware returns stays a real 404.
+ *
  * The lifting middleware throws if the context is absent. `createWorker` injects
  * it on every request the router sees, so this only trips when the app is run
  * outside the runtime — a misconfiguration we surface loudly rather than let
@@ -134,6 +305,25 @@ const httpAction =
  */
 const httpRouter = (): LunoraHttpApp => {
     const app = new Hono<LunoraHttpEnv>();
+    const hasRoute = routeMatcher(app);
+    const use = app.use.bind(app);
+
+    httpRouters.add(app);
+
+    // Hono assigns `use` per instance; recording what it registers is how a route is told from middleware.
+    app.use = ((...arguments_: Parameters<typeof use>) => {
+        const [path] = arguments_;
+
+        if (typeof path !== "string" || BLANKET_PATHS.has(path)) {
+            for (const handler of arguments_) {
+                if (typeof handler === "function") {
+                    middlewareHandlers.add(handler);
+                }
+            }
+        }
+
+        return use(...arguments_);
+    }) as typeof app.use;
 
     app.use("*", async (c, next) => {
         const injected = c.env.__lunoraCtx;
@@ -147,8 +337,50 @@ const httpRouter = (): LunoraHttpApp => {
 
         c.set("lunora", injected);
 
+        // A page navigation no route matches gets the app shell from the runtime, whatever the app's middleware would
+        // have answered: a blanket auth gate's 401 must not stand in for the shell of a client-side route.
+        const { __lunoraShellFirst: shellFirst, __lunoraUnrouted: markUnrouted } = c.env;
+
+        if (shellFirst === true && !(await hasRoute(c.req.raw))) {
+            markUnrouted?.();
+
+            return c.text("404 Not Found", 404);
+        }
+
+        // A handler or middleware that calls `c.notFound()` answers 404 on purpose (a denial, a hidden record). Hono
+        // reaches the app's not-found handler through this field only from such a call; when no route matched it
+        // calls the handler directly, so wrapping the field tells the two apart.
+        const deliberate = c.notFound;
+
+        // eslint-disable-next-line no-param-reassign -- Hono reads `notFound` off this request's context; replacing it is the only hook on a deliberate call
+        c.notFound = () => {
+            deliberateNotFound.add(c);
+
+            return deliberate();
+        };
+
         await next();
+
+        return undefined;
     });
+
+    // Every not-found handler, Hono's default or one the app sets later, also signals that no route matched. The
+    // runtime serves a single-page app's shell only on that signal, never on a status: a 404 a handler returns,
+    // `c.notFound()` included, stays a 404, and a custom handler still answers every miss that is not a page load.
+    const setNotFound = app.notFound;
+
+    app.notFound = (handler) =>
+        setNotFound((c) => {
+            const { __lunoraUnrouted: markUnrouted } = c.env;
+
+            if (!deliberateNotFound.has(c)) {
+                markUnrouted?.();
+            }
+
+            return handler(c);
+        });
+
+    app.notFound((c) => c.text("404 Not Found", 404));
 
     return app;
 };
@@ -196,8 +428,20 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
     /**
      * Attach a `Cache-Control` header to the response. Only meaningful when
      * Workers Cache is enabled in `wrangler.jsonc` (`"cache": { "enabled": true }`).
+     *
+     * Sent as written to an anonymous caller. When the request carries a
+     * credential (`Authorization`, `Cookie`, `Cf-Access-Jwt-Assertion`, an x402
+     * payment header, a Cloudflare Access identity, or one of
+     * `options.credentialHeaders`), a value without a bare `private` or
+     * `no-store` is sent as `private`, with `public`, `s-maxage`,
+     * `proxy-revalidate` and a field-qualified `private="…"` removed.
+     *
+     * Only those credentials are recognised. An app that authenticates on
+     * another header (`x-api-key`, a tenant header) must list it in
+     * `options.credentialHeaders`, or its callers read as anonymous and get the
+     * declared value, `public` included.
      */
-    cacheControl: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
+    cacheControl: (value: string, options?: HttpRouteCacheOptions) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
 
     /**
      * Attach a `Cache-Tag` header to the response for tag-based purging via
@@ -221,11 +465,20 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * handler's yielded type — unless `.output()` was declared, in which case each
      * chunk must be that type and is parsed through the validator before the frame
      * is written (a violation ends the stream with an `event: error` frame).
+     *
+     * A handler may yield a plain `R` (unchanged) or {@link sseEvent}, which
+     * wraps one chunk so the pump emits an `id:` line ahead of its `data:`.
      */
     stream: [Output] extends [undefined]
-        ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler
+        ? <R>(
+              handler: (
+                  options: HttpStreamHandlerOptions<SearchParams, Params>,
+              ) => AsyncGenerator<R | SseEvent<R>, void, void> | AsyncIterable<R | SseEvent<R>>,
+          ) => LunoraRouteHandler
         : (
-              handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output, void, void> | AsyncIterable<Output>,
+              handler: (
+                  options: HttpStreamHandlerOptions<SearchParams, Params>,
+              ) => AsyncGenerator<Output | SseEvent<Output>, void, void> | AsyncIterable<Output | SseEvent<Output>>,
           ) => LunoraRouteHandler;
 
     /**
@@ -233,6 +486,16 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * cached variants per distinct value of the listed request headers.
      */
     vary: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
+}
+
+/** Options for {@link HttpRouteBuilder.cacheControl}. */
+interface HttpRouteCacheOptions {
+    /**
+     * Request headers this app authenticates on beyond the built-in ones, as
+     * `RestCachePolicy.credentialHeaders` declares them for a REST endpoint. A
+     * request carrying one gets the `private` narrowing.
+     */
+    readonly credentialHeaders?: ReadonlyArray<string>;
 }
 
 /** Opens a fresh {@link HttpRouteBuilder}. The `path` documents intent; hono owns the actual routing at mount. */
@@ -254,6 +517,7 @@ interface RouteState {
     body: ArgsValidator;
     cacheControl?: string;
     cacheTag?: string;
+    credentialHeaders?: ReadonlyArray<string>;
     method: HttpMethod;
     output?: Validator;
     params: ArgsValidator;
@@ -396,33 +660,6 @@ const parseBody = async (validators: ArgsValidator, c: Context<LunoraHttpEnv>): 
     return parseValidatorMap(validators, json as Record<string, unknown>, "body");
 };
 
-/** Map a thrown error to its HTTP response, re-throwing anything unrecognised. */
-const errorResponse = (error: unknown): Response => {
-    if (error instanceof ValidationError) {
-        return Response.json({ code: "BAD_REQUEST", error: error.message }, { status: 400 });
-    }
-
-    // Structural, NOT `instanceof`: the errors that actually reach a route
-    // handler are minted by several classes (the facade's `@lunora/errors`
-    // `LunoraError`, the runtime's own subclass, a twin rebuilt from a shard-RPC
-    // error payload) and by other bundled copies of this package. An
-    // `instanceof` test against any single class misses all of those and falls
-    // through to the rethrow below, which escapes hono as a bare
-    // `500 text/plain` — losing the code, status, hint and `data`.
-    if (isLunoraError(error)) {
-        const { body, redacted, status } = toErrorBody(error, { fallbackCode: "INTERNAL_SERVER_ERROR", redactedMessage: "Internal error" });
-
-        if (redacted) {
-            // eslint-disable-next-line no-console -- log internal errors server-side; never echo raw details to the client
-            console.error("[lunora] http action error (redacted on the wire):", error);
-        }
-
-        return Response.json({ code: body.code, error: body.message }, { status });
-    }
-
-    throw error;
-};
-
 /**
  * Reject a request whose verb is not the one the route was declared with.
  *
@@ -472,7 +709,7 @@ const buildRouteHandler =
             const headers: Record<string, string> = {};
 
             if (state.cacheControl) {
-                headers["cache-control"] = state.cacheControl;
+                headers["cache-control"] = routeCacheControl(state, state.cacheControl, c);
             }
 
             if (state.cacheTag) {
@@ -505,39 +742,100 @@ type LooseStreamHandler = (options: {
 }) => AsyncGenerator<unknown, void, void> | AsyncIterable<unknown>;
 
 /**
- * Headers on every SSE response. SSE responses must stay uncacheable so proxies
- * don't buffer or coalesce live frames — `cacheControl()` is intentionally
- * ignored for stream() routes, and `cacheTag`/`vary` are also omitted because
- * they only make sense alongside a cacheable response. `x-accel-buffering`
- * hints to proxies (including Cloudflare's own buffering layer) that this
- * response must not be coalesced.
+ * Read the SSE resume position off a request: the `Last-Event-ID` header a
+ * browser `EventSource` replays automatically on reconnect, falling back to a
+ * `lastEventId` query parameter for clients that cannot set that header.
+ * The query fallback applies only when the header is absent. A present but empty
+ * header is a cleared position (the server emitted an empty `id:`), so it returns
+ * `undefined` rather than resurrecting a stale query value. Returns `undefined`
+ * when there is no resume position, so a handler can treat it the same as
+ * "resume from the beginning".
+ *
+ * The handler decides what to replay — the framework only surfaces the value.
  */
-const SSE_HEADERS: Record<string, string> = {
-    "cache-control": "no-cache, no-transform",
-    "content-type": "text/event-stream; charset=utf-8",
-    "x-accel-buffering": "no",
+const lastEventId = (request: Request): string | undefined => {
+    const header = request.headers.get("last-event-id");
+
+    if (header !== null) {
+        return header === "" ? undefined : header;
+    }
+
+    const query = new URL(request.url).searchParams.get("lastEventId");
+
+    return query === null || query === "" ? undefined : query;
 };
 
 /**
- * Format one SSE frame. Each frame ends with `\n\n`, the spec-required
- * separator. `event:` is omitted for `data` (the default event name); we use
- * named events only for the terminal sentinels (`complete`, `error`).
- *
- * A default `data` frame carries a user chunk, so it goes through the wire codec
- * — the same bracketing the WS stream path has always had, and which this
- * transport was missing on both ends. Bare `JSON.stringify` flattens a `Date` to
- * an ISO string, an `ArrayBuffer` to `{}` and `NaN` to `null` (all still typed
- * as the declared yield type on the client), and throws outright on a `bigint`,
- * killing the stream mid-flight with a redacted "Internal error".
- *
- * The terminal sentinels are NOT encoded: `complete` carries `{}` and `error`
- * carries a plain `{ code, message }` that the client reads without decoding.
+ * Module-unique brand marking a yielded chunk as an opt-in SSE frame that
+ * carries an event id. `Symbol.for` (not a fresh `Symbol()`) keeps the key
+ * stable even if this package is bundled twice into one worker, and the brand
+ * means a plain user chunk that happens to have `id`/`data` fields is NOT
+ * mistaken for a frame — {@link sseEvent} is the only way to opt in.
  */
-const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
-    const data = JSON.stringify(event === undefined ? encodeWire(chunk) : chunk);
-    const prefix = event ? `event: ${event}\n` : "";
+const SSE_EVENT_BRAND: unique symbol = Symbol.for("@lunora/server/sse-event");
 
-    return `${prefix}data: ${data}\n\n`;
+/**
+ * The shape {@link sseEvent} returns and a `.stream()` handler yields to attach an
+ * SSE `id:` to one chunk. The brand is REQUIRED: a plain `{ data, id }` object does
+ * not satisfy it, so a yield typed `SseEvent<T>` is always a frame the pump unwraps,
+ * and the chunk type codegen derives from it is the type that reaches the wire.
+ */
+interface SseEvent<R> {
+    readonly data: R;
+    readonly id: string;
+    readonly [SSE_EVENT_BRAND]: true;
+}
+
+/**
+ * Wrap a chunk so the SSE pump emits `id: <id>` immediately before its `data:`
+ * line:
+ *
+ * ```ts
+ * httpRoute.get("/api/logs").stream(async function* logs() {
+ *     for await (const entry of tail()) {
+ *         yield sseEvent({ data: entry, id: entry.seq });
+ *     }
+ * });
+ * ```
+ *
+ * `data` goes through the same wire codec and per-chunk `.output()` enforcement
+ * as a plain yield; the wrapper is transport, not part of the user's contract.
+ */
+const sseEvent = <R>(frame: { data: R; id: string }): SseEvent<R> => {
+    return { [SSE_EVENT_BRAND]: true, data: frame.data, id: frame.id };
+};
+
+const isSseEvent = (value: unknown): value is SseEvent<unknown> =>
+    typeof value === "object" && value !== null && (value as Partial<SseEvent<unknown>>)[SSE_EVENT_BRAND] === true;
+
+/**
+ * Encode one yielded chunk into a default SSE frame. `.output()` is enforced
+ * HERE — the pump's per-chunk contract check — against the chunk itself, or
+ * against a branded {@link sseEvent}'s inner `data` (the wrapper is transport,
+ * not the user's contract). A violating chunk throws out of the pump into its
+ * catch and becomes a redacted `event: error` frame, the same verdict the RPC
+ * and REST paths reach for a contract breach — a wrong chunk is not a stream
+ * that keeps going.
+ *
+ * A data frame goes through the wire codec. Bare `JSON.stringify` flattens a
+ * `Date` to an ISO string, an `ArrayBuffer` to `{}` and `NaN` to `null`, and
+ * throws on a `bigint`, killing the stream mid-flight. The terminal sentinels are
+ * not encoded: `complete` carries `{}` and `error` a plain `{ code, message }`.
+ */
+const frameChunk = (output: Validator | undefined, chunk: unknown): string => {
+    if (isSseEvent(chunk)) {
+        // Checked here so a bad id is a LunoraError: the shared helper's plain Error
+        // would reach the client as INTERNAL_SERVER_ERROR instead of INTERNAL.
+        if (!isSafeHeaderValue(chunk.id)) {
+            throw new LunoraError("INTERNAL", "sseEvent id must not contain CR, LF or NUL");
+        }
+
+        const data = output ? applyOutput(output, chunk.data) : chunk.data;
+
+        return sseFrame(encodeWire(data), undefined, chunk.id);
+    }
+
+    return sseFrame(encodeWire(output ? applyOutput(output, chunk) : chunk));
 };
 
 /**
@@ -616,17 +914,12 @@ const buildStreamHandler =
                             break;
                         }
 
-                        // `.output()` applies HERE too. SSE was the one result path
-                        // that skipped `applyOutput`, whose own contract is "every
-                        // result-parsing site (RPC, REST, any future transport) must
-                        // route through this helper" — so a `.stream()` route accepted
-                        // an `.output()`, type-checked the handler against it, and then
-                        // discarded it, sending whatever the generator yielded. A
-                        // violating chunk throws out of the pump into the catch below
-                        // and becomes a redacted `event: error` frame, which is the
-                        // same verdict the RPC and REST paths reach for a contract
-                        // breach — a wrong chunk is not a stream that keeps going.
-                        controller.enqueue(encoder.encode(sseFrame(state.output ? applyOutput(state.output, chunk) : chunk)));
+                        // SSE was the one result path that skipped `applyOutput`,
+                        // whose own contract is "every result-parsing site (RPC,
+                        // REST, any future transport) must route through this
+                        // helper" — so `.output()` is enforced per chunk inside
+                        // `frameChunk`, alongside the branded-`sseEvent` framing.
+                        controller.enqueue(encoder.encode(frameChunk(state.output, chunk)));
                     }
 
                     // Re-check after the loop: a consumer `cancel()` (or a client
@@ -658,7 +951,19 @@ const buildStreamHandler =
                     // enqueueing onto the closed controller would throw out of
                     // this catch.
                     if (!ac.signal.aborted) {
-                        controller.enqueue(encoder.encode(sseFrame({ code: body.code, message: body.message }, "error")));
+                        controller.enqueue(
+                            encoder.encode(
+                                sseFrame(
+                                    {
+                                        code: body.code,
+                                        hint: body.hint,
+                                        message: body.message,
+                                        why: body.why,
+                                    },
+                                    "error",
+                                ),
+                            ),
+                        );
                     }
                 } finally {
                     request.signal.removeEventListener("abort", onAbort);
@@ -678,10 +983,27 @@ const buildStreamHandler =
         return new Response(stream, { headers: SSE_HEADERS });
     };
 
+/**
+ * `credentialHeaders` as given, refused when a name is not a header name: a typo
+ * would otherwise mean the app's credential header is never seen, and its callers
+ * share a cached response. Said when the route is defined, not on a request.
+ * @throws LunoraError `INTERNAL` naming the entry that is not a header name.
+ */
+const checkedCredentialHeaders = (names: ReadonlyArray<string> | undefined): ReadonlyArray<string> | undefined => {
+    const invalid = names?.find((name) => !isHeaderName(name));
+
+    if (invalid !== undefined) {
+        throw new LunoraError("INTERNAL", `httpRoute .cacheControl(): credentialHeaders entry ${JSON.stringify(invalid)} is not a header name`);
+    }
+
+    return names;
+};
+
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
     return {
         body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
-        cacheControl: (value: string) => makeRouteBuilder({ ...state, cacheControl: value }),
+        cacheControl: (value: string, options?: HttpRouteCacheOptions) =>
+            makeRouteBuilder({ ...state, cacheControl: value, credentialHeaders: checkedCredentialHeaders(options?.credentialHeaders) }),
         cacheTag: (value: string) => makeRouteBuilder({ ...state, cacheTag: value }),
         handler: (userHandler: LooseHandler): LunoraRouteHandler => buildRouteHandler(state, userHandler),
         output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
@@ -737,9 +1059,8 @@ const httpRoute: HttpRoute = {
  * handler can guard a request-derived header value before writing it — the fix the
  * `http_action_response_header_injection` advisor lint points to.
  */
-const isSafeHeaderValue = (value: string): boolean => !(value.includes("\r") || value.includes("\n") || value.includes("\0"));
 
-export { httpAction, httpRoute, httpRouter, isSafeHeaderValue };
+export { httpAction, httpRoute, httpRouter, isHttpRouter, lastEventId, sseEvent };
 
 export type {
     HttpActionCtx,
@@ -747,11 +1068,19 @@ export type {
     HttpMethod,
     HttpRoute,
     HttpRouteBuilder,
+    HttpRouteCacheOptions,
     HttpRouteFactory,
     HttpRouteHandlerOptions,
     HttpRunners,
     HttpStreamHandlerOptions,
+    LivePublisher,
+    LivePublishOptions,
     LunoraHttpApp,
     LunoraHttpEnv,
     LunoraRouteHandler,
+    ShardFetch,
+    ShardFetchInit,
+    SseEvent,
 };
+
+export { isSafeHeaderValue } from "../../../shared/sse";

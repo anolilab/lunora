@@ -125,7 +125,7 @@ const EvalsPanel = ({ initialShardKey }: EvalsPanelProps): ReactElement => {
         <section className="flex flex-col gap-4" data-testid="ev-panel">
             <ShardInput onChange={setShardKey} testId="ev-shard-input" value={shardKey} />
 
-            {error === null ? null : <ErrorAlert error={error} testId="ev-error" />}
+            {error === null ? null : <ErrorAlert error={error} shardKey={queryShardKey} testId="ev-error" />}
 
             {cards.length === 0 ? (
                 <EmptyState

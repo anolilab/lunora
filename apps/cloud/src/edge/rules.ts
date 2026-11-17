@@ -128,7 +128,7 @@ const ZONE_FACTS = new Set(["applied", "appliedAt", "cloudflareRuleId", "targets
  * pass, which plans against its new intent; a row that is gone is not written for.
  */
 const stillCurrent = async (database: ControlPlaneStore, row: EdgeRuleRow): Promise<boolean> => {
-    const fresh = (await database.get(row._id, "edgeRules")) as EdgeRuleRow | null;
+    const fresh = (await database.get("edgeRules", row._id)) as EdgeRuleRow | null;
 
     return fresh !== null && fresh.organizationId === row.organizationId && fresh.kind === row.kind && fresh.updatedAt === row.updatedAt;
 };
@@ -148,13 +148,13 @@ const recordOutcome = async (
         const facts = Object.fromEntries(Object.entries(outcome.fields).filter(([field]) => ZONE_FACTS.has(field)));
 
         if (Object.keys(facts).length > 0) {
-            await database.patch(row._id, facts, "edgeRules");
+            await database.patch("edgeRules", row._id, facts);
         }
 
         return outcome.status;
     }
 
-    await database.patch(row._id, { ...outcome.fields, status: outcome.status, updatedAt: now }, "edgeRules");
+    await database.patch("edgeRules", row._id, { ...outcome.fields, status: outcome.status, updatedAt: now });
     await database.insert("auditLog", {
         action: `edge.${row.kind}.${outcome.audit}`,
         actorUserId: "system:edge-rules",
@@ -229,7 +229,7 @@ const applyAndRecord = async (
         if (organizationGone) {
             // The organization was purged while its rule was still on the zone; with
             // the rule gone, nothing is left for this row to name.
-            await database.delete(row._id, "edgeRules");
+            await database.delete("edgeRules", row._id);
             await database.insert("auditLog", {
                 action: `edge.${row.kind}.removed`,
                 actorUserId: "system:edge-rules",
@@ -381,7 +381,7 @@ export const runEdgeRuleSweep = async (database: ControlPlaneStore, options: Edg
 
     for (const row of rows) {
         // eslint-disable-next-line no-await-in-loop -- serialized so the budget and write counts stay exact across rows
-        const organization = (await database.get(row.organizationId, "organizations")) as null | { deletionRequestedAt?: null | number };
+        const organization = (await database.get("organizations", row.organizationId)) as null | { deletionRequestedAt?: null | number };
         const organizationGone = organization === null;
         // A missing organization counts as deleting: its rule must come off.
         const deleting = organizationGone || organization.deletionRequestedAt != null;
@@ -438,7 +438,7 @@ export const engageAnomalyRateLimits = async (
             continue;
         }
 
-        await database.patch(row._id, { attempts: 0, engaged, status: "pending", updatedAt: now }, "edgeRules");
+        await database.patch("edgeRules", row._id, { attempts: 0, engaged, status: "pending", updatedAt: now });
         await database.insert("auditLog", {
             action: engaged ? "edge.rate_limit.engage" : "edge.rate_limit.release",
             actorUserId: "system:anomaly",

@@ -19,11 +19,12 @@
  * (overwrite and prune are idempotent) or, once committed, answers the recorded
  * result.
  */
+import { toErrorBody } from "@lunora/errors";
 import type { DatabaseWriterLike, SchemaLike } from "@lunora/shard-engine";
-
+import type { ExportRow, ImportError } from "@lunora/sql-store";
+import { prepareGlobalImportRow } from "@lunora/sql-store";
 import { decodeWire, encodeWire } from "@lunora/wire";
-import type { ExportRow, ImportError, ImportResult } from "./admin-export-import";
-import { explicitIdConflicts, prepareReplaceRows, writeRow } from "./admin-export-import";
+
 import type { D1Exec } from "./d1-ctx-db";
 import { quoteIdentifier } from "./dialect";
 
@@ -34,6 +35,104 @@ const SESSION_TABLE = "__lunora_import_session__";
 const STAGE_TTL_MS: number = 24 * 60 * 60 * 1000;
 
 const PAGE_ROWS = 200;
+
+/**
+ * What a staged commit reports. Its own shape, not `ImportResult`: a replace counts
+ * rows written per table (overwrites included) and rows pruned per table, which the
+ * runtime session totals across planes.
+ */
+interface StagedCommitResult {
+    conflicts: number;
+    /** Rows pruned per table because the snapshot did not hold them. */
+    deleted: Record<string, number>;
+    errors: ImportError[];
+    inserted: Record<string, number>;
+}
+
+interface ReplaceRow {
+    decoded: Record<string, unknown>;
+    id: string;
+    line: number;
+    table: string;
+}
+
+/**
+ * Validate every row of a replace before any is staged, so one bad row stages
+ * nothing. The shape check is the ordinary import's (`prepareGlobalImportRow`);
+ * a replace adds that the row's table is in scope and that it carries its `_id`,
+ * since rows are kept by `_id` and one without would be written and then pruned.
+ */
+const prepareReplaceRows = (
+    schema: SchemaLike,
+    args: { rows: ReadonlyArray<ExportRow>; startLine?: number },
+    scope: ReadonlySet<string>,
+): { errors: ImportError[]; ready: ReplaceRow[] } => {
+    const errors: ImportError[] = [];
+    const ready: ReplaceRow[] = [];
+    let line = (args.startLine ?? 1) - 1;
+
+    for (const row of args.rows) {
+        line += 1;
+
+        const effectiveLine = row.line ?? line;
+
+        if (!scope.has(row.table)) {
+            errors.push({ code: "BAD_ROW", line: effectiveLine, message: `table "${row.table}" is not in this replace import's tables`, table: row.table });
+            continue;
+        }
+
+        const prepared = prepareGlobalImportRow(schema, row, effectiveLine);
+
+        if (prepared.kind === "settled") {
+            if (prepared.outcome.kind === "error") {
+                errors.push(prepared.outcome.error);
+            }
+        } else if (prepared.kind === "delete") {
+            // A replace prunes what the snapshot does not hold; a delete row has nothing to add to that.
+            errors.push({ code: "BAD_ROW", line: effectiveLine, message: 'a replace import does not take `op: "delete"` rows', table: row.table });
+        } else if (prepared.explicitId === undefined) {
+            errors.push({ code: "BAD_ROW", line: effectiveLine, message: "a replace import row must carry its `_id`", table: prepared.table });
+        } else {
+            ready.push({ decoded: prepared.decoded, id: prepared.explicitId, line: effectiveLine, table: prepared.table });
+        }
+    }
+
+    return { errors, ready };
+};
+
+/** Whether `table` already holds `id`. A probe error propagates: read as "absent", the write would duplicate the row. */
+const tableHolds = async (exec: D1Exec, table: string, id: string): Promise<boolean> => {
+    const hits = await exec.all(`SELECT 1 FROM ${quoteIdentifier(table)} WHERE id = ? LIMIT 1`, [id]);
+
+    return hits.length > 0;
+};
+
+/**
+ * Overwrite the stored row or insert a new one, turning a throw into a row error. Routed through `toErrorBody`: a
+ * recognized `LunoraError` keeps its code and message, an unrecognized throw is redacted rather than leaked.
+ */
+const writeStagedRow = async (
+    writer: DatabaseWriterLike,
+    exec: D1Exec,
+    row: { decoded: Record<string, unknown>; id: string; line: number; table: string },
+): Promise<ImportError | undefined> => {
+    try {
+        if (await tableHolds(exec, row.table, row.id)) {
+            const fields = { ...row.decoded };
+
+            delete fields["_id"];
+            await writer.replace(row.table, row.id, fields, { allowExplicitId: true });
+        } else {
+            await writer.insert(row.table, row.decoded, { allowExplicitId: true });
+        }
+
+        return undefined;
+    } catch (error: unknown) {
+        const { body } = toErrorBody(error, { fallbackCode: "INSERT_FAILED" });
+
+        return { code: body.code, line: row.line, message: body.message, table: row.table };
+    }
+};
 
 /** A staged-replace failure the caller maps to its HTTP status. */
 class GlobalImportStagingError extends Error {
@@ -70,7 +169,7 @@ const sweep = async (exec: D1Exec, now: number): Promise<void> => {
 
 interface SessionRecord {
     generation: string;
-    result?: ImportResult;
+    result?: StagedCommitResult;
     state: "committed" | "staging";
 }
 
@@ -92,7 +191,7 @@ const readSession = async (exec: D1Exec, session: string, generation: string): P
         throw new GlobalImportStagingError("IMPORT_SESSION_STALE", `import session "${session}" in D1 belongs to an earlier session of the same id`);
     }
 
-    return typeof row["result"] === "string" ? { generation, result: JSON.parse(row["result"]) as ImportResult, state } : { generation, state };
+    return typeof row["result"] === "string" ? { generation, result: JSON.parse(row["result"]) as StagedCommitResult, state } : { generation, state };
 };
 
 /** Run `statements` as one D1 round trip when the exec can batch, one at a time otherwise. */
@@ -183,16 +282,12 @@ const writeStaged = async (writer: DatabaseWriterLike, exec: D1Exec, session: st
             const id = String(row["id"]);
             const decoded = decodeWire(JSON.parse(String(row["doc"]))) as Record<string, unknown>;
             // eslint-disable-next-line no-await-in-loop -- rows are written in staging order through the one writer
-            const exists = await explicitIdConflicts(writer, exec, table, id);
-            // eslint-disable-next-line no-await-in-loop -- as above
-            const outcome = await writeRow(table, Number(row["line"]), async () =>
-                exists ? writer.replace(id, decoded, table, { allowExplicitId: true }) : writer.insert(table, decoded, { allowExplicitId: true }),
-            );
+            const failure = await writeStagedRow(writer, exec, { decoded, id, line: Number(row["line"]), table });
 
-            if (outcome.kind === "error") {
-                errors.push(outcome.error);
-            } else {
+            if (failure === undefined) {
                 inserted[table] = (inserted[table] ?? 0) + 1;
+            } else {
+                errors.push(failure);
             }
         }
 
@@ -224,7 +319,7 @@ const pruneTable = async (writer: DatabaseWriterLike, exec: D1Exec, session: str
 
         for (const { id } of doomed) {
             // eslint-disable-next-line no-await-in-loop -- deletes run in order through the one writer (cascades included)
-            await writer.delete(String(id), table, { hard: true });
+            await writer.delete(table, String(id), { hard: true });
         }
 
         deleted += doomed.length;
@@ -247,7 +342,7 @@ const commitStagedGlobalRows = async (
     schema: SchemaLike,
     args: { generation: string; session: string; staged: boolean; tables: ReadonlyArray<string> },
     now: number = Date.now(),
-): Promise<ImportResult> => {
+): Promise<StagedCommitResult> => {
     await sweep(exec, now);
 
     const record = await readSession(exec, args.session, args.generation);
@@ -275,7 +370,7 @@ const commitStagedGlobalRows = async (
         deleted[table] = await pruneTable(writer, exec, args.session, table);
     }
 
-    const result: ImportResult = { conflicts: 0, deleted, errors: [], inserted };
+    const result: StagedCommitResult = { conflicts: 0, deleted, errors: [], inserted };
 
     // The marker and the drop of the staged rows go together: a retry either
     // sees the marker, or still has the rows to re-apply.
@@ -302,5 +397,5 @@ const abortStagedGlobalRows = async (exec: D1Exec, session: string, generation: 
     ]);
 };
 
-export type { StageGlobalArgs };
+export type { StagedCommitResult, StageGlobalArgs };
 export { abortStagedGlobalRows, commitStagedGlobalRows, GlobalImportStagingError, stageGlobalRows };

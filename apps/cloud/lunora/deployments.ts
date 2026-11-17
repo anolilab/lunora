@@ -127,7 +127,7 @@ const liveRelease = async (context: QueryContext, row: Pick<DeploymentRow, "alia
  */
 const pointProjectAt = async (context: MutationContext, deployment: DeploymentRow): Promise<void> => {
     if (deployment.kind === "production") {
-        await context.db.patch(deployment.projectId, { activeDeploymentId: deployment._id, activeScriptName: deployment.scriptName });
+        await context.db.patch("projects", deployment.projectId, { activeDeploymentId: deployment._id, activeScriptName: deployment.scriptName });
     }
 };
 
@@ -160,7 +160,7 @@ export const adminTarget = internalQuery
             // internal call runs under the session it was made with.
             await assertMember(context, organizationId, isDataMovementPath(adminPath) ? ["owner", "admin"] : ["owner", "admin", "member"]);
 
-            const deployment = await context.db.get(deploymentId);
+            const deployment = await context.db.get("deployments", deploymentId);
             const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);
 
             // Live only: every release of an alias shares one Worker, and only the
@@ -187,7 +187,7 @@ export const adminTarget = internalQuery
 
 /** Whether a project has a preview password set. Read as part of {@link planForScript}. */
 const previewProtectionEnabled = async (context: QueryContext, projectId: Id<"projects">): Promise<boolean> => {
-    const project = (await context.db.get(projectId)) as null | { previewPasswordHash?: string };
+    const project = (await context.db.get("projects", projectId)) as null | { previewPasswordHash?: string };
 
     return Boolean(project?.previewPasswordHash);
 };
@@ -245,7 +245,7 @@ export const planForScript = query
         // accrual already breaches its cap is refused here as soon as the ledger
         // write lands, not an hour later when the sweep suspends it. An org row
         // this lookup cannot find is refused too — unknown state fails closed.
-        const organization = (await context.db.get(deployment.organizationId)) as (AdmissionRow & { recursionPolicy?: null | string }) | null;
+        const organization = (await context.db.get("organizations", deployment.organizationId)) as (AdmissionRow & { recursionPolicy?: null | string }) | null;
 
         if (!organizationServing(organization, context.now)) {
             return { plan: "suspended" };
@@ -429,7 +429,7 @@ export const create = mutation
         }
 
         // Integrity: the project must belong to the same org (no cross-org linkage).
-        const project = await context.db.get(arguments_.projectId);
+        const project = await context.db.get("projects", arguments_.projectId);
 
         if (project?.organizationId !== arguments_.organizationId) {
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
@@ -521,7 +521,7 @@ export const activate = mutation
         id: v.id("deployments"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, id } }): Promise<void> => {
-        const deployment = await context.db.get(id);
+        const deployment = await context.db.get("deployments", id);
 
         if (!deployment) {
             throw new LunoraError("NOT_FOUND", "deployment not found");
@@ -546,14 +546,14 @@ export const activate = mutation
 
         for (const other of others) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(other._id, { status: "superseded", supersededAt: now, updatedAt: now });
+            await context.db.patch("deployments", other._id, { status: "superseded", supersededAt: now, updatedAt: now });
             // eslint-disable-next-line no-await-in-loop -- the same small batch
             await endInstallBadge(installBadgeOf(context), other);
         }
 
         await restoreInstallBadge(installBadgeOf(context), deployment, now);
 
-        const project = (await context.db.get(deployment.projectId)) as null | { activeDeploymentId?: string; name?: string };
+        const project = (await context.db.get("projects", deployment.projectId)) as null | { activeDeploymentId?: string; name?: string };
         const movesPointer = deployment.kind === "production" && project?.activeDeploymentId !== id;
 
         await pointProjectAt(context, deployment);
@@ -597,7 +597,7 @@ export const rollback = internalMutation
         organizationId: v.id("organizations"),
     })
     .mutation(async ({ ctx: context, args: { deployKey, id, organizationId } }): Promise<{ scriptName: string; version?: number }> => {
-        const target = await context.db.get(id);
+        const target = await context.db.get("deployments", id);
 
         if (target?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "deployment not found in this organization");
@@ -624,11 +624,11 @@ export const rollback = internalMutation
 
         if (replaced && replaced._id !== id) {
             assertStatusMove(replaced.status, "superseded");
-            await context.db.patch(replaced._id, { status: "superseded", supersededAt: now, updatedAt: now });
+            await context.db.patch("deployments", replaced._id, { status: "superseded", supersededAt: now, updatedAt: now });
             await endInstallBadge(installBadgeOf(context), replaced);
         }
 
-        await context.db.patch(id, { liveAt: now, status: "live", updatedAt: now });
+        await context.db.patch("deployments", id, { liveAt: now, status: "live", updatedAt: now });
         await restoreInstallBadge(installBadgeOf(context), target, now);
         await pointProjectAt(context, target);
         await context.db.insert("auditLog", {
@@ -675,7 +675,7 @@ export const releaseTarget = internalQuery
             runtime?: "worker";
             target?: string;
         }> => {
-            const target = await context.db.get(id);
+            const target = await context.db.get("deployments", id);
 
             if (target?.organizationId !== organizationId) {
                 throw new LunoraError("NOT_FOUND", "deployment not found in this organization");
@@ -746,7 +746,7 @@ export const pruneSuperseded = internalMutation.mutation(async ({ ctx: context }
 
     for (const deployment of excess) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-        await context.db.patch(deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
+        await context.db.patch("deployments", deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
     }
 
     return { pruned: excess.length };
@@ -775,7 +775,7 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
 
     for (const deployment of expired) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-        await context.db.patch(deployment._id, { status: "destroyed", updatedAt: now });
+        await context.db.patch("deployments", deployment._id, { status: "destroyed", updatedAt: now });
         // eslint-disable-next-line no-await-in-loop -- see above
         await enqueueNotification(context, deployment.organizationId, "preview.expired", {
             detail: `Preview ${deployment.alias ?? deployment.scriptName} was removed after its expiry time.`,
@@ -819,7 +819,7 @@ export const updateStatus = mutation
         url: v.optional(boundedString(LIMITS.url)),
     })
     .mutation(async ({ ctx: context, args: { bundleHash, deployKey, id, status, url } }): Promise<void> => {
-        const existing = await context.db.get(id);
+        const existing = await context.db.get("deployments", id);
 
         if (!existing) {
             throw new LunoraError("NOT_FOUND", "deployment not found");
@@ -839,7 +839,7 @@ export const updateStatus = mutation
         const { now } = context;
         const phaseColumn = PHASE_TIMESTAMP[status];
 
-        await context.db.patch(id, {
+        await context.db.patch("deployments", id, {
             ...(bundleHash === undefined ? {} : { bundleHash }),
             ...(url === undefined ? {} : { url }),
             ...(phaseColumn ? { [phaseColumn]: now } : {}),
@@ -885,7 +885,7 @@ export const ejectTarget = internalQuery.input({ deployKey: boundedString(LIMITS
         scriptName: string;
         url: string;
     }> => {
-        const deployment = await context.db.get(deploymentId);
+        const deployment = await context.db.get("deployments", deploymentId);
 
         if (!deployment) {
             return null;
@@ -909,7 +909,7 @@ export const ejectTarget = internalQuery.input({ deployKey: boundedString(LIMITS
             throw new LunoraError("CONFLICT", PLAIN_WORKER_NO_ADMIN);
         }
 
-        const project = (await context.db.get(deployment.projectId)) as { slug?: string } | null;
+        const project = (await context.db.get("projects", deployment.projectId)) as { slug?: string } | null;
 
         return {
             ...(deployment.adminToken ? { adminToken: deployment.adminToken } : {}),

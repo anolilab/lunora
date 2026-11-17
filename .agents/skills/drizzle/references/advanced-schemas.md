@@ -208,22 +208,19 @@ await db.execute(sql`SET app.current_tenant_id = ${tenantId}`);
 
 ```typescript
 import { drizzle } from 'drizzle-orm/node-postgres';
+import { pgSchema, serial, text } from 'drizzle-orm/pg-core';
 
-// Create schema-aware connection
-function getTenantDb(tenantId: string) {
-  const schemaName = `tenant_${tenantId}`;
-
-  return drizzle(pool, {
-    schema: {
-      ...schema,
-    },
-    schemaPrefix: schemaName,
+// drizzle-orm 1.0.0-rc.5 has no schemaPrefix option. Each tenant gets its own
+// pgSchema(...) namespace, so the table is declared per tenant.
+function tenantUsers(tenantId: string) {
+  return pgSchema(`tenant_${tenantId}`).table('users', {
+    id: serial('id').primaryKey(),
+    name: text('name').notNull(),
   });
 }
 
-// Use tenant-specific DB
-const tenantDb = getTenantDb('tenant123');
-await tenantDb.select().from(users);
+const db = drizzle({ client: pool });
+await db.select().from(tenantUsers('tenant123'));
 ```
 
 ## Database-Specific Features
@@ -332,19 +329,22 @@ export type UserWithPosts = User & {
 ```typescript
 // db/schema/users.ts
 export const users = pgTable('users', { ... });
-export const userRelations = relations(users, { ... });
 
 // db/schema/posts.ts
 export const posts = pgTable('posts', { ... });
-export const postRelations = relations(posts, { ... });
 
 // db/schema/index.ts
 export * from './users';
 export * from './posts';
 
-// db/client.ts
+// db/relations.ts: one defineRelations call covers every table
+import { defineRelations } from 'drizzle-orm';
 import * as schema from './schema';
-export const db = drizzle(pool, { schema });
+export const relations = defineRelations(schema, (r) => ({ ... }));
+
+// db/client.ts
+import { relations } from './relations';
+export const db = drizzle({ client: pool, relations });
 ```
 
 ### Naming Conventions

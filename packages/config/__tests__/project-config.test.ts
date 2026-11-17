@@ -1,12 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { platformMatrixIds } from "@lunora/codegen";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { BUILD_ROOT_ENV, BUILD_TARGET_ENV } from "../src/codegen-env";
 import { DEFAULT_DEPLOY_TARGET, deployTargetIds, resolveDeployDriver } from "../src/driver-registry";
-import { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget } from "../src/project-config";
+import { assertBuildTargetMatches, interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget } from "../src/project-config";
 
 describe("interpretRemote", () => {
     it("passes a boolean through unchanged", () => {
@@ -207,5 +208,74 @@ describe("target registries", () => {
         const matrixIds = new Set(platformMatrixIds());
 
         expect(deployTargetIds().every((id) => matrixIds.has(id))).toBe(true);
+    });
+});
+
+describe("assertBuildTargetMatches", () => {
+    const root = resolve("/app");
+    const saved = process.env[BUILD_TARGET_ENV];
+
+    beforeEach(() => {
+        process.env[BUILD_ROOT_ENV] = root;
+    });
+
+    afterEach(() => {
+        Reflect.deleteProperty(process.env, BUILD_ROOT_ENV);
+
+        if (saved === undefined) {
+            Reflect.deleteProperty(process.env, BUILD_TARGET_ENV);
+        } else {
+            process.env[BUILD_TARGET_ENV] = saved;
+        }
+    });
+
+    it("does nothing outside a CLI build, where the env var is unset", () => {
+        expect.assertions(1);
+
+        Reflect.deleteProperty(process.env, BUILD_TARGET_ENV);
+
+        expect(() => {
+            assertBuildTargetMatches("node", root);
+        }).not.toThrow();
+    });
+
+    it("accepts the target the CLI resolved", () => {
+        expect.assertions(1);
+
+        process.env[BUILD_TARGET_ENV] = "cloudflare";
+
+        expect(() => {
+            assertBuildTargetMatches("cloudflare", root);
+        }).not.toThrow();
+    });
+
+    it("treats an empty env var as unset, so a direct plugin build is not refused", () => {
+        expect.assertions(1);
+
+        process.env[BUILD_TARGET_ENV] = "";
+
+        expect(() => {
+            assertBuildTargetMatches("node", root);
+        }).not.toThrow();
+    });
+
+    it("refuses a plugin target that differs from the one the CLI resolved", () => {
+        expect.assertions(1);
+
+        process.env[BUILD_TARGET_ENV] = "cloudflare";
+
+        expect(() => {
+            assertBuildTargetMatches("node", root);
+        }).toThrow(/resolves target "node" but the CLI resolved "cloudflare"/);
+    });
+
+    it("does not check a nested build for another project, which inherits the variables from the CLI's build", () => {
+        expect.assertions(1);
+
+        process.env[BUILD_TARGET_ENV] = "cloudflare";
+
+        expect(() => {
+            assertBuildTargetMatches("node", resolve("/app/services/parser"));
+        }).not.toThrow();
     });
 });

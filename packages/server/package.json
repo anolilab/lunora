@@ -1,6 +1,6 @@
 {
     "name": "@lunora/server",
-    "version": "1.0.0-alpha.206",
+    "version": "1.0.0-alpha.276",
     "description": "Server primitives for Lunora: defineSchema, defineTable, query, mutation, and action",
     "keywords": [
         "backend",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -31,7 +31,9 @@
         "__assets__"
     ],
     "type": "module",
-    "sideEffects": false,
+    "sideEffects": [
+        "./dist/drizzle.mjs"
+    ],
     "main": "./dist/index.mjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
@@ -74,9 +76,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
@@ -85,11 +85,11 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/scheduler": "1.0.0-alpha.129",
-        "@lunora/shard-engine": "1.0.0-alpha.131",
-        "@lunora/values": "1.0.0-alpha.66",
-        "@lunora/wire": "1.0.0-alpha.1",
+        "@lunora/errors": ">=1.0.0-alpha.77 <2.0.0-0",
+        "@lunora/scheduler": "^1.0.0-alpha.170",
+        "@lunora/shard-engine": "^1.0.0-alpha.191",
+        "@lunora/values": "^1.0.0-alpha.95",
+        "@lunora/wire": "1.0.0-alpha.6",
         "drizzle-orm": "catalog:drizzle",
         "hono": "catalog:http"
     },
@@ -97,9 +97,9 @@
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/observability": "1.0.0-alpha.142",
+        "@lunora/observability": "^1.0.0-alpha.202",
         "@lunora/search-core": "workspace:*",
-        "@lunora/storage": "1.0.0-alpha.134",
+        "@lunora/storage": "^1.0.0-alpha.172",
         "@opentelemetry/api": "catalog:otel",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",

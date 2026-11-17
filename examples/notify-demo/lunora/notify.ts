@@ -10,7 +10,7 @@ import { d1SubscriptionStore, defineNotify, fcmFromEnv, webPushFromEnv } from "@
  *
  * - `webPush` reads VAPID secrets (`VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` /
  *   `VAPID_SUBJECT`) from `env`.
- * - `fcm` reads `FCM_PROJECT_ID` / `FCM_ACCESS_TOKEN` from `env`.
+ * - `fcm` reads `FCM_SERVICE_ACCOUNT` (+ optional `FCM_PROJECT_ID`) from `env`.
  * - `store` persists device subscriptions in the `DB` D1 binding (lazily-created
  *   table — no migration needed).
  */

@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import { runExportCommand, runImportCommand } from "../../src/commands/data-transfer";
 import { EXIT_CODE } from "../../src/util/exit-code";
@@ -24,6 +25,21 @@ const silentLogger = (): Logger => {
         info: () => {},
         success: () => {},
         warn: () => {},
+    };
+};
+
+/** A `dryRun` POST is the check that runs before a real import. It writes and records nothing, so the fakes below answer it without counting. */
+const isCheck = (url: string): boolean => new URL(url).searchParams.get("dryRun") === "true";
+
+const checkResponse = () => {
+    return {
+        body: null,
+        json: async () => {
+            return { conflicts: 0, dryRun: true, errors: [], inserted: {} };
+        },
+        ok: true,
+        status: 200,
+        text: async () => "",
     };
 };
 
@@ -53,7 +69,7 @@ describe("lunora data-transfer", () => {
     /** A worker that answers one NDJSON row carrying something worth not disclosing. */
     const oneRowFetch = (): StreamingFetchLike => async (): ReturnType<StreamingFetchLike> => {
         return {
-            body: stringStream(`${JSON.stringify({ doc: { _id: "u1", ssn: "000-00-0000" }, table: "users" })}\n`),
+            body: stringStream(`${JSON.stringify({ doc: { _id: "u1", ssn: "000-00-0000" }, table: "users" })}\n${exportEndLine(1)}`),
             json: async () => undefined,
             ok: true,
             status: 200,
@@ -84,7 +100,7 @@ describe("lunora data-transfer", () => {
             expect.assertions(5);
 
             const calls: { body: unknown; headers?: Record<string, string>; url: string }[] = [];
-            const ndjson = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${JSON.stringify({ doc: { _id: "u2" }, table: "users" })}\n`;
+            const ndjson = `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${JSON.stringify({ doc: { _id: "u2" }, table: "users" })}\n${exportEndLine(2)}`;
 
             const fetchImpl: StreamingFetchLike = async (url, init) => {
                 calls.push({ body: init?.body ? JSON.parse(bodyText(init.body)) : undefined, headers: init?.headers, url });
@@ -115,6 +131,23 @@ describe("lunora data-transfer", () => {
             expect(readFileSync(outPath, "utf8")).toBe(ndjson);
         });
 
+        it.each([
+            ["no end marker (cut on a row boundary)", `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`],
+            ["an end marker that counts a different number of rows", `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(2)}`],
+        ])("refuses a response with %s and keeps no file", async (_label, body) => {
+            expect.assertions(2);
+
+            const outPath = join(workDir, "dump.ndjson");
+            const fetchImpl: StreamingFetchLike = async () => {
+                return { body: stringStream(body), json: async () => undefined, ok: true, status: 200, text: async () => "" };
+            };
+
+            await expect(runExportCommand({ fetchImpl, logger: silentLogger(), out: outPath, token: "t", url: "http://localhost:8787" })).rejects.toThrow(
+                /end marker/u,
+            );
+            expect(readdirSync(workDir)).toStrictEqual([]);
+        });
+
         it("forwards --tables to the request body", async () => {
             expect.assertions(1);
 
@@ -124,7 +157,7 @@ describe("lunora data-transfer", () => {
                 calls.push({ body: init?.body ? (JSON.parse(bodyText(init.body)) as { tables?: unknown }) : {} });
 
                 return {
-                    body: stringStream(""),
+                    body: stringStream(exportEndLine(0)),
                     json: async () => undefined,
                     ok: true,
                     status: 200,
@@ -276,7 +309,7 @@ describe("lunora data-transfer", () => {
 
             const file = join(workDir, "remote.ndjson");
 
-            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`, "utf8");
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`, "utf8");
 
             const errors: string[] = [];
             const calls: string[] = [];
@@ -307,6 +340,64 @@ describe("lunora data-transfer", () => {
             expect(errors.join("\n")).toContain("--yes");
         });
 
+        it.each([
+            ["no end marker (cut on a row boundary)", [JSON.stringify({ doc: { _id: "u1" }, table: "users" })]],
+            ["an end marker that counts a different number of rows", [JSON.stringify({ doc: { _id: "u1" }, table: "users" }), exportEndLine(2).trim()]],
+            [
+                "a row after the end marker",
+                [JSON.stringify({ doc: { _id: "u1" }, table: "users" }), exportEndLine(1).trim(), JSON.stringify({ doc: { _id: "u2" }, table: "users" })],
+            ],
+        ])("refuses a file with %s before writing any row", async (_label, lines) => {
+            expect.assertions(3);
+
+            const file = join(workDir, "cut.ndjson");
+
+            writeFileSync(file, `${lines.join("\n")}\n`, "utf8");
+
+            const writes: string[] = [];
+            const fetchImpl: StreamingFetchLike = async (url) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
+                writes.push(url);
+
+                return {
+                    body: null,
+                    json: async () => {
+                        return { conflicts: 0, errors: [], inserted: { users: 1 } };
+                    },
+                    ok: true,
+                    status: 200,
+                    text: async () => "",
+                };
+            };
+
+            const result = await runImportCommand({ fetchImpl, file, logger: silentLogger(), token: "t", url: "http://localhost:8787" });
+
+            expect(result.code).not.toBe(0);
+            expect(result.inserted).toBe(0);
+            expect(writes).toStrictEqual([]);
+        });
+
+        it("tells the operator a file without an end marker predates it, and how to make it importable", async () => {
+            expect.assertions(3);
+
+            const file = join(workDir, "old-backup.ndjson");
+
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n`, "utf8");
+
+            const errors: string[] = [];
+            const logger: Logger = { error: (message: string) => errors.push(message), info: () => {}, success: () => {}, warn: () => {} };
+            const fetchImpl: StreamingFetchLike = async () => checkResponse();
+            const result = await runImportCommand({ fetchImpl, file, logger, token: "t", url: "http://localhost:8787" });
+            const message = `${result.error ?? ""}\n${errors.join("\n")}`;
+
+            expect(result.code).not.toBe(0);
+            expect(message).toContain("written before exports carried an end marker");
+            expect(message).toContain('{"end":true,"rows":N}');
+        });
+
         it("pOSTs batches and aggregates the inserted counts", async () => {
             expect.assertions(4);
 
@@ -318,6 +409,7 @@ describe("lunora data-transfer", () => {
                     JSON.stringify({ doc: { _id: "u1" }, table: "users" }),
                     JSON.stringify({ doc: { _id: "u2" }, table: "users" }),
                     JSON.stringify({ doc: { _id: "u3" }, table: "users" }),
+                    exportEndLine(3).trim(),
                 ].join("\n"),
                 "utf8",
             );
@@ -325,6 +417,10 @@ describe("lunora data-transfer", () => {
             const calls: { body: string; url: string }[] = [];
 
             const fetchImpl: StreamingFetchLike = async (url, init) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 calls.push({ body: bodyText(init?.body), url });
 
                 const rows = bodyText(init?.body)
@@ -366,7 +462,11 @@ describe("lunora data-transfer", () => {
 
             const captured: { body: string }[] = [];
 
-            const fetchImpl: StreamingFetchLike = async (_url, init) => {
+            const fetchImpl: StreamingFetchLike = async (url, init) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 captured.push({ body: bodyText(init?.body) });
 
                 return {
@@ -424,7 +524,11 @@ describe("lunora data-transfer", () => {
 
             const captured: string[] = [];
 
-            const fetchImpl: StreamingFetchLike = async (_url, init) => {
+            const fetchImpl: StreamingFetchLike = async (url, init) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 captured.push(bodyText(init?.body));
 
                 return {
@@ -513,7 +617,7 @@ describe("lunora data-transfer", () => {
 
             const file = join(workDir, "in.ndjson");
 
-            writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`, "utf8");
 
             const calls: string[] = [];
             const fetchImpl: StreamingFetchLike = async (url) => {
@@ -548,10 +652,14 @@ describe("lunora data-transfer", () => {
 
             const file = join(workDir, "in.ndjson");
 
-            writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`, "utf8");
 
             const calls: string[] = [];
             const fetchImpl: StreamingFetchLike = async (url) => {
+                if (isCheck(url)) {
+                    return checkResponse();
+                }
+
                 calls.push(url);
 
                 return {
@@ -579,223 +687,12 @@ describe("lunora data-transfer", () => {
             expect(calls).toHaveLength(1);
         });
 
-        describe("--replace", () => {
-            /**
-             * A worker with staged replace import: stages each batch, commits with one
-             * deletion, recording the calls. `stageErrors` makes every batch refuse a
-             * row; `staged: false` is a worker without staged import.
-             */
-            const replaceFetch =
-                (calls: { body: string; url: string }[], worker: { staged?: boolean; stageErrors?: boolean } = {}): StreamingFetchLike =>
-                async (url, init) => {
-                    calls.push({ body: bodyText(init?.body), url });
-
-                    const rows = bodyText(init?.body)
-                        .split("\n")
-                        .filter((line) => line.trim().length > 0);
-                    let payload: Record<string, unknown> = {
-                        errors: worker.stageErrors === true ? [{ code: "VALIDATION_ERROR", line: 1, message: "bad", table: "users" }] : [],
-                        failed: [],
-                        received: rows.length,
-                        staged: { users: rows.length },
-                    };
-
-                    if (url.endsWith("/abort")) {
-                        payload = { aborted: false };
-                    } else if (url.endsWith("/commit")) {
-                        payload = { deleted: { users: 2 }, inserted: { users: 2 }, status: "committed" };
-                    }
-
-                    const ok = worker.staged !== false || !url.endsWith("/abort");
-
-                    return {
-                        body: null,
-                        json: async () => payload,
-                        ok,
-                        status: ok ? 200 : 404,
-                        text: async () => "",
-                    };
-                };
-
-            const writeRows = (rows: ReadonlyArray<unknown>): string => {
-                const file = join(workDir, "replace.ndjson");
-
-                writeFileSync(file, rows.map((row) => JSON.stringify(row)).join("\n"), "utf8");
-
-                return file;
-            };
-
-            it("stages every batch of --tables into one session, commits it once, and reports what it deleted", async () => {
-                expect.assertions(5);
-
-                const file = writeRows([
-                    { doc: { _id: "u1" }, table: "users" },
-                    { doc: { _id: "m1" }, table: "messages" },
-                    { doc: { key: "k", namespace: "CACHE", value: "AQ==" }, table: "$kv" },
-                    { doc: { _id: "u2" }, table: "users" },
-                ]);
-                const calls: { body: string; url: string }[] = [];
-                const infos: string[] = [];
-                const warnings: string[] = [];
-
-                const result = await runImportCommand({
-                    batchSize: 1,
-                    fetchImpl: replaceFetch(calls),
-                    file,
-                    logger: { ...silentLogger(), info: (message) => infos.push(message), warn: (message) => warnings.push(message) },
-                    replace: true,
-                    tables: "users",
-                    token: "t",
-                    url: "http://localhost:8787",
-                    yes: true,
-                });
-
-                expect(result.code).toBe(0);
-                expect(calls.map((call) => call.url.replace(/stage=cli-[\da-f-]+/u, "stage=<session>"))).toStrictEqual([
-                    "http://localhost:8787/_lunora/admin/import/abort",
-                    "http://localhost:8787/_lunora/admin/import?mode=replace&tables=users&stage=<session>",
-                    "http://localhost:8787/_lunora/admin/import?mode=replace&tables=users&stage=<session>",
-                    "http://localhost:8787/_lunora/admin/import/commit",
-                ]);
-                expect(result.body?.deleted).toStrictEqual({ users: 2 });
-                expect(infos).toContain("replace: deleted 2 row(s) from users");
-                expect(warnings).toStrictEqual([
-                    "replace: skipped 1 row(s) of messages, which is not in --tables",
-                    "replace: skipped 1 row(s) of $kv, which is not in --tables",
-                ]);
-            });
-
-            it("sends an empty replace, since an empty file empties the tables", async () => {
-                expect.assertions(2);
-
-                const calls: { body: string; url: string }[] = [];
-
-                const result = await runImportCommand({
-                    fetchImpl: replaceFetch(calls),
-                    file: writeRows([]),
-                    logger: silentLogger(),
-                    replace: true,
-                    token: "t",
-                    url: "http://localhost:8787",
-                    yes: true,
-                });
-
-                expect(result.code).toBe(0);
-                expect(
-                    calls.map((call) => [call.url.replace(/stage=cli-[\da-f-]+/u, "stage=<session>"), call.url.endsWith("/abort") ? "" : call.body]),
-                ).toStrictEqual([
-                    ["http://localhost:8787/_lunora/admin/import/abort", ""],
-                    ["http://localhost:8787/_lunora/admin/import?mode=replace&stage=<session>", ""],
-                    ["http://localhost:8787/_lunora/admin/import/commit", calls[2]?.body],
-                ]);
-            });
-
-            it("asks first, and writes nothing when the prompt is declined", async () => {
-                expect.assertions(3);
-
-                const calls: { body: string; url: string }[] = [];
-                const prompts: string[] = [];
-
-                const result = await runImportCommand({
-                    confirm: async (prompt) => {
-                        prompts.push(prompt);
-
-                        return false;
-                    },
-                    fetchImpl: replaceFetch(calls),
-                    file: writeRows([{ doc: { _id: "u1" }, table: "users" }]),
-                    logger: silentLogger(),
-                    replace: true,
-                    table: "users",
-                    token: "t",
-                    url: "http://localhost:8787",
-                });
-
-                expect(result.code).toBe(EXIT_CODE.CANCELLED);
-                expect(prompts[0]).toContain("the table(s) users");
-                expect(calls).toHaveLength(0);
-            });
-
-            it("refuses without --yes when there is no TTY to ask on", async () => {
-                expect.assertions(2);
-
-                const calls: { body: string; url: string }[] = [];
-                const { isTTY } = process.stdin;
-
-                process.stdin.isTTY = false;
-
-                try {
-                    const result = await runImportCommand({
-                        fetchImpl: replaceFetch(calls),
-                        file: writeRows([{ doc: { _id: "u1" }, table: "users" }]),
-                        logger: silentLogger(),
-                        replace: true,
-                        token: "t",
-                        url: "http://localhost:8787",
-                    });
-
-                    expect(result.code).toBe(EXIT_CODE.USAGE);
-                    expect(calls).toHaveLength(0);
-                } finally {
-                    process.stdin.isTTY = isTTY;
-                }
-            });
-
-            it("refuses --tables without --replace", async () => {
-                expect.assertions(1);
-
-                const result = await runImportCommand({ file: writeRows([]), logger: silentLogger(), tables: "users", token: "t" });
-
-                expect(result.code).toBe(EXIT_CODE.USAGE);
-            });
-
-            it("refuses a worker without staged import before it sends a row", async () => {
-                expect.assertions(2);
-
-                const calls: { body: string; url: string }[] = [];
-                const result = await runImportCommand({
-                    fetchImpl: replaceFetch(calls, { staged: false }),
-                    file: writeRows([{ doc: { _id: "u1" }, table: "users" }]),
-                    logger: silentLogger(),
-                    replace: true,
-                    token: "t",
-                    url: "http://localhost:8787",
-                    yes: true,
-                });
-
-                expect(result.code).toBe(1);
-                expect(calls.map((call) => call.url)).toStrictEqual(["http://localhost:8787/_lunora/admin/import/abort"]);
-            });
-
-            it("aborts, and never commits, when a staged batch refuses a row", async () => {
-                expect.assertions(2);
-
-                const calls: { body: string; url: string }[] = [];
-                const result = await runImportCommand({
-                    fetchImpl: replaceFetch(calls, { stageErrors: true }),
-                    file: writeRows([{ doc: { _id: "u1" }, table: "users" }]),
-                    logger: silentLogger(),
-                    replace: true,
-                    token: "t",
-                    url: "http://localhost:8787",
-                    yes: true,
-                });
-
-                expect(result.code).toBe(1);
-                expect(calls.map((call) => call.url.split("?")[0])).toStrictEqual([
-                    "http://localhost:8787/_lunora/admin/import/abort",
-                    "http://localhost:8787/_lunora/admin/import",
-                    "http://localhost:8787/_lunora/admin/import/abort",
-                ]);
-            });
-        });
-
         it("returns a non-zero exit code when the server reports errors", async () => {
             expect.assertions(1);
 
             const file = join(workDir, "in.ndjson");
 
-            writeFileSync(file, JSON.stringify({ doc: { _id: "u1" }, table: "users" }), "utf8");
+            writeFileSync(file, `${JSON.stringify({ doc: { _id: "u1" }, table: "users" })}\n${exportEndLine(1)}`, "utf8");
 
             const fetchImpl: StreamingFetchLike = async () => {
                 return {

@@ -150,7 +150,7 @@ export const runAlertSweep = async (database: ControlPlaneDatabase, options: Ale
                     const patch = { firing, lastEvaluatedAt: options.now, lastValue: value, updatedAt: options.now };
 
                     await (existing
-                        ? database.patch(existing._id, patch, "alertRuleState")
+                        ? database.patch("alertRuleState", existing._id, patch)
                         : database.insert("alertRuleState", { createdAt: options.now, organizationId, ruleId, ...patch }));
                 },
             },

@@ -148,16 +148,21 @@ export const analyzedSearchText = (document: Record<string, unknown>, index: { f
     analyzedSearchTokens(document, index).join(" ");
 
 /**
- * Tally a document's indexed text into the `(token, occurrences)` rows the
- * portable inverted index stores — one row per distinct token, the count being
- * exactly what `scoreTokens` (see `query.ts`) would add for that token. Empty text
- * yields an empty map (nothing to index, and nothing to delete beyond the
- * unconditional by-id purge the write path already issues).
+ * Tally a document's analyzed token stream into the `(token, occurrences)` rows
+ * the portable inverted index stores — one row per distinct token, the count
+ * being exactly what `scoreTokens` (see `query.ts`) would add for that token.
+ * Empty text yields an empty map (nothing to index, and nothing to delete beyond
+ * the unconditional by-id purge the write path already issues).
+ *
+ * Takes the document rather than text for the reason {@link analyzedSearchTokens}
+ * exposes an array: tallying the space-joined {@link analyzedSearchText} meant
+ * re-running the whole analysis over tokens that were already analyzed, which
+ * was half the cost of every inverted-index write.
  */
-export const countSearchTokens = (text: string, analyzer: SearchAnalyzer): Map<string, number> => {
+export const countSearchTokens = (document: Record<string, unknown>, index: { field: string; language?: string }): Map<string, number> => {
     const counts = new Map<string, number>();
 
-    for (const token of splitSearchTokens(text, analyzer)) {
+    for (const token of analyzedSearchTokens(document, index)) {
         counts.set(token, (counts.get(token) ?? 0) + 1);
     }
 

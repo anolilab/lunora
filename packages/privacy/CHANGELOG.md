@@ -1,3 +1,427 @@
+## @lunora/privacy [1.0.0-alpha.58](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.57...@lunora/privacy@1.0.0-alpha.58) (2026-11-14)
+
+- fix(privacy): retire restored requests like a completed erasure (#1533)
+
+## @lunora/privacy [1.0.0-alpha.57](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.56...@lunora/privacy@1.0.0-alpha.57) (2026-11-03)
+
+- fix(ci): mark test fixtures so the secrets scan passes (#1470)
+
+## @lunora/privacy [1.0.0-alpha.56](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.55...@lunora/privacy@1.0.0-alpha.56) (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
+## @lunora/privacy 1.0.0-alpha.56 (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
+## @lunora/privacy [1.0.0-alpha.55](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.54...@lunora/privacy@1.0.0-alpha.55) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.267
+* **@lunora/auth:** upgraded to 1.0.0-alpha.256
+
+## @lunora/privacy [1.0.0-alpha.54](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.53...@lunora/privacy@1.0.0-alpha.54) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.266
+* **@lunora/auth:** upgraded to 1.0.0-alpha.255
+
+## @lunora/privacy [1.0.0-alpha.53](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.52...@lunora/privacy@1.0.0-alpha.53) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/server:** upgraded to 1.0.0-alpha.264
+* **@lunora/auth:** upgraded to 1.0.0-alpha.254
+
+## @lunora/privacy [1.0.0-alpha.52](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.51...@lunora/privacy@1.0.0-alpha.52) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/server:** upgraded to 1.0.0-alpha.262
+* **@lunora/auth:** upgraded to 1.0.0-alpha.253
+
+## @lunora/privacy [1.0.0-alpha.51](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.50...@lunora/privacy@1.0.0-alpha.51) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/server:** upgraded to 1.0.0-alpha.261
+* **@lunora/auth:** upgraded to 1.0.0-alpha.252
+
+## @lunora/privacy [1.0.0-alpha.50](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.49...@lunora/privacy@1.0.0-alpha.50) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.260
+* **@lunora/auth:** upgraded to 1.0.0-alpha.251
+
+## @lunora/privacy [1.0.0-alpha.49](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.48...@lunora/privacy@1.0.0-alpha.49) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/server:** upgraded to 1.0.0-alpha.259
+* **@lunora/auth:** upgraded to 1.0.0-alpha.250
+
+## @lunora/privacy [1.0.0-alpha.48](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.47...@lunora/privacy@1.0.0-alpha.48) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/auth:** upgraded to 1.0.0-alpha.249
+
+## @lunora/privacy [1.0.0-alpha.47](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.46...@lunora/privacy@1.0.0-alpha.47) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.256
+* **@lunora/auth:** upgraded to 1.0.0-alpha.248
+
+## @lunora/privacy [1.0.0-alpha.46](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.45...@lunora/privacy@1.0.0-alpha.46) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/auth:** upgraded to 1.0.0-alpha.247
+
+## @lunora/privacy [1.0.0-alpha.45](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.44...@lunora/privacy@1.0.0-alpha.45) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.253
+* **@lunora/auth:** upgraded to 1.0.0-alpha.246
+
+## @lunora/privacy [1.0.0-alpha.44](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.43...@lunora/privacy@1.0.0-alpha.44) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.252
+* **@lunora/auth:** upgraded to 1.0.0-alpha.245
+
+## @lunora/privacy [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.42...@lunora/privacy@1.0.0-alpha.43) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/auth:** upgraded to 1.0.0-alpha.244
+
+## @lunora/privacy [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.41...@lunora/privacy@1.0.0-alpha.42) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.251
+* **@lunora/auth:** upgraded to 1.0.0-alpha.243
+
+## @lunora/privacy [1.0.0-alpha.41](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.40...@lunora/privacy@1.0.0-alpha.41) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.250
+* **@lunora/auth:** upgraded to 1.0.0-alpha.242
+
+## @lunora/privacy [1.0.0-alpha.40](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.39...@lunora/privacy@1.0.0-alpha.40) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.249
+* **@lunora/auth:** upgraded to 1.0.0-alpha.241
+
+## @lunora/privacy [1.0.0-alpha.39](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.38...@lunora/privacy@1.0.0-alpha.39) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.248
+* **@lunora/auth:** upgraded to 1.0.0-alpha.240
+
+## @lunora/privacy [1.0.0-alpha.38](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.37...@lunora/privacy@1.0.0-alpha.38) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.247
+* **@lunora/auth:** upgraded to 1.0.0-alpha.239
+
+## @lunora/privacy [1.0.0-alpha.37](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.36...@lunora/privacy@1.0.0-alpha.37) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.246
+* **@lunora/auth:** upgraded to 1.0.0-alpha.238
+
+## @lunora/privacy [1.0.0-alpha.36](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.35...@lunora/privacy@1.0.0-alpha.36) (2026-10-27)
+
+### ⚠ BREAKING CHANGES
+
+* an evaluation error in `@lunora/auth` or a spec module now surfaces on
+the first event (every request 500s) instead of failing the upload; the pre-deploy
+smoke-load covers lazy builds only. `serverQuery` on the composed app is async, so a
+synchronous throw while building the worker arrives as a rejected promise. The codegen
+result gains `generated.authModule`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* perf(privacy): load the archive writers on the first export
+
+`definePrivacy` reaches `export.ts`, which imported `archive.ts` statically, and that
+module imports `@cantoo/pdf-lib` (with culori, fflate, html-entities and an HTML parser
+behind it; pdf-lib declares no `sideEffects`, so none of it tree-shakes). Every Worker that
+declares a privacy policy therefore evaluated about 1.5 MB of PDF and ZIP code at startup,
+although only `assembleExport`, already async and run inside a workflow step, uses it.
+It now loads `./archive` with `import()` there; the manifest, ZIP and PDF it builds are
+unchanged.
+
+`@lunora/privacy` bundled alone with the workerd conditions (esbuild metafile, static
+edges only): 659 modules / 2,491 KiB -> 303 modules / 938 KiB. Importing that bundle in
+a fresh Node process, 11 runs, median / min: 27.2 / 26.8 ms -> 16.2 / 13.8 ms. The first
+export run per isolate pays the load instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(plans): record the generated-app cheap levers in plan 490
+
+### Performance Improvements
+
+* cut Worker startup CPU (refs [#1166](https://github.com/anolilab/lunora/issues/1166)) ([#1352](https://github.com/anolilab/lunora/issues/1352)) ([12dc5a4](https://github.com/anolilab/lunora/commit/12dc5a4a0f469b4c9c67754ca715e8fcffdfba5c)), closes [#1165](https://github.com/anolilab/lunora/issues/1165) [#1165](https://github.com/anolilab/lunora/issues/1165) [#1175](https://github.com/anolilab/lunora/issues/1175)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.244
+* **@lunora/auth:** upgraded to 1.0.0-alpha.237
+
+## @lunora/privacy [1.0.0-alpha.35](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.34...@lunora/privacy@1.0.0-alpha.35) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/server:** upgraded to 1.0.0-alpha.243
+* **@lunora/auth:** upgraded to 1.0.0-alpha.236
+
+## @lunora/privacy [1.0.0-alpha.34](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.33...@lunora/privacy@1.0.0-alpha.34) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/auth:** upgraded to 1.0.0-alpha.235
+
+## @lunora/privacy [1.0.0-alpha.33](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.32...@lunora/privacy@1.0.0-alpha.33) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/server:** upgraded to 1.0.0-alpha.241
+* **@lunora/auth:** upgraded to 1.0.0-alpha.234
+
+## @lunora/privacy [1.0.0-alpha.32](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.31...@lunora/privacy@1.0.0-alpha.32) (2026-10-26)
+
+### Bug Fixes
+
+* **privacy:** erasure replay, coverage, retention and persistence fixes ([#1286](https://github.com/anolilab/lunora/issues/1286)) ([1ef4e1b](https://github.com/anolilab/lunora/commit/1ef4e1be46596c97f576e125cdf6c11d2d86b324))
+
+## @lunora/privacy [1.0.0-alpha.31](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.30...@lunora/privacy@1.0.0-alpha.31) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.239
+* **@lunora/auth:** upgraded to 1.0.0-alpha.233
+
+## @lunora/privacy [1.0.0-alpha.30](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.29...@lunora/privacy@1.0.0-alpha.30) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/server:** upgraded to 1.0.0-alpha.238
+* **@lunora/auth:** upgraded to 1.0.0-alpha.232
+
+## @lunora/privacy [1.0.0-alpha.29](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.28...@lunora/privacy@1.0.0-alpha.29) (2026-10-26)
+
+### Features
+
+* **privacy:** finish the example's download, retention and sign-in paths ([#1336](https://github.com/anolilab/lunora/issues/1336)) ([01e4e01](https://github.com/anolilab/lunora/commit/01e4e013bd4f0511225fab5a8bac5d7c2d55ce95))
+
+## @lunora/privacy [1.0.0-alpha.28](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.27...@lunora/privacy@1.0.0-alpha.28) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.237
+* **@lunora/auth:** upgraded to 1.0.0-alpha.231
+
+## @lunora/privacy [1.0.0-alpha.27](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.26...@lunora/privacy@1.0.0-alpha.27) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/server:** upgraded to 1.0.0-alpha.236
+* **@lunora/auth:** upgraded to 1.0.0-alpha.230
+
+## @lunora/privacy [1.0.0-alpha.26](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.25...@lunora/privacy@1.0.0-alpha.26) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/server:** upgraded to 1.0.0-alpha.235
+* **@lunora/auth:** upgraded to 1.0.0-alpha.229
+
+## @lunora/privacy [1.0.0-alpha.25](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.24...@lunora/privacy@1.0.0-alpha.25) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.234
+* **@lunora/auth:** upgraded to 1.0.0-alpha.228
+
+## @lunora/privacy [1.0.0-alpha.24](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.23...@lunora/privacy@1.0.0-alpha.24) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.233
+* **@lunora/auth:** upgraded to 1.0.0-alpha.227
+
+## @lunora/privacy [1.0.0-alpha.23](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.22...@lunora/privacy@1.0.0-alpha.23) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.232
+* **@lunora/auth:** upgraded to 1.0.0-alpha.226
+
+## @lunora/privacy [1.0.0-alpha.22](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.21...@lunora/privacy@1.0.0-alpha.22) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.230
+* **@lunora/auth:** upgraded to 1.0.0-alpha.225
+
+## @lunora/privacy [1.0.0-alpha.21](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.20...@lunora/privacy@1.0.0-alpha.21) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/server:** upgraded to 1.0.0-alpha.228
+* **@lunora/auth:** upgraded to 1.0.0-alpha.224
+
+## @lunora/privacy [1.0.0-alpha.20](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.19...@lunora/privacy@1.0.0-alpha.20) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/auth:** upgraded to 1.0.0-alpha.223
+
+## @lunora/privacy [1.0.0-alpha.19](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.18...@lunora/privacy@1.0.0-alpha.19) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.227
+* **@lunora/auth:** upgraded to 1.0.0-alpha.222
+
+## @lunora/privacy [1.0.0-alpha.18](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.17...@lunora/privacy@1.0.0-alpha.18) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/auth:** upgraded to 1.0.0-alpha.221
+
+## @lunora/privacy [1.0.0-alpha.17](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.16...@lunora/privacy@1.0.0-alpha.17) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+* **@lunora/auth:** upgraded to 1.0.0-alpha.220
+
+## @lunora/privacy [1.0.0-alpha.16](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.15...@lunora/privacy@1.0.0-alpha.16) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/server:** upgraded to 1.0.0-alpha.224
+* **@lunora/auth:** upgraded to 1.0.0-alpha.219
+
+## @lunora/privacy [1.0.0-alpha.15](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.14...@lunora/privacy@1.0.0-alpha.15) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+* **@lunora/auth:** upgraded to 1.0.0-alpha.218
+
+## @lunora/privacy [1.0.0-alpha.14](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.13...@lunora/privacy@1.0.0-alpha.14) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+* **@lunora/auth:** upgraded to 1.0.0-alpha.217
+
+## @lunora/privacy [1.0.0-alpha.13](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.12...@lunora/privacy@1.0.0-alpha.13) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/server:** upgraded to 1.0.0-alpha.221
+* **@lunora/auth:** upgraded to 1.0.0-alpha.216
+
+## @lunora/privacy [1.0.0-alpha.12](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.11...@lunora/privacy@1.0.0-alpha.12) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.220
+* **@lunora/auth:** upgraded to 1.0.0-alpha.215
+
 ## @lunora/privacy [1.0.0-alpha.11](https://github.com/anolilab/lunora/compare/@lunora/privacy@1.0.0-alpha.10...@lunora/privacy@1.0.0-alpha.11) (2026-10-15)
 
 ### Performance Improvements

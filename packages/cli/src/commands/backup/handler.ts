@@ -39,6 +39,8 @@ import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { resolveProductionWorkerUrl } from "../../util/resolve-target";
 import { runExportCommand } from "../data-transfer/export";
 import { runImportCommand } from "../data-transfer/import";
+import type { ImportMode, ImportPlan } from "../data-transfer/import-plan";
+import { IMPORT_MODES, parseImportMode } from "../data-transfer/import-plan";
 import type { StreamingFetchLike } from "../data-transfer/shared";
 import type { FetchLike } from "../run/handler";
 import { readAndLogBody } from "../run/handler";
@@ -83,10 +85,14 @@ interface BackupCommandOptions {
     cwd?: string;
     /** Backup directory (relative to cwd). Defaults to `.lunora-backups`. */
     dir?: string;
+    /** `restore`: print the plan against the target's rows and write nothing. */
+    dryRun?: boolean;
     fetchImpl?: StreamingFetchLike;
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
     logger: Logger;
+    /** `restore`: how the rows the target already holds are treated. Defaults to `require-empty`, so a restore never lands on live rows unasked. */
+    mode?: ImportMode;
     /** Injectable clock for deterministic backup ids in tests. */
     now?: () => Date;
     /** Key prefix bucket-backed backups live under. Defaults to `backups/`. */
@@ -121,6 +127,8 @@ interface BackupCommandData {
     deleted?: string[];
     entries?: ReadonlyArray<BackupManifestEntry>;
     entry?: BackupManifestEntry;
+    /** `restore` — what the import would do or did, per table (the plan a `--dry-run` exists to show). */
+    plan?: ImportPlan["tables"];
     preview?: BackupRetentionPreview;
     restored?: number;
     /** `pitr` — the endpoint's own answer (a bookmark, or a restore receipt). */
@@ -137,6 +145,8 @@ interface BackupCommandResult extends CommandResult<BackupCommandData> {
     entries?: ReadonlyArray<BackupManifestEntry>;
     /** Set on `create` — the written backup's manifest entry. */
     entry?: BackupManifestEntry;
+    /** Set on `restore` — the import leg's per-table plan, when it made one. */
+    plan?: ImportPlan["tables"];
     /** Set on `retention` — what the worker reported it would delete next. */
     preview?: BackupRetentionPreview;
     /** Set on `restore` — how many rows the import leg wrote back. */
@@ -291,7 +301,11 @@ const runBackupRestore = async (options: BackupCommandOptions, destination: Back
             cwd: options.cwd,
             fetchImpl: options.fetchImpl,
             file: snapshot.path,
+            // Without it the import's json guard never fires, and a prompt would draw on the stdout the summary owns.
+            format: options.format,
             logger: options.logger,
+            dryRun: options.dryRun,
+            mode: options.mode ?? "require-empty",
             prod: options.prod,
             token: options.token,
             url: options.url,
@@ -301,7 +315,12 @@ const runBackupRestore = async (options: BackupCommandOptions, destination: Back
         // Plain snapshot import — the off-platform / portable restore. For in-place
         // time-travel to an arbitrary moment in the last 30 days, use native PITR
         // (`lunora backup pitr` / the studio) rather than replaying a snapshot.
-        return { code: result.code, entry: matched, restored: result.inserted };
+        return {
+            code: result.code,
+            entry: matched,
+            ...(result.body?.plan === undefined ? {} : { plan: result.body.plan }),
+            restored: result.inserted + (result.replaced ?? 0),
+        };
     } finally {
         await snapshot.release().catch((error: unknown) => {
             options.logger.warn(`backup: could not clean up the downloaded snapshot (${error instanceof Error ? error.message : String(error)})`);
@@ -780,6 +799,7 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
             subcommand: options.subcommand,
             ...(result.entries === undefined ? {} : { entries: result.entries }),
             ...(result.entry === undefined ? {} : { entry: result.entry }),
+            ...(result.plan === undefined ? {} : { plan: result.plan }),
             ...(result.restored === undefined ? {} : { restored: result.restored }),
             ...(result.preview === undefined ? {} : { preview: result.preview }),
             ...(result.deleted === undefined ? {} : { deleted: result.deleted }),
@@ -804,6 +824,16 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions, Back
         return { code: EXIT_CODE.USAGE, error: message };
     }
 
+    const mode = parseImportMode(options.mode, "require-empty");
+
+    if (mode === undefined) {
+        const message = `--mode ${String(options.mode)} is not a known mode. Expected one of: ${IMPORT_MODES.join(", ")}.`;
+
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, error: message };
+    }
+
     const result = await runBackupCommand({
         at: options.at,
         bookmark: options.bookmark,
@@ -813,6 +843,8 @@ const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions, Back
         format,
         logger,
         prefix: options.prefix,
+        dryRun: options.dryRun === true,
+        mode,
         prod: options.prod === true,
         restart: options.restart === true,
         restore: options.restore === true,

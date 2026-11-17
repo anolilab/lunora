@@ -78,7 +78,7 @@ describe("creem adapter", () => {
     it("is a merchant-of-record with a portal; rejects manual capture and programmatic refunds", () => {
         expect.assertions(4);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         expect(adapter.capabilities.merchantOfRecord).toBe(true);
         expect(adapter.capabilities.portal).toBe(true);
@@ -90,7 +90,7 @@ describe("creem adapter", () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
-        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const result = await adapter.createCheckout({
             cancelUrl: "https://x/cancel",
@@ -116,7 +116,7 @@ describe("creem adapter", () => {
         expect.assertions(1);
 
         const calls: RecordedCall[] = [];
-        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         await adapter.createCheckout({ email: "a@b.test", mode: "subscription", priceId: "prod_team", referenceId: "org_1", successUrl: "https://x/ok" });
 
@@ -129,7 +129,7 @@ describe("creem adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const portal = await adapter.createPortalSession({ customerId: "cust_1", referenceId: "user_1", returnUrl: "https://x/back" });
 
@@ -143,7 +143,7 @@ describe("creem adapter", () => {
         const calls: RecordedCall[] = [];
         // Page 2 holds org_b's subscription: the same person pays for a second org with one email.
         const subscriptions = subscriptionPages([{ id: "sub_a", metadata: { referenceId: "org_a" } }], [{ id: "sub_b", metadata: { referenceId: "org_b" } }]);
-        const adapter = createCreemAdapter({ client: makeClient(calls, subscriptions), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(calls, subscriptions), webhookSecret: SECRET });
 
         await expect(adapter.createPortalSession({ customerId: "cust_1", referenceId: "org_a", returnUrl: "https://x/back" })).rejects.toMatchObject({
             code: "FORBIDDEN",
@@ -155,7 +155,7 @@ describe("creem adapter", () => {
         expect.assertions(1);
 
         const subscriptions = subscriptionPages([{ id: "sub_a", metadata: { referenceId: "org_a" } }, { id: "sub_dashboard" }]);
-        const adapter = createCreemAdapter({ client: makeClient([], subscriptions), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient([], subscriptions), webhookSecret: SECRET });
 
         await expect(adapter.createPortalSession({ customerId: "cust_1", referenceId: "org_a", returnUrl: "https://x/back" })).resolves.toEqual({
             url: "https://creem.test/portal",
@@ -166,7 +166,7 @@ describe("creem adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const subscription = await adapter.cancelSubscription("sub_1", { atPeriodEnd: true });
 
@@ -181,7 +181,7 @@ describe("creem adapter", () => {
         expect.assertions(1);
 
         const calls: RecordedCall[] = [];
-        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         await adapter.cancelSubscription("sub_1");
 
@@ -193,7 +193,7 @@ describe("creem adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         const subscription = await adapter.updateSubscription("sub_1", { priceId: "prod_enterprise" });
 
@@ -231,10 +231,11 @@ describe("creem adapter", () => {
 
             const calls: RecordedCall[] = [];
             const adapter = createCreemAdapter({
-                client: makeSeatClient(calls, [
-                    { id: "item_addon", productId: "prod_addon", units: 1 },
-                    { id: "item_pro", productId: "prod_pro", units: 1 },
-                ]),
+                client: () =>
+                    makeSeatClient(calls, [
+                        { id: "item_addon", productId: "prod_addon", units: 1 },
+                        { id: "item_pro", productId: "prod_pro", units: 1 },
+                    ]),
                 webhookSecret: SECRET,
             });
 
@@ -253,7 +254,7 @@ describe("creem adapter", () => {
 
             const calls: RecordedCall[] = [];
             const adapter = createCreemAdapter({
-                client: makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
+                client: () => makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
                 webhookSecret: SECRET,
             });
 
@@ -267,7 +268,7 @@ describe("creem adapter", () => {
 
             const calls: RecordedCall[] = [];
             const adapter = createCreemAdapter({
-                client: makeSeatClient(calls, [{ id: "item_addon", productId: "prod_addon", units: 1 }]),
+                client: () => makeSeatClient(calls, [{ id: "item_addon", productId: "prod_addon", units: 1 }]),
                 webhookSecret: SECRET,
             });
 
@@ -280,7 +281,7 @@ describe("creem adapter", () => {
 
             const calls: RecordedCall[] = [];
             const adapter = createCreemAdapter({
-                client: makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
+                client: () => makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
                 webhookSecret: SECRET,
             });
 
@@ -302,7 +303,7 @@ describe("creem adapter", () => {
                     return { id, items: [{ id: "item_pro", productId: "prod_pro", units: 1 }], product: "prod_pro", status: "active" };
                 },
             };
-            const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
+            const adapter = createCreemAdapter({ client: () => client, webhookSecret: SECRET });
 
             await expect(adapter.updateSubscription("sub_1", { quantity: 5 })).rejects.toMatchObject({ code: "PROVIDER_ERROR" });
         });
@@ -312,7 +313,7 @@ describe("creem adapter", () => {
 
             const calls: RecordedCall[] = [];
             const adapter = createCreemAdapter({
-                client: makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
+                client: () => makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
                 webhookSecret: SECRET,
             });
 
@@ -325,7 +326,7 @@ describe("creem adapter", () => {
 
             const calls: RecordedCall[] = [];
             const adapter = createCreemAdapter({
-                client: makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
+                client: () => makeSeatClient(calls, [{ id: "item_pro", productId: "prod_pro", units: 1 }]),
                 webhookSecret: SECRET,
             });
 
@@ -338,7 +339,7 @@ describe("creem adapter", () => {
     it("reads a paid checkout as a captured payment", async () => {
         expect.assertions(3);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const session = await adapter.getPaymentStatus("ch_1");
 
@@ -350,7 +351,7 @@ describe("creem adapter", () => {
     it("normalizes a verified checkout.completed webhook", async () => {
         expect.assertions(4);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             eventType: "checkout.completed",
             id: "evt_1",
@@ -373,7 +374,7 @@ describe("creem adapter", () => {
     it("reads the reference from the metadata Creem copies onto the subscription, never from the customer id", async () => {
         expect.assertions(2);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         // Shape of Creem's documented `subscription.active` payload: the checkout's metadata rides along.
         const copied = JSON.stringify({
             eventType: "subscription.active",
@@ -395,7 +396,7 @@ describe("creem adapter", () => {
     it("maps subscription events, failing closed on unpaid (regression)", async () => {
         expect.assertions(3);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const activeBody = JSON.stringify({ eventType: "subscription.active", id: "e1", object: { id: "sub_1", product: "prod_pro", status: "active" } });
         const active = await adapter.parseWebhook({ headers: headersFor(sign(activeBody)), payload: activeBody });
@@ -417,7 +418,7 @@ describe("creem adapter", () => {
     it("maps subscription.expired to canceled whatever status it carries, with occurredAt (regression)", async () => {
         expect.assertions(2);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         // Creem's `SubscriptionStatus` has no `expired` member, so the payload can still read `active`.
         const body = JSON.stringify({
             created_at: 1_767_323_045_000,
@@ -450,7 +451,7 @@ describe("creem adapter", () => {
                 };
             },
         };
-        const subscription = await createCreemAdapter({ client, webhookSecret: SECRET }).getSubscriptionStatus("sub_1");
+        const subscription = await createCreemAdapter({ client: () => client, webhookSecret: SECRET }).getSubscriptionStatus("sub_1");
 
         expect(subscription.currentPeriodEnd).toBe(Date.parse("2026-08-01T00:00:00Z"));
         expect(subscription.currentPeriodStart).toBe(Date.parse("2026-07-01T00:00:00Z"));
@@ -461,7 +462,7 @@ describe("creem adapter", () => {
     it("normalizes a refund.created webhook from Creem's flat refund fields (regression)", async () => {
         expect.assertions(5);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         // A real `RefundEntity`: `transaction` is required, `checkout` is optional but present on a
         // refund of a checkout — so the fixture carries BOTH and the key choice is unambiguous.
         const payload = JSON.stringify({
@@ -499,7 +500,7 @@ describe("creem adapter", () => {
         // documents the first two as non-terminal processing states. Booking one leaves the ledger
         // claiming a refund the customer never got, which the facade's over-refund guard then makes
         // unissuable.
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         for (const status of ["pending", "requiresAction"]) {
             const payload = JSON.stringify({
@@ -517,7 +518,7 @@ describe("creem adapter", () => {
     it("keys a dashboard refund to the checkout row a checkout.completed created (regression)", async () => {
         expect.assertions(2);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const checkoutBody = JSON.stringify({
             eventType: "checkout.completed",
             id: "evt_checkout",
@@ -541,7 +542,7 @@ describe("creem adapter", () => {
     it("rounds a fractional webhook amount instead of throwing on the BigInt conversion (regression)", async () => {
         expect.assertions(2);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             eventType: "checkout.completed",
             id: "evt_2",
@@ -559,7 +560,7 @@ describe("creem adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createCreemAdapter({ client: makeClient(calls), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(calls), webhookSecret: SECRET });
 
         await adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" });
 
@@ -593,7 +594,7 @@ describe("creem adapter", () => {
                 },
             },
         };
-        const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => client, webhookSecret: SECRET });
 
         const customer = await adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" });
 
@@ -626,7 +627,7 @@ describe("creem adapter", () => {
                 },
             },
         };
-        const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => client, webhookSecret: SECRET });
 
         // One person paying under two references is normal, so this is not an error — but org_b gets
         // no customer (and so no portal onto org_a's billing); its checkout starts unbound.
@@ -656,7 +657,7 @@ describe("creem adapter", () => {
                 },
             },
         };
-        const adapter = createCreemAdapter({ client, webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => client, webhookSecret: SECRET });
 
         await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).rejects.toThrow(/timed out/);
 
@@ -667,7 +668,7 @@ describe("creem adapter", () => {
     it("rejects a bad signature", async () => {
         expect.assertions(1);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         await expect(adapter.parseWebhook({ headers: headersFor("deadbeef"), payload: "{}" })).rejects.toMatchObject({
             code: "WEBHOOK_SIGNATURE_INVALID",
@@ -677,7 +678,7 @@ describe("creem adapter", () => {
     it("reads the event id from event_id when id is absent (field-casing drift)", async () => {
         expect.assertions(1);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             event_id: "evt_casing",
             eventType: "checkout.completed",
@@ -691,7 +692,7 @@ describe("creem adapter", () => {
     it("maps a payload with no id field at all to a blank eventId for the central guard to reject", async () => {
         expect.assertions(1);
 
-        const adapter = createCreemAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createCreemAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             eventType: "checkout.completed",
             object: { id: "ch_1", metadata: { referenceId: "user_1" }, order: { amount: 2500, currency: "EUR", status: "paid" } },

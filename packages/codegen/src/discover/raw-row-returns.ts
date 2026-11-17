@@ -1,9 +1,9 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { singleHopInitializer } from "../argument-taint";
+import { singleHopDeclaration } from "../argument-taint";
 import type { RawRowReturnIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, unwrapExpression } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { chainHasStep, chainUsesWrappedCall } from "./builder-chain";
 import { isDatabaseAccessor } from "./database-calls";
@@ -109,9 +109,12 @@ const rawRowReadTable = (expression: TsNode, hopped = false): string | undefined
             return undefined;
         }
 
-        const initializer = singleHopInitializer(node);
+        // Only a binding of the whole value is the row: a destructured name holds one field or a projection of it.
+        const declaration = singleHopDeclaration(node);
+        const initializer = declaration !== undefined && Node.isIdentifier(declaration.getNameNode()) ? declaration.getInitializer() : undefined;
 
-        return initializer === undefined ? undefined : rawRowReadTable(initializer, true);
+        // A destructured field (`const { email } = await read()`) is a projection, not the row.
+        return initializer === undefined || !Node.isIdentifier(declaration?.getNameNode()) ? undefined : rawRowReadTable(initializer, true);
     }
 
     if (!Node.isCallExpression(node)) {
@@ -136,7 +139,7 @@ const handlerReturnExpressions = (handler: InspectableHandler): TsNode[] => {
 
     const expressions: TsNode[] = [];
 
-    for (const statement of handler.getDescendantsOfKind(SyntaxKind.ReturnStatement)) {
+    for (const statement of descendantsOfKind(handler, SyntaxKind.ReturnStatement)) {
         const enclosing = statement.getFirstAncestor(
             (ancestor) => Node.isArrowFunction(ancestor) || Node.isFunctionExpression(ancestor) || Node.isFunctionDeclaration(ancestor),
         );

@@ -210,4 +210,56 @@ describe("defaultSpawner", () => {
 
         expect(result.stdout).toBe("é");
     });
+
+    it("captures all of a large stdout written immediately before exit", async () => {
+        expect.assertions(5);
+
+        const size = 1_000_000;
+
+        for (let run = 0; run < 5; run += 1) {
+            // eslint-disable-next-line no-await-in-loop -- runs are sequential so each is a separate exit race
+            const result = await defaultSpawner({
+                args: ["-e", `process.stdout.write("x".repeat(${String(size)}), () => process.exit(0));`],
+                captureStdoutSilently: true,
+                command: process.execPath,
+            });
+
+            expect(result.stdout?.length).toBe(size);
+        }
+    });
+
+    // A child that never exits must not hold the caller forever: the timeout kills it and the run reports failure.
+    it("kills a child that outlives its timeoutMs and reports a failed run", async () => {
+        expect.assertions(2);
+
+        const result = await defaultSpawner({
+            args: ["-e", "setInterval(() => {}, 1000)"],
+            captureStdoutSilently: true,
+            command: process.execPath,
+            timeoutMs: 50,
+        });
+
+        expect(result.code).not.toBe(0);
+        expect(result.code).toBe(1);
+    });
+
+    // A caller that reports its own outcome captures stderr without printing the tool's errors.
+    it("captures a child's stderr without teeing it when captureStderrSilently is set", async () => {
+        expect.assertions(2);
+
+        const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+        try {
+            const result = await defaultSpawner({
+                args: ["-e", "process.stderr.write('tool-error-text')"],
+                captureStderrSilently: true,
+                command: process.execPath,
+            });
+
+            expect(result.stderr).toContain("tool-error-text");
+            expect(writeSpy).not.toHaveBeenCalledWith(expect.anything());
+        } finally {
+            writeSpy.mockRestore();
+        }
+    });
 });

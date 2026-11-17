@@ -4,11 +4,19 @@ import type { LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { QueryClient, QueryClientContext, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement, ReactNode } from "react";
-import { createContext, use, useEffect, useRef, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 
 import { getSubscriptionRegistry } from "./cache";
+import sharedContext from "./shared-context";
 
-const LunoraContext = createContext<LunoraClient | null>(null);
+// Shared by name, not created here: a second copy of this package must read the same context (see `shared-context.ts`).
+const LunoraContext = sharedContext<LunoraClient | null>("lunora-client", null);
+
+const LunoraQueryClientContext = sharedContext<QueryClient | null>("lunora-query-client", null);
+
+// The TanStack context object the nearest Lunora provider wrapped its children with. A hook trusts its own TanStack context only
+// when it is this same object, since a context from another TanStack copy can only show a provider outside the Lunora one.
+const LunoraTanStackOwnerContext = sharedContext<typeof QueryClientContext | null>("lunora-tanstack-owner", null);
 
 /**
  * Whether the provider's `client` differs from the one it first rendered with.
@@ -16,7 +24,7 @@ const LunoraContext = createContext<LunoraClient | null>(null);
  * mounts after a swap must not seed it: its own `useState` only ever saw the
  * new client.
  */
-const LunoraClientSwappedContext = createContext(false);
+const LunoraClientSwappedContext = sharedContext("lunora-client-swapped", false);
 
 interface LunoraProviderProps {
     children: ReactNode;
@@ -103,10 +111,16 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
     // react-doctor-disable-next-line react-doctor/no-derived-useState -- intentional: the FIRST `client` is the point, never re-synced to the prop
     const [firstClient] = useState(client);
 
+    // The TanStack client rides the shared registry as well as TanStack's own context: a hook from another copy of this
+    // package reads its TanStack context from that copy's module, which the provider's `QueryClientProvider` never reaches.
     const content = (
-        <LunoraContext value={client}>
-            <LunoraClientSwappedContext value={client !== firstClient}>{children}</LunoraClientSwappedContext>
-        </LunoraContext>
+        <LunoraTanStackOwnerContext value={QueryClientContext}>
+            <LunoraQueryClientContext value={effectiveClient}>
+                <LunoraContext value={client}>
+                    <LunoraClientSwappedContext value={client !== firstClient}>{children}</LunoraClientSwappedContext>
+                </LunoraContext>
+            </LunoraQueryClientContext>
+        </LunoraTanStackOwnerContext>
     );
 
     // Don't double-wrap when a parent already provides the client.
@@ -115,6 +129,29 @@ const LunoraProvider = ({ children, client, queryClient }: LunoraProviderProps):
     }
 
     return <QueryClientProvider client={effectiveClient}>{content}</QueryClientProvider>;
+};
+
+/**
+ * The TanStack `QueryClient` a Lunora hook should use. A `QueryClientProvider` nearer than the Lunora provider wins, as it does for
+ * TanStack's own hooks: the nested cache is where the caller's ordinary queries live. Read from this copy's own TanStack context, so
+ * a copy that cannot see a provider falls back to the client the Lunora provider shares through the registry.
+ */
+const useLunoraQueryClient = (): QueryClient => {
+    const owner = use(LunoraTanStackOwnerContext);
+    const visibleNearest = use(QueryClientContext);
+    const shared = use(LunoraQueryClientContext);
+    // Only a TanStack context this copy shares with the nearest Lunora provider can see inside it. Any other provider this copy
+    // sees may sit outside that Lunora provider, and must not take precedence over it.
+    const nearest = owner === QueryClientContext ? visibleNearest : undefined;
+    // A provider from an older copy shares the Lunora client but not these markers. Its TanStack provider is then the only client
+    // this hook can reach, as it was before the shared context existed.
+    const queryClient = nearest ?? shared ?? visibleNearest;
+
+    if (!queryClient) {
+        throw new LunoraError("INTERNAL", "useLunoraQueryClient must be used inside <LunoraProvider />");
+    }
+
+    return queryClient;
 };
 
 /** Whether the nearest `<LunoraProvider>` has swapped its `client` since it first rendered. */
@@ -136,4 +173,4 @@ const useLunora = (): LunoraClient => {
 
 export type { LunoraProviderProps };
 // eslint-disable-next-line react-refresh/only-export-components -- useLunora is a hook kept colocated with the provider component for back-compat; splitting it into its own module would break existing imports.
-export { LunoraProvider, useLunora, useLunoraClientSwapped };
+export { LunoraProvider, useLunora, useLunoraClientSwapped, useLunoraQueryClient };

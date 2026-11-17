@@ -52,34 +52,139 @@ To fix:
     Scaffold the missing migration(s) — the generated `up` is an identity placeholder you must fill in:
       lunora migrate create backfill_users --table users
 
+  • If the stored rows already fit the new schema, `lunora deploy` goes ahead on its own: it reads the rows of each affected table from the deployed worker (`--migrate-url` or the project link, plus `LUNORA_ADMIN_TOKEN`) and names any row that does not fit.
   • For backward-compatible changes (e.g. adding an optional field): pass `--allow-schema-drift` to skip the block.
-  • To accept the new shape without a migration (you know data is compatible): pass `--update-schema-baseline`.
-Docs: https://lunora.dev/docs/migrations
+Docs: https://lunora.sh/docs/concepts/migrations
 ```
 
-<Callout type="warn">
-    The scaffolded `up` is `(document) => document` — an identity transform. It satisfies the gate immediately, so a scaffold you forget to fill in ships the schema
-    change with no backfill behind it.
-</Callout>
+The scaffolded `up` is `(document) => document`, an identity transform. A
+migration whose `up` only returns its document rewrites no row, so it does not
+cover anything: the gate names it and keeps blocking until you fill it in, or
+until the stored rows show the backfill is not needed.
+
+### When the stored rows already fit
+
+A tightening is often already true of the data: every stored row has the new
+required field, or every stored value already has the new type. `lunora deploy`
+checks that instead of asking for a migration. For each blocking change that
+concerns one field (a new required field, a field made required, a changed type
+or shape, a dropped field) it reads the stored rows of that table from the
+deployed worker, across every shard and the `.global()` plane, and runs the new
+validator on the changed fields:
+
+- every row fits: the deploy goes ahead, and the baseline advances when it succeeds;
+- a row does not fit: the deploy stays blocked and lists the first ten such rows by
+  table, `_id`, field and reason. Stored values, shard keys and record keys are
+  never printed.
+
+The rows are read through the deployed worker's admin export, from the URL
+`--migrate-url` names (or the [project link](/docs/concepts/environments#linking-a-checkout-to-a-deployment)
+for this `--env`), with `LUNORA_ADMIN_TOKEN` as the bearer. With no URL or no
+token the check does not run and the block stands. The URL must be the worker
+this deploy ships to: a local or private address (`localhost`, `127.0.0.1`, a
+LAN address) is refused, and so is a URL other than the one this checkout is
+linked to for the `--env` (path included) or a URL linked to a different `--env`.
+A `*.workers.dev` URL is trusted only when the project link for that `--env`
+names it: the Worker name in the host is not enough, because the account
+subdomain after it cannot be read from the config and a same-named Worker in
+another account would match. Without that link the check is inconclusive and the
+block stands; run `lunora link --url` after the first deploy, or confirm the
+drift yourself with `--allow-schema-drift`. A custom domain must match a `route`/`routes` pattern that `--env`
+declares in the Wrangler config, and is refused when it matches another env's
+route; only a project that declares no routes at all has nothing to compare it
+with, and its URL is taken as given. A refused URL keeps the block and the
+message names it. A celld deploy prints no worker URL to link, so record the fleet's URL
+once with `lunora link --url` or pass `--migrate-url`. The Node target has no
+`lunora deploy`. The scaffolded CI pipelines pass `LUNORA_DEPLOY_URL` and
+`LUNORA_ADMIN_TOKEN` from the provider's secrets. CI has no project link (the
+`.lunora/` directory is not committed), so on a `*.workers.dev` URL the stored
+rows are not read there and a tightening still needs a migration or
+`--allow-schema-drift`; a custom domain on a route in the Wrangler config is read.
+
+Some changes cannot be settled by reading rows, and keep their block until a
+migration covers them: a field that is no longer nullable or gained a refinement,
+and any changed field whose validator codegen could not resolve, that now points
+a `v.id()` or `v.storage()` somewhere else, or that carries a refinement other than a
+literal `.max(n)`. A new `.unique()` column or unique index is **not** one of
+them: rows settle it (see below). The export route holds each shard's rows in
+worker memory before streaming them, so the check is bounded by that.
 
 A migration only clears the drift on **the table it iterates**, so a backfill on
-`messages` will not wave through a required field added to `users`.
+`messages` will not wave through a required field added to `users`. A migration
+whose `up` returns the document unchanged, or whose `table` is not a string
+literal, covers nothing. An `up` given by name is followed to its declaration (in
+the file or imported); one that cannot be resolved to a function is treated as a
+real transform, so it is trusted to cover.
 
-Nor is a migration offered for every breaking change — only for the ones a
-per-document transform can actually fix (a new required field, a type change, an
-optional field made required, a dropped field). The rest name their own fix
-instead:
+Every change is classified by what it can do to the stored data:
 
-| Change                                                                 | What clears it                                                                    |
-| ---------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| Dropped index, changed index, dropped relation                         | Change the queries that used them, then accept the new shape                      |
-| Dropped table                                                          | Its rows stay in each shard's SQLite, unreachable — export the shard to keep them |
-| [Shard-mode flip](/docs/concepts/sharding#migrating-a-populated-table) | An export/import round trip; a per-shard transform cannot move rows between DOs   |
-| [Jurisdiction change](/docs/concepts/data-residency)                   | Export then import into the new region, or revert                                 |
+| Change                                                                          | Effect on stored data                                     | How it clears                                                                                                                                                           |
+| ------------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| New optional field, new table, new index, new relation                          | none                                                      | Does not block                                                                                                                                                          |
+| Field made optional or nullable, constraint relaxed                             | none                                                      | Does not block                                                                                                                                                          |
+| TTL lengthened or removed                                                       | every row stays (it expires later, or is no longer swept) | Does not block; warns                                                                                                                                                   |
+| New required field, optional made required, type or shape change, dropped field | rows can become invalid                                   | `lunora deploy` reads the rows and passes if all fit; otherwise a migration on the table                                                                                |
+| New unique index, index made unique, field made `.unique()`                     | duplicate values would break the index                    | `lunora deploy` reads the rows and passes if no value repeats (naming the repeats otherwise); otherwise a migration that de-duplicates                                  |
+| No longer nullable, gained a refinement, `.commitOrdered()` turned on           | rows can become invalid or lack a sequence                | A migration on the table                                                                                                                                                |
+| Dropped index, unique or not                                                    | none                                                      | Does not block, unless a query still names it through `withIndex`: the deploy is refused naming the function; point the query elsewhere first                           |
+| Dropped table                                                                   | rows are left in place, unreachable                       | Does not block; warns. Export the shard if the data must be kept, or declare the table again                                                                            |
+| Dropped relation                                                                | foreign-key values stay; its `onDelete` stops             | Does not block; warns                                                                                                                                                   |
+| TTL added, moved to another column, or shortened                                | the next sweep deletes rows now past the cutoff           | Blocks until a new migration declares `covers: { table, ttl: { field, after } }`; the message counts the rows that would go when `lunora deploy` can read the worker    |
+| `.commitOrdered()` turned off                                                   | none; a `_commitSeq` changefeed stops advancing           | Does not block; warns                                                                                                                                                   |
+| [Shard-mode flip](/docs/concepts/sharding#migrating-a-populated-table)          | rows move to other storage                                | Blocks until a new migration declares `covers: { table, shardMode }` naming the table and the mode it moves to, after the rows are moved by an export/import round trip |
+| Table turned `.memory()`                                                        | every row is deleted on the next cold start               | Blocks until a new migration declares `covers: { table, memory: true }`; export the rows first if they must be kept                                                     |
+| [Jurisdiction change](/docs/concepts/data-residency)                            | every Durable Object is re-homed                          | Blocks until a new migration declares `covers: { jurisdiction }` naming the jurisdiction it moves to (`none` when removed), after the data is moved                     |
 
-If you know the stored data is already compatible, `--allow-schema-drift` skips
-the block for one run and `lunora prepare --update-schema-baseline` accepts the
-new shape permanently.
+For the changes that move data, a migration clears the gate only when it **names the
+change** in `covers`, so an unrelated migration never does. `covers` is read
+statically, so its values must be literals: `table`, `shardMode` (`root`, `global`,
+`global:d1`, `global:hyperdrive` or `shardBy:<field>`; `global` matches either global
+backend), `memory: true`, `ttl` (`{ field, after }` in milliseconds, `after` 0 when
+absent), or `jurisdiction` (`eu`, `fedramp`, `us`, or `none`). It must
+match the change exactly: the table and the mode the table moves to, or the
+jurisdiction the schema moves to. Where a table is involved the migration must also
+iterate that table with an `up` that rewrites rows (one that returns the document
+unchanged covers nothing); a jurisdiction change has no table, so `covers` alone is the
+acknowledgement. A missing, different or unreadable `covers` keeps the block, and the
+message names what to declare. For a `users` table moving to `.shardBy("tenantId")`:
+
+```bash
+lunora export --tables users --out users.ndjson   # before the deploy
+lunora deploy                                      # with the migration below declared
+lunora import users.ndjson                         # rows route to their new home
+```
+
+```ts
+export const rehomeUsers = defineMigration({
+    id: "rehome_users",
+    table: "users",
+    covers: { shardMode: "shardBy:tenantId", table: "users" },
+    // give every row what its new home needs, here its shard key
+    up: (doc) => ({ ...doc, tenantId: doc.tenantId ?? "default" }),
+});
+```
+
+A jurisdiction change reads `covers: { jurisdiction: "eu" }`. The gate cannot see that
+the rows were moved: declaring the migration is how you tell it. A dropped index a
+query still names is the one drop that blocks, because the shard drops the index and
+the next request through that query would throw. The gate reads the
+`.withIndex("name")` calls in your functions; a call whose index name is not a string
+literal makes it refuse every dropped index of that table.
+
+A new unique index, an index that becomes unique, or a field that becomes `.unique()`
+is checked against the stored rows: `lunora deploy` refuses while two rows repeat a
+value, naming them by `_id` (never printing the value), or while the rows cannot be
+read. A `NULL` never counts as a repeat, `true` and `1` are one value as in SQLite's
+index, and on a `.shardBy()` table only rows of the same shard are compared, because
+each shard has its own index.
+
+When every change is verified, or a new migration covers it, the baseline
+advances with the deploy. `--allow-schema-drift` skips the block for one run
+without checking anything and leaves the baseline where it was, so the next run
+sees the same drift. `lunora prepare` reads no deployment, so for a change only
+stored rows can confirm it refuses and points you at `lunora deploy`. A baseline
+file that is unreadable blocks until it is fixed or deleted; deleting it makes
+the next run a first capture.
 
 ## Schema migrations (global tables)
 
@@ -112,7 +217,9 @@ itself from the schema the worker is running:
   (`ALTER TABLE … ADD COLUMN`), so rows written before the deploy stay readable
   and read the new field as absent.
 - **`.global()` tables** are provisioned on the first request that touches them,
-  with the same additive rules.
+  with the same additive rules. Several isolates cold-starting at once may all
+  try to add the same column; the ones that lose see it already there and carry
+  on, so no request fails on it.
 
 ### Adding a required field to a table that has rows
 
@@ -121,8 +228,10 @@ An added column is always created nullable, because SQLite and D1 reject
 field as required, so rows written before it need a value:
 
 - **A required field with a default** (`.default(v)`, `.defaultNow()`,
-  `.$defaultFn(fn)`) is backfilled on a `.global()` table when the runtime adds
-  the column: every row without a value gets the default, evaluated once. That
+  `.$defaultFn(fn)`) is backfilled on a `.global()` table when the column is
+  added, whether the runtime adds it or a generated SQL file does through
+  `lunora migrate apply`, which fills it in the same batch. Every row without a
+  value gets the default, evaluated once. That
   includes the `updatedAt` column `.timestamps()` adds, which starts at the time
   of the deploy. A column under a unique constraint (`.unique()`, or part of any unique index) is the
   exception, whatever its default: one value written to every row would collide
@@ -137,29 +246,100 @@ field as required, so rows written before it need a value:
   `v.null()`) needs nothing.
 
 Root and `.shardBy()` tables store each row as a JSON document, so a field
-added later is simply absent from older rows.
+added later is absent from older rows.
 
 So a deploy that only adds tables, optional fields or non-unique indexes needs
 nothing beyond the deploy itself. Two things still need a person before it:
 the hand-written SQL described below, and a data migration that backfills rows.
 
-### Nothing applies the generated file
+### Applying the generated file
 
-The `.sql` file is a record of the diff, not a step in any pipeline. What
-actually provisions a global table is the runtime: on the first request that
-touches one it runs `CREATE TABLE IF NOT EXISTS` for the declared columns and
-indexes, and `ALTER TABLE … ADD COLUMN` for fields the table lacks. That covers
-every additive change, which is most of them, with the schema as the single
-source of truth.
+The runtime provisions a global table on the first request that touches one: it
+runs `CREATE TABLE IF NOT EXISTS` for the declared columns and indexes, and
+`ALTER TABLE … ADD COLUMN` for fields the table lacks. That covers every additive
+change, which is most of them, with the schema as the single source of truth.
 
-It does **not** cover anything the generator flags as `unsupported`, or SQL you
-add by hand: a backfilling `UPDATE`, a column rename written as add/copy/drop,
-an index the schema does not declare, a `DROP TABLE`. Apply those yourself, once
-per environment, before the deploy that depends on them:
+What it never runs is the rest: a `DROP TABLE`, a `DROP INDEX`, anything the
+generator flags as `unsupported`, and SQL you add by hand, such as a backfilling
+`UPDATE` or a column rename written as add/copy/drop. Apply those with
+`lunora migrate apply`:
 
 ```bash
-wrangler d1 execute <DB> --remote --file=lunora/migrations/<timestamp>_<slug>.sql
+lunora migrate status --sql --url https://your-worker.example.workers.dev   # what has run, what is pending
+lunora migrate apply --url https://your-worker.example.workers.dev --yes    # run the pending files
 ```
+
+`apply` sends each `lunora/migrations/*.sql` file to the Worker in name order.
+The Worker runs a file's statements and records its name and SHA-256 in one
+atomic batch, so a file runs once per environment. A second run is a no-op. A
+file whose text changed after it ran is refused rather than run again: put the
+change in a new file. Renaming an applied file counts as a change, so it is
+refused too. A `DROP` or a replacing write is refused unless you pass
+`--allow-destructive`, and the refusal lists the statements. `--yes` only
+confirms the target, so a remote run needs both flags for such a file. `--dry-run` prints the statements without
+running them. A file cannot contain `BEGIN`, `COMMIT` or `ROLLBACK`, because each
+file already runs as one batch. `lunora deploy --migrate` runs `apply` before the
+data migrations, so a deploy applies its SQL with the rest. Any other deploy tool
+can call the same command as a step before its deploy.
+
+Who may run `apply` is set by the token. The root admin token runs any file. A
+named token minted with `lunora admin-token create <name> --scope migrations` runs
+only additive statements: `CREATE TABLE`, a `CREATE INDEX` that is not `UNIQUE`, and
+`ADD COLUMN` with no default, constraint or generated value. A file with any other statement, such as a `DROP`,
+an `UPDATE`, a trigger or a `CREATE UNIQUE INDEX`, is refused before anything in the
+run executes, and the refusal says which token it needs. A `.unique()` field or index
+generates a `CREATE UNIQUE INDEX`, so a deploy that adds one needs the root token. A
+dry run shows which statements those are.
+
+**Upgrading an existing project.** Files committed before `migrate apply` existed were never recorded, so the first run would treat every one of them as pending. A file that drops a table could then run again over rows written since it last ran. Record the files that already ran on each environment, without running them, before its first `deploy --migrate`:
+
+```bash
+# Every file in lunora/migrations/ has already run on this environment:
+lunora migrate apply --baseline --url https://your-worker.example.workers.dev --yes
+
+# Only the files up to the last one that ran. Later files, such as a DROP that has not run yet, stay pending:
+lunora migrate apply --baseline-through <last-file-that-ran>.sql --url https://your-worker.example.workers.dev --yes
+```
+
+After a `--baseline-through`, `lunora migrate apply --url … --yes` runs the files
+that are left, including a `DROP`. Baseline only the files that ran: a recorded
+file is never executed.
+
+If the file that drops a table is the first `.sql` file on a stage, nothing ran
+before it there, so there is no earlier file to name. Run that file's statements
+by hand on the stage first, then record it. Do not run the whole file as it is: an
+`ADD COLUMN` the runtime already provisioned makes the duplicate column stop the
+run before the `DROP`. Copy the file, delete the `ADD COLUMN` lines for columns the
+stage already has, and run the copy:
+
+```bash
+cp lunora/migrations/<file>.sql /tmp/<file>.sql
+# Remove the ADD COLUMN lines for columns the stage already has from /tmp/<file>.sql
+wrangler d1 execute <database-name> --remote --file /tmp/<file>.sql
+lunora migrate apply --baseline-through <file>.sql --url https://your-worker.example.workers.dev --yes
+```
+
+Record the file only once every statement in it has run.
+
+Name the file you ran by hand, so `--baseline-through` records it and nothing
+after it. A later file on the same stage stays pending, and a normal
+`lunora migrate apply --url … --yes` runs it, with `--allow-destructive` too if it drops or replaces data. Plain `--baseline` would record
+every pending file as applied, later ones included, so a later file would never
+run.
+
+Run it by hand before the baseline, never after or instead of it: a recorded file
+is never executed, so a baseline of a DROP that has not run leaves the table in
+place for good. The same applies to a seed `INSERT` on a database that is new to
+tracking.
+
+A database with no recorded file refuses any file that drops, replaces or writes
+rows, whatever `--allow-destructive` says, and the refusal points here. Once a file is
+recorded, a later run applies only what is new.
+
+An `ADD COLUMN` that the runtime already added is skipped, since SQLite has no
+`IF NOT EXISTS` for it. The generator's `-- lunora:allow-destructive` comment
+before each `DROP` is what `@lunora/d1`'s `MigrationRunner` reads, and `apply`
+does not need it.
 
 ### Relaxing NOT NULL on a D1 table
 
@@ -287,15 +467,16 @@ lunora migrate down backfill-read-by           # apply the down transform
 lunora migrate status backfill-read-by         # per-shard run-state
 ```
 
-| Flag           | Description                                                                                    |
-| -------------- | ---------------------------------------------------------------------------------------------- |
-| `--dry-run`    | Scan and count without rewriting rows or persisting run-state.                                 |
-| `--batch-size` | Rows per batch, overriding the migration's own `batchSize` and the default.                    |
-| `--steps`      | Cap on batches processed this invocation (the runner's `maxBatches`). The run stays resumable. |
-| `--url`        | Worker URL (defaults to `http://localhost:8787`).                                              |
-| `--token`      | Admin bearer token. Falls back to `LUNORA_ADMIN_TOKEN`.                                        |
-| `--prod`       | Target production. Requires an explicit `--url`.                                               |
-| `--yes`        | Required alongside `--prod` for `up`/`down`; confirms running against production.              |
+| Flag                  | Description                                                                                                       |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `--dry-run`           | Scan and count without rewriting rows or persisting run-state.                                                    |
+| `--batch-size`        | Rows per batch, overriding the migration's own `batchSize` and the default.                                       |
+| `--steps`             | Cap on batches processed this invocation (the runner's `maxBatches`). The run stays resumable.                    |
+| `--url`               | Worker URL (defaults to `http://localhost:8787`).                                                                 |
+| `--token`             | Admin bearer token. Falls back to `LUNORA_ADMIN_TOKEN`.                                                           |
+| `--prod`              | Target production. Requires an explicit `--url`.                                                                  |
+| `--yes`               | Required alongside `--prod` for `up`/`down`, and for any `apply` against a non-local worker; confirms the target. |
+| `--allow-destructive` | `apply` only: confirms a file that drops, renames, truncates or replaces data. Separate from `--yes`.             |
 
 Every run is admin-gated: pass `--token` or set `LUNORA_ADMIN_TOKEN`. Against
 production, `--prod` requires an explicit `--url`, and `up`/`down` additionally
@@ -382,7 +563,7 @@ versioned and re-runnable. It is the wrong tool for _"mark these 800 rows
 The Studio's data browser has **Set column on N matching** beside **Delete N
 matching**. Filter the table to the rows you mean, pick a column, give it a
 JSON value, and every matching row is patched through the same schema-aware
-writer a mutation uses: validators run, indexes and FTS/aggregate/rank shadow
+writer a mutation uses: validators run, indexes and full-text search (FTS), aggregate and rank shadow
 tables stay in sync, and live subscribers are poked.
 
 The Studio is always local: `lunora view` opens the studio the running dev

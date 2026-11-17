@@ -41,8 +41,8 @@ describe("discover/shapes", () => {
         `);
 
         expect(discoverShapes(newProject(), workdir)).toEqual([
-            { args: {}, exportName: "channel", filePath: "shapes", table: "messages" },
-            { args: {}, exportName: "room", filePath: "shapes", table: "messages" },
+            { args: {}, exportName: "channel", filePath: "shapes", line: 5, table: "messages" },
+            { args: {}, exportName: "room", filePath: "shapes", line: 4, table: "messages" },
         ]);
     });
 
@@ -58,8 +58,8 @@ describe("discover/shapes", () => {
         `);
 
         expect(discoverShapes(newProject(), workdir)).toEqual([
-            { args: {}, exportName: "dynamic", filePath: "shapes", table: undefined },
-            { args: {}, exportName: "literal", filePath: "shapes", table: "messages" },
+            { args: {}, exportName: "dynamic", filePath: "shapes", line: 6, table: undefined },
+            { args: {}, exportName: "literal", filePath: "shapes", line: 5, table: "messages" },
         ]);
     });
 
@@ -84,6 +84,7 @@ describe("discover/shapes", () => {
                 },
                 exportName: "channel",
                 filePath: "shapes",
+                line: 4,
                 table: "messages",
             },
         ]);
@@ -98,7 +99,7 @@ describe("discover/shapes", () => {
             export const channel = shape({ table: "messages", where: () => ({}) });
         `);
 
-        expect(discoverShapes(newProject(), workdir)).toEqual([{ args: {}, exportName: "channel", filePath: "shapes", table: "messages" }]);
+        expect(discoverShapes(newProject(), workdir)).toEqual([{ args: {}, exportName: "channel", filePath: "shapes", line: 4, table: "messages" }]);
     });
 
     it("discovers a namespace-imported defineShape (server.defineShape)", () => {
@@ -110,7 +111,7 @@ describe("discover/shapes", () => {
             export const channel = server.defineShape({ table: "messages", where: () => ({}) });
         `);
 
-        expect(discoverShapes(newProject(), workdir)).toEqual([{ args: {}, exportName: "channel", filePath: "shapes", table: "messages" }]);
+        expect(discoverShapes(newProject(), workdir)).toEqual([{ args: {}, exportName: "channel", filePath: "shapes", line: 4, table: "messages" }]);
     });
 
     it("ignores a namespace-imported defineShape from a foreign module", () => {
@@ -148,5 +149,28 @@ describe("discover/shapes", () => {
         `);
 
         expect(discoverShapes(newProject(), workdir)).toEqual([]);
+    });
+    it("marks a shape whose where may read ctx.ip, directly or through a helper, and leaves others unmarked", () => {
+        expect.assertions(1);
+
+        writeShapes(`
+            import { defineShape } from "@lunora/server";
+
+            declare const helper: (ctx: unknown) => Record<string, unknown>;
+            declare const byRef: any;
+
+            export const aDirect = defineShape({ table: "messages", where: (ctx) => ({ ip: ctx.ip }) });
+            export const bHelper = defineShape({ table: "messages", where: (ctx) => helper(ctx) });
+            export const cByReference = defineShape({ table: "messages", where: byRef });
+            export const dPlain = defineShape({ table: "messages", where: (ctx) => ({ owner: ctx.auth.userId }) });
+            export const eUnused = defineShape({ table: "messages", where: (_context, { id }) => ({ id }) });
+            export const fRenamed = defineShape({ table: "messages", where: (context) => ({ owner: context.auth.userId }) });
+        `);
+
+        const marked = discoverShapes(newProject(), workdir)
+            .filter((shape) => shape.readsIp === true)
+            .map((shape) => shape.exportName);
+
+        expect(marked).toStrictEqual(["aDirect", "bHelper", "cByReference", "fRenamed"]);
     });
 });

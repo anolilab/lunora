@@ -35,7 +35,7 @@ export const record = internalMutation
         // A redelivered webhook fills in a sender a row staged without one; it never replaces a recorded one.
         if (existing) {
             if (existing.installedByGithubId == null && installedByGithubId !== undefined) {
-                await context.db.patch(existing._id, {
+                await context.db.patch("githubInstallations", existing._id, {
                     installedByGithubId,
                     ...(installedByLogin === undefined ? {} : { installedByLogin }),
                 });
@@ -99,7 +99,7 @@ export const bind = internalMutation
             throw new LunoraError("CONFLICT", "installation is already claimed by another organization");
         }
 
-        await context.db.patch(installation._id, { claimedAt: context.now, organizationId });
+        await context.db.patch("githubInstallations", installation._id, { claimedAt: context.now, organizationId });
         await context.db.insert("auditLog", {
             action: "github.installation.claim",
             actorUserId: userId,
@@ -142,7 +142,7 @@ export const unclaim = mutation
             throw new LunoraError("NOT_FOUND", "installation not found in this organization");
         }
 
-        await context.db.patch(installation._id, { claimedAt: null, organizationId: null });
+        await context.db.patch("githubInstallations", installation._id, { claimedAt: null, organizationId: null });
         await context.db.insert("auditLog", {
             action: "github.installation.unclaim",
             actorUserId: userId,
@@ -162,7 +162,7 @@ export const remove = internalMutation.input({ installationId: v.number() }).mut
     const existing = page[0];
 
     if (existing) {
-        await context.db.delete(existing._id);
+        await context.db.delete("githubInstallations", existing._id);
     }
 });
 

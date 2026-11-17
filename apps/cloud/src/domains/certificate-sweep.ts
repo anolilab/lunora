@@ -90,7 +90,7 @@ const drainReleases = async (ports: CertificateSweepPorts): Promise<Pick<Certifi
             // eslint-disable-next-line no-await-in-loop -- bounded batch; one API call at a time keeps the cell's API budget flat
             await issuer.release(row.customHostnameId);
             // eslint-disable-next-line no-await-in-loop -- forgotten only once released
-            await ports.database.delete(row._id, "certificateReleases");
+            await ports.database.delete("certificateReleases", row._id);
             result.released += 1;
         } catch (error) {
             const message = (error instanceof Error ? error.message : String(error)).slice(0, MAX_RELEASE_ERROR);
@@ -98,7 +98,7 @@ const drainReleases = async (ports: CertificateSweepPorts): Promise<Pick<Certifi
             result.releaseFailed += 1;
             ports.log?.(`[certificates] could not release the certificate of ${row.hostname}: ${message}`);
             // eslint-disable-next-line no-await-in-loop -- one row per failed release
-            await ports.database.patch(row._id, { attempts: (row.attempts ?? 0) + 1, lastError: message }, "certificateReleases").catch(() => undefined);
+            await ports.database.patch("certificateReleases", row._id, { attempts: (row.attempts ?? 0) + 1, lastError: message }).catch(() => undefined);
         }
     }
 
@@ -139,7 +139,7 @@ export const runCertificateSweep = async (ports: CertificateSweepPorts): Promise
                     : { certificateError: certificate.error ?? null, certificateStatus: certificate.sslStatus };
 
             // eslint-disable-next-line no-await-in-loop -- one row per certificate read
-            await ports.database.patch(row._id, { ...patch, updatedAt: ports.now }, "domains");
+            await ports.database.patch("domains", row._id, { ...patch, updatedAt: ports.now });
 
             if (certificate?.sslStatus === ISSUED) {
                 result.issued += 1;

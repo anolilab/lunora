@@ -1,8 +1,8 @@
 import type { Stats } from "node:fs";
-import { existsSync, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
+import { lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, extname, join, relative, sep } from "node:path";
 
-import { FIND_UP_STOP, findUpSync, matcher } from "@visulima/fs";
+import { matcher } from "@visulima/fs";
 import type {
     BindingElement,
     Block,
@@ -15,13 +15,14 @@ import type {
     Project,
     SourceFile,
     Symbol as TsSymbol,
+    ts,
     VariableDeclaration,
 } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import { readProjectConfigLiterals } from "../project-config-file";
-import { findProjectConfigFile } from "../project-config-path";
+import { findCodegenConfigFile, findProjectConfigFile } from "../project-config-path";
 import { propertyKeyName, propertyNameText } from "./property-name";
 
 /** Strips a trailing `.ts` extension from a relative source path. */
@@ -30,6 +31,30 @@ const TS_EXTENSION_RE: RegExp = /\.ts$/u;
 /** Lunora-relative module path for a source file: dir-relative, POSIX separators, no `.ts`. */
 const lunoraRelativePath = (lunoraDirectory: string, filePath: string): string =>
     relative(lunoraDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
+
+/**
+ * The 1-based line an advisor finding points at for a declaration: the statement that
+ * declares it (`export const …`, `export function …`, or the expression or `return` statement
+ * that registers a call), so a JSDoc block above it is excluded. A node with no such statement
+ * above it (or a function declaration itself) falls back to its own start line, and so does one
+ * that sits in a function body with no statement of its own (`const register = () => crons.daily(…)`):
+ * the statement past that boundary declares the helper, not the registration.
+ */
+const declarationLineOf = (node: Node): number => {
+    const statement = Node.isFunctionDeclaration(node)
+        ? node
+        : node.getFirstAncestor(
+              (ancestor) =>
+                  Node.isVariableStatement(ancestor) ||
+                  Node.isFunctionDeclaration(ancestor) ||
+                  Node.isExpressionStatement(ancestor) ||
+                  Node.isReturnStatement(ancestor) ||
+                  Node.isArrowFunction(ancestor) ||
+                  Node.isFunctionExpression(ancestor),
+          );
+
+    return (statement === undefined || Node.isArrowFunction(statement) || Node.isFunctionExpression(statement) ? node : statement).getStartLineNumber();
+};
 
 /** Directories under `lunora/` that are never source: codegen's own output, and installed packages. */
 const SKIPPED_DIRECTORIES: ReadonlySet<string> = new Set(["_generated", "node_modules"]);
@@ -76,6 +101,9 @@ const excludeCache = new Map<string, { isExcluded: (relativePath: string) => boo
 
 const NOTHING_EXCLUDED = (): boolean => false;
 
+/** The walks {@link listLunoraSourceFiles} did inside the current {@link withSourceListMemo} run; unset outside one. */
+let sourceListMemo: Map<string, ReadonlyArray<string>> | undefined;
+
 /**
  * The `codegen.exclude` globs of the `lunora.config.*` nearest above
  * `lunoraDirectory` (stopping at the project's `package.json`), compiled to a
@@ -84,15 +112,7 @@ const NOTHING_EXCLUDED = (): boolean => false;
  * never silently treated as "no excludes" without a word.
  */
 const configuredExcludes = (lunoraDirectory: string): ((relativePath: string) => boolean) => {
-    // The project root (its `package.json`, or the repo root) ends the search: a
-    // config above it belongs to another project.
-    const configFile = findUpSync(
-        (directory) =>
-            findProjectConfigFile(directory) ?? (existsSync(join(directory, "package.json")) || existsSync(join(directory, ".git")) ? FIND_UP_STOP : undefined),
-        {
-            cwd: dirname(resolve(lunoraDirectory)),
-        },
-    );
+    const configFile = findCodegenConfigFile(lunoraDirectory);
     const stats = configFile === undefined ? undefined : statSync(configFile, { throwIfNoEntry: false });
 
     if (configFile === undefined || stats === undefined) {
@@ -219,15 +239,50 @@ const walkLunoraSourceFiles = (
  */
 const listLunoraSourceFiles = (directory: string, options: { includeSkipped?: boolean } = {}): string[] => {
     const includeSkipped = options.includeSkipped ?? false;
-    const isExcluded = includeSkipped ? NOTHING_EXCLUDED : configuredExcludes(directory);
+    const key = `${String(includeSkipped)}\0${directory}`;
+    const memoized = sourceListMemo?.get(key);
 
-    return walkLunoraSourceFiles(
+    // A copy every time: callers own the array they get (the fingerprint pushes `schema.ts` onto it).
+    if (memoized !== undefined) {
+        return [...memoized];
+    }
+
+    const isExcluded = includeSkipped ? NOTHING_EXCLUDED : configuredExcludes(directory);
+    const files = walkLunoraSourceFiles(
         directory,
         [],
         directory,
         new Set(),
         (entry, relativePath, isDirectory) => isSkippedEntry(entry, isDirectory, includeSkipped) || isExcluded(relativePath),
     );
+
+    sourceListMemo?.set(key, files);
+
+    return [...files];
+};
+
+/**
+ * Run `run` with {@link listLunoraSourceFiles} memoized for its duration.
+ *
+ * Some forty discoverers each walk the same tree, and each walk costs a
+ * `statSync` and a `realpathSync` per entry. Within one synchronous run the tree cannot change
+ * under codegen (its own writes land in the skipped `_generated/`), so one walk
+ * serves them all. Outside a run nothing is memoized, so a long-lived caller (a
+ * watcher's fingerprint) always sees the tree as it is now. Re-entrant: a nested
+ * call shares the outer run's memo.
+ */
+const withSourceListMemo = <T>(run: () => T): T => {
+    if (sourceListMemo !== undefined) {
+        return run();
+    }
+
+    sourceListMemo = new Map();
+
+    try {
+        return run();
+    } finally {
+        sourceListMemo = undefined;
+    }
 };
 
 /**
@@ -346,6 +401,36 @@ type RowsOf<Row extends object> = ReadonlyArray<Row> | Row | undefined;
 /** Narrows {@link RowsOf} to its several-rows case. */
 const isRowList = <Row extends object>(rows: RowsOf<Row>): rows is ReadonlyArray<Row> => Array.isArray(rows);
 
+/** {@link descendantsOfKind} results per node, keyed by the compiler node so a re-parse starts over. */
+const DESCENDANTS_CACHE = new WeakMap<ts.Node, Map<SyntaxKind, ReadonlyArray<Node>>>();
+
+/**
+ * `node.getDescendantsOfKind(kind)`, walked once per parse of the node's file.
+ * Dozens of feeders scan every file, and every procedure handler in it, for the
+ * same `CallExpression`s and `Identifier`s, and the tree walk (with a ts-morph
+ * wrapper per node) was the bulk of their cost. Keyed by the compiler node, as
+ * `EXPORT_NAMES_CACHE` is: an edit re-parses the file into new nodes, so a stale
+ * list is never served, and an unchanged file keeps its lists across runs. The
+ * list is shared, so callers must not mutate it (the readonly type says so).
+ */
+const descendantsOfKind = <Kind extends SyntaxKind>(node: Node, kind: Kind): ReadonlyArray<KindToNodeMappings[Kind]> => {
+    let byKind = DESCENDANTS_CACHE.get(node.compilerNode);
+
+    if (byKind === undefined) {
+        byKind = new Map();
+        DESCENDANTS_CACHE.set(node.compilerNode, byKind);
+    }
+
+    let nodes = byKind.get(kind);
+
+    if (nodes === undefined) {
+        nodes = node.getDescendantsOfKind(kind);
+        byKind.set(kind, nodes);
+    }
+
+    return nodes as ReadonlyArray<KindToNodeMappings[Kind]>;
+};
+
 /**
  * Resolve each file into the shared `Project` (reusing an already-added
  * `SourceFile`) and map every descendant of `kind` through `rowOf` with the
@@ -362,7 +447,7 @@ const collectNodeRowsFrom = <Row extends object, Kind extends SyntaxKind>(
     for (const { displayPath, filePath } of files) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        for (const node of sourceFile.getDescendantsOfKind(kind)) {
+        for (const node of descendantsOfKind(sourceFile, kind)) {
             const produced = rowOf(node, displayPath);
 
             if (isRowList(produced)) {
@@ -644,13 +729,73 @@ const unwrapExpression = (node: Node | undefined): Node | undefined => {
     return current;
 };
 
+/**
+ * The numeric value of `node` when the source states it outright: a numeric
+ * literal (`604_800`), a sign on one, or `+ - *` over two such values
+ * (`7 * 24 * 60 * 60`, the way durations are written). Identifiers and calls are
+ * not followed — a binding can be reassigned or read from the environment.
+ */
+const staticNumberValue = (node: Node | undefined): number | undefined => {
+    const current = unwrapExpression(node);
+
+    if (current === undefined) {
+        return undefined;
+    }
+
+    if (Node.isNumericLiteral(current)) {
+        return current.getLiteralValue();
+    }
+
+    if (Node.isPrefixUnaryExpression(current)) {
+        const operand = staticNumberValue(current.getOperand());
+
+        if (operand === undefined) {
+            return undefined;
+        }
+
+        const operator = current.getOperatorToken();
+
+        if (operator === SyntaxKind.MinusToken) {
+            return -operand;
+        }
+
+        return operator === SyntaxKind.PlusToken ? operand : undefined;
+    }
+
+    if (Node.isBinaryExpression(current)) {
+        const left = staticNumberValue(current.getLeft());
+        const right = staticNumberValue(current.getRight());
+
+        if (left === undefined || right === undefined) {
+            return undefined;
+        }
+
+        switch (current.getOperatorToken().getKind()) {
+            case SyntaxKind.AsteriskToken: {
+                return left * right;
+            }
+            case SyntaxKind.MinusToken: {
+                return left - right;
+            }
+            case SyntaxKind.PlusToken: {
+                return left + right;
+            }
+            default: {
+                return undefined;
+            }
+        }
+    }
+
+    return undefined;
+};
+
 /** Where {@link walkChain} stopped: at the chain's root, or at a call `settle` decided. */
 type ChainEnd = { root: Node | undefined; verdict?: never } | { root?: never; verdict: boolean };
 
 /**
  * Walk `value`'s member / call chain to its leftmost operand: through property
  * and element access, the callee side of calls, `await`, parentheses and
- * casts (`(await ctx.db.get(id)).owner` → `ctx`). `settle` is asked at each
+ * casts (`(await ctx.db.get("t", id)).owner` → `ctx`). `settle` is asked at each
  * call on the way and may end the walk with a verdict.
  */
 const walkChain = (value: Node | undefined, settle?: (call: CallExpression) => boolean | undefined): ChainEnd => {
@@ -877,7 +1022,9 @@ export {
     collectCallRows,
     collectNodeRows,
     collectSecurityCallRows,
+    declarationLineOf,
     defaultExportExpression,
+    descendantsOfKind,
     findObjectProperty,
     functionKeyOf,
     functionReferenceSegments,
@@ -898,6 +1045,7 @@ export {
     propertyInitializer,
     returningFunctionOf,
     RUN_METHODS,
+    staticNumberValue,
     stringPropertyFor,
     stringPropertyOf,
     symbolConstInitializer,
@@ -905,6 +1053,7 @@ export {
     unwrapExpression,
     unwrapToCallExpression,
     walkChain,
+    withSourceListMemo,
 };
 export type { ChainEnd, RowsOf, ScannedSourceFile };
 

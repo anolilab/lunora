@@ -227,7 +227,7 @@ const AiUsagePanel = ({ initialShardKey }: AiUsagePanelProps): ReactElement => {
         <section className="flex flex-col gap-4" data-testid="ai-panel">
             <ShardInput onChange={setShardKey} testId="ai-shard-input" value={shardKey} />
 
-            {error === null ? null : <ErrorAlert error={error} testId="ai-error" />}
+            {error === null ? null : <ErrorAlert error={error} shardKey={queryShardKey} testId="ai-error" />}
 
             {usage.source === "none" ? (
                 <EmptyState

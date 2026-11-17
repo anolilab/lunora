@@ -1,10 +1,11 @@
 /* eslint-disable no-secrets/no-secrets -- fixtures intentionally contain placeholder secret-like strings */
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MINTABLE_SECRET_KEYS, mintableSecretKeysFor } from "../src/package-secrets-registry";
 import type { ScaffoldPlan } from "../src/scaffold-dev-variables";
 import {
     ensureDevVariables,
@@ -160,6 +161,15 @@ describe("planDevVariablesScaffold", () => {
         expect(plan.content).toContain("# Generate a strong secret with: openssl rand -hex 32");
     });
 
+    it("mints LUNORA_RELAY_SECRET from its placeholder, so a shard-registry app boots from a fresh scaffold", () => {
+        expect.assertions(2);
+
+        const example = 'LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"\n';
+        const plan = generatePlan(planDevVariablesScaffold({ devVarsExists: false, exampleContent: example, randomHex: fixedHex }));
+
+        expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+    });
+
     it("catches common placeholder conventions beyond the example's own (todo / placeholder / change_this)", () => {
         expect.assertions(2);
 
@@ -200,13 +210,13 @@ describe("planDevVariablesScaffold", () => {
         const plan = generatePlan(
             planDevVariablesScaffold({
                 devVarsExists: false,
-                exampleContent: 'SHARED_TOKEN="abc123def456"\n',
+                exampleContent: 'SHARED_TOKEN="abc123def456"\n', // secret-scanner:allow -- test fixture, not a real credential
                 randomHex: fixedHex,
             }),
         );
 
         expect(plan.generatedKeys).toStrictEqual([]);
-        expect(plan.content).toContain('SHARED_TOKEN="abc123def456"');
+        expect(plan.content).toContain('SHARED_TOKEN="abc123def456"'); // secret-scanner:allow -- test fixture, not a real credential
     });
 
     it("never mints provider-issued keys — their placeholders survive so they stay detectable as unfilled", () => {
@@ -320,6 +330,30 @@ describe("ensureDevVariables", () => {
 
     afterEach(() => {
         rmSync(dir, { force: true, recursive: true });
+    });
+
+    it.each([
+        [".dev.vars", [".dev.vars.example"]],
+        [".dev.vars", []],
+        [".dev.vars.example", []],
+    ])("warns once and writes nothing when %s is a directory (beside: %j)", async (directory, files) => {
+        expect.assertions(4);
+
+        // A directory, not a `chmod 000` file: EACCES does not reproduce under root in CI.
+        for (const file of files) {
+            writeFileSync(join(dir, file), EXAMPLE, "utf8");
+        }
+
+        mkdirSync(join(dir, directory));
+
+        const info = vi.fn<(message: string) => void>();
+        const warn = vi.fn<(message: string) => void>();
+        const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info, randomHex: fixedHex, warn });
+
+        expect(result.status).toBe("unreadable");
+        expect(warn).toHaveBeenCalledExactlyOnceWith(`skipped the .dev.vars scaffold: ${directory} is not a readable file (EISDIR)`);
+        expect(info).not.toHaveBeenCalled();
+        expect(readdirSync(dir).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([directory, ...files].toSorted((a, b) => a.localeCompare(b)));
     });
 
     it("does nothing when .dev.vars already has every example key", async () => {
@@ -705,6 +739,40 @@ describe("planDevSecretsFill", () => {
 // fillDevSecrets — I/O
 // ─────────────────────────────────────────────────────────────────────────────
 
+describe("the relay secret is withheld only from a client-only project", () => {
+    const CLIENT_TEMPLATE = "<copy-from-the-worker-that-hosts-the-registry>";
+
+    it("mints the relay secret unless the project only constructs the client", () => {
+        expect.assertions(5);
+
+        expect(mintableSecretKeysFor(["@lunora/do:shardRegistry"]).has("LUNORA_RELAY_SECRET")).toBe(true);
+        expect(mintableSecretKeysFor([]).has("LUNORA_RELAY_SECRET")).toBe(true);
+        expect(mintableSecretKeysFor(["@lunora/replica:eventLogClient"]).has("LUNORA_RELAY_SECRET")).toBe(false);
+        expect(mintableSecretKeysFor(["@lunora/replica:eventLogClient", "@lunora/replica:eventLog"]).has("LUNORA_RELAY_SECRET")).toBe(true);
+        expect(MINTABLE_SECRET_KEYS.has("LUNORA_RELAY_SECRET")).toBe(false);
+    });
+
+    it("generates a blank relay line, which a host's dev file can carry before its first fill", () => {
+        expect.assertions(1);
+
+        const plan = planDevSecretsFill({ existingContent: 'LUNORA_RELAY_SECRET=""\n', randomHex: fixedHex });
+
+        expect(plan.filledKeys).toContain("LUNORA_RELAY_SECRET");
+    });
+
+    it("generates the relay line a host scaffolded, and leaves a client's template for the operator", () => {
+        expect.assertions(4);
+
+        const host = planDevSecretsFill({ existingContent: 'LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"\n', randomHex: fixedHex });
+        const client = planDevSecretsFill({ existingContent: `LUNORA_RELAY_SECRET="${CLIENT_TEMPLATE}"\n`, randomHex: fixedHex });
+
+        expect(host.filledKeys).toContain("LUNORA_RELAY_SECRET");
+        expect(host.content).toContain(`LUNORA_RELAY_SECRET="${fixedHex(32)}"`);
+        expect(client.filledKeys).not.toContain("LUNORA_RELAY_SECRET");
+        expect(client.content).toContain(`LUNORA_RELAY_SECRET="${CLIENT_TEMPLATE}"`);
+    });
+});
+
 describe("fillDevSecrets", () => {
     let dir: string;
 
@@ -714,6 +782,18 @@ describe("fillDevSecrets", () => {
 
     afterEach(() => {
         rmSync(dir, { force: true, recursive: true });
+    });
+
+    it("leaves a .dev.vars that is a directory alone instead of throwing", () => {
+        expect.assertions(2);
+
+        // `ensureDevVariables`, which every dev host runs first, is the one that warns.
+        mkdirSync(join(dir, ".dev.vars"));
+
+        const info = vi.fn<(message: string) => void>();
+
+        expect(fillDevSecrets({ cwd: dir, info, randomHex: fixedHex })).toStrictEqual({ addedKeys: [], filledKeys: [], status: "unchanged" });
+        expect(info).not.toHaveBeenCalled();
     });
 
     it("fills a feature-scaffolded .dev.vars (blank secrets, no admin token) so dev boots with real values", () => {
@@ -777,5 +857,104 @@ describe("fillDevSecrets", () => {
         expect(second.status).toBe("unchanged");
         // The second run must not regenerate (and so must not change) the values.
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe(afterFirst);
+    });
+});
+
+describe("the secret-value key is never minted", () => {
+    it("leaves its base64 placeholder in place, because hex would decode to the wrong length", () => {
+        expect.assertions(3);
+
+        const existing = 'LUNORA_SECRET_VALUE_KEY="<your-base64-32-byte-key>"\n';
+        const plan = planDevSecretsFill({ existingContent: existing, randomHex: () => "f".repeat(64) });
+
+        expect(MINTABLE_SECRET_KEYS.has("LUNORA_SECRET_VALUE_KEY")).toBe(false);
+        expect(plan.filledKeys).not.toContain("LUNORA_SECRET_VALUE_KEY");
+        expect(plan.content).toContain('LUNORA_SECRET_VALUE_KEY="<your-base64-32-byte-key>"');
+    });
+});
+
+describe("planDevSecretsFill — relay key follows the project's role", () => {
+    const hostPlaceholder = 'LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"\n';
+
+    it("mints the relay key for a project that hosts a relay-secured object", () => {
+        expect.assertions(1);
+
+        const plan = planDevSecretsFill({
+            existingContent: hostPlaceholder,
+            mintable: mintableSecretKeysFor(["@lunora/replica:eventLog"]),
+            randomHex: fixedHex,
+        });
+
+        expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+    });
+
+    it("leaves a host placeholder unminted for a project that only constructs the client", () => {
+        expect.assertions(2);
+
+        const plan = planDevSecretsFill({
+            existingContent: hostPlaceholder,
+            mintable: mintableSecretKeysFor(["@lunora/replica:eventLogClient"]),
+            randomHex: fixedHex,
+        });
+
+        expect(plan.content).toContain(hostPlaceholder);
+        expect(plan.filledKeys).not.toContain("LUNORA_RELAY_SECRET");
+    });
+
+    it("keeps minting the relay key when no secret sources are given", () => {
+        expect.assertions(1);
+
+        const plan = planDevSecretsFill({ existingContent: hostPlaceholder, randomHex: fixedHex });
+
+        expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+    });
+
+    it("mints the host placeholder for a project with no relay source, the same as a replica-only one", () => {
+        expect.assertions(1);
+
+        const plan = planDevSecretsFill({
+            existingContent: hostPlaceholder,
+            mintable: mintableSecretKeysFor([]),
+            randomHex: fixedHex,
+        });
+
+        expect(plan.content).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+    });
+});
+
+describe("fillDevSecrets — a client-only worker's relay key", () => {
+    it("says where the relay key comes from when the worker only constructs the client", () => {
+        expect.assertions(1);
+
+        const dir = mkdtempSync(join(tmpdir(), "lunora-relay-client-"));
+
+        try {
+            writeFileSync(join(dir, ".dev.vars"), 'LUNORA_RELAY_SECRET="<your-eventlogdo-host-relay-secret>"\n');
+            const info = vi.fn<(message: string) => void>();
+
+            fillDevSecrets({ cwd: dir, info, secretSources: ["@lunora/replica:eventLogClient"] });
+
+            expect(info).toHaveBeenCalledWith(expect.stringContaining("hosts EventLogDO"));
+        } finally {
+            rmSync(dir, { force: true, recursive: true });
+        }
+    });
+
+    it("mints the relay key and says nothing about a host for a project that names no relay source", () => {
+        expect.assertions(2);
+
+        const dir = mkdtempSync(join(tmpdir(), "lunora-relay-none-"));
+
+        try {
+            writeFileSync(join(dir, ".dev.vars"), 'LUNORA_RELAY_SECRET="replace-with-openssl-rand-hex-32"\n');
+            const info = vi.fn<(message: string) => void>();
+
+            fillDevSecrets({ cwd: dir, info, secretSources: [], randomHex: fixedHex });
+
+            expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toContain(`LUNORA_RELAY_SECRET="${"a".repeat(64)}"`);
+            expect(info).not.toHaveBeenCalledWith(expect.stringContaining("hosts EventLogDO"));
+        } finally {
+            rmSync(dir, { force: true, recursive: true });
+        }
     });
 });

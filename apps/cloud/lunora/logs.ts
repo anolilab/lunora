@@ -319,7 +319,7 @@ export const prune = internalMutation.mutation(async ({ ctx: context }): Promise
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-        await context.db.delete(row._id);
+        await context.db.delete("tenantLogs", row._id);
     }
 
     return { pruned: stale.length };

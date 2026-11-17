@@ -188,7 +188,7 @@ const rewriteLegacySetRoleTargets = async (context: MutationContext, userId: str
 
             if (role !== undefined) {
                 // eslint-disable-next-line no-await-in-loop -- sequential patches; few entries per organization
-                await context.db.patch(entry._id, { target: `${DELETED_ACTOR} → ${role}` });
+                await context.db.patch("auditLog", entry._id, { target: `${DELETED_ACTOR} → ${role}` });
             }
         }
     }

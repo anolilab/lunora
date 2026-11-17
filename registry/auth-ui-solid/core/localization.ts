@@ -134,6 +134,8 @@ interface Localization {
     profile: string;
     profileSaved: string;
     remove: string;
+    /** The countdown on a send/resend button during its cooldown; `{seconds}` is replaced. */
+    resendAvailableIn: string;
     resetPassword: string;
     resetPasswordOtpDescription: string;
     revoke: string;
@@ -313,6 +315,7 @@ const DEFAULT_LOCALIZATION: Localization = {
     profile: "Profile",
     profileSaved: "Your profile has been updated.",
     remove: "Remove",
+    resendAvailableIn: "Available again in {seconds}s",
     resetPassword: "Set new password",
     resetPasswordOtpDescription: "Enter the code we emailed you, then choose a new password.",
     revoke: "Revoke",

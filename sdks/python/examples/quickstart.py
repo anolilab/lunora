@@ -18,15 +18,18 @@ Everything except ``connect_and_run`` works with only the Python standard librar
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from lunora import LunoraClient, WireBigInt
+from lunora import LunoraClient, WebsocketsMissingError, WireBigInt
 
 
 async def main() -> None:
+    # reconnect_forever logs each failed run here and retries, so surface those warnings.
+    logging.basicConfig(level=logging.WARNING)
     url = os.environ.get("LUNORA_URL", "http://127.0.0.1:8787")
 
     # An async WS token provider (mirrors the TS WsTokenProvider): resolved fresh
@@ -63,11 +66,11 @@ async def main() -> None:
     client.subscribe("messages:list", {"channel": "general"}, on_data, on_error)
 
     try:
-        await asyncio.wait_for(client.connect_and_run(), timeout=10)
+        await asyncio.wait_for(client.reconnect_forever(), timeout=10)
     except asyncio.TimeoutError:
-        print("(stopped listening after 10s)")
-    except RuntimeError as exc:
-        print(exc)  # websockets not installed
+        print("(stopped listening after 10s; connection failures are logged above)")
+    except WebsocketsMissingError as exc:
+        print(exc)
 
 
 if __name__ == "__main__":

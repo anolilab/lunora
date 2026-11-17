@@ -12,10 +12,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use lunora::client::{Client, ClientError};
+use lunora::client::{Client, ClientError, TransportError};
 use lunora::offline::{
     is_stale_version, random_id, replay_identity_verdict, same_shard, token_digest, token_stamp, Identity, OfflineQueue, PersistenceAdapter, QueuedMutation,
-    ReplayVerdict, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
+    ReplayVerdict, CODE_CLIENT_CLOSED, CODE_OFFLINE_IDENTITY_CHANGED, CODE_OFFLINE_NOT_QUEUED, CODE_OFFLINE_PRECONDITION_FAILED, CODE_OFFLINE_QUEUE_OVERFLOW,
     CODE_OFFLINE_WRITE_UNDECODABLE, CODE_OFFLINE_WRITE_UNENCODABLE, MAX_BATCH_ENTRIES, MAX_RETRY_AFTER_MS,
 };
 use lunora::submit::{MutationStatus, SubmitOptions};
@@ -120,7 +120,7 @@ fn recording_client(body: Value) -> (Client, String, Arc<Mutex<Vec<WireValue>>>)
     let seen = Arc::new(Mutex::new(Vec::new()));
     let observer = Arc::clone(&seen);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let id = client.subscribe(
         FUNCTION,
@@ -162,7 +162,7 @@ pub fn optimistic_layer_rebases_onto_server_frame() {
 
     // Queued rather than sent, so the layer is still pending when the frame
     // lands — installed by the write path a consumer would use.
-    client.detach_socket();
+    client.detach_socket(None, None);
 
     let outcome = submit_appending(&mut client, wire(&case["appended"])).expect("queued");
 
@@ -191,7 +191,7 @@ fn declining_layer_is_skipped() {
     let case = optimistic_case("throwingLayerSkipped");
     let (mut client, id, seen) = recording_client(json!({ "result": null }));
 
-    client.detach_socket();
+    client.detach_socket(None, None);
     client
         .submit(
             SubmitOptions::new(FUNCTION, args()).with_optimistic(Arc::new(|current: &WireValue| match current {
@@ -296,7 +296,7 @@ fn constant_layer_masks_the_frame() {
     let case = optimistic_case("constantMask");
     let (mut client, id, seen) = primed(json!({ "error": { "code": "NOT_FOUND", "message": "gone" } }), &case["base"]);
 
-    client.detach_socket();
+    client.detach_socket(None, None);
     client
         .submit(SubmitOptions::new(FUNCTION, args()).with_optimistic_query(FUNCTION, args(), wire(&case["value"])))
         .expect("queued");
@@ -309,7 +309,7 @@ fn constant_layer_masks_the_frame() {
 
     // The replay's coded verdict is terminal, which is what takes the override
     // down — the same path a failed write takes.
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
@@ -329,7 +329,7 @@ pub fn optimistic_cursorless_frame_preserves_cursor() {
     let commit_cursor = case["commitCursor"].as_i64().expect("cursor");
     let (mut client, id, seen) = primed(json!({ "commitCursor": commit_cursor, "result": { "ok": true } }), &case["base"]);
 
-    client.detach_socket();
+    client.detach_socket(None, None);
     submit_appending(&mut client, wire(&case["appended"])).expect("queued");
     client.handle_frame(&frame(&id, &case["cursoredFrame"])).expect("cursored frame");
     client.handle_frame(&frame(&id, &case["cursorlessFrame"])).expect("cursorless frame");
@@ -346,7 +346,7 @@ pub fn optimistic_cursorless_frame_preserves_cursor() {
     );
     assert_eq!(layers(&client, &id), count(&case["layersAfterCursorlessFrame"]));
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.flush_offline_queue(None);
 
     // With the cursor preserved the commit cursor has already been reached, so
@@ -1006,8 +1006,8 @@ pub fn offline_flush_unencodable_write_settles_terminal() {
     }));
 
     // Connected once, then offline, so the writes queue rather than fail fast.
-    client.attach_socket(Box::new(|_frame| {}));
-    client.detach_socket();
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.detach_socket(None, None);
 
     for id in ids(&case["queued"]) {
         let mut options = SubmitOptions::new(
@@ -1036,7 +1036,7 @@ pub fn offline_flush_unencodable_write_settles_terminal() {
         "and no substitute record was persisted"
     );
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
@@ -1473,7 +1473,7 @@ fn submit_queues_while_offline(commit_cursor: i64) {
     let observer = Arc::clone(&seen);
     let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.subscribe(
         "messages:list",
         args.clone(),
@@ -1483,7 +1483,7 @@ fn submit_queues_while_offline(commit_cursor: i64) {
 
     // Prime the subscription with a server value, then drop the socket.
     client.handle_frame(r#"{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}"#).expect("prime");
-    client.detach_socket();
+    client.detach_socket(None, None);
 
     let outcome = client
         .submit(SubmitOptions::new("messages:list", args).with_optimistic(shared_appender(WireValue::String("c".into()))))
@@ -1496,7 +1496,7 @@ fn submit_queues_while_offline(commit_cursor: i64) {
     // Queued, not sent: nothing may reach the wire while the socket is down.
     assert_eq!(*posts.lock().expect("posts"), 0);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.flush_offline_queue(None);
 
     assert_eq!(*posts.lock().expect("posts"), 1, "the flush replayed it");
@@ -1698,11 +1698,11 @@ pub fn offline_flush_undecodable_result_settles_committed() {
 
     let settled = record_settled(&mut client);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let subscription = client.subscribe(FUNCTION, args(), None, None);
 
-    client.detach_socket();
+    client.detach_socket(None, None);
 
     for id in ids(&spec["queued"]) {
         let mut options = SubmitOptions::new(FUNCTION, args()).with_optimistic(shared_appender(WireValue::String("pending".into())));
@@ -1711,7 +1711,7 @@ pub fn offline_flush_undecodable_result_settles_committed() {
         client.submit(options).expect("queued");
     }
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
@@ -1746,7 +1746,7 @@ fn a_direct_submit_with_an_undecodable_result_commits(raw: &Value, code: &str) {
     let result = raw.clone();
     let (mut client, _requests) = replying_client(move |_request| (200, serde_json::to_vec(&json!({ "commitCursor": 7, "result": result })).expect("body")));
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let subscription = client.subscribe(FUNCTION, args(), None, None);
     let outcome = client
@@ -1897,8 +1897,8 @@ pub fn offline_write_held_for_credential_replays_after_token_refresh() {
     client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
     client.set_identity(case["identity"].as_str().map(str::to_string));
     client.set_auth_token(case["staleToken"].as_str().map(str::to_string));
-    client.attach_socket(Box::new(|_frame| {}));
-    client.detach_socket();
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.detach_socket(None, None);
 
     let settled = record_settled(&mut client);
     let queued = ids(&case["queued"]);
@@ -1911,7 +1911,7 @@ pub fn offline_write_held_for_credential_replays_after_token_refresh() {
         assert_eq!(client.submit(options).expect("queued").status, MutationStatus::Queued, "{id} queues offline");
     }
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let refused = client.flush_offline_queue(None);
     let after_refusal = &case["afterRefusal"];
@@ -1967,8 +1967,8 @@ fn bearer_client(token: Option<&str>) -> (Client, Bearers) {
     );
 
     set_token(&mut client, token);
-    client.attach_socket(Box::new(|_frame| {}));
-    client.detach_socket();
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.detach_socket(None, None);
 
     (client, bearers)
 }
@@ -2005,7 +2005,7 @@ pub fn offline_unset_identity_stamps_token_digest() {
 
     queue_writes(&mut client, 1);
     set_token(&mut client, Some(flushed_under));
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
@@ -2022,7 +2022,7 @@ pub fn offline_unset_identity_stamps_token_digest() {
     let (mut client, bearers) = bearer_client(Some(queued_under));
 
     queue_writes(&mut client, 1);
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
@@ -2059,7 +2059,7 @@ fn an_identity_spelled_like_a_digest_never_matches_a_token_stamp() {
     queue_writes(&mut client, 1);
     set_token(&mut client, None);
     client.set_identity(Some(digest.clone()));
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     assert_eq!(client.flush_offline_queue(None).rejected.len(), 1);
     assert!(sent(&bearers).is_empty());
@@ -2071,7 +2071,7 @@ fn an_identity_spelled_like_a_digest_never_matches_a_token_stamp() {
     queue_writes(&mut client, 1);
     client.set_identity(None);
     set_token(&mut client, Some("token-a"));
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     assert_eq!(client.flush_offline_queue(None).rejected.len(), 1);
     assert!(sent(&bearers).is_empty());
@@ -2139,7 +2139,7 @@ fn token_write_is_held_while_no_token_is_set() {
     client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
     queue_writes(&mut client, 1);
     set_token(&mut client, None);
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
@@ -2163,7 +2163,7 @@ fn legacy_null_stamp_is_not_sent_under_a_token() {
 
     queued.identity = Identity::SignedOut;
     client.offline_queue.enqueue(queued, Ok(json!({})));
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
@@ -2174,7 +2174,7 @@ fn legacy_null_stamp_is_not_sent_under_a_token() {
     let (mut client, bearers) = bearer_client(Some("token-b"));
 
     client.offline_queue.enqueue(entry("m2", None), Ok(json!({})));
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.flush_offline_queue(None);
 
     assert_eq!(sent(&bearers), vec![Some("Bearer token-b".to_string())]);
@@ -2204,14 +2204,214 @@ fn every_request_of_a_pass_carries_its_token() {
 
     set_token(&mut client, Some("token-a"));
     client.offline_queue = OfflineQueue::new().with_max_items(MAX_BATCH_ENTRIES + 1);
-    client.attach_socket(Box::new(|_frame| {}));
-    client.detach_socket();
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.detach_socket(None, None);
     queue_writes(&mut client, MAX_BATCH_ENTRIES + 1);
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let report = client.flush_offline_queue(None);
 
     assert_eq!(report.committed.len(), MAX_BATCH_ENTRIES + 1);
     assert!(bearers.lock().expect("bearers").len() >= 4, "two halves of a split chunk, then the tail");
     assert!(sent(&bearers).iter().all(|bearer| bearer.as_deref() == Some("Bearer token-a")));
+}
+
+/// An online-only write is the one a socket-down client must refuse, so its
+/// arguments never reach the queue or the persistence adapter.
+const SECRET: &str = "sentinel-secret-7731";
+
+fn online_only_write() -> SubmitOptions {
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let mut options = SubmitOptions::new("auth:setPassword", args);
+    options.online_only = true;
+
+    options
+}
+
+fn disconnected_client(store: &MemoryStore, posts: Arc<Mutex<Vec<Vec<u8>>>>) -> Client {
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, body| {
+            posts.lock().expect("posts").push(body.to_vec());
+
+            Ok((200, br#"{"commitCursor":3,"result":{"ok":true}}"#.to_vec()))
+        })),
+    );
+    client.offline_queue = OfflineQueue::new()
+        .with_persistence(Box::new(store.clone()))
+        .with_queue_before_first_connect(true);
+
+    client
+}
+
+/// With the socket down, an online-only write is refused before anything is
+/// queued, persisted or sent.
+pub fn offline_online_only_refused_when_disconnected() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+
+    // A subscription on the write's own path and args, primed with a server value,
+    // so an overlay the write applied would be displayed.
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+
+    client.attach_socket(Box::new(|_frame| {}), None);
+    client.subscribe(
+        "auth:setPassword",
+        args,
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+    client.handle_frame(r#"{"cursor":1,"data":["a"],"id":"sub_1","type":"data"}"#).expect("prime");
+    client.detach_socket(None, None);
+
+    let write = online_only_write().with_optimistic(shared_appender(WireValue::String("c".into())));
+    let error = client.submit(write).expect_err("an online-only write must be refused");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == CODE_OFFLINE_NOT_QUEUED),
+        "refused with OFFLINE_NOT_QUEUED, got {error:?}"
+    );
+    let predicted = WireValue::Array(vec![WireValue::String("a".into()), WireValue::String("c".into())]);
+
+    assert!(!seen.lock().expect("seen").contains(&predicted), "a refused write's overlay is never displayed");
+    assert_eq!(client.pending_mutation_count(), 0);
+    assert_eq!(store.appended(), 0, "the persistence adapter must never see the write");
+    let persisted = serde_json::to_string(&store.inner.lock().expect("store lock").records).expect("records");
+    assert!(!persisted.contains(SECRET), "the arguments reached durable storage");
+    assert!(posts.lock().expect("posts").is_empty(), "a refused write reached the wire");
+}
+
+/// With the socket up, an online-only write is sent normally and commits.
+pub fn offline_online_only_sends_when_connected() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let outcome = client.submit(online_only_write()).expect("committed");
+
+    assert_eq!(outcome.status, MutationStatus::Committed);
+    let sent = posts.lock().expect("posts");
+    assert_eq!(sent.len(), 1, "one request for the write");
+    assert!(String::from_utf8_lossy(&sent[0]).contains(SECRET), "the arguments go out on the wire");
+    assert_eq!(store.appended(), 0, "a sent write is not persisted");
+}
+
+/// A normal write made with the socket down still queues beside an online-only one.
+pub fn offline_online_only_leaves_normal_writes_queued() {
+    let store = MemoryStore::seeded(Vec::new());
+    let posts = Arc::new(Mutex::new(Vec::new()));
+    let mut client = disconnected_client(&store, Arc::clone(&posts));
+
+    let args = WireValue::Object(vec![("text".into(), WireValue::String("hi".into()))]);
+    let outcome = client.submit(SubmitOptions::new("messages:send", args)).expect("queued");
+
+    assert_eq!(outcome.status, MutationStatus::Queued);
+    assert_eq!(client.pending_mutation_count(), 1);
+    assert_eq!(store.appended(), 1);
+    assert!(posts.lock().expect("posts").is_empty(), "a queued write is not sent");
+}
+
+/// A client that has never connected, so an online-only write takes the direct
+/// path. Every request gets `reply`, the only answer the network gives.
+fn never_connected_client(store: &MemoryStore, reply: Result<(u16, Vec<u8>), String>, sends: Arc<Mutex<usize>>) -> Client {
+    let mut client = Client::new(
+        "https://app.example",
+        Some(Box::new(move |_url, _headers, _body| {
+            *sends.lock().expect("sends") += 1;
+
+            reply.clone()
+        })),
+    );
+    client.offline_queue = OfflineQueue::new().with_persistence(Box::new(store.clone()));
+
+    client
+}
+
+/// Subscribes to the write's own path and args, primed with the server value
+/// `["a"]`, so an overlay the write applies is displayed. No socket is attached.
+fn primed_online_only_subscription(client: &mut Client) -> Arc<Mutex<Vec<WireValue>>> {
+    let args = WireValue::Object(vec![("token".into(), WireValue::String(SECRET.into()))]);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let observer = Arc::clone(&seen);
+    let id = client.subscribe(
+        "auth:setPassword",
+        args,
+        Some(Box::new(move |value| observer.lock().expect("seen").push(value.clone()))),
+        None,
+    );
+    client
+        .handle_frame(&format!(r#"{{"cursor":1,"data":["a"],"id":"{id}","type":"data"}}"#))
+        .expect("prime");
+
+    seen
+}
+
+/// An online-only write sent directly to a shard that never connected, whose
+/// request got no reply, is refused as a queued write would be: nothing queued or
+/// persisted, the overlay rolled back, the transport error kept as the source. A
+/// coded rejection surfaces as itself, and a failure while the socket is up
+/// surfaces unchanged.
+pub fn offline_online_only_transport_failure_refused() {
+    use std::error::Error as _;
+
+    let unreachable = "dial tcp: connection refused";
+    let sends = Arc::new(Mutex::new(0));
+    let store = MemoryStore::seeded(Vec::new());
+    let mut client = never_connected_client(&store, Err(unreachable.into()), Arc::clone(&sends));
+    let seen = primed_online_only_subscription(&mut client);
+
+    let write = online_only_write().with_optimistic(shared_appender(WireValue::String("c".into())));
+    let error = client.submit(write).expect_err("a send with no reply must be refused");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == CODE_OFFLINE_NOT_QUEUED),
+        "refused with OFFLINE_NOT_QUEUED, got {error:?}"
+    );
+    let cause = error.source().and_then(|cause| cause.downcast_ref::<TransportError>());
+    assert_eq!(
+        cause,
+        Some(&TransportError(unreachable.into())),
+        "the transport error is the cause, got {error:?}"
+    );
+    assert_eq!(*sends.lock().expect("sends"), 1, "one direct send, not a queued one");
+    assert_eq!(client.pending_mutation_count(), 0);
+    assert_eq!(store.appended(), 0, "the persistence adapter must never see the write");
+
+    let shown = seen.lock().expect("seen").clone();
+    let predicted = WireValue::Array(vec![WireValue::String("a".into()), WireValue::String("c".into())]);
+    assert!(shown.contains(&predicted), "the overlay was never shown, so its rollback proves nothing");
+    assert_eq!(
+        shown.last(),
+        Some(&WireValue::Array(vec![WireValue::String("a".into())])),
+        "the overlay is rolled back"
+    );
+
+    let coded_sends = Arc::new(Mutex::new(0));
+    let coded = Ok((403, br#"{"error":{"code":"PERMISSION_DENIED","message":"not allowed"}}"#.to_vec()));
+    let store = MemoryStore::seeded(Vec::new());
+    let mut client = never_connected_client(&store, coded, coded_sends);
+    primed_online_only_subscription(&mut client);
+
+    let error = client.submit(online_only_write()).expect_err("a coded rejection is an error");
+
+    assert!(
+        matches!(&error, ClientError::Api(api) if api.code == "PERMISSION_DENIED" && api.source.is_none()),
+        "a coded rejection surfaces as itself, got {error:?}"
+    );
+
+    let connected_sends = Arc::new(Mutex::new(0));
+    let store = MemoryStore::seeded(Vec::new());
+    let mut client = never_connected_client(&store, Err(unreachable.into()), connected_sends);
+    client.attach_socket(Box::new(|_frame| {}), None);
+
+    let error = client.submit(online_only_write()).expect_err("a failed send is an error");
+
+    assert!(
+        matches!(&error, ClientError::Transport(message) if message == unreachable),
+        "a failure while connected surfaces unchanged, got {error:?}"
+    );
 }

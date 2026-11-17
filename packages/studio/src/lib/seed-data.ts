@@ -75,6 +75,7 @@ const collectUnresolvableFkColumns = (columns: ReadonlyArray<ColumnMeta>, fkPool
 /** The reply envelope, typed as it actually arrives: every field is host-supplied and unvalidated. */
 interface SeedResponseBody {
     readonly error?: unknown;
+    readonly message?: unknown;
     readonly rows?: unknown;
     readonly tables?: unknown;
 }
@@ -149,6 +150,11 @@ const requestSeedRows = async (request: SeedRowsRequest): Promise<SeedRowsResult
         const tables = Array.isArray(body.tables) ? body.tables.filter((table): table is string => typeof table === "string") : [];
 
         return { kind: "error", message: `no rows to reference in ${tables.join(", ")} — seed those tables first` };
+    }
+
+    // The planner's own refusal names the column and the table; show that, not the code.
+    if (body.error === "seed-refused" && typeof body.message === "string") {
+        return { kind: "error", message: body.message };
     }
 
     return { kind: "error", message: typeof body.error === "string" ? body.error : `seed request failed (${String(response.status)})` };

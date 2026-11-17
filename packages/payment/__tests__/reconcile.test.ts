@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { PaymentAdapter } from "../src/adapter";
 import { money } from "../src/money";
+import type { PaymentObserver } from "../src/observability";
 import { reconcile } from "../src/reconcile";
 import { MemoryPaymentStore } from "../src/store";
 import type { Subscription } from "../src/types";
@@ -41,6 +42,99 @@ const truthAdapter = (): PaymentAdapter =>
     }) as unknown as PaymentAdapter;
 
 describe("reconcile", () => {
+    it("counts a sweep's refused row as a changed row and reports it as drift", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        await store.upsertSubscription({ ...subscription("active"), id: "sub_live" });
+        await store.upsertSubscription({ ...subscription("past_due"), id: "sub_2" });
+
+        const observer = vi.fn<PaymentObserver>();
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async () => {
+                return { ...subscription("active"), id: "sub_2" };
+            },
+        } as PaymentAdapter;
+        const result = await reconcile({ adapter, observability: observer, singleSubscriptionPerReference: true, store, subscriptionIds: ["sub_2"] });
+
+        expect(result.updatedSubscriptions).toBe(1);
+        expect(observer).toHaveBeenCalledWith(expect.objectContaining({ id: "sub_2", type: "reconcile.drift" }));
+    });
+
+    it("records a refused revival as paused, so the customer can still cancel it", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        await store.upsertSubscription({ ...subscription("active"), id: "sub_live" });
+        await store.upsertSubscription({ ...subscription("canceled"), id: "sub_2" });
+
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async () => {
+                return { ...subscription("active"), id: "sub_2" };
+            },
+        } as PaymentAdapter;
+        await reconcile({ adapter, singleSubscriptionPerReference: true, store, subscriptionIds: ["sub_2"] });
+
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "paused" });
+    });
+
+    it("does not reactivate a refused subscription when the provider still reports it active", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+        // The reference already holds a live subscription, so the past-due row must not be activated by reconciliation.
+        await store.upsertSubscription({ ...subscription("active"), id: "sub_live" });
+        await store.upsertSubscription({ ...subscription("past_due"), id: "sub_2" });
+
+        const observer = vi.fn<PaymentObserver>();
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async () => {
+                return { ...subscription("active"), id: "sub_2" };
+            },
+        } as PaymentAdapter;
+        await reconcile({ adapter, observability: observer, singleSubscriptionPerReference: true, store, subscriptionIds: ["sub_2"] });
+
+        await expect(store.getSubscription("stripe", "sub_2")).resolves.toMatchObject({ state: "past_due" });
+        expect(observer).toHaveBeenCalledWith({ provider: "stripe", subscriptionId: "sub_2", type: "subscription.duplicate" });
+    });
+
+    it("does not overwrite a webhook that lands between its read and its write", async () => {
+        expect.assertions(2);
+
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("past_due"));
+
+        // The second read is the one reconcile takes just before deciding to write. A webhook lands
+        // right after it returns, so the write that follows was decided on a row that is now stale.
+        const storedRead = store.getSubscription.bind(store);
+        const storedWrite = store.upsertSubscription.bind(store);
+        let reads = 0;
+
+        store.getSubscription = async (provider, id) => {
+            reads += 1;
+
+            const row = await storedRead(provider, id);
+
+            if (reads === 2) {
+                await storedWrite({ ...subscription("canceled"), updatedAt: 200 });
+            }
+
+            return row;
+        };
+
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+
+        expect(result.updatedSubscriptions).toBe(0);
+
+        const stored = await storedRead("stripe", "sub_1");
+
+        expect(stored?.state).toBe("canceled");
+    });
+
     it("repairs a subscription the store missed (drift from a dropped webhook)", async () => {
         expect.assertions(3);
 
@@ -49,7 +143,7 @@ describe("reconcile", () => {
         // Store stuck on a stale state a missed cancellation→reactivation left behind.
         await store.upsertSubscription(subscription("past_due"));
 
-        const result = await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
 
         expect(result).toEqual({
             checkedPayments: 0,
@@ -80,18 +174,27 @@ describe("reconcile", () => {
         // Same primary price, but the add-on is still on the row — and with it, its entitlement.
         await store.upsertSubscription({ ...truth, lastEventAt: 900, priceIds: ["price_1", "price_addon"] });
 
-        await expect(reconcile({ adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({ updatedSubscriptions: 1 });
+        await expect(reconcile({ singleSubscriptionPerReference: false, adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({
+            updatedSubscriptions: 1,
+        });
         await expect(store.getSubscription("stripe", "sub_1")).resolves.toMatchObject({ lastEventAt: 900, priceIds: ["price_1"] });
 
         await store.upsertSubscription({ ...truth, currentPeriodStart: 1000 });
 
-        await expect(reconcile({ adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({ updatedSubscriptions: 1 });
+        await expect(reconcile({ singleSubscriptionPerReference: false, adapter, store, subscriptionIds: ["sub_1"] })).resolves.toMatchObject({
+            updatedSubscriptions: 1,
+        });
 
         // An unknown set (`undefined`) is not drift.
         const unknownSet = { ...truth, priceIds: undefined };
 
         await expect(
-            reconcile({ adapter: { ...adapter, getSubscriptionStatus: async () => unknownSet }, store, subscriptionIds: ["sub_1"] }),
+            reconcile({
+                singleSubscriptionPerReference: false,
+                adapter: { ...adapter, getSubscriptionStatus: async () => unknownSet },
+                store,
+                subscriptionIds: ["sub_1"],
+            }),
         ).resolves.toMatchObject({ updatedSubscriptions: 0 });
     });
 
@@ -102,7 +205,7 @@ describe("reconcile", () => {
 
         await store.upsertSubscription(subscription("active"));
 
-        const result = await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
 
         expect(result.updatedSubscriptions).toBe(0);
     });
@@ -112,7 +215,7 @@ describe("reconcile", () => {
 
         const store = new MemoryPaymentStore();
 
-        const result = await reconcile({ adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
 
         expect(result).toEqual({
             checkedPayments: 1,
@@ -152,7 +255,7 @@ describe("reconcile", () => {
 
         // The provider snapshot reports captured / refunded 0 (a Stripe PaymentIntent stays `succeeded`
         // after a refund). Reconcile must preserve the refund rather than overwrite it back to captured.
-        const result = await reconcile({ adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
 
         const session = await store.getPaymentSession("stripe", "pi_1");
 
@@ -196,7 +299,7 @@ describe("reconcile", () => {
             updatedAt: 100,
         });
 
-        const result = await reconcile({ adapter: blankReferenceAdapter, paymentSessionIds: ["pi_1"], store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter: blankReferenceAdapter, paymentSessionIds: ["pi_1"], store });
 
         const session = await store.getPaymentSession("stripe", "pi_1");
 
@@ -227,6 +330,7 @@ describe("reconcile", () => {
 
         const result = await reconcile({
             adapter: flakyAdapter,
+            singleSubscriptionPerReference: false,
             observability: (event) => events.push(event),
             store,
             subscriptionIds: ["sub_boom", "sub_1"],
@@ -251,6 +355,133 @@ describe("reconcile", () => {
         // The failure is surfaced and `reconcile.completed` always fires.
         expect(events.map((event) => event.type)).toContain("reconcile.error");
         expect(events.at(-1)?.type).toBe("reconcile.completed");
+    });
+
+    it("bounds the provider reads in flight during a sweep", async () => {
+        expect.assertions(2);
+
+        // Each provider read parks until eight are in flight at once, so the peak is the pool's bound, reached, not a timing accident.
+        const POOL = 8;
+        let entered = 0;
+        let inFlight = 0;
+        let peak = 0;
+        let openGate: () => void = () => undefined;
+        const gate = new Promise<void>((resolve) => {
+            openGate = resolve;
+        });
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async (id: string) => {
+                inFlight += 1;
+                entered += 1;
+                peak = Math.max(peak, inFlight);
+
+                if (entered === POOL) {
+                    openGate();
+                }
+
+                await gate;
+                inFlight -= 1;
+
+                return { ...subscription("active"), id };
+            },
+        };
+        const ids = Array.from({ length: 20 }, (_, index) => `sub_${String(index)}`);
+
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store: new MemoryPaymentStore(), subscriptionIds: ids });
+
+        expect(peak).toBe(POOL);
+        expect(result.updatedSubscriptions).toBe(20);
+    });
+
+    it("skips the write when a webhook landed on the row mid-sweep", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const stale = { ...subscription("past_due"), lastEventAt: 100 };
+        const calls: string[] = [];
+
+        await store.upsertSubscription(stale);
+
+        // The webhook lands while the adapter call is in flight: the read before it sees the
+        // stale row, the read after it sees the newer one.
+        vi.spyOn(store, "getSubscription")
+            .mockImplementationOnce(async () => {
+                calls.push("read");
+
+                return stale;
+            })
+            .mockImplementationOnce(async () => {
+                calls.push("read");
+
+                // Same timestamps: only the row's content shows the webhook landed.
+                return { ...subscription("canceled"), lastEventAt: 100 };
+            });
+
+        const upsert = vi.spyOn(store, "upsertSubscription");
+        const adapter = {
+            ...truthAdapter(),
+            getSubscriptionStatus: async () => {
+                calls.push("adapter");
+
+                return subscription("active");
+            },
+        } as PaymentAdapter;
+
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store, subscriptionIds: ["sub_1"] });
+
+        expect(calls).toEqual(["read", "adapter", "read"]);
+        expect(upsert).not.toHaveBeenCalled();
+        expect(result.updatedSubscriptions).toBe(0);
+    });
+
+    it("skips the payment write when a webhook landed on the row mid-sweep", async () => {
+        expect.assertions(3);
+
+        const store = new MemoryPaymentStore();
+        const stale = {
+            amount: money(1000, "USD"),
+            capturedAmount: money(0, "USD"),
+            createdAt: 1,
+            id: "pay_1",
+            provider: "stripe",
+            referenceId: "user_1",
+            refundedAmount: money(0, "USD"),
+            state: "initiated",
+            updatedAt: 1,
+        } as const;
+        const calls: string[] = [];
+
+        await store.upsertPaymentSession(stale);
+
+        vi.spyOn(store, "getPaymentSession")
+            .mockImplementationOnce(async () => {
+                calls.push("read");
+
+                return stale;
+            })
+            .mockImplementationOnce(async () => {
+                calls.push("read");
+
+                return { ...stale, state: "failed", updatedAt: 2 };
+            });
+
+        const upsert = vi.spyOn(store, "upsertPaymentSession");
+        const base = truthAdapter();
+        const adapter = {
+            ...base,
+            getPaymentStatus: async (sessionId: string) => {
+                calls.push("adapter");
+
+                return base.getPaymentStatus(sessionId);
+            },
+        };
+
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, paymentSessionIds: ["pay_1"], store });
+
+        expect(calls).toEqual(["read", "adapter", "read"]);
+        expect(upsert).not.toHaveBeenCalled();
+        expect(result.updatedPayments).toBe(0);
     });
 
     it("re-forwards a usage event whose upstream report failed, and marks it reported", async () => {
@@ -296,14 +527,14 @@ describe("reconcile", () => {
             reportedToProvider: false,
         });
 
-        const result = await reconcile({ adapter, store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(reported).toStrictEqual([{ idempotencyKey: "evt_1", quantity: 5 }]);
         expect(result.updatedUsage).toBe(1);
         expect(result.checkedUsage).toBe(1);
 
         // Marked reported, so the next sweep does not send it again.
-        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toStrictEqual([]);
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toStrictEqual([]);
     });
 
     it("never regresses a refunded row to partially_refunded", async () => {
@@ -339,7 +570,7 @@ describe("reconcile", () => {
             identifier: "polar",
         } as unknown as PaymentAdapter;
 
-        await reconcile({ adapter, paymentSessionIds: ["ord_1"], store });
+        await reconcile({ singleSubscriptionPerReference: false, adapter, paymentSessionIds: ["ord_1"], store });
 
         const merged = await store.getPaymentSession("polar", "ord_1");
 
@@ -376,7 +607,7 @@ describe("reconcile", () => {
             identifier: "polar",
         } as unknown as PaymentAdapter;
 
-        await reconcile({ adapter, paymentSessionIds: ["ord_1"], store });
+        await reconcile({ singleSubscriptionPerReference: false, adapter, paymentSessionIds: ["ord_1"], store });
 
         const merged = await store.getPaymentSession("polar", "ord_1");
 
@@ -403,7 +634,7 @@ describe("reconcile", () => {
             identifier: "creem",
         } as unknown as PaymentAdapter;
 
-        const result = await reconcile({ adapter, store, subscriptionIds: ["sub_1"] });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store, subscriptionIds: ["sub_1"] });
 
         expect(result.updatedSubscriptions).toBe(1);
 
@@ -423,7 +654,7 @@ describe("reconcile", () => {
 
         await store.upsertSubscription({ ...subscription("past_due"), referenceId: "" });
 
-        await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
+        await reconcile({ singleSubscriptionPerReference: false, adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
 
         await expect(store.getSubscription("stripe", "sub_1").then((row) => row?.referenceId)).resolves.toBe("user_1");
     });
@@ -455,12 +686,12 @@ describe("reconcile", () => {
             reportedToProvider: false,
         });
 
-        const result = await reconcile({ adapter, store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(reported).toStrictEqual([]);
         expect(result.checkedUsage).toBe(0);
         // Still pending: the sweep declines to guess, it does not mark the row done.
-        await expect(store.listUnreportedUsage("autumn", 10)).resolves.toHaveLength(1);
+        await expect(store.listUnreportedUsage("autumn", 10, Number.POSITIVE_INFINITY)).resolves.toHaveLength(1);
     });
 
     it("leaves a usage event pending when the retried forward fails again", async () => {
@@ -485,9 +716,233 @@ describe("reconcile", () => {
             reportedToProvider: false,
         });
 
-        const result = await reconcile({ adapter, store });
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
 
         expect(result.failedUsage).toBe(1);
-        await expect(store.listUnreportedUsage("stripe", 10)).resolves.toHaveLength(1);
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toHaveLength(1);
+    });
+
+    it("does not let a full batch of events with no customer starve a newer event's forward", async () => {
+        expect.assertions(4);
+
+        // Regression: a forward that kept failing (Stripe refuses a reference with no
+        // customer) left its row first in the oldest-first batch on every tick, so once
+        // `usageReportLimit` such rows piled up no newer event was ever forwarded.
+        const store = new MemoryPaymentStore();
+        const reported: string[] = [];
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async (input: { customerId?: string; idempotencyKey: string }) => {
+                if (input.customerId === undefined) {
+                    throw new Error("no Stripe customer");
+                }
+
+                reported.push(input.idempotencyKey);
+            },
+        } as unknown as PaymentAdapter;
+
+        const record = (createdAt: number, referenceId: string) =>
+            store.recordUsage({
+                createdAt,
+                featureId: "tokens",
+                idempotencyKey: `evt_${String(createdAt)}`,
+                provider: "stripe",
+                quantity: 1,
+                referenceId,
+                reportedToProvider: false,
+            });
+
+        await store.upsertCustomer({ createdAt: 1, id: "cus_1", provider: "stripe", referenceId: "user_paying" });
+        await record(1, "user_orphan");
+        await record(2, "user_orphan");
+        await record(3, "user_paying");
+
+        const first = await reconcile({ adapter, singleSubscriptionPerReference: false, store, usageReportLimit: 2 });
+        const second = await reconcile({ adapter, singleSubscriptionPerReference: false, store, usageReportLimit: 2 });
+
+        expect(first.failedUsage).toBe(2);
+        expect(second.updatedUsage).toBe(1);
+        expect(reported).toStrictEqual(["evt_3"]);
+        // Deferred, not dropped: the orphaned events are retried once their backoff passes.
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toHaveLength(2);
+    });
+
+    it("looks up each reference's customer once per tick, and still reports every event in order", async () => {
+        expect.assertions(3);
+
+        // Regression: the sweep awaited `getCustomerByReference` once per event, so a
+        // batch of events for one reference repeated the same lookup.
+        const store = new MemoryPaymentStore();
+        const lookup = vi.spyOn(store, "getCustomerByReference");
+        const reported: string[] = [];
+        const adapter = {
+            capabilities: { usageMetering: true },
+            getPaymentStatus: async () => {
+                throw new Error("not used");
+            },
+            getSubscriptionStatus: async () => subscription("active"),
+            identifier: "stripe",
+            reportUsage: async (input: { idempotencyKey: string }) => {
+                reported.push(input.idempotencyKey);
+            },
+        } as unknown as PaymentAdapter;
+
+        const record = (createdAt: number, referenceId: string) =>
+            store.recordUsage({
+                createdAt,
+                featureId: "tokens",
+                idempotencyKey: `evt_${String(createdAt)}`,
+                provider: "stripe",
+                quantity: 5,
+                referenceId,
+                reportedToProvider: false,
+            });
+
+        await store.upsertCustomer({ createdAt: 1, id: "cus_1", provider: "stripe", referenceId: "user_1" });
+        await store.upsertCustomer({ createdAt: 1, id: "cus_2", provider: "stripe", referenceId: "user_2" });
+        await record(1, "user_1");
+        await record(2, "user_1");
+        await record(3, "user_2");
+
+        const result = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
+
+        expect(lookup.mock.calls).toStrictEqual([
+            ["stripe", "user_1"],
+            ["stripe", "user_2"],
+        ]);
+        expect(reported).toStrictEqual(["evt_1", "evt_2", "evt_3"]);
+        expect(result.updatedUsage).toBe(3);
+    });
+
+    it("picks up a customer created mid-tick for a later event of the same reference", async () => {
+        expect.assertions(2);
+
+        // Regression: a miss was memoised as `undefined` for the whole tick, so an event
+        // after the customer was created still reported with no customer id.
+        const store = new MemoryPaymentStore();
+        const reported: (string | undefined)[] = [];
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async (input: { customerId?: string; idempotencyKey: string }) => {
+                reported.push(input.customerId);
+
+                if (input.idempotencyKey === "evt_1") {
+                    await store.upsertCustomer({
+                        createdAt: 1,
+                        id: "cus_new",
+                        provider: "stripe",
+                        referenceId: "user_1",
+                    });
+                }
+            },
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1,
+            featureId: "tokens",
+            idempotencyKey: "evt_1",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+        await store.recordUsage({
+            createdAt: 2,
+            featureId: "tokens",
+            idempotencyKey: "evt_2",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        await reconcile({ singleSubscriptionPerReference: false, adapter, store });
+
+        expect(reported).toStrictEqual([undefined, "cus_new"]);
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toStrictEqual([]);
+    });
+
+    it("does not cache a failed customer lookup across ticks", async () => {
+        expect.assertions(4);
+
+        // The memo lives for one tick only: a lookup that failed in one tick must be
+        // retried by the next, not replayed from a cache.
+        const store = new MemoryPaymentStore();
+        const lookup = vi.spyOn(store, "getCustomerByReference").mockRejectedValueOnce(new Error("db unavailable"));
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async () => undefined,
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1,
+            featureId: "tokens",
+            idempotencyKey: "evt_1",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        vi.useFakeTimers({ now: 1_000_000, toFake: ["Date"] });
+
+        try {
+            const first = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
+
+            expect(first.failedUsage).toBe(1);
+
+            // Past the failed forward's backoff, so the next tick retries it.
+            vi.setSystemTime(1_000_000 + 6 * 60 * 60 * 1000);
+
+            const second = await reconcile({ singleSubscriptionPerReference: false, adapter, store });
+
+            expect(second.updatedUsage).toBe(1);
+        } finally {
+            vi.useRealTimers();
+        }
+
+        expect(lookup).toHaveBeenCalledTimes(2);
+        await expect(store.listUnreportedUsage("stripe", 10, Number.POSITIVE_INFINITY)).resolves.toStrictEqual([]);
+    });
+
+    it("times a failed forward's backoff from the failure, not from the start of the sweep", async () => {
+        expect.assertions(1);
+
+        const store = new MemoryPaymentStore();
+        const failedAt = 1_000_000 + 10 * 60 * 1000;
+        const adapter = {
+            capabilities: { usageMetering: true },
+            identifier: "stripe",
+            reportUsage: async () => {
+                // A slow provider: the failure lands well after the sweep began.
+                vi.setSystemTime(failedAt);
+
+                throw new Error("provider down");
+            },
+        } as unknown as PaymentAdapter;
+
+        await store.recordUsage({
+            createdAt: 1_000_000,
+            featureId: "tokens",
+            idempotencyKey: "evt_slow",
+            provider: "stripe",
+            quantity: 5,
+            referenceId: "user_1",
+            reportedToProvider: false,
+        });
+
+        vi.useFakeTimers({ now: 1_000_000, toFake: ["Date"] });
+
+        try {
+            await reconcile({ singleSubscriptionPerReference: false, adapter, store });
+        } finally {
+            vi.useRealTimers();
+        }
+
+        // Half the minimum wait after the failure, the row must still be backing off.
+        await expect(store.listUnreportedUsage("stripe", 10, failedAt + 30_000)).resolves.toStrictEqual([]);
     });
 });

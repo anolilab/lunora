@@ -13,6 +13,7 @@ const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
     return {
         allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
+        lazyFunctions: false,
         cloudflare: false,
         generatedDir: "lunora/_generated",
         overlay: false,

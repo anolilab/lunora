@@ -250,7 +250,7 @@ describe("ctx-db paginate", () => {
             const c2 = second.continueCursor;
 
             // Delete the first row of page 2 (t2) — adjacent to the C1 boundary.
-            await writer.delete("t2");
+            await writer.delete("todos", "t2");
 
             const page1 = await writer
                 .query("todos")

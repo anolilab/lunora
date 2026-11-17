@@ -171,14 +171,14 @@ interface StoredPlacement {
 export const placement = internalQuery
     .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
     .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<StoredPlacement> => {
-        const project = await context.db.get(projectId);
+        const project = await context.db.get("projects", projectId);
 
         if (project?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
         }
 
-        const organization = (await context.db.get(organizationId)) as { cellId: Id<"cells"> } | null;
-        const cell = organization ? ((await context.db.get(organization.cellId)) as { name: string } | null) : null;
+        const organization = (await context.db.get("organizations", organizationId)) as { cellId: Id<"cells"> } | null;
+        const cell = organization ? ((await context.db.get("cells", organization.cellId)) as { name: string } | null) : null;
         const target = storedTarget(project.target);
         // A host of another organization is none at all: `setTarget` never writes one, so this only guards drift.
         const host =
@@ -236,7 +236,7 @@ export const create = mutation
             projectId,
         );
 
-        await context.db.patch(projectId, { productionAlias });
+        await context.db.patch("projects", projectId, { productionAlias });
 
         return projectId;
     });
@@ -262,10 +262,10 @@ export const setTarget = mutation
     .mutation(async ({ ctx: context, args: { organizationId, placementRef, projectId, target } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, projectId, organizationId, "project");
+        await assertRowInOrg(context, "projects", projectId, organizationId, "project");
         await assertPlacementRef(rowReaderOf(context.db), organizationId, target, placementRef);
 
-        const project = (await context.db.get(projectId)) as ProjectRow;
+        const project = (await context.db.get("projects", projectId)) as ProjectRow;
         const currentTarget = storedTarget(project.target) ?? DEFAULT_TARGET;
 
         if (currentTarget === target && (project.placementRef ?? undefined) === placementRef) {
@@ -282,7 +282,7 @@ export const setTarget = mutation
             );
         }
 
-        await context.db.patch(projectId, { placementRef: placementRef ?? null, target });
+        await context.db.patch("projects", projectId, { placementRef: placementRef ?? null, target });
         await context.db.insert("auditLog", {
             action: "project.target.set",
             actorUserId: member.userId,
@@ -303,8 +303,8 @@ export const rename = mutation
     .mutation(async ({ ctx: context, args: { id, name, organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "project");
-        await context.db.patch(id, { name });
+        await assertRowInOrg(context, "projects", id, organizationId, "project");
+        await context.db.patch("projects", id, { name });
         await context.db.insert("auditLog", {
             action: "project.rename",
             actorUserId: member.userId,
@@ -343,7 +343,7 @@ export const updateBuildSettings = mutation
         }): Promise<{ rootDirectory: string; runtime: ProjectRuntime; watchPaths: string[] }> => {
             const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-            await assertRowInOrg(context, id, organizationId, "project");
+            await assertRowInOrg(context, "projects", id, organizationId, "project");
 
             let root: string;
             let patterns: string[];
@@ -355,10 +355,10 @@ export const updateBuildSettings = mutation
                 throw new LunoraError("BAD_REQUEST", error instanceof Error ? error.message : "invalid build settings");
             }
 
-            const project = await context.db.get(id);
+            const project = await context.db.get("projects", id);
             const next = runtime ?? storedRuntime(project?.runtime);
 
-            await context.db.patch(id, {
+            await context.db.patch("projects", id, {
                 rootDirectory: root === "" ? null : root,
                 // Lunora is stored as absence, like every row that predates the setting.
                 runtime: next === "worker" ? "worker" : null,
@@ -419,7 +419,7 @@ export const remove = mutation
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ destroyed: number }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "project");
+        await assertRowInOrg(context, "projects", id, organizationId, "project");
 
         const { now } = context;
 
@@ -439,10 +439,10 @@ export const remove = mutation
 
         for (const deployment of live) {
             // eslint-disable-next-line no-await-in-loop -- sequential patches; a project's volumes are small
-            await context.db.patch(deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
+            await context.db.patch("deployments", deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
         }
 
-        await context.db.delete(id);
+        await context.db.delete("projects", id);
         await context.db.insert("auditLog", {
             action: "project.delete",
             actorUserId: member.userId,
@@ -480,10 +480,10 @@ export const setPreviewProtection = mutation
     .mutation(async ({ ctx: context, args: { id, organizationId, password } }): Promise<{ protected: boolean }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "project");
+        await assertRowInOrg(context, "projects", id, organizationId, "project");
 
         if (password === null) {
-            await context.db.patch(id, { previewPasswordHash: null, previewPasswordSalt: null });
+            await context.db.patch("projects", id, { previewPasswordHash: null, previewPasswordSalt: null });
             await context.db.insert("auditLog", {
                 action: "project.preview_protection.disable",
                 actorUserId: member.userId,
@@ -502,7 +502,7 @@ export const setPreviewProtection = mutation
         // share a hash — and a leaked table cannot be attacked once for all of them.
         const salt = randomSecret();
 
-        await context.db.patch(id, { previewPasswordHash: await sha256Hex(`${salt}:${password}`), previewPasswordSalt: salt });
+        await context.db.patch("projects", id, { previewPasswordHash: await sha256Hex(`${salt}:${password}`), previewPasswordSalt: salt });
         await context.db.insert("auditLog", {
             action: "project.preview_protection.enable",
             actorUserId: member.userId,
@@ -542,7 +542,7 @@ export const verifyPreviewPassword = internalQuery
             return { ok: false };
         }
 
-        const project = await context.db.get(deployment.projectId);
+        const project = await context.db.get("projects", deployment.projectId);
 
         if (!project?.previewPasswordHash || !project.previewPasswordSalt) {
             return { ok: false };

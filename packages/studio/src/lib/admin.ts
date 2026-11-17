@@ -15,13 +15,26 @@
 
 // Canonical captured-mail wire type, owned by `@lunora/mail`. Type-only: erased
 // at build time, so no mail *runtime* enters the studio's browser bundle.
-import type { AdvisorProcedureProtection, Finding } from "@lunora/advisor";
+import type { AdvisorProcedureDocument, Finding } from "@lunora/advisor";
 import type { CapturedMail } from "@lunora/mail";
 // Canonical registered-device wire type, owned by `@lunora/notify` (the
 // secret-stripped projection the `listPushSubscriptions` RPC returns). Type-only,
 // so no notify *runtime* enters the browser bundle — same allowed direction as
 // the `@lunora/mail` type import above.
 import type { PushSubscriptionDevice } from "@lunora/notify";
+
+/*
+ * The chat transcript and result types come from the ENGINE rather than being
+ * restated here.
+ *
+ * They were duplicated, and had already drifted: the local copy omitted
+ * `toolCalls` and `partial`, so the studio silently dropped the two fields that
+ * say what a turn actually did. A type-only import from `shared/` costs nothing
+ * at runtime and makes that class of drift impossible — the studio already reads
+ * other types from there the same way.
+ */
+import type { AiOptInLevel } from "../../../../shared/ai-chat";
+import type { GenerateSqlDegradedReason } from "../../../../shared/ai-prompt";
 
 export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 
@@ -35,7 +48,10 @@ export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 export const ADMIN_FUNCTIONS = {
     aiAvailable: "__lunora_admin__:aiAvailable",
     aiChartConfig: "__lunora_admin__:aiChartConfig",
+    aiChat: "__lunora_admin__:aiChat",
+    aiCronExpression: "__lunora_admin__:aiCronExpression",
     aiGenerateSql: "__lunora_admin__:aiGenerateSql",
+    aiNameQuery: "__lunora_admin__:aiNameQuery",
     aiTableFilter: "__lunora_admin__:aiTableFilter",
     assignIssue: "__lunora_admin__:assignIssue",
     backRelationCounts: "__lunora_admin__:backRelationCounts",
@@ -46,11 +62,11 @@ export const ADMIN_FUNCTIONS = {
     deleteRows: "__lunora_admin__:deleteRows",
     describeTable: "__lunora_admin__:describeTable",
     describeTables: "__lunora_admin__:describeTables",
+    dropOutboxEntry: "__lunora_admin__:dropOutboxEntry",
     explainIssue: "__lunora_admin__:explainIssue",
     exportShard: "__lunora_admin__:exportShard",
     facetColumn: "__lunora_admin__:facetColumn",
     getAdvisories: "__lunora_admin__:getAdvisories",
-    getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures",
     getAuditLog: "__lunora_admin__:getAuditLog",
     getAuthAuditLog: "__lunora_admin__:getAuthAuditLog",
     getAuthMetrics: "__lunora_admin__:getAuthMetrics",
@@ -58,6 +74,7 @@ export const ADMIN_FUNCTIONS = {
     getFanoutMetrics: "__lunora_admin__:getFanoutMetrics",
     getFunctionStats: "__lunora_admin__:getFunctionStats",
     getIssues: "__lunora_admin__:getIssues",
+    getScheduleOutbox: "__lunora_admin__:getScheduleOutbox",
     lintSql: "__lunora_admin__:lintSql",
     listFlags: "__lunora_admin__:listFlags",
     listReactors: "__lunora_admin__:listReactors",
@@ -89,6 +106,7 @@ export const ADMIN_FUNCTIONS = {
     pitrRestore: "__lunora_admin__:pitrRestore",
     readTablePage: "__lunora_admin__:readTablePage",
     replayQueueMessage: "__lunora_admin__:replayQueueMessage",
+    retryOutboxEntry: "__lunora_admin__:retryOutboxEntry",
     resolveIssue: "__lunora_admin__:resolveIssue",
     rlsPolicies: "__lunora_admin__:rlsPolicies",
     schemaHistory: "__lunora_admin__:schemaHistory",
@@ -98,6 +116,7 @@ export const ADMIN_FUNCTIONS = {
     runSql: "__lunora_admin__:runSql",
     sendQueueMessage: "__lunora_admin__:sendQueueMessage",
     sendTestMail: "__lunora_admin__:sendTestMail",
+    sendWorkflowEvent: "__lunora_admin__:sendWorkflowEvent",
     setIssueSeverity: "__lunora_admin__:setIssueSeverity",
     storageOrphans: "__lunora_admin__:storageOrphans",
     storageReferences: "__lunora_admin__:storageReferences",
@@ -106,8 +125,8 @@ export const ADMIN_FUNCTIONS = {
     writeRow: "__lunora_admin__:writeRow",
 } as const;
 
-/** Comparison a {@link FilterClause} applies, mirroring `@lunora/do`'s `FilterOperator`. `contains` is a substring (LIKE). */
-export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+/** Comparison a {@link FilterClause} applies, mirroring `@lunora/do`'s `FilterOperator`. `contains` is a substring (LIKE); `has` is membership in a JSON array. */
+export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "has" | "lt" | "lte" | "ne";
 
 /**
  * One structured column filter passed to `readTablePage`, mirroring `@lunora/do`'s
@@ -117,6 +136,8 @@ export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "
 export interface FilterClause {
     column: string;
     operator: FilterOperator;
+    /** Field names nested under a document `column`, outermost first (`["city"]` addresses `column.city`). */
+    path?: string[];
     value?: unknown;
 }
 
@@ -175,6 +196,21 @@ export interface BulkRowOpResult {
     hasMore: boolean;
 }
 
+export type { AiOptInLevel, ChatApproval, ChatPendingApproval, ChatResult, ChatStreamEvent, ChatToolReport, ChatTurn } from "../../../../shared/ai-chat";
+export type { GenerateSqlDegradedReason, SchemaFact } from "../../../../shared/ai-prompt";
+export type {
+    AssistantChartConfig,
+    GenerateChartResult,
+    GenerateCronResult,
+    GenerateQueryNameResult,
+    GenerateSqlResult,
+} from "../../../../shared/sql-assistant";
+
+/** Result of `__lunora_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
+export interface CapturedMailResult {
+    entries: CapturedMail[];
+}
+
 /**
  * One captured outbound email as served by `__lunora_admin__:getCapturedMail`.
  * Persisted by `@lunora/mail`'s dev capture transport into the root-shard
@@ -189,22 +225,6 @@ export interface BulkRowOpResult {
  * added in `@lunora/mail` flows here automatically.
  */
 export type { CapturedMail } from "@lunora/mail";
-
-/** Result of `__lunora_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
-export interface CapturedMailResult {
-    entries: CapturedMail[];
-}
-
-/**
- * One registered `@lunora/notify` device subscription, re-exported verbatim from
- * `@lunora/notify` (its canonical owner) — the secret-stripped
- * {@link PushSubscriptionDevice} the `__lunora_admin__:listPushSubscriptions` RPC
- * returns (endpoint / kind / owner / timestamps + last-send status & error). The
- * Web Push encryption `keys` and the FCM `token` are dropped server-side and are
- * NOT part of this shape. Like `CapturedMail`, it shares the real source of truth,
- * so a field added in `@lunora/notify` flows here automatically.
- */
-export type { PushSubscriptionDevice } from "@lunora/notify";
 
 /** Payload of a `__lunora_admin__:listPushSubscriptions` call — the registered devices, newest register/send touch first. */
 export interface PushSubscriptionsResult {
@@ -504,15 +524,15 @@ export interface AdvisoriesResult {
 }
 
 /**
- * Payload of a `__lunora_admin__:getAdvisorProcedures` call.
+ * Body of the dev host's `/__lunora/advisor-procedures` response: the
+ * codegen-written `_generated/advisor-procedures.json` sidecar, read by
+ * `useAdvisorProcedures`. Not an admin call; the worker does not carry the list.
  *
- * Reuses `@lunora/advisor`'s type rather than re-declaring the 20-field shape:
- * studio already depends on that package, so a local copy would be one more
+ * Reuses `@lunora/advisor`'s document type rather than re-declaring the 20-field
+ * shape: studio already depends on that package, so a local copy would be one more
  * transcription to keep in lockstep for no isolation benefit.
  */
-export interface AdvisorProceduresResult {
-    procedures: AdvisorProcedureProtection[];
-}
+export type AdvisorProceduresResult = AdvisorProcedureDocument;
 
 /** The operation an RLS policy gates, mirroring `@lunora/do`'s `RlsPolicyMetadata["on"]`. `read` covers get/query/findMany. */
 export type RlsOperation = "delete" | "insert" | "read" | "update";
@@ -673,6 +693,8 @@ export interface WorkflowMetadata {
 
 /** Payload of a `__lunora_admin__:listWorkflows` call, hand-mirroring `@lunora/do`'s `WorkflowsResult`. */
 export interface WorkflowsResult {
+    /** The declared `defineWorkflowEvent` types `sendWorkflowEvent` accepts; absent when the app declares none. */
+    eventTypes?: string[];
     workflows: WorkflowMetadata[];
 }
 
@@ -731,6 +753,29 @@ export interface QueueMessageRow {
 /** Result of `__lunora_admin__:getQueueMessages` — the dev consumed-message log, newest first. */
 export interface QueueMessagesResult {
     entries: QueueMessageRow[];
+}
+
+/**
+ * One deferred schedule a shard still holds because the scheduler has not
+ * accepted it, as served by `getScheduleOutbox` (mirrors `@lunora/shard-engine`'s
+ * `ScheduleOutboxEntry`).
+ */
+export interface ScheduleOutboxEntry {
+    attempts: number;
+    createdAt: number;
+    forever: boolean;
+    id: string;
+    nextAttemptAt: number;
+    parked: boolean;
+    target: string | undefined;
+    when: number | undefined;
+}
+
+/** Result of `getScheduleOutbox` — one page, oldest first, live and parked alike. */
+export interface ScheduleOutboxResult {
+    entries: ScheduleOutboxEntry[];
+    /** Pass back as `cursor` for the next page; absent on the last one. */
+    nextCursor?: string;
 }
 
 /**
@@ -811,7 +856,17 @@ export interface ReactorsResult {
  * Lifecycle state of a workflow instance, hand-mirroring `@lunora/do`'s
  * `WorkflowInstanceState` (itself mirrored from `@lunora/workflow`).
  */
-export type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+export type WorkflowInstanceState =
+    | "complete"
+    | "errored"
+    | "paused"
+    | "queued"
+    | "rollingBack"
+    | "running"
+    | "terminated"
+    | "unknown"
+    | "waiting"
+    | "waitingForPause";
 
 /** Payload of a `__lunora_admin__:createWorkflowInstance` call: the new instance id and its initial status. */
 export interface CreateWorkflowInstanceResult {
@@ -847,6 +902,8 @@ export interface LogEntry {
     /** Structured fields from a `ctx.log.<level>(message, fields)` / `ctx.log.with(fields)` call, when present. */
     fields?: Record<string, unknown>;
     functionPath?: string;
+    /** The line's identity, unique across shards and Durable Object restarts: what a row is keyed by. Absent on a worker predating the field. */
+    id?: string;
     instance?: string;
     level: LogLevel;
     message: string;
@@ -964,8 +1021,9 @@ export interface FanoutTopicStat {
 /**
  * Running fan-out counters for one delivery path since the DO instance woke,
  * mirroring `@lunora/do`'s `FanoutPathCounters`. `socketsIterated` is the
- * O(subscribers) loop cost; `socketsDelivered` is how many of those received a
- * frame. `totalMs`/`maxMs` are **coarse** (a DO clock advances only on I/O) and
+ * O(subscribers) loop cost; `socketsDelivered` counts successful sends to sockets
+ * (one per whisper or shape poke, a handoff and not a receipt by the client; a
+ * relay counts one per socket-and-shape pair). `totalMs`/`maxMs` are **coarse** (a DO clock advances only on I/O) and
  * populated only for the asynchronous shape-poke path — they stay `0` for the
  * synchronous whisper broadcast.
  */
@@ -1453,8 +1511,8 @@ export interface SecurityAuditResult {
 
 /**
  * Payload of a `__lunora_admin__:runSql` call, mirroring `@lunora/do`'s
- * `SqlConsoleResult`: a read-only query's `columns` (from the first row), the
- * (capped) `rows`, the true `rowCount`, and whether the rows were `truncated`.
+ * `SqlConsoleResult`: a read-only query's `columns`, its `rows`, and `rowCount` —
+ * the rows returned, at most `MAX_SQL_ROWS`; `truncated` says whether more existed.
  */
 export interface SqlConsoleResult {
     columns: string[];
@@ -1464,32 +1522,43 @@ export interface SqlConsoleResult {
 }
 
 /**
- * Payload of an `aiGenerateSql` admin call, mirroring `@lunora/do`'s
- * `GenerateSqlResult`. A discriminated union on `degraded` so the ok arm's `sql`
- * is guaranteed by the type rather than by convention.
+ * Payload of an `aiTableFilter` call — structured clauses, never SQL.
+ *
+ * Declared here rather than re-exported with its four siblings above because it
+ * genuinely diverges: the shared arm types `operator` as `string`, and this
+ * narrows it to the {@link FilterOperator} union the browser's filter builder
+ * accepts. The server validates against exactly that set (`FILTER_OPERATORS` in
+ * `shared/sql-assistant.ts`), so the narrowing states a guarantee the server
+ * already enforces and the shared type does not carry.
  */
-export type GenerateSqlResult = { degraded: false; sql: string } | { degraded: true; reason: GenerateSqlDegradedReason };
-
-/** Payload of an `aiTableFilter` call — structured clauses, never SQL. */
 export type GenerateFilterResult = { clauses: FilterClause[]; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
 
-/** A chart the editor can render, inferred from a result set's SHAPE only. */
-export interface AssistantChartConfig {
-    kind: "area" | "bar" | "line";
-    x: string;
-    y: string[];
-}
-
-/** Whether the deployment has an `AI` binding — the gate for every assistant affordance. */
+/**
+ * Result of `__lunora_admin__:aiAvailable` — can the assistant run here, and how
+ * much may it read?
+ *
+ * Both fields come from the WORKER, which is where `aiChat` is served and where
+ * the tool gate consults the level. The studio only ever displays `level`; it has
+ * no way to send one, which is what makes the ladder a gate rather than a
+ * preference.
+ */
 export interface AiAvailableResult {
+    /** `false` when there is no `AI` binding, or the level is `disabled`. Gates every assistant affordance. */
     available: boolean;
+    /** The data-sharing level this deployment enforces. Read-only readout. */
+    level: AiOptInLevel;
 }
 
-/** Payload of an `aiChartConfig` call. */
-export type GenerateChartResult = { chart: AssistantChartConfig; degraded: false } | { degraded: true; reason: GenerateSqlDegradedReason };
-
-/** Why no statement came back. `no-ai-binding` means the app has no AI binding — hide the affordance entirely. */
-export type GenerateSqlDegradedReason = "ai-error" | "empty-response" | "no-ai-binding" | "too-long" | "unsafe-response";
+/**
+ * One registered `@lunora/notify` device subscription, re-exported verbatim from
+ * `@lunora/notify` (its canonical owner) — the secret-stripped
+ * {@link PushSubscriptionDevice} the `__lunora_admin__:listPushSubscriptions` RPC
+ * returns (endpoint / kind / owner / timestamps + last-send status & error). The
+ * Web Push encryption `keys` and the FCM `token` are dropped server-side and are
+ * NOT part of this shape. Like `CapturedMail`, it shares the real source of truth,
+ * so a field added in `@lunora/notify` flows here automatically.
+ */
+export type { PushSubscriptionDevice } from "@lunora/notify";
 
 /** One reverse edge: `table.column` holds a foreign key pointing at the browsed table. */
 export interface BackRelation {
@@ -1740,8 +1809,12 @@ export interface ImportError {
 /** Result of a single `__lunora_admin__:importShard` invocation against one shard. */
 export interface ImportShardResult {
     conflicts: number;
+    /** Stored rows removed by `op: "delete"` rows under `deletes: true`; absent from a shard built before delete rows. */
+    deleted?: number;
     errors: ImportError[];
     inserted: Record<string, number>;
+    /** Existing rows overwritten under `onConflict: "replace"`; absent from a shard built before replace imports. */
+    replaced?: number;
 }
 
 /* -------------------------------------------------------------------------- */

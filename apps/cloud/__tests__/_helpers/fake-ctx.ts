@@ -78,11 +78,6 @@ const EMPTY_UNLESS_SEEDED = [
 const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; userId?: null | string } = {}): FakeCtx => {
     const ops: Op[] = [];
     const userId = options.userId === undefined ? "usr_1" : options.userId;
-    const byId = new Map(
-        Object.values(tables)
-            .flat()
-            .map((row) => [row["_id"] as string, row]),
-    );
 
     // Pinned to the table, like the real facade: an id of another table answers
     // null, and a write to one refuses the way the store does.
@@ -120,20 +115,21 @@ const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; userId?
     // which is the first-request path and keeps the limiter out of the assertion.
     const emptyQuery: { first: () => Promise<null>; withIndex: () => typeof emptyQuery } = { first: () => Promise.resolve(null), withIndex: () => emptyQuery };
 
+    // Table first, like the real `ctx.db`: the by-id calls name their table.
     const database: Record<string, unknown> = {
-        delete: (id: string) => {
+        delete: (_table: string, id: string) => {
             ops.push({ id, kind: "delete" });
 
             return Promise.resolve();
         },
         findFirst: () => Promise.resolve(null),
-        get: (id: string) => Promise.resolve(byId.get(id) ?? null),
+        get: (table: string, id: string) => Promise.resolve(pinned(table, id)),
         insert: (table: string, document: Row) => {
             ops.push({ document, kind: "insert", table });
 
             return Promise.resolve(`${table}_new`);
         },
-        patch: (id: string, patch: Row) => {
+        patch: (_table: string, id: string, patch: Row) => {
             assertNoExplicitUndefined(patch);
             ops.push({ id, kind: "patch", patch });
 

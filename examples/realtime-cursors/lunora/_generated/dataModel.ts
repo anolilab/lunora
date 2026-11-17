@@ -56,7 +56,7 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  */
 export interface IndexNamesByTable {
     cursors: "by_room_session";
-    ratelimit_buckets: "by_key";
+    ratelimit_buckets: "by_key" | "by_ts";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];

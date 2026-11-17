@@ -33,10 +33,10 @@ const RATELIMIT_SCHEMA = `/**
  * Defines the \`ratelimit_buckets\` table used by \`createDbStore\` for durable,
  * DO-backed rate limiting. Included automatically in every Lunora project.
  */
-import type { Middleware } from "lunorash/server";
-import { defineSchemaExtension, defineTable, definePlugin, v } from "lunorash/server";
-import { createDbStore, RateLimiter } from "lunorash/ratelimit";
 import type { RateLimitConfigMap } from "lunorash/ratelimit";
+import { createDbStore, RateLimiter } from "lunorash/ratelimit";
+import type { Middleware } from "lunorash/server";
+import { definePlugin, defineSchemaExtension, defineTable, v } from "lunorash/server";
 
 /**
  * Named limits this app enforces. This is the one place they live — add your own
@@ -44,18 +44,31 @@ import type { RateLimitConfigMap } from "lunorash/ratelimit";
  * \`lunora/messages.ts\`).
  */
 export const limits = {
-    /** Chat writes: 30 per caller per minute, refilling continuously over 60s. */
-    send: { kind: "token bucket", period: 60_000, rate: 30 },
+    /** Chat writes: 10 per caller per minute, refilling continuously over 60s. */
+    send: { kind: "token bucket", period: 60_000, rate: 10 },
 } as const satisfies RateLimitConfigMap;
 
+/** The limit names you've configured above. */
 export type LimitName = keyof typeof limits;
 
+/**
+ * Build a durable {@link RateLimiter} bound to this request's \`ctx.db\`. State is
+ * persisted in the \`ratelimit_buckets\` table, so limits survive Durable Object
+ * hibernation/eviction and are shared across every call into the same DO. Each
+ * \`get\`→\`set\` runs under the DO input gate, so the read-modify-write is atomic.
+ */
 export const makeRateLimiter = (ctx: { db: unknown }): RateLimiter<LimitName> =>
     new RateLimiter<LimitName>({
         config: limits,
+        // The merged table name carries the plugin prefix.
         store: createDbStore({ db: ctx.db as never, table: "ratelimit_buckets" }),
     });
 
+/**
+ * Middleware that injects \`ctx.api.ratelimit\` — a per-request limiter helper —
+ * for any procedure that opts in with \`.use(ratelimit.middleware)\`. Convention
+ * (see \`definePlugin\`): helpers hang off \`ctx.api.<key>\`.
+ */
 const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { api: Record<string, unknown>; db: unknown }> = ({ ctx, next }) =>
     next({
         ctx: {
@@ -64,9 +77,19 @@ const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { a
         },
     });
 
+/**
+ * The rate-limit plugin: a schema extension (\`ratelimit_buckets\`) + middleware
+ * (\`ctx.api.ratelimit\`). \`lunora/schema.ts\` wires the extension in with
+ * \`.extend(ratelimit.extension)\`; attach the middleware yourself with
+ * \`c.mutation.use(ratelimit.middleware)\`.
+ */
 export const ratelimit = definePlugin("ratelimit", {
     extension: defineSchemaExtension("ratelimit", {
         tables: {
+            // Bare name — auto-prefixes to \`ratelimit_buckets\` at merge time.
+            // \`externallyManaged\`: rows are written by \`createDbStore\` (via
+            // \`makeRateLimiter\`), not a discoverable \`ctx.db.insert(...)\`, so the
+            // \`table_without_insert\` advisor correctly skips it.
             buckets: defineTable({
                 key: v.string(),
                 value: v.number(),
@@ -74,6 +97,7 @@ export const ratelimit = definePlugin("ratelimit", {
                 prev: v.optional(v.number()),
             })
                 .index("by_key", ["key"])
+                .index("by_ts", ["ts"])
                 .externallyManaged(),
         },
     }),
@@ -165,14 +189,18 @@ const SERVER_ENTRY = `import type { ShardNamespaceLike } from "lunorash/runtime"
 import { defineApp } from "../lunora/_generated/app.js";
 
 interface Env extends Record<string, unknown> {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     SHARD: ShardNamespaceLike;
 }
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => env.ADMIN_REVOCATIONS)
     .build();
 
 export const ShardDO = app.ShardDO;
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../lunora/_generated/adminRevocations.js";
 export default app;
 `;
 
@@ -193,9 +221,15 @@ const WRANGLER = `{
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
-        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
+        ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     // Blast-radius cap. Alerting is lagging by definition — by the time a
     // threshold trips, the runaway handler has already run — so a CPU ceiling is
     // one of the few controls that bounds the damage rather than reporting it.
@@ -370,7 +404,7 @@ const patchPackageJson = async (target: string, name: string, adapter: Framework
     parsed.imports = { ...parsed.imports, "#lunora/*": "./lunora/*" };
     parsed.dependencies = restampLunora(dependencies, distTag, versions);
     parsed.devDependencies = restampLunora(devDependencies, distTag, versions);
-    parsed.scripts = { ...parsed.scripts, codegen: "lunora codegen", deploy: "vite build && lunora deploy" };
+    parsed.scripts = { ...parsed.scripts, codegen: "lunora codegen", deploy: "lunora deploy" };
 
     writeFileSync(path, `${JSON.stringify(parsed, undefined, 4)}\n`, "utf8");
 };

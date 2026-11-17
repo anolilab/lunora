@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverNotifyCalls, discoverNotifyConfig } from "../../src/discover/notify";
+import type { FcmCredentials } from "../../src/discover/notify";
+import { discoverNotifyCalls, discoverNotifyChannels, discoverNotifyConfig } from "../../src/discover/notify";
 
 /** A mutation that sends a push via `ctx.push.send` — must be recorded (outside-action). */
 const MUTATION_PUSH_SEND = `
@@ -95,6 +96,28 @@ describe("discoverNotifyCalls", () => {
         expect(calls[0]).toMatchObject({ callee: "ctx.push.broadcast", exportName: "fanout", file: "fanout", kind: "query" });
     });
 
+    it("records a ctx.push.sendToTopic inside a query as a device-push send", () => {
+        expect.assertions(2);
+
+        writeFileSync(
+            join(workdir, "lunora", "news.ts"),
+            `
+    import { query } from "@lunora/server";
+
+    export const headlines = query({
+        args: {},
+        handler: async (ctx) => ctx.push.sendToTopic("news", { title: "news" }),
+    });
+`,
+            "utf8",
+        );
+
+        const calls = discoverNotifyCalls(project, lunoraDirectory());
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toMatchObject({ callee: "ctx.push.sendToTopic", exportName: "headlines", kind: "query" });
+    });
+
     it("records a ctx.notify.send multi-channel send inside a mutation", () => {
         expect.assertions(2);
 
@@ -152,7 +175,32 @@ export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
         );
         writeFileSync(join(workdir, "lunora", "ping.ts"), ACTION_PUSH_SEND, "utf8");
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: true });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: true });
+    });
+
+    it("marks a topic send as FCM-only in the config evidence", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify, webPushFromEnv } from "@lunora/notify";
+export default defineNotify({ webPush: (env) => webPushFromEnv(env) });
+`,
+            "utf8",
+        );
+        writeFileSync(
+            join(workdir, "lunora", "news.ts"),
+            `import { mutation } from "@lunora/server";
+
+export const headline = mutation({
+    args: {},
+    handler: async (ctx) => ctx.push.sendToTopic("news", { title: "news" }),
+});
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: true, usesPush: true });
     });
 
     it("flags a push-using app whose defineNotify wires neither channel (usesPush, no channels)", () => {
@@ -167,7 +215,7 @@ export default defineNotify({});
         );
         writeFileSync(join(workdir, "lunora", "ping.ts"), MUTATION_PUSH_SEND, "utf8");
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: false, usesPush: true });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: false, usesFcmOnlySend: false, usesPush: true });
     });
 
     it.each([
@@ -227,7 +275,7 @@ export default defineNotify(config);
 
         writeFileSync(join(workdir, "lunora", "notify.ts"), source, "utf8");
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("follows a same-file const alias of a direct defineNotify call (webPush-only does not scaffold fcm)", () => {
@@ -242,7 +290,7 @@ export default definition;
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("follows a cross-file default re-export of a direct defineNotify call (webPush-only does not scaffold fcm)", () => {
@@ -263,7 +311,7 @@ export default definition;
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("reads a same-file variable config argument of defineNotify (webPush-only does not scaffold fcm)", () => {
@@ -278,7 +326,7 @@ export default defineNotify(config);
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("reads an imported variable config argument of defineNotify from a sibling file (webPush-only does not scaffold fcm)", () => {
@@ -294,7 +342,7 @@ export default defineNotify(config);
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("reports both channels when an imported config is mutated in the using file", () => {
@@ -311,7 +359,7 @@ export default defineNotify(config);
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
     });
 
     it("reports both channels when an imported config is mutated in its declaring file", () => {
@@ -331,6 +379,140 @@ export default defineNotify(config);
             "utf8",
         );
 
-        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesPush: false });
+        expect(discoverNotifyConfig(project, lunoraDirectory())).toStrictEqual({ hasFcm: true, hasWebPush: true, usesFcmOnlySend: false, usesPush: false });
+    });
+});
+
+describe("fcm credentials read from defineNotify", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-notify-fcm-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    const fcmOfSource = (source: string): FcmCredentials | undefined => {
+        writeFileSync(join(workdir, "lunora", "notify.ts"), source, "utf8");
+
+        return discoverNotifyChannels(project, lunoraDirectory())?.fcm;
+    };
+
+    const fcmOf = (fcmValue: string): FcmCredentials | undefined =>
+        fcmOfSource(`import { defineNotify, fcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+export default defineNotify({ fcm: ${fcmValue} });
+`);
+
+    it.each([
+        ["a spread of fcmFromEnv plus its own token", "(env) => ({ ...fcmFromEnv(env), getAccessToken })"],
+        ["fcmFromEnv overrides", "(env) => fcmFromEnv(env, { getAccessToken })"],
+        ["a non-null fcmFromEnv overrides call", "(env) => fcmFromEnv(env, { getAccessToken })!"],
+        ["a block body returning the object", "(env) => { return { ...fcmFromEnv(env), getAccessToken: getAccessToken }; }"],
+        ["an inline token function", `(env) => ({ ...fcmFromEnv(env), getAccessToken: async () => "t" })`],
+    ])("reads its own token source for %s", (_label, fcmValue) => {
+        expect.assertions(1);
+
+        expect(fcmOf(fcmValue)).toBe("ownToken");
+    });
+
+    it("reads its own token source for an fcm method", () => {
+        expect.assertions(1);
+
+        expect(
+            fcmOfSource(`import { defineNotify, fcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+export default defineNotify({ fcm(env) { return fcmFromEnv(env, { getAccessToken }); } });
+`),
+        ).toBe("ownToken");
+    });
+
+    it.each([
+        ["read from env", "{ getAccessToken, projectId: env.FCM_PROJECT_ID }"],
+        ["a shorthand variable", "{ getAccessToken, projectId }"],
+        ["an empty string, which fcmFromEnv treats as unset", `fcmFromEnv(env, { getAccessToken, projectId: "" })`],
+        ["replaced by a later computed key", `{ projectId: "acme", [key]: env.FCM_PROJECT_ID, getAccessToken }`],
+        ["replaced by a later member of the same name", `{ getAccessToken, projectId: "acme", projectId: env.FCM_PROJECT_ID }`],
+    ])("still takes the project id from env when projectId is %s", (_label, object) => {
+        expect.assertions(1);
+
+        expect(fcmOf(`(env) => (${object})`)).toBe("ownToken");
+    });
+
+    it.each([
+        ["a literal projectId", `{ getAccessToken, projectId: "acme" }`],
+        ["a later computed key it can resolve statically", `{ getAccessToken, projectId: "acme", ["region"]: "eu" }`],
+    ])("reads own credentials for %s", (_label, fcmValue) => {
+        expect.assertions(1);
+
+        expect(fcmOf(fcmValue)).toBe("ownCredentials");
+    });
+
+    it.each([
+        ["plain fcmFromEnv", "(env) => fcmFromEnv(env)"],
+        ["the bare fcmFromEnv reference", "fcmFromEnv"],
+        ["a static accessToken override", `(env) => fcmFromEnv(env, { accessToken: "tok" })`],
+        ["a literal projectId with no token of its own", `(env) => fcmFromEnv(env, { projectId: "acme" })`],
+        ["a spread after the token, which can replace it", "(env) => ({ getAccessToken, ...fcmFromEnv(env) })"],
+        ["a computed key after the token, which can replace it", "(env) => ({ ...fcmFromEnv(env), getAccessToken, [key]: undefined })"],
+        ["getAccessToken set to undefined", "(env) => fcmFromEnv(env, { getAccessToken: undefined })"],
+        ["a conditional getAccessToken", "(env) => fcmFromEnv(env, { getAccessToken: useOwn ? getAccessToken : undefined })"],
+        ["a function passed as the overrides argument", `(env) => fcmFromEnv(env, () => ({ getAccessToken, projectId: "p" }))`],
+        ["a call to some other factory", "(env) => buildFcm(env, { getAccessToken })"],
+        ["a block body that does more than return", "(env) => { const base = fcmFromEnv(env); return { ...base, getAccessToken }; }"],
+    ])("reads env credentials for %s", (_label, fcmValue) => {
+        expect.assertions(1);
+
+        expect(fcmOf(fcmValue)).toBe("env");
+    });
+
+    it.each([
+        [
+            "a local function that is only named fcmFromEnv",
+            `import { defineNotify, fcmFromEnv as packageFcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+const fcmFromEnv = (env: Record<string, unknown>, _ignored?: unknown) => packageFcmFromEnv(env);
+export default defineNotify({ fcm: (env) => fcmFromEnv(env, { getAccessToken }) });
+`,
+        ],
+        [
+            "an fcm member that a later computed key can replace",
+            `import { defineNotify, fcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+const key: string = "fcm";
+export default defineNotify({ fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken }), [key]: (env) => fcmFromEnv(env) });
+`,
+        ],
+        [
+            "a variable config that an alias of it rewrites",
+            `import { defineNotify, fcmFromEnv } from "@lunora/notify";
+import { getAccessToken } from "./google-auth";
+const config = { fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken }) };
+const alias = config;
+alias.fcm = (env) => fcmFromEnv(env);
+export default defineNotify(config);
+`,
+        ],
+    ])("reads env credentials for %s", (_label, source) => {
+        expect.assertions(1);
+
+        expect(fcmOfSource(source)).toBe("env");
+    });
+
+    it("reads env credentials and both channels when the config falls back to every channel", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "notify.ts"),
+            `import { defineNotify } from "@lunora/notify";
+import { base } from "./notify-base";
+export default defineNotify({ ...base, fcm: () => ({ getAccessToken: async () => "t", projectId: "p" }) });
+`,
+            "utf8",
+        );
+
+        expect(discoverNotifyChannels(project, lunoraDirectory())).toStrictEqual({ fcm: "env", hasWebPush: true });
     });
 });

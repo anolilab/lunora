@@ -1,6 +1,6 @@
-import { jsonSchema } from "@ai-sdk/provider-utils";
 import { LunoraError } from "@lunora/errors";
 
+import jsonSchema from "./json-schema";
 import type { AgentToolContext, AgentToolDefinition } from "./types";
 
 /**

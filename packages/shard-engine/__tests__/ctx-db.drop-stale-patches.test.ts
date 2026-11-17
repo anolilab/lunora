@@ -84,13 +84,13 @@ describe("ctx-db .dropStalePatches()", () => {
         const baseline = cursor();
 
         // Someone else edits the same field in between.
-        await writer.patch(id, { title: "theirs" });
+        await writer.patch("documents", id, { title: "theirs" });
 
         // The caller's write lands late, still carrying its own baseline.
         setBaseline(baseline);
-        await writer.patch(id, { title: "mine" });
+        await writer.patch("documents", id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("theirs");
         expect(dropped).toHaveLength(1);
@@ -104,7 +104,7 @@ describe("ctx-db .dropStalePatches()", () => {
         const id = await writer.insert("documents", { body: "b", title: "original", views: 0 });
         const baseline = cursor();
 
-        await writer.patch(id, { title: "theirs" });
+        await writer.patch("documents", id, { title: "theirs" });
 
         setBaseline(baseline);
 
@@ -112,7 +112,7 @@ describe("ctx-db .dropStalePatches()", () => {
             applied: false,
             doc: expect.objectContaining({ title: "theirs" }),
         });
-        await expect(writer.get(id)).resolves.toMatchObject({ title: "theirs" });
+        await expect(writer.get("documents", id)).resolves.toMatchObject({ title: "theirs" });
         expect(dropped).toHaveLength(1);
     });
 
@@ -124,13 +124,13 @@ describe("ctx-db .dropStalePatches()", () => {
         const baseline = cursor();
 
         // Another writer bumps the counter after the caller's baseline.
-        await writer.patch(id, { views: { increment: 1 } });
+        await writer.patch("documents", id, { views: { increment: 1 } });
 
         // The caller's queued increment arrives late and must still count.
         setBaseline(baseline);
-        await writer.patch(id, { views: { increment: 1 } });
+        await writer.patch("documents", id, { views: { increment: 1 } });
 
-        const row = await writer.get(id);
+        const row = await writer.get("documents", id);
 
         expect(row?.["views"]).toBe(2);
         expect(dropped).toHaveLength(0);
@@ -138,7 +138,7 @@ describe("ctx-db .dropStalePatches()", () => {
         // The same holds through patchIf.
         await writer.patchIf?.("documents", id, { patch: { views: { increment: 5 } }, where: { body: "b" } });
 
-        const afterPatchIf = await writer.get(id);
+        const afterPatchIf = await writer.get("documents", id);
 
         expect(afterPatchIf?.["views"]).toBe(7);
     });
@@ -150,12 +150,12 @@ describe("ctx-db .dropStalePatches()", () => {
         const id = await writer.insert("documents", { body: "b", title: "original", views: 0 });
         const baseline = cursor();
 
-        await writer.patch(id, { title: "theirs" });
+        await writer.patch("documents", id, { title: "theirs" });
 
         setBaseline(baseline);
-        await writer.patch(id, { title: "mine", views: { increment: 1 } });
+        await writer.patch("documents", id, { title: "mine", views: { increment: 1 } });
 
-        const row = await writer.get(id);
+        const row = await writer.get("documents", id);
 
         expect(row?.["title"]).toBe("theirs");
         expect(row?.["views"]).toBe(0);
@@ -170,12 +170,12 @@ describe("ctx-db .dropStalePatches()", () => {
         const baseline = cursor();
 
         // A concurrent edit to a DIFFERENT field must not block this one.
-        await writer.patch(id, { title: "theirs" });
+        await writer.patch("documents", id, { title: "theirs" });
 
         setBaseline(baseline);
-        await writer.patch(id, { body: "mine" });
+        await writer.patch("documents", id, { body: "mine" });
 
-        const row = await writer.get(id);
+        const row = await writer.get("documents", id);
 
         expect(row?.["body"]).toBe("mine");
         expect(row?.["title"]).toBe("theirs");
@@ -189,15 +189,15 @@ describe("ctx-db .dropStalePatches()", () => {
         const id = await writer.insert("documents", { body: "original", title: "original", views: 0 });
         const baseline = cursor();
 
-        await writer.patch(id, { title: "theirs" });
+        await writer.patch("documents", id, { title: "theirs" });
 
         // `body` is fresh and `title` is stale. Applying the fresh half would
         // leave a row no mutation ever wrote — the invariant this granularity
         // exists to protect.
         setBaseline(baseline);
-        await writer.patch(id, { body: "mine", title: "mine" });
+        await writer.patch("documents", id, { body: "mine", title: "mine" });
 
-        const row = await writer.get(id);
+        const row = await writer.get("documents", id);
 
         expect(row?.["body"]).toBe("original");
         expect(row?.["title"]).toBe("theirs");
@@ -213,12 +213,12 @@ describe("ctx-db .dropStalePatches()", () => {
 
         // Someone else "changed" it to the same value. Nothing moved, so a caller
         // re-sending an unchanged field must not lose its write over it.
-        await writer.patch(id, { title: "original" });
+        await writer.patch("documents", id, { title: "original" });
 
         setBaseline(baseline);
-        await writer.patch(id, { title: "mine" });
+        await writer.patch("documents", id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("mine");
         expect(dropped).toHaveLength(0);
@@ -231,12 +231,12 @@ describe("ctx-db .dropStalePatches()", () => {
         const id = await writer.insert("notes", { body: "b", title: "original", views: 0 });
         const baseline = cursor();
 
-        await writer.patch(id, { title: "theirs" });
+        await writer.patch("notes", id, { title: "theirs" });
 
         setBaseline(baseline);
-        await writer.patch(id, { title: "mine" });
+        await writer.patch("notes", id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("notes", id);
 
         expect(titleRow?.["title"]).toBe("mine");
         expect(dropped).toHaveLength(0);
@@ -248,13 +248,13 @@ describe("ctx-db .dropStalePatches()", () => {
         const { dropped, setBaseline, writer } = setup();
         const id = await writer.insert("documents", { body: "b", title: "original", views: 0 });
 
-        await writer.patch(id, { title: "theirs" });
+        await writer.patch("documents", id, { title: "theirs" });
 
         // An unsubscribed client, or one older than this feature.
         setBaseline(undefined);
-        await writer.patch(id, { title: "mine" });
+        await writer.patch("documents", id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("mine");
         expect(dropped).toHaveLength(0);
@@ -266,15 +266,15 @@ describe("ctx-db .dropStalePatches()", () => {
         const { dropped, setBaseline, writer } = setup();
         const id = await writer.insert("documents", { body: "b", title: "original", views: 0 });
 
-        await writer.patch(id, { title: "theirs" });
+        await writer.patch("documents", id, { title: "theirs" });
 
         // A baseline BELOW the row's own insert — what a trimmed log looks like.
         // Discarding writes because retention ran would trade a rare lost edit for
         // a common one.
         setBaseline(0);
-        await writer.patch(id, { title: "mine" });
+        await writer.patch("documents", id, { title: "mine" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("mine");
         expect(dropped).toHaveLength(0);
@@ -299,18 +299,18 @@ describe("ctx-db .dropStalePatches()", () => {
         const id = await writer.insert("documents", { body: "b", title: "original", views: 0 });
 
         baseline = readCdcCursor(harness.sql);
-        await writer.patch(id, { title: "theirs" });
+        await writer.patch("documents", id, { title: "theirs" });
 
         const cursorBefore = readCdcCursor(harness.sql);
         const broadcasts = broadcast.mock.calls.length;
 
-        await writer.patch(id, { title: "mine" });
+        await writer.patch("documents", id, { title: "mine" });
 
         // Indistinguishable from a patch that was never issued.
         expect(readCdcCursor(harness.sql)).toBe(cursorBefore);
         expect(broadcast).toHaveBeenCalledTimes(broadcasts);
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("theirs");
     });
@@ -343,20 +343,20 @@ describe("ctx-db .dropStalePatches()", () => {
         const id = await writer.insert("documents", { at: 1, size: 9_007_199_254_740_993n, title: "t" });
 
         baseline = readCdcCursor(harness.sql);
-        await writer.patch(id, { size: 42n });
+        await writer.patch("documents", id, { size: 42n });
 
         // The plain stable stringifier throws on a bigint; the comparison has to
         // use the wire-safe one or this write path dies on a perfectly ordinary row.
-        await writer.patch(id, { size: 7n });
+        await writer.patch("documents", id, { size: 7n });
 
-        const sizeRow = await writer.get(id);
+        const sizeRow = await writer.get("documents", id);
 
         expect(sizeRow?.["size"]).toBe(42n);
 
         // A field that did NOT move still applies, bigint neighbours and all.
-        await writer.patch(id, { title: "fresh" });
+        await writer.patch("documents", id, { title: "fresh" });
 
-        const titleRow = await writer.get(id);
+        const titleRow = await writer.get("documents", id);
 
         expect(titleRow?.["title"]).toBe("fresh");
     });

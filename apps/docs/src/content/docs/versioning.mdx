@@ -5,8 +5,8 @@ description: What SemVer means for Lunora packages — release channels, stabili
 
 Lunora is a monorepo of independently versioned npm packages (`lunorash`, the
 `@lunora/*` scope). Every package follows [Semantic
-Versioning](https://semver.org/) and is released automatically by
-multi-semantic-release: [Conventional
+Versioning](https://semver.org/) and is released automatically on merge:
+[Conventional
 Commits](https://www.conventionalcommits.org/) drive the bumps (`fix:` →
 patch, `feat:` → minor, a `BREAKING CHANGE:` footer or `!` → major), and each
 package ships its own changelog.
@@ -35,6 +35,9 @@ channel. To follow a prerelease channel, pin the tag explicitly
 the concrete version the CLI's own channel points at, so a scaffold and its
 runtime always come from the same channel.
 
+Each release comments on the pull requests and issues it shipped, listing every
+package and version per channel, and labels them `released`.
+
 ## What SemVer means here
 
 From `1.0.0` on, for every package in the **stable** tiers below:
@@ -59,7 +62,7 @@ The _public API_ is what a package exports from its documented entry points
 
 ## Stability tiers
 
-Not all 53 published packages make the stable promise at the same time. The
+Not all 56 published packages make the stable promise at the same time. The
 current plan tiers them as follows; the same taxonomy drives the public-API
 snapshot gate (`scripts/api-snapshot.js`), so the table below and what CI
 enforces cannot drift apart unnoticed.

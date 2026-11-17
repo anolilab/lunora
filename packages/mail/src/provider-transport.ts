@@ -7,9 +7,8 @@
  * drifting) per provider. Each transport supplies only its provider instance
  * and its recipient policy.
  */
-import { LunoraError } from "@lunora/errors";
-
 import { toAddress, toAddressList } from "./address";
+import { MailSendError } from "./send-error";
 import type { SendPayload } from "./types";
 
 /** `@visulima/email` models an address as `{ email, name? }`. */
@@ -22,6 +21,7 @@ interface ProviderEmail {
     from: ProviderAddress;
     headers?: Record<string, string>;
     html?: string;
+    idempotencyKey?: string;
     replyTo?: ProviderAddress;
     subject: string;
     text?: string;
@@ -64,13 +64,93 @@ const reasonOf = (rawError: unknown): string => {
     return JSON.stringify(rawError) ?? "send failed";
 };
 
+/** A provider error code that is an HTTP status, as `@visulima/email` writes it (`"429"`). */
+const THREE_DIGIT_STATUS = /^\d{3}$/;
+
+/** The HTTP status a provider error's `code` carries, as a number: the number itself, or a three-digit string. */
+const httpStatusOf = (code: unknown): number | undefined => {
+    if (typeof code === "number") {
+        return code;
+    }
+
+    return typeof code === "string" && THREE_DIGIT_STATUS.test(code) ? Number(code) : undefined;
+};
+
+/** The `code` `@visulima/email`'s HTTP client puts on a request it aborted at its own timeout. */
+const PROVIDER_TIMEOUT_CODE = "ETIMEDOUT";
+
+/** The provider errors in a failure's `cause` chain, outermost first — `@visulima/email` wraps a callback's failure as a `cause`. */
+const causeChain = (rawError: unknown): Error[] => {
+    const chain: Error[] = [];
+
+    for (let current: unknown = rawError; current instanceof Error && chain.length < 5; current = current.cause) {
+        chain.push(current);
+    }
+
+    return chain;
+};
+
+/**
+ * Whether the provider gave up waiting for its own request. The request may have
+ * reached the provider and been accepted, so the send's outcome is unknown, and
+ * `@visulima/email` deliberately does not retry it for the same reason.
+ */
+const isProviderTimeout = (rawError: unknown): boolean => causeChain(rawError).some((error) => "code" in error && error.code === PROVIDER_TIMEOUT_CODE);
+
+/** The HTTP status the provider answered with, from the first error in the cause chain that carries one. */
+const providerStatusOf = (rawError: unknown): number | undefined => {
+    for (const error of causeChain(rawError)) {
+        const status = httpStatusOf("code" in error ? error.code : undefined);
+
+        if (status !== undefined) {
+            return status;
+        }
+    }
+
+    return undefined;
+};
+
+/**
+ * Resend answers 409 for a request whose `Idempotency-Key` it has seen: either the
+ * first request under it is still in flight (`concurrent_idempotent_requests`) or
+ * it carried a different body (`invalid_idempotent_request`). `@visulima/email`
+ * 4.2 drops the response body, so only the status reaches here and the two cannot
+ * be told apart. Both are treated as the first: the original may yet be accepted,
+ * so the outcome is unknown and a deduping provider makes the retry safe. The
+ * mismatched-body case then retries into the dead-letter queue rather than being
+ * acked, which is the cheaper mistake.
+ */
+const IDEMPOTENCY_CONFLICT_STATUS = 409;
+
+/**
+ * Whether a provider's failed send is worth repeating. `@visulima/email` puts an
+ * HTTP status on the error as a numeric `code`, so 408, 429 and 5xx are
+ * transient and any other 1xx-5xx status is a refusal. A send is dropped only on
+ * that explicit permanent status; anything the provider did not classify (a plain
+ * `Error`, a network failure, a non-`Error` result) is retried, because a wrong
+ * retry only dead-letters the message and a wrong drop loses it.
+ */
+const isRetryableProviderError = (rawError: unknown): boolean => {
+    if (!(rawError instanceof Error)) {
+        return true;
+    }
+
+    const status = providerStatusOf(rawError);
+
+    if (status !== undefined && status >= 100 && status <= 599) {
+        return status === 408 || status === 429 || status >= 500;
+    }
+
+    return true;
+};
+
 /** Resolve the validated recipient list + its first entry, throwing when empty. */
 const requireRecipients = (to: SendPayload["to"]): { first: ProviderAddress; list: ProviderAddress[] } => {
     const list = toAddressList(to);
     const [first] = list ?? [];
 
     if (!list || first === undefined) {
-        throw new LunoraError("INTERNAL", "@lunora/mail: at least one recipient is required");
+        throw new MailSendError({ message: "@lunora/mail: at least one recipient is required", retryable: false });
     }
 
     return { first, list };
@@ -94,18 +174,43 @@ const toProviderEmail = (payload: SendPayload, defaultFrom: string, to: Provider
 /**
  * Interpret a provider send result: on failure, log the redacted reason
  * (server-side only — surfacing it to callers can disclose provider internals)
- * and throw a stable, generic error; on success, return the message id.
+ * and throw a stable, generic error; on success, return the message id. A
+ * send that may have landed is never retryable here: `createMailer`'s `send()`
+ * alone decides whether the provider can drop the repeat.
  */
 const interpretSendResult = (result: ProviderSendResult): { id: string } => {
+    if (result.success && !result.data) {
+        // The provider accepted the send, so a redelivery would email the recipient twice.
+        throw new MailSendError({ message: "@lunora/mail: provider accepted the send but returned no message id", retryable: false });
+    }
+
     if (!result.success || !result.data) {
         // eslint-disable-next-line no-console -- intentional server-side log of the redacted provider error before throwing a generic message
         console.error(`@lunora/mail: send failed: ${reasonOf(result.error)}`);
 
-        throw new LunoraError("INTERNAL", "@lunora/mail: send failed");
+        if (isProviderTimeout(result.error)) {
+            throw new MailSendError({
+                cause: result.error,
+                message: "@lunora/mail: the provider timed out, so the send may have been delivered",
+                outcomeUnknown: true,
+                retryable: false,
+            });
+        }
+
+        if (providerStatusOf(result.error) === IDEMPOTENCY_CONFLICT_STATUS) {
+            throw new MailSendError({
+                cause: result.error,
+                message: "@lunora/mail: the provider is still processing a send with this idempotency key, so it may be delivered",
+                outcomeUnknown: true,
+                retryable: false,
+            });
+        }
+
+        throw new MailSendError({ cause: result.error, retryable: isRetryableProviderError(result.error) });
     }
 
     return { id: result.data.messageId };
 };
 
-export { interpretSendResult, requireRecipients, toProviderEmail };
+export { interpretSendResult, isRetryableProviderError, requireRecipients, toProviderEmail };
 export type { ProviderSendResult };

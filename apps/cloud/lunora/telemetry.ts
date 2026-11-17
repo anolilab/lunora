@@ -173,7 +173,7 @@ export const upsertIssue = async (
     const before = existing ? existing.count : 0;
 
     if (existing) {
-        await context.db.patch(existing._id, {
+        await context.db.patch("issues", existing._id, {
             count: before + group.count,
             lastSeen: Math.max(existing.lastSeen, group.lastTs),
             sampleMessage: group.sampleMessage,
@@ -215,7 +215,7 @@ export const upsertIncident = async (
     const before = existing ? existing.count : 0;
 
     if (existing) {
-        await context.db.patch(existing._id, { count: before + group.count, lastSeen: Math.max(existing.lastSeen, group.lastTs), updatedAt: now });
+        await context.db.patch("incidents", existing._id, { count: before + group.count, lastSeen: Math.max(existing.lastSeen, group.lastTs), updatedAt: now });
     } else {
         await context.db.insert("incidents", {
             container: group.container,
@@ -280,7 +280,7 @@ export const ingest = mutation
             // tenant can attribute its spans to another org's deployment. Reads stay
             // org-scoped either way; what breaks is per-deployment attribution.
             if (args.deploymentId !== undefined) {
-                await assertRowInOrg(context, args.deploymentId, args.organizationId, "deployment");
+                await assertRowInOrg(context, "deployments", args.deploymentId, args.organizationId, "deployment");
             }
 
             // Persist every span as an observation (Traces). Additive to the error
@@ -412,7 +412,7 @@ export const ingest = mutation
                             const existing = stateByRule.get(ruleId);
 
                             await (existing
-                                ? context.db.patch(existing._id, { firing, lastEvaluatedAt: now, lastValue: value, updatedAt: now })
+                                ? context.db.patch("alertRuleState", existing._id, { firing, lastEvaluatedAt: now, lastValue: value, updatedAt: now })
                                 : context.db.insert("alertRuleState", {
                                       createdAt: now,
                                       firing,
@@ -463,7 +463,7 @@ export const pruneObservations = internalMutation.mutation(async ({ ctx: context
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-        await context.db.delete(row._id);
+        await context.db.delete("observations", row._id);
     }
 
     return { pruned: stale.length };

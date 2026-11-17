@@ -2,7 +2,7 @@
     "name": "@lunora-example/expo",
     "version": "0.0.0",
     "private": true,
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "main": "index.ts",
     "imports": {
         "#lunora/*": "./lunora/*"
@@ -14,7 +14,7 @@
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev:server": "wrangler dev",
-        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsc --noEmit",
+        "lint:types": "node node_modules/lunorash/dist/bin.mjs codegen && tsrs --noEmit",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix"
     },

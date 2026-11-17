@@ -9,7 +9,7 @@ use std::thread;
 
 use lunora::client::{
     build_connect_frame, build_rpc_body, build_shape_subscribe_frame, build_subscribe_frame, build_unsubscribe_frame, parse_rpc_response, Client, ClientError,
-    StreamEvent, CODE_INVALID_FRAME, MAX_PENDING_POKES,
+    WatchEvent, CODE_INVALID_FRAME, MAX_PENDING_POKES,
 };
 use lunora::key::{stable_stringify, stable_wire_key};
 use lunora::submit::is_transient;
@@ -22,15 +22,23 @@ use serde_json::{json, Value};
 // with no `#[test]` in it — the manifest must stay the only entry point.
 mod offline_cases;
 
+// The socket session and whisper cases. Same arrangement: plain functions, dispatched
+// from the manifest arms below and wrapped in `#[test]`s at the foot of this file.
+mod socket_cases;
+// The subscription retry hint. Not manifest cases yet, so only the `#[test]` wrappers
+// at the foot of this file run them.
+mod retry_cases;
+
 use offline_cases::{
     batch_entry_cap_matches_protocol, offline_flush_batch_splits_on_envelopeless_413, offline_flush_batch_splits_on_payload_too_large,
     offline_flush_batches_multiple_writes, offline_flush_classifies_single_and_batch_alike, offline_flush_empty_shard_key_routes_to_default,
     offline_flush_replays_and_confirms_optimistic, offline_flush_undecodable_result_settles_committed, offline_flush_unencodable_write_settles_terminal,
-    offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order, offline_queue_hydrate_overflow_settles_discarded,
-    offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay, offline_queue_overflow_evicts_oldest,
-    offline_queue_precondition_drops_stale_write, offline_unset_identity_stamps_token_digest, offline_write_held_for_credential_replays_after_token_refresh,
-    optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor, optimistic_layer_drops_on_settled_frame,
-    optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
+    offline_online_only_leaves_normal_writes_queued, offline_online_only_refused_when_disconnected, offline_online_only_sends_when_connected,
+    offline_online_only_transport_failure_refused, offline_queue_drains_only_the_named_shard, offline_queue_fifo_replay_order,
+    offline_queue_hydrate_overflow_settles_discarded, offline_queue_hydrates_persisted_writes, offline_queue_identity_gate_rejects_replay,
+    offline_queue_overflow_evicts_oldest, offline_queue_precondition_drops_stale_write, offline_unset_identity_stamps_token_digest,
+    offline_write_held_for_credential_replays_after_token_refresh, optimistic_cursorless_frame_preserves_cursor, optimistic_layer_drops_on_commit_cursor,
+    optimistic_layer_drops_on_settled_frame, optimistic_layer_rebases_onto_server_frame, optimistic_layer_rolls_back_on_failure,
 };
 
 /// Walks up from the crate directory to the repo's `protocol/fixtures`.
@@ -132,6 +140,10 @@ fn conformance_manifest_is_covered() {
             "offline_queue_drains_only_the_named_shard" => offline_queue_drains_only_the_named_shard(),
             "offline_queue_overflow_evicts_oldest" => offline_queue_overflow_evicts_oldest(),
             "offline_queue_precondition_drops_stale_write" => offline_queue_precondition_drops_stale_write(),
+            "offline_online_only_refused_when_disconnected" => offline_online_only_refused_when_disconnected(),
+            "offline_online_only_sends_when_connected" => offline_online_only_sends_when_connected(),
+            "offline_online_only_transport_failure_refused" => offline_online_only_transport_failure_refused(),
+            "offline_online_only_leaves_normal_writes_queued" => offline_online_only_leaves_normal_writes_queued(),
             "offline_queue_hydrates_persisted_writes" => offline_queue_hydrates_persisted_writes(),
             "offline_queue_identity_gate_rejects_replay" => offline_queue_identity_gate_rejects_replay(),
             "offline_flush_replays_and_confirms_optimistic" => offline_flush_replays_and_confirms_optimistic(),
@@ -154,6 +166,12 @@ fn conformance_manifest_is_covered() {
             "identity_change_evicts_previous_session" => identity_change_evicts_previous_session(),
             "auth_token_redacted_when_printed" => auth_token_redacted_when_printed(),
             "offline_unset_identity_stamps_token_digest" => offline_unset_identity_stamps_token_digest(),
+            "connect_frame_first_and_carries_session_token" => socket_cases::connect_frame_first_and_carries_session_token(),
+            "ws_url_carries_only_the_admin_ticket" => socket_cases::ws_url_carries_only_the_admin_ticket(),
+            "attach_socket_carries_connection_context" => socket_cases::attach_socket_carries_connection_context(),
+            "close_codes_drive_token_expiry" => socket_cases::close_codes_drive_token_expiry(),
+            "whisper_frames_join_send_and_deliver" => socket_cases::whisper_frames_join_send_and_deliver(),
+            "whisper_topics_rejoin_after_reconnect" => socket_cases::whisper_topics_rejoin_after_reconnect(),
             other => panic!("protocol/conformance-cases.json requires case {other:?}, which this suite does not implement"),
         }
     }
@@ -488,15 +506,29 @@ fn non_2xx_without_error_envelope_fails() {
     assert!(!coded(400));
 }
 
+/// A connect golden with the `pageDelta` capability laid over it.
+pub(crate) fn with_page_delta(golden: &Value) -> Value {
+    let mut frame = golden.clone();
+
+    frame["caps"] = json!(["pageDelta"]);
+
+    frame
+}
+
 fn client_frame_builders() {
     let document = fixture("ws-frames.json");
     let frames = &document["clientFrames"];
     let args = WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]);
 
-    assert_eq!(canonical(&build_connect_frame(Some("client-test"), None)), canonical(&frames["connect"]));
+    // Every connect announces `pageDelta` (and not `refreshBatch`, which this port
+    // does not handle), so the expected plain connect is the capability golden.
     assert_eq!(
-        canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })))),
-        canonical(&frames["connect-with-context"])
+        canonical(&build_connect_frame(Some("client-test"), None, None)),
+        canonical(&frames["connect-with-page-delta-caps"])
+    );
+    assert_eq!(
+        canonical(&build_connect_frame(Some("client-test"), Some(&json!({ "roomId": "general" })), None)),
+        canonical(&with_page_delta(&frames["connect-with-context"]))
     );
     assert_eq!(
         canonical(&build_subscribe_frame("sub_1", "messages:list", &args, None, None, None).expect("build")),
@@ -519,9 +551,12 @@ fn server_frame_consumer() {
         let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
         let outbound = Arc::clone(&sent);
 
-        client.attach_socket(Box::new(move |frame| {
-            outbound.lock().expect("sent").push(frame.clone());
-        }));
+        client.attach_socket(
+            Box::new(move |frame| {
+                outbound.lock().expect("sent").push(frame.clone());
+            }),
+            None,
+        );
 
         // `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the handler aliases are
         // `Send`, which is what makes `Client` itself `Send` and shareable — see
@@ -592,6 +627,231 @@ fn server_frame_consumer() {
     assert_eq!(cancellations, 1, "serverFrames must carry one cancelling case");
 
     a_refused_payload_stays_on_its_own_subscription();
+    page_delta_frames_merge_into_the_cached_result();
+}
+
+/// Each `pageDeltaFrames` case seeds the subscription with `baseWire`, applies the
+/// row-change frame, and expects the merged value.
+fn page_delta_frames_merge_into_the_cached_result() {
+    let document = fixture("ws-frames.json");
+    let cases = document["pageDeltaFrames"].as_array().expect("pageDeltaFrames");
+
+    assert_eq!(cases.len(), 9, "pageDeltaFrames must carry the nine merge cases");
+
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("?");
+        let id = case["frame"]["id"].as_str().expect("frame id");
+        let mut client = Client::new("https://app.example", None);
+        let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_handle = Arc::clone(&seen);
+        let subscribed = client.subscribe(
+            "messages:list",
+            WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+            Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
+            None,
+        );
+
+        assert_eq!(subscribed, id, "{name}: the fixture frame targets the first subscription");
+
+        let seed = json!({ "id": id, "type": "data", "data": case["baseWire"] });
+
+        client.handle_frame(&seed.to_string()).expect("seed");
+        seen.lock().expect("seen").clear();
+
+        let kind = client.handle_frame(&case["frame"].to_string()).expect("handle");
+
+        assert_eq!(kind.as_deref(), case["expect"]["kind"].as_str(), "{name}");
+
+        let seen = seen.lock().expect("seen");
+
+        assert_eq!(seen.len(), 1, "onData should fire once for {name}");
+        assert_eq!(
+            canonical(&encode_wire(&seen[0]).expect("encode")),
+            canonical(&case["expect"]["valueWire"]),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn page_delta_frames_merge() {
+    page_delta_frames_merge_into_the_cached_result();
+}
+
+/// A subscription on `messages:list` with every observable recorded: the frames
+/// it sends, the values it publishes and the error codes it raises.
+struct DeltaHarness {
+    client: Client,
+    sent: Arc<Mutex<Vec<Value>>>,
+    seen: Arc<Mutex<Vec<WireValue>>>,
+    errors: Arc<Mutex<Vec<String>>>,
+}
+
+fn delta_harness(identity: Option<String>) -> DeltaHarness {
+    let mut client = Client::new("https://app.example", None);
+    let sent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+    let outbound = Arc::clone(&sent);
+
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
+    client.set_identity(identity);
+
+    let seen: Arc<Mutex<Vec<WireValue>>> = Arc::new(Mutex::new(Vec::new()));
+    let seen_handle = Arc::clone(&seen);
+    let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let errors_handle = Arc::clone(&errors);
+
+    client.subscribe(
+        "messages:list",
+        WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
+        Some(Box::new(move |value| seen_handle.lock().expect("seen").push(value.clone()))),
+        Some(Box::new(move |error| {
+            errors_handle.lock().expect("errors").push(error.code.clone().unwrap_or_default());
+        })),
+    );
+
+    DeltaHarness { client, sent, seen, errors }
+}
+
+impl DeltaHarness {
+    /// Feeds one frame and returns the error codes it raised.
+    fn feed(&mut self, frame: &Value) -> Vec<String> {
+        self.errors.lock().expect("errors").clear();
+        self.client.handle_frame(&frame.to_string()).expect("handle");
+
+        self.errors.lock().expect("errors").clone()
+    }
+
+    /// Runs fixture steps: a frame with its publish count (and optionally the
+    /// published value and the error codes it raised), or a resend checked against
+    /// the resume position it names.
+    fn run_steps(&mut self, name: &str, steps: &Value) {
+        for (index, step) in steps.as_array().expect("steps").iter().enumerate() {
+            if let Some(resume) = step.get("resume") {
+                self.sent.lock().expect("sent").clear();
+                self.client.resend_subscriptions().expect("resend");
+
+                let frames = self.sent.lock().expect("sent");
+                let subscribe = frames.iter().find(|frame| frame["type"] == json!("subscribe")).expect("a resent subscribe");
+
+                assert_eq!(subscribe["query"]["sinceSeq"], resume["sinceSeq"], "{name} step {index}");
+                assert_eq!(subscribe["query"]["sinceEpoch"], resume["sinceEpoch"], "{name} step {index}");
+
+                continue;
+            }
+
+            self.seen.lock().expect("seen").clear();
+
+            let raised = self.feed(&step["frame"]);
+
+            if let Some(expected) = step.get("errors") {
+                assert_eq!(json!(raised), *expected, "{name} step {index}: error codes");
+            }
+
+            let seen = self.seen.lock().expect("seen");
+
+            assert_eq!(seen.len() as u64, step["publishes"].as_u64().expect("publishes"), "{name} step {index}");
+
+            if let Some(value_wire) = step.get("valueWire") {
+                assert_eq!(canonical(&encode_wire(&seen[0]).expect("encode")), canonical(value_wire), "{name} step {index}");
+            }
+        }
+    }
+}
+
+/// Runs every case under `key`: seed the subscription, then replay the steps.
+fn run_page_delta_cases(key: &str, expected: usize) {
+    let document = fixture("ws-frames.json");
+    let cases = document[key].as_array().unwrap_or_else(|| panic!("{key}"));
+
+    assert_eq!(cases.len(), expected, "{key} must carry its {expected} cases");
+
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("?");
+        let mut harness = delta_harness(None);
+
+        harness.feed(&case["seedFrame"]);
+        harness.run_steps(name, &case["steps"]);
+    }
+}
+
+/// An unmergeable row change poisons the subscription: later delta frames neither
+/// publish nor move the resume cursor. A resubscribe or a `data` frame clears it.
+#[test]
+fn an_unmergeable_run_freezes_the_cursor() {
+    run_page_delta_cases("pageDeltaPoisonCases", 3);
+}
+
+/// A run of delta frames marked `more` is held and commits once, on its last frame.
+#[test]
+fn a_delta_run_commits_once_on_its_last_frame() {
+    run_page_delta_cases("pageDeltaRunCases", 5);
+}
+
+/// A delta frame the decoder refuses reports once, discards the run and freezes the
+/// subscription like an unmergeable row change.
+#[test]
+fn an_undecodable_run_frame_freezes_the_subscription() {
+    run_page_delta_cases("undecodableDeltaRunCases", 2);
+}
+
+/// Attaching a socket, over a live one or after a failed open, discards every held run: it
+/// is one socket's stream, so the next frame merges onto the committed base.
+#[test]
+fn attaching_a_socket_discards_every_held_run() {
+    let document = fixture("ws-frames.json");
+    let case = &document["pageDeltaRunCases"][0];
+    let mut harness = delta_harness(None);
+
+    harness.feed(&case["seedFrame"]);
+    harness.feed(&json!({
+        "id": "sub_1", "type": "delta", "more": true,
+        "delta": {"key": "m1", "op": "update", "table": "messages",
+                  "row": {"_creationTime": 1001, "_id": "m1", "text": "ONE"}},
+    }));
+
+    harness.client.attach_socket(Box::new(|_| {}), None);
+    harness.seen.lock().expect("seen").clear();
+    harness.feed(&json!({
+        "id": "sub_1", "type": "delta",
+        "delta": {"key": "m2", "op": "update", "table": "messages",
+                  "row": {"_creationTime": 1002, "_id": "m2", "text": "TWO"}},
+    }));
+
+    let seen = harness.seen.lock().expect("seen");
+
+    assert_eq!(seen.len(), 1, "the final frame publishes once");
+    assert!(
+        !canonical(&encode_wire(&seen[0]).expect("encode")).contains("ONE"),
+        "a run held before the attach must not commit"
+    );
+}
+
+/// A change of identity drops the cached base and the freeze with it: both belong
+/// to the session that was shown them.
+#[test]
+fn an_identity_change_evicts_the_cached_base_and_the_poison() {
+    let document = fixture("ws-frames.json");
+    let cases = document["identityChangeEvictionCases"].as_array().expect("identityChangeEvictionCases");
+    let identity = |value: &Value| value.as_str().map(str::to_string);
+
+    assert_eq!(cases.len(), 2, "identityChangeEvictionCases must carry its two cases");
+
+    for case in cases {
+        let name = case["name"].as_str().unwrap_or("?");
+        let change = &case["identityChange"];
+        let mut harness = delta_harness(identity(&change["from"]));
+
+        harness.feed(&case["seedFrame"]);
+
+        if let Some(freeze) = case.get("freezeFrame") {
+            let raised = harness.feed(freeze);
+
+            assert_eq!(json!(raised), case["freezeErrors"], "{name}: the freeze is reported once");
+        }
+
+        harness.client.set_identity(identity(&change["to"]));
+        harness.run_steps(name, &case["steps"]);
+    }
 }
 
 /// A `data` payload the codec refuses reaches THAT subscription's error callback
@@ -602,7 +862,7 @@ fn server_frame_consumer() {
 fn a_refused_payload_stays_on_its_own_subscription() {
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let errors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&errors);
@@ -646,12 +906,12 @@ fn a_refused_payload_stays_on_its_own_subscription() {
 /// as the callback form.
 fn subscription_stream_yields_frame_values_in_order() {
     let document = fixture("ws-frames.json");
-    let case = &document["stream"];
+    let case = &document["watch"];
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
-    let (events, id) = client.stream(
+    let (events, id) = client.watch(
         "messages:list",
         WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
         None,
@@ -662,8 +922,8 @@ fn subscription_stream_yields_frame_values_in_order() {
         client.handle_frame(&frame.to_string()).expect("handle");
 
         match events.recv().expect("a streamed event") {
-            StreamEvent::Value(value) => seen.push(encode_wire(&value).expect("encode")),
-            StreamEvent::Error(error) => panic!("stream error: {}", error.message),
+            WatchEvent::Value(value) => seen.push(encode_wire(&value).expect("encode")),
+            WatchEvent::Error(error) => panic!("stream error: {}", error.message),
         }
     }
 
@@ -691,7 +951,7 @@ fn shape_subscribe_frame() {
 fn shape_subscriptions_resend_after_reconnect() {
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
     client.subscribe(
         "messages:list",
         WireValue::Object(vec![("channel".into(), WireValue::String("general".into()))]),
@@ -723,7 +983,10 @@ fn shape_subscriptions_resend_after_reconnect() {
     let resent: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
     let recorder = Arc::clone(&resent);
 
-    client.attach_socket(Box::new(move |frame| recorder.lock().expect("resent").push(frame.clone())));
+    client.attach_socket(Box::new(move |frame| recorder.lock().expect("resent").push(frame.clone())), None);
+
+    // The attach wrote `connect`; this case is about what the resend adds after it.
+    resent.lock().expect("resent").clear();
     client.resend_subscriptions().expect("resend");
 
     let frames = resent.lock().expect("resent");
@@ -744,7 +1007,7 @@ fn poke_sequence_materialises_rows() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::clone(&delivered);
@@ -775,7 +1038,7 @@ fn poke_parts_do_not_apply_before_poke_end() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let fired = Arc::new(Mutex::new(0));
     let handle = Arc::clone(&fired);
@@ -805,7 +1068,7 @@ fn reset_poke_replaces_the_view() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::clone(&delivered);
@@ -845,7 +1108,7 @@ fn reset_poke_replaces_the_view() {
 fn pending_poke_buffers_are_bounded() {
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
     let delivered: Arc<Mutex<Vec<Vec<WireValue>>>> = Arc::new(Mutex::new(Vec::new()));
     let handle = Arc::clone(&delivered);
@@ -926,7 +1189,7 @@ fn shape_client() -> (Client, Arc<Mutex<Vec<Value>>>, ShapeRecorders) {
     let errors: Arc<Mutex<Vec<Option<String>>>> = Arc::new(Mutex::new(Vec::new()));
     let (rows_handle, errors_handle) = (Arc::clone(&rows), Arc::clone(&errors));
 
-    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())));
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
     client.subscribe_shape(
         "roomMessages",
         Some(WireValue::Object(vec![("room".into(), WireValue::String("general".into()))])),
@@ -944,7 +1207,7 @@ fn deliver(client: &mut Client, frames: &Value) {
 }
 
 /// The frames `resend_subscriptions` sends now, keyed by type.
-fn resent(client: &Client, sent: &Arc<Mutex<Vec<Value>>>, kind: &str) -> Value {
+fn resent(client: &mut Client, sent: &Arc<Mutex<Vec<Value>>>, kind: &str) -> Value {
     sent.lock().expect("sent").clear();
     client.resend_subscriptions().expect("resend");
 
@@ -990,7 +1253,7 @@ fn shape_poke_with_undecodable_row_is_refused_whole() {
         "the shape's error callback hears it once"
     );
 
-    let frame = resent(&client, &sent, "shape_subscribe");
+    let frame = resent(&mut client, &sent, "shape_subscribe");
 
     assert_eq!(
         frame["sinceCheckpoint"], shape["undecodableRowResendCheckpoint"],
@@ -1034,7 +1297,7 @@ fn shape_poke_with_undecodable_row_is_refused_whole() {
         "cold"
     );
 
-    let frame = resent(&client, &sent, "shape_subscribe");
+    let frame = resent(&mut client, &sent, "shape_subscribe");
 
     assert!(
         frame.get("sinceCheckpoint").is_none() && frame.get("sinceEpoch").is_none(),
@@ -1070,7 +1333,7 @@ fn malformed_frames_are_ignored_without_raising() {
     let touched = Arc::new(Mutex::new(0_usize));
     let (on_data, on_error) = (Arc::clone(&touched), Arc::clone(&touched));
 
-    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())));
+    client.attach_socket(Box::new(move |frame| outbound.lock().expect("sent").push(frame.clone())), None);
     client.subscribe(
         "messages:list",
         WireValue::Object(Vec::new()),
@@ -1088,7 +1351,7 @@ fn malformed_frames_are_ignored_without_raising() {
 
     assert_eq!(*touched.lock().expect("touched"), 0, "no malformed frame reaches sub_1's callbacks");
 
-    let frame = resent(&client, &sent, "subscribe");
+    let frame = resent(&mut client, &sent, "subscribe");
 
     assert_eq!(
         frame["query"]["sinceSeq"], case["resendSinceSeq"],
@@ -1140,9 +1403,9 @@ fn subscription_stream_ends_on_close() {
 
     let mut client = Client::new("https://app.example", None);
 
-    client.attach_socket(Box::new(|_frame| {}));
+    client.attach_socket(Box::new(|_frame| {}), None);
 
-    let (events, id) = client.stream("messages:list", WireValue::Object(Vec::new()), None);
+    let (events, id) = client.watch("messages:list", WireValue::Object(Vec::new()), None);
 
     client
         .handle_frame(&json!({ "type": "data", "id": id, "data": 1, "cursor": 1 }).to_string())
@@ -1151,7 +1414,7 @@ fn subscription_stream_ends_on_close() {
 
     assert_eq!(
         events.recv_timeout(Duration::from_secs(2)).expect("the delivered value"),
-        StreamEvent::Value(WireValue::Number(1.0))
+        WatchEvent::Value(WireValue::Number(1.0))
     );
     assert_eq!(
         events.recv_timeout(Duration::from_secs(2)),
@@ -1180,8 +1443,8 @@ fn identity_change_evicts_previous_session() {
 
         client.set_identity(identity(&transition["to"]));
 
-        let query = resent(&client, &sent, "subscribe");
-        let shape = resent(&client, &sent, "shape_subscribe");
+        let query = resent(&mut client, &sent, "subscribe");
+        let shape = resent(&mut client, &sent, "shape_subscribe");
 
         if transition["evicts"] == json!(true) {
             let evicted = &case["evicted"];
@@ -1247,8 +1510,8 @@ fn token_change_without_identity_evicts_previous_session(document: &Value) {
 
         set_token(&mut client, after);
 
-        let query = resent(&client, &sent, "subscribe");
-        let shape = resent(&client, &sent, "shape_subscribe");
+        let query = resent(&mut client, &sent, "subscribe");
+        let shape = resent(&mut client, &sent, "shape_subscribe");
 
         assert_eq!(query["query"].get("sinceSeq").is_none(), evicts, "{label}: query");
         assert_eq!(shape.get("sinceCheckpoint").is_none(), evicts, "{label}: shape");
@@ -1297,7 +1560,7 @@ fn concurrent_subscribe_and_handle_frame() {
 
     let client = Arc::new(Mutex::new(Client::new("https://app.example", None)));
 
-    client.lock().expect("client").attach_socket(Box::new(|_frame| {}));
+    client.lock().expect("client").attach_socket(Box::new(|_frame| {}), None);
 
     let workers: Vec<_> = (0..THREADS)
         .map(|_| {
@@ -1337,7 +1600,14 @@ fn concurrent_subscribe_and_handle_frame() {
     let counter = Arc::clone(&resent);
     let mut guard = client.lock().expect("client");
 
-    guard.attach_socket(Box::new(move |_frame| *counter.lock().expect("resent") += 1));
+    guard.attach_socket(
+        Box::new(move |frame| {
+            if frame["type"] == json!("subscribe") {
+                *counter.lock().expect("resent") += 1;
+            }
+        }),
+        None,
+    );
     guard.resend_subscriptions().expect("resend");
 
     assert_eq!(
@@ -1399,4 +1669,159 @@ fn from_model_json_matches_whole_paths() {
 
     assert!(encoded.get("limit").is_none(), "the top-level path prunes");
     assert_eq!(encoded["outer"]["limit"], Value::Null, "the same key one level down is a different path");
+}
+
+// The session credential must never ride the socket URL: not on the first open,
+// not on a reconnect, and not when the value comes from a provider re-resolved
+// on every open. The URL is built from the ticket alone; the session is read only
+// into the connect frame.
+#[test]
+fn session_credential_never_rides_the_url() {
+    const SESSION: &str = "sess-secret-123";
+    // The URL percent-encodes the hyphens, so a leak can show up in either form.
+    const SESSION_ENCODED: &str = "sess%2Dsecret%2D123";
+
+    let client = Client::new("https://app.example", None);
+    let leaks = |url: &str| url.contains(SESSION) || url.contains(SESSION_ENCODED);
+    let mut resolved = 0;
+    // `provider` stands in for an app-supplied resolver, called fresh on every open.
+    let mut provider = || {
+        resolved += 1;
+        SESSION
+    };
+
+    for open in 0..3 {
+        let session = provider();
+
+        assert!(
+            !leaks(&client.ws_url(Some("tenant_a"), Some("ticket-abc"))),
+            "open {open}: the URL carries the session credential"
+        );
+        assert!(!leaks(&client.ws_url(None, None)), "open {open}: the bare URL carries the session credential");
+        assert_eq!(
+            build_connect_frame(Some("client-test"), None, Some(session))["token"],
+            json!(SESSION),
+            "open {open}: connect token"
+        );
+    }
+
+    assert_eq!(resolved, 3, "the provider resolves once per open");
+}
+
+// The six socket cases run as ordinary tests too, so a failure names its test
+// without the manifest. The manifest arms above dispatch the same functions once
+// the manifest requires them.
+#[test]
+fn connect_frame_first_and_carries_session_token() {
+    socket_cases::connect_frame_first_and_carries_session_token();
+}
+
+#[test]
+fn ws_url_carries_only_the_admin_ticket() {
+    socket_cases::ws_url_carries_only_the_admin_ticket();
+}
+
+#[test]
+fn attach_socket_carries_connection_context() {
+    socket_cases::attach_socket_carries_connection_context();
+}
+
+#[test]
+fn close_codes_drive_token_expiry() {
+    socket_cases::close_codes_drive_token_expiry();
+}
+
+#[test]
+fn whisper_frames_join_send_and_deliver() {
+    socket_cases::whisper_frames_join_send_and_deliver();
+}
+
+#[test]
+fn whisper_topics_rejoin_after_reconnect() {
+    socket_cases::whisper_topics_rejoin_after_reconnect();
+}
+
+#[test]
+fn closed_client_does_not_rejoin_rooms() {
+    socket_cases::closed_client_does_not_rejoin_rooms();
+}
+
+#[test]
+fn re_subscribes_once_cold_at_the_hint() {
+    retry_cases::re_subscribes_once_cold_at_the_hint();
+}
+
+#[test]
+fn the_error_still_reaches_the_handler() {
+    retry_cases::the_error_still_reaches_the_handler();
+}
+
+#[test]
+fn a_later_hint_replaces_the_pending_one() {
+    retry_cases::a_later_hint_replaces_the_pending_one();
+}
+
+#[test]
+fn each_cancel_frame_cancels() {
+    retry_cases::each_cancel_frame_cancels();
+}
+
+#[test]
+fn no_retry_frames_schedule_nothing() {
+    retry_cases::no_retry_frames_schedule_nothing();
+}
+
+#[test]
+fn unsubscribe_cancels() {
+    retry_cases::unsubscribe_cancels();
+}
+
+#[test]
+fn detach_cancels() {
+    retry_cases::detach_cancels();
+}
+
+#[test]
+fn attach_cancels() {
+    retry_cases::attach_cancels();
+}
+
+#[test]
+fn a_hint_after_detach_or_close_schedules_nothing() {
+    retry_cases::a_hint_after_detach_or_close_schedules_nothing();
+}
+
+#[test]
+fn close_cancels() {
+    retry_cases::close_cancels();
+}
+
+#[test]
+fn a_shape_error_never_schedules() {
+    retry_cases::a_shape_error_never_schedules();
+}
+
+#[test]
+fn the_hint_is_clamped() {
+    retry_cases::the_hint_is_clamped();
+}
+
+#[test]
+fn a_data_frame_that_cannot_be_applied_keeps_the_retry() {
+    retry_cases::a_data_frame_that_cannot_be_applied_keeps_the_retry();
+}
+
+#[test]
+fn a_settled_that_cuts_off_a_run_keeps_the_retry() {
+    retry_cases::a_settled_that_cuts_off_a_run_keeps_the_retry();
+}
+
+#[test]
+fn a_cold_retry_forgets_the_confirmed_cursor() {
+    retry_cases::a_cold_retry_forgets_the_confirmed_cursor();
+}
+
+#[test]
+fn a_slow_error_handler_does_not_push_the_retry_later() {
+    retry_cases::a_slow_error_handler_does_not_push_the_retry_later();
 }

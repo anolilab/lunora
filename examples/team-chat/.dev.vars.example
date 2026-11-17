@@ -3,3 +3,5 @@
 AUTH_SECRET=dev-only-change-me
 # Signs the upload/download URLs the `/files/*` route verifies.
 STORAGE_SECRET=dev-only-change-me-too
+# Signs every request to ShardRegistryDO (and the shard-to-shard control channel).
+LUNORA_RELAY_SECRET=dev-only-change-me-three

@@ -1,4 +1,4 @@
-import { isRunnableTarget, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
+import { assertBuildTargetMatches, isRunnableTarget, resolveLazyFunctions, resolveTargetOrThrow, runnableTargetIds } from "@lunora/config";
 
 import type { LunoraRspackOptions, ResolvedLunoraRspackOptions } from "./types";
 
@@ -20,16 +20,27 @@ const resolveRunnableTargetOrThrow = (projectRoot: string, explicit?: string): s
         );
     }
 
+    assertBuildTargetMatches(target, projectRoot);
+
     return target;
 };
 
 /** Merge the user's options with the defaults, validating the deploy target. */
 const resolveOptions = (options: LunoraRspackOptions | undefined): ResolvedLunoraRspackOptions => {
     const input = options ?? {};
+    // `lazyFunctions` moved to `codegen.lazyFunctions` in lunora.config. A plugin that still passes it would otherwise
+    // regenerate the eager registry without a word, so the removed option is refused here.
+    if ((input as { lazyFunctions?: unknown }).lazyFunctions !== undefined) {
+        throw new Error(
+            "lunora(): the `lazyFunctions` option was removed. Set `codegen: { lazyFunctions: true }` in lunora.config (or pass --lazy-functions for one run).",
+        );
+    }
     const projectRoot = input.projectRoot ?? process.cwd();
 
     return {
         apiSpec: input.apiSpec ?? "openapi",
+        explicitTarget: input.target,
+        lazyFunctions: resolveLazyFunctions(),
         projectRoot,
         schemaDir: input.schemaDir ?? "lunora",
         // Same resolution AND validation as the CLI — explicit option, then

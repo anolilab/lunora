@@ -47,7 +47,7 @@ const fromBase64 = (encoded: string): string => {
  * Cursors arrive from the client, so any decode failure is a bad request rather
  * than a server fault — a raw `TypeError` would surface as a 500.
  */
-const invalidCursor = (): LunoraError => new LunoraError("BAD_REQUEST", "invalid cursor");
+const invalidCursor = (): LunoraError => new LunoraError("INVALID_CURSOR", "invalid cursor");
 
 /**
  * Most terms one `.search(field, query)` may carry, after de-duplication.
@@ -300,7 +300,7 @@ export const encodeSearchCursor = (offset: number): string => btoa(`search:${Str
 /**
  * Decode a search page cursor back to its offset. Returns `undefined` for
  * anything that isn't one of ours — the caller turns that into a
- * `BAD_REQUEST`, since cursors arrive from the client.
+ * `INVALID_CURSOR`, since cursors arrive from the client.
  */
 export const parseSearchCursor = (cursor: string): number | undefined => {
     let decoded: string;

@@ -97,11 +97,11 @@ const accrueSpend = async (
     organizationId: Id<"organizations">,
     row: { kind: string; periodStart: number; quantity: number },
 ): Promise<void> => {
-    const organization = (await context.db.get(organizationId)) as null | SpendAccrual;
+    const organization = (await context.db.get("organizations", organizationId)) as null | SpendAccrual;
     const next = organization === null ? null : accruedSpend(organization, row, context.now);
 
     if (next !== null) {
-        await context.db.patch(organizationId, next);
+        await context.db.patch("organizations", organizationId, next);
     }
 };
 
@@ -166,7 +166,7 @@ export const ingest = mutation
         // attribution, which for the usage ledger is the number a bill is
         // computed from.
         if (arguments_.deploymentId !== undefined) {
-            await assertRowInOrg(context, arguments_.deploymentId, arguments_.organizationId, "deployment");
+            await assertRowInOrg(context, "deployments", arguments_.deploymentId, arguments_.organizationId, "deployment");
         }
 
         const id = await context.db.insert("platformUsage", {
@@ -248,12 +248,12 @@ export const rollup = internalMutation.mutation(async ({ ctx: context }): Promis
         // Delete the extras first (fail-safe ordering — see the doc comment).
         for (const row of extras) {
             // eslint-disable-next-line no-await-in-loop -- sequential delete of the now-summed rows
-            await context.db.delete(row._id);
+            await context.db.delete("platformUsage", row._id);
         }
 
         // Then fold the group total onto the surviving row.
         // eslint-disable-next-line no-await-in-loop -- one patch per group; volumes are small
-        await context.db.patch(survivor._id, { quantity: total });
+        await context.db.patch("platformUsage", survivor._id, { quantity: total });
 
         compacted += extras.length;
     }
@@ -308,7 +308,7 @@ export const spendStatus = query
     .input({ organizationId: v.id("organizations") })
     .query(async ({ ctx: context, args: { organizationId } }): Promise<SpendStatus> => {
         const member = await assertMember(context, organizationId);
-        const organization = (await context.db.get(member.organizationId)) as null | {
+        const organization = (await context.db.get("organizations", member.organizationId)) as null | {
             spendCapMinor?: null | number;
             spendWarnMinor?: null | number;
         };
@@ -347,13 +347,13 @@ export const meteringStatus = query
     .input({ organizationId: v.id("organizations") })
     .query(async ({ ctx: context, args: { organizationId } }): Promise<MeteringStatusNotice[]> => {
         const member = await assertMember(context, organizationId);
-        const organization = (await context.db.get(member.organizationId)) as null | { cellId: Id<"cells"> };
+        const organization = (await context.db.get("organizations", member.organizationId)) as null | { cellId: Id<"cells"> };
         const [statuses, accounts, cell] = await Promise.all([
             collectAll<SourceStatusRow>((cursor) => context.db.usageSourceStatus.findMany({ cursor })),
             collectAll<{ _id: string; label: string }>((cursor) =>
                 context.db.cloudflareAccounts.findMany({ cursor, where: { organizationId: member.organizationId } }),
             ),
-            organization === null ? null : (context.db.get(organization.cellId) as Promise<null | { name: string }>),
+            organization === null ? null : (context.db.get("cells", organization.cellId) as Promise<null | { name: string }>),
         ]);
 
         // The platform's own source is shown for the organization's cell only: its name is the `cloudflare-wfp` scope.
@@ -401,7 +401,7 @@ export const billingSummary = internalQuery
             throw new LunoraError("BAD_REQUEST", "periodStart must be the first instant (UTC) of the current or an earlier month");
         }
 
-        const organization = (await context.db.get(verified)) as null | {
+        const organization = (await context.db.get("organizations", verified)) as null | {
             spendCapMinor?: null | number;
             spendWarnMinor?: null | number;
             suspendedAt?: null | number;
@@ -457,7 +457,7 @@ export const setSpendWarning = mutation
             throw new LunoraError("BAD_REQUEST", `warnMinor must be a whole number of cents between 0 and ${String(MAX_SPEND_THRESHOLD_MINOR)}`);
         }
 
-        await context.db.patch(member.organizationId, { spendWarnedPeriod: null, spendWarnMinor: warnMinor });
+        await context.db.patch("organizations", member.organizationId, { spendWarnedPeriod: null, spendWarnMinor: warnMinor });
         await context.db.insert("auditLog", {
             action: "organization.spend_warn_set",
             actorUserId: member.userId,
@@ -541,14 +541,14 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         // accrual (plan 365 W3) from it, correcting any increment a racing writer lost.
         if (organization.spendPeriod !== periodStart || organization.spendNanoCents !== spendNanoCents) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organizationId, { spendNanoCents, spendPeriod: periodStart });
+            await context.db.patch("organizations", organizationId, { spendNanoCents, spendPeriod: periodStart });
         }
 
         if (decision.level === "breach" && organization.suspendedAt == null) {
             // The warn latch is stamped with the suspension, so recovering inside the
             // same period (a raised cap) does not then fire a stale soft-cap warning.
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organizationId, { spendWarnedPeriod: periodStart, suspendedAt: context.now, suspendedReason: "spend-cap" });
+            await context.db.patch("organizations", organizationId, { spendWarnedPeriod: periodStart, suspendedAt: context.now, suspendedReason: "spend-cap" });
             // eslint-disable-next-line no-await-in-loop -- one audit row per transition
             await audit("organization.suspend", `spend ${String(decision.spendMinor)} >= cap ${String(decision.capMinor)}`);
             // eslint-disable-next-line no-await-in-loop -- one alert fan-out per transition
@@ -562,7 +562,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         } else if (decision.level !== "breach" && organization.suspendedAt != null && organization.suspendedReason === "spend-cap") {
             // Only lift our own suspensions — dunning/support ones stay (GAPS.md C2).
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organizationId, { suspendedAt: null, suspendedReason: null });
+            await context.db.patch("organizations", organizationId, { suspendedAt: null, suspendedReason: null });
             // eslint-disable-next-line no-await-in-loop -- one audit row per transition
             await audit("organization.unsuspend", `spend ${String(decision.spendMinor)} < cap ${String(decision.capMinor)}`);
             unsuspended += 1;
@@ -571,7 +571,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         // Soft cap (plan 365 D3): a notification, never an action — once per period.
         if (decision.level === "warn" && organization.spendWarnedPeriod !== periodStart) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organizationId, { spendWarnedPeriod: periodStart });
+            await context.db.patch("organizations", organizationId, { spendWarnedPeriod: periodStart });
             // eslint-disable-next-line no-await-in-loop -- one audit row per transition
             await audit("organization.spend_warn", `spend ${String(decision.spendMinor)} >= warn ${String(decision.warnMinor)}`);
             // eslint-disable-next-line no-await-in-loop -- one alert fan-out per transition
@@ -621,7 +621,7 @@ export const recordOverageDebit = internalMutation
         }
 
         if (debitedCredits > row.debitedCredits) {
-            await context.db.patch(row._id, { debitedCredits, updatedAt: now });
+            await context.db.patch("overageDebits", row._id, { debitedCredits, updatedAt: now });
         }
     });
 

@@ -33,6 +33,8 @@ vis generate lunora-queue --name=emailQueue
 
 ## Declare a queue
 
+The following module declares an email queue whose handler runs one `email.send` call per message:
+
 ```ts
 // lunora/queues.ts
 import { defineQueue } from "@lunora/queue";
@@ -85,7 +87,7 @@ Cloudflare Queues has no retry that does not count against `maxRetries`, so a de
 
 A decline on the message's **last** delivery cannot be retried: the broker would dead-letter or drop it with the call still running. The consumer sends a copy back onto the same queue instead, delayed by the same 15 minutes, and acks the original only once that send succeeded. The copy gets a fresh `maxRetries` budget. Its handler sees the original `message.id` and `message.body`, so its `message.run(...)` calls carry the same dedup ids and are served the declined call's result rather than running it again. The copy goes through the queue's own producer binding, which codegen always declares.
 
-The copy's body is an envelope under the reserved key `"$lunora.requeued$"`: the original id, the original body as the JSON text of its wire encoding (so a `bigint`, `Date` or bytes survives), and an HMAC-SHA256 over both keyed by `LUNORA_ADMIN_TOKEN`. The consumer unwraps only an envelope whose MAC verifies. Any other body, including one that copies the envelope's shape, is delivered as-is under the broker's own id, so a body forwarded from outside cannot pick the dedup ids its calls carry. `ctx.queues.<name>.send` and `sendBatch` refuse a body carrying the reserved key. A dead-lettered copy sits in the DLQ as that JSON envelope; the original body is the `body` string inside it.
+The copy's body is an envelope under the reserved key `"$lunora.requeued$"`: the original id, the original body as the JSON text of its wire encoding (so a `bigint`, `Date` or bytes survives), and an HMAC-SHA256 over both keyed by `LUNORA_ADMIN_TOKEN`. The consumer unwraps only an envelope whose MAC verifies. Any other body, including one that copies the envelope's shape, is delivered as-is under the broker's own id, so a body forwarded from outside cannot pick the dedup ids its calls carry. `ctx.queues.<name>.send` and `sendBatch` refuse a body carrying the reserved key. A dead-lettered copy sits in the dead-letter queue (DLQ) as that JSON envelope; the original body is the `body` string inside it.
 
 A copy is never copied again. If a copy's own last delivery is declined too, or the copy cannot be sent (the send fails, the envelope would exceed the 128 KB message limit, or the body has no wire encoding, such as a class instance), the message is retried anyway, which takes it to the `deadLetterQueue` or drops it if the queue has none, and the consumer logs an error. Give a queue that calls slow actions a `maxRetries` of at least 2, plus a `deadLetterQueue`.
 
@@ -165,3 +167,126 @@ Removing an option from `defineQueue` removes it from the consumer on the next `
 ## Studio
 
 Declared queues show in the Studio **Queues** page (export name, deployed queue name, consumer mode, producer binding and dead-letter queue), with each topic's subscriptions grouped under it, refreshed on every codegen run. The **Send** tab can target a topic, which publishes the test message to every subscription.
+
+## API
+
+Reference for the public exports of `@lunora/queue`. The shapes of the binding types
+(`QueueBindingLike`, `MessageBatchLike`, `QueueContentType`) are listed in
+`api-snapshots/queue.api.md`.
+
+### `defineQueue`
+
+**Type:** `<Body = unknown>(config: QueueConfig<Body>) => QueueDefinition<Body>`
+
+Declares a queue export in `lunora/queues.ts`. For a pull queue, omit `handler` and
+set `mode: "pull"`, so an external worker polls the queue over HTTP.
+
+### `QueueConfig`
+
+**Type:** `QueueConsumerTuning & { handler?: QueueHandler<Body>; mode?: QueueConsumerMode; name?: string }`
+
+The options for `defineQueue`. `name` is the wrangler queue name, and it defaults to
+the kebab-cased export name (`emailQueue` becomes `email-queue`). `mode` is
+`"push"` by default. The handler receives a `QueueMessageBatch`, and each message is a
+`QueueMessage`.
+
+### `QueueConsumerTuning`
+
+**Type:** `{ deadLetterQueue?: string; maxBatchSize?: number; maxBatchTimeout?: number; maxConcurrency?: number; maxRetries?: number; retryDelay?: number }`
+
+Consumer settings written onto the queue's `queues.consumers[]` entry. `maxBatchSize`
+accepts 1 to 100 messages per batch. `maxRetries` defaults to `3` when unset
+(`packages/queue/src/dispatch.ts:157`). Options you leave out are not written.
+
+### `QueueConsumerMode`
+
+**Type:** `"push" | "pull"`
+
+Selects whether Cloudflare pushes batches to the worker's `queue()` handler or an
+external consumer pulls them over HTTP.
+
+### `QueueMessage`
+
+**Type:** `MessageLike<Body> & { readonly run: DispatchRunFunction }`
+
+One message in a batch. `message.run(fn, args)` runs a Lunora function on the shard
+with a replay-dedup id. `ack()` and `retry()` set the message's outcome.
+
+### `defineTopic`
+
+**Type:** `<Payload = unknown>() => TopicDefinition<Payload>`
+
+Declares a topic export. Publish to it with `ctx.topics.<exportName>`.
+
+### `defineSubscription`
+
+**Type:** `<Payload>(topic: TopicDefinition<Payload>, config: SubscriptionConfig<Payload>) => SubscriptionDefinition<Payload>`
+
+Subscribes a handler to a topic. Each subscription is its own queue with its own
+retries and dead-letter queue.
+
+### `SubscriptionConfig`
+
+**Type:** `QueueConsumerTuning & { handler: QueueHandler<Payload>; name?: string }`
+
+The options for `defineSubscription`. `handler` is required.
+
+### `TopicPublisher`
+
+**Type:** `{ publish: (payload, options?) => Promise<void>; publishBatch: (messages, options?) => Promise<void> }`
+
+The object `ctx.topics.<exportName>` returns. `publish` sends one copy to each
+subscription's queue in parallel. `publishBatch` accepts at most 100 messages.
+
+### `createQueues`
+
+**Type:** `<Name extends string>(options: LunoraQueuesOptions<Name>) => Queues<Name>`
+
+Builds the `ctx.queues` map of typed producers from the bindings on `env`.
+
+### `LunoraQueuesOptions`
+
+**Type:** `{ bindings: Record<Name, QueueBindingLike> }`
+
+The bindings `createQueues` wraps, keyed by export name.
+
+### `dispatchQueueBatch`
+
+**Type:** `(batch: MessageBatchLike, registry: QueueRegistry, options: DispatchOptions) => Promise<void>`
+
+Delivers one assembled batch to the handlers in `registry`. The generated `queue()`
+export calls it.
+
+### `createQueueCaptureSink`
+
+**Type:** `(env: QueueEnv, options?: QueueCaptureOptions) => QueueCaptureSink`
+
+Builds the sink that records queue messages to Studio's **Queues** log.
+
+### `shouldCaptureQueue`
+
+**Type:** `(env: QueueEnv) => boolean`
+
+Decides whether the capture sink is active. `LUNORA_QUEUE_CAPTURE` set to `1` or
+`true` turns it on, and `0` or `false` turns it off. An explicit value wins over
+environment detection.
+
+### `queueBindingName`
+
+**Type:** `(exportName: string) => string`
+
+Returns the producer binding name for an export. `emailQueue` becomes
+`QUEUE_EMAIL_QUEUE`.
+
+### `queueDefaultName`
+
+**Type:** `(exportName: string) => string`
+
+Returns the default wrangler queue name for an export. `emailQueue` becomes
+`email-queue`.
+
+### `isQueueDefinition`
+
+**Type:** `(value: unknown) => value is QueueDefinition`
+
+Type guard for a `defineQueue` result.

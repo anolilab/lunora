@@ -12,6 +12,7 @@ import { withX402 } from "../../src/charge/http-action";
 import type { X402ChargeConfig } from "../../src/config";
 
 const chargeConfig: X402ChargeConfig = {
+    facilitator: { url: "https://facilitator.example/x402" },
     network: "base",
     price: "$0.01",
     recipient: { evm: "0x1111111111111111111111111111111111111111" },

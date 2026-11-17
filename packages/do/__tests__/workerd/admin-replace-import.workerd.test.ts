@@ -62,7 +62,7 @@ describe("replace import on workerd", () => {
                 importShardRows(writerOf(state), schema, { keepIds: new Set(), replaceTables: ["notes"], rows }),
             );
 
-            expect(result.deleted).toStrictEqual({ notes: 1 });
+            expect(result.pruned).toStrictEqual({ notes: 1 });
             await expect(titles(state)).resolves.toStrictEqual({ "deleted-since": "back", kept: "as snapshotted" });
         });
     });

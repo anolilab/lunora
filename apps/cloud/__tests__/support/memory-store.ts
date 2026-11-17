@@ -54,7 +54,7 @@ export const memoryStore = (seed: Record<string, Row[]> = {}): MemoryStore => {
             .find((row) => row["_id"] === id);
 
     return {
-        delete: (id) => {
+        delete: (_table, id) => {
             for (const rows of Object.values(tables)) {
                 const index = rows.findIndex((row) => row["_id"] === id);
 
@@ -66,7 +66,7 @@ export const memoryStore = (seed: Record<string, Row[]> = {}): MemoryStore => {
             return Promise.resolve();
         },
         findMany: (table, args) => Promise.resolve({ isDone: true, page: (tables[table] ?? []).filter((row) => matches(row, args?.where ?? {})) }),
-        get: (id) => Promise.resolve(find(id) ?? null),
+        get: (_table, id) => Promise.resolve(find(id) ?? null),
         insert: (table, document) => {
             sequence += 1;
 
@@ -79,7 +79,7 @@ export const memoryStore = (seed: Record<string, Row[]> = {}): MemoryStore => {
 
             return Promise.resolve(id);
         },
-        patch: (id, patch) => {
+        patch: (_table, id, patch) => {
             const row = find(id);
 
             if (row === undefined) {

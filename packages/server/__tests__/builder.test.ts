@@ -2,7 +2,7 @@ import { DEFER_VALIDATION, installCompiledValidatorMap } from "@lunora/values";
 import { describe, expect, it, vi } from "vitest";
 
 import type { Middleware } from "../src/index";
-import { initLunora, LunoraError, v, ValidationError } from "../src/index";
+import { initLunora, LunoraError, PROCEDURE_META, procedureMeta, UNLOADED_META, v, ValidationError } from "../src/index";
 
 const c = initLunora.dataModel<Record<string, never>>().create();
 
@@ -39,11 +39,11 @@ describe("builder terminal", () => {
 describe(".meta()", () => {
     // `.meta()` exists so ONE generic middleware can read the policy it is meant
     // to enforce off `ctx.meta`, instead of the policy being re-parameterised at
-    // every `.use()` site. It is deliberately NOT stamped onto the registration:
-    // nothing ever read `fn.meta` (not codegen, not the runtime, not studio), and
-    // `FunctionRegistryEntry` has no field for it.
-    it("does not stamp metadata onto the registration", () => {
-        expect.assertions(3);
+    // every `.use()` site. Tooling — an authorization audit walking the function
+    // table — reads the same declaration through `procedureMeta(fn)`; there is no
+    // `meta` field on the dispatch shape for it to collide with.
+    it("exposes the declaration to tooling through procedureMeta", () => {
+        expect.assertions(5);
 
         const createPin = c.query
             .meta({ rateLimit: "pins/create" })
@@ -54,9 +54,18 @@ describe(".meta()", () => {
             yield 1;
         });
 
+        expect(procedureMeta(createPin)).toStrictEqual({ rateLimit: "pins/create" });
+        expect(procedureMeta(watch)).toStrictEqual({ rateLimit: "pins/watch" });
+        expect(procedureMeta(c.query.query(() => 1))).toBeUndefined();
         expect(createPin).not.toHaveProperty("meta");
-        expect(watch).not.toHaveProperty("meta");
-        expect(c.query.query(() => 1)).not.toHaveProperty("meta");
+        // A wrapper that re-tags a registration by spreading it keeps the declaration.
+        expect(procedureMeta({ ...createPin, visibility: "internal" })).toStrictEqual({ rateLimit: "pins/create" });
+    });
+
+    it("refuses to answer for a lazily registered function whose meta is not loaded", () => {
+        expect.assertions(1);
+
+        expect(() => procedureMeta({ [PROCEDURE_META]: UNLOADED_META, kind: "query" })).toThrow(/only readable after the module loads/u);
     });
 
     // The SAME object reaches every request's `ctx.meta`, so a middleware that

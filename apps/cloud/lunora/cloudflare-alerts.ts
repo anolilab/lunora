@@ -154,7 +154,7 @@ const recordNotificationsRead = async (context: ActionContext, id: Id<"cloudflar
         return;
     }
 
-    await context.db.patch(id, { permissions: [...fresh.permissions, "notifications"] });
+    await context.db.patch("cloudflareAccounts", id, { permissions: [...fresh.permissions, "notifications"] });
     await context.db.insert("auditLog", {
         action: "cloudflare_account.permission_seen",
         actorUserId,

@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -63,14 +63,14 @@ const root = mountStudio({ baseUrl: "https://my-app.workers.dev" });
 // root.unmount() to tear it down
 ```
 
-`mountStudio` constructs a `LunoraClient`, manages the admin token, and renders the whole console. To embed in your own React tree, render `<StudioApp>` (same self-contained shell) or compose `<Studio>` and the individual panels under a `<LunoraProvider>`:
+`mountStudio` constructs a `LunoraAdminClient`, manages the admin token, and renders the whole console. To embed in your own React tree, render `<StudioApp>` (same self-contained shell) or compose `<Studio>` and the individual panels under a `<LunoraProvider>`. `<Studio>` and every panel need a `LunoraAdminClient` (from `@lunora/client/admin`) in that provider; a plain `LunoraClient` has no admin methods, and they refuse it:
 
 ```tsx
-import { LunoraClient } from "@lunora/client";
+import { LunoraAdminClient } from "@lunora/client/admin";
 import { LunoraProvider } from "@lunora/react";
 import { Studio } from "@lunora/studio";
 
-const client = new LunoraClient({ url: "https://my-app.workers.dev" });
+const client = new LunoraAdminClient({ url: "https://my-app.workers.dev" });
 
 // `functions` populate the runner + API tabs; `kind` is a compile-time
 // phantom, so it must be named here.
@@ -116,11 +116,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora studio package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora studio package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/studio?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/studio

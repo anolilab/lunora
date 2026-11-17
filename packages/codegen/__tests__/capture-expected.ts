@@ -19,7 +19,18 @@ for (const [fixture, goldenDirectory, only] of GOLDEN_FIXTURES) {
     mkdirSync(expectedDirectory, { recursive: true });
 
     for (const [file, key] of GOLDEN_OUTPUTS.filter(([name]) => only === undefined || only.includes(name))) {
-        writeFileSync(join(expectedDirectory, file), result.generated[key], "utf8");
+        const payload = result.generated[key];
+
+        if (typeof payload !== "string") {
+            throw new TypeError(`Golden output ${key} must be a string`);
+        }
+
+        writeFileSync(join(expectedDirectory, file), payload, "utf8");
+    }
+
+    // `live.ts` exists only for a project that declares a live stream, so it is captured on top of the shared outputs.
+    if (result.generated.live !== "") {
+        writeFileSync(join(expectedDirectory, "live.ts"), result.generated.live, "utf8");
     }
 
     // The workdir lives under `__tests__/fixtures` (see `makeFixtureWorkdir`), so

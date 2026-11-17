@@ -1,6 +1,6 @@
 {
     "name": "@lunora/payment",
-    "version": "1.0.0-alpha.210",
+    "version": "1.0.0-alpha.275",
     "description": "Provider-agnostic payments for Lunora: Stripe-first adapter, webhook sync, and subscription/payment state machine",
     "keywords": [
         "billing",
@@ -15,7 +15,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -75,9 +75,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -86,14 +84,14 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/server": "1.0.0-alpha.206",
-        "@lunora/values": "1.0.0-alpha.66",
+        "@lunora/server": "^1.0.0-alpha.269",
+        "@lunora/values": "^1.0.0-alpha.95",
         "dinero.js": "catalog:payment"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
-        "@lunora/shard-engine": "1.0.0-alpha.131",
+        "@lunora/shard-engine": "^1.0.0-alpha.199",
         "@polar-sh/sdk": "catalog:payment",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -103,6 +101,7 @@
         "dodopayments": "catalog:payment",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "fast-check": "catalog:test",
         "stripe": "catalog:payment",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
@@ -113,7 +112,7 @@
         "autumn-js": "^1.2.0",
         "creem": "^1.5.0",
         "dodopayments": "^2.41.0",
-        "stripe": "^22.0.0"
+        "stripe": "^23.0.0"
     },
     "peerDependenciesMeta": {
         "@polar-sh/sdk": {

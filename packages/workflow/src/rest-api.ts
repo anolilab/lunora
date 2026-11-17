@@ -20,8 +20,10 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
 import { capErrorBody } from "../../../shared/cap-error-body";
 import { cloudflareRestRequest } from "../../../shared/cloudflare-rest";
+import { RESERVED_EVENT_TYPE_PREFIX } from "./define-event";
 import type { WorkflowInstanceStatus } from "./types";
 
 /**
@@ -35,6 +37,7 @@ const KNOWN_STATUSES = {
     errored: true,
     paused: true,
     queued: true,
+    rollingBack: true,
     running: true,
     terminated: true,
     unknown: true,
@@ -88,8 +91,14 @@ const toStep = (raw: Record<string, unknown>): WorkflowStepDetail => {
     };
 };
 
-/** The lifecycle mutations the REST API exposes via `PATCH .../instances/{id}`. */
-export type WorkflowInstanceAction = "pause" | "resume" | "terminate";
+/** The lifecycle mutations the REST API exposes via `PATCH .../instances/{id}/status`. */
+export type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
+
+/** The instance `POST .../instances` created: its id and the status it starts in. */
+export interface WorkflowInstanceCreated {
+    id: string;
+    status: WorkflowInstanceStatus;
+}
 
 /** Configuration for a {@link WorkflowsRestClient}. */
 export interface WorkflowsRestConfig {
@@ -160,8 +169,17 @@ export class WorkflowsRestError extends LunoraError {
 
 /** The observe client: list instances, read one instance's steps, and (with Edit scope) mutate its status. */
 export interface WorkflowsRestClient {
+    /** Start a new instance. `params` is sent JSON-encoded, as the instance's event payload. */
+    createInstance: (args: { instanceId?: string; params?: unknown; workflowName: string }) => Promise<WorkflowInstanceCreated>;
     getInstance: (args: { instanceId: string; workflowName: string }) => Promise<WorkflowInstanceDetail>;
     listInstances: (args: { page?: number; perPage?: number; status?: WorkflowInstanceStatus; workflowName: string }) => Promise<WorkflowInstancePage>;
+    /** Deliver an event to a running instance's matching `waitForEvent`. `payload` is the JSON body. */
+    sendEvent: (args: {
+        eventType: string;
+        instanceId: string;
+        payload?: unknown;
+        workflowName: string;
+    }) => Promise<{ instanceId: string; timestamp?: string }>;
     setInstanceStatus: (args: { action: WorkflowInstanceAction; instanceId: string; workflowName: string }) => Promise<{ status: WorkflowInstanceStatus }>;
 }
 
@@ -238,7 +256,7 @@ export const createWorkflowsRestClient = (config: WorkflowsRestConfig): Workflow
             // not on the instance itself — Cloudflare's API reference:
             // PATCH /accounts/{account_id}/workflows/{workflow_name}/instances/{instance_id}/status
             // (https://developers.cloudflare.com/api/resources/workflows/subresources/instances/subresources/status/methods/edit/).
-            // The instance path has no PATCH handler, so pausing/resuming/terminating
+            // The instance path has no PATCH handler, so pausing/resuming/restarting/terminating
             // from the studio reached an endpoint that could never act on it.
             const body = await request(`/${encodeURIComponent(workflowName)}/instances/${encodeURIComponent(instanceId)}/status`, {
                 body: JSON.stringify({ status: action }),
@@ -247,6 +265,42 @@ export const createWorkflowsRestClient = (config: WorkflowsRestConfig): Workflow
             const result = (body["result"] ?? {}) as Record<string, unknown>;
 
             return { status: toStatus(result["status"]) };
+        },
+        createInstance: async ({ instanceId, params, workflowName }) => {
+            // A forged marker here would reach the child's event.payload and spoof a ctx.parallel completion.
+            if (hasBranchMarker(params)) {
+                throw new LunoraError("BAD_REQUEST", `@lunora/workflow: params ${BRANCH_MARKER_REJECTION}`, { status: 400 });
+            }
+
+            const payload = {
+                ...(instanceId === undefined ? {} : { instance_id: instanceId }),
+                ...(params === undefined ? {} : { params: JSON.stringify(params) }),
+            };
+            const body = await request(`/${encodeURIComponent(workflowName)}/instances`, { body: JSON.stringify(payload), method: "POST" });
+            const result = (body["result"] ?? {}) as Record<string, unknown>;
+            const id = asString(result["id"]) ?? instanceId;
+
+            if (id === undefined) {
+                throw new LunoraError("WORKFLOWS_REST_ERROR", "Cloudflare Workflows create response carried no instance id", { status: 502 });
+            }
+
+            return { id, status: toStatus(result["status"]) };
+        },
+        sendEvent: async ({ eventType, instanceId, payload, workflowName }) => {
+            // `lunora:` is the framework's own namespace: a forged `lunora:branch:<id>` event would complete a parent's ctx.parallel join.
+            if (eventType.startsWith(RESERVED_EVENT_TYPE_PREFIX)) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `Workflows event type "${eventType}" is reserved — the "${RESERVED_EVENT_TYPE_PREFIX}" prefix belongs to the framework`,
+                    { status: 400 },
+                );
+            }
+
+            const path = `/${encodeURIComponent(workflowName)}/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventType)}`;
+            const body = await request(path, { body: JSON.stringify(payload === undefined ? {} : payload), method: "POST" });
+            const result = (body["result"] ?? {}) as Record<string, unknown>;
+
+            return { instanceId: asString(result["instanceId"]) ?? instanceId, timestamp: asString(result["timestamp"]) };
         },
     };
 };

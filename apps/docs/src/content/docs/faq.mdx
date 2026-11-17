@@ -1,0 +1,40 @@
+---
+title: FAQ
+description: Short answers to the questions people ask before adopting Lunora, with links to the pages that go deeper.
+---
+
+## Is Lunora open source?
+
+Yes. The framework packages are licensed under Apache-2.0. You can read the
+source, fork it, and self-host it. See [Self-host, or use Lunora Cloud](/docs/overview#self-host-or-use-lunora-cloud).
+
+## Can I run Lunora on my own Cloudflare account?
+
+Yes. A Lunora app is Cloudflare Workers and Durable Objects in your account, so
+your data stays in infrastructure you control. [Deployment](/docs/deployment)
+covers the steps.
+
+## Is Lunora production-ready?
+
+No, not yet. Lunora is in alpha, so expect breaking changes before the first
+stable release. The [overview](/docs/overview#where-its-rough) lists what is
+still rough.
+
+## Does Lunora run on Cloudflare's free plan?
+
+Yes, for small apps. An app with little traffic stays within the free plan. Past
+its limits you move to Workers Paid, which starts at $5 a month. The
+[cost guide](/docs/cost) lists both sets of limits.
+
+## Can one app scale past a single Durable Object?
+
+Yes. A new app runs on one shard. `.shardBy()` splits a table across more
+Durable Objects, and `.global()` moves a table to Cloudflare D1 for data that
+every shard reads. See [sharding](/docs/concepts/sharding).
+
+## How do I move an existing app to Lunora?
+
+There is a guide for each source: [from Convex](/docs/migrating/from-convex),
+[from Firebase](/docs/migrating/from-firebase), and
+[from Supabase](/docs/migrating/from-supabase). Each maps the schema, reads and
+writes, and auth. The Firebase guide also covers importing your data.

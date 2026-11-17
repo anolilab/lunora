@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -94,8 +94,10 @@ client.close();
 ## Related
 
 - [`@lunora/react`](https://www.npmjs.com/package/@lunora/react) — React hooks built on this client.
-- `@lunora/client/query` — the shared live-query state machine every UI adapter builds on (subpath of this package).
+- `@lunora/client/query` — the shared live-query state machine every UI adapter builds on, plus the TanStack Query key contract and `lunoraQueryOptions` factory (subpath of this package).
+- `@lunora/client/auth` — the identity store and auth-gate contract, plus the framework-neutral core of the admin/organization list hooks (subpath of this package).
 - `@lunora/client/ssr` — server-side preloading over this client's HTTP transport (subpath of this package).
+- `@lunora/client/admin` — `LunoraAdminClient`, a `LunoraClient` with the deployment-admin surface (functions, scheduler, storage, KV, vectors, logs, better-auth admin) the Studio uses. Kept off `LunoraClient` so apps don't ship it.
 
 ## Supported Node.js Versions
 
@@ -119,11 +121,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora client package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora client package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/client?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/client

@@ -41,7 +41,7 @@ const makeBucket = () => {
 
 type Bucket = ReturnType<typeof makeBucket>;
 
-const SECRET = "test-secret-0123456789abcdef";
+const SECRET = "test-secret-0123456789abcdef"; // secret-scanner:allow -- test fixture, not a real credential
 const USAGE_ALERT = JSON.stringify({ alert_type: "billing_usage_alert", name: "Lunora usage: Workers requests", policy_id: "p1" });
 const SCHEDULE = { cron: "0 * * * *" };
 /** The guard trusts its last read of the pause flag for 30 s; a test that flips the flag steps past it. */

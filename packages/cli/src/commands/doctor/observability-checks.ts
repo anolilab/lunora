@@ -48,12 +48,15 @@ const checkObservabilitySampling = (parsed: WranglerConfig | undefined, findings
     }
 
     for (const [name, environment] of Object.entries(parsed.env ?? {})) {
+        // A null env block is read as written and has no block of its own.
+        const observability = (environment as WranglerConfig | null | undefined)?.observability;
+
         // An env without its own block inherits the top level, already counted above.
-        if (environment.observability === undefined) {
+        if (observability === undefined) {
             continue;
         }
 
-        const signals = fullSamplingSignals(environment.observability);
+        const signals = fullSamplingSignals(observability);
 
         if (signals.length > 0) {
             scopes.push(`${signals.join(" + ")} (env.${name})`);

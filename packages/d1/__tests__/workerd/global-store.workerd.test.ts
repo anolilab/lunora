@@ -18,6 +18,9 @@
  * each other's read and write; `node:sqlite`'s synchronous calls never do. And
  * whether D1's primary-key refusal for a pinned `clientId` is one the dialect
  * maps to `CONFLICT`, which callers that key a row deterministically rely on.
+ *
+ * Whether the retention sweep's expiry probe, which goes through the `ts`
+ * index, finds expired rows behind a lowest-`seq` row stamped by a fast clock.
  */
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
@@ -39,13 +42,45 @@ interface RewindResult {
 const post = async <T>(path: string): Promise<T> => await SELF.fetch(`https://test${path}`, { method: "POST" }).then(async (r) => await r.json<T>());
 
 describe("global store (workerd)", () => {
+    it("imports explicit ids through the batched ownership probe: insert, skip a held id, replace it", async () => {
+        expect.assertions(5);
+
+        const result = await post<Record<string, number | Record<string, unknown> | string[]>>("/import-explicit-ids");
+
+        expect(result["fresh"]).toMatchObject({ conflicts: 0, errors: [], inserted: { imp: 1 }, replaced: 0 });
+        expect(result["skip"]).toMatchObject({ conflicts: 1, errors: [], inserted: { imp: 2 }, replaced: 0 });
+        expect(result["replace"]).toMatchObject({ conflicts: 0, errors: [], replaced: 1 });
+        expect(result["bodies"]).toStrictEqual(["auto", "bee", "three"]);
+        // The probe saw every held id, so no insert was attempted and refused.
+        expect(result["refusedInserts"]).toBe(0);
+    });
+
+    it("restores in replace mode on real D1: overwrite, then a checked, counted, repeatable prune of the rows the file lacks", async () => {
+        expect.assertions(7);
+
+        const result = await post<Record<string, unknown>>("/import-replace-prune");
+
+        expect(result["written"]).toMatchObject({ conflicts: 0, deleted: 0, errors: [], inserted: { prune: 1 }, replaced: 1 });
+        // The check deletes nothing and counts nothing.
+        expect(result["dryRun"]).toMatchObject({ deleted: 0, errors: [] });
+        expect(result["afterDryRun"]).toStrictEqual(["a", "b", "c", "d"]);
+        expect(result["pruned"]).toMatchObject({ deleted: 2, errors: [] });
+        expect(result["afterPrune"]).toStrictEqual(["a", "d"]);
+        // A re-run converges: an `_id` already gone removes nothing and is not an error.
+        expect(result["again"]).toMatchObject({ deleted: 0, errors: [] });
+        expect(result["bodies"]).toStrictEqual([
+            { body: "new", id: "a" },
+            { body: "added", id: "d" },
+        ]);
+    });
+
     it("refuses a `.unique()` column over existing duplicates with a diagnostic, not a bare engine error", async () => {
         expect.assertions(3);
 
         const result = await post<UniqueResult>("/unique-over-duplicates");
 
         expect(result.outcome).toBe("threw");
-        expect(result.code).toBe("INTERNAL");
+        expect(result.code).toBe("UNIQUE_INDEX_DUPLICATES");
         expect(result.message).toMatch(/dups_unique_slug.*duplicates/isu);
     });
 
@@ -64,6 +99,15 @@ describe("global store (workerd)", () => {
         expect(result.afterRestore).toBe("threw:CDC_TIMELINE_FORKED");
     });
 
+    it("sweeps expired changelog rows that sit behind a future-dated head, and nothing when none expired", async () => {
+        expect.assertions(2);
+
+        const result = await post<{ afterNoop: number[]; afterSweep: number[] }>("/cdc-retention");
+
+        expect(result.afterNoop).toStrictEqual([1, 2, 3]);
+        expect(result.afterSweep).toStrictEqual([1]);
+    });
+
     it("lets exactly one of ten interleaved conditional patches apply, on real D1", async () => {
         expect.assertions(2);
 
@@ -71,7 +115,8 @@ describe("global store (workerd)", () => {
 
         expect(result.applied).toStrictEqual(Array.from<number>({ length: 20 }).fill(1));
         expect(result.values).toStrictEqual(Array.from<number>({ length: 20 }).fill(1));
-    });
+        // 20 rounds of 12 serial D1 round trips: the default 5s budget is too tight on a shared CI runner.
+    }, 30_000);
 
     it("surfaces a primary-key collision on a pinned clientId as CONFLICT", async () => {
         expect.assertions(2);

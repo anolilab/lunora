@@ -530,7 +530,7 @@ export type QueueContentType = "bytes" | "json" | "text" | "v8";
 export interface QueueSendOptions {
     /** Wire serialization for this message (defaults to the queue's content type). */
     contentType?: QueueContentType;
-    /** Per-message delivery delay in seconds (0–43200, i.e. up to 12 hours). */
+    /** Per-message delivery delay in seconds (0–86400, i.e. up to 24 hours). */
     delaySeconds?: number;
 }
 

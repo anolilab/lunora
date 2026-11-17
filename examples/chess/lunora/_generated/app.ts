@@ -2,13 +2,12 @@
 // Run `lunora codegen` to regenerate.
 
 import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
-import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
+import type * as LunoraAuthModule from "./authModule.js";
+import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, SecurityOptions, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "lunorash/runtime";
 import { createWorker, resolveLogArchiveFromEnv, memoizeIdentity } from "lunorash/runtime";
 
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
-import { openApiSpec } from "./openapi.js";
 import { createShardDO } from "./shard.js";
 
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
@@ -19,6 +18,21 @@ type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
 
 /** The identity memo per `env` object, owned by one assembled worker. */
 type IdentityMemoStore = WeakMap<object, ReturnType<typeof memoizeIdentity>>;
+
+/** What the worker reads only once a request arrives: loaded then, not at isolate startup (Cloudflare caps startup at 1 s of CPU). */
+interface DeferredModules {
+    auth: typeof LunoraAuthModule;
+}
+
+let deferredModules: Promise<DeferredModules> | undefined;
+
+/** Loads {@link DeferredModules} once per isolate; every entry that builds the worker awaits it first. */
+const loadDeferredModules = (): Promise<DeferredModules> =>
+    (deferredModules ??= (async (): Promise<DeferredModules> => {
+        return {
+            auth: await import("./authModule.js"),
+        };
+    })());
 
 /** `.auth(...)` declaration — better-auth options plus the storage the adapter reads. Give it `d1` (the default) or `namespace` (a Durable Object that hosts the auth tables), never both. The builder owns the lazy build + `ensureMigrated` dance and wires `authHandler` / `resolveIdentity` / `authAdmin`. */
 interface AuthDeclaration<Env> {
@@ -49,9 +63,11 @@ interface ComposedApp extends LunoraWorker {
  * first request so per-isolate singletons are built once.
  */
 class AppBuilder<Env extends object> {
+    private adminRevocationsSelector?: Selector<Env, ShardNamespaceLike>;
     private adminToken?: Selector<Env, string>;
     private authDeclaration?: AuthDeclaration<Env>;
     private cdcEnabled = false;
+    private deliveryAuthorizationSelector?: ShardConfig["deliveryAuthorization"];
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
     private observabilitySink?: ShardConfig["observability"];
@@ -119,6 +135,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** Authorize each RPC/subscription read and fence its eventual delivery against durable authority epochs. */
+    public deliveryAuthorization(selector: (env: Env) => ReturnType<NonNullable<ShardConfig["deliveryAuthorization"]>>): this {
+        this.deliveryAuthorizationSelector = selector as NonNullable<ShardConfig["deliveryAuthorization"]>;
+
+        return this;
+    }
+
     /** Wire better-auth — the builder lazily builds the instance, runs `ensureMigrated`, and dispatches `/api/auth/*` inside the worker (instrumented for the auth-failure SLO). Pass `d1` for the D1-backed default, or `namespace` + `internalSecret` to host the auth tables in a Durable Object (what `@better-auth/scim` needs). */
     public auth(declaration: AuthDeclaration<Env>): this {
         // Reject the ambiguous and the empty shapes here rather than at the first
@@ -178,6 +201,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** The `AdminRevocationDO` namespace (typically `env.ADMIN_REVOCATIONS`). Records revoked named admin tokens where a point-in-time restore of the default shard cannot rewind them. Without it no named admin token can be created and any that exist are refused. */
+    public adminRevocations(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.adminRevocationsSelector = selector;
+
+        return this;
+    }
+
     /** Materialise the standalone Cloudflare worker + `ShardDO` class. */
     public build(): ComposedApp {
         return this.assemble();
@@ -190,6 +220,7 @@ class AppBuilder<Env extends object> {
             reactiveCache: this.reactiveCacheConfig,
             ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
             ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
         });
 
@@ -199,8 +230,8 @@ class AppBuilder<Env extends object> {
         let worker: LunoraWorker | null = null;
         let auth: LunoraAuth | null = null;
         let authInit: Promise<void> | null = null;
-        // One memo per env for THIS assembled worker: a framework-hosted worker rebuilds its options per
-        // request and must reuse it, but a second `assemble()` has its own auth closure and must not share.
+        // One memo per env for THIS assembled worker: every worker it builds reuses it, but a second
+        // `assemble()` has its own auth closure and must not share.
         const identityMemos: IdentityMemoStore = new WeakMap();
 
         const initAuth = async (env: Env): Promise<void> => {
@@ -232,6 +263,7 @@ class AppBuilder<Env extends object> {
             // On a first boot against an unmigrated database this means better-auth's
             // eager schema check runs BEFORE the migration, so one
             // "the auth tables do not match…" line on a cold start is expected.
+            const { createAuth, lunoraD1Adapter } = (await loadDeferredModules()).auth;
             const requestAuth = createAuth({ ...this.authDeclaration.options(env), database: lunoraD1Adapter(d1(env) as never) });
 
             // Loaded on first request, not at module evaluation: the migrator pulls in kysely and
@@ -255,24 +287,41 @@ class AppBuilder<Env extends object> {
                 throw error;
             }));
 
-        const buildWorker = (env: Env): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos));
+        // For host-owned events (cron, queue, mail), which must not go down with auth. The failure is
+        // logged each time: auth retries on the next event, and an isolate that only ever sees these
+        // would otherwise repeat it with nothing saying why the admin and auth surfaces are missing.
+        const authReady = (env: Env): Promise<boolean> =>
+            ensureAuth(env).then(
+                () => true,
+                (error: unknown) => {
+                    console.error("[lunora] auth failed to initialise; this event runs without auth:", error);
+
+                    return false;
+                },
+            );
+
+        const buildWorker = (env: Env, deferred: DeferredModules): LunoraWorker => createWorker(this.buildWorkerOptions(env, () => auth, identityMemos, deferred));
 
         const composed: ComposedApp = {
             ShardDO,
             fetch: async (request: Request, rawEnv: unknown, context: ExecutionContextLike): Promise<Response> => {
                 const env = rawEnv as Env;
+                const deferred = await loadDeferredModules();
                 await ensureAuth(env);
-                worker ??= buildWorker(env);
+                worker ??= buildWorker(env, deferred);
 
                 return worker.fetch(request, rawEnv, context);
             },
             scheduled: async (controller: ScheduledControllerLike, rawEnv: unknown, context: ExecutionContextLike): Promise<void> => {
-                worker ??= buildWorker(rawEnv as Env);
+                const deferred = await loadDeferredModules();
+                const target = (await authReady(rawEnv as Env)) ? (worker ??= buildWorker(rawEnv as Env, deferred)) : buildWorker(rawEnv as Env, deferred);
 
-                return worker.scheduled(controller, rawEnv, context);
+                return target.scheduled(controller, rawEnv, context);
             },
-            serverQuery: (request, rawEnv, reference, args, options) => {
-                worker ??= buildWorker(rawEnv as Env);
+            serverQuery: async (request, rawEnv, reference, args, options) => {
+                const deferred = await loadDeferredModules();
+                await ensureAuth(rawEnv as Env);
+                worker ??= buildWorker(rawEnv as Env, deferred);
 
                 return worker.serverQuery(request, rawEnv, reference, args, options);
             },
@@ -288,18 +337,22 @@ class AppBuilder<Env extends object> {
     }
 
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
-    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore): WorkerOptions {
+    private buildWorkerOptions(env: Env, getAuth: () => LunoraAuth | null, identityMemos: IdentityMemoStore, deferred: DeferredModules): WorkerOptions {
         const options: WorkerOptions = {
+            aiChatBinding: (env as Record<string, unknown>)["AI"] as WorkerOptions["aiChatBinding"],
+            aiOptInLevel: (env as Record<string, unknown>)["LUNORA_AI_OPT_IN"] as WorkerOptions["aiOptInLevel"],
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
-            openApiSpec,
+            openApiSpec: () => import("./openapi.js").then((module) => module.openApiSpec),
             ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
         };
 
-        if (this.adminToken) {
-            options.adminToken = this.adminToken(env);
+        const adminToken = this.adminToken?.(env);
+
+        if (adminToken !== undefined) {
+            options.adminToken = adminToken;
         }
 
         const tableSharding = new Map<string, ShardingInfo>([
@@ -313,11 +366,22 @@ class AppBuilder<Env extends object> {
         options.listSchemaTables = () => [...tableSharding.keys()];
         options.resolveTableSharding = (table) => tableSharding.get(table);
 
-        options.logArchive = resolveLogArchiveFromEnv(env);
+        const adminRevocations = this.adminRevocationsSelector?.(env);
+
+        if (adminRevocations) {
+            options.adminRevocations = adminRevocations;
+        }
+
+        const logArchive = resolveLogArchiveFromEnv(env);
+
+        if (logArchive !== undefined) {
+            options.logArchive = logArchive;
+        }
 
         // Captured before the branch so the narrowing survives — reading
         // `this.authDeclaration.namespace` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
+        const { authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -327,16 +391,20 @@ class AppBuilder<Env extends object> {
             // to it. `createDoAuthWiring` is a tested function in `@lunora/auth` rather
             // than more emitted code: request-path logic in generated output can only be
             // typechecked, never unit-tested.
+            const discoveryPaths = authDiscoveryPathsFor(authDeclaration, env);
+            const internalSecret = authDeclaration.internalSecret?.(env);
+            const namespace = authNamespace(env);
+            const objectName = authDeclaration.objectName?.(env);
             const authWiring = createDoAuthWiring({
                 // The OAuth discovery documents (an `mcp()` resource's metadata, the
                 // issuer's) are derived here from the declared options, so the worker
                 // forwards only those exact paths and no other probe reaches the object.
-                // Memoised on the declaration: a framework-hosted worker rebuilds these
-                // options per request, and `options(env)` rebuilds every plugin.
-                discoveryPaths: authDiscoveryPathsFor(authDeclaration, env),
-                internalSecret: authDeclaration.internalSecret?.(env),
-                namespace: authNamespace(env),
-                objectName: authDeclaration.objectName?.(env),
+                // Memoised on the declaration: each worker built for a new `env` runs
+                // these options again, and `options(env)` rebuilds every plugin.
+                discoveryPaths,
+                internalSecret,
+                namespace,
+                ...(objectName === undefined ? {} : { objectName }),
             });
 
             options.authHandler = authWiring.authHandler;
@@ -375,43 +443,17 @@ class AppBuilder<Env extends object> {
                     return null;
                 }
 
-                const session = await auth.api.getSession({ headers: (request as Request).headers });
-
-                if (!session?.user?.id) {
-                    return null;
-                }
-
-                // `role` rides along so `rls(policies, { roles })` and `auth.can(...)`
-                // work on this wiring without a hand-written resolver. better-auth's
-                // `admin()` plugin owns that column (comma-joined for multiple roles)
-                // and only an administrator can write it; it is absent when the plugin
-                // is off, which reads as no roles.
-                //
-                // `expiresAtMs` is the socket credential expiry the runtime forwards
-                // as `x-lunora-identity-exp`. Without it the DO's expiry check never
-                // fires, so a signed-out, banned or lapsed user keeps streaming their
-                // RLS-scoped rows over an already-open WebSocket while every HTTP call
-                // is anonymous. better-auth hands back a `Date`; anything else means
-                // the adapter did not hydrate it, and omitting beats guessing.
-                const expiresAt = session.session.expiresAt;
-                // `email` and `name` are the claims `ctx.auth.getIdentity()` is
-                // documented to carry ("email, name, roles, custom claims"). Without
-                // them the documented `me` query — `identity?.email` — resolves
-                // `undefined` on the built-in wiring. Empty strings are dropped so an
-                // absent claim reads as absent rather than as "".
-                const user = session.user as { email?: unknown; name?: unknown; role?: unknown };
-
-                return {
-                    ...(typeof user.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
-                    ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
-                    ...(typeof user.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
-                    role: user.role,
-                    userId: session.user.id,
-                };
+                // `resolveSessionIdentity` is shared with the DO wiring, so both modes put
+                // the same claims (role, expiry, profile, and the active organization and
+                // team checked against membership) on the identity, and it is unit-tested
+                // where this template cannot be.
+                return resolveSessionIdentity(auth, (request as Request).headers);
             };
             const authInstance = getAuth();
 
-            options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
+            if (authInstance) {
+                options.authAdmin = createAuthAdmin(authInstance);
+            }
             options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
             // better-auth's tables for the admin export / import (`$auth`). A table the
             // schema declares (`authTables(...)`) already travels as a `.global()` row.
@@ -480,9 +522,16 @@ class AppBuilder<Env extends object> {
                 memo = memoizeIdentity(options.resolveIdentity, {
                     // better-auth resolves the session from ALL request headers, so the key
                     // must cover every header a supported plugin authenticates on: the
-                    // session cookie, `Authorization` (bearer / jwt) and `x-api-key` (apiKey).
+                    // session cookie and `Authorization` (bearer / jwt). `x-api-key` requests are never keyed (see below).
                     cacheKey: (request: Request) => {
-                        const parts = ["authorization", "cookie", "x-api-key"].map((name) => request.headers.get(name) ?? "");
+                        // A revoked API key must stop resolving on its next call. Revocation is a row
+                        // delete with nothing in the cookie to change, so a key request is never
+                        // memoised across requests; the lookup is one row read per call.
+                        if (request.headers.get("x-api-key") !== null) {
+                            return undefined;
+                        }
+
+                        const parts = ["authorization", "cookie"].map((name) => request.headers.get(name) ?? "");
 
                         if (parts.every((part) => part === "")) {
                             return undefined;
@@ -506,6 +555,8 @@ class AppBuilder<Env extends object> {
             options.resolveIdentity = memo;
         }
 
+        options.agentWorkflows = [];
+
         for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));
         }
@@ -527,14 +578,18 @@ interface LunoraConfig<Env extends object = object> {
     advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
     /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
-    /** Codegen's source walk. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as `target`. */
-    codegen?: { exclude?: string[] };
+    /** Codegen settings. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. `lazyFunctions: true` emits the per-module lazy function registry for every command and bundler plugin that generates or checks `_generated/`. Literals, for the same reason as `target`. */
+    codegen?: { exclude?: string[]; lazyFunctions?: boolean };
     /** Host the shard, scheduler and shard registry in ONE Durable Object class (`merge: true`, plan 462) — before the first deploy only. A literal, for the same reason as `target`. */
     durableObjects?: { merge?: boolean };
     /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */
     remote?: boolean;
     /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class (`rpc: false` binds that class but calls it with plain `fetch`, without importing the service's sources). Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
     services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Baseline security headers for the Worker AND the static assets' generated `_headers` (`crossOriginOpenerPolicy`, `frameAncestors`, `csp`, …; `false` omits a header, `headers: false` all of them). A `security.headers` set in code wins. Literals, for the same reason as `target`. */
+    security?: { headers?: SecurityOptions["headers"] };
+    /** Studio settings. `companion: true` emits the companion Worker that serves the advisor procedure list to a hosted Studio, bound to the app as `ADVISOR_COMPANION`. A literal, for the same reason as `target`. */
+    studio?: { companion?: boolean };
     /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. Must be a literal: `runCodegen` resolves it synchronously by PARSING this file, so a computed value is not seen — `lunora verify` reports `platform_unreadable_target` rather than defaulting in silence. */
     target?: string;
 }

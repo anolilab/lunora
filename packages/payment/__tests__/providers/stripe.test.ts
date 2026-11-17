@@ -1,6 +1,7 @@
 import type { Stripe } from "stripe";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { LunoraPaymentError } from "../../src/errors";
 import { money } from "../../src/money";
 import type { StripeClientLike } from "../../src/providers/stripe";
 import { createStripeAdapter } from "../../src/providers/stripe";
@@ -45,6 +46,9 @@ const makeClient = (calls: RecordedCall[]): Stripe =>
                     calls.push({ args: [parameters, options], name: "checkout" });
 
                     return { id: "cs_1", url: "https://checkout.test" };
+                },
+                retrieve: async (id: string) => {
+                    return { id, status: "open", url: "https://checkout.test" };
                 },
             },
         },
@@ -102,11 +106,45 @@ const makeClient = (calls: RecordedCall[]): Stripe =>
     }) as unknown as Stripe;
 
 describe("stripe adapter", () => {
+    it("loads the client on the first provider call, once, not at construction", async () => {
+        expect.assertions(3);
+
+        const client = vi.fn<() => Stripe>(() => makeClient([]));
+        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+
+        expect(client).not.toHaveBeenCalled();
+
+        await Promise.all([
+            adapter.createPortalSession({ customerId: "cus_1", referenceId: "user_1", returnUrl: "https://x" }),
+            adapter.getPaymentStatus("pi_1"),
+        ]);
+
+        expect(client).toHaveBeenCalledTimes(1);
+
+        await adapter.getPaymentStatus("pi_1");
+
+        expect(client).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects with the loader's own error and retries the load on the next call", async () => {
+        expect.assertions(3);
+
+        const client = vi.fn<() => Promise<Stripe>>().mockRejectedValueOnce(new Error("Cannot find module 'stripe'"));
+
+        client.mockResolvedValue(makeClient([]));
+
+        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+
+        await expect(adapter.getPaymentStatus("pi_1")).rejects.toThrow("Cannot find module 'stripe'");
+        await expect(adapter.getPaymentStatus("pi_1")).resolves.toMatchObject({ provider: "stripe" });
+        expect(client).toHaveBeenCalledTimes(2);
+    });
+
     it("forwards an idempotency key and reference metadata on checkout", async () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         const result = await adapter.createCheckout({
             cancelUrl: "https://x/cancel",
@@ -125,11 +163,165 @@ describe("stripe adapter", () => {
         expect((checkout?.args[0] as { metadata?: Record<string, string> }).metadata?.referenceId).toBe("user_1");
     });
 
+    describe("checkout replay of a finished session", () => {
+        const request = {
+            cancelUrl: "https://x/cancel",
+            idempotencyKey: "checkout:stripe:user_1",
+            mode: "subscription" as const,
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        };
+
+        /**
+         * A client whose `checkout.sessions.create` answers with the queued responses, in order.
+         * `retrieve` reports each session's live status: the one in `current`, else the status it
+         * was created with, since Stripe's idempotent replay returns the stored creation body.
+         */
+        const replayingClient = (
+            calls: RecordedCall[],
+            responses: { id: string; status?: string; url: string }[],
+            current: Record<string, string> = {},
+        ): Stripe => {
+            const queue = [...responses];
+            const created = new Map(responses.map((response) => [response.id, response]));
+
+            return {
+                checkout: {
+                    sessions: {
+                        create: async (parameters: Record<string, unknown>, options?: { idempotencyKey?: string }) => {
+                            calls.push({ args: [parameters, options], name: "checkout" });
+
+                            return queue.shift();
+                        },
+                        retrieve: async (id: string) => {
+                            calls.push({ args: [id], name: "retrieve" });
+
+                            const session = created.get(id);
+
+                            return { ...session, status: current[id] ?? session?.status };
+                        },
+                    },
+                },
+            } as unknown as Stripe;
+        };
+
+        it("retries when a replayed session reads open but has since completed", async () => {
+            expect.assertions(2);
+
+            // The replay returns the stored creation body, which still says `open`.
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () =>
+                    replayingClient(
+                        calls,
+                        [
+                            { id: "cs_old", status: "open", url: "https://checkout.test/old" },
+                            { id: "cs_new", status: "open", url: "https://checkout.test/new" },
+                        ],
+                        { cs_old: "complete" },
+                    ),
+                webhookSecret: "whsec",
+            });
+
+            await expect(adapter.createCheckout(request)).resolves.toEqual({ id: "cs_new", provider: "stripe", url: "https://checkout.test/new" });
+            expect((calls.filter((call) => call.name === "checkout")[1]?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe(
+                "checkout:stripe:user_1:cs_old",
+            );
+        });
+
+        it.each(["complete", "expired"])("retries once under a derived key when the replayed session is %s", async (status) => {
+            expect.assertions(4);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () =>
+                    replayingClient(calls, [
+                        { id: "cs_old", status, url: "https://checkout.test/old" },
+                        { id: "cs_new", status: "open", url: "https://checkout.test/new" },
+                    ]),
+                webhookSecret: "whsec",
+            });
+
+            const result = await adapter.createCheckout(request);
+
+            expect(result).toEqual({ id: "cs_new", provider: "stripe", url: "https://checkout.test/new" });
+
+            const checkouts = calls.filter((call) => call.name === "checkout");
+
+            expect(checkouts).toHaveLength(2);
+            expect((checkouts[1]?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe("checkout:stripe:user_1:cs_old");
+            expect(checkouts[1]?.args[0]).toEqual(checkouts[0]?.args[0]);
+        });
+
+        it("returns an open session from a single call", async () => {
+            expect.assertions(2);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () => replayingClient(calls, [{ id: "cs_1", status: "open", url: "https://checkout.test/1" }]),
+                webhookSecret: "whsec",
+            });
+
+            await expect(adapter.createCheckout(request)).resolves.toEqual({ id: "cs_1", provider: "stripe", url: "https://checkout.test/1" });
+            expect(calls.filter((call) => call.name === "checkout")).toHaveLength(1);
+        });
+
+        it("rejects with PROVIDER_ERROR when the retry also replays a finished session", async () => {
+            expect.assertions(3);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () =>
+                    replayingClient(calls, [
+                        { id: "cs_old", status: "complete", url: "https://checkout.test/old" },
+                        { id: "cs_older", status: "expired", url: "https://checkout.test/older" },
+                    ]),
+                webhookSecret: "whsec",
+            });
+
+            const failure = await adapter.createCheckout(request).catch((error: unknown) => error);
+
+            expect(failure).toBeInstanceOf(LunoraPaymentError);
+            expect(failure).toMatchObject({ code: "PROVIDER_ERROR" });
+            expect(calls.filter((call) => call.name === "checkout")).toHaveLength(2);
+        });
+
+        it("does not retry a finished session when the request carries no idempotency key", async () => {
+            expect.assertions(2);
+
+            const calls: RecordedCall[] = [];
+            const adapter = createStripeAdapter({
+                client: () => replayingClient(calls, [{ id: "cs_old", status: "complete", url: "https://checkout.test/old" }]),
+                webhookSecret: "whsec",
+            });
+
+            await expect(adapter.createCheckout({ ...request, idempotencyKey: undefined })).resolves.toMatchObject({ id: "cs_old" });
+            expect(calls.filter((call) => call.name === "checkout")).toHaveLength(1);
+        });
+    });
+
+    it("forwards a checkout expiry in the seconds Stripe takes, and none when unset", async () => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
+        const request = { mode: "subscription" as const, priceId: "price_1", referenceId: "user_1", successUrl: "https://x/ok" };
+
+        await adapter.createCheckout({ ...request, expiresAt: 1_800_000_000_999 });
+        await adapter.createCheckout(request);
+
+        const sent = calls.filter((call) => call.name === "checkout").map((call) => (call.args[0] as { expires_at?: number }).expires_at);
+
+        expect(sent[0]).toBe(1_800_000_000);
+        expect(sent[1]).toBeUndefined();
+    });
+
     it("never lets caller metadata override the framework referenceId on checkout", async () => {
         expect.assertions(1);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         await adapter.createCheckout({
             cancelUrl: "https://x/cancel",
@@ -150,7 +342,7 @@ describe("stripe adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         await adapter.createCheckout({
             cancelUrl: "https://x/cancel",
@@ -180,7 +372,7 @@ describe("stripe adapter", () => {
     it("maps a captured intent to a payment session", async () => {
         expect.assertions(2);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const session = await adapter.capturePayment({ sessionId: "pi_1" });
 
@@ -191,7 +383,7 @@ describe("stripe adapter", () => {
     it("normalizes a verified payment_intent.succeeded webhook", async () => {
         expect.assertions(5);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const event = {
             created: 1_700_000_000,
@@ -213,7 +405,7 @@ describe("stripe adapter", () => {
     it("tags charge.refunded as an absolute (cumulative) refund total", async () => {
         expect.assertions(4);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const event = {
             data: { object: { amount_refunded: 700, currency: "usd", id: "ch_1", payment_intent: "pi_1" } },
@@ -231,7 +423,7 @@ describe("stripe adapter", () => {
     it("maps an `incomplete` subscription to a non-entitling state, not an active grant (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const event = {
             data: {
@@ -256,7 +448,7 @@ describe("stripe adapter", () => {
     it("carries every price id on a subscription webhook, and none at all when the list is truncated (regression)", async () => {
         expect.assertions(4);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const eventFor = (items: Record<string, unknown>) => {
             return {
@@ -292,7 +484,7 @@ describe("stripe adapter", () => {
     it("reads the billing period from the subscription item, not the top level (Stripe basil) (regression)", async () => {
         expect.assertions(2);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const start = 1_750_000_000;
         const end = 1_752_592_000;
@@ -319,7 +511,7 @@ describe("stripe adapter", () => {
     it("does not mark an `unpaid` subscription checkout active (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const event = {
             data: { object: { customer: "cus_1", id: "cs_1", mode: "subscription", payment_status: "unpaid", subscription: "sub_1" } },
@@ -335,7 +527,7 @@ describe("stripe adapter", () => {
     it("keys a payment-mode completed session on the payment intent id", async () => {
         expect.assertions(2);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const event = {
             data: {
@@ -350,10 +542,41 @@ describe("stripe adapter", () => {
         expect(action.sessionId).toBe("pi_1");
     });
 
+    it("does not record a setup-mode checkout session as a captured payment (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
+
+        // A setup session saves a card: no PaymentIntent, `no_payment_required`, and no money moves.
+        const event = {
+            data: { object: { customer: "cus_1", id: "cs_setup", mode: "setup", payment_status: "no_payment_required", setup_intent: "seti_1" } },
+            id: "evt_cs_setup",
+            type: "checkout.session.completed",
+        };
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        expect(action.type).toBe("unhandled");
+    });
+
+    it("does not record an async-settled setup-mode checkout session as a captured payment (regression)", async () => {
+        expect.assertions(1);
+
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
+
+        const event = {
+            data: { object: { customer: "cus_1", id: "cs_setup", mode: "setup", payment_status: "no_payment_required", setup_intent: "seti_1" } },
+            id: "evt_cs_setup_async",
+            type: "checkout.session.async_payment_succeeded",
+        };
+        const action = await adapter.parseWebhook({ headers: webhookHeaders, payload: JSON.stringify(event) });
+
+        expect(action.type).toBe("unhandled");
+    });
+
     it("still captures a fully discounted session, which never gets a payment intent (regression)", async () => {
         expect.assertions(3);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         // A 100%-off session settles as `no_payment_required` and Stripe creates NO PaymentIntent,
         // so deferring would drop the order entirely — it keeps the cs_… id it will always have.
@@ -384,7 +607,7 @@ describe("stripe adapter", () => {
     it("defers a completed session without a payment_intent to payment_intent.succeeded (regression)", async () => {
         expect.assertions(4);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         // Async payment methods (SEPA, ACH) can complete the session before the intent id is
         // attached — capturing under the cs_… id would double-count once pi_… lands.
@@ -425,7 +648,7 @@ describe("stripe adapter", () => {
     it("records an unpaid delayed-notification session as authorized, not captured (regression)", async () => {
         expect.assertions(4);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         // SEPA/ACH/Boleto/OXXO complete the session with `payment_status: "unpaid"` while the
         // PaymentIntent is still `processing` — the money has NOT settled. Recording that as
@@ -466,7 +689,7 @@ describe("stripe adapter", () => {
     it("captures a delayed-notification session on async_payment_succeeded (regression)", async () => {
         expect.assertions(3);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
         const session = {
             amount_total: 250_000,
             currency: "eur",
@@ -508,7 +731,7 @@ describe("stripe adapter", () => {
     it("fails a delayed-notification session on async_payment_failed (regression)", async () => {
         expect.assertions(3);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
         const session = {
             amount_total: 250_000,
             currency: "eur",
@@ -548,7 +771,7 @@ describe("stripe adapter", () => {
     it("does not entitle an unpaid subscription checkout on async_payment_failed (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const failed = await adapter.parseWebhook({
             headers: webhookHeaders,
@@ -566,7 +789,7 @@ describe("stripe adapter", () => {
     it("reverses a captured payment when a chargeback is lost (regression)", async () => {
         expect.assertions(4);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const captured = await adapter.parseWebhook({
             headers: webhookHeaders,
@@ -606,7 +829,7 @@ describe("stripe adapter", () => {
     it("leaves a won or still-open dispute alone", async () => {
         expect.assertions(2);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const won = await adapter.parseWebhook({
             headers: webhookHeaders,
@@ -634,7 +857,7 @@ describe("stripe adapter", () => {
     it("rejects an unsigned webhook", async () => {
         expect.assertions(1);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         await expect(adapter.parseWebhook({ headers: { get: () => null }, payload: "{}" })).rejects.toMatchObject({ code: "WEBHOOK_SIGNATURE_INVALID" });
     });
@@ -645,7 +868,7 @@ describe("stripe adapter", () => {
         // A bound-but-empty `STRIPE_WEBHOOK_SECRET` (an unset `.dev.vars` line, a wrangler var set
         // to `""`). The Stripe SDK does not validate the secret, so without the guard this event —
         // which the fake verifier happily parses — would be accepted and granted entitlements.
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "" });
 
         await expect(
             adapter.parseWebhook({
@@ -659,7 +882,7 @@ describe("stripe adapter", () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         await adapter.reportUsage?.({ customerId: "cus_1", featureId: "api_calls", idempotencyKey: "usage_1", quantity: 5, referenceId: "user_1" });
 
@@ -672,11 +895,25 @@ describe("stripe adapter", () => {
         expect((meterEvent?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe("usage_1");
     });
 
+    it.each([undefined, "  "])("refuses to report usage without a Stripe customer (%j) instead of sending an empty customer id", async (customerId) => {
+        expect.assertions(2);
+
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
+
+        // Stripe attributes a meter event only by `stripe_customer_id`; an empty one is accepted and
+        // billed to nobody, and the facade would then mark the row as forwarded.
+        await expect(
+            adapter.reportUsage?.({ customerId, featureId: "api_calls", idempotencyKey: "usage_1", quantity: 5, referenceId: "user_1" }),
+        ).rejects.toBeInstanceOf(LunoraPaymentError);
+        expect(calls.some((call) => call.name === "meterEvent")).toBe(false);
+    });
+
     it("cancels immediately (no atPeriodEnd) via subscriptions.cancel", async () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         const subscription = await adapter.cancelSubscription("sub_1", { idempotencyKey: "cancel_1" });
 
@@ -691,7 +928,7 @@ describe("stripe adapter", () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         const subscription = await adapter.cancelSubscription("sub_1", { atPeriodEnd: true, idempotencyKey: "cancel_2" });
 
@@ -709,7 +946,7 @@ describe("stripe adapter", () => {
         expect.assertions(1);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         await adapter.resumeSubscription("sub_1");
 
@@ -724,7 +961,7 @@ describe("stripe adapter", () => {
         expect.assertions(1);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         await adapter.resumeSubscription("sub_1", { idempotencyKey: "resume_2" });
 
@@ -737,7 +974,7 @@ describe("stripe adapter", () => {
         expect.assertions(1);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         await adapter.updateSubscription("sub_1", { priceId: "price_a" });
         await adapter.updateSubscription("sub_1", { priceId: "price_b" });
@@ -756,7 +993,7 @@ describe("stripe adapter", () => {
         expect.assertions(1);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         await adapter.updateSubscription("sub_1", { idempotencyKey: "plan_2", priceId: "price_new" });
 
@@ -769,7 +1006,7 @@ describe("stripe adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         const subscription = await adapter.resumeSubscription("sub_1");
 
@@ -785,7 +1022,7 @@ describe("stripe adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         await adapter.updateSubscription("sub_1", { priceId: "price_new", quantity: 3 });
 
@@ -825,7 +1062,7 @@ describe("stripe adapter", () => {
             },
             webhooks: undefined,
         };
-        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => client, webhookSecret: "whsec" });
 
         // Pinning today's actual behaviour (see plan §8): an empty items.data does not throw — it
         // silently sends `id: undefined`, which Stripe would treat as creating a NEW subscription item
@@ -842,7 +1079,7 @@ describe("stripe adapter", () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         const session = await adapter.refundPayment({ sessionId: "pi_1" });
 
@@ -874,7 +1111,7 @@ describe("stripe adapter", () => {
                 status: "succeeded",
             };
         };
-        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => client, webhookSecret: "whsec" });
 
         const result = await adapter.refundPayment({ amount: money(500n, "usd"), sessionId: "pi_1" });
 
@@ -893,7 +1130,7 @@ describe("stripe adapter", () => {
                 return { id: "re_2", status: "pending" };
             },
         };
-        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => client, webhookSecret: "whsec" });
 
         await expect(adapter.refundPayment({ sessionId: "pi_1" })).resolves.toMatchObject({ pending: true });
 
@@ -910,7 +1147,7 @@ describe("stripe adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         const session = await adapter.refundPayment({ amount: money(500n, "usd"), sessionId: "pi_1" });
 
@@ -925,7 +1162,7 @@ describe("stripe adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient(calls), webhookSecret: "whsec" });
 
         // Equal to the retrieve stub's amount_received (1000) — compareMoney is 0, not < 0, so this
         // must land on the full-refund boundary, not the partial one.
@@ -940,7 +1177,7 @@ describe("stripe adapter", () => {
     it("fails closed on an unknown status in the webhook path, for created and updated alike (regression)", async () => {
         expect.assertions(2);
 
-        const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => makeClient([]), webhookSecret: "whsec" });
 
         const unknownStatusEvent = async (type: string) =>
             adapter.parseWebhook({
@@ -998,7 +1235,7 @@ describe("stripe adapter", () => {
                 },
             },
         } as unknown as Stripe;
-        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => client, webhookSecret: "whsec" });
 
         const subscription = await adapter.getSubscriptionStatus("sub_1");
 
@@ -1053,7 +1290,7 @@ describe("stripe adapter", () => {
             },
         } as unknown as Stripe;
 
-        const subscription = await createStripeAdapter({ client, webhookSecret: "whsec" }).getSubscriptionStatus("sub_1");
+        const subscription = await createStripeAdapter({ client: () => client, webhookSecret: "whsec" }).getSubscriptionStatus("sub_1");
 
         expect(subscription.priceIds).toEqual(["price_base", "price_addon", "price_metered"]);
         // `limit: 100` is the endpoint maximum, so one request covers any real subscription.
@@ -1086,7 +1323,7 @@ describe("stripe adapter", () => {
             },
         } as unknown as Stripe;
 
-        const cheap = await createStripeAdapter({ client: cheapClient, webhookSecret: "whsec" }).getSubscriptionStatus("sub_1");
+        const cheap = await createStripeAdapter({ client: () => cheapClient, webhookSecret: "whsec" }).getSubscriptionStatus("sub_1");
 
         expect(cheap.priceIds).toEqual(["price_base"]);
         expect(cheapCalls).toEqual(["retrieve:sub_1"]);
@@ -1107,7 +1344,7 @@ describe("stripe adapter", () => {
             },
         } as unknown as Stripe;
 
-        const subscription = await createStripeAdapter({ client, webhookSecret: "whsec" }).getSubscriptionStatus("sub_1");
+        const subscription = await createStripeAdapter({ client: () => client, webhookSecret: "whsec" }).getSubscriptionStatus("sub_1");
 
         // No id is granted rather than a blank one — `""` in the set would match a plan configured
         // with an empty price id.
@@ -1133,7 +1370,7 @@ describe("stripe adapter", () => {
                 },
             },
         } as unknown as Stripe;
-        const adapter = createStripeAdapter({ client, webhookSecret: "whsec" });
+        const adapter = createStripeAdapter({ client: () => client, webhookSecret: "whsec" });
 
         const subscription = await adapter.getSubscriptionStatus("sub_1");
 

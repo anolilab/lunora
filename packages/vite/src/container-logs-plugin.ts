@@ -1,5 +1,6 @@
-import type { ContainerLogStreamHandle } from "@lunora/config";
-import { discoverContainerInfo, lunoraLine, streamContainerLogs } from "@lunora/config";
+import type { ContainerLogStreamHandle, DiscoveryCache } from "@lunora/config";
+import { discoverContainerInfo, streamContainerLogs } from "@lunora/config";
+import { lunoraLine } from "@lunora/config/cli";
 import type { Plugin } from "vite";
 
 import type { ResolvedLunoraPluginOptions } from "./types";
@@ -19,8 +20,11 @@ import type { ResolvedLunoraPluginOptions } from "./types";
  * returns an empty list, so `dockerode` is never imported and no Docker work
  * starts. Set `LUNORA_CONTAINER_LOGS=0` to opt out. A missing/stopped Docker
  * engine degrades to a single warning rather than breaking dev.
+ *
+ * `discovery` is the startup's shared source-scan memo, so the container
+ * discovery binding inference already ran is not parsed again here.
  */
-const containerLogsPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
+const containerLogsPlugin = (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache): Plugin => {
     let handle: ContainerLogStreamHandle | undefined;
 
     // Idempotent — safe to call from more than one lifecycle hook.
@@ -42,8 +46,8 @@ const containerLogsPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 return;
             }
 
-            const discovery = discoverContainerInfo(options.projectRoot, options.schemaDir);
-            const containers = discovery.containers.map((container) => {
+            const declared = discoverContainerInfo(options.projectRoot, options.schemaDir, discovery);
+            const containers = declared.containers.map((container) => {
                 return { className: container.className, exportName: container.exportName };
             });
 

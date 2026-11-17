@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -120,6 +120,14 @@ describe("hasCloudflareCredentials", () => {
             expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(false);
         });
 
+        it("reads a token line the way wrangler's dotenv does: a trailing comment is not its value", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(project, ".env"), `${TOKEN_KEY}= # set me\n`, "utf8");
+
+            expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(false);
+        });
+
         it("pairs a global key in the environment with an email in .env", () => {
             expect.assertions(1);
 
@@ -149,5 +157,94 @@ describe("hasCloudflareCredentials", () => {
         } finally {
             rmSync(appData, { force: true, recursive: true });
         }
+    });
+});
+
+describe("hasCloudflareCredentials with a wrangler login file", () => {
+    let home: string;
+    let project: string;
+
+    beforeEach(() => {
+        home = mkdtempSync(join(tmpdir(), "lunora-cf-home-"));
+        project = mkdtempSync(join(tmpdir(), "lunora-cf-project-"));
+        mkdirSync(join(home, ".wrangler", "config"), { recursive: true });
+        writeFileSync(join(home, ".wrangler", "config", "default.enc"), "stale", "utf8");
+    });
+
+    afterEach(() => {
+        rmSync(home, { force: true, recursive: true });
+        rmSync(project, { force: true, recursive: true });
+    });
+
+    /** Install a stand-in `wrangler` in the project whose `whoami` runs `body`. */
+    const installWrangler = (body: string): void => {
+        const root = join(project, "node_modules", "wrangler");
+
+        mkdirSync(join(root, "bin"), { recursive: true });
+        writeFileSync(join(root, "package.json"), JSON.stringify({ bin: { wrangler: "bin/wrangler.js" }, name: "wrangler", version: "0.0.0" }), "utf8");
+        writeFileSync(join(root, "bin", "wrangler.js"), body, "utf8");
+        writeFileSync(join(project, "package.json"), "{}", "utf8");
+    };
+
+    it("is false when wrangler says the login is unusable", () => {
+        expect.assertions(1);
+
+        installWrangler("console.log(JSON.stringify({ loggedIn: false })); process.exit(1);");
+
+        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(false);
+    });
+
+    it("is true when wrangler says the login works", () => {
+        expect.assertions(1);
+
+        installWrangler("console.log(JSON.stringify({ loggedIn: true }));");
+
+        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(true);
+    });
+
+    it("is true when wrangler cannot answer, such as offline", () => {
+        expect.assertions(1);
+
+        installWrangler('console.error("A fetch request failed"); process.exit(1);');
+
+        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(true);
+    });
+
+    it("is true when the project has no wrangler to ask", () => {
+        expect.assertions(1);
+
+        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(true);
+    });
+
+    it("remembers a silent answer as logged in, so an offline probe is paid once", () => {
+        expect.assertions(3);
+
+        const asked = join(project, "asked");
+
+        installWrangler(`require("node:fs").appendFileSync(${JSON.stringify(asked)}, "x"); console.error("A fetch request failed"); process.exit(1);`);
+
+        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(true);
+        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(true);
+        expect(readFileSync(asked, "utf8")).toBe("x");
+    });
+
+    it("asks wrangler once for the workers of one dev start", () => {
+        expect.assertions(3);
+
+        const asked = join(project, "asked");
+
+        installWrangler(`require("node:fs").appendFileSync(${JSON.stringify(asked)}, "x"); console.log(JSON.stringify({ loggedIn: false }));`);
+
+        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(false);
+        expect(hasCloudflareCredentials({ env: {}, home, projectRoot: project })).toBe(false);
+        expect(readFileSync(asked, "utf8")).toBe("x");
+    });
+
+    it("never asks wrangler when an API token is set", () => {
+        expect.assertions(1);
+
+        installWrangler("console.log(JSON.stringify({ loggedIn: false }));");
+
+        expect(hasCloudflareCredentials({ env: { CLOUDFLARE_API_TOKEN: "t" }, home, projectRoot: project })).toBe(true);
     });
 });

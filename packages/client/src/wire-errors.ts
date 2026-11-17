@@ -3,6 +3,7 @@ import { LunoraError } from "@lunora/errors";
 import { decodeWire } from "@lunora/wire";
 
 import { getRetryAfterMs, TransportError } from "./errors";
+import frameHintOption from "./frame-hint";
 import type { SubscriptionError } from "./subscription";
 import type { ServerErrorMessage } from "./types";
 
@@ -75,6 +76,12 @@ const retryAfterData = (error: { data?: unknown }, header: null | string): Recor
 };
 
 /**
+ * The envelope's `why`, as an own property to spread onto a thrown error. Absent unless the
+ * envelope carries a string, so an error never has a `why` key whose value is undefined.
+ */
+const whyProperty = (envelope: { why?: string }): { why?: string } => (envelope.why === undefined ? {} : { why: envelope.why });
+
+/**
  * The `{ code, message, data?, … }` envelope a response carries, or `undefined`
  * when it carries none.
  *
@@ -89,10 +96,20 @@ const retryAfterData = (error: { data?: unknown }, header: null | string): Recor
  * eight `sdks/*` ports narrow the slot this way and are held to
  * `responseTransportError` in `protocol/fixtures/rpc.json`; so is this one.
  */
-const errorEnvelopeOf = (body: unknown): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string } | undefined => {
+
+const errorEnvelopeOf = (
+    body: unknown,
+): { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string; why?: string } | undefined => {
     const slot = (body as RpcEnvelopeBody | null | undefined)?.error;
 
-    return typeof slot === "object" && slot !== null && !Array.isArray(slot) ? slot : undefined;
+    if (typeof slot !== "object" || slot === null || Array.isArray(slot)) {
+        return undefined;
+    }
+
+    // `why` is typed as a string on the wire, so a malformed one is dropped rather than passed on.
+    const { why, ...rest } = slot as { why?: unknown };
+
+    return typeof why === "string" ? { ...rest, why } : rest;
 };
 
 /**
@@ -129,11 +146,18 @@ const parseServerError = (message: ServerErrorMessage, fallbackMessage: string):
     return { code, messageText: (typeof message.message === "string" ? message.message : undefined) ?? nestedMessage ?? fallbackMessage };
 };
 
-/** Build a coded `Error` from a stream-scoped server `error` frame. */
+/** Build a coded `Error` from a stream-scoped server `error` frame, keeping the server's `why` explanation. */
 const buildStreamError = (message: ServerErrorMessage): Error => {
     const { code, messageText } = parseServerError(message, "stream error");
+    const frame = message.error as { hint?: unknown; why?: unknown } | undefined;
+    const why = frame?.why;
+    const error: Error & { why?: string } = code === undefined ? new Error(messageText) : new LunoraError(code, messageText, frameHintOption(frame?.hint));
 
-    return code === undefined ? new Error(messageText) : new LunoraError(code, messageText);
+    if (typeof why === "string") {
+        error.why = why;
+    }
+
+    return error;
 };
 
 /**
@@ -143,15 +167,30 @@ const buildStreamError = (message: ServerErrorMessage): Error => {
  */
 const buildSubscriptionError = (message: ServerErrorMessage): SubscriptionError => {
     const { code, messageText } = parseServerError(message, "subscription error");
+    const frame = message.error as { hint?: unknown; why?: unknown } | undefined;
+    const why = typeof frame?.why === "string" ? { why: frame.why } : {};
 
-    return { message: messageText, ...(code === undefined ? {} : { code }) };
+    return { message: messageText, ...(code === undefined ? {} : { code }), ...frameHintOption(frame?.hint), ...why };
 };
 
+/** The `Symbol.for` key `@lunora/mcp` reads to tell a server verdict from a caller's own error. */
+const SERVER_VERDICT = Symbol.for("lunora.serverVerdict");
+
 /** Rebuild a thrown `Error` from a server `{ code, message, data?, hint?, docsUrl? }` envelope, wire-decoding `data` so `bigint`/`bytes` inside it survive. */
-const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string }): LunoraClientError => {
+const reconstructError = (errorBody: {
+    code?: string;
+    data?: unknown;
+    docsUrl?: string;
+    hint?: string | string[];
+    message?: string;
+    why?: string;
+}): LunoraClientError => {
     const error = new Error(errorBody.message ?? "request failed") as LunoraClientError;
 
     error.code = errorBody.code;
+    // Marks the server's own verdict. A plain `Error` with a catalog code is otherwise
+    // indistinguishable from one a caller threw, and only the server's message is safe to forward.
+    (error as unknown as Record<symbol, unknown>)[SERVER_VERDICT] = true;
 
     // Guarded: a `data` the codec refuses is dropped, and the envelope stays the
     // server's coded verdict. Thrown bare, the codec's own exception replaced the
@@ -173,8 +212,25 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: 
         error.docsUrl = errorBody.docsUrl;
     }
 
+    if (typeof errorBody.why === "string") {
+        error.why = errorBody.why;
+    }
+
     return error;
 };
+
+/**
+ * A response's headers as a plain read-only record, keys lowercased (the `Headers`
+ * iterator yields lowercase names). Built once per error, so the caller's `Headers`
+ * object is never retained. `set-cookie` is left out: it is a session credential the
+ * browser stores for itself, and nothing a caller does with the error needs it.
+ */
+const responseHeadersRecord = (responseHeaders: Headers): Readonly<Record<string, string>> =>
+    Object.freeze(Object.fromEntries([...responseHeaders].filter(([name]) => name !== "set-cookie")));
+
+/** Attach the reply's headers to an error about to be thrown, non-enumerable like `internal`. */
+const withResponseHeaders = <T extends Error>(error: T, responseHeaders: Headers): T =>
+    Object.defineProperty(error, "headers", { value: responseHeadersRecord(responseHeaders) });
 
 /**
  * Rebuild a thrown `Error` from a server `{ error }` envelope (`reconstructError`)
@@ -183,19 +239,21 @@ const reconstructError = (errorBody: { code?: string; data?: unknown; docsUrl?: 
  * reads. The runtime's REST limiter sends its hint as the header (whole seconds)
  * where an application limiter puts milliseconds in the envelope, so both replay
  * paths normalise it here rather than each in their own way.
+ *
+ * The response's headers ride along as `headers` (see {@link responseHeadersRecord}).
  */
 const reconstructErrorWithRetryAfter = (
     errorBody: { code?: string; data?: unknown; docsUrl?: string; hint?: string | string[]; message?: string },
-    retryAfterHeader: null | string,
+    responseHeaders: Headers,
 ): LunoraClientError => {
     const error = reconstructError(errorBody);
-    const data = retryAfterData(error, retryAfterHeader);
+    const data = retryAfterData(error, responseHeaders.get("retry-after"));
 
     if (data !== undefined) {
         error.data = data;
     }
 
-    return error;
+    return withResponseHeaders(error, responseHeaders);
 };
 
 /**
@@ -221,17 +279,59 @@ const slotError = (inner: { error?: unknown }): LunoraClientError => {
  * forward-compat/unknown server codes assignable without losing autocomplete on
  * the known `LunoraErrorCode` union.
  */
-type LunoraClientError = Error & { code?: LunoraErrorCode | (string & {}); data?: unknown; docsUrl?: string; hint?: string | string[] };
+type LunoraClientError = Error & {
+    code?: LunoraErrorCode | (string & {});
+    data?: unknown;
+    docsUrl?: string;
+
+    /**
+     * The headers of the reply this error came from. Set by the RPC, batch and replay paths; absent on
+     * a failure with no reply (a `fetch` that rejected, a timeout) and on the admin and stream paths.
+     */
+    headers?: Readonly<Record<string, string>>;
+    hint?: string | string[];
+    why?: string;
+};
+
+/** Errors {@link undecodableResultError} minted — recognised by identity, never by a code a peer could also send. */
+const undecodableResults = new WeakSet<Error>();
+
+/**
+ * The error a SUCCESSFUL reply is reported as when its `result` does not
+ * decode. The write it answers has committed — the server said so — so a
+ * replay must settle it rather than classify it: left codeless it read as a
+ * transport failure and replayed forever (the same reply every time), and
+ * thrown out of a batch demux it abandoned every later slot for the session.
+ */
+const undecodableResultError = (cause: unknown): LunoraError => {
+    const error = new LunoraError(
+        "WIRE_DECODE_FAILED",
+        `LunoraClient: the call succeeded but its result could not be decoded (a mutation has still committed) — ${cause instanceof Error ? cause.message : String(cause)}`,
+        { cause },
+    );
+
+    undecodableResults.add(error);
+
+    return error;
+};
+
+/** Whether `error` reports a committed reply whose result did not decode (see {@link undecodableResultError}). */
+const isUndecodableResult = (error: unknown): error is LunoraError => error instanceof Error && undecodableResults.has(error);
 
 export {
     buildStreamError,
     buildSubscriptionError,
     errorEnvelopeOf,
+    isUndecodableResult,
     reconstructError,
     reconstructErrorWithRetryAfter,
+    responseHeadersRecord,
     retryAfterData,
     retryAfterHeaderMs,
     slotError,
+    undecodableResultError,
     unreadableSlotError,
+    whyProperty,
+    withResponseHeaders,
 };
 export type { LunoraClientError, RpcEnvelopeBody };

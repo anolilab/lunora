@@ -5,6 +5,7 @@ package lunora
 
 import (
 	"math/big"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -221,6 +222,8 @@ func TestWSURLSwapsScheme(t *testing.T) {
 		t.Errorf("WSURL = %q, want %q", got, want)
 	}
 
+	// The ticket is the only credential the URL carries; the session credential
+	// goes in the connect frame (see TestSessionCredentialNeverRidesTheURL).
 	if got, want := client.WSURL("tenant a", "tok/en"), "wss://app.example/_lunora/ws?shard=tenant+a&token=tok%2Fen"; got != want {
 		t.Errorf("WSURL = %q, want %q", got, want)
 	}
@@ -228,5 +231,78 @@ func TestWSURLSwapsScheme(t *testing.T) {
 	plain := NewClient("http://localhost:8787", nil)
 	if got, want := plain.WSURL("", ""), "ws://localhost:8787/_lunora/ws"; got != want {
 		t.Errorf("WSURL = %q, want %q", got, want)
+	}
+}
+
+// The session credential must never ride the socket URL: not on the first open,
+// not on a reconnect, and not when the value comes from a provider that is
+// re-resolved each time. The URL is built from the ticket alone; the session is
+// read only into the connect frame.
+func TestSessionCredentialNeverRidesTheURL(t *testing.T) {
+	const session = "sess-secret-123"
+
+	client := NewClient("https://app.example", nil)
+
+	// provider stands in for an app-supplied resolver, called fresh on every open.
+	calls := 0
+	provider := func() string {
+		calls++
+
+		return session
+	}
+
+	for open := 0; open < 3; open++ { // first open, then two reconnects
+		value := provider()
+
+		if url := client.WSURL("tenant_a", "ticket-abc"); strings.Contains(url, session) {
+			t.Fatalf("open %d: socket URL %q carries the session credential", open, url)
+		}
+
+		if url := client.WSURL("", ""); strings.Contains(url, session) {
+			t.Fatalf("open %d: bare socket URL %q carries the session credential", open, url)
+		}
+
+		if frame := BuildConnectFrame("client-test", nil, value); frame["token"] != session {
+			t.Fatalf("open %d: connect frame token = %v, want the session credential", open, frame["token"])
+		}
+	}
+
+	if calls != 3 {
+		t.Errorf("provider resolved %d times, want once per open (3)", calls)
+	}
+}
+
+// The connect envelope carries the session credential as token, and omits the
+// key entirely when no credential is held.
+func TestConnectFrameCarriesSessionToken(t *testing.T) {
+	withToken := BuildConnectFrame("client-test", nil, "sess-abc")
+	if got := withToken["token"]; got != "sess-abc" {
+		t.Errorf("connect token = %v, want sess-abc", got)
+	}
+
+	without := BuildConnectFrame("client-test", nil, "")
+	if _, present := without["token"]; present {
+		t.Errorf("connect frame carries token %#v with no credential held, want the key absent", without["token"])
+	}
+}
+
+// The ticket is the only thing that appears in ?token=, and it is that ticket
+// exactly, not the session credential.
+func TestWSURLTicketIsTheOnlyToken(t *testing.T) {
+	client := NewClient("https://app.example", nil)
+
+	raw := client.WSURL("tenant_a", "ticket-abc")
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse %q: %v", raw, err)
+	}
+
+	if got := parsed.Query()["token"]; len(got) != 1 || got[0] != "ticket-abc" {
+		t.Errorf("token params = %v, want exactly [ticket-abc]", got)
+	}
+
+	if got := client.WSURL("", ""); strings.Contains(got, "token=") {
+		t.Errorf("WSURL without a ticket = %q, want no token parameter", got)
 	}
 }

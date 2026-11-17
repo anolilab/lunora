@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 
-import { readProjectManifest } from "@lunora/config";
+import { readProjectManifest } from "@lunora/config/cli";
 import { findUpSync } from "@visulima/fs";
 import { dirname } from "@visulima/path";
 

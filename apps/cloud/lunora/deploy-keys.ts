@@ -77,7 +77,7 @@ export const issue = mutation
         // target, but it produces a key that silently authorizes nothing and an
         // operator with no way to see why.
         if (arguments_.projectId !== undefined) {
-            await assertRowInOrg(context, arguments_.projectId, arguments_.organizationId, "project");
+            await assertRowInOrg(context, "projects", arguments_.projectId, arguments_.organizationId, "project");
         }
 
         const key = formatDeployKey({
@@ -109,9 +109,9 @@ export const revoke = mutation
     .input({ id: v.id("deployKeys"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "deploy key");
+        await assertRowInOrg(context, "deployKeys", id, organizationId, "deploy key");
 
-        await context.db.patch(id, { revokedAt: context.now });
+        await context.db.patch("deployKeys", id, { revokedAt: context.now });
     });
 
 /** The subset of a key row that decides whether it can be rolled. */
@@ -170,9 +170,9 @@ export const roll = mutation
     .input({ id: v.id("deployKeys"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ id: Id<"deployKeys">; key: string }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "deploy key");
+        await assertRowInOrg(context, "deployKeys", id, organizationId, "deploy key");
 
-        const existing = (await context.db.get(id)) as DeployKeyRow | null;
+        const existing = (await context.db.get("deployKeys", id)) as DeployKeyRow | null;
 
         if (!existing) {
             throw new LunoraError("NOT_FOUND", "deploy key not found");
@@ -204,7 +204,7 @@ export const roll = mutation
         // Revoke AFTER the insert. If the insert fails — a hash collision violates
         // the unique `by_hash` index — the whole mutation rolls back and the caller
         // keeps a working key, rather than losing it to a half-applied roll.
-        await context.db.patch(id, { revokedAt: context.now });
+        await context.db.patch("deployKeys", id, { revokedAt: context.now });
 
         return { id: replacementId, key };
     });
@@ -259,7 +259,7 @@ export const verify = mutation
                 return null;
             }
 
-            await context.db.patch(row._id, { lastUsedAt: context.now });
+            await context.db.patch("deployKeys", row._id, { lastUsedAt: context.now });
 
             return { deployKeyId: row._id, organizationId: row.organizationId, projectId: row.projectId ?? undefined, type: row.type };
         },
@@ -369,7 +369,7 @@ export const recordReleaseKey = internalMutation
         type: v.union(v.literal("production"), v.literal("preview")),
     })
     .mutation(async ({ ctx: context, args: { buildId, hashedKey, organizationId, projectId, type } }): Promise<Id<"deployKeys">> => {
-        const build = (await context.db.get(buildId)) as null | { organizationId: Id<"organizations">; projectId: Id<"projects"> };
+        const build = (await context.db.get("builds", buildId)) as null | { organizationId: Id<"organizations">; projectId: Id<"projects"> };
 
         // The edge formats the key with the org and project it encodes, so they
         // arrive as arguments — and are refused unless they are the build's own.
@@ -396,13 +396,13 @@ export const recordReleaseKey = internalMutation
 export const removeReleaseKey = internalMutation
     .input({ buildId: v.id("builds"), id: v.id("deployKeys") })
     .mutation(async ({ ctx: context, args: { buildId, id } }): Promise<void> => {
-        const row = (await context.db.get(id)) as null | { name: string };
+        const row = (await context.db.get("deployKeys", id)) as null | { name: string };
 
         if (row?.name !== releaseKeyName(buildId)) {
             throw new LunoraError("NOT_FOUND", "no release key for this build");
         }
 
-        await context.db.delete(id);
+        await context.db.delete("deployKeys", id);
     });
 
 /** How long a catalog install's release key lives: the release lease, after which a crashed install's key is dead. */
@@ -422,7 +422,11 @@ export const recordInstallKey = internalMutation
         projectId: v.id("projects"),
     })
     .mutation(async ({ ctx: context, args: { hashedKey, installId, organizationId, projectId } }): Promise<Id<"deployKeys">> => {
-        const install = (await context.db.get(installId)) as null | { organizationId: Id<"organizations">; projectId: Id<"projects">; status: string };
+        const install = (await context.db.get("catalogInstalls", installId)) as null | {
+            organizationId: Id<"organizations">;
+            projectId: Id<"projects">;
+            status: string;
+        };
 
         if (install?.status !== "installing" || install.organizationId !== organizationId || install.projectId !== projectId) {
             throw new LunoraError("FORBIDDEN", "a release key must be scoped to its claimed install's own project");
@@ -443,11 +447,11 @@ export const recordInstallKey = internalMutation
 export const removeInstallKey = internalMutation
     .input({ id: v.id("deployKeys"), installId: v.id("catalogInstalls") })
     .mutation(async ({ ctx: context, args: { id, installId } }): Promise<void> => {
-        const row = (await context.db.get(id)) as null | { name: string };
+        const row = (await context.db.get("deployKeys", id)) as null | { name: string };
 
         if (row?.name !== installKeyName(installId)) {
             throw new LunoraError("NOT_FOUND", "no release key for this install");
         }
 
-        await context.db.delete(id);
+        await context.db.delete("deployKeys", id);
     });

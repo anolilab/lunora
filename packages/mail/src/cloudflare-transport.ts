@@ -1,8 +1,8 @@
-import { LunoraError } from "@lunora/errors";
 import { cloudflareEmailProvider } from "@visulima/email/providers/cloudflare-email";
 
 import type { ProviderSendResult } from "./provider-transport";
 import { interpretSendResult, requireRecipients, toProviderEmail } from "./provider-transport";
+import { MailSendError } from "./send-error";
 import type { MailTransport, SendPayload } from "./types";
 
 /**
@@ -53,7 +53,10 @@ const createCloudflareTransport = (options: CloudflareTransportOptions): MailTra
             const hasBcc = payload.bcc !== undefined && payload.bcc.length > 0;
 
             if (hasCc || hasBcc) {
-                throw new LunoraError("INTERNAL", "@lunora/mail: Cloudflare Email Workers does not support cc/bcc — fan out one send per recipient instead");
+                throw new MailSendError({
+                    message: "@lunora/mail: Cloudflare Email Workers does not support cc/bcc — fan out one send per recipient instead",
+                    retryable: false,
+                });
             }
 
             // Single-recipient binding: reject (don't silently truncate) a multi-recipient
@@ -61,10 +64,10 @@ const createCloudflareTransport = (options: CloudflareTransportOptions): MailTra
             const { first, list } = requireRecipients(payload.to);
 
             if (list.length > 1) {
-                throw new LunoraError(
-                    "INTERNAL",
-                    `@lunora/mail: Cloudflare Email Workers is single-recipient but received ${String(list.length)} \`to\` addresses — fan out one send per recipient instead`,
-                );
+                throw new MailSendError({
+                    message: `@lunora/mail: Cloudflare Email Workers is single-recipient but received ${String(list.length)} \`to\` addresses — fan out one send per recipient instead`,
+                    retryable: false,
+                });
             }
 
             const result = (await provider.sendEmail(toProviderEmail(payload, options.from, first))) as ProviderSendResult;

@@ -46,6 +46,8 @@ interface FakeClient {
     push: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
     /** Push a chunk to every open stream matching `(functionPath, args)`. */
     pushStream: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
+    /** Every `resnapshot` call made against the fake, in order. */
+    resnapshotCalls: { args: Record<string, unknown>; functionPath: string; shardKey?: string }[];
     /** Set the auth token (and optionally the subject) — fires `onAuthTokenChange`. */
     setAuthToken: (token: string | null, subject?: string | null) => void;
     /** Every `stream` call made against the fake, in order. */
@@ -60,6 +62,7 @@ const keyOf = (functionPath: string, args: Record<string, unknown>): string => `
 
 const createFakeClient = (): FakeClient => {
     const subscribeCalls: SubscribeCall[] = [];
+    const resnapshotCalls: { args: Record<string, unknown>; functionPath: string; shardKey?: string }[] = [];
     const streamCalls: StreamCall[] = [];
     const unsubscribeSpy = vi.fn<() => void>();
     const mutationSpy = vi.fn<(...args: unknown[]) => Promise<unknown>>(async () => undefined);
@@ -135,6 +138,9 @@ const createFakeClient = (): FakeClient => {
 
     const fake = {
         action: actionSpy,
+        resnapshot: (function_: FunctionReference, args: Record<string, unknown>, options: { shardKey?: string } = {}): void => {
+            resnapshotCalls.push({ args, functionPath: function_["__lunoraRef"], shardKey: options.shardKey });
+        },
         currentIdentity: (): string | null => authSubject ?? authToken,
         // The identity store declares itself on attach; the fake has nothing
         // to gate, so this only has to exist.
@@ -196,6 +202,7 @@ const createFakeClient = (): FakeClient => {
         provide,
         push,
         pushStream,
+        resnapshotCalls,
         setAuthToken: setAuthTokenFake,
         streamCalls,
         subscribeCalls,

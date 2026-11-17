@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -98,6 +98,30 @@ describe(createStudioMiddleware, () => {
         expect(next).not.toHaveBeenCalled();
         expect(captured.status()).toBe(200);
         expect(captured.body()).toContain("/__lunora/studio.js");
+    });
+
+    it("re-renders the document with the new admin token after `.dev.vars` changes", () => {
+        expect.assertions(2);
+
+        const root = projectRoot();
+        const middleware = createStudioMiddleware({ isNonLoopbackBind: false, projectRoot: root });
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+        writeFileSync(join(root, ".dev.vars"), "LUNORA_ADMIN_TOKEN=tokenA\n");
+
+        const first = capture();
+
+        middleware(request("/__lunora"), first.response, vi.fn<() => void>());
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a throwaway .dev.vars fixture in a temp directory, not a credential
+        writeFileSync(join(root, ".dev.vars"), "LUNORA_ADMIN_TOKEN=tokenB\n");
+
+        const second = capture();
+
+        middleware(request("/__lunora"), second.response, vi.fn<() => void>());
+
+        expect(first.body()).toContain("tokenA");
+        expect(second.body()).toContain("tokenB");
     });
 
     it("matches the mount under a non-root base, as the dev server announces it", () => {

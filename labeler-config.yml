@@ -67,6 +67,9 @@
 "package: hyperdrive":
     - changed-files:
           - any-glob-to-any-file: "packages/hyperdrive/**/*"
+"package: jwt-auth":
+    - changed-files:
+          - any-glob-to-any-file: "packages/jwt-auth/**/*"
 "package: lunora":
     - changed-files:
           - any-glob-to-any-file: "packages/lunora/**/*"
@@ -124,6 +127,9 @@
 "package: runtime":
     - changed-files:
           - any-glob-to-any-file: "packages/runtime/**/*"
+"package: saas-ui":
+    - changed-files:
+          - any-glob-to-any-file: "packages/saas-ui/**/*"
 "package: scheduler":
     - changed-files:
           - any-glob-to-any-file: "packages/scheduler/**/*"

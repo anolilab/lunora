@@ -11,7 +11,7 @@
 import { Node, Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import { parseObjectShape } from "../src/parse-validator";
+import { parseObjectShape, parseValidator } from "../src/parse-validator";
 
 /** Parse the `args` object literal declared last in `source`. */
 const shapeOf = (source: string): Record<string, unknown> => {
@@ -83,5 +83,30 @@ describe("parseObjectShape spreads", () => {
         // `lunora introspect` generates `.input(<table>List.args)`, so this
         // shape is machine-written, not exotic.
         expect(shapeOf(`const list = { args: { page: v.number() } };\nconst args = { ...list.args };`)).toStrictEqual({ page: { kind: "number" } });
+    });
+
+    describe("v.object() shape completeness", () => {
+        const objectOf = (source: string): { shape?: Record<string, unknown>; unresolvedShape?: boolean } => {
+            const file = new Project({ useInMemoryFileSystem: true }).createSourceFile("snippet.ts", source, { overwrite: true });
+
+            return parseValidator(file.getVariableDeclarationOrThrow("field").getInitializerOrThrow());
+        };
+
+        it("flags a shape built at runtime, a cyclic spread, a shape with an unreadable spread, and a bare v.object()", () => {
+            expect.assertions(4);
+
+            expect(objectOf(`const field = v.object(buildShape());`)).toMatchObject({ shape: {}, unresolvedShape: true });
+            expect(objectOf(`const a = { ...b };\nconst b = { ...a };\nconst field = v.object(a);`)).toMatchObject({ unresolvedShape: true });
+            expect(objectOf(`const field = v.object({ ...buildShape(), id: v.string() });`)).toMatchObject({ unresolvedShape: true });
+            expect(objectOf(`const field = v.object();`)).toMatchObject({ unresolvedShape: true });
+        });
+
+        it("leaves a fully readable shape unflagged, including an empty literal", () => {
+            expect.assertions(3);
+
+            expect(objectOf(`const shared = { id: v.string() };\nconst field = v.object({ ...shared, n: v.number() });`)).not.toHaveProperty("unresolvedShape");
+            expect(objectOf(`const field = v.object({});`)).not.toHaveProperty("unresolvedShape");
+            expect(objectOf(`const field = v.object({ id });`)).not.toHaveProperty("unresolvedShape");
+        });
     });
 });

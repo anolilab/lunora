@@ -33,6 +33,13 @@ const isFallbackImage = (value?: null | string): boolean =>
  */
 const coverImageUrl = (value?: null | string): string | undefined => (isFallbackImage(value) ? undefined : new URL(value ?? "", SITE_URL).href);
 
+/**
+ * A page's generated social card, site-relative. `scripts/generate-og-images.mjs`
+ * writes the file to the same path under `public/` during the build, and imports
+ * this function so the two cannot disagree on a name.
+ */
+const ogImagePath = (page: string): string => `/og/${page}.png`;
+
 interface SeoOptions {
     canonical?: string;
     description?: string;
@@ -85,4 +92,4 @@ export const createSeoHead = (options: SeoOptions): { links: Record<string, stri
 
 export const createJsonLd = (data: Record<string, unknown>): string => JSON.stringify({ "@context": "https://schema.org", ...data });
 
-export { coverImageUrl, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, isFallbackImage, SITE_NAME, SITE_URL };
+export { coverImageUrl, DEFAULT_DESCRIPTION, DEFAULT_OG_IMAGE, isFallbackImage, ogImagePath, SITE_NAME, SITE_URL };

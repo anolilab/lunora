@@ -1,3 +1,5 @@
+import { dirname } from "node:path";
+
 import { LunoraError } from "@lunora/errors";
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
@@ -5,8 +7,10 @@ import { Node, SyntaxKind } from "ts-morph";
 import { globalVectorIndexMessage } from "../../../../../shared/global-vector-index";
 import { diagnosticAt } from "../../diagnostics";
 import type { SchemaIR, TableIR, VectorIndexIR } from "../../ir";
+import { descendantsOfKind } from "../ast";
 import { applyExtensions, parseStandaloneVectorIndexes } from "./internal/extensions";
 import { chainedStringLiteralArgument, getBooleanProperty, getStringProperty } from "./internal/properties";
+import { siteLocatorFor } from "./internal/sites";
 import { parseBaseTables } from "./internal/table-builder";
 
 /** Recognised Cloudflare DO data-residency jurisdictions — the literals a `.jurisdiction("…")` call may carry. */
@@ -117,7 +121,7 @@ const markStandaloneAggregates = (tables: TableIR[], argument: TsNode | undefine
 const discoverSchema = (project: Project, schemaPath: string, projectRoot?: string): SchemaIR => {
     const file: SourceFile = project.addSourceFileAtPath(schemaPath);
 
-    const defineSchemaCall = file.getDescendantsOfKind(SyntaxKind.CallExpression).find((call) => {
+    const defineSchemaCall = descendantsOfKind(file, SyntaxKind.CallExpression).find((call) => {
         const callee = call.getExpression();
 
         return Node.isIdentifier(callee) && callee.getText() === "defineSchema";
@@ -133,16 +137,17 @@ const discoverSchema = (project: Project, schemaPath: string, projectRoot?: stri
         throw diagnosticAt(defineSchemaCall, "defineSchema() expects an object literal");
     }
 
-    const tables: TableIR[] = parseBaseTables(argument);
+    const locate = siteLocatorFor(dirname(schemaPath));
+    const tables: TableIR[] = parseBaseTables(argument, locate);
 
     // Standalone vector indexes live in the optional second argument (Shape B).
     const standaloneArgument = defineSchemaCall.getArguments()[1];
     const standaloneVectorIndexes =
-        standaloneArgument && Node.isObjectLiteralExpression(standaloneArgument) ? parseStandaloneVectorIndexes(standaloneArgument) : [];
+        standaloneArgument && Node.isObjectLiteralExpression(standaloneArgument) ? parseStandaloneVectorIndexes(standaloneArgument, locate) : [];
 
     // Merge chained `.extend(...)` extensions, mutating `tables` and collecting
     // their standalone vector indexes.
-    const extensionStandaloneVectorIndexes = applyExtensions(defineSchemaCall, tables, projectRoot);
+    const extensionStandaloneVectorIndexes = applyExtensions(defineSchemaCall, tables, projectRoot, locate);
 
     // Standalone aggregate indexes live in the optional third argument; extension
     // tables are merged above, so they are marked too.

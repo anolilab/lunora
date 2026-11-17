@@ -23,7 +23,7 @@ import type { PayFetch, X402PayDeps } from "./fetch";
 import { createPayFetch } from "./fetch";
 
 export type { X402CdpSignerConfig, X402PayConfig, X402Price, X402SignerConfig } from "../config";
-export { DEFAULT_FACILITATOR_URL, resolveFacilitatorUrl } from "../config";
+export { resolveFacilitatorUrl } from "../config";
 export type { Caip2, X402Network } from "../networks";
 export { isEvmNetwork, isSvmNetwork, toCaip2 } from "../networks";
 export type { PayFetch, X402PayDeps } from "./fetch";

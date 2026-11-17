@@ -294,7 +294,9 @@ class SignUpCardComponent {
                     (changed)="actions.setField('email', $event)"
                     (blurred)="actions.blur('email')"
                 />
-                <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.forgotPassword }}</lunora-auth-submit-button>
+                <lunora-auth-submit-button [availableAt]="state().resendAvailableAt" [pending]="state().status === 'submitting'">{{
+                    t.forgotPassword
+                }}</lunora-auth-submit-button>
             </form>
             <lunora-auth-link lunoraAuthCardFooter [href]="signInLink()">{{ t.backToSignIn }}</lunora-auth-link>
         </lunora-auth-card>
@@ -464,7 +466,7 @@ class ResetPasswordOtpCardComponent {
                         (changed)="actions.setField('email', $event)"
                         (blurred)="actions.blur('email')"
                     />
-                    <lunora-auth-submit-button [pending]="state().status === 'submitting'">
+                    <lunora-auth-submit-button [availableAt]="state().resendAvailableAt" [pending]="state().status === 'submitting'">
                         {{ t.magicLink }}
                         @if (lastUsedMagicLink()) {
                             <span class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
@@ -531,7 +533,9 @@ class MagicLinkCardComponent {
                             autoComplete="email"
                             (changed)="actions.setEmail($event)"
                         />
-                        <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.emailOtp }}</lunora-auth-submit-button>
+                        <lunora-auth-submit-button [availableAt]="state().resendAvailableAt" [pending]="state().status === 'submitting'">{{
+                            t.emailOtp
+                        }}</lunora-auth-submit-button>
                     </form>
                 </lunora-auth-card>
             }

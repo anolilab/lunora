@@ -10,6 +10,7 @@ import dev.lunora.Submit.SubmitOptions;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -20,6 +21,7 @@ import java.util.Set;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 /**
  * A Lunora deployment client.
@@ -116,6 +118,18 @@ public final class Client {
      */
     public static final String CODE_WIRE_DECODE_FAILED = "WIRE_DECODE_FAILED";
 
+    /** The error code the server sends when the session credential has expired. */
+    private static final String CODE_TOKEN_EXPIRED = "TOKEN_EXPIRED";
+
+    /** Close code: the session has expired. */
+    private static final int CLOSE_TOKEN_EXPIRED = 4001;
+
+    /** Close code: the server refused the credential, or no {@code connect} arrived in time. */
+    private static final int CLOSE_REFUSED = 4003;
+
+    /** The 4003 reason for a socket that never sent {@code connect}: it refused no credential. */
+    private static final String CONNECT_DEADLINE = "connect deadline";
+
     /**
      * A success whose {@code result} would not decode. It keeps the commit cursor the reply echoed,
      * because the write DID commit and its optimistic overlay confirms against that cursor.
@@ -146,6 +160,44 @@ public final class Client {
     private volatile String authToken;
 
     /**
+     * The session credential, sent as {@code connect.token} on every socket open. A provider so the
+     * value is read fresh on each reconnect; it never enters the socket URL. Written under {@link
+     * #lock} together with {@link #credentialGeneration}.
+     */
+    private volatile Supplier<String> wsTokenProvider;
+
+    /**
+     * Bumped on every {@link #wsToken} call. A refused credential is reported once per generation,
+     * so a new credential re-arms the report. Guarded by {@link #lock}.
+     */
+    private int credentialGeneration;
+
+    /** The generation the open socket was attached under. Guarded by {@link #lock}. */
+    private int socketGeneration;
+
+    /**
+     * The generation a 4003 refusal was last reported for; -1 before the first. Guarded by {@link
+     * #lock}.
+     */
+    private int refusedGeneration = -1;
+
+    /** The {@link #onTokenExpired} listeners. Guarded by {@link #lock}. */
+    private final List<Registration<Runnable>> tokenExpiredListeners = new ArrayList<>();
+
+    /**
+     * Topics whose join write failed, so the next listener on them sends the join again. Guarded by
+     * {@link #lock}.
+     */
+    private final Set<String> unjoinedTopics = new LinkedHashSet<>();
+
+    /** The {@link #whisperSubscribe} listeners, per topic. Guarded by {@link #lock}. */
+    private final Map<String, List<Registration<Consumer<Object>>>> whisperListeners =
+            new LinkedHashMap<>();
+
+    /** The ephemeral admin ticket, sent as {@code ?token=} on the socket URL by {@link #wsUrl}. */
+    private volatile Supplier<String> wsTicketProvider;
+
+    /**
      * Guards every field below, and the {@code cursor}/{@code epoch}/row state hanging off {@link
      * Subscription} and {@link Shape}.
      *
@@ -161,12 +213,26 @@ public final class Client {
     final Object lock = new Object();
 
     FrameSender sender;
+
+    /**
+     * Bumped by every attach and detach, so an attach whose connect is still going out can tell it
+     * was superseded.
+     */
+    private long attachGeneration;
+
     private final Map<String, Subscription> subscriptions = new LinkedHashMap<>();
+
+    /**
+     * The {@link System#nanoTime} deadline of the one re-subscribe a retry hint asked for, per
+     * query subscription id. Guarded by {@code lock}.
+     */
+    private final Map<String, Long> pendingRetries = new HashMap<>();
+
     private final Map<String, Shape> shapes = new LinkedHashMap<>();
     private final Map<String, PokeBuffer> pokes = new LinkedHashMap<>();
 
     /** The streams {@link #close} ends. */
-    private final Set<Stream> streams = new LinkedHashSet<>();
+    private final Set<Watch> streams = new LinkedHashSet<>();
 
     private int nextId;
     private int nextShapeId;
@@ -187,6 +253,22 @@ public final class Client {
         final Consumer<SubscriptionError> onError;
         Object cursor;
         Object epoch;
+
+        /**
+         * Set by a row change that could not be merged into the held base. While set, delta frames
+         * are ignored entirely (no cursor advance); a data frame or a resubscribe clears it.
+         */
+        boolean poisoned;
+
+        /**
+         * The server base with the frames of an unfinished {@code more} run merged in. Row changes
+         * in a run build on it rather than on the committed base, but nothing is published and the
+         * resume position stays put until the run's last frame: a drop mid-run must replay the
+         * whole run from the cursor before it.
+         */
+        Object heldBase;
+
+        boolean holding;
 
         /** The displayed value and its optimistic overlays. See {@link Optimistic}. */
         final Optimistic.State state = new Optimistic.State(null);
@@ -348,6 +430,25 @@ public final class Client {
     }
 
     /**
+     * Sets the provider for the session credential, read on every socket open and sent as {@code
+     * connect.token}. Pass {@code null} to stop sending one.
+     */
+    public void wsToken(Supplier<String> provider) {
+        synchronized (lock) {
+            this.wsTokenProvider = provider;
+            this.credentialGeneration++;
+        }
+    }
+
+    /**
+     * Sets the provider for the ephemeral admin ticket, read on every {@link #wsUrl} call and sent
+     * as {@code ?token=}. Pass {@code null} to stop sending one.
+     */
+    public void wsTicket(Supplier<String> provider) {
+        this.wsTicketProvider = provider;
+    }
+
+    /**
      * Sets the bearer token. With {@link #identity()} unset the token's digest IS the identity, so
      * a different token (or clearing it) evicts the previous session exactly as changing a set
      * identity does. With an identity set the digest is not consulted, and a token refresh is not a
@@ -390,11 +491,28 @@ public final class Client {
         return token == null ? Offline.Identity.signedOut() : Offline.Identity.tokenStamp(token);
     }
 
+    /** Call with {@link #lock} held. */
+    private void discardRuns() {
+        for (Subscription subscription : subscriptions.values()) {
+            discardRun(subscription);
+        }
+    }
+
+    /** Forgets a run's held frames; the server replays the whole run from the last cursor. */
+    private static void discardRun(Subscription subscription) {
+        subscription.holding = false;
+        subscription.heldBase = null;
+    }
+
     /** Drops every resume cursor and shape row; call with {@link #lock} held. */
     private void evictSession(List<Delivery> deliveries) {
         for (Subscription subscription : subscriptions.values()) {
+            discardRun(subscription);
             subscription.cursor = null;
             subscription.epoch = null;
+            subscription.poisoned = false;
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            subscription.state.serverBase = null;
         }
 
         for (Shape shape : shapes.values()) {
@@ -440,21 +558,284 @@ public final class Client {
     /**
      * Registers the sender used for subscription frames. Call once the socket is open.
      *
+     * <p>It sends the {@code connect} frame first, carrying the session credential from {@link
+     * #wsToken(Supplier)} resolved now, so every open and every reconnect presents it before any
+     * subscription. The app must not send {@code connect} itself. Pass {@code null} for {@code
+     * context} when there is none; a non-null {@code context} rides the {@code connect} frame,
+     * where the server records it for the {@code onConnect} lifecycle hooks, so it applies to every
+     * open and reconnect, not only the first.
+     *
      * <p>It also latches "has connected at least once", which is what the write queue gates on: a
      * write made before the FIRST connect fails fast by default, so a misconfigured endpoint
      * surfaces on the first write instead of silently filling a queue that will never flush.
      */
-    public void attachSocket(FrameSender sender) {
+    public void attachSocket(FrameSender sender, Map<String, Object> context) {
+        Supplier<String> provider;
+        long generation;
+        int credential;
+
+        // Writes queue while the connect frame goes out, so none can reach the socket this one
+        // replaces. The credential is read with the attach generation: a rotation racing this
+        // attach must not tag the socket with a generation newer than the credential it presents.
         synchronized (lock) {
+            this.sender = null;
+            discardRuns();
+            generation = ++this.attachGeneration;
+            pendingRetries.clear();
+            provider = wsTokenProvider;
+            credential = credentialGeneration;
+        }
+
+        sender.send(
+                buildConnectFrame(
+                        clientId,
+                        context,
+                        resolve(provider),
+                        List.of(DeltaMerge.PAGE_DELTA_CAPABILITY)));
+
+        // A detach or a newer attach during the send supersedes this one: installing this sender
+        // would undo it, so it is not installed and its whisper joins are not sent. The joins are
+        // written under the lock, so a last-listener leave cannot unsubscribe between this snapshot
+        // and its join. Whisper joins follow connect and precede the resubscribe, as any frame on
+        // the socket does. A join that throws leaves the client offline, and the error propagates.
+        synchronized (lock) {
+            if (generation != this.attachGeneration) {
+                return;
+            }
+
             this.sender = sender;
+            this.socketGeneration = credential;
             this.wasEverConnected = true;
+
+            try {
+                for (String topic : new ArrayList<>(whisperListeners.keySet())) {
+                    // A sender that detaches or re-attaches during a write supersedes this attach:
+                    // the
+                    // remaining joins are not written to a socket that is no longer attached.
+                    if (generation != this.attachGeneration) {
+                        return;
+                    }
+
+                    sender.send(buildWhisperSubscribeFrame(topic));
+                }
+
+                unjoinedTopics.clear();
+            } catch (RuntimeException failure) {
+                if (this.sender == sender) {
+                    this.sender = null;
+                }
+
+                throw failure;
+            }
         }
     }
 
-    /** Forgets the sender, so subsequent writes queue rather than fail. */
-    public void detachSocket() {
+    /**
+     * Forgets the sender, so subsequent writes queue rather than fail, and classifies the close.
+     *
+     * <p>A 4001 always reports token expiry. A 4003 reports it once per credential generation, and
+     * only from a socket opened under the current one: a socket opened under an earlier generation
+     * refused a credential no longer in force. The {@code connect deadline} close refuses no
+     * credential. Any other close, or none ({@code null}), reports nothing. Either way the client
+     * is offline until the next attach.
+     */
+    public void detachSocket(Integer closeCode, String reason) {
+        boolean expired = false;
+
         synchronized (lock) {
             this.sender = null;
+            this.attachGeneration++;
+            pendingRetries.clear();
+            discardRuns();
+
+            if (closeCode != null && closeCode == CLOSE_TOKEN_EXPIRED) {
+                expired = true;
+            } else if (closeCode != null
+                    && closeCode == CLOSE_REFUSED
+                    && !CONNECT_DEADLINE.equals(reason)
+                    && socketGeneration == credentialGeneration
+                    && socketGeneration != refusedGeneration) {
+                refusedGeneration = socketGeneration;
+                expired = true;
+            }
+        }
+
+        if (expired) {
+            notifyTokenExpired();
+        }
+    }
+
+    /**
+     * Observes token expiry: a 4001 close, a {@code TOKEN_EXPIRED} frame, or a refused session
+     * credential (once per credential). Returns an unregister handle.
+     *
+     * <p>A listener that throws is contained, so it cannot break a detach or the frame reader.
+     */
+    public Runnable onTokenExpired(Runnable listener) {
+        Registration<Runnable> registration = new Registration<>(listener);
+
+        synchronized (lock) {
+            tokenExpiredListeners.add(registration);
+        }
+
+        return () -> {
+            synchronized (lock) {
+                tokenExpiredListeners.remove(registration);
+            }
+        };
+    }
+
+    /** Runs every {@link #onTokenExpired} listener; call with {@link #lock} released. */
+    private void notifyTokenExpired() {
+        List<Registration<Runnable>> snapshot;
+
+        synchronized (lock) {
+            snapshot = new ArrayList<>(tokenExpiredListeners);
+        }
+
+        for (Registration<Runnable> registration : snapshot) {
+            try {
+                registration.listener.run();
+            } catch (RuntimeException ignored) {
+                // The app's listener must not end the socket reader or fail a detach.
+            }
+        }
+    }
+
+    /**
+     * Joins the whisper {@code topic} and hands each delivered value to {@code listener}, decoded.
+     * Returns an unregister handle; removing a topic's last listener leaves the topic.
+     *
+     * <p>The first listener on a topic sends {@code whisper_subscribe} if a socket is attached, and
+     * every attach rejoins each topic after {@code connect}. Nothing is queued while detached, and
+     * no acknowledgement is awaited: a room topic is never acked.
+     */
+    public Runnable whisperSubscribe(String topic, Consumer<Object> listener) {
+        Registration<Consumer<Object>> registration = new Registration<>(listener);
+
+        // The join goes out under the lock, in the order the listener state changes, so a leave
+        // cannot overtake it. A join that fails is retried by the next listener on the topic.
+        synchronized (lock) {
+            List<Registration<Consumer<Object>>> listeners =
+                    whisperListeners.computeIfAbsent(topic, key -> new ArrayList<>());
+            boolean join = listeners.isEmpty() || unjoinedTopics.contains(topic);
+
+            listeners.add(registration);
+
+            if (join && sender != null) {
+                try {
+                    sender.send(buildWhisperSubscribeFrame(topic));
+                    unjoinedTopics.remove(topic);
+                } catch (RuntimeException failure) {
+                    unjoinedTopics.add(topic);
+                    throw failure;
+                }
+            }
+        }
+
+        return () -> leaveWhisper(topic, registration);
+    }
+
+    /** Removes one registration; the last one on a topic also sends {@code whisper_unsubscribe}. */
+    private void leaveWhisper(String topic, Registration<Consumer<Object>> registration) {
+        // The unsubscribe goes out under the lock, in the order the listener state changes. It is
+        // sent
+        // before the state is removed, so a write that throws leaves the listener registered and
+        // the
+        // leave can be retried: the membership is not stranded on the server.
+        synchronized (lock) {
+            List<Registration<Consumer<Object>>> listeners = whisperListeners.get(topic);
+
+            if (listeners == null || !listeners.contains(registration)) {
+                return;
+            }
+
+            if (listeners.size() > 1) {
+                listeners.remove(registration);
+
+                return;
+            }
+
+            if (sender != null) {
+                sender.send(buildWhisperUnsubscribeFrame(topic));
+            }
+
+            whisperListeners.remove(topic);
+            unjoinedTopics.remove(topic);
+        }
+    }
+
+    /**
+     * Sends {@code data} to the other members of {@code topic}. Returns false, sending nothing,
+     * when no socket is attached: a whisper is transient and is not queued. The data is encoded
+     * first, so an unencodable value throws whether or not a socket is attached.
+     */
+    public boolean whisper(String topic, Object data) {
+        Map<String, Object> frame = buildWhisperFrame(topic, data);
+        FrameSender socket;
+
+        synchronized (lock) {
+            socket = sender;
+        }
+
+        if (socket == null) {
+            return false;
+        }
+
+        socket.send(frame);
+
+        return true;
+    }
+
+    /** A joined room. {@link #close} leaves it; {@link #send} is {@link #whisper} on its topic. */
+    public static final class Room implements AutoCloseable {
+        private final Client client;
+        private final String topic;
+        private final Runnable leave;
+        private volatile boolean closed;
+
+        private Room(Client client, String topic, Runnable leave) {
+            this.client = client;
+            this.topic = topic;
+            this.leave = leave;
+        }
+
+        /**
+         * Sends {@code message} to the room; false when no socket is attached, or the room is
+         * closed.
+         */
+        public boolean send(Object message) {
+            return !closed && client.whisper(topic, message);
+        }
+
+        /** Leaves the room. Idempotent. */
+        @Override
+        public void close() {
+            closed = true;
+            leave.run();
+        }
+    }
+
+    /**
+     * Joins the room {@code name} (the whisper topic {@code room:<name>}). It is never
+     * acknowledged, so there is nothing to wait for before {@link Room#send}.
+     */
+    public Room connectRoom(String name, Consumer<Object> listener) {
+        String topic = "room:" + name;
+
+        return new Room(this, topic, whisperSubscribe(topic, listener));
+    }
+
+    /**
+     * A listener registration. A holder rather than the listener itself: the same lambda registered
+     * twice is two entries, and each handle removes only its own. Identity equality, so a record
+     * (whose equality is by value) would not do.
+     */
+    private static final class Registration<T> {
+        final T listener;
+
+        Registration(T listener) {
+            this.listener = listener;
         }
     }
 
@@ -510,20 +891,22 @@ public final class Client {
      */
     public void close() {
         List<Offline.Discarded> discarded;
-        List<Stream> open;
+        List<Watch> open;
 
         // Emptied under the monitor, settled outside it: `clear` mutates the same list every other
         // queue call does, while settling rolls optimistic layers back and notifies listeners.
         synchronized (lock) {
             closed = true;
             sender = null;
+            pendingRetries.clear();
+            discardRuns();
             discarded = offlineQueue.clear();
             open = new ArrayList<>(streams);
         }
 
         // Every open stream ends: a consumer blocked in its loop would otherwise wait forever on a
         // client that will never deliver again.
-        for (Stream stream : open) {
+        for (Watch stream : open) {
             stream.close();
         }
 
@@ -781,8 +1164,12 @@ public final class Client {
         return cursor instanceof Number number ? number.longValue() : null;
     }
 
+    /**
+     * The {@code connect} frame. {@code token} is the session credential; null omits it. {@code
+     * caps} announces optional server behaviours and is omitted when null or empty.
+     */
     public static Map<String, Object> buildConnectFrame(
-            String clientId, Map<String, Object> context) {
+            String clientId, Map<String, Object> context, String token, List<String> caps) {
         Map<String, Object> frame = new LinkedHashMap<>();
 
         frame.put("id", "connect");
@@ -795,6 +1182,49 @@ public final class Client {
         if (context != null) {
             frame.put("context", context);
         }
+
+        if (token != null) {
+            frame.put("token", token);
+        }
+
+        if (caps != null && !caps.isEmpty()) {
+            frame.put("caps", caps);
+        }
+
+        return frame;
+    }
+
+    private static String resolve(Supplier<String> provider) {
+        return provider == null ? null : provider.get();
+    }
+
+    /** The {@code whisper_subscribe} frame: joins {@code topic} on this socket. */
+    public static Map<String, Object> buildWhisperSubscribeFrame(String topic) {
+        Map<String, Object> frame = new LinkedHashMap<>();
+
+        frame.put("topic", topic);
+        frame.put("type", "whisper_subscribe");
+
+        return frame;
+    }
+
+    /** The {@code whisper_unsubscribe} frame: leaves {@code topic}. */
+    public static Map<String, Object> buildWhisperUnsubscribeFrame(String topic) {
+        Map<String, Object> frame = new LinkedHashMap<>();
+
+        frame.put("topic", topic);
+        frame.put("type", "whisper_unsubscribe");
+
+        return frame;
+    }
+
+    /** The {@code whisper} frame: {@code data} wire-encoded, sent to the topic's other members. */
+    public static Map<String, Object> buildWhisperFrame(String topic, Object data) {
+        Map<String, Object> frame = new LinkedHashMap<>();
+
+        frame.put("data", Wire.encode(data));
+        frame.put("topic", topic);
+        frame.put("type", "whisper");
 
         return frame;
     }
@@ -908,6 +1338,7 @@ public final class Client {
 
             synchronized (lock) {
                 subscriptions.remove(id);
+                pendingRetries.remove(id);
                 current = sender;
             }
 
@@ -924,7 +1355,7 @@ public final class Client {
      * two of them can read them out of order, and the whole point of a stream is that what arrived
      * first is delivered first.
      */
-    public record StreamEvent(Object value, SubscriptionError error) {}
+    public record WatchEvent(Object value, SubscriptionError error) {}
 
     /**
      * A live query as a closeable {@link Iterable}, for {@code for (var event : stream)}.
@@ -934,22 +1365,22 @@ public final class Client {
      * try-with-resources — otherwise the subscription outlives the loop and the iterator blocks
      * forever.
      */
-    public static final class Stream implements Iterable<StreamEvent>, AutoCloseable {
+    public static final class Watch implements Iterable<WatchEvent>, AutoCloseable {
         // Unbounded, so the frame dispatcher never blocks on a slow consumer; the trade is that one
         // which stops reading without closing grows the buffer.
-        private final LinkedBlockingQueue<StreamEvent> events = new LinkedBlockingQueue<>();
+        private final LinkedBlockingQueue<WatchEvent> events = new LinkedBlockingQueue<>();
         // The sentinel the iterator stops on. A distinct instance rather than a null, because
         // LinkedBlockingQueue rejects nulls outright.
-        private final StreamEvent end = new StreamEvent(null, null);
+        private final WatchEvent end = new WatchEvent(null, null);
         private final AtomicBoolean closed = new AtomicBoolean();
         private Runnable unsubscribe = () -> {};
 
-        private Stream() {}
+        private Watch() {}
 
         @Override
-        public Iterator<StreamEvent> iterator() {
+        public Iterator<WatchEvent> iterator() {
             return new Iterator<>() {
-                private StreamEvent next;
+                private WatchEvent next;
 
                 @Override
                 public boolean hasNext() {
@@ -969,12 +1400,12 @@ public final class Client {
                 }
 
                 @Override
-                public StreamEvent next() {
+                public WatchEvent next() {
                     if (!hasNext()) {
                         throw new NoSuchElementException("the stream is closed");
                     }
 
-                    StreamEvent value = next;
+                    WatchEvent value = next;
 
                     next = null;
 
@@ -995,20 +1426,20 @@ public final class Client {
     }
 
     /**
-     * Opens a live query as a {@link Stream}.
+     * Opens a live query as a {@link Watch}.
      *
      * <p>Each call opens its OWN subscription — at CALL time, so a frame arriving before the loop
-     * starts is not lost — and {@link Stream#close} tears it down. Use {@link #subscribe} directly
+     * starts is not lost — and {@link Watch#close} tears it down. Use {@link #subscribe} directly
      * when the value outlives one loop.
      */
-    public Stream stream(String functionPath, Object args, String shardKey) {
-        Stream stream = new Stream();
+    public Watch watch(String functionPath, Object args, String shardKey) {
+        Watch stream = new Watch();
         Runnable unsubscribe =
                 subscribe(
                         functionPath,
                         args,
-                        value -> stream.events.add(new StreamEvent(value, null)),
-                        error -> stream.events.add(new StreamEvent(null, error)),
+                        value -> stream.events.add(new WatchEvent(value, null)),
+                        error -> stream.events.add(new WatchEvent(null, error)),
                         shardKey);
 
         synchronized (lock) {
@@ -1069,6 +1500,7 @@ public final class Client {
     public void resendSubscriptions() {
         FrameSender socket;
         List<Map<String, Object>> frames = new ArrayList<>();
+        Map<String, Subscription> frozen = new LinkedHashMap<>();
 
         // The frames are BUILT under the lock, not just the iteration: each one
         // reads `cursor`/`epoch`, which the frame handler writes. Snapshotting the
@@ -1083,6 +1515,14 @@ public final class Client {
             for (Map.Entry<String, Subscription> entry : subscriptions.entrySet()) {
                 Subscription subscription = entry.getValue();
 
+                // The replay from the old cursor re-applies the dropped change, and poisons again
+                // if it is still unmergeable. A send that fails below puts the freeze back.
+                if (subscription.poisoned) {
+                    frozen.put(entry.getKey(), subscription);
+                }
+
+                subscription.poisoned = false;
+                discardRun(subscription);
                 frames.add(
                         buildSubscribeFrame(
                                 entry.getKey(),
@@ -1110,8 +1550,153 @@ public final class Client {
         }
 
         for (Map<String, Object> frame : frames) {
-            socket.send(frame);
+            try {
+                socket.send(frame);
+            } catch (RuntimeException error) {
+                // Nothing replayed the dropped change for the frames that never went out, so a
+                // later delta would move the cursor past it. The failed one and every unsent
+                // frame stay frozen; the ones already sent are replaying.
+                synchronized (lock) {
+                    for (Map.Entry<String, Subscription> entry : frozen.entrySet()) {
+                        entry.getValue().poisoned = true;
+                    }
+                }
+
+                throw error;
+            }
+
+            frozen.remove(frame.get("id"));
         }
+    }
+
+    /**
+     * Re-subscribes every query whose retry hint has come due at {@link System#nanoTime}, and
+     * returns how many frames it sent. Nothing is sent, and nothing is dropped, while no socket is
+     * attached. The caller arms its own timer for {@link #nextSubscriptionRetryAtNanos}.
+     */
+    public int retryDueSubscriptions() {
+        return retryDueSubscriptions(System.nanoTime());
+    }
+
+    /** {@link #retryDueSubscriptions()} at an explicit {@link System#nanoTime} reading. */
+    public int retryDueSubscriptions(long nowNanos) {
+        FrameSender socket;
+        List<Map<String, Object>> frames = new ArrayList<>();
+        List<String> ids = new ArrayList<>();
+
+        // Built under the lock for the same reason as resendSubscriptions: each cold frame
+        // reads the entry the frame handler writes.
+        synchronized (lock) {
+            socket = sender;
+
+            if (socket == null) {
+                return 0;
+            }
+
+            Iterator<Map.Entry<String, Long>> pending = pendingRetries.entrySet().iterator();
+
+            while (pending.hasNext()) {
+                Map.Entry<String, Long> retry = pending.next();
+
+                if (retry.getValue() - nowNanos > 0) {
+                    continue;
+                }
+
+                pending.remove();
+
+                Subscription subscription = subscriptions.get(retry.getKey());
+
+                if (subscription == null) {
+                    continue;
+                }
+
+                subscription.cursor = null;
+                subscription.epoch = null;
+                ids.add(retry.getKey());
+                frames.add(
+                        buildSubscribeFrame(
+                                retry.getKey(),
+                                subscription.functionPath,
+                                subscription.args,
+                                null,
+                                null,
+                                null));
+            }
+        }
+
+        int sent = 0;
+
+        try {
+            for (; sent < frames.size(); sent++) {
+                socket.send(frames.get(sent));
+            }
+        } catch (RuntimeException failure) {
+            // The frames not written yet stay due, unless a newer hint, an unsubscribe or a new
+            // socket has decided their fate since.
+            synchronized (lock) {
+                if (sender == socket) {
+                    for (String id : ids.subList(sent, ids.size())) {
+                        if (subscriptions.containsKey(id)) {
+                            pendingRetries.putIfAbsent(id, nowNanos);
+                        }
+                    }
+                }
+            }
+
+            throw failure;
+        }
+
+        // The frames went out after the lock was released, so an unsubscribe on another thread
+        // may have reached the socket first; follow it with another, or the server keeps a
+        // subscription this client no longer holds.
+        List<String> dropped = new ArrayList<>();
+
+        synchronized (lock) {
+            for (String id : ids) {
+                if (!subscriptions.containsKey(id)) {
+                    dropped.add(id);
+                }
+            }
+        }
+
+        for (String id : dropped) {
+            socket.send(buildUnsubscribeFrame(id));
+        }
+
+        return frames.size();
+    }
+
+    /** The earliest pending retry deadline in {@link System#nanoTime} terms, or null if none. */
+    public Long nextSubscriptionRetryAtNanos() {
+        synchronized (lock) {
+            Long earliest = null;
+
+            for (long deadline : pendingRetries.values()) {
+                if (earliest == null || deadline - earliest < 0) {
+                    earliest = deadline;
+                }
+            }
+
+            return earliest;
+        }
+    }
+
+    /**
+     * The server's retry hint on a subscription error in nanoseconds, or null when it sent none
+     * this client can honour. Booleans and strings are not numbers, so they fall through.
+     */
+    private static Long retryAfterNanos(Map<String, Object> envelope) {
+        if (!(envelope.get("retryAfterMs") instanceof Number number)) {
+            return null;
+        }
+
+        double delay = number.doubleValue();
+
+        if (Double.isNaN(delay) || Double.isInfinite(delay) || delay < 0) {
+            return null;
+        }
+
+        return (long) (Math.min(delay, Offline.MAX_RETRY_AFTER_MS) * 1_000_000L);
     }
 
     /**
@@ -1137,6 +1722,15 @@ public final class Client {
         String kind = frame.get("type") instanceof String text ? text : "";
         String id = frame.get("id") instanceof String text ? text : "";
 
+        // The server answered this subscription, so a retry it was waiting on is moot. A `data`,
+        // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
+        // applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
+        if ("ack".equals(kind)) {
+            synchronized (lock) {
+                pendingRetries.remove(id);
+            }
+        }
+
         // Each case resolves the subscription UNDER the lock and hands the
         // callback back out, rather than looking `entry` up once up here: the app
         // thread can unsubscribe in between, and `advance` writes the very state
@@ -1156,11 +1750,31 @@ public final class Client {
                     // callback rather than vanish or escape handleFrame — silently
                     // dropping the frame trades a crash for a subscription that goes
                     // quietly stale.
-                    Consumer<SubscriptionError> onError;
+                    Consumer<SubscriptionError> onError = null;
+                    String code = CODE_INVALID_FRAME;
 
                     synchronized (lock) {
                         Subscription entry = subscriptions.get(id);
-                        onError = entry != null ? entry.onError : null;
+
+                        if (entry != null) {
+                            // A refused row change never reaches the base, so drop any held run and
+                            // freeze: a later frame cannot commit past the refused row.
+                            boolean deltaFrame = "delta".equals(kind);
+
+                            discardRun(entry);
+
+                            if (deltaFrame) {
+                                code = CODE_WIRE_DECODE_FAILED;
+
+                                // Already frozen: the freeze was reported once.
+                                if (!entry.poisoned) {
+                                    entry.poisoned = true;
+                                    onError = entry.onError;
+                                }
+                            } else {
+                                onError = entry.onError;
+                            }
+                        }
                     }
 
                     if (onError != null) {
@@ -1170,8 +1784,7 @@ public final class Client {
                         // was delivered.
                         onError.accept(
                                 new SubscriptionError(
-                                        CODE_INVALID_FRAME,
-                                        "malformed wire value: " + error.getMessage()));
+                                        code, "malformed wire value: " + error.getMessage()));
                     }
 
                     return "error";
@@ -1179,6 +1792,7 @@ public final class Client {
 
                 List<Runnable> deferred = new ArrayList<>();
 
+                frozen:
                 synchronized (lock) {
                     Subscription entry = subscriptions.get(id);
 
@@ -1186,8 +1800,68 @@ public final class Client {
                         return kind;
                     }
 
+                    // The merge applies to the SERVER base, not the displayed value: the layers
+                    // are re-folded onto the merged result below, as for a data frame. A row
+                    // change that cannot be merged leaves the base as it was; the reference
+                    // re-snapshots here, this port has no such path, so the next data frame
+                    // reconciles it.
+                    if ("data".equals(kind)) {
+                        // A snapshot is authoritative, so it ends any poisoning.
+                        entry.poisoned = false;
+                        discardRun(entry);
+                        entry.state.serverBase = value;
+                    } else {
+                        if (entry.poisoned) {
+                            // A dropped row change is only replayed if the resume cursor stays
+                            // before it, and only the last frame of a run carries a cursor.
+                            return kind;
+                        }
+
+                        Object base = entry.holding ? entry.heldBase : entry.state.serverBase;
+
+                        if (DeltaMerge.resolve(base, value)
+                                instanceof DeltaMerge.Outcome.Publish publish) {
+                            if (Boolean.TRUE.equals(frame.get("more"))) {
+                                // Neither the cursor nor the optimistic layers move until the run's
+                                // last frame commits it.
+                                entry.heldBase = publish.value();
+                                entry.holding = true;
+
+                                return kind;
+                            }
+
+                            discardRun(entry);
+                            entry.state.serverBase = publish.value();
+                        } else {
+                            // The run cannot commit, and replaying it needs the cursor from before
+                            // it.
+                            discardRun(entry);
+                            // Nothing changed, so nothing is published. Poisoned until a data
+                            // frame or a resubscribe, so a later frame's cursor cannot move the
+                            // resume position past the dropped change.
+                            entry.poisoned = true;
+                            // Reported once, when the freeze starts; the label exits the lock so
+                            // the callback runs after it.
+                            Consumer<SubscriptionError> handler = entry.onError;
+                            if (handler != null) {
+                                deferred.add(
+                                        () ->
+                                                handler.accept(
+                                                        new SubscriptionError(
+                                                                "delta_unmergeable",
+                                                                "a row change could not be merged;"
+                                                                    + " the subscription is frozen"
+                                                                    + " until a snapshot or a"
+                                                                    + " resubscribe")));
+                            }
+                            break frozen;
+                        }
+                    }
+
+                    // Advanced only once the frame is applied: a poisoned subscription returned
+                    // above and leaves the resume cursor where it was.
+                    pendingRetries.remove(id);
                     advance(entry, frame);
-                    entry.state.serverBase = value;
 
                     // `cursor` is OPTIONAL on data/delta frames, so a frame without one LEAVES the
                     // tracked cursor where it was. Nulling it strands every pending layer: the
@@ -1220,6 +1894,28 @@ public final class Client {
                         return kind;
                     }
 
+                    // A poisoned subscription ignores these frames too: their cursor would move
+                    // the resume position past the dropped row change.
+                    if (entry.poisoned) {
+                        return kind;
+                    }
+
+                    // A resume means the server is about to replay a held run. A settled frame
+                    // mid-run carries a cursor past rows this client never applied, so taking it
+                    // would ack a checkpoint it does not have: drop the run, keep the cursor, and
+                    // freeze so a later delta cannot commit past the dropped part.
+                    if ("settled".equals(kind) && entry.holding) {
+                        discardRun(entry);
+                        entry.poisoned = true;
+
+                        return kind;
+                    }
+
+                    if ("resume".equals(kind)) {
+                        discardRun(entry);
+                    }
+
+                    pendingRetries.remove(id);
                     advance(entry, frame);
 
                     // A resume/settled frame advances the cursor without a value change — but a
@@ -1256,11 +1952,30 @@ public final class Client {
                 SubscriptionError error =
                         new SubscriptionError(
                                 envelope.get("code") instanceof String code ? code : null, message);
+
+                // Token expiry is the session's, not the subscription's: report it, and do not
+                // route the frame, whether or not it names one.
+                if (CODE_TOKEN_EXPIRED.equals(error.code())) {
+                    notifyTokenExpired();
+
+                    return kind;
+                }
+
                 List<Consumer<SubscriptionError>> handlers = new ArrayList<>();
 
                 synchronized (lock) {
                     Subscription entry = subscriptions.get(id);
                     Shape shape = shapes.get(id);
+                    Long delay = retryAfterNanos(envelope);
+
+                    // A late frame from a detached or closed socket must not arm a retry no
+                    // sender can fire: it would sit due until the next attach, or forever.
+                    if (entry != null && delay != null && !closed && sender != null) {
+                        pendingRetries.put(id, System.nanoTime() + delay);
+                    } else if (entry != null) {
+                        // A hint-less error ends the subscription: drop an earlier hint's retry.
+                        pendingRetries.remove(id);
+                    }
 
                     if (entry != null && entry.onError != null) {
                         handlers.add(entry.onError);
@@ -1321,6 +2036,35 @@ public final class Client {
                                             ? base
                                             : null,
                                     frame.get("epoch") instanceof String epoch ? epoch : null));
+                }
+            }
+            case "whisper" -> {
+                // A whisper names its topic, so one without a non-empty string topic reaches no
+                // listener, and one whose data will not decode is dropped rather than raised.
+                if (!(frame.get("topic") instanceof String topic) || topic.isEmpty()) {
+                    return kind;
+                }
+
+                Object value;
+
+                try {
+                    value = Wire.decode(frame.get("data"));
+                } catch (RuntimeException undecodable) {
+                    return kind;
+                }
+
+                List<Registration<Consumer<Object>>> listeners;
+
+                synchronized (lock) {
+                    listeners = List.copyOf(whisperListeners.getOrDefault(topic, List.of()));
+                }
+
+                for (Registration<Consumer<Object>> registration : listeners) {
+                    try {
+                        registration.listener.accept(value);
+                    } catch (RuntimeException ignored) {
+                        // An app listener must not end the socket reader.
+                    }
                 }
             }
             case "pokePart" -> bufferPokePart(frame);
@@ -1572,15 +2316,16 @@ public final class Client {
     }
 
     /**
-     * The socket URL: the origin with its scheme swapped, plus the shard and credential query
-     * parameters when present.
+     * The socket URL: the origin with its scheme swapped, plus the shard and the admin ticket as
+     * {@code ?token=} when present. The session credential is never in the URL; it travels in the
+     * {@code connect} frame.
      *
      * <p>{@code shard=} is omitted for an empty key as well as an absent one, for the same reason
      * {@link #buildRpcBody} omits it: {@code ""} is the default shard here and a distinct named
      * shard to the runtime, and a socket opened against the wrong one would deliver frames for a
      * shard the writes never reach.
      */
-    public String wsUrl(String shardKey, String token) {
+    public String wsUrl(String shardKey) {
         String endpoint = join(WS_PATH);
 
         if (endpoint.startsWith("https://")) {
@@ -1595,8 +2340,10 @@ public final class Client {
             params.add("shard=" + URLEncoder.encode(shardKey, StandardCharsets.UTF_8));
         }
 
-        if (token != null) {
-            params.add("token=" + URLEncoder.encode(token, StandardCharsets.UTF_8));
+        String ticket = resolve(wsTicketProvider);
+
+        if (ticket != null) {
+            params.add("token=" + URLEncoder.encode(ticket, StandardCharsets.UTF_8));
         }
 
         if (params.isEmpty()) {

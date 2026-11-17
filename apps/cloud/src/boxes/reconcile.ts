@@ -83,7 +83,7 @@ const retireBoxesOfErasedOrganizations = async (ports: BoxSweepPorts, boxes: Swe
         }
 
         // eslint-disable-next-line no-await-in-loop -- one patch per box of an erased org; small
-        await ports.database.patch(box._id, { revokedAt: ports.now, status: "revoked" }, "boxes");
+        await ports.database.patch("boxes", box._id, { revokedAt: ports.now, status: "revoked" });
         retired.add(box._id);
 
         // eslint-disable-next-line no-await-in-loop -- see above
@@ -143,7 +143,7 @@ export const runBoxSweep = async (ports: BoxSweepPorts): Promise<BoxSweepResult>
     for (const [boxId, dnsError] of reconciled.outcomes) {
         if (current.get(boxId) !== dnsError) {
             // eslint-disable-next-line no-await-in-loop -- only boxes whose outcome changed are written
-            await ports.database.patch(boxId, { dnsError }, "boxes");
+            await ports.database.patch("boxes", boxId, { dnsError });
         }
     }
 

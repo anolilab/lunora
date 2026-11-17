@@ -14,10 +14,19 @@
  * as logged in, and every candidate directory wrangler might resolve on any
  * platform is searched. A false "logged in" only keeps today's behaviour; a false
  * "logged out" would switch Workers AI off for a user who has it.
+ *
+ * A login file alone can be stale (a keychain-backed `.enc` whose keyring entry is
+ * gone or whose ciphertext is invalid), so when the project has its own wrangler it
+ * is asked: `wrangler whoami --json` prints `{"loggedIn":false}` from local state
+ * alone, before any network call. Only that exact answer counts as logged out;
+ * being offline, a timeout, or a missing wrangler all still count as logged in.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
+import { dirname } from "node:path";
 
+import { readDevVariablesRecord, wranglerDotenvFiles } from "../dev-variables-format";
 import join from "../path";
 
 /** Inputs, injectable so tests never read the real home directory or env. */
@@ -28,8 +37,14 @@ interface CloudflareCredentialProbe {
     projectRoot?: string;
 }
 
-/** The `.env` files wrangler loads in dev. */
-const DOTENV_FILES = [".env", ".env.local", ".env.development", ".env.development.local"] as const;
+/**
+ * The `.env` files a dev session can take credentials from: the ones wrangler
+ * loads into its own environment, plus Vite's development-mode pair, whose
+ * `CLOUDFLARE_*` values `@cloudflare/vite-plugin` copies into `process.env`
+ * (`vite.loadEnv(mode, root, "CLOUDFLARE_")`). A superset on purpose: the check
+ * is one-sided.
+ */
+const DOTENV_FILES: ReadonlyArray<string> = [...wranglerDotenvFiles(), ".env.development", ".env.development.local"];
 
 const TOKEN_KEYS = ["CLOUDFLARE_API_TOKEN", "CF_API_TOKEN"] as const;
 const GLOBAL_KEY_KEYS = ["CLOUDFLARE_API_KEY", "CF_API_KEY"] as const;
@@ -37,14 +52,14 @@ const EMAIL_KEYS = ["CLOUDFLARE_EMAIL", "CF_EMAIL"] as const;
 
 const CREDENTIAL_KEYS: ReadonlySet<string> = new Set([...TOKEN_KEYS, ...GLOBAL_KEY_KEYS, ...EMAIL_KEYS]);
 
-/** A leading `export ` on a `.env` line. */
-const EXPORT_PREFIX = /^export\s+/u;
+/** What `wrangler whoami --json` prints when no usable login exists. */
+const LOGGED_OUT = /"loggedIn"\s*:\s*false/u;
 
-/** A `.env` file's line break. */
-const LINE_BREAK = /\r?\n/u;
+/** How long a "logged out" answer is reused, so the workers of one dev start ask once. */
+const LOGGED_OUT_TTL_MS = 10_000;
 
-/** A value wrapped in matching single or double quotes. */
-const QUOTED_VALUE = /^(["'])(.*)\1$/u;
+/** Per project, the last answer from `wrangler whoami`. */
+const answers = new Map<string, { at: number; loggedOut: boolean }>();
 
 const isSet = (value: string | undefined): boolean => value !== undefined && value.trim() !== "";
 
@@ -71,38 +86,73 @@ const hasEntries = (directory: string): boolean => {
     }
 };
 
+/** The wrangler entry script the project installed, found the way node resolves a package: nearest `node_modules` upwards. */
+const findWrangler = (projectRoot: string): string | undefined => {
+    for (let directory = projectRoot; ; directory = dirname(directory)) {
+        const script = join(directory, "node_modules", "wrangler", "bin", "wrangler.js");
+
+        if (existsSync(script)) {
+            return script;
+        }
+
+        if (dirname(directory) === directory) {
+            return undefined;
+        }
+    }
+};
+
 /**
- * The credential variables that a `.env` file sets to a non-empty value. A plain
- * `KEY=value` reader: an optional `export ` prefix and surrounding quotes are
- * stripped, and comments and blank lines are skipped. An unreadable file counts as
- * empty.
+ * Whether the project's own wrangler says its on-disk login is unusable. Everything
+ * short of that exact answer (no wrangler installed, a timeout, no network) is
+ * `false`, so this can only ever switch Workers AI off for a login that is dead.
+ * Every answer from a wrangler that ran is remembered for a few seconds, so
+ * concurrent callers share one probe: a silent probe (fail-open, treated as
+ * working) and a logout are both re-checked once the entry lapses, so a fresh
+ * `wrangler login` or logout is picked up without restarting.
  */
+const wranglerSaysLoggedOut = (projectRoot: string, env: Record<string, string | undefined>): boolean => {
+    const known = answers.get(projectRoot);
+
+    if (known !== undefined && Date.now() - known.at < LOGGED_OUT_TTL_MS) {
+        return known.loggedOut;
+    }
+
+    const script = findWrangler(projectRoot);
+
+    if (script === undefined) {
+        return false;
+    }
+
+    const { stdout } = spawnSync(process.execPath, [script, "whoami", "--json"], {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: { ...env, WRANGLER_SEND_METRICS: "false" },
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 3000,
+    });
+    const loggedOut = LOGGED_OUT.test(stdout);
+
+    // A silent probe (timeout, offline) matches neither pattern: remember it as
+    // logged in, or every caller re-pays the timeout.
+    answers.set(projectRoot, { at: Date.now(), loggedOut });
+
+    return loggedOut;
+};
+
+/** The credential variables the `.env` files set to a non-empty value. An unreadable file counts as empty. */
 const dotenvCredentialKeys = (projectRoot: string): Set<string> => {
     const keys = new Set<string>();
 
     for (const file of DOTENV_FILES) {
-        let text: string;
+        let values: Record<string, string> | undefined;
 
         try {
-            text = readFileSync(join(projectRoot, file), "utf8");
+            values = readDevVariablesRecord(join(projectRoot, file));
         } catch {
             continue;
         }
 
-        for (const raw of text.split(LINE_BREAK)) {
-            const line = raw.trim().replace(EXPORT_PREFIX, "");
-            const equals = line.indexOf("=");
-
-            if (line.startsWith("#") || equals === -1) {
-                continue;
-            }
-
-            const key = line.slice(0, equals).trim();
-            const value = line
-                .slice(equals + 1)
-                .trim()
-                .replace(QUOTED_VALUE, "$2");
-
+        for (const [key, value] of Object.entries(values ?? {})) {
             if (CREDENTIAL_KEYS.has(key) && isSet(value)) {
                 keys.add(key);
             }
@@ -125,7 +175,9 @@ const hasCloudflareCredentials = (probe: CloudflareCredentialProbe = {}): boolea
         return true;
     }
 
-    return wranglerConfigBases(env, probe.home ?? homedir()).some((base) => hasEntries(join(base, ".wrangler", "config")));
+    const hasLoginFile = wranglerConfigBases(env, probe.home ?? homedir()).some((base) => hasEntries(join(base, ".wrangler", "config")));
+
+    return hasLoginFile && (probe.projectRoot === undefined || !wranglerSaysLoggedOut(probe.projectRoot, env));
 };
 
 export type { CloudflareCredentialProbe };

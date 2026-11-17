@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -46,7 +46,7 @@ Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-sa
 pnpm add @lunora/payment stripe
 ```
 
-`stripe` is an optional peer dependency — install only the provider SDK you use; the adapter takes the client by injection. The same holds for the other providers: `createPolarAdapter` (Polar), `createAutumnAdapter` ([Autumn](https://useautumn.com)), `createDodoPaymentsAdapter` ([Dodo Payments](https://dodopayments.com)), and `createCreemAdapter` ([Creem](https://creem.io)) take a structural client too, so no provider SDK is a hard dependency of this package. Additional providers plug in via `PaymentAdapter`.
+`stripe` is an optional peer dependency — install only the provider SDK you use; the adapter takes a loader for the client, called on the first provider call and reused, so the SDK stays out of the Worker's startup graph (a static `import Stripe from "stripe"` in the entry is evaluated at startup and defeats this). The same holds for the other providers: `createPolarAdapter` (Polar), `createAutumnAdapter` ([Autumn](https://useautumn.com)), `createDodoPaymentsAdapter` ([Dodo Payments](https://dodopayments.com)), and `createCreemAdapter` ([Creem](https://creem.io)) take a loader for a structural client too, so no provider SDK is a hard dependency of this package. Additional providers plug in via `PaymentAdapter`.
 
 ## Usage
 
@@ -55,11 +55,14 @@ Build a facade from an adapter and a store, then start a hosted checkout:
 ```ts
 import { createPayment, MemoryPaymentStore } from "@lunora/payment";
 import { createStripeAdapter } from "@lunora/payment/stripe";
-import Stripe from "stripe";
 
 const payment = createPayment({
     adapter: createStripeAdapter({
-        client: new Stripe(env.STRIPE_SECRET_KEY),
+        client: async () => {
+            const { default: Stripe } = await import("stripe");
+
+            return new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
+        },
         webhookSecret: env.STRIPE_WEBHOOK_SECRET,
     }),
     // Required. Return `true` only when the current caller owns `referenceId`; anything else
@@ -99,7 +102,7 @@ Webhook signature verification needs the raw request body, so the endpoint runs 
 
 ```ts
 // lunora/http.ts
-import { webhookResponse } from "@lunora/payment";
+import { readWebhookBody, webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 import { processWebhook } from "./billing";
 
@@ -108,13 +111,15 @@ export const app = httpRouter();
 app.post(
     "/payment/webhook",
     httpAction(async (ctx, request) => {
-        const body = await request.text();
+        const body = await readWebhookBody(request);
         const signature = request.headers.get("stripe-signature") ?? "";
 
         return webhookResponse(await ctx.runAction(processWebhook, { body, signature }));
     }),
 );
 ```
+
+`readWebhookBody` caps the body at `MAX_WEBHOOK_BODY_BYTES` (1 MiB) and throws `PAYLOAD_TOO_LARGE` past it, which an `httpAction` answers with `413`: the route is public and the body has to be read before its signature can be checked, so a plain `request.text()` lets anyone make the Worker buffer as much as they send. `handleWebhook` applies the same cap.
 
 Once the signature verifies, `handleWebhook` acknowledges with `200` — a duplicate or no-op event is not re-applied — with one deliberate exception: an **orphaned** event, one patching a row whose create event has not arrived yet, answers `500` so the provider retries it (bounded to a single retry). That is why the route must use `webhookResponse`: `Response.json(result)` would answer `200` for every outcome, and an out-of-order delivery would be lost for good.
 
@@ -148,11 +153,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora payment package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora payment package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/payment?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/payment

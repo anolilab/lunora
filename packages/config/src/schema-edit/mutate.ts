@@ -159,7 +159,14 @@ const isAllowedValidatorText = (validator: unknown): boolean => {
         return false;
     }
 
-    const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
+    // `skipLoadingLibFiles` keeps the program from parsing the full `lib.d.ts` set
+    // (hundreds of ms per call) — the syntactic read below does not need it.
+    const project = new Project({
+        compilerOptions: { allowJs: true },
+        skipFileDependencyResolution: true,
+        skipLoadingLibFiles: true,
+        useInMemoryFileSystem: true,
+    });
     const sourceFile = project.createSourceFile("validator.ts", `const __v = (${validator});`, { overwrite: true });
 
     // SYNTACTIC diagnostics only — `v` is undefined in this isolated file, so a

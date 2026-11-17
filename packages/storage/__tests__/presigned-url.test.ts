@@ -20,8 +20,15 @@ const FIXED_NOW = Date.UTC(2026, 5, 7, 8, 30, 0);
  * different crypto API than the WebCrypto impl under test). If both agree on the
  * full URL, the canonicalization in `buildPresignedUrl` is correct.
  */
-const referenceUrl = (key: string, method: "GET" | "PUT", expires: number, host = `${CREDENTIALS.accountId}.r2.cloudflarestorage.com`): string => {
-    const date = new Date(FIXED_NOW);
+const referenceUrl = (
+    key: string,
+    method: "GET" | "PUT",
+    expires: number,
+    host = `${CREDENTIALS.accountId}.r2.cloudflarestorage.com`,
+    now = FIXED_NOW,
+    secretAccessKey = CREDENTIALS.secretAccessKey,
+): string => {
+    const date = new Date(now);
     const amzDate = `${date.toISOString().replaceAll(/[:-]/gu, "").slice(0, 15)}Z`;
     const dateStamp = amzDate.slice(0, 8);
     const scope = `${dateStamp}/auto/s3/aws4_request`;
@@ -53,7 +60,7 @@ const referenceUrl = (key: string, method: "GET" | "PUT", expires: number, host 
     const canonicalRequest = [method, canonicalUri, canonicalQuery, `host:${host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
     const hashedRequest = createHash("sha256").update(canonicalRequest).digest("hex");
     const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, hashedRequest].join("\n");
-    const kDate = createHmac("sha256", `AWS4${CREDENTIALS.secretAccessKey}`).update(dateStamp).digest();
+    const kDate = createHmac("sha256", `AWS4${secretAccessKey}`).update(dateStamp).digest();
     const kRegion = createHmac("sha256", kDate).update("auto").digest();
     const kService = createHmac("sha256", kRegion).update("s3").digest();
     const kSigning = createHmac("sha256", kService).update("aws4_request").digest();
@@ -69,6 +76,22 @@ describe("buildPresignedUrl", () => {
         const url = await buildPresignedUrl({ credentials: CREDENTIALS, expiresInSeconds: 900, key: "photos/cat.png", method: "GET", now: () => FIXED_NOW });
 
         expect(url).toBe(referenceUrl("photos/cat.png", "GET", 900));
+    });
+
+    it("signs under the current day and secret after an earlier presign, not a cached key", async () => {
+        expect.assertions(3);
+
+        const host = `${CREDENTIALS.accountId}.r2.cloudflarestorage.com`;
+        const nextDay = FIXED_NOW + 24 * 60 * 60 * 1000;
+        const rotated = { ...CREDENTIALS, secretAccessKey: "rotatedEXAMPLE" };
+
+        const today = await buildPresignedUrl({ credentials: CREDENTIALS, key: "x.bin", now: () => FIXED_NOW });
+        const tomorrow = await buildPresignedUrl({ credentials: CREDENTIALS, key: "x.bin", now: () => nextDay });
+        const afterRotation = await buildPresignedUrl({ credentials: rotated, key: "x.bin", now: () => nextDay });
+
+        expect(today).toBe(referenceUrl("x.bin", "GET", 900));
+        expect(tomorrow).toBe(referenceUrl("x.bin", "GET", 900, host, nextDay));
+        expect(afterRotation).toBe(referenceUrl("x.bin", "GET", 900, host, nextDay, rotated.secretAccessKey));
     });
 
     it("matches the reference for a PUT and differs from the GET signature", async () => {

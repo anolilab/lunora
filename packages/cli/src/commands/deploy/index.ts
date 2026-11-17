@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
-import { TARGET_OPTION } from "../../util/deploy-target";
+import TARGET_OPTION from "../../util/deploy-target";
 import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 const deployCommand: Command = {
@@ -10,7 +10,11 @@ const deployCommand: Command = {
         ["lunora deploy", "Deploy to Cloudflare"],
         ["lunora deploy --env production", "Deploy to a named environment"],
         ["lunora deploy --dry-run", "Validate + bundle without publishing"],
-        ["lunora deploy --migrate --migrate-yes --migrate-url <url>", "Deploy, then run pending data migrations"],
+        ["lunora deploy --migrate --migrate-yes --migrate-url <url>", "Deploy, then apply pending SQL and run the data migrations"],
+        [
+            "lunora deploy --migrate --migrate-yes --migrate-allow-destructive --migrate-url <url>",
+            "Same, and also apply a committed file that drops, renames or replaces data",
+        ],
     ],
     group: "Deploy",
     loader: () =>
@@ -21,11 +25,25 @@ const deployCommand: Command = {
     options: [
         {
             description:
-                "Override the schema-drift gate for this run (deploy even with breaking schema drift and no migration; the committed baseline is not advanced — use --update-schema-baseline to accept the new shape)",
+                "Deploy even though the app enables the open-shard option (any value but a literal false; any caller may target any shard). Without it, deploy refuses until shards are gated with `authorizeShard`",
+            name: "allow-open-shards",
+            type: Boolean,
+        },
+        {
+            description:
+                "Override the schema-drift gate for this run (deploy even with breaking schema drift and no migration; nothing is checked and the committed baseline is not advanced)",
             name: "allow-schema-drift",
             type: Boolean,
         },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
+        // Declared as `framework-build` + `no-framework-build`, like `build`: the handler reads `!== false`.
+        {
+            description: "Run the project's vite/rsbuild client build before bundling the Worker (default when wrangler reads its output)",
+            name: "framework-build",
+            type: Boolean,
+        },
+        { description: "Skip the vite/rsbuild client build; bundle whatever is already on disk", name: "no-framework-build", type: Boolean },
         { description: "Validate, bundle, and run pre-deploy gates without publishing (wrangler deploy --dry-run)", name: "dry-run", type: Boolean },
         { description: "Cloudflare environment name", name: "env", type: String },
         OUTPUT_FORMAT_OPTION,
@@ -42,13 +60,28 @@ const deployCommand: Command = {
             name: "prebuilt",
             type: Boolean,
         },
+        {
+            description:
+                "Project directory to deploy (default the working directory). A Vite or Rspack plugin with an explicit root must name the same directory.",
+            name: "root",
+            type: String,
+        },
         { description: "Admin bearer token for --migrate (falls back to LUNORA_ADMIN_TOKEN)", name: "migrate-token", type: String },
         {
             description: "Worker URL for --migrate (REQUIRED with --migrate; the deploy target URL is not captured automatically)",
             name: "migrate-url",
             type: String,
         },
-        { description: "Confirm running the production data migration triggered by --migrate (required with --migrate)", name: "migrate-yes", type: Boolean },
+        {
+            description: "Confirm the production target for --migrate: its SQL files and its data migrations (required with --migrate)",
+            name: "migrate-yes",
+            type: Boolean,
+        },
+        {
+            description: "With --migrate: confirm a committed SQL file that drops, renames, truncates or replaces data. --migrate-yes does not cover it",
+            name: "migrate-allow-destructive",
+            type: Boolean,
+        },
         // Both the positive AND the `no-*` form are declared explicitly, same as
         // `lunora codegen`'s identically-named flag (#285): relying on cerebro to
         // synthesize `--strict-advisories` from only the `no-*` declaration clones
@@ -70,7 +103,8 @@ const deployCommand: Command = {
             type: Boolean,
         },
         {
-            description: "Upload a preview version (wrangler versions upload) instead of going live — prints a preview URL; doesn't shift production traffic",
+            description:
+                "Refused: a Worker version shares production state and gets no preview URL — deploy an isolated copy with `lunora preview deploy <name>`",
             name: "preview",
             type: Boolean,
         },
@@ -79,16 +113,18 @@ const deployCommand: Command = {
             name: "skip-services",
             type: Boolean,
         },
+        // Both halves declared explicitly, like `typecheck` on `verify`: the handler reads `!== false`.
+        {
+            description: "Evaluate the modules the Worker loads on demand (lazy functions, auth, API specs) in workerd before shipping (default)",
+            name: "smoke-load",
+            type: Boolean,
+        },
+        { description: "Skip evaluating on-demand modules before shipping", name: "no-smoke-load", type: Boolean },
         TARGET_OPTION,
         {
             description:
                 "Deploy to a temporary Cloudflare account when unauthenticated (wrangler deploy --temporary; live ~60min, then claim or it's deleted). Wrangler errors if you're already authenticated.",
             name: "temporary",
-            type: Boolean,
-        },
-        {
-            description: "Re-bless the committed schema baseline (lunora/.lunora-schema.json) with the current shape",
-            name: "update-schema-baseline",
             type: Boolean,
         },
     ],
@@ -97,21 +133,26 @@ const deployCommand: Command = {
 export { deployCommand };
 
 export type DeployOptions = CreateOptions<{
+    "allow-open-shards": boolean | undefined;
     "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;
     "dry-run": boolean | undefined;
     env: string | undefined;
     format: string | undefined;
+    "framework-build": boolean | undefined;
     "health-check": boolean | undefined;
+    "lazy-functions": boolean | undefined;
     migrate: boolean | undefined;
+    "migrate-allow-destructive": boolean | undefined;
     "migrate-token": string | undefined;
     "migrate-url": string | undefined;
     "migrate-yes": boolean | undefined;
     prebuilt: boolean | undefined;
     preview: boolean | undefined;
+    root: string | undefined;
     "skip-services": boolean | undefined;
+    "smoke-load": boolean | undefined;
     "strict-advisories": boolean | undefined;
     target: string | undefined;
     temporary: boolean | undefined;
-    "update-schema-baseline": boolean | undefined;
 }>;

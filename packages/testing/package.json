@@ -1,6 +1,6 @@
 {
     "name": "@lunora/testing",
-    "version": "1.0.0-alpha.270",
+    "version": "1.0.0-alpha.337",
     "description": "Testing toolkit for Lunora: an in-memory harness for queries, mutations, and actions",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -54,9 +54,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -64,21 +62,23 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/agent": "1.0.0-alpha.213",
-        "@lunora/bindings": "1.0.0-alpha.114",
+        "@lunora/agent": "^1.0.0-alpha.283",
+        "@lunora/bindings": "1.0.0-alpha.151",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/mail": "1.0.0-alpha.108",
-        "@lunora/notify": "1.0.0-alpha.81",
-        "@lunora/queue": "1.0.0-alpha.107",
-        "@lunora/scheduler": "1.0.0-alpha.129",
-        "@lunora/server": "1.0.0-alpha.206",
-        "@lunora/wire": "1.0.0-alpha.1",
-        "@visulima/notification": "catalog:notify"
+        "@lunora/mail": "^1.0.0-alpha.139",
+        "@lunora/notify": "^1.0.0-alpha.111",
+        "@lunora/platform": "1.0.0-alpha.80",
+        "@lunora/queue": "1.0.0-alpha.143",
+        "@lunora/scheduler": "^1.0.0-alpha.169",
+        "@lunora/server": "^1.0.0-alpha.268",
+        "@lunora/wire": "1.0.0-alpha.6",
+        "@visulima/notification": "catalog:notify",
+        "ai": "catalog:ai"
     },
     "devDependencies": {
-        "@lunora/observability": "1.0.0-alpha.142",
-        "@lunora/ratelimit": "1.0.0-alpha.138",
-        "@lunora/shard-engine": "1.0.0-alpha.131",
+        "@lunora/observability": "^1.0.0-alpha.204",
+        "@lunora/ratelimit": "1.0.0-alpha.196",
+        "@lunora/shard-engine": "^1.0.0-alpha.197",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

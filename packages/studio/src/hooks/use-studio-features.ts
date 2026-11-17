@@ -1,9 +1,9 @@
-import { useLunora } from "@lunora/react";
 import { useEffect, useState } from "react";
 
 import type { StudioFeatures, StudioFeaturesResult, StudioPlatform } from "../lib/admin";
 import { ADMIN_FUNCTIONS } from "../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../lib/internal";
+import useStudioClient from "./use-studio-client";
 
 const STUDIO_FEATURES = adminRef(ADMIN_FUNCTIONS.studioFeatures);
 
@@ -98,7 +98,7 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
 const UNSETTLED: StudioFeatures = { ...DEFAULT_STUDIO_FEATURES, settled: false };
 
 const useStudioFeatures = (): StudioFeatures => {
-    const client = useLunora();
+    const client = useStudioClient();
     // Keyed on the client that answered, so a client swap reads as unsettled at
     // once rather than serving the previous worker's host until the new one answers.
     const [answer, setAnswer] = useState<{ client: typeof client; features: StudioFeatures } | undefined>(undefined);

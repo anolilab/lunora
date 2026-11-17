@@ -1,9 +1,9 @@
 import { LOG_ARCHIVE_PATH, SHARD_TRAFFIC_PATH } from "../client-paths";
-import type { LunoraClient } from "../lunora-client";
 import type { PipelineLogPage, ShardTrafficResult } from "../types";
+import type { LunoraAdminClient } from "./admin-client";
 import type { AdminHost } from "./host";
 
-export const shardTraffic = async (host: AdminHost, table: Parameters<LunoraClient["shardTraffic"]>[0]): ReturnType<LunoraClient["shardTraffic"]> => {
+export const shardTraffic = async (host: AdminHost, table: Parameters<LunoraAdminClient["shardTraffic"]>[0]): ReturnType<LunoraAdminClient["shardTraffic"]> => {
     host.assertOpen();
 
     const body = (await host.adminFetch(SHARD_TRAFFIC_PATH, "POST", { table })) as Partial<ShardTrafficResult>;
@@ -13,8 +13,8 @@ export const shardTraffic = async (host: AdminHost, table: Parameters<LunoraClie
 
 export const queryLogArchive = async (
     host: AdminHost,
-    query: Parameters<LunoraClient["queryLogArchive"]>[0] = {},
-): ReturnType<LunoraClient["queryLogArchive"]> => {
+    query: Parameters<LunoraAdminClient["queryLogArchive"]>[0] = {},
+): ReturnType<LunoraAdminClient["queryLogArchive"]> => {
     host.assertOpen();
 
     // `PipelineLogQuery` is a named interface (no index signature), so widen it

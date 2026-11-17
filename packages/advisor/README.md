@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -109,7 +109,7 @@ const findings = runAdvisor(context, { source: "static" });
 const map = scoreAdvisor(context.procedureProtections ?? [], findings);
 
 console.log(map.score, map.grade); // e.g. 84 "good"
-console.log(map.summary); // { clean: 9, exempt: 0, failing: 1, procedures: 12, rulesFired: 6, warned: 2 }
+console.log(map.summary); // { clean: 9, exempt: 0, failing: 1, procedures: 12, rulesFired: 6, suppressed: 0, warned: 2 }
 ```
 
 Each procedure starts at 100 and loses each fired **rule's** severity weight (`ERROR` 20 / `WARN` 10 / `INFO` 5 — severity is the only input; a lint carries no weight of its own) — charged once however many times that rule fires — then rolls up into a weighted global mean: public handlers count double, internal ones and queries half. Findings that name no procedure (schema shape, wrangler config) land in a project bucket weighted against the procedure population, so schema debt genuinely moves the grade.
@@ -180,11 +180,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora advisor package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora advisor package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/advisor?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/advisor

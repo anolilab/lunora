@@ -122,7 +122,7 @@ const recordingDb = (tables: Record<string, Row[]>) => {
     const patched: { id: string; patch: Row }[] = [];
     const deleted: string[] = [];
     const database = fakeControlPlaneDb(tables, {
-        delete: async (id) => {
+        delete: async (_table, id) => {
             deleted.push(id);
         },
         insert: async (table, document) => {
@@ -130,7 +130,7 @@ const recordingDb = (tables: Record<string, Row[]>) => {
 
             return `new_${String(inserted.length)}`;
         },
-        patch: async (id, patch) => {
+        patch: async (_table, id, patch) => {
             patched.push({ id, patch });
         },
     });

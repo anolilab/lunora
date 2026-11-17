@@ -54,6 +54,7 @@ import type { DirectShardDirectory, ShardHost, ShardKvStore, ShardStub, SocketHo
 
 import { createNodeShardKvStore } from "./node-kv-store";
 import { createNodeShardHost } from "./node-shard-host";
+import type { NodeSocketHost } from "./node-socket-host";
 import { createNodeSocketHost } from "./node-socket-host";
 
 /** Extension used for a file-backed shard's database. */
@@ -146,6 +147,12 @@ const shardKeyForFile = (directory: string, entry: string): string => {
 
 /** The contracts scoped to one shard key. */
 export interface NodeShard {
+    /**
+     * Inbound socket events for this shard's registry. Bind the shard that owns
+     * the sockets here, so a frame or close reaches its `webSocketMessage` and
+     * `webSocketClose`. See `bindShardSockets`.
+     */
+    inbound: Pick<NodeSocketHost, "onClose" | "onMessage">;
     /** Durable key-value storage on this shard's database. */
     kv: ShardKvStore;
     /** Single-writer execution, local SQL, transactions, durable alarms. */
@@ -208,7 +215,7 @@ export interface NodeShardRegistry {
 
 /** Build the in-process shard registry. */
 export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}): NodeShardRegistry => {
-    const live = new Map<string, { dispose: () => void; shard: NodeShard }>();
+    const live = new Map<string, { dispose: () => void; drain: () => Promise<void> | undefined; shard: NodeShard }>();
 
     /**
      * Keys known to exist, whether or not their shard is currently live.
@@ -255,14 +262,17 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             shardKey: key,
         });
 
+        const socketHost = createNodeSocketHost(database);
+
         shard = {
+            inbound: socketHost,
             kv: createNodeShardKvStore(database),
             shard: host,
             shardKey: key,
-            sockets: createNodeSocketHost(database).socket,
+            sockets: socketHost.socket,
         };
 
-        live.set(key, { dispose: disposeHost, shard });
+        live.set(key, { dispose: disposeHost, drain: socketHost.drain, shard });
         known.add(key);
 
         return shard;
@@ -285,7 +295,14 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
     return {
         close: () => {
             for (const entry of live.values()) {
-                entry.dispose();
+                // A route's close handler may still be writing; the database is disposed only once it settles.
+                const pending = entry.drain();
+
+                if (pending === undefined) {
+                    entry.dispose();
+                } else {
+                    pending.finally(entry.dispose).catch(() => undefined);
+                }
             }
 
             live.clear();

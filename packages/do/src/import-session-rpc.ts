@@ -43,6 +43,19 @@ interface ImportSessionShard {
     sql: SqlExec;
 }
 
+/**
+ * What a staged commit reports. Its own shape, not `ImportShardResult`: a replace
+ * session counts rows written per table (overwrites included) and rows pruned per
+ * table, which the runtime session totals across shards.
+ */
+interface StagedCommitResult {
+    conflicts: number;
+    /** Rows pruned per table because the snapshot did not hold them. */
+    deleted: Record<string, number>;
+    errors: ImportError[];
+    inserted: Record<string, number>;
+}
+
 /** Staged rows per write page at commit — bounds what one `runShardImport` call holds. */
 const COMMIT_PAGE_ROWS = 200;
 
@@ -105,7 +118,7 @@ const stage = (shard: ImportSessionShard, args: Record<string, unknown>, now: nu
 };
 
 /** Write every staged page through the writer, then prune — the body of the commit's one transaction. */
-const swapStaged = async (shard: ImportSessionShard, session: string, tables: ReadonlyArray<string>): Promise<ImportShardResult> => {
+const swapStaged = async (shard: ImportSessionShard, session: string, tables: ReadonlyArray<string>): Promise<StagedCommitResult> => {
     const inserted: Record<string, number> = {};
     let afterSeq = 0;
 
@@ -129,6 +142,7 @@ const swapStaged = async (shard: ImportSessionShard, session: string, tables: Re
             // `runShardImport` numbers a page's rows from 1; report the source line each was staged with.
             return {
                 conflicts: 0,
+                deleted: {},
                 errors: result.errors.map((error) => {
                     return { ...error, line: page.rows[error.line - 1]?.line ?? error.line };
                 }),
@@ -145,13 +159,13 @@ const swapStaged = async (shard: ImportSessionShard, session: string, tables: Re
 
     const pruned = await shard.runShardImport({ keepIds: stagedImportIds(shard.sql, session), replaceTables: tables, rows: [] });
 
-    return { conflicts: 0, deleted: pruned.deleted ?? {}, errors: pruned.errors, inserted };
+    return { conflicts: 0, deleted: pruned.pruned ?? {}, errors: pruned.errors, inserted };
 };
 
 /** Thrown inside the commit transaction to roll it back while keeping the outcome. */
 const ROLLBACK = new LunoraError("IMPORT_REFUSED", "staged import rolled back", { status: 400 });
 
-const commit = async (shard: ImportSessionShard, args: Record<string, unknown>, now: number): Promise<ImportShardResult & { committed?: boolean }> => {
+const commit = async (shard: ImportSessionShard, args: Record<string, unknown>, now: number): Promise<StagedCommitResult & { committed?: boolean }> => {
     const session = assertImportSessionId(args["session"]);
     const tables = stringList(args["tables"]);
     const dryRun = args["dryRun"] === true;
@@ -169,7 +183,7 @@ const commit = async (shard: ImportSessionShard, args: Record<string, unknown>, 
     }
 
     if (record?.state === "committed") {
-        return { ...(record.result as unknown as ImportShardResult), committed: true };
+        return { ...(record.result as unknown as StagedCommitResult), committed: true };
     }
 
     // A shard the session staged rows on must still hold them: committing it
@@ -182,7 +196,7 @@ const commit = async (shard: ImportSessionShard, args: Record<string, unknown>, 
         touchShardImportSession(shard.sql, session, now);
     }
 
-    let outcome: ImportShardResult | undefined;
+    let outcome: StagedCommitResult | undefined;
 
     try {
         const result = await shard.runInTransaction(async () => {

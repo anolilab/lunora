@@ -28,7 +28,9 @@
                         "TOO_MANY_REQUESTS",
                         "UNAUTHORIZED",
                         "UNPROCESSABLE",
-                        "VALIDATION_ERROR"
+                        "VALIDATION_ERROR",
+                        "UNIQUE_INDEX_DUPLICATES",
+                        "INVALID_CURSOR"
                       ],
                       "type": "string"
                     },

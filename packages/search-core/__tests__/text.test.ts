@@ -192,9 +192,7 @@ describe(countSearchTokens, () => {
     it("tallies occurrences per distinct token", () => {
         expect.assertions(1);
 
-        const analyzer = createSearchAnalyzer(undefined);
-
-        expect(countSearchTokens("cat cat dog", analyzer)).toStrictEqual(
+        expect(countSearchTokens({ body: "cat cat dog" }, { field: "body" })).toStrictEqual(
             new Map([
                 ["cat", 2],
                 ["dog", 1],
@@ -202,9 +200,53 @@ describe(countSearchTokens, () => {
         );
     });
 
-    it("returns an empty map for text with nothing to index", () => {
+    it("tallies the analyzed, capped stream: stopwords dropped, nothing past the cap", () => {
         expect.assertions(1);
 
-        expect(countSearchTokens("", createSearchAnalyzer(undefined))).toStrictEqual(new Map());
+        const document = { body: `The Cat ${"dog ".repeat(MAX_INDEXED_TOKENS)}` };
+
+        expect(countSearchTokens(document, { field: "body", language: "en" })).toStrictEqual(
+            new Map([
+                ["cat", 1],
+                ["dog", MAX_INDEXED_TOKENS - 1],
+            ]),
+        );
+    });
+
+    // Stored inverted rows were tallied from the joined text re-analyzed, so
+    // tallying the tokens directly is only safe while re-analysis is a no-op.
+    it.each([undefined, "en", "de"])("tallies what re-analyzing the joined text did (language %s)", (language) => {
+        expect.hasAssertions();
+
+        const samples = [
+            "Café über Straße naïve",
+            "бой ёж й",
+            "が パ タワー",
+            "한국어 텍스트",
+            "北京大学は東京にある",
+            "iphone15プロ用",
+            "हिन्दी भाषा",
+            "İstanbul ΟΔΟΣ",
+            `${"x".repeat(300)} word`,
+            `the cat ${"dog ".repeat(1200)}`,
+        ];
+        const index = { field: "body", language };
+        const analyzer = createSearchAnalyzer(language);
+
+        for (const body of samples) {
+            const rejoined = new Map<string, number>();
+
+            for (const token of analyzer.document(analyzedSearchText({ body }, index))) {
+                rejoined.set(token, (rejoined.get(token) ?? 0) + 1);
+            }
+
+            expect(countSearchTokens({ body }, index)).toStrictEqual(rejoined);
+        }
+    });
+
+    it("returns an empty map for a document with nothing to index", () => {
+        expect.assertions(1);
+
+        expect(countSearchTokens({}, { field: "body" })).toStrictEqual(new Map());
     });
 });

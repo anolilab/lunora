@@ -19,12 +19,12 @@ describe("discoverOwnerFieldWrites: the ctx.db receiver", () => {
             [
                 "`const database = ctx.db`",
                 "ctx, args",
-                `const database = ctx.db;\n        await database.patch(args.id, { userId: args.targetUserId }); // @write`,
+                `const database = ctx.db;\n        await database.patch("posts", args.id, { userId: args.targetUserId }); // @write`,
             ],
             [
                 "a `const` alias of a renamed ctx",
                 "c, args",
-                `const context = c;\n        await context.db.replace(args.id, { userId: args.targetUserId }); // @write`,
+                `const context = c;\n        await context.db.replace("posts", args.id, { userId: args.targetUserId }); // @write`,
             ],
         ])("reports a caller-chosen owner written through %s", (_label, parameters, body) => {
             expect.assertions(2);
@@ -182,10 +182,10 @@ export const create = ${kind}({
 
     it.each([
         ["a destructured `auth`", `const { auth } = ctx;\n    await ctx.db.insert("posts", { userId: auth.userId }); // @write`],
-        ["a row read by an args id", `await ctx.db.insert("posts", { userId: (await ctx.db.get(args.id)).ownerId }); // @write`],
+        ["a row read by an args id", `await ctx.db.insert("posts", { userId: (await ctx.db.get("posts", args.id)).ownerId }); // @write`],
         [
             "a const bound to such a row's owner",
-            `const owner = (await ctx.db.get(args.id)).ownerId;\n    await ctx.db.insert("posts", { userId: owner }); // @write`,
+            `const owner = (await ctx.db.get("posts", args.id)).ownerId;\n    await ctx.db.insert("posts", { userId: owner }); // @write`,
         ],
     ])("does not record an identity column rooted in ctx through %s", (_label, body) => {
         expect.assertions(1);

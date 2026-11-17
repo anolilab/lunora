@@ -120,6 +120,10 @@ interface PlanViteRemoteOptions {
 
 Re-exported from `@lunora/config` — signature tracked at its source.
 
+### `RemotePlan` (interface)
+
+Re-exported from `@lunora/config` — signature tracked at its source.
+
 ### `ResolvedLunoraPluginOptions` (interface)
 
 ```ts
@@ -128,6 +132,7 @@ interface ResolvedLunoraPluginOptions {
     apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
     cloudflare: false | CloudflarePluginOptions;
     generatedDir: string;
+    lazyFunctions: boolean;
     overlay: false | OverlayPluginOptions;
     projectRoot: string;
     schemaDir: string;
@@ -158,18 +163,6 @@ type SolutionFinder = NonNullable<OverlayPluginOptions["solutionFinders"]>[numbe
 
 ```ts
 const VERSION: string;
-```
-
-### `ViteRemotePlan` (interface)
-
-```ts
-interface ViteRemotePlan {
-    cleanup: () => void;
-    configPath?: string;
-    enabled: boolean;
-    reason?: string;
-    withheld: string[];
-}
 ```
 
 ### `WORKER_STARTUP_HINT` (const)
@@ -221,13 +214,13 @@ const checkLunoraProxy: (proxy: Record<string, unknown> | undefined, label: stri
 ### `codegenPlugin` (const)
 
 ```ts
-const codegenPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const codegenPlugin: (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache) => Plugin;
 ```
 
 ### `containerLogsPlugin` (const)
 
 ```ts
-const containerLogsPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const containerLogsPlugin: (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache) => Plugin;
 ```
 
 ### `detectFramework` (const)
@@ -243,7 +236,10 @@ const devStatePlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ### `devVariablesPlugin` (const)
 
 ```ts
-const devVariablesPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const devVariablesPlugin: (options: ResolvedLunoraPluginOptions, { configPath, withheld }?: {
+    configPath?: string;
+    withheld?: () => ReadonlyArray<string>;
+}) => Plugin;
 ```
 
 ### `frameworkComposePlugin` (const)
@@ -291,7 +287,7 @@ const lunoraSolutionFinders: ReadonlyArray<SolutionFinder>;
 ### `planViteRemoteBindings` (const)
 
 ```ts
-const planViteRemoteBindings: (options: PlanViteRemoteOptions) => ViteRemotePlan;
+const planViteRemoteBindings: (options: PlanViteRemoteOptions) => RemotePlan;
 ```
 
 ### `proxyCheckPlugin` (const)
@@ -307,7 +303,7 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 ### `remoteBindingsPlugin` (const)
 
 ```ts
-const remoteBindingsPlugin: (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions) => Plugin;
+const remoteBindingsPlugin: (options: CloudflarePluginOptions | undefined, planOptions: PlanViteRemoteOptions, onPlan?: (plan: RemotePlan) => void) => Plugin;
 ```
 
 ### `resolveOverlayOption` (const)
@@ -325,7 +321,7 @@ const studioPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
 ### `withRemoteBindings` (const)
 
 ```ts
-const withRemoteBindings: (options: CloudflarePluginOptions, plan: ViteRemotePlan) => CloudflarePluginOptions;
+const withRemoteBindings: (options: CloudflarePluginOptions, plan: RemotePlan) => CloudflarePluginOptions;
 ```
 
 ### `withWorkerStartupHint` (const)
@@ -337,7 +333,7 @@ const withWorkerStartupHint: (plugins: ReadonlyArray<Plugin>) => Plugin[];
 ### `wranglerValidatorPlugin` (const)
 
 ```ts
-const wranglerValidatorPlugin: (options: ResolvedLunoraPluginOptions) => Plugin;
+const wranglerValidatorPlugin: (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache) => Plugin;
 ```
 
 ## Referenced internal declarations

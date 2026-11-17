@@ -31,10 +31,11 @@ const isInlineEditChord = (event: React.KeyboardEvent): boolean =>
  * The span the inline AI rewrite is targeting: the operator's selection, or the
  * whole draft when the caret was collapsed.
  *
- * Offsets so Accept can splice the rewrite back in place, plus the text they
- * covered at arm time: the draft has writers besides the textarea (Format, the
- * prompt bar, loading a saved query), and Accept must refuse a span that no
- * longer holds what was rewritten.
+ * Offsets so the accepted rewrite can be spliced back, and the targeted `text`
+ * so Accept can tell the span still holds what was asked about. Typing dismisses
+ * an armed rewrite, but Format, loading a saved query and the assistant's Insert
+ * change the draft without a keystroke — offsets alone would splice the proposal
+ * across whatever now sits there.
  */
 interface InlineEditTarget {
     readonly end: number;
@@ -45,7 +46,7 @@ interface InlineEditTarget {
 /** Everything {@link useSqlEditorSurface} hands back — what the editor pane renders and wires. */
 interface SqlEditorSurface {
     /** The completion popover's state, or `null` when closed. */
-    /** Splice an accepted AI rewrite over `inlineEdit`'s span and close the panel. */
+    /** Splice an accepted AI rewrite over `inlineEdit`'s span and close the panel — or just close it when that span no longer holds the text it targeted. */
     readonly acceptInlineEdit: (sql: string) => void;
     readonly autocompleteState: SqlAutocomplete["state"];
     /** Dismiss the popover — also called when the panel switches tabs. */
@@ -279,10 +280,11 @@ const useSqlEditorSurface = ({
 
         const { end, start, text } = inlineEdit;
 
-        // The draft moved underneath the armed span (Format, prompt bar, load):
-        // splicing now would land the rewrite across unrelated characters.
+        // The draft moved under the armed span (see `InlineEditTarget`). The
+        // proposal was written for text that is no longer there, so drop it
+        // rather than splice it over unrelated SQL.
         if (node.value.slice(start, end) !== text) {
-            closeInlineEdit();
+            setInlineEdit(null);
 
             return;
         }

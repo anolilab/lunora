@@ -34,7 +34,7 @@ export const releaseDetail = (deployment: DeploymentRow, url: string | undefined
 
 /** The project's display name for a notification, falling back when the row is gone. */
 export const projectNameOf = async (context: MutationContext, projectId: Id<"projects">): Promise<string> => {
-    const project = (await context.db.get(projectId)) as null | { name?: string };
+    const project = (await context.db.get("projects", projectId)) as null | { name?: string };
 
     return project?.name ?? "project";
 };
@@ -42,11 +42,11 @@ export const projectNameOf = async (context: MutationContext, projectId: Id<"pro
 /** The catalog install badge over this mutation's database (`src/catalog/install-badge.ts` holds the rule). */
 export const installBadgeOf = (context: MutationContext): InstallBadgeStore => {
     return {
-        delete: (id) => context.db.delete(id as Id<"catalogInstalls">),
+        delete: (id) => context.db.delete("catalogInstalls", id as Id<"catalogInstalls">),
         insert: async (row) => await context.db.insert("catalogInstalls", row),
         installsOf: (projectId) =>
             collectAll<BadgeInstall>((cursor) => context.db.catalogInstalls.findMany({ cursor, where: { projectId: projectId as Id<"projects"> } })),
-        patch: (id, values) => context.db.patch(id as Id<"catalogInstalls">, values),
+        patch: (id, values) => context.db.patch("catalogInstalls", id as Id<"catalogInstalls">, values),
     };
 };
 
@@ -67,7 +67,7 @@ export const onEnter = async (context: MutationContext, id: Id<"deployments">, e
     // written again by a retry — firing on the state rather than the crossing
     // would page somebody once per attempt for one broken release.
     if (status === "failed" && existing.status !== "failed") {
-        const project = (await context.db.get(existing.projectId)) as null | { name: string };
+        const project = (await context.db.get("projects", existing.projectId)) as null | { name: string };
 
         await fireDeployAlerts(context, existing.organizationId, `deployment:${id}`, {
             detail: `The deployment did not reach a live state. Its last recorded phase was "${existing.status}".`,

@@ -12,9 +12,27 @@ export {
     LUNORA_SKILL_NAMES,
     ROOT_SKILL_NAME,
 } from "./agent-rules";
+export type { MarkedApiSpec } from "./api-spec-marker";
+export { clearApiSpecMarker, readApiSpecMarker, writeApiSpecMarker } from "./api-spec-marker";
+export { MissingBuildOutputError } from "./build-output-error";
+export { default as canonicalPath } from "./canonical-path";
+export type { CelldToolchainProbe, CelldToolchainProbeOptions } from "./celld/celld-toolchain";
+export { probeCelldToolchain } from "./celld/celld-toolchain";
 export type { CelldDevSession, CelldDevSessionOptions, CelldLineOrigin } from "./celld/dev-session";
-export { startCelldDevSession } from "./celld/dev-session";
-export { CODEGEN_ENV, isCodegenDisabled } from "./codegen-env";
+export { startCelldDevSession, writeCelldDevProjection } from "./celld/dev-session";
+export { D1_PLACEHOLDER_ID } from "./cloudflare/placeholder-ids";
+export {
+    BUILD_ROOT_ENV,
+    BUILD_TARGET_ENV,
+    BUNDLE_META_PATH_ENV,
+    CODEGEN_ENV,
+    DEFAULT_BUNDLE_META_PATH,
+    isCodegenDisabled,
+    isLazyFunctionsEnabled,
+    LAZY_FUNCTIONS_ENV,
+    resolveLazyFunctions,
+    STRICT_ADVISORIES_ENV,
+} from "./codegen-env";
 export type { ContainerIR, DiscoverContainerInfoResult } from "./container-info";
 export { discoverContainerInfo } from "./container-info";
 export type {
@@ -39,6 +57,8 @@ export type {
 } from "./deploy-driver";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework, projectUsesUmbrella } from "./detect-framework";
+export type { DevEnvCheck, DevEnvCheckOptions, EnvKeyFailure } from "./dev-env-check";
+export { checkDevEnv, describeDevEnvCheck, ENV_FILENAME } from "./dev-env-check";
 export type { DevProcess, DevProcessOptions, DevProcessSpawner } from "./dev-process";
 export { acceptsConnection, startDevProcess } from "./dev-process";
 export type { ClaimDevServerStateResult, DevServerMode, DevServerState } from "./dev-server-state";
@@ -60,14 +80,18 @@ export {
     updateDevServerState,
     writeDevServerState,
 } from "./dev-server-state";
+export type { DevTriggerHint, DevTriggerHintOptions } from "./dev-trigger-hints";
+export { devTriggerHints, formatDevBannerRow } from "./dev-trigger-hints";
 export {
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
     DEV_VARS_KEY_PATTERN,
     escapeRegExp,
     parseDevVariableEntries,
+    readDevVariablesRecord,
     removeDevVariableLine,
     upsertDevVariableLine,
+    wranglerDotenvFiles,
 } from "./dev-variables-format";
 export { DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, ensureDevWorkerEnv } from "./dev-worker-env";
 export type { DiscoveryCache } from "./discovery-cache";
@@ -82,6 +106,7 @@ export {
     runnableTargetIds,
     targetRunsOwnDevServer,
 } from "./driver-registry";
+export { default as ensureGitignoreEntries } from "./ensure-gitignore";
 export type { InferOptions, InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings, secretSourcesFromBindings } from "./infer-bindings";
 export type { LinkedProject } from "./linked-project";
@@ -89,9 +114,10 @@ export { LINKED_PROJECT_DIR, LINKED_PROJECT_FILE, readLinkedProject, writeLinked
 export type { LintIgnoreOutcome, LintIgnoreStatus, LintTool } from "./lint-ignores";
 export { applyLintIgnores, detectLintTools, LUNORA_IGNORED_PATHS } from "./lint-ignores";
 export type { FindingLogger } from "./log-badge";
-export { advisoryLine, blockingFindingsMessage, LUNORA_TAG, lunoraLine, reportCodegenFindings } from "./log-badge";
+export { blockingFindingsMessage, reportCodegenFindings } from "./log-badge";
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
+export { advisoryLine, LUNORA_TAG, lunoraLine } from "./log-line";
 export { default as LunoraReporter } from "./lunora-reporter";
 export type { PackageManager, PackageManagerProbe } from "./package-manager";
 export {
@@ -105,11 +131,18 @@ export {
     toolchainExecArgs,
 } from "./package-manager";
 export type { SecretEntry } from "./package-secrets-registry";
-export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
+export { mintableSecretKeysFor, PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { HookLogger, HookSpawnDescriptor, HookSpawner, PostCodegenHookResult } from "./post-codegen-hook";
 export { runPostCodegenHook } from "./post-codegen-hook";
 export type { RemotePreference } from "./project-config";
-export { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow } from "./project-config";
+export {
+    assertBuildTargetMatches,
+    interpretRemote,
+    readProjectRemotePreference,
+    readProjectTarget,
+    resolveProjectTarget,
+    resolveTargetOrThrow,
+} from "./project-config";
 export { readProjectDependencies, readProjectDependencyNames, readProjectManifest } from "./project-manifest";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptText, promptYesNo } from "./prompt";

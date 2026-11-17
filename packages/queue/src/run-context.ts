@@ -9,12 +9,14 @@
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { createDispatchLogger, createDispatchRunner } from "@lunora/dispatch";
 
-import type { QueueRunContext } from "./types";
+import type { QueueLivePublisher, QueueRunContext } from "./types";
 
 interface RunContextOptions {
     env: Record<string, unknown>;
     exportName: string;
     fetchImpl?: typeof fetch;
+    /** The runtime's shard-forwarding publisher, surfaced as `ctx.live`. Omitted → `ctx.live` is absent. */
+    live?: QueueLivePublisher;
     /** The consumer invocation's `traceparent`, so `ctx.run` joins the queue's trace. */
     traceparent?: string;
 }
@@ -30,6 +32,7 @@ const createQueueRunContext = (options: RunContextOptions): QueueRunContext => {
             label: "@lunora/queue",
             ...(options.traceparent === undefined ? {} : { traceparent: options.traceparent }),
         }),
+        ...(options.live === undefined ? {} : { live: options.live }),
     };
 };
 

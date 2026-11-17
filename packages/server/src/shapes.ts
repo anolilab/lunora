@@ -68,7 +68,7 @@ import type { InferValidatorMap, ValidatorMap } from "@lunora/values";
 
 import type { Middleware } from "./builder/types";
 import contextUserId from "./context-identity";
-import { validateArgs } from "./functions";
+import { admitSensitiveArgs, validateArgs } from "./functions";
 import { deny, toWhereInput } from "./rls/predicates";
 import type { RlsReadRegistry } from "./rls/shape-read-base";
 import { buildRlsReadRegistry } from "./rls/shape-read-base";
@@ -215,6 +215,11 @@ export const defineShape = <Args extends ValidatorMap = ValidatorMap, Context = 
 
     const compileWhere = (context: unknown, rawArgs: Record<string, unknown>, options?: { ownerField?: string }): WhereInput => {
         const parsed = validateArgs(definition.args ?? ({} as Args), rawArgs);
+
+        // The where-clause receives the validator's output, which a `v.sensitive` transform may
+        // have changed (trimmed, decoded). Admit it before the predicate can log or throw it.
+        admitSensitiveArgs(context, definition.args ?? {}, parsed);
+
         const shapeWhere = definition.where ? toWhereInput(definition.where(context as Context, parsed)) : undefined;
 
         if (definition.owner === undefined) {

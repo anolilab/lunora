@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, LunoraClient, MutationCallOptions, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, MutationCallOptions, OnlineOnlyOption, ReturnOf } from "@lunora/client";
 
 import { resolveLunoraClient } from "./client";
 
@@ -35,8 +35,15 @@ export interface MutateOptions<F extends FunctionReference> extends MutationCall
  * resolve from the injector.
  * @experimental
  */
-export const mutate = <F extends FunctionReference>(reference: F, args: ArgsOf<F>, options: MutateOptions<F> = {}): Promise<ReturnOf<F>> => {
-    const { client, ...callOptions } = options;
+export const mutate = <F extends FunctionReference>(
+    reference: F,
+    args: ArgsOf<F>,
+    options: MutateOptions<F> & OnlineOnlyOption<F> = {},
+): Promise<ReturnOf<F>> => {
+    const { client, ...rest } = options;
+    // Destructuring a conditional intersection drops the `OnlineOnlyOption<F>` arm; the
+    // options were already checked against it at this function's signature.
+    const callOptions = rest as MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>;
 
     return resolveLunoraClient(client).mutation(reference, args, callOptions);
 };

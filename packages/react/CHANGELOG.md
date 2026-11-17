@@ -1,3 +1,731 @@
+## @lunora/react [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.300...@lunora/react@1.0.0-alpha.301) (2026-11-12)
+
+- fix(react): depend on the workspace client so the release pins the matching one (#1555)
+
+## @lunora/react [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.299...@lunora/react@1.0.0-alpha.300) (2026-11-11)
+
+- feat(client): move admin auth hook logic into @lunora/client (#1552)
+
+## @lunora/react [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.298...@lunora/react@1.0.0-alpha.299) (2026-11-10)
+
+- fix(react): pass the provider's query client to TanStack; extend the cross-copy fix to other frameworks (#1524)
+
+## @lunora/react [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.297...@lunora/react@1.0.0-alpha.298) (2026-11-10)
+
+- fix(react): share the provider contexts across copies of the package (#1523)
+
+## @lunora/react [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.296...@lunora/react@1.0.0-alpha.297) (2026-11-05)
+
+- fix(client): restart a paginated feed when the server refuses its cursor (#1496)
+
+## @lunora/react [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.295...@lunora/react@1.0.0-alpha.296) (2026-11-04)
+
+- Release 1.0.0-alpha.296. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
+
+## @lunora/react [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.294...@lunora/react@1.0.0-alpha.295) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.196
+
+## @lunora/react [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.293...@lunora/react@1.0.0-alpha.294) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.284
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.195
+
+## @lunora/react [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.292...@lunora/react@1.0.0-alpha.293) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.283
+
+## @lunora/react [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.291...@lunora/react@1.0.0-alpha.292) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.282
+
+## @lunora/react [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.290...@lunora/react@1.0.0-alpha.291) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.281
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.194
+
+## @lunora/react [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.289...@lunora/react@1.0.0-alpha.290) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.279
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.192
+
+## @lunora/react [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.288...@lunora/react@1.0.0-alpha.289) (2026-11-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.278
+
+## @lunora/react [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.287...@lunora/react@1.0.0-alpha.288) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.277
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.191
+
+## @lunora/react [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.286...@lunora/react@1.0.0-alpha.287) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.276
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.190
+
+## @lunora/react [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.285...@lunora/react@1.0.0-alpha.286) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.275
+
+## @lunora/react [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.284...@lunora/react@1.0.0-alpha.285) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.274
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.189
+
+## @lunora/react [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.283...@lunora/react@1.0.0-alpha.284) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.188
+
+## @lunora/react [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.282...@lunora/react@1.0.0-alpha.283) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.273
+
+## @lunora/react [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.281...@lunora/react@1.0.0-alpha.282) (2026-10-30)
+
+### Performance Improvements
+
+* **react,codegen:** cache page keys and evaluate flags concurrently ([#1391](https://github.com/anolilab/lunora/issues/1391)) ([aa302ec](https://github.com/anolilab/lunora/commit/aa302ec401c41ba573a6e772591cc8399f2f56ee))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.272
+
+## @lunora/react [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.280...@lunora/react@1.0.0-alpha.281) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.187
+
+## @lunora/react [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.279...@lunora/react@1.0.0-alpha.280) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.269
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.186
+
+## @lunora/react [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.278...@lunora/react@1.0.0-alpha.279) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.268
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.185
+
+## @lunora/react [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.277...@lunora/react@1.0.0-alpha.278) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.184
+
+## @lunora/react [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.276...@lunora/react@1.0.0-alpha.277) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.265
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.183
+
+## @lunora/react [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.275...@lunora/react@1.0.0-alpha.276) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.264
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.182
+
+## @lunora/react [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.274...@lunora/react@1.0.0-alpha.275) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.263
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.181
+
+## @lunora/react [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.273...@lunora/react@1.0.0-alpha.274) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.262
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.180
+
+## @lunora/react [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.272...@lunora/react@1.0.0-alpha.273) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.261
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.179
+
+## @lunora/react [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.271...@lunora/react@1.0.0-alpha.272) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.260
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.178
+
+## @lunora/react [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.270...@lunora/react@1.0.0-alpha.271) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.259
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.177
+
+## @lunora/react [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.269...@lunora/react@1.0.0-alpha.270) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.258
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.176
+
+## @lunora/react [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.268...@lunora/react@1.0.0-alpha.269) (2026-10-27)
+
+### ⚠ BREAKING CHANGES
+
+* **client:** the admin methods (`listFunctions`, `listKvKeys`,
+`listScheduledJobs`, `listAuthUsers`, `getAuthConfig`, ... ) are no longer
+on `LunoraClient`; construct `new LunoraAdminClient(...)` from
+`@lunora/client/admin` to call them. `@lunora/react`'s admin-auth hooks
+throw unless the provider's client is a LunoraAdminClient. `@lunora/studio`'s
+`client` prop and `@lunora/mcp`'s `client` option and `callTool` now take a
+LunoraAdminClient.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci: note that the client size job builds its workspace deps
+
+The step lists only the adapters; vis expands it to their whole
+dependency closure (26 build tasks, including server, shard-engine and
+values, which the reference apps resolve through ratelimit).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci: count TanStack Query in the React size budget and require baselines
+
+- `@tanstack/*` was external to the reference apps, but the React adapter
+  ships TanStack Query, so adapter-driven growth there passed the gate. It is
+  now bundled; the React baseline moves from 47.3 to 56.7 KiB gzip (the other
+  adapters do not use it and are unchanged).
+- An app with no committed baseline got an unlimited ceiling. Check mode now
+  fails it with the instruction to run `client-size:update`.
+- The reference apps are written out literally instead of built from
+  JSON.stringify templates, which code scanning flagged as code built from
+  improperly sanitized values (the inputs were constants, so nothing was
+  injectable, but the literal source is also simpler to read).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(studio): embed Studio with a LunoraAdminClient
+
+The README still built a plain `LunoraClient` for `<Studio>`, which now
+requires the admin client, so following it crashed on first render. Also
+points the data browser's transport note at `useStudioClient` and fixes a
+`{@link}` to `readGlobalTablePage`, which moved to `LunoraAdminClient`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(mcp): reject an injected client without the admin surface
+
+A JS caller or a cast that passes a plain LunoraClient as `client` used to
+fail on the first tool call with `listFunctions is not a function`. Fail at
+construction instead, with the same LunoraAdminClient message Studio and the
+React admin-auth hooks give.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* ci: run the client size gate on lockfile and catalog bumps
+
+The gate bundles TanStack Query and each adapter's framework runtime, so a
+dependency bump changes the shipped size without touching `packages/**`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test: type the mcp client stubs and sort an admin-list import
+
+The Lint (eslint) job failed on `vitest/require-mock-type-parameters` for the
+`listFunctions` stubs added with the MCP client guard, and on import order in
+the admin-auth-lists test after it switched to LunoraAdminClient.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(client): drop admin doc comments that restate the method
+
+Eight auth-admin methods carried a one-line comment that only repeated the
+method name; the signature already says it. The rest name a plugin
+requirement, a cascade or a caveat and stay.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): split five panels past the complexity budget
+
+VectorBrowser, MetricsPanel, HealthPanel, QueuesPanel and
+PermissionsPlayground each exceeded react-doctor's cyclomatic/cognitive
+limit of 15. Their independent render branches move into components
+(index table, matches, metrics tabs/toolbar/overview, status banner,
+shards card, DLQ warning, probe outcome and run controls), and the send
+form's validation into a pure parseSendInput.
+
+The metrics sparkline series is now tagged with its shard and reads as
+empty under another, instead of being reset by a setState in the effect,
+which react-doctor flagged as adjusting state on a prop change. A test
+covers the shard switch.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): reset shard metrics series when the shard changes
+
+The sparkline series stayed in state after a shard switch until the new shard recorded its first
+delta, so returning to a previously viewed shard restored its stale history and appended new
+deltas to it. A shard switch now starts an empty series.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(deps): pin @lunora/client to the version that ships ./admin
+
+react, mcp, studio and lunorash import the @lunora/client/admin subpath but pinned older
+exact versions that do not export it. Pin them to the current in-repo version.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **client:** smaller browser bundle, one-pass delta merge, client size gate ([#1353](https://github.com/anolilab/lunora/issues/1353)) ([b940830](https://github.com/anolilab/lunora/commit/b9408305ff0fa5d6328a63078bf40e66e70893eb))
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.257
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.175
+
+## @lunora/react [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.267...@lunora/react@1.0.0-alpha.268) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.256
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.174
+
+## @lunora/react [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.266...@lunora/react@1.0.0-alpha.267) (2026-10-27)
+
+### Performance Improvements
+
+* **react:** skip foreign cache events in usePaginatedQuery ([#1371](https://github.com/anolilab/lunora/issues/1371)) ([1956a48](https://github.com/anolilab/lunora/commit/1956a487f0a1f7f105ad1e6d503676d2afce55c8))
+
+### Code Refactoring
+
+* **client:** host the framework-neutral auth and query-options cores ([#1358](https://github.com/anolilab/lunora/issues/1358)) ([861397a](https://github.com/anolilab/lunora/commit/861397afe2b363999bbcd1400d6a0190715c6fee))
+
+## @lunora/react [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.265...@lunora/react@1.0.0-alpha.266) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.253
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.172
+
+## @lunora/react [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.264...@lunora/react@1.0.0-alpha.265) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.252
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.171
+
+## @lunora/react [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.263...@lunora/react@1.0.0-alpha.264) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.251
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.170
+
+## @lunora/react [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.262...@lunora/react@1.0.0-alpha.263) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.250
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.169
+
+## @lunora/react [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.261...@lunora/react@1.0.0-alpha.262) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.249
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.168
+
+## @lunora/react [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.260...@lunora/react@1.0.0-alpha.261) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.248
+
+## @lunora/react [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.259...@lunora/react@1.0.0-alpha.260) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.247
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.167
+
+## @lunora/react [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.258...@lunora/react@1.0.0-alpha.259) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.246
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.166
+
+## @lunora/react [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.257...@lunora/react@1.0.0-alpha.258) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.245
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.165
+
+## @lunora/react [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.256...@lunora/react@1.0.0-alpha.257) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.244
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.164
+
+## @lunora/react [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.255...@lunora/react@1.0.0-alpha.256) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.243
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.163
+
+## @lunora/react [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.254...@lunora/react@1.0.0-alpha.255) (2026-10-22)
+
+### Bug Fixes
+
+* **client:** keep the session WebSocket credential out of the URL ([#1282](https://github.com/anolilab/lunora/issues/1282)) ([be89863](https://github.com/anolilab/lunora/commit/be89863726b49c0f5d8e8bb7e479b793f93197d9))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.162
+
+## @lunora/react [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.253...@lunora/react@1.0.0-alpha.254) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.241
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.161
+
+## @lunora/react [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.252...@lunora/react@1.0.0-alpha.253) (2026-10-22)
+
+### Features
+
+* **agent:** add owner-scoped approvals inbox ([#1255](https://github.com/anolilab/lunora/issues/1255)) ([5ee5072](https://github.com/anolilab/lunora/commit/5ee5072b2e51a9ac79bf846efeb0fc3347a5b429))
+
+## @lunora/react [1.0.0-alpha.252](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.251...@lunora/react@1.0.0-alpha.252) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.239
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.159
+
+## @lunora/react [1.0.0-alpha.251](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.250...@lunora/react@1.0.0-alpha.251) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.238
+
+## @lunora/react [1.0.0-alpha.250](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.249...@lunora/react@1.0.0-alpha.250) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.237
+
+## @lunora/react [1.0.0-alpha.249](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.248...@lunora/react@1.0.0-alpha.249) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.236
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.158
+
+## @lunora/react [1.0.0-alpha.248](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.247...@lunora/react@1.0.0-alpha.248) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.235
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.157
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
+## @lunora/react [1.0.0-alpha.247](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.246...@lunora/react@1.0.0-alpha.247) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.234
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.156
+
+## @lunora/react [1.0.0-alpha.246](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.245...@lunora/react@1.0.0-alpha.246) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.233
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.155
+
+## @lunora/react [1.0.0-alpha.245](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.244...@lunora/react@1.0.0-alpha.245) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.232
+
+## @lunora/react [1.0.0-alpha.244](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.243...@lunora/react@1.0.0-alpha.244) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.231
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.154
+
+## @lunora/react [1.0.0-alpha.243](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.242...@lunora/react@1.0.0-alpha.243) (2026-10-19)
+
+### Bug Fixes
+
+* **do:** bound subscription work and apply replica pages atomically ([#1265](https://github.com/anolilab/lunora/issues/1265)) ([d3b5c5c](https://github.com/anolilab/lunora/commit/d3b5c5ccc5c1c7ca72636cd4b2d8232143f79547))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.230
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.153
+
+## @lunora/react [1.0.0-alpha.242](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.241...@lunora/react@1.0.0-alpha.242) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.229
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.152
+
+## @lunora/react [1.0.0-alpha.241](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.240...@lunora/react@1.0.0-alpha.241) (2026-10-18)
+
+### Features
+
+* **client:** share one live stream connection and add live topic bindings ([#1252](https://github.com/anolilab/lunora/issues/1252)) ([d108d5a](https://github.com/anolilab/lunora/commit/d108d5af5fa7f8dc099d7a30c42deeeb956fdebe))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.228
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.151
+
+## @lunora/react [1.0.0-alpha.240](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.239...@lunora/react@1.0.0-alpha.240) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.227
+
+## @lunora/react [1.0.0-alpha.239](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.238...@lunora/react@1.0.0-alpha.239) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.226
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.150
+
+## @lunora/react [1.0.0-alpha.238](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.237...@lunora/react@1.0.0-alpha.238) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.225
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.149
+
+## @lunora/react [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.236...@lunora/react@1.0.0-alpha.237) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.224
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.148
+
+## @lunora/react [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.235...@lunora/react@1.0.0-alpha.236) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.222
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.147
+
+## @lunora/react [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.234...@lunora/react@1.0.0-alpha.235) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.221
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.146
+
+## @lunora/react [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.233...@lunora/react@1.0.0-alpha.234) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.219
+
+## @lunora/react [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.232...@lunora/react@1.0.0-alpha.233) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.218
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.145
+
+## @lunora/react [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.231...@lunora/react@1.0.0-alpha.232) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.217
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.144
+
+## @lunora/react [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.230...@lunora/react@1.0.0-alpha.231) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.216
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.143
+
+## @lunora/react [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.229...@lunora/react@1.0.0-alpha.230) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.215
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.142
+
+## @lunora/react [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.228...@lunora/react@1.0.0-alpha.229) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.141
+
+## @lunora/react [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.227...@lunora/react@1.0.0-alpha.228) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.214
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.139
+
 ## @lunora/react [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/react@1.0.0-alpha.226...@lunora/react@1.0.0-alpha.227) (2026-10-15)
 
 

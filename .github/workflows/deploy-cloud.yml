@@ -78,7 +78,7 @@
             "CLOUDFLARE_API_TOKEN": "${{ secrets.CLOUDFLARE_API_TOKEN }}"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               # SECURITY TODO: this job holds a Cloudflare API token that can create
               # and overwrite Workers. `block` needs an allowlist confirmed from a
               # real audit run — an incomplete one breaks the deploy. Known-required
@@ -89,7 +89,7 @@
             - "name": "Git checkout"
               # Full history: the release job below derives its changelog range from
               # the previous `cloud-v*` tag, which a shallow clone does not carry.
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
 
@@ -121,12 +121,13 @@
                   echo "Deploying the ${name} cell from ${REF_NAME}."
 
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "deploy-cloud"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -287,12 +288,12 @@
             "contents": "write" # to create the GitHub release
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
 

@@ -53,6 +53,7 @@ interface AppendAuthAuditEntry {
 
 ```ts
 interface AppendAuthAuditOptions {
+    hashKey?: string;
     redactDetail?: boolean;
     retention?: number;
 }
@@ -123,6 +124,9 @@ interface AuthAdmin {
         password?: string;
         role?: string | string[];
     }) => Promise<AuthAdminUser>;
+    deleteApiKey: (input: {
+        apiKeyId: string;
+    }) => Promise<void>;
     deleteOrganization: (input: {
         organizationId: string;
     }) => Promise<void>;
@@ -147,6 +151,9 @@ interface AuthAdmin {
     listAccounts: (input: {
         userId: string;
     }) => Promise<AuthAccount[]>;
+    listApiKeys: (input: {
+        userId: string;
+    }) => Promise<AuthApiKey[]>;
     listInvitations: (options: {
         limit?: number;
         offset?: number;
@@ -285,6 +292,23 @@ interface AuthAdminUser {
 }
 ```
 
+### `AuthApiKey` (interface)
+
+```ts
+interface AuthApiKey {
+    [key: string]: unknown;
+    createdAt?: AuthTimestamp;
+    enabled?: boolean;
+    expiresAt?: AuthTimestamp | null;
+    id: string;
+    lastRequest?: AuthTimestamp | null;
+    name?: null | string;
+    prefix?: null | string;
+    referenceId: string;
+    start?: null | string;
+}
+```
+
 ### `AuthAuditEntry` (interface)
 
 ```ts
@@ -305,7 +329,7 @@ interface AuthAuditEntry {
 ### `AuthAuditEvent` (type)
 
 ```ts
-type AuthAuditEvent = "account-link" | "account-unlink" | "email-verification" | "mfa-disable" | "mfa-enable" | "password-change" | "password-reset" | "session-revoke" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "token-refresh" | (string & {});
+type AuthAuditEvent = "account-link" | "account-unlink" | "admin-impersonate-start" | "admin-impersonate-stop" | "admin-password-set" | "admin-role-change" | "admin-session-revoke" | "admin-user-ban" | "admin-user-create" | "admin-user-remove" | "admin-user-unban" | "admin-user-update" | "api-key-create" | "api-key-delete" | "api-key-update" | "device-approve" | "device-deny" | "email-change" | "email-change-request" | "email-verification" | "mfa-backup-codes-regenerate" | "mfa-disable" | "mfa-enable" | "oauth-client-create" | "oauth-client-delete" | "oauth-client-keys-rotate" | "oauth-client-secret-rotate" | "oauth-client-update" | "oauth-consent" | "oauth-consent-revoke" | "oauth-consent-update" | "oauth-resource-client-link" | "oauth-resource-client-unlink" | "oauth-resource-create" | "oauth-resource-delete" | "oauth-resource-update" | "oauth-token-issue" | "oauth-token-revoke" | "one-time-token-create" | "org-create" | "org-delete" | "org-invitation-accept" | "org-invitation-cancel" | "org-invitation-create" | "org-invitation-reject" | "org-member-leave" | "org-member-remove" | "org-member-role-change" | "org-role-change" | "org-switch" | "org-team-create" | "org-team-member-add" | "org-team-member-remove" | "org-team-remove" | "org-team-switch" | "org-team-update" | "org-update" | "passkey-add" | "passkey-remove" | "passkey-rename" | "password-change" | "password-reset" | "password-reset-request" | "phone-verification" | "scim-group-create" | "scim-group-delete" | "scim-group-update" | "scim-user-create" | "scim-user-delete" | "scim-user-update" | "session-revoke" | "session-switch" | "sign-in" | "sign-in-initiated" | "sign-out" | "sign-up" | "sso-provider-delete" | "sso-provider-register" | "sso-provider-update" | "token-refresh" | "user-delete" | "user-delete-request" | (string & {});
 ```
 
 ### `AuthAuditHookConfig` (interface)
@@ -338,6 +362,7 @@ interface AuthAuditReader {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    apiKey: boolean;
     inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
@@ -687,13 +712,7 @@ interface DoAuthWiring {
     dataPort?: AuthDataPortLike;
     discoveryHandler: (request: Request) => Promise<Response | undefined>;
     jurisdictionMove?: AuthJurisdictionMove;
-    resolveIdentity: (request: Request) => Promise<null | {
-        email?: string;
-        expiresAtMs?: number;
-        name?: string;
-        role?: string;
-        userId: string;
-    }>;
+    resolveIdentity: (request: Request) => Promise<SessionIdentity | null>;
 }
 ```
 
@@ -701,6 +720,7 @@ interface DoAuthWiring {
 
 ```ts
 interface DoAuthWiringOptions {
+    claims?: ReadonlyArray<string>;
     discoveryPaths?: ReadonlyArray<string>;
     internalSecret: string | undefined;
     jurisdiction?: AuthJurisdiction;
@@ -868,6 +888,20 @@ interface ReadAuthAuditOptions {
 }
 ```
 
+### `SessionIdentity` (type)
+
+```ts
+type SessionIdentity = {
+    email?: string;
+    expiresAtMs?: number;
+    name?: string;
+    orgId?: string;
+    role?: string;
+    teamId?: string;
+    userId: string;
+};
+```
+
 ### `SessionPolicy` (type)
 
 ```ts
@@ -975,6 +1009,12 @@ const appendAuthAuditEntry: (executor: SqlExecutor, entry: AppendAuthAuditEntry,
 
 ```ts
 const assertEmailAllowed: (email: string, config?: EmailGateConfig) => Promise<EmailClassification>;
+```
+
+### `authAuditBeforeHook` (const)
+
+```ts
+const authAuditBeforeHook: () => ReturnType<typeof createAuthMiddleware>;
 ```
 
 ### `authAuditHook` (const)
@@ -1135,7 +1175,7 @@ const ensureMigrated: (auth: LunoraAuth | {
 ### `eventForPath` (const)
 
 ```ts
-const eventForPath: (path: string) => AuthAuditEvent | undefined;
+const eventForPath: (path: string, method?: string, grantType?: string) => AuthAuditEvent | undefined;
 ```
 
 ### `handleAuthDiscoveryRequest` (const)
@@ -1148,6 +1188,12 @@ const handleAuthDiscoveryRequest: (auth: LunoraAuth, request: Request) => Promis
 
 ```ts
 const handleAuthRequest: (auth: LunoraAuth, request: Request, basePath?: string) => Promise<Response | undefined>;
+```
+
+### `isDevEnvironment` (const)
+
+```ts
+const isDevEnvironment: (env: Record<string, unknown>) => boolean;
 ```
 
 ### `legacyIssuerCleanupStatements` (const)
@@ -1217,6 +1263,12 @@ const readAuthAuditLog: (executor: SqlExecutor, options?: ReadAuthAuditOptions) 
 const resolveAuthOptions: (options: LunoraAuthOptions) => LunoraAuthOptions;
 ```
 
+### `resolveSessionIdentity` (const)
+
+```ts
+const resolveSessionIdentity: (auth: LunoraAuth, headers: Headers, claims?: ReadonlyArray<string>) => Promise<SessionIdentity | null>;
+```
+
 ### `revokeSignUpInvitation` (const)
 
 ```ts
@@ -1255,6 +1307,7 @@ const verifyTurnstileMiddleware: <Context>(options: VerifyTurnstileMiddlewareOpt
 const withAuthAudit: <Options extends {
     hooks?: {
         after?: unknown;
+        before?: unknown;
     };
 }>(options: Options, config: AuthAuditHookConfig) => Options;
 ```
@@ -1659,6 +1712,7 @@ type LunoraAuthClientPlugin = ReturnType<typeof organizationClient>;
 interface LunoraAuthPluginToggles {
     admin?: boolean;
     anonymous?: boolean;
+    apiKey?: boolean;
     deviceAuthorization?: boolean;
     emailOtp?: boolean;
     lastLoginMethod?: boolean;
@@ -1925,6 +1979,60 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
 
+## `@lunora/auth/worker`
+
+### `authCredentialTableNames` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `authDiscoveryPathsFor` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `authTableNames` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createAuth` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createAuthAdmin` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createAuthAuditReader` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createDoAuthWiring` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `createSqlAuthDataPort` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `d1Executor` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `handleAuthDiscoveryRequest` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `handleAuthRequest` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `lunoraD1Adapter` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
+### `resolveSessionIdentity` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members
@@ -1951,6 +2059,8 @@ interface AuditHookContext {
     context?: {
         newSession?: {
             session?: {
+                activeOrganizationId?: string;
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
@@ -1958,9 +2068,13 @@ interface AuditHookContext {
                 id?: string;
             };
         } | null;
+        responseHeaders?: Headers;
         returned?: unknown;
+        secret?: string;
         session?: {
             session?: {
+                activeOrganizationId?: string;
+                impersonatedBy?: string;
                 userId?: string;
             };
             user?: {
@@ -1970,6 +2084,8 @@ interface AuditHookContext {
         } | null;
     };
     headers?: Headers;
+    method?: string;
+    params?: Record<string, unknown>;
     path?: string;
     request?: Request;
 }
@@ -2473,7 +2589,7 @@ type WhereValue = boolean | number | string;
 ### `acsEndpoint` (const)
 
 ```ts
-const acsEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/sp/acs/:providerId", {
+const acsEndpoint: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/saml2/sp/acs/:providerId", {
     method: ("GET" | "POST")[];
     body: z.ZodOptional<z.ZodObject<{
         SAMLResponse: z.ZodString;
@@ -2508,7 +2624,7 @@ const acsEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
 ### `callbackSSO` (const)
 
 ```ts
-const callbackSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/callback/:providerId", {
+const callbackSSO: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/callback/:providerId", {
     method: "GET";
     query: z.ZodObject<{
         code: z.ZodOptional<z.ZodString>;
@@ -2539,7 +2655,7 @@ const callbackSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
 ### `callbackSSOShared` (const)
 
 ```ts
-const callbackSSOShared: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/callback", {
+const callbackSSOShared: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/callback", {
     metadata: {
         openapi: {
             operationId: string;
@@ -2570,9 +2686,9 @@ const callbackSSOShared: (options?: SSOOptions) => _$better_call0.StrictEndpoint
 ### `deleteSSOProvider` (const)
 
 ```ts
-const deleteSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/delete-provider", {
+const deleteSSOProvider: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/delete-provider", {
     method: "POST";
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2624,9 +2740,9 @@ const deleteSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint
 ### `getSSOProvider` (const)
 
 ```ts
-const getSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/get-provider", {
+const getSSOProvider: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/get-provider", {
     method: "GET";
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2707,12 +2823,12 @@ const getSSOProvider: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/
 ### `initiateSLO` (const)
 
 ```ts
-const initiateSLO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/logout/:providerId", {
+const initiateSLO: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/saml2/logout/:providerId", {
     method: "POST";
     body: z.ZodObject<{
         callbackURL: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>;
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2744,9 +2860,9 @@ const initiateSLO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
 ### `listSSOProviders` (const)
 
 ```ts
-const listSSOProviders: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/providers", {
+const listSSOProviders: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/providers", {
     method: "GET";
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2831,12 +2947,12 @@ function parseCertificate(certPem: string): {
 ### `registerSSOProvider` (const)
 
 ```ts
-const registerSSOProvider: <O extends SSOOptions>(options: O) => _$better_call0.StrictEndpoint<"/sso/register", {
+const registerSSOProvider: <O extends SSOOptions>(options: O) => import("better-call").StrictEndpoint<"/sso/register", {
     method: "POST";
     body: z.ZodObject<{
         [x: string]: z.ZodOptional<z.ZodAny>;
     }, z.core.$strip>;
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -2986,7 +3102,6 @@ const registerSSOProvider: <O extends SSOOptions>(options: O) => _$better_call0.
                                                         description: string;
                                                     };
                                                 };
-                                                required: string[];
                                             };
                                         };
                                         required: string[];
@@ -3038,7 +3153,7 @@ const registerSSOProvider: <O extends SSOOptions>(options: O) => _$better_call0.
 ### `requestDomainVerification` (const)
 
 ```ts
-const requestDomainVerification: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/request-domain-verification", {
+const requestDomainVerification: (options: SSOOptions) => import("better-call").StrictEndpoint<"/sso/request-domain-verification", {
     method: "POST";
     body: z.ZodObject<{
         providerId: z.ZodString;
@@ -3060,7 +3175,7 @@ const requestDomainVerification: (options: SSOOptions) => _$better_call0.StrictE
             };
         };
     };
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -3091,7 +3206,7 @@ const requestDomainVerification: (options: SSOOptions) => _$better_call0.StrictE
 ### `signInSSO` (const)
 
 ```ts
-const signInSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sign-in/sso", {
+const signInSSO: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sign-in/sso", {
     method: "POST";
     body: z.ZodObject<{
         email: z.ZodOptional<z.ZodString>;
@@ -3218,7 +3333,7 @@ const signInSSO: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sign-
 ### `sloEndpoint` (const)
 
 ```ts
-const sloEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/sp/slo/:providerId", {
+const sloEndpoint: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/saml2/sp/slo/:providerId", {
     method: ("GET" | "POST")[];
     body: z.ZodOptional<z.ZodObject<{
         SAMLRequest: z.ZodOptional<z.ZodString>;
@@ -3244,7 +3359,7 @@ const sloEndpoint: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
 ### `spMetadata` (const)
 
 ```ts
-const spMetadata: (options?: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/saml2/sp/metadata", {
+const spMetadata: (options?: SSOOptions) => import("better-call").StrictEndpoint<"/sso/saml2/sp/metadata", {
     method: "GET";
     query: z.ZodObject<{
         providerId: z.ZodString;
@@ -3301,9 +3416,9 @@ function sso$1<O extends SSOOptions>(options?: O | undefined): {
 ### `updateSSOProvider` (const)
 
 ```ts
-const updateSSOProvider: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/update-provider", {
+const updateSSOProvider: (options: SSOOptions) => import("better-call").StrictEndpoint<"/sso/update-provider", {
     method: "POST";
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;
@@ -3349,19 +3464,18 @@ const updateSSOProvider: (options: SSOOptions) => _$better_call0.StrictEndpoint<
             pkce: z.ZodOptional<z.ZodOptional<z.ZodDefault<z.ZodBoolean>>>;
             overrideUserInfo: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
             mapping: z.ZodOptional<z.ZodOptional<z.ZodObject<{
-                email: z.ZodString;
+                email: z.ZodOptional<z.ZodString>;
                 emailVerified: z.ZodOptional<z.ZodString>;
-                name: z.ZodString;
+                name: z.ZodOptional<z.ZodString>;
                 image: z.ZodOptional<z.ZodString>;
                 extraFields: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodAny>>;
             }, z.core.$strict>>>;
         }, z.core.$strip>>;
         samlConfig: z.ZodOptional<z.ZodObject<{
-            audience: z.ZodOptional<z.ZodOptional<z.ZodString>>;
             mapping: z.ZodOptional<z.ZodOptional<z.ZodObject<{
-                email: z.ZodString;
+                email: z.ZodOptional<z.ZodString>;
                 emailVerified: z.ZodOptional<z.ZodString>;
-                name: z.ZodString;
+                name: z.ZodOptional<z.ZodString>;
                 firstName: z.ZodOptional<z.ZodString>;
                 lastName: z.ZodOptional<z.ZodString>;
                 extraFields: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodAny>>;
@@ -3382,6 +3496,7 @@ const updateSSOProvider: (options: SSOOptions) => _$better_call0.StrictEndpoint<
                 z.ZodArray<z.ZodString>
             ]>>>;
             entryPoint: z.ZodOptional<z.ZodString>;
+            audience: z.ZodOptional<z.ZodOptional<z.ZodString>>;
             callbackUrl: z.ZodOptional<z.ZodOptional<z.ZodString>>;
             wantAssertionsSigned: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
             authnRequestsSigned: z.ZodOptional<z.ZodOptional<z.ZodBoolean>>;
@@ -3468,7 +3583,7 @@ const updateSSOProvider: (options: SSOOptions) => _$better_call0.StrictEndpoint<
 ### `verifyDomain` (const)
 
 ```ts
-const verifyDomain: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso/verify-domain", {
+const verifyDomain: (options: SSOOptions) => import("better-call").StrictEndpoint<"/sso/verify-domain", {
     method: "POST";
     body: z.ZodObject<{
         providerId: z.ZodString;
@@ -3493,7 +3608,7 @@ const verifyDomain: (options: SSOOptions) => _$better_call0.StrictEndpoint<"/sso
             };
         };
     };
-    use: _$better_call0.Middleware<_$better_call0.MiddlewareOptions, (inputContext: _$better_call0.MiddlewareInputContext<_$better_call0.MiddlewareOptions>) => Promise<{
+    use: import("better-call").Middleware<import("better-call").MiddlewareOptions, (inputContext: import("better-call").MiddlewareInputContext<import("better-call").MiddlewareOptions>) => Promise<{
         session: {
             session: Record<string, any> & {
                 id: string;

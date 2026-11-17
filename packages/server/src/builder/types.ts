@@ -10,6 +10,10 @@ import type {
     MutationCtx as MutationContext,
     QueryCtx as QueryContext,
     RegisteredAction,
+    RegisteredInternalAction,
+    RegisteredInternalMutation,
+    RegisteredInternalQuery,
+    RegisteredInternalStream,
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,
@@ -46,6 +50,23 @@ export interface MiddlewareNext<ContextIn> {
  * propagates the extension into every downstream `.use()` and the handler.
  */
 export type Middleware<ContextIn, ContextOut> = (options: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }) => ContextOut | Promise<ContextOut>;
+
+/**
+ * What a policy middleware (`rls()`, `mask()`) returns: a middleware generic over
+ * the procedure context it is attached to, handing that same context on.
+ *
+ * Generic so `.use()` instantiates it with the builder's own context: a generated
+ * `QueryCtx` / `MutationCtx` carries a typed `db` facade that is not assignable to
+ * the untyped writer shape a policy module projects. Keeping the caller's type is
+ * sound because the runtime only swaps `db` (and `orm`) for wrappers of the same
+ * facade. `Required` is everything else the policies read (`auth`, a `tenantId`
+ * an earlier middleware adds), so attaching them where it is missing is still a
+ * type error rather than an `undefined` at request time.
+ */
+export type PolicyMiddleware<Required = unknown> = <Context extends Required & { db: object }>(options: {
+    ctx: Context;
+    next: MiddlewareNext<Context>;
+}) => Promise<Context>;
 
 /**
  * The context a `.use(...)` step actually receives: the procedure context plus
@@ -255,13 +276,13 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
     meta: (value: Record<string, unknown>) => InternalQueryBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalQueryBuilder<Context, Args, Infer<V>>;
     query: [Output] extends [undefined]
-        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>>
-        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
+        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredInternalQuery<Args, Awaited<R>>
+        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredInternalQuery<Args, Output>;
     /** See {@link QueryBuilder.stream}; the internal variant routes the registration into `internal` instead of `api`. */
     stream: <R>(
         handler: (options: { args: InferArgs<Args>; ctx: Context; signal: AbortSignal }) => AsyncGenerator<R, void, void> | AsyncIterable<R>,
         options?: StreamOptions,
-    ) => RegisteredStream<Args, R>;
+    ) => RegisteredInternalStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 
@@ -285,8 +306,8 @@ export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Ou
      */
     meta: (value: Record<string, unknown>) => InternalMutationBuilder<Context, Args, Output>;
     mutation: [Output] extends [undefined]
-        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
-        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
+        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredInternalMutation<Args, Awaited<R>>
+        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredInternalMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => InternalMutationBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
 }
@@ -295,8 +316,8 @@ export interface InternalActionBuilder<Context, Args extends ArgsValidator, Outp
     readonly __lunoraProcedure: "action";
     readonly __lunoraVisibility: "internal";
     action: [Output] extends [undefined]
-        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>
-        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
+        ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredInternalAction<Args, Awaited<R>>
+        : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredInternalAction<Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
 
     /**

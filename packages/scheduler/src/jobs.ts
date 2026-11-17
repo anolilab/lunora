@@ -350,6 +350,11 @@ const cronJobs = (): CronJobsBuilder => {
             throw new LunoraError("INTERNAL", `@lunora/scheduler: cron job name must be a non-empty string`);
         }
 
+        // The SchedulerDO refuses longer names for the cron lease (`cronName`), which would run the job unguarded.
+        if (name.length > 256) {
+            throw new LunoraError("INTERNAL", `@lunora/scheduler: cron job name "${name.slice(0, 40)}…" is longer than 256 characters`);
+        }
+
         if (seen.has(name)) {
             throw new LunoraError("INTERNAL", `@lunora/scheduler: duplicate cron job name "${name}" — names must be unique within one cronJobs()`);
         }

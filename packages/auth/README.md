@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -86,7 +86,7 @@ export default {
 };
 ```
 
-The runtime resolves the inbound session and stamps `ctx.auth` on every `query` / `mutation` / `action`: `ctx.auth.userId` is the signed-in user's id (or `null` when anonymous), and `ctx.auth.getIdentity()` resolves the decoded claims.
+The runtime resolves the inbound session and stamps `ctx.auth` on every `query` / `mutation` / `action`: `ctx.auth.userId` is the signed-in user's id (or `null` when anonymous), and `ctx.auth.getIdentity()` resolves the claims: `email`, `name`, `role`, `expiresAtMs`, and, with the `organization()` plugin, `orgId` / `teamId` for the session's active organization and team.
 
 ### Plugins & CAPTCHA
 
@@ -96,7 +96,7 @@ For Cloudflare Turnstile on the **auth flow**, use the `captcha` plugin (`captch
 
 ### Disposable / free-email gating
 
-Reject throwaway/disposable signups (and branch on free-vs-business email) by reusing the visulima email lists — pure-data and **edge-safe on the default path** (no DNS). Wire it into better-auth's native signup with `withEmailGate` (or `emailGateDatabaseHooks`):
+Reject throwaway/disposable signups (and branch on free-vs-business email) by reusing the visulima email lists — pure-data and **edge-safe on the default path** (no DNS). Wire it into better-auth with `withEmailGate` (or `emailGateDatabaseHooks`). The gate runs on sign-up and on address changes (`/change-email`, the email-OTP change, admin updates); `onClassify` fires only at sign-up:
 
 ```ts
 import { createAuth, withEmailGate, lunoraD1Adapter } from "@lunora/auth";
@@ -142,7 +142,7 @@ const link = `https://app.example/sign-up?email=${encodeURIComponent(invite.emai
 
 An uninvited signup fails with the coded error `SIGN_UP_INVITE_REQUIRED` (HTTP **400** — a 403 from a create hook is swallowed by better-auth's sign-up route and answered with a fabricated success). Leave `emailAndPassword.disableSignUp` **off** — the invitee still uses the ordinary sign-up form, which `@lunora/auth-ui` prefills from `?email=`. `listSignUpInvitations` and `revokeSignUpInvitation` complete the set; all three are trusted server-side calls with no authorization of their own, so gate them like any other admin action.
 
-- **An invitation carries a secret token** — 256 CSPRNG bits, returned in the clear exactly once and stored only as a SHA-256. It is checked on `/sign-up/email` and nowhere else, because every other account-minting path (OAuth callback, magic link, email OTP) has already proved the person controls the address. So there are two layers: the database gate requires an unspent invitation whatever created the row, and the route hook additionally requires the token. Missing token, wrong token, expired invitation and never-invited address all answer with one message, so the form is not a directory oracle.
+- **An invitation carries a secret token** — 256 CSPRNG bits, returned in the clear exactly once and stored only as a SHA-256. It is checked on `/sign-up/email` and nowhere else. Other account-minting paths admit an invitation only when the new account's email is verified: magic link and email OTP are, and an OAuth or SSO account is only when its provider reports the address verified (SSO reports unverified unless `trustEmailVerified` is set, and SCIM provisioning cannot take an invitation). See [`docs/plugins.mdx`](docs/plugins.mdx). So there are two layers: the database gate requires an unspent invitation whatever created the row, and the route hook additionally requires the token. Missing token, wrong token, expired invitation and never-invited address all answer with one message, so the form is not a directory oracle.
 - **The link is a bearer credential.** Whoever holds it takes the seat — send it to the invitee, not a shared inbox, and reissue rather than resend if unsure. `requireEmailVerification` still matters: the user row is written before the verification mail goes out, so verification is what keeps a spent invitation from becoming a usable session. The plugin warns on startup when password sign-up runs without it.
 - **Plugins that synthesize an address are refused, not admitted.** `anonymous` (`temp-<id>@…`), `siwe` (`<wallet>@<domain>`), and `phoneNumber`'s sign-up-on-verification all create users with a generated email that matches no invitation, so those flows are rejected — but only once a user exists. Under `allowFirstUser: true` the bootstrap runs before the address is compared, so the first anonymous session or wallet sign-in is what claims it. Don't combine them with this.
 - **Nobody signs up before the first invitation exists, including you.** Seed it with `createSignUpInvitation` at worker init or from a one-off internal mutation. `inviteOnly({ allowFirstUser: true })` instead admits the first account uninvited — convenient, but the "is the user table empty" check is racy and open to whoever finds the URL first.
@@ -151,10 +151,10 @@ An uninvited signup fails with the coded error `SIGN_UP_INVITE_REQUIRED` (HTTP *
 
 ### Security / audit trail
 
-Record authentication & security events (sign-in, sign-up, password change, MFA enable/disable, token refresh, session revoke, …) to a durable, queryable audit trail. Install the better-auth `hooks.after` recorder with `authAuditHook` (or compose via `withAuthAudit`), backed by the same D1 database as the auth tables:
+Record authentication & security events (sign-in, sign-up, password change, MFA enable/disable, token refresh, session revoke, …) to a durable, queryable audit trail. Install the better-auth `hooks.after` recorder `authAuditHook` with its `hooks.before` companion `authAuditBeforeHook` (or compose both onto existing hooks via `withAuthAudit`), backed by the same D1 database as the auth tables:
 
 ```ts
-import { authAuditHook, createAuth, d1Executor, lunoraD1Adapter, readAuthAuditLog } from "@lunora/auth";
+import { authAuditBeforeHook, authAuditHook, createAuth, d1Executor, lunoraD1Adapter, readAuthAuditLog } from "@lunora/auth";
 
 const executor = d1Executor(env.DB);
 
@@ -162,6 +162,8 @@ const auth = createAuth({
     secret: env.AUTH_SECRET,
     database: lunoraD1Adapter(env.DB),
     hooks: {
+        // reads the owner of a session an admin revokes, which the revoke itself deletes
+        before: authAuditBeforeHook(),
         after: authAuditHook({
             executor,
             // retention is CONFIGURABLE and NOT capped — omit it for an unbounded, compliance-grade trail
@@ -208,11 +210,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora auth package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora auth package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/auth?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/auth

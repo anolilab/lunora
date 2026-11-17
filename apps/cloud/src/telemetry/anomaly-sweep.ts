@@ -294,7 +294,7 @@ const readSignal = async (
 
     await (baseline === undefined
         ? database.insert("anomalyBaselines", { ...row, createdAt: now, organizationId, signal })
-        : database.patch(baseline._id, row, "anomalyBaselines"));
+        : database.patch("anomalyBaselines", baseline._id, row));
 
     // A warming baseline folds the hour in but offers no reading: its score is 0 by
     // construction, and offering it would clear a rule for no reason.
@@ -364,7 +364,7 @@ export const runAnomalySweep = async (database: ControlPlaneDatabase, options: {
                     const patch = { firing, lastEvaluatedAt: options.now, lastValue: value, updatedAt: options.now };
 
                     await (existing
-                        ? database.patch(existing._id, patch, "alertRuleState")
+                        ? database.patch("alertRuleState", existing._id, patch)
                         : database.insert("alertRuleState", { createdAt: options.now, organizationId, ruleId, ...patch }));
                 },
             },

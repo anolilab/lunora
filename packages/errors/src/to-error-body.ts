@@ -6,9 +6,10 @@
  * unrecognized error never echoes its message" holds identically everywhere,
  * instead of being re-derived (and drifting) per edge.
  */
-import type { ErrorHint } from "./catalog";
-import { isInternalCode, resolveHint } from "./catalog";
+import { isInternalCode } from "./catalog";
 import { isLunoraError } from "./guards";
+import type { ErrorHint } from "./hints";
+import { resolveHint } from "./hints";
 
 /** The client-facing error envelope body. */
 export interface ErrorBody {
@@ -17,6 +18,8 @@ export interface ErrorBody {
     docsUrl?: string;
     hint?: ErrorHint;
     message: string;
+    /** Short human explanation of the cause (a sibling of `hint`). Only on a non-redacted body. */
+    why?: string;
 }
 
 export interface ToErrorBodyOptions {
@@ -71,6 +74,12 @@ export const toErrorBody = (error: unknown, options: ToErrorBodyOptions = {}): T
             body.docsUrl = error.docsUrl;
         }
 
+        if (typeof error.why === "string") {
+            body.why = error.why;
+        }
+
+        // `internal` is deliberately never copied: it is operator-only context for
+        // observability sinks, and this function is the single client-facing seam.
         return { body, redacted: false, status: error.status };
     }
 

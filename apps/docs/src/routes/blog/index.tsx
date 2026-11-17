@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { staticFunctionMiddleware } from "@tanstack/start-static-server-functions";
 
-import { createSeoHead, SITE_URL } from "@/lib/seo";
+import { createSeoHead, ogImagePath, SITE_URL } from "@/lib/seo";
 import BlogOverview from "@/pages/blog/overview";
 
 const listPosts = createServerFn({ method: "GET" })
@@ -27,15 +27,9 @@ export const Route = createFileRoute("/blog/")({
     head: () => {
         // The index had no card of its own, so every share of /blog showed the
         // generic site image with no hint of what the link was.
-        const ogParameters = new URLSearchParams({
-            description: "News, insights, and engineering deep dives from the team building Lunora.",
-            eyebrow: "Blog",
-            title: "News & insights",
-        });
-
         const seo = createSeoHead({
             description: "News, insights, and engineering deep dives from the team building Lunora.",
-            ogImage: `${SITE_URL}/api/og?${ogParameters.toString()}`,
+            ogImage: `${SITE_URL}${ogImagePath("blog")}`,
             path: "/blog",
             title: "Blog",
         });

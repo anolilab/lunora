@@ -32,6 +32,6 @@ Modifications by anolilab and contributors:
   - A Lunora-specific adapter (`src/lunora.ts`, `fingerprintError`) was added
     on top of the vendored core.
 
-The combined work is redistributed under FSL-1.1-Apache-2.0 (see LICENSE.md),
+The combined work is redistributed under Apache-2.0 (see LICENSE.md),
 as permitted by Section 4 of the Apache License, Version 2.0, with the above
 attribution preserved.

@@ -38,7 +38,7 @@ const makeCtx = (tables: Record<string, Row[]>): { ctx: MutationCtx; deleted: st
             buildLogs: facade("buildLogs"),
             builds: facade("builds"),
             catalogInstalls: facade("catalogInstalls"),
-            delete: (id: string) => {
+            delete: (_table: string, id: string) => {
                 deleted.push(id);
 
                 return Promise.resolve();
@@ -47,10 +47,10 @@ const makeCtx = (tables: Record<string, Row[]>): { ctx: MutationCtx; deleted: st
             domains: facade("domains"),
             halts: facade("halts"),
             findFirst: () => Promise.resolve(null),
-            get: (id: string) => Promise.resolve({ _id: id, organizationId: ORG }),
+            get: (_table: string, id: string) => Promise.resolve({ _id: id, organizationId: ORG }),
             insert: () => Promise.resolve("row_1"),
             members: facade("members"),
-            patch: (id: string, patch: Row) => {
+            patch: (_table: string, id: string, patch: Row) => {
                 patched.push({ id, patch });
 
                 return Promise.resolve();

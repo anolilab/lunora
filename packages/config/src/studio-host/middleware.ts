@@ -2,8 +2,10 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 import { detectAgentRules } from "../agent-rules";
 import { resolveAdminToken } from "./admin-token";
-import { applyStudioAssetCache, sendStudioDocument } from "./asset-cache";
+import { ADVISOR_PROCEDURES_ENDPOINT, handleAdvisorProceduresRequest } from "./advisor-procedures-handler";
+import { sendStudioAsset, sendStudioDocument } from "./asset-cache";
 import { assetContentType, isStandaloneModulePath, loadStudioAssets, readStandaloneAsset, studioAssetsStamp } from "./assets";
+import createStudioDocumentCache from "./document-cache";
 import { handlePolicyScaffoldRequest, POLICY_SCAFFOLD_ENDPOINT } from "./policy-scaffold-handler";
 import renderStudioHtml from "./render-html";
 import { handleSchemaEditRequest, SCHEMA_EDIT_ENDPOINT } from "./schema-edit-handler";
@@ -26,6 +28,7 @@ const JSON_ENDPOINT_HANDLERS: Readonly<Record<string, LocalEndpointHandler>> = {
     [POLICY_SCAFFOLD_ENDPOINT]: handlePolicyScaffoldRequest,
     [SCHEMA_EDIT_ENDPOINT]: handleSchemaEditRequest,
     [SEED_ENDPOINT]: handleSeedRequest,
+    [ADVISOR_PROCEDURES_ENDPOINT]: handleAdvisorProceduresRequest,
 };
 
 interface StudioMiddlewareOptions extends LocalEndpointContext {
@@ -65,13 +68,6 @@ const basePrefixOf = (base: string | undefined): string => (base === undefined |
 /** Where the studio is mounted under a dev server's `base` — the path a startup banner announces. */
 const studioMountPath = (base?: string): string => `${basePrefixOf(base)}${STUDIO_PATH}`;
 
-/** Write a 200 response with the given body and content type. */
-const sendOk = (response: ServerResponse, body: Buffer | string, contentType: string): void => {
-    response.statusCode = 200;
-    response.setHeader("Content-Type", contentType);
-    response.end(body);
-};
-
 /**
  * The pathname of a request's `url`, the way every studio host routes on it:
  * query dropped, and dot segments resolved — so `/_lunora/../x` routes as the
@@ -103,7 +99,25 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
 
     let assets: StudioAssets | undefined;
     let assetsStamp: number | undefined;
-    let html: string | undefined;
+
+    // The basepath is fixed, but the admin token the document embeds is not, so
+    // the cache re-renders it when `.dev.vars` changes.
+    const currentDocument = createStudioDocumentCache(projectRoot, () =>
+        renderStudioHtml({
+            adminToken: resolveAdminToken(projectRoot),
+            advisorProcedures: true,
+            basePath: STUDIO_PATH,
+            // Loopback-only dev route (it 403s on a non-loopback bind), so the
+            // developer owns the data — let them edit rows, run-as a user, and edit
+            // the schema by default.
+            dataEditable: true,
+            rulesInstalled: detectAgentRules(projectRoot).installed,
+            runAsIdentity: true,
+            schemaEditable: true,
+            scriptSrc: STUDIO_SCRIPT_PATH,
+            styleHref: STUDIO_STYLE_PATH,
+        }),
+    );
 
     // Serve a static studio asset — the compiled stylesheet, the `studio.js`
     // entry, or one of its on-demand `chunk-*.js` code-split siblings — re-reading
@@ -136,14 +150,10 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
         // revalidates independently; the rebuild stamp busts them all at once.
         const fileName = pathname.slice(pathname.lastIndexOf("/") + 1);
 
-        // Shared with the CLI host so the two cannot drift; it sends the `304`
-        // itself on a match.
-        if (applyStudioAssetCache(request, response, fileName, stamp)) {
-            return;
-        }
-
+        // Shared with the CLI host so the two cannot drift: cache headers, the
+        // `304`, and compression all happen there.
         if (isStyle) {
-            sendOk(response, assets.styles, "text/css; charset=utf-8");
+            sendStudioAsset(request, response, assets.styles, "text/css; charset=utf-8", fileName, stamp);
 
             return;
         }
@@ -163,7 +173,7 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
             return;
         }
 
-        sendOk(response, bytes, assetContentType(fileName));
+        sendStudioAsset(request, response, bytes, assetContentType(fileName), fileName, stamp);
     };
 
     return (request: IncomingMessage, response: ServerResponse, next: () => void): void => {
@@ -205,7 +215,11 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
         const jsonHandler = JSON_ENDPOINT_HANDLERS[pathname];
 
         if (jsonHandler !== undefined) {
-            serveJsonHandler(request, response, jsonHandler, projectRoot, { apiSpec: options.apiSpec, schemaDirectory: options.schemaDirectory });
+            serveJsonHandler(request, response, jsonHandler, projectRoot, {
+                apiSpec: options.apiSpec,
+                lazyFunctions: options.lazyFunctions,
+                schemaDirectory: options.schemaDirectory,
+            });
 
             return;
         }
@@ -222,25 +236,9 @@ const createStudioMiddleware = (options: StudioMiddlewareOptions): ((request: In
             return;
         }
 
-        // Built once per dev session: the basepath is fixed, and the admin token
-        // is read from `.dev.vars` at startup.
-        html ??= renderStudioHtml({
-            adminToken: resolveAdminToken(projectRoot),
-            basePath: STUDIO_PATH,
-            // Loopback-only dev route (it 403s on a non-loopback bind), so the
-            // developer owns the data — let them edit rows, run-as a user, and edit
-            // the schema by default.
-            dataEditable: true,
-            rulesInstalled: detectAgentRules(projectRoot).installed,
-            runAsIdentity: true,
-            schemaEditable: true,
-            scriptSrc: STUDIO_SCRIPT_PATH,
-            styleHref: STUDIO_STYLE_PATH,
-        });
-
         // The document embeds the admin token, so it is `no-store` and never
         // carries an ETag — same helper the CLI host serves its document with.
-        sendStudioDocument(response, html);
+        sendStudioDocument(response, currentDocument());
     };
 };
 

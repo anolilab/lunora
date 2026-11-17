@@ -62,7 +62,7 @@ const storeWith = (tables: Record<string, Row[]>, auth: { userId: string }): Sto
     };
 
     const methods: Record<string, unknown> = {
-        delete: (id: string) => {
+        delete: (_table: string, id: string) => {
             const found = locate(id);
 
             if (found) {
@@ -78,7 +78,7 @@ const storeWith = (tables: Record<string, Row[]>, auth: { userId: string }): Sto
             return Promise.resolve();
         },
         findFirst: () => Promise.resolve(null),
-        get: (id: string) => Promise.resolve(locate(id)?.row ? { ...locate(id)?.row } : null),
+        get: (_table: string, id: string) => Promise.resolve(locate(id)?.row ? { ...locate(id)?.row } : null),
         insert: (table: string, row: Record<string, unknown>) => {
             counter += 1;
             const id = `${table}_new_${String(counter)}`;
@@ -88,7 +88,7 @@ const storeWith = (tables: Record<string, Row[]>, auth: { userId: string }): Sto
 
             return Promise.resolve(id);
         },
-        patch: (id: string, values: Record<string, unknown>) => {
+        patch: (_table: string, id: string, values: Record<string, unknown>) => {
             const found = locate(id);
 
             if (found) {

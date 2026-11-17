@@ -93,15 +93,13 @@ const ownedRuntime = (userId: string): { rows: Map<string, FakeRow[]>; run: Agen
 
             return id;
         },
-        patch: async (id: string, patch: Record<string, unknown>) => {
+        patch: async (table: string, id: string, patch: Record<string, unknown>) => {
             assertNoExplicitUndefined(patch);
 
-            for (const tableContent of rows.values()) {
-                const row = tableContent.find((candidate) => candidate["_id"] === id);
+            const row = tableRows(table).find((candidate) => candidate["_id"] === id);
 
-                if (row) {
-                    Object.assign(row, patch);
-                }
+            if (row) {
+                Object.assign(row, patch);
             }
         },
         query: (table: string) => {

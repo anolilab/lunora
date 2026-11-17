@@ -184,9 +184,9 @@ export const updateChannel = mutation
     })
     .mutation(async ({ ctx: context, args }): Promise<Id<"notificationChannels">> => {
         await assertMember(context, args.organizationId, MANAGER_ROLES);
-        await assertRowInOrg(context, args.id, args.organizationId, "notification channel");
+        await assertRowInOrg(context, "notificationChannels", args.id, args.organizationId, "notification channel");
 
-        await context.db.patch(args.id, {
+        await context.db.patch("notificationChannels", args.id, {
             ...(args.enabled === undefined ? {} : { enabled: args.enabled }),
             ...(args.events === undefined ? {} : { events: args.events }),
             ...(args.name === undefined ? {} : { name: args.name }),
@@ -202,8 +202,8 @@ export const deleteChannel = mutation
     .input({ id: v.id("notificationChannels"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<Id<"notificationChannels">> => {
         await assertMember(context, organizationId, MANAGER_ROLES);
-        await assertRowInOrg(context, id, organizationId, "notification channel");
-        await context.db.delete(id);
+        await assertRowInOrg(context, "notificationChannels", id, organizationId, "notification channel");
+        await context.db.delete("notificationChannels", id);
 
         return id;
     });
@@ -218,9 +218,9 @@ export const sendTest = mutation
     .input({ id: v.id("notificationChannels"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<Id<"notificationDeliveries">> => {
         await assertMember(context, organizationId, MANAGER_ROLES);
-        await assertRowInOrg(context, id, organizationId, "notification channel");
+        await assertRowInOrg(context, "notificationChannels", id, organizationId, "notification channel");
 
-        const channel = await context.db.get(id);
+        const channel = await context.db.get("notificationChannels", id);
 
         if (!channel) {
             throw new LunoraError("NOT_FOUND", "notification channel not found");

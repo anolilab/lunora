@@ -24,7 +24,7 @@ interface AdapterRegistry {
 ```ts
 interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
+    readonly reason?: "duplicate" | "duplicate_subscription" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
 }
 ```
 
@@ -119,6 +119,7 @@ interface CreatePaymentOptions {
     readonly authorize: AuthorizeReference;
     readonly entitlements?: EntitlementsConfig;
     readonly observability?: PaymentObserver;
+    readonly singleSubscriptionPerReference?: boolean;
     readonly store: PaymentStore;
 }
 ```
@@ -183,7 +184,7 @@ interface FeatureBalance extends CheckResult {
 
 ```ts
 interface LunoraDatabaseLike {
-    delete: (id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findFirst: (table: string, args?: {
         where?: Record<string, unknown>;
     }) => Promise<Record<string, unknown> | null>;
@@ -197,7 +198,14 @@ interface LunoraDatabaseLike {
         page: Record<string, unknown>[];
     }>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
+    patchIf?: (table: string, id: string, args: {
+        patch: Record<string, unknown>;
+        where: Record<string, unknown>;
+    }) => Promise<{
+        applied: boolean;
+        doc: Record<string, unknown> | null;
+    }>;
 }
 ```
 
@@ -205,7 +213,6 @@ interface LunoraDatabaseLike {
 
 ```ts
 interface LunoraPayment {
-    readonly adapter: PaymentAdapter;
     attach: (input: AttachInput) => Promise<CheckoutResult>;
     cancelPayment: (sessionId: string, options?: {
         idempotencyKey?: string;
@@ -220,9 +227,17 @@ interface LunoraPayment {
     handleWebhook: (request: Request) => Promise<Response>;
     listBalances: (referenceId: string) => Promise<FeatureBalance[]>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
+    readonly provider: {
+        readonly capabilities: ProviderCapabilities;
+        readonly identifier: ProviderId;
+    };
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
+    resumeSubscription: (subscriptionId: string, options?: {
+        idempotencyKey?: string;
+    }) => Promise<Subscription>;
     readonly store: PaymentStore;
     track: (input: TrackInput) => Promise<TrackResult>;
+    updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
 }
 ```
 
@@ -231,8 +246,16 @@ interface LunoraPayment {
 ```ts
 class LunoraPaymentError extends LunoraError {
     readonly code: PaymentErrorCode;
-    constructor(code: PaymentErrorCode, message: string);
+    constructor(code: PaymentErrorCode, message: string, options?: {
+        cause?: unknown;
+    });
 }
+```
+
+### `MAX_WEBHOOK_BODY_BYTES` (const)
+
+```ts
+const MAX_WEBHOOK_BODY_BYTES = 1048576;
 ```
 
 ### `MemoryPaymentStore` (class)
@@ -244,16 +267,19 @@ class MemoryPaymentStore implements PaymentStore {
     getPaymentSessionBySubscription(provider: ProviderId, subscriptionId: string): Promise<PaymentSession | undefined>;
     getSubscription(provider: ProviderId, id: string): Promise<Subscription | undefined>;
     listSubscriptionsByReference(referenceId: string): Promise<Subscription[]>;
-    listUnreportedUsage(provider: ProviderId, limit: number): Promise<UsageEvent[]>;
+    listUnreportedUsage(provider: ProviderId, limit: number, now: number): Promise<UsageEvent[]>;
+    getReferenceRevision(referenceId: string): Promise<number>;
+    bumpReferenceRevision(referenceId: string, ifRevision: number): Promise<boolean>;
     markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean>;
     releaseEvent(provider: ProviderId, eventId: string): Promise<void>;
+    deferUsageReport(provider: ProviderId, idempotencyKey: string, retryAt: number): Promise<void>;
     markUsageReported(provider: ProviderId, idempotencyKey: string): Promise<void>;
     recordUsage(event: UsageEvent): Promise<boolean>;
     sumUsage(referenceId: string, featureId: string, since: number): Promise<number>;
     sumUsageByFeature(referenceId: string, featureIds: ReadonlyArray<string>, since: number): Promise<ReadonlyMap<string, number>>;
     upsertCustomer(customer: Customer): Promise<void>;
-    upsertPaymentSession(session: PaymentSession): Promise<void>;
-    upsertSubscription(subscription: Subscription): Promise<void>;
+    upsertPaymentSession(session: PaymentSession, guard?: RevisionGuard): Promise<boolean>;
+    upsertSubscription(subscription: Subscription, guard?: RevisionGuard): Promise<boolean>;
 }
 ```
 
@@ -332,11 +358,12 @@ interface PaymentContextLike {
 
 ```ts
 interface PaymentDatabase {
-    delete: (id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findFirst: (table: string, where: Record<string, unknown>) => Promise<PaymentRow | null>;
     findMany: (table: string, where: Record<string, unknown>, page?: PaymentPageArgs) => Promise<PaymentPage>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
+    patchIf: (table: string, id: string, where: Record<string, unknown>, patch: Record<string, unknown>) => Promise<boolean>;
 }
 ```
 
@@ -359,6 +386,10 @@ type PaymentEvent = {
     eventId: string;
     provider: ProviderId;
     type: "webhook.duplicate";
+} | {
+    provider: ProviderId;
+    subscriptionId: string;
+    type: "subscription.duplicate";
 } | {
     error: unknown;
     id: string;
@@ -387,6 +418,12 @@ type PaymentEvent = {
     type: "reconcile.completed";
     updatedPayments: number;
     updatedSubscriptions: number;
+} | {
+    provider: ProviderId;
+    referenceId?: string;
+    refundId: string;
+    sessionId: string;
+    type: "refund.replayed";
 } | {
     featureId: string;
     provider: ProviderId;
@@ -439,6 +476,7 @@ interface PaymentSession {
     readonly provider: ProviderId;
     readonly referenceId: string;
     readonly refundedAmount: Money;
+    readonly revision?: number;
     readonly state: PaymentState;
     readonly subscriptionId?: string;
     readonly updatedAt: number;
@@ -455,12 +493,15 @@ type PaymentState = "authorized" | "canceled" | "captured" | "failed" | "initiat
 
 ```ts
 interface PaymentStore {
+    bumpReferenceRevision: (referenceId: string, ifRevision: number) => Promise<boolean>;
+    deferUsageReport: (provider: ProviderId, idempotencyKey: string, retryAt: number) => Promise<void>;
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
     getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
+    getReferenceRevision: (referenceId: string) => Promise<number>;
     getSubscription: (provider: ProviderId, id: string) => Promise<Subscription | undefined>;
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
-    listUnreportedUsage: (provider: ProviderId, limit: number) => Promise<UsageEvent[]>;
+    listUnreportedUsage: (provider: ProviderId, limit: number, now: number) => Promise<UsageEvent[]>;
     markEventProcessed: (provider: ProviderId, eventId: string, type: string) => Promise<boolean>;
     markUsageReported: (provider: ProviderId, idempotencyKey: string) => Promise<void>;
     recordUsage: (event: UsageEvent) => Promise<boolean>;
@@ -468,8 +509,8 @@ interface PaymentStore {
     sumUsage: (referenceId: string, featureId: string, since: number) => Promise<number>;
     sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, since: number) => Promise<ReadonlyMap<string, number>>;
     upsertCustomer: (customer: Customer) => Promise<void>;
-    upsertPaymentSession: (session: PaymentSession) => Promise<void>;
-    upsertSubscription: (subscription: Subscription) => Promise<void>;
+    upsertPaymentSession: (session: PaymentSession, guard?: RevisionGuard) => Promise<boolean>;
+    upsertSubscription: (subscription: Subscription, guard?: RevisionGuard) => Promise<boolean>;
 }
 ```
 
@@ -481,6 +522,7 @@ interface PaymentsFromContextOptions {
     readonly authorize?: AuthorizeContextReference;
     readonly entitlements?: EntitlementsConfig;
     readonly observability?: PaymentObserver;
+    readonly singleSubscriptionPerReference?: boolean;
 }
 ```
 
@@ -508,6 +550,7 @@ interface PortalInput {
 
 ```ts
 interface ProviderCapabilities {
+    readonly checkoutExpiry?: boolean;
     readonly merchantOfRecord: boolean;
     readonly portal: boolean;
     readonly usageMetering: boolean;
@@ -527,6 +570,7 @@ interface ReconcileInput {
     readonly adapter: PaymentAdapter;
     readonly observability?: PaymentObserver;
     readonly paymentSessionIds?: ReadonlyArray<string>;
+    readonly singleSubscriptionPerReference: boolean;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
     readonly usageReportLimit?: number;
@@ -611,6 +655,7 @@ interface Subscription {
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
+    readonly revision?: number;
     readonly state: SubscriptionState;
     readonly updatedAt: number;
 }
@@ -660,6 +705,12 @@ interface TrackResult {
 }
 ```
 
+### `USAGE_NEVER_DUE` (const)
+
+```ts
+const USAGE_NEVER_DUE: number;
+```
+
 ### `UsageEvent` (interface)
 
 ```ts
@@ -672,6 +723,7 @@ interface UsageEvent {
     readonly quantity: number;
     readonly referenceId: string;
     readonly reportedToProvider: boolean;
+    readonly reportRetryAt?: number;
 }
 ```
 
@@ -753,6 +805,7 @@ interface WebhookInput {
 ```ts
 interface WebhookOutcome {
     applied: boolean;
+    referenceId?: string;
     status: number;
 }
 ```
@@ -772,7 +825,7 @@ const allocateMoney: (amount: Money, ratios: ReadonlyArray<bigint>) => Money[];
 ### `applyWebhookAction` (const)
 
 ```ts
-const applyWebhookAction: (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver) => Promise<ApplyResult>;
+const applyWebhookAction: (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver, singleSubscriptionPerReference?: boolean) => Promise<ApplyResult>;
 ```
 
 ### `canTransitionPayment` (const)
@@ -904,13 +957,19 @@ const nextSubscriptionState: (from: SubscriptionState, action: SubscriptionActio
 ### `paymentExtension` (const)
 
 ```ts
-const paymentExtension: SchemaExtension<Record<"customers" | "events" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>, "payment">;
+const paymentExtension: SchemaExtension<Record<"customers" | "events" | "referenceRevisions" | "sessions" | "subscriptions" | "usageEvents", TableDefinition>, "payment">;
 ```
 
 ### `paymentsFromContext` (const)
 
 ```ts
 const paymentsFromContext: (context: PaymentContextLike, options: PaymentsFromContextOptions) => LunoraPayment;
+```
+
+### `readWebhookBody` (const)
+
+```ts
+const readWebhookBody: (request: Request, maxBytes?: number) => Promise<string>;
 ```
 
 ### `reconcile` (const)
@@ -935,6 +994,12 @@ const subtractMoney: (a: Money, b: Money) => Money;
 
 ```ts
 const toMoneyJSON: (m: Money) => MoneyJSON;
+```
+
+### `usageFirstDueAt` (const)
+
+```ts
+const usageFirstDueAt: (event: Pick<UsageEvent, "createdAt" | "mode" | "quantity">) => number;
 ```
 
 ### `usagePeriodStart` (const)
@@ -973,7 +1038,7 @@ const zeroMoney: (currency: CurrencyCode) => Money;
 
 ```ts
 interface AutumnAdapterOptions {
-    readonly client: AutumnClientLike;
+    readonly client: () => Promise<AutumnClientLike> | AutumnClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -1068,7 +1133,7 @@ interface AutumnFeaturesClientLike {
 
 ```ts
 interface AutumnFeaturesOptions {
-    readonly client: AutumnFeaturesClientLike;
+    readonly client: () => Promise<AutumnFeaturesClientLike> | AutumnFeaturesClientLike;
 }
 ```
 
@@ -1129,7 +1194,7 @@ const createAutumnFeatures: (options: AutumnFeaturesOptions) => AutumnFeatures;
 
 ```ts
 interface CreemAdapterOptions {
-    readonly client: CreemClientLike;
+    readonly client: () => Promise<CreemClientLike> | CreemClientLike;
     readonly webhookSecret: string;
 }
 ```
@@ -1156,7 +1221,7 @@ const createCreemAdapter: (options: CreemAdapterOptions) => PaymentAdapter;
 
 ```ts
 interface DodoPaymentsAdapterOptions {
-    readonly client: DodoPaymentsClientLike;
+    readonly client: () => Promise<DodoPaymentsClientLike> | DodoPaymentsClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -1187,7 +1252,7 @@ const createDodoPaymentsAdapter: (options: DodoPaymentsAdapterOptions) => Paymen
 
 ```ts
 interface PolarAdapterOptions {
-    readonly client: PolarClientLike;
+    readonly client: () => Promise<PolarClientLike> | PolarClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -1219,7 +1284,7 @@ const createPolarAdapter: (options: PolarAdapterOptions) => PaymentAdapter;
 
 ```ts
 interface StripeAdapterOptions {
-    readonly client: StripeClientLike;
+    readonly client: () => Promise<StripeClientLike> | StripeClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -1259,6 +1324,7 @@ public API and is gated as one. Listed once per package, sorted by name.
 interface CheckoutRequest {
     readonly cancelUrl?: string;
     readonly email?: string;
+    readonly expiresAt?: number;
     readonly idempotencyKey?: string;
     readonly metadata?: Record<string, string>;
     readonly mode: "payment" | "subscription";
@@ -1266,5 +1332,13 @@ interface CheckoutRequest {
     readonly quantity?: number;
     readonly referenceId: string;
     readonly successUrl: string;
+}
+```
+
+### `RevisionGuard` (interface)
+
+```ts
+interface RevisionGuard {
+    readonly ifRevision: number | undefined;
 }
 ```

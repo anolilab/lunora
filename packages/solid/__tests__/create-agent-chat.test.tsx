@@ -21,6 +21,11 @@ const makeStreamRef = (reference: string): FunctionReference<"stream", { key: st
 const MESSAGES_REF = "agents:agentMessages";
 const THREAD_REF = "agents:agentThread";
 const APPROVAL_REF = "agents:agentResolveApproval";
+const GRANTS_REF = "agents:agentApprovalGrants";
+const REVOKE_REF = "agents:agentRevokeApprovalGrant";
+const SUPPLY_REF = "agents:agentSupplySecret";
+const DECLINE_REF = "agents:agentDeclineSecret";
+const SECRET = "sk-live-4242-do-not-log";
 const SEND_REF = "chat:startRun";
 const CANCEL_REF = "chat:cancelRun";
 const STREAM_REF = "chat:liveEvents";
@@ -28,8 +33,12 @@ const STREAM_REF = "chat:liveEvents";
 const buildApi = (): CreateAgentChatApi =>
     ({
         agents: {
+            agentApprovalGrants: makeRef(GRANTS_REF),
+            agentDeclineSecret: makeRef(DECLINE_REF),
             agentMessages: makeRef(MESSAGES_REF),
             agentResolveApproval: makeRef(APPROVAL_REF),
+            agentRevokeApprovalGrant: makeRef(REVOKE_REF),
+            agentSupplySecret: makeRef(SUPPLY_REF),
             agentThread: makeRef(THREAD_REF),
         },
     }) as unknown as CreateAgentChatApi;
@@ -53,7 +62,7 @@ describe(createAgentChat, () => {
         );
 
         // Both the history and thread channels open on setup.
-        expect(fake.subscriptions.map((sub) => sub.functionPath).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([MESSAGES_REF, THREAD_REF]);
+        expect(fake.subscriptions.map((sub) => sub.functionPath).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([GRANTS_REF, MESSAGES_REF, THREAD_REF]);
         expect(latest?.messages()).toStrictEqual([]);
         expect(latest?.status()).toBeUndefined();
         // No stream reference supplied — streamingText stays empty (no stream opens).
@@ -309,6 +318,65 @@ describe(createAgentChat, () => {
         expect(fake.mutationCalls).toContainEqual({ args: { instanceId: "wf-1", threadKey: "t1" }, functionPath: CANCEL_REF });
     });
 
+    it("supplySecret sends the value through agentSupplySecret with onlineOnly, and keeps no copy", async () => {
+        const fake = createFakeClient();
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+                return <pre>{String(latest.status())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        await latest?.supplySecret("call-1", SECRET);
+
+        // The secret rides in the args only; the options are exactly the online-only flag.
+        expect(fake.mutationCalls).toStrictEqual([
+            { args: { secret: SECRET, threadKey: "t1", toolCallId: "call-1" }, functionPath: SUPPLY_REF, options: { onlineOnly: true } },
+        ]);
+        expect(document.body.textContent).not.toContain(SECRET);
+    });
+
+    it("supplySecret rethrows the original failure, so the value is not echoed into the error", async () => {
+        const fake = createFakeClient();
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+                return <pre>{String(latest.status())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+        const failure = new Error("connection is not live");
+
+        fake.setMutationThrow(failure);
+
+        await expect(latest?.supplySecret("call-1", SECRET)).rejects.toBe(failure);
+    });
+
+    it("declineSecret sends agentDeclineSecret for the tool call, carrying no value", async () => {
+        const fake = createFakeClient();
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+                return <pre>{String(latest.status())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        await latest?.declineSecret("call-1");
+
+        expect(fake.mutationCalls).toContainEqual({ args: { threadKey: "t1", toolCallId: "call-1" }, functionPath: DECLINE_REF });
+    });
+
     it("approve rejects when there is no in-flight run to resolve", async () => {
         const fake = createFakeClient();
         let latest: CreateAgentChatResult | undefined;
@@ -323,6 +391,64 @@ describe(createAgentChat, () => {
         );
 
         await expect(latest?.approve("call-1")).rejects.toThrow("no in-flight run");
+    });
+
+    it("approveForThread sends approve_for_thread through agentResolveApproval", async () => {
+        const fake = createFakeClient();
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+                return <pre>{String(latest.status())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        pushTo(fake.subscriptions, THREAD_REF, { instanceId: "wf-1", status: "awaiting_input" });
+
+        await latest?.approveForThread("call-1", "ok for this thread");
+
+        expect(fake.mutationCalls).toContainEqual({
+            args: { decision: "approve_for_thread", instanceId: "wf-1", note: "ok for this thread", threadKey: "t1", toolCallId: "call-1" },
+            functionPath: APPROVAL_REF,
+        });
+    });
+
+    it("lists the thread's approval grants and revokes one, refreshing the list from the server", async () => {
+        const fake = createFakeClient();
+        let latest: CreateAgentChatResult | undefined;
+
+        render(
+            () => {
+                latest = createAgentChat({ api: buildApi(), send: makeRef(SEND_REF) as FunctionReference<"mutation">, threadKey: "t1" });
+
+                return <pre>{JSON.stringify(latest.approvalGrants())}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        expect(latest?.approvalGrants()).toStrictEqual([]);
+
+        pushTo(fake.subscriptions, GRANTS_REF, [
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        expect(latest?.approvalGrants()).toStrictEqual([
+            { createdAt: 1, toolName: "sendEmail" },
+            { createdAt: 2, toolName: "refund" },
+        ]);
+
+        await latest?.revokeGrant("sendEmail");
+
+        expect(fake.mutationCalls).toContainEqual({ args: { threadKey: "t1", toolName: "sendEmail" }, functionPath: REVOKE_REF });
+
+        // The revoke commits server-side; the grants subscription re-pushes the list.
+        pushTo(fake.subscriptions, GRANTS_REF, [{ createdAt: 2, toolName: "refund" }]);
+
+        expect(latest?.approvalGrants()).toStrictEqual([{ createdAt: 2, toolName: "refund" }]);
     });
 
     // A session expiry or RLS denial on the history/thread subscriptions used to be

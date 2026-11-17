@@ -31,28 +31,35 @@ The package never rewrites SQL, so use your driver's native placeholders.
 
 ## Step 2: Create the binding
 
+Nothing to write by hand: `lunora dev` and `lunora deploy` add a `HYPERDRIVE` binding
+to `wrangler.jsonc` with a placeholder `id`.
+
+- **Dev.** `ctx.sql` runs on an embedded Postgres (PGlite), data in
+  `.wrangler/state/lunora-pglite`. Install its two optional packages:
+
 ```bash
-wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host:5432/db" # gitleaks:allow -- placeholder, not a real secret
+pnpm add -D @electric-sql/pglite @electric-sql/pglite-socket
 ```
 
-Add the printed `id` to `wrangler.jsonc`. `localConnectionString` lets `lunora dev`
-connect directly:
+To use your own database, set `localConnectionString` on the binding or
+`CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING>`; neither is overridden.
 
-```jsonc
-{
-    "hyperdrive": [
-        {
-            "binding": "HYPERDRIVE",
-            "id": "<the id from the command above>",
-            "localConnectionString": "postgres://user:pass@localhost:5432/db", // gitleaks:allow -- placeholder, not a real secret
-        },
-    ],
-}
+- **Deploy.** Give `lunora deploy` the origin and a token that may edit Hyperdrive:
+
+```bash
+LUNORA_HYPERDRIVE_URL="postgres://user:pass@host:5432/db" lunora deploy # gitleaks:allow -- placeholder, not a real secret
 ```
 
-Lunora validates the entry but never writes the `id` itself, because only
-`wrangler hyperdrive create` can mint it. Validation fails without a `binding`
-and warns when `id` is empty.
+(`CLOUDFLARE_API_TOKEN` with Hyperdrive: Edit, and `CLOUDFLARE_ACCOUNT_ID`; the variable is
+`LUNORA_<BINDING>_URL`.) Lunora creates the config, or reuses one of the same name, and writes
+its `id` into `wrangler.jsonc`. The connection string is never written or logged.
+
+To manage the config yourself, run `wrangler hyperdrive create my-db --connection-string=...`
+and put the `id` in the binding. Validation fails without a `binding`.
+
+Hyperdrive caches read results (up to 60 s plus 15 s stale by default) and a write does not
+invalidate them. For reads that must see your own writes, add a second config created with
+`--caching-disabled` and bind it under another name.
 
 ## Step 3: Regenerate types
 
@@ -72,17 +79,27 @@ thunk instead. It runs once per shard construction, not per request:
 ```ts title="src/server.ts"
 import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
 
 import { defineApp } from "../lunora/_generated/app.js";
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .hyperdrive((env) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 
 export const ShardDO = app.ShardDO;
 ```
+
+The adapters take a loader, not a driver. It runs on the first query, so the
+driver stays out of the Worker's startup graph; never `import postgres from
+"postgres"` statically in the entry. For `pg`, the loader may `await
+client.connect()` before returning.
 
 Then query from any action:
 
@@ -145,7 +162,11 @@ messages: defineTable({ body: v.string(), channelId: v.string() })
 
 ```ts
 // worker entry: one client per binding name
-.sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+.sourceClient((env, binding) => fromPostgresJs(async () => {
+    const { default: postgres } = await import("postgres");
+
+    return postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 });
+}))
 ```
 
 How `.source()` behaves:
@@ -163,9 +184,14 @@ How `.source()` behaves:
 
 1. **`ctx.sql` in a query/mutation.** It's action-only. Move the SQL into an action.
 2. **Expecting `ctx.sql` writes to update subscriptions.** They don't. Use Step 5.
-3. **Placeholder or empty `id`.** The binding can't connect. Run
-   `wrangler hyperdrive create` and paste the id.
+3. **Placeholder `id` at deploy.** The deploy stops until `LUNORA_<BINDING>_URL` is set
+   (Lunora then creates the config) or the real `id` is pasted in. An empty `id` is not
+   provisioned: wrangler rejects it, so remove the entry and let Lunora add it again.
 4. **Wrong placeholders.** Use `$1` for `postgres`/`pg` and `?` for `mysql2`.
-5. **Unscoped `.source()` under `.shardBy()`.** Without `tenantBy`, every tenant's
+5. **Array or JSON params on postgres.js with `fetch_types: false`.** A JS array bound to
+   `= ANY($1)` fails as a malformed array literal: bind `JSON.stringify(list)` to
+   `IN (SELECT jsonb_array_elements_text($1::text::jsonb))`. Cast JSON params `$1::text::jsonb`,
+   since a bare `$1::jsonb` gets your string JSON-encoded twice.
+6. **Unscoped `.source()` under `.shardBy()`.** Without `tenantBy`, every tenant's
    rows are copied into each shard. `defineSchema` throws, and the
    `external_source_unscoped` lint fails the build.

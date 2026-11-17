@@ -1,9 +1,29 @@
 # Plan 490 — Lazy function registry (Worker startup CPU scales with procedure count)
 
 **Baseline:** `947c714aa` (2026-10-13); email-guard prerequisite re-checked against `3e8806fd3` (2026-10-14)
-**Status:** TODO — design and measurements only; nothing in this plan is implemented. The
-email-guard prerequisite (§8) has shipped (#1159). Measurement scripts are not committed; §6 says
-what to add.
+**Status:** PARTIAL — the lazy registry shipped opt-in (`--lazy-functions`, #1236/#1239). The pre-deploy smoke-load of §7 (error timing) is `lunora build|deploy|prepare`'s default, and covers eager builds too: it evaluates every lazy function module plus every `import()` target of the generated `app.ts` / `shard.ts` (§3.2). The §9 startup budget shipped as `pnpm run worker-startup:check` (#1165) It also builds the reference app with `--lazy-functions` against its own baseline, so a loader turned back into a static import fails CI.. Cheap levers shipped: the
+`shard.ts` admin payloads parse on first use (#1175, §6 4(a)), and the generated `app.ts` loads
+`@lunora/auth` (through a generated `_generated/authModule.ts` that names the exports it uses) and
+the OpenAPI / OpenRPC / architecture documents with `import()` on the first event (§6 4(b)(c), §8;
+refs #1166). On a 1,000-procedure synthetic app that roughly halved `wrangler check startup` with
+`--lazy-functions` (median 55 → 28 ms) and cut about a quarter without it when auth is reached only
+through `defineApp().auth()` (50 → 37 ms); an eager app whose function modules import `@lunora/auth`
+themselves pays ~6 ms more (esbuild lazy-init wrappers, zod no longer tree-shaken). The same PR marks
+the `lunorash` entries and `@lunora/server/drizzle` side-effectful: esbuild drops the lazy-init call
+behind an `export *` in a `sideEffects: false` package, which crashed such builds at startup. Phase 2 (§3.1, refs #1166) defers, in lazy
+builds only, the push-queue registry, the `onEmail` agent definitions and the modules behind the
+generated workflow and agent `WorkflowEntrypoint` classes; on the startup gate's fixture (now with a
+queue, a workflow and an agent) that cut the lazy eager graph from 979 modules / 5,982 KiB to 581 /
+3,693 KiB. Phase 3 (§3.2) moves the builder-wired integration SDKs (`@cloudflare/playwright`,
+the payment provider SDKs, the Hyperdrive drivers including `mysql2` for `.hyperdriveGlobal`, and
+`@modelcontextprotocol/sdk` behind every `@lunora/mcp` server builder) behind loaders the
+integrations await on first use, in eager and lazy builds alike; with those integrations wired, the
+gate fixture's lazy graph went from 1,299 modules / 9,100 KiB to 808 / 4,801 KiB. The smoke-load
+of a lazy build also evaluates every package the app loads with a literal `import()` (§3.2).
+Still open: the lazy registry as the default, lighter shared builders (§8 last paragraph), and the
+`@lunora/agent` barrel that the shard imports for `ctx.agents` (§3.1).
+The email-guard prerequisite (§8) has shipped (#1159). Measurement scripts for a realistic app are
+in `apps/bench/scripts/` (startup, first-call cold start, chunked builds); results in §5.2.
 
 ## 0. Headline finding
 
@@ -107,14 +127,141 @@ already renders them for OpenAPI/`api.ts`), instead of reading the live validato
   profile, and it defines the tables. Keep eager.
 - `LUNORA_LIFECYCLE_HOOKS` (path arrays; IR-derived), `LUNORA_CRONS`, cron triggers, queue
   registry: these name **paths** or are user-written modules, not function bodies. Cron/queue
-  consumers dispatch by path, so they benefit from the same loader. Workflow classes
-  (`../workflows.js`), containers, agents (`../agents.js`), `http.ts` routes and `queues.ts`
-  are imported by value in generated output (`emit/shard-runtime.ts` 75/180/271/378) and stay
-  eager in phase 1; they are a phase-2 candidate (HTTP routes are the awkward one: the router
-  needs the route table to match a request).
+  consumers dispatch by path, so they benefit from the same loader. Containers
+  (`../containers.js`), workflows (`../workflows.js`), agents (`../agents.js`) and the queue
+  modules are imported by value in generated output (`emit/shard-runtime.ts`); phase 2 (§3.1)
+  defers all but containers. `http.ts` is not imported by generated output at all (§3.1).
 - `LUNORA_MUTATOR_PATHS`, `LUNORA_SHAPES`: shapes run `assertShapesDeclareReadPolicies` at
   module scope (`shard-shapes.ts:112`) and mutators must be recognised before dispatch, so
   both stay eager in phase 1 (typically a handful of entries).
+
+### 3.1 Phase 2: what else a lazy build defers
+
+Behind the same opt-in; eager output is byte-identical (the golden fixtures pin it).
+
+| Surface                 | Lazy build                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Push queues             | **Deferred.** `app.ts` drops its static `./queues.js` import; the `queue()` consumer passes `(await import("./queues.js")).LUNORA_QUEUE_REGISTRY` to `dispatchQueueBatch`. One `import()` for the whole registry, not one per queue: every queue-declaring file loads on the first batch of any queue (first-batch latency, not startup). That keeps the target in `app.ts`, where the smoke-load looks, and leaves `@lunora/queue`'s registry type alone.                                                                                                                                         |
+| `onEmail` agents        | **Deferred.** `email()` loads `@lunora/agent/inbound` and `../agents.js` on the first message and builds the dispatcher once. The eager build's static `../agents.js` import in `app.ts` would otherwise keep the agent module eager even with lazy entrypoints.                                                                                                                                                                                                                                                                                                                                   |
+| Workflow entrypoints    | **Deferred.** The class stays exported (wrangler binds `class_name` at upload), but `LunoraWorkflow` now also takes a loader, `async () => (await import("../workflows.js")).<export>`, awaited at the top of `run`. Safe because a `WorkflowEntrypoint` has no constructor-time or `blockConcurrencyWhile` contract, nothing reads the definition before `run`, and `run` is async and replays from the top in each isolate. Types come from `import type`.                                                                                                                                       |
+| Agent entrypoints       | **Deferred unless an agent declares `voice`.** The loader `import()`s `@lunora/agent` and `../agents.js` together and calls `compileAgentWorkflow` on the first run. `VoiceSessionDO` is a Durable Object whose constructor and synchronous `fetch` read the definition, so with any voice agent `agents.ts` keeps the eager shape (a loader would defer nothing while the voice class imports the module).                                                                                                                                                                                        |
+| Containers              | Eager. Not attempted: `LunoraContainer` is a Durable Object constructed with its definition, the same constraint as the voice session.                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| HTTP routes (`http.ts`) | Eager, and not codegen's to defer. Generated output never imports `http.ts`: the app's entry imports its `httpRouter()` app and hands the value to `createWorker({ httpRouter })` / `.httpRouter()`. `discoverHttpRoutes` reads only `httpRoute.<verb>("literal")` chains, for OpenAPI and `api.ts` types; a hono app's own routes and middleware, and computed paths, never reach the IR, so a static route table could not stand in for the router. Deferring it would need a codegen-owned mount API (route table emitted from IR, handler module loaded on match), which is a separate change. |
+
+Measured with `pnpm run worker-startup:check`, every row on the same local `build:prod` of the
+packages the app reaches (that build put the old fixture at 914 / 5,721 KiB against the committed
+915 / 5,905 KiB, so re-baseline after a full `build:packages:prod` if CI disagrees). The synthetic app
+now also declares one push queue, one workflow and one agent, each importing the shared
+`@lunora/auth` module, and the entry re-exports `_generated/workflows.js` / `agents.js`. That moved
+the eager baseline from 914 modules / 5,721 KiB to 995 / 6,104 KiB (`worker-startup.json`). With
+`LUNORA_LAZY_FUNCTIONS=1` the graph shrinks by ~40 % (the deterministic figure); the CPU column is
+advisory and, at under 2× on a loaded machine, unproven by §5's own rule:
+
+| Lazy build, same fixture                     | Eager graph             | Advisory CPU (median / min, load ~15) |
+| -------------------------------------------- | ----------------------- | ------------------------------------- |
+| phase 1 only (queues/workflows/agents eager) | 979 modules / 5,982 KiB | 64 / 56 ms                            |
+| phase 2                                      | 581 modules / 3,693 KiB | 48 / 39 ms                            |
+| for reference: fixture without the three     | 409 modules / 2,481 KiB | —                                     |
+
+The remaining 172 modules / 1.2 MiB over the reference are framework edges, not user modules: the
+generated `shard.ts` imports `createAgentContext` from the `@lunora/agent` barrel for `ctx.agents`
+(139 modules / 1.1 MiB, mostly `@ai-sdk/*` and zod, reachable only through that edge),
+`functions.ts` registers `agentComponent` from `@lunora/agent/component`, and `@lunora/queue` /
+`@lunora/workflow` helpers stay static (~25 modules). `createAgentContext` itself is light; a
+`@lunora/agent/context` subpath would remove most of it, but it changes eager output, so it is left
+for its own change.
+
+Smoke-load coverage: the generated output decides what is deferred. The smoke entry imports the queue
+registry (`app.ts` holds `import("./queues.js")`), `lunora/workflows.ts` and `lunora/agents.ts` (the
+`import()` targets in `_generated/workflows.ts`, `agents.ts` and the `onEmail` block of `app.ts`), so
+a broken module blocks `build`/`deploy` instead of failing its first production run. A failure is
+reported as `<file> (queue|workflow|agent)`, and a project that defers only these still gets the check.
+
+### 3.2 Phase 3: builder-wired integration SDKs
+
+Neither codegen nor the integration packages imported these SDKs by value; each package already took
+the SDK by injection to keep its optional peer out of non-users' bundles. The static edge was in the
+app's own entry, because the injection contract was a value the entry had to build at module scope
+(`import { launch } from "@cloudflare/playwright"`, `import Stripe from "stripe"`,
+`import postgres from "postgres"` feeding the `defineApp()` thunks). A lazy registry cannot reach that
+edge, so the fix is an API change, and it applies to eager builds too:
+
+| Integration                                                                  | Before                                               | Now                                                                                     |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `.browser()` / `createBrowser`                                               | `launch` / `connect` / `sessions` values             | one `playwright: () => import("@cloudflare/playwright")` loader                         |
+| `.payment()` / `create{Stripe,Polar,Autumn,Creem,DodoPayments}Adapter`       | `client` instance                                    | `client: () => Client \| Promise<Client>`; the SDK is `import()`ed inside the loader    |
+| `.hyperdrive()` / `fromPostgresJs`, `fromNodePg`, `fromMysql2`               | a driver instance                                    | a loader returning the driver (`pg` may `await connect()` in it)                        |
+| `@lunora/mcp/worker` `createMcpFetchHandler`, `createAuthedMcpFetchHandler`  | imported `Server` and the transport at module scope  | `import()` the server module per request; `serveStateless` loads the transport per call |
+| `createToolServer`, `createFunctionMcpServer` (and the docs / local servers) | built a `Server` synchronously                       | async: `Promise<Server>`, the SDK `import()`ed when the server is built                 |
+| `createPaidMcpServer`                                                        | compiled each tool's schema with the SDK at `tool()` | same sync API; the first request compiles the schemas and builds the server             |
+| `.hyperdriveGlobal` / `buildMysqlExec`, `createMysqlGlobalCtxDb`             | a `mysql2` connection, flags checked at construction | a loader; the `CLIENT_FOUND_ROWS` check runs when it resolves, before any statement     |
+| `createAutumnFeatures`                                                       | `client` instance                                    | `client` loader, like `createAutumnAdapter`                                             |
+
+The loaders run on the first call that needs the SDK and are memoised (`shared/lazy-value.ts`); a
+rejected load reaches that caller unchanged and is not cached, so the next call retries. Each
+`import()` keeps a string-literal specifier, so a missing package still fails `lunora build` at
+bundle time (esbuild: `Could not resolve`). What moves to first use is only an SDK whose module
+evaluation throws in workerd. The loaders themselves cannot be smoke-run (they are closures inside
+app-supplied thunks that need the binding or secret the thunk reads), but the module behind each is
+named by its literal specifier. So the pre-deploy smoke-load (`packages/cli/src/util/lazy-smoke-load.ts`)
+collects the package specifiers of every literal `import()` in the files the Worker loads (from the
+entry along relative imports, through `_generated` without collecting from it;
+`integration-modules.ts`),
+keeps those installed in the project, and `import()`s each one in workerd next to the lazy function
+modules. It runs in eager builds too when there is at least one. Not covered: an SDK a package loads
+for itself (the MCP SDK inside `@lunora/mcp`; its workerd suite is the check there), and every
+project the smoke-load already skips (containers, a Hyperdrive binding with no local database, which
+includes the gate fixture). A Cloudflare Vite plugin build (`.wrangler/deploy/config.json` present) runs
+against the source config with stub Durable Object / Workflow classes in place of the entry, which
+only builds inside Vite; its entry's own evaluation is therefore not smoke-checked.
+
+Durable Object input gate: `ctx.browser`, `ctx.payments` and `ctx.sql` are ActionCtx-only, and the
+loaders run inside the action body, immediately before the network call the action was about to
+await anyway. An action is not admitted under the single-writer gate and already yields on that
+I/O, so the extra `await` adds no interleaving point. That differs from `holdShardWhileLoading`
+(`test/lazy-input-gate`, 475a5d927), which guards function loading at ingress, before a mutation is
+admitted. The MCP loads run on the Worker side. The one DO mutation path is `.hyperdriveGlobal`:
+`buildPgExec(fromPostgresJs(loader))` is the shard's global writer, reached from a mutation inside
+`runSerialized`. The generated shard calls `declaration.exec(env)` on every ctx build, so each
+request gets a fresh loader whose first `import()` starts at its first global query, inside the
+mutation's gated span, and completes there (workerd delivers I/O begun inside the hold; the span
+already awaits the Postgres round trip). No load starts outside a gate and is awaited inside one,
+which is the reset 475a5d927 guards against. Caching the exec across requests would break this.
+
+Measured with `pnpm run worker-startup:check` (the fixture wires all four, through loaders),
+local `build:prod` (modules / KiB in the static graph). The lazy "before" ran on the old package
+builds. The eager "before" ran the old wiring against the new builds, so its MCP figure is about
+5 modules low:
+
+| Same fixture, all four integrations wired | Eager build    | Lazy build    |
+| ----------------------------------------- | -------------- | ------------- |
+| static SDK imports in the entry (before)  | 1,709 / 11,456 | 1,299 / 9,100 |
+| loaders (now)                             | 1,223 / 7,213  | 808 / 4,801   |
+
+Lazy-build attribution before: `@cloudflare/playwright` 278 modules / 3,167 KiB, `stripe`
+197 / 999, the MCP SDK through `@lunora/mcp` 203 / 992, `postgres` 11 / 76. The module count still
+includes the MCP SDK through `@lunora/mcp/worker`'s barrel: it re-exports `createToolServer`,
+`createPaidMcpServer` and `createFunctionMcpServer`, whose chunks import `Server` statically. esbuild
+drops those modules when the app uses only the fetch handlers, but the metafile keeps the edges, so
+the count over-approximates. The gate's forbidden-SDK check follows only modules that put bytes in
+the output (or are pure re-export barrels), which is what fails if any of the four SDKs is evaluated
+at startup again; reverting the `createMcpFetchHandler` deferral turns it red.
+
+The fixture then grew to cover the rest: `.hyperdriveGlobal` on MySQL (a
+`.global({ backend: "hyperdrive" })` table, with `mysql2` added to the forbidden SDKs) and every MCP
+server builder (`createToolServer` and `createFunctionMcpServer` awaited in `fetch`, a
+`createPaidMcpServer` given a tool at module scope). The fixture has to call each builder: one it
+never calls is dropped by esbuild, and its static SDK import would go unseen. With the extended
+fixture the eager graph is 1,239 modules / 7,080 KiB and the lazy one 824 / 4,668 KiB (the new
+baseline); the module counts rose by the `.hyperdriveGlobal` store, and the bytes fell because the
+`@lunora/mcp/worker` barrel no longer has static SDK edges. Restoring the synchronous
+`createToolServer` or `createPaidMcpServer` (1,377 / 1,387 modules), or a static `mysql2` import in
+the entry, turns the gate red.
+
+`.hyperdriveGlobal` and the input gate: `buildMysqlExec(load)` loads nothing when it is built, for
+the reason given above for `buildPgExec(fromPostgresJs(load))`; its first statement starts the
+`import("mysql2/promise")` inside the mutation's gated span. A connection that lacks
+`CLIENT_FOUND_ROWS` fails that statement and is not kept, so every later statement fails too.
 
 ## 4. Other concerns checked
 
@@ -124,8 +271,27 @@ already renders them for OpenAPI/`api.ts`), instead of reading the live validato
   now does so on first call, not at isolate start (already nondeterministic across isolates).
   Mutations are transaction-wrapped by `runMutationTransaction` after the handler is resolved,
   so the load sits **outside** the span if `prepareFunction` is awaited first (recommended).
-  Open: confirm an `await import()` before the input gate is released does not widen the
-  interleaving window for concurrent RPCs on one DO (add a workerd test).
+- **Interleaving at the cold load (answered, #1166).** It did widen the window. workerd returns
+  to its event loop on every dynamic `import()`, even of an uploaded module that is already
+  evaluated, so a request pipelined behind a cold one on the same stub overtook it. Lost updates
+  stayed impossible, because the mutation body runs inside the single-writer gate and the load
+  sits in front of it. Admission order broke, on the first call per module per isolate, in
+  builds whose loaders emit a real `import()` (Vite/rolldown chunks, uploaded modules): a
+  pipelined query missed the client's own write, and two cold mutations committed out of
+  order. The esbuild single-file wrapper (`Promise.resolve().then(init)`) and eager mode never
+  yield and were not exposed. Fixed by holding the shard while a cold module loads:
+  the generated `prepareFunction` runs the load through `ShardDO.holdShardWhileLoading`
+  (`ShardHost.runSerialized`, i.e. `blockConcurrencyWhile` on Cloudflare). Two constraints
+  come with it, both checked against plain workerd: the import must START inside the hold
+  (workerd never delivers I/O begun outside it, so awaiting another request's in-flight
+  import times the hold out and resets the object, hence `loadFunction` shares a load only
+  once it has settled), and the warm path must never call `import()` or enter the hold.
+  `packages/do/__tests__/workerd/lazy-input-gate.workerd.test.ts` pins ordering,
+  read-your-writes, one evaluation per module, and the warm path, for RPC, subscription and
+  stream, per loader shape. One limit: under `@cloudflare/vitest-plugin` modules resolve
+  through the module-fallback service, which is real I/O, so a cold load concurrent with
+  another request's unheld import of the same module deadlocks there but not in production;
+  that case is not in the suite.
 - **Live-query subscriptions that name an unloaded function.** `executeSubscription` is already
   async; it awaits `prepareFunction` first. After a hibernation wake-up the DO restores
   subscriptions from attachments and re-runs by path, loading on demand. The first re-run
@@ -147,8 +313,10 @@ already renders them for OpenAPI/`api.ts`), instead of reading the live validato
   that was enough (§5.1: −31 %). On a synthetic app of cheap modules the wrappers cost about
   what they save, so it is a regression there (§5). Real code splitting (esbuild `--splitting`
   with `no_bundle`) gave **no** additional gain on the real app (§5.1) and costs more files; do
-  not make it a prerequisite. Whether rolldown's chunked output saves _parse_ time is
-  unmeasured (the `check startup` "Active" figure may not include compile time).
+  not make it a prerequisite. rolldown's chunked output (Vite) is a different matter: on the
+  bench app, when it boots, it starts a lazy build about 3× faster than the single file. But its
+  default evaluation order crashes depending on unrelated edits, and a real `import()` there
+  yields to the event loop (§5.2).
 
 ## 5. Measurements
 
@@ -233,11 +401,11 @@ is why the three levers (registry, lazy `app.ts` auth, lighter shared builders) 
 Cheaper levers, measured as upper bounds (payload replaced by an empty value) on top of the
 lazy+split build — all within noise individually, ~8–15 ms together:
 
-| Lever                                                                                                                                                                                  | Result                        |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| `shard.ts` metadata (`LUNORA_ADVISORIES` 1.4 MiB, `LUNORA_ADVISOR_PROCEDURES` 0.4 MiB, `TABLE_COLUMNS`, `TABLE_INDEXES`) is already `JSON.parse("…")` but still parsed at module scope | stubbing: 38 vs 32 ms (noise) |
-| `openapi.ts` is an object literal (0.6 MiB at 138 tables) evaluated at module scope                                                                                                    | stubbing: 41 vs 32 ms (noise) |
-| both                                                                                                                                                                                   | 24 vs 32 ms (min 10 vs 25)    |
+| Lever                                                                                                                                                                                                                                                                                             | Result                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `shard.ts` metadata (`LUNORA_ADVISORIES` 1.4 MiB, `LUNORA_ADVISOR_PROCEDURES` 0.4 MiB (since moved out of the bundle into `_generated/advisor-procedures.json`; measured while it was a literal), `TABLE_COLUMNS`, `TABLE_INDEXES`) is already `JSON.parse("…")` but still parsed at module scope | stubbing: 38 vs 32 ms (noise) |
+| `openapi.ts` is an object literal (0.6 MiB at 138 tables) evaluated at module scope                                                                                                                                                                                                               | stubbing: 41 vs 32 ms (noise) |
+| both                                                                                                                                                                                                                                                                                              | 24 vs 32 ms (min 10 vs 25)    |
 
 → worth doing because they are O(tables) and cheap (§6 step 4), but they are not what
 decides whether a large app deploys.
@@ -247,12 +415,93 @@ better-auth/core ~35, `@simplewebauthn/*` ~25, rate-limiter 48, agent modules ~1
 `@lunora/values` ~28, schema 19, rls policies 18, lazy-init helper 170–190 self. All of these
 are reachable only from function modules except `schema` and the generated-app auth import.
 
+### 5.2 Bench app (`apps/bench`, customer preset)
+
+`apps/bench` is a realistic app built from the SaaS kit, with every server package that runs
+without credentials. Its `--preset customer` adds 40 generated domains, half of them with an action
+module on a real SDK (`@aws-sdk/client-s3`, `e2b`, `@bufbuild/protobuf`, `tldts`,
+`@ai-sdk/openai`) that only the registry imports. The aim is §5.1's profile. How to run each bench:
+`apps/bench/README.md`. Findings: `apps/bench/FINDINGS.md`.
+
+Machine: Apple M5 Max (18 cores, 36 GiB), macOS 26.7, Node 24.15, wrangler 4.149, Vite 8.3.5,
+load average 2.0–3.5 throughout. That is much quieter than §5.1's ~16, so absolute ms are not
+comparable with §5.1, only the ratios. All three benches ran at `18edf37e6`.
+
+Startup, single-file esbuild bundle (`scripts/startup.mjs`, 9 interleaved runs, median / min):
+
+| Metric                          | Bench customer       | Real app (§5.1)      |
+| ------------------------------- | -------------------- | -------------------- |
+| Functions / tables              | 998 / 131            | ~1,000 / ~130        |
+| Eager modules                   | 3,530                | 4,088                |
+| Registry-only modules           | 1,069 (30 %)         | 1,340 (33 %)         |
+| … of which dependency modules   | 762                  | 979                  |
+| Registry-only bytes             | 3.97 MiB             | 5.95 MiB             |
+| Registry-only `lunora/` modules | 307 of 330 (93 %)    | 347 of 534 (65 %)    |
+| Bundle (minified)               | 13.2 MiB             | 11.1 MiB             |
+| Eager Active                    | 162 / 161 ms         | 421 / 364 ms         |
+| Lazy Active                     | 104 / 102 ms (−36 %) | 290 / 267 ms (−31 %) |
+
+The relative win reproduces. The absolute gap (2.6×) is partly load and partly what the bench
+does not model: the real app's ~100 ms of agent modules, and shared builders that keep 187 app
+modules eager. Without the heavy SDKs, the same 40 domains measured 106 eager against 112 ms lazy
+(+6 %, at `cf2cc3f75`): a lazy registry pays only when function modules alone reach expensive
+imports.
+
+Chunked builds (`scripts/chunked.mjs`, 7 interleaved runs, Active median ms):
+
+| Artifact                                | core   | customer |
+| --------------------------------------- | ------ | -------- |
+| esbuild single file, eager              | 75.4   | 160.5    |
+| esbuild single file, lazy               | 84.0   | 103.4    |
+| rolldown chunks, eager                  | fails¹ | 103.6    |
+| rolldown chunks, lazy                   | fails¹ | fails¹   |
+| rolldown, `strictExecutionOrder`, eager | 134.1  | 200.8    |
+| rolldown, `strictExecutionOrder`, lazy  | 127.1  | 156.5    |
+
+¹ `tsyringe requires a reflect polyfill`: rolldown evaluates the ESM `tsyringe` before the CJS
+`reflect-metadata` that `@peculiar/x509` (passkey) imports first. One commit earlier, before
+two small app edits, both lazy builds booted, at 47.8 (core) and 55.6 ms (customer). So whether
+default rolldown output boots depends on unrelated graph changes. `strictExecutionOrder` fixes
+the order but costs more than the chunking saves.
+
+→ When it boots, chunked lazy is the fastest artifact by far (about −65 % against the eager
+single file). It cannot be taken as a result yet, for three reasons:
+
+- its default evaluation order crashes depending on unrelated edits, and the order-safe variant
+  is the slowest of all;
+- a parallel branch found that a real `import()` in a chunked or uploaded-module build yields
+  to the event loop and broke Durable Object request ordering, and that fix
+  (`test/lazy-input-gate`) is not on the measured branch;
+- these artifacts were profiled at startup only, never served, and whether Active counts compile
+  time is not documented.
+
+Cold start (`scripts/cold-start.mjs`): 20 fresh local isolates per mode, 94 functions, ms
+p50 / p95 / p99. The functions are 4–5 of each domain's 6–8 modules, including every heavy-SDK
+action, so the deferred cost is a lower bound:
+
+| Metric                          | eager                 | lazy                  |
+| ------------------------------- | --------------------- | --------------------- |
+| cold → first response           | 1,244 / 1,259 / 1,259 | 1,216 / 1,235 / 1,238 |
+| first call per function         | 3.6 / 8.4 / 23.3      | 3.8 / 10.0 / 15.7     |
+| first call, heavy-SDK action    | 3.2 / 8.1 / 27.1      | 3.4 / 15.1 / 21.6     |
+| all 94 first calls, per isolate | 395 / 457 / 461       | 437 / 493 / 504       |
+| warm call                       | 3.3 / 8.0 / 9.8       | 3.4 / 8.2 / 11.4      |
+
+→ The ~58 ms of startup Active a lazy registry saves reappears as about +42 ms spread over 94
+first calls, at most ~15 ms p95 for a heavy-SDK action. The first-call penalty is not a reason
+to keep the registry eager. A local cold start is dominated by ~1.2 s that is the same in both
+modes and was not profiled.
+
 ## 6. Proposed work (if approved)
 
 0. **Bundler is not a prerequisite (corrected).** An earlier draft said real code splitting
    was required. The real-app run (§5.1) shows the default single-file wrangler bundle already
-   gets most of the win; splitting added nothing. Keep chunking as a follow-up to measure
-   _parse_ time once a real chunked (rolldown) artifact is available.
+   gets most of the win; esbuild splitting added nothing. rolldown chunks cut a lazy build's
+   startup a further ~45–50 % on the bench when the build booted (§5.2). They are not usable
+   until two correctness problems are solved: rolldown's default output can evaluate a CommonJS
+   polyfill after the ESM that needs it, and a real `import()` yields to the event loop inside a
+   Durable Object request. Treat chunked lazy builds as a follow-up behind those fixes, not part
+   of this plan.
 1. **Codegen — manifest + loaders** (`emit/functions.ts`). Lazy compiled validators: emit one
    shim per user module, `_generated/fn/<namespace>.ts`, that imports the module, runs the
    `installCompiledValidatorMap(m.fn.args, …)` calls for its functions and re-exports the
@@ -292,7 +541,7 @@ opt-in first.
 - Cold-path latency: first call per function per isolate pays module eval. Measure p99.
 - Single-file esbuild gives a smaller win and wraps modules; document that the Vite/rolldown
   chunked output is the recommended path for large apps, and test wrangler `find_additional_modules`.
-- `createWorker`'s HTTP router and `queues.ts`/`workflows.ts`/`agents.ts` remain eager.
+- `createWorker`'s HTTP router, containers and voice-agent sessions remain eager (§3.1).
 
 ## 8. `@lunora/auth` at the generated-app level (cheap lever)
 

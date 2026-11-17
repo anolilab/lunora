@@ -4,7 +4,7 @@ A **protocol-conformant** Kotlin client for a Lunora deployment, implementing th
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, a closeable `Sequence` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, a closeable `Sequence` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -30,6 +30,7 @@ retries and socket library:
 ```kotlin
 val client = Client("https://my-app.example.com", post = myPoster, authToken = "…")
 client.identity = currentUserId
+client.wsToken = { currentBearer } // the session credential, sent in the first connect frame
 // `clientId` is minted per instance. Pin a stable per-device one only when the
 // offline queue is durable — a replayed write is namespaced server-side under
 // the id that issued it.
@@ -38,9 +39,15 @@ val messages = client.query("messages:list", args)
 client.mutation("messages:send", args)
 
 // Live subscription: attach your socket, then feed it frames.
+// attachSocket sends the connect frame itself, carrying the wsToken supplier: do not send another.
 client.attachSocket { frame -> socket.send(Json.write(frame)) }
 val unsubscribe = client.subscribe("messages:list", args, onData = ::render)
 ```
+
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. `java.net.http.HttpClient`
+refuses them by default (`HttpClient.Redirect.NEVER`); with OkHttp, build the client
+with `OkHttpClient.Builder().followRedirects(false)`.
 
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
 `client.resendSubscriptions()` re-subscribes everything after a reconnect —
@@ -57,13 +64,86 @@ not a `reset` re-seeds the shape instead of splicing onto it: the view is emptie
 its checkpoint and epoch cleared, `onRows` told `[]`, the ops skipped, and a cold
 `shape_subscribe` sent at once through the attached socket.
 
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handleFrame` returns the frame's type):
+
+```kotlin
+var attempt = 0
+val shard: String? = null // this socket's shard key; null is the default shard
+val jitter = { backoff: Long -> backoff / 2 + Random.nextLong(backoff / 2 + 1) }
+while (isActive) {
+    var closeCode: Int? = null
+    var closeReason: String? = null
+    try {
+        coroutineScope {
+            var retry: Job? = null
+            try {
+                connect().use { socket -> // your socket library
+                    // attachSocket sends connect before it attaches the sender, so a subscribe on another coroutine cannot write ahead of it
+                    client.attachSocket { frame -> socket.send(Json.write(frame)) }
+                    client.resendSubscriptions()
+                    // blocking HTTP replay: off the read loop's dispatcher, and cancel can interrupt it
+                    val report = runInterruptible(Dispatchers.IO) { client.flushOfflineQueue(shard) }
+                    if (report.requeued.isNotEmpty() || report.retryAfterMs != null) {
+                        // requeued writes never stop the read loop: retry in a child coroutine
+                        retry = launch {
+                            var backoff = 1_000L
+                            var wait = report.retryAfterMs ?: jitter(backoff)
+                            while (true) {
+                                delay(wait)
+                                val again = runInterruptible(Dispatchers.IO) { client.flushOfflineQueue(shard) }
+                                if (again.requeued.isEmpty() && again.retryAfterMs == null) break
+                                // a persistent transient failure backs off instead of replaying every second
+                                backoff = minOf(30_000L, backoff * 2)
+                                wait = again.retryAfterMs ?: jitter(backoff)
+                            }
+                        }
+                    }
+                    while (true) {
+                        val raw = socket.receive() ?: break
+                        if (client.handleFrame(raw) == "ack") attempt = 0
+                    }
+                    // the close frame, from your socket library; 4001 and 4003 drive token-expiry listeners
+                    closeCode = socket.closeCode
+                    closeReason = socket.closeReason
+                }
+            } finally {
+                retry?.cancel() // the socket run ended: stop the retry timer
+            }
+        }
+    } catch (e: CancellationException) {
+        throw e // a CancellationException is an Exception: never swallow it
+    } catch (e: Exception) {
+        // an ordinary failure takes the retry path below
+    } finally {
+        client.detachSocket(closeCode, closeReason)
+    }
+    val ms = minOf(30_000L, 1_000L shl minOf(attempt++, 5))
+    delay(ms / 2 + Random.nextLong(ms / 2 + 1))
+}
+```
+
+A requeued or rate-limited replay must not tear the socket down: the loop keeps reading live updates while a child coroutine retries the flush, and that coroutine is cancelled when the socket run ends.
+
+**Socket credentials.** Every `attachSocket` sends `connect` first: `clientId`, the connection context when one is given (`attachSocket(context) { … }`), and `token`, the session credential from `wsToken`. The credential travels only in that frame. `wsUrl()` carries only the admin ticket from `wsTicket`. The RPC bearer (`authToken`) is a different credential and never goes on the socket. Subscriptions and whisper joins are sent after `connect`, so do not send `connect` yourself.
+
+**Token expiry.** `onTokenExpired { … }` registers a listener and returns its unregister. Pass the socket's close code and reason to `detachSocket(closeCode, reason)`:
+
+- `4001` (token expired) always notifies.
+- `4003` (refused credential) notifies once per credential generation, and only for a socket that opened under the current generation. A socket opened under a superseded credential notifies nothing. Assigning `wsToken` starts a new generation, so re-assign it when the credential you hand out changes. A reason of exactly `connect deadline` refuses no credential and notifies nothing.
+- Any other close, or no close frame, notifies nothing.
+
+A `TOKEN_EXPIRED` error frame notifies and is not routed to its subscription. An `UNAUTHENTICATED` error frame is routed like any other error. Every detach leaves the client offline, and a throwing listener does not stop the others.
+
+**Whispers and rooms.** `whisperSubscribe(topic) { value -> … }` joins a topic, rejoins it after every reconnect, and returns its leave handle; leaving the last listener sends `whisper_unsubscribe`. `whisper(topic, value)` relays a message to a topic and returns `false`, without queueing, when no socket is attached. `connectRoom(name) { … }` joins `room:<name>` and returns a `Room` with `send(message)` and `close()`. It does not wait for an ack, because a room topic is never acknowledged.
+
 A reply the RPC cannot read — a body that is not a JSON object, whatever its
 status — throws `ApiException` (`INTERNAL`), never a parser or cast exception. A
 success whose `result` does not decode throws `ApiException`
 (`WIRE_DECODE_FAILED`): the call did reach the server, and a mutation behind it
 committed.
 
-`client.close()` also ends every open `stream`: a loop over one yields what was
+`client.close()` also ends every open `watch`: a loop over one yields what was
 already delivered and then returns.
 
 ## Optimistic updates and offline writes
@@ -109,12 +189,22 @@ restored record whose args cannot be wire-_decoded_ is purged and settled
 Every discard — including one the capacity cap evicts out of a _restored_ queue,
 which has no caller left to tell — reaches `client.onMutationSettled`.
 
+A write that must never sit on disk — a credential, a one-time token — sets
+`onlineOnly = true` on its `SubmitOptions`. It is never queued, persisted or
+replayed: where a normal write would be queued, `submit` throws an
+`OfflineException` coded `OFFLINE_NOT_QUEUED` before any optimistic layer is
+installed, and its arguments never reach the persistence adapter. It does not
+wait for a flush or queue behind pending writes, so it may land before an older
+queued write to the same document. A transport failure on such a write, sent
+directly while the connection is down, is refused the same way, with the
+transport error as its `cause`.
+
 A replay the server rate-limits is re-queued, not dropped: `FlushReport.retryAfterMs`
 carries the delay the envelope named, and the next flush is a no-op until it has
 passed.
 
 A lone write and a batched one are classified by ONE rule: a coded error envelope
-by its code alone, whatever the HTTP status (`SHARD_ERROR`, `SHARD_UNAVAILABLE`,
+by its code alone, whatever the HTTP status (`SHARD_ERROR`, `SHARD_UNAVAILABLE`, `DELIVERY_FENCED`,
 `RATE_LIMITED`, `TOO_MANY_REQUESTS` and the refused-credential codes
 `UNAUTHORIZED`, `TOKEN_EXPIRED` and `UNAUTHENTICATED` re-queue; every other code,
 a coded 5xx and a server-sent `WIRE_DECODE_FAILED` included, is terminal), and a

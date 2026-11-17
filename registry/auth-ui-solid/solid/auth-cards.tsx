@@ -170,7 +170,9 @@ const ForgotPasswordCard = (props: ForgotPasswordCardProps = {}): JSX.Element =>
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <SubmitButton pending={state.status === "submitting"}>{t.forgotPassword}</SubmitButton>
+                <SubmitButton availableAt={state.resendAvailableAt} pending={state.status === "submitting"}>
+                    {t.forgotPassword}
+                </SubmitButton>
             </form>
         </AuthCard>
     );
@@ -249,7 +251,7 @@ const MagicLinkCard = (props: MagicLinkCardProps = {}): JSX.Element => {
             <form class="lunora-auth-form" noValidate onSubmit={onSubmit(actions.submit)}>
                 <FormBanner error={state.formError} success={state.successMessage} />
                 <FormField actions={actions} autoComplete="email" field="email" label={t.emailLabel} state={state} type="email" />
-                <SubmitButton pending={state.status === "submitting"}>
+                <SubmitButton availableAt={state.resendAvailableAt} pending={state.status === "submitting"}>
                     {t.magicLink}
                     <Show when={lastUsed() === LAST_METHOD_MAGIC_LINK}>
                         <span class="lunora-auth-social__badge">{t.lastUsed}</span>
@@ -284,7 +286,9 @@ const EmailOtpCard = (): JSX.Element => {
                             onChange={actions.setEmail}
                             type="email"
                         />
-                        <SubmitButton pending={state.status === "submitting"}>{t.emailOtp}</SubmitButton>
+                        <SubmitButton availableAt={state.resendAvailableAt} pending={state.status === "submitting"}>
+                            {t.emailOtp}
+                        </SubmitButton>
                     </form>
                 </AuthCard>
             }

@@ -1,7 +1,29 @@
 /* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
 import type { TableIR } from "../ir";
 import type { ResolvedAppOptions } from "./app-helpers";
-import { hasShardedTables } from "./app-helpers";
+import { hasLiveStreamMounts, hasShardedTables } from "./app-helpers";
+import { assertIdentifier, IMPORT_PATH_RE } from "./shared";
+
+/** The declared claim names as a TS array literal, or `undefined` when the app declares none. */
+const authClaimsLiteral = (options: ResolvedAppOptions): string | undefined =>
+    options.authClaims === undefined || options.authClaims.length === 0 ? undefined : JSON.stringify(options.authClaims);
+
+/** The trailing `, [...]` argument for the D1 `resolveSessionIdentity` call, or empty when the app declares none. */
+const d1ClaimsArgument = (options: ResolvedAppOptions): string => {
+    const literal = authClaimsLiteral(options);
+
+    return literal === undefined ? "" : `, ${literal}`;
+};
+
+/** The `claims:` line of the object-route wiring, or empty when the app declares none. */
+const doAuthClaimsLine = (options: ResolvedAppOptions): string => {
+    const literal = authClaimsLiteral(options);
+
+    return literal === undefined
+        ? ""
+        : `
+                claims: ${literal},`;
+};
 
 /**
  * The schema's jurisdiction, pinned onto the DO-backed auth object: it holds
@@ -53,15 +75,89 @@ ${options.tables.map((table) => `            [${JSON.stringify(table.name)}, ${s
               `        const shardRegistry = this.shardRegistrySelector?.(env);
 
         if (shardRegistry) {
-            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}namespace: shardRegistry }) });
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ ${options.jurisdiction ? `jurisdiction: ${JSON.stringify(options.jurisdiction)}, ` : ""}env, namespace: shardRegistry }) });
         }`,
           ]
         : []),
 ];
 
+/**
+ * The admin revocation store, when the builder was given one. Emitted for every
+ * app: named admin tokens are a runtime feature, so no schema signal gates it.
+ * Without it the worker refuses to create a named token and refuses any that exist.
+ */
+const ADMIN_REVOCATIONS_LINES = [
+    `        const adminRevocations = this.adminRevocationsSelector?.(env);
+
+        if (adminRevocations) {
+            options.adminRevocations = adminRevocations;
+        }`,
+];
+
+/**
+ * One `liveStreamRouter` mount per declared stream, as the lines of an array literal. Each stream's module loads on its
+ * first request, so a worker starts without evaluating the live modules.
+ */
+const liveStreamMountEntries = (options: ResolvedAppOptions): string[] =>
+    (options.liveStreamDeclarations ?? []).map((stream) => {
+        assertIdentifier(stream.exportName, "live stream export name");
+
+        if (!IMPORT_PATH_RE.test(stream.filePath)) {
+            throw new Error(`@lunora/codegen: live stream file path is not safe to import: ${JSON.stringify(stream.filePath)}`);
+        }
+
+        return `                { id: ${JSON.stringify(stream.id)}, load: () => import("../${stream.filePath}.js").then((m) => m.${stream.exportName}) },`;
+    });
+
+/**
+ * The worker's `httpRouter`. With live streams to mount, the router serves each declared stream's connect and control
+ * routes and hands every other request to the app's own router. A framework host ignores this key and composes its
+ * own router, so {@link buildFrameworkHostLine} wraps the host instead.
+ */
+const buildHttpRouterLines = (options: ResolvedAppOptions): string[] => {
+    if (!hasLiveStreamMounts(options)) {
+        return [`            ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),`];
+    }
+
+    return [`            httpRouter: liveStreamRouter([`, ...liveStreamMountEntries(options), `            ], this.httpRouterApp),`];
+};
+
+/**
+ * The `"METHOD path"` keys of the declared stream routes, so the runtime dispatches them ahead of the app's explicit
+ * `.route()` entries. The paths are the ones `@lunora/server` derives from each stream's `id`.
+ */
+const buildLiveStreamRouteLines = (options: ResolvedAppOptions): string[] =>
+    hasLiveStreamMounts(options)
+        ? [
+              `            liveStreamRoutes: [`,
+              ...(options.liveStreamDeclarations ?? []).flatMap((stream) => [
+                  `                ${JSON.stringify(`GET /live/${stream.id}/connect`)},`,
+                  `                ${JSON.stringify(`POST /live/${stream.id}/control`)},`,
+              ]),
+              `            ],`,
+          ]
+        : [];
+
+/**
+ * The router a framework host is composed with, as an expression. The live-stream routes come first, so `/live/...`
+ * reaches the worker before the host's own handler sees it. Without live streams the host is used as it is.
+ */
+const buildFrameworkHostLine = (options: ResolvedAppOptions): string =>
+    hasLiveStreamMounts(options) ? `liveStreamRouter([\n${liveStreamMountEntries(options).join("\n")}\n            ], host)` : "host";
+
+/**
+ * Agent workflow class names: a scheduled job that starts one has its run shard stamped
+ * from the signed scheduler record, never from the job's args. An app with no agents still
+ * declares its empty list, so its plain scheduled workflows keep their args; an undeclared
+ * list would strip their `shardKey` as if any of them could be an agent run.
+ */
+const buildAgentWorkflowLines = (options: ResolvedAppOptions): string[] =>
+    options.agentWorkflows === undefined ? [] : [`        options.agentWorkflows = ${JSON.stringify(options.agentWorkflows)};`];
+
 /** The per-capability blocks of `buildWorkerOptions` (the worker-side fan-out). */
 const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
     ...buildTableShardingLines(options),
+    ...(options.hasAdminRevocations === false ? [] : ADMIN_REVOCATIONS_LINES),
     ...(options.hasScheduler
         ? [
               `        if (this.schedulerDeclaration) {
@@ -97,6 +193,12 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 // land here, and without it they are reported, not written.
                 options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);
                 options.importGlobalsStaging = buildGlobalImportStaging(database, this.cdcEnabled);
+                // The importer above skips the write for a dry run, overwrites an
+                // existing \`_id\` under \`onConflict: "replace"\`, and removes the row
+                // an \`op: "delete"\` row names.
+                options.importGlobalsSupportsDryRun = true;
+                options.importGlobalsSupportsReplace = true;
+                options.importGlobalsSupportsDelete = true;
                 // The read/replay half of the same admin plane. Each one is the
                 // only reason its endpoint can see the global storage plane at
                 // all, and every one of them fails SILENTLY when unset — export
@@ -108,7 +210,63 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 options.exportGlobals = buildGlobalExporter(database);
                 options.syncGlobals = buildGlobalCdcSync(database);
                 options.applyGlobals = buildGlobalCdcApplier(database, this.cdcEnabled);
+                // \`lunora migrate apply\` runs the generated SQL files against this binding, recording each in
+                // \`__lunora_sql_migrations\`. A file runs once per stage, and nothing else runs it. The schema lets a
+                // column a file adds be filled the way the runtime fills it, so its rows never read NULL.
+                options.applySqlMigrations = (request) =>
+                    applySqlMigrationFiles(database, request.files, { ...request, schema: schema as unknown as D1CtxDbOptions["schema"] });
             }
+        }`,
+          ]
+        : []),
+    // The Hyperdrive twin of the D1 admin plane above — same six options, same
+    // reason each one exists. \`declaration.exec(env)\` is called inside every
+    // request's closure, never hoisted: a Postgres/MySQL socket opened while
+    // serving one request cannot do I/O for another on Workers.
+    ...(options.hasHyperdriveGlobal
+        ? [
+              `        const hyperdriveDeclaration = this.hyperdriveGlobalDeclaration;
+
+        if (hyperdriveDeclaration) {
+            const engine = hyperdriveDeclaration.engine;
+            const hyperdriveSchema = schema as unknown as SqlCtxDbOptions["schema"];
+            const exec = (): SqlExec => hyperdriveDeclaration.exec(env);
+            const cdc = this.cdcEnabled;
+
+            options.globalIntrospector = {
+                facetColumn: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).facetColumn(request),
+                listTables: () => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).listTables(),
+                readTablePage: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).readTablePage(request),
+            };
+            options.importGlobals = (request) =>
+                importHyperdriveGlobalRows({
+                    cdc,
+                    dryRun: request.dryRun === true,
+                    engine,
+                    exec: exec(),
+                    onConflict: request.onConflict ?? "skip",
+                    rows: request.rows,
+                    schema: hyperdriveSchema,
+                    ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
+                });
+            options.importGlobalsSupportsDryRun = true;
+            options.importGlobalsSupportsReplace = true;
+            options.importGlobalsSupportsDelete = true;
+            options.exportGlobals = (request) => exportHyperdriveGlobalRows({ engine, exec: exec(), schema: hyperdriveSchema, tables: request.tables });
+            options.syncGlobals = async (request) => {
+                const page = await readHyperdriveGlobalCdc(engine, exec(), request);
+
+                // \`as unknown as\`: \`CdcChange\` is an interface, which carries no implicit index signature.
+                return { changes: page.changes as unknown as ReadonlyArray<Record<string, unknown>>, cursor: page.cursor };
+            };
+            options.applyGlobals = (request) =>
+                applyHyperdriveGlobalCdc({
+                    cdc,
+                    changes: request.changes as unknown as Parameters<typeof applyHyperdriveGlobalCdc>[0]["changes"],
+                    engine,
+                    exec: exec(),
+                    schema: hyperdriveSchema,
+                });
         }`,
           ]
         : []),
@@ -171,18 +329,27 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
     // factory takes `NotifyEnv` — an index signature an interface does not satisfy.
     // Without it every app with a `lunora/notify.ts` emits an app.ts that fails tsc.
     ...(options.hasNotify
-        ? [`        options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;`]
+        ? [
+              `        if (notifyConfig.store) {
+            options.notifySubscriptionStore = notifyConfig.store(env as Record<string, unknown>);
+        }`,
+          ]
         : []),
     // The studio's Logs → Archive feed is wired zero-config: when the operator sets
     // `LUNORA_LOG_ARCHIVE_TABLE` (the R2 Data Catalog table `pipelineLogSink` writes
     // to), the durable archive becomes readable; unset ⇒ `undefined` ⇒ the feed
     // reports "not configured". The R2 SQL credentials come from `R2_SQL_*` env vars.
-    `        options.logArchive = resolveLogArchiveFromEnv(env);`,
+    `        const logArchive = resolveLogArchiveFromEnv(env);
+
+        if (logArchive !== undefined) {
+            options.logArchive = logArchive;
+        }`,
     ...(options.hasAuth
         ? [
               `        // Captured before the branch so the narrowing survives — reading
         // \`this.authDeclaration.namespace\` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
+        const { authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -192,16 +359,20 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
             // to it. \`createDoAuthWiring\` is a tested function in \`@lunora/auth\` rather
             // than more emitted code: request-path logic in generated output can only be
             // typechecked, never unit-tested.
+            const discoveryPaths = authDiscoveryPathsFor(authDeclaration, env);
+            const internalSecret = authDeclaration.internalSecret?.(env);
+            const namespace = authNamespace(env);
+            const objectName = authDeclaration.objectName?.(env);
             const authWiring = createDoAuthWiring({
                 // The OAuth discovery documents (an \`mcp()\` resource's metadata, the
                 // issuer's) are derived here from the declared options, so the worker
                 // forwards only those exact paths and no other probe reaches the object.
-                // Memoised on the declaration: a framework-hosted worker rebuilds these
-                // options per request, and \`options(env)\` rebuilds every plugin.
-                discoveryPaths: authDiscoveryPathsFor(authDeclaration, env),
-                internalSecret: authDeclaration.internalSecret?.(env),${doAuthJurisdictionLine(options)}
-                namespace: authNamespace(env),
-                objectName: authDeclaration.objectName?.(env),
+                // Memoised on the declaration: each worker built for a new \`env\` runs
+                // these options again, and \`options(env)\` rebuilds every plugin.
+                discoveryPaths,
+                internalSecret,${doAuthJurisdictionLine(options)}${doAuthClaimsLine(options)}
+                namespace,
+                ...(objectName === undefined ? {} : { objectName }),
             });
 
             options.authHandler = authWiring.authHandler;
@@ -240,43 +411,17 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                     return null;
                 }
 
-                const session = await auth.api.getSession({ headers: (request as Request).headers });
-
-                if (!session?.user?.id) {
-                    return null;
-                }
-
-                // \`role\` rides along so \`rls(policies, { roles })\` and \`auth.can(...)\`
-                // work on this wiring without a hand-written resolver. better-auth's
-                // \`admin()\` plugin owns that column (comma-joined for multiple roles)
-                // and only an administrator can write it; it is absent when the plugin
-                // is off, which reads as no roles.
-                //
-                // \`expiresAtMs\` is the socket credential expiry the runtime forwards
-                // as \`x-lunora-identity-exp\`. Without it the DO's expiry check never
-                // fires, so a signed-out, banned or lapsed user keeps streaming their
-                // RLS-scoped rows over an already-open WebSocket while every HTTP call
-                // is anonymous. better-auth hands back a \`Date\`; anything else means
-                // the adapter did not hydrate it, and omitting beats guessing.
-                const expiresAt = session.session.expiresAt;
-                // \`email\` and \`name\` are the claims \`ctx.auth.getIdentity()\` is
-                // documented to carry ("email, name, roles, custom claims"). Without
-                // them the documented \`me\` query — \`identity?.email\` — resolves
-                // \`undefined\` on the built-in wiring. Empty strings are dropped so an
-                // absent claim reads as absent rather than as "".
-                const user = session.user as { email?: unknown; name?: unknown; role?: unknown };
-
-                return {
-                    ...(typeof user.email === "string" && user.email.length > 0 ? { email: user.email } : {}),
-                    ...(expiresAt instanceof Date ? { expiresAtMs: expiresAt.getTime() } : {}),
-                    ...(typeof user.name === "string" && user.name.length > 0 ? { name: user.name } : {}),
-                    role: user.role,
-                    userId: session.user.id,
-                };
+                // \`resolveSessionIdentity\` is shared with the DO wiring, so both modes put
+                // the same claims (role, expiry, profile, and the active organization and
+                // team checked against membership) on the identity, and it is unit-tested
+                // where this template cannot be.
+                return resolveSessionIdentity(auth, (request as Request).headers${d1ClaimsArgument(options)});
             };
             const authInstance = getAuth();
 
-            options.authAdmin = authInstance ? createAuthAdmin(authInstance) : undefined;
+            if (authInstance) {
+                options.authAdmin = createAuthAdmin(authInstance);
+            }
             options.authAuditReader = createAuthAuditReader(d1Executor(authD1(env) as never));
             // better-auth's tables for the admin export / import (\`$auth\`). A table the
             // schema declares (\`authTables(...)\`) already travels as a \`.global()\` row.
@@ -345,9 +490,16 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                 memo = memoizeIdentity(options.resolveIdentity, {
                     // better-auth resolves the session from ALL request headers, so the key
                     // must cover every header a supported plugin authenticates on: the
-                    // session cookie, \`Authorization\` (bearer / jwt) and \`x-api-key\` (apiKey).
+                    // session cookie and \`Authorization\` (bearer / jwt). \`x-api-key\` requests are never keyed (see below).
                     cacheKey: (request: Request) => {
-                        const parts = ["authorization", "cookie", "x-api-key"].map((name) => request.headers.get(name) ?? "");
+                        // A revoked API key must stop resolving on its next call. Revocation is a row
+                        // delete with nothing in the cookie to change, so a key request is never
+                        // memoised across requests; the lookup is one row read per call.
+                        if (request.headers.get("x-api-key") !== null) {
+                            return undefined;
+                        }
+
+                        const parts = ["authorization", "cookie"].map((name) => request.headers.get(name) ?? "");
 
                         if (parts.every((part) => part === "")) {
                             return undefined;
@@ -391,6 +543,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
         }`,
           ]
         : []),
+    ...buildAgentWorkflowLines(options),
     // Voice-enabled agents: map each export name to its `VOICE_*` Durable Object
     // namespace so the runtime serves `/_lunora/voice/<exportName>`. Read off
     // `env` structurally (the binding is provisioned by the config layer's
@@ -410,8 +563,89 @@ ${options.voiceAgents
         : []),
 ];
 
+/**
+ * The push-consumer handler backing the worker's `queue(batch, …)` entry:
+ * routes each delivered batch to its `defineQueue` handler. Built from
+ * `@lunora/queue` here (keeping the runtime decoupled) and wired only when the
+ * app declares push queues in `lunora/queues.ts`. In a dev environment (or with
+ * `LUNORA_QUEUE_CAPTURE`), every consumed message is recorded into the studio's
+ * Queues log via the root shard's `recordQueueMessage` admin RPC.
+ * `ctx.live.publish` reaches the handler only for an app that declares a live
+ * stream the target serves: the runtime always offers the Worker's shard-forwarding
+ * publisher as the fifth argument, and this forwards it only when `liveStreams` is set.
+ * Otherwise the handler's `ctx.live` is absent, matching a target without live streams.
+ */
+const buildQueueConsumerLines = (options: ResolvedAppOptions): string[] =>
+    options.hasQueue
+        ? [
+              // The runtime hands the handler the Worker's shard-forwarding publisher (fifth)
+              // and the host's `ctx.run` fetch (sixth, `undefined` on Cloudflare).
+              // Lazy: the registry statically imports every queue-declaring module, so it loads on the
+              // first batch (all of them at once, cached by the module system) instead of at startup.
+              `            queue: ${options.lazyFunctions === true ? "async " : ""}(batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace, ${options.liveStreams ? "queueLive" : "_live"}: Parameters<typeof dispatchQueueBatch>[2]["live"], queueFetch: Parameters<typeof dispatchQueueBatch>[2]["fetchImpl"]): Promise<void> =>`,
+              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], ${options.lazyFunctions === true ? `(await import("./queues.js")).LUNORA_QUEUE_REGISTRY` : "LUNORA_QUEUE_REGISTRY"}, {`,
+              `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
+              `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
+                  options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
+              })`,
+              `                        : undefined,`,
+              `                    env: queueEnv as Record<string, unknown>,`,
+              // Set only while the deployment is paused: the consumer re-enqueues each
+              // message instead of running it.
+              `                    holdSeconds: trigger.holdSeconds,`,
+              // The consumer's `ctx.run` joins the queue invocation's trace instead
+              // of minting a fresh one per dispatched function.
+              `                    traceparent: trigger.traceparent,`,
+              `                    fetchImpl: queueFetch,`,
+              ...(options.liveStreams ? [`                    live: queueLive,`] : []),
+              `                }),`,
+          ]
+        : [];
+
+/**
+ * Studio's documents, as loaders: only its admin routes read them, and they grow
+ * with the app. Shipped as assets, each is read through the binding on that
+ * route's first request, and the Worker script never contains it. Otherwise the
+ * `import()` keeps each in its own chunk (or, under wrangler's single-file
+ * bundle, behind a lazy initializer), evaluated on that route's first request
+ * rather than on the isolate's first event.
+ */
+const buildStudioDocumentLines = (options: ResolvedAppOptions): string[] => {
+    const documents = [
+        [options.wantsArchitecture, "architecture", "architecture", "architecture"],
+        [options.wantsOpenApi, "openApiSpec", "openapi", "openApiSpec"],
+        [options.wantsOpenRpc, "openRpcSpec", "openrpc", "openRpcSpec"],
+    ] as const;
+    const { studioAssetsBinding } = options;
+
+    return documents.flatMap(([wanted, option, file, exportName]) => {
+        if (!wanted) {
+            return [];
+        }
+
+        return studioAssetsBinding === undefined
+            ? [`            ${option}: () => import("./${file}.js").then((module) => module.${exportName}),`]
+            : [
+                  `            ${option}: () => loadStudioDocument((env as Record<string, unknown>)[${JSON.stringify(studioAssetsBinding)}], ${JSON.stringify(file)}),`,
+              ];
+    });
+};
+
 /** The `shardDO` + spec fields the worker always (or conditionally) carries. */
 const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
+    // The `env` object's `AI` binding, for the studio's chat assistant
+    // (`__lunora_admin__:aiChat`). Read off `env` exactly as the shard DO reads it
+    // for the three one-shot assistant RPCs — that op is served at the WORKER, so
+    // it cannot reach `env` any other way, and without this it degrades to
+    // "no AI binding" on every app regardless of what is bound.
+    //
+    // Unconditional and untyped-by-name: an app with no `AI` binding yields
+    // `undefined`, which is exactly the not-configured signal the op expects.
+    `            aiChatBinding: (env as Record<string, unknown>)["AI"] as WorkerOptions["aiChatBinding"],`,
+    // How much the chat assistant may read, as a wrangler var rather than a code
+    // change. Read off `env` like the binding above; an app that sets nothing gets
+    // `undefined`, and the runtime's `asOptInLevel` falls back to the safe default.
+    `            aiOptInLevel: (env as Record<string, unknown>)["LUNORA_AI_OPT_IN"] as WorkerOptions["aiOptInLevel"],`,
     `            cronJobs: LUNORA_CRONS,`,
     `            functions: LUNORA_FUNCTIONS,`,
     // The declared `defineIdentity(...)` contract — wires the runtime trust
@@ -423,37 +657,26 @@ const buildBaseWorkerOptions = (options: ResolvedAppOptions): string[] => [
     // Cloudflare data-residency region. Emitted only when declared, so apps
     // without it keep the un-pinned global namespace (and unchanged output).
     ...(options.jurisdiction ? [`            jurisdiction: ${JSON.stringify(options.jurisdiction)},`] : []),
-    ...(options.wantsArchitecture ? [`            architecture,`] : []),
-    ...(options.wantsOpenApi ? [`            openApiSpec,`] : []),
-    ...(options.wantsOpenRpc ? [`            openRpcSpec,`] : []),
-    // The push-consumer handler backing the worker's `queue(batch, …)` entry:
-    // routes each delivered batch to its `defineQueue` handler. Built from
-    // `@lunora/queue` here (keeping the runtime decoupled) and wired only when the
-    // app declares push queues in `lunora/queues.ts`. In a dev environment (or with
-    // `LUNORA_QUEUE_CAPTURE`), every consumed message is recorded into the studio's
-    // Queues log via the root shard's `recordQueueMessage` admin RPC.
-    ...(options.hasQueue
-        ? [
-              `            queue: (batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace): Promise<void> =>`,
-              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], LUNORA_QUEUE_REGISTRY, {`,
-              `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
-              `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
-                  options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
-              })`,
-              `                        : undefined,`,
-              `                    env: queueEnv as Record<string, unknown>,`,
-              // The consumer's `ctx.run` joins the queue invocation's trace instead
-              // of minting a fresh one per dispatched function.
-              `                    traceparent: trigger.traceparent,`,
-              `                }),`,
-          ]
-        : []),
+    ...buildStudioDocumentLines(options),
+    ...buildQueueConsumerLines(options),
     // Spread so an unset `.httpRouter()` leaves the key absent rather than
     // explicitly `undefined` — `createWorker` treats the two the same, but the
     // emitted options object reads as "not configured" either way.
-    `            ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),`,
+    ...buildHttpRouterLines(options),
+    ...buildLiveStreamRouteLines(options),
     `            routes: this.routeMap,`,
+    ...(options.liveStreamsWithheld ? [`            liveStreams: false,`] : []),
     `            shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),`,
+    // A single-page app routes every path to the Worker first; what no route serves goes to its assets binding.
+    // Each wrangler environment may name its own, so the first one this deployment has wins.
+    // Emitted only for such an app, so every other app keeps unchanged output.
+    ...(options.spaAssetsBindings === undefined || options.spaAssetsBindings.length === 0
+        ? []
+        : [
+              `            spaAssets: (${options.spaAssetsBindings
+                  .map((binding) => `(env as Record<string, unknown>)[${JSON.stringify(binding)}]`)
+                  .join(" ?? ")}) as WorkerOptions["spaAssets"],`,
+          ]),
 ];
 
-export { buildBaseWorkerOptions, buildWorkerOptionLines };
+export { buildBaseWorkerOptions, buildFrameworkHostLine, buildWorkerOptionLines };

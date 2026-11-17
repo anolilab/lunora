@@ -3,8 +3,23 @@ rules:
     dangerous-triggers:
         # `pull_request_target` runs with the base repository's token, which is only
         # dangerous when the workflow also checks out or runs the pull request's code.
-        # These two read the event payload and the API through shared workflows and
-        # check nothing out.
+        # These read the event payload and the API through shared workflows or
+        # actions (labeler, semantic PR title, sticky comment) and check nothing out.
         ignore:
+            - "allo-allo.yaml"
+            - "cla.yml"
+            - "labeler.yml"
             - "pr-size.yml"
             - "pr-vouch.yml"
+            - "semantic-pull-request.yml"
+    # Vendored agent-skill templates under .agents/ are third-party and not ours
+    # to change; they are never run as this repository's workflows.
+    artipacked:
+        ignore:
+            - "validate-skill.yml"
+    excessive-permissions:
+        ignore:
+            - "validate-skill.yml"
+    unpinned-uses:
+        ignore:
+            - "validate-skill.yml"

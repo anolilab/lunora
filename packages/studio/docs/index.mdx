@@ -28,7 +28,7 @@ Router over the History API), so deep links and back/forward work.
 
 ## Running the studio
 
-Three ways, smallest setup first:
+The studio mounts in three ways, starting with the smallest setup:
 
 1. **`lunora dev` (zero config).** The [`@lunora/vite`](/docs/packages/vite) plugin
    serves the studio at **`/__lunora`** during dev and prints the URL on startup.
@@ -39,12 +39,16 @@ Three ways, smallest setup first:
 3. **Embed.** Mount the whole console, or compose individual panels
    under your own `<LunoraProvider>`.
 
+The following call mounts the whole console into the `#root` element:
+
 ```ts
 // mount the whole console into <div id="root">
 import { mountStudio } from "@lunora/studio/mount";
 
 mountStudio({ baseUrl: "https://my-app.workers.dev" });
 ```
+
+To embed the shell or a single panel in your own React app, import the components and render them:
 
 ```tsx
 // or embed the shell / a single panel in your own React app
@@ -59,9 +63,22 @@ The `<Studio>` shell takes a few host-controlled switches worth knowing:
 - `dataEditable`: allow row insert/edit/delete (off by default; the console is
   read-only until the host opts in).
 - `runAsIdentity`: let the function runner execute **as** a chosen authenticated
-  identity, to test auth + RLS. Security-sensitive (it forges identity on an
+  identity, to test auth and row-level security (RLS). Security-sensitive (it forges identity on an
   admin RPC). Only ever enable on a trusted loopback-dev gate, never in
   production.
+- `advisorProcedures`: the host serves `/__lunora/advisor-procedures`, the
+  procedure list the Advisors **Health score** is computed against. The dev
+  hosts (`lunora dev`, the Vite and Rspack plugins) set it. The list is
+  Studio-only data that codegen writes to `_generated/advisor-procedures.json`;
+  the app's Worker does not carry it.
+- `advisorCompanion`: a hosted or embedded studio reads the list from its
+  worker instead. Opt in with `studio: { companion: true }` in
+  `lunora.config.ts`: codegen emits a small companion Worker (no public route,
+  reachable only through a service binding) that `lunora deploy` ships with the
+  app, and the app's Worker forwards the route to it after the admin check.
+  Then set `advisorCompanion` (in `apps/studio`, build with
+  `VITE_LUNORA_ADVISOR_COMPANION=true`). Without either flag the Health score
+  shows a notice; the other Advisors pages work everywhere.
 - `functions`: the descriptors that populate the function runner and API tab.
 - `initialShardKey`: the shard every shard-scoped panel targets on first load.
 
@@ -133,8 +150,8 @@ Everything that reads or shapes stored state.
 - **Migrations**: _Review migration status and run them._ Inspect
   data-migration run-state and kick one off.
 - **Vectors**: _Browse Vectorize indexes and run similarity searches._
-- **Time Travel**: _Restore a shard to a point in the last 30 days_ (PITR).
-- **Export / Import**: _Export a shard to NDJSON, or import rows from it._
+- **Time Travel**: _Restore a shard to a point in the last 30 days_ (point-in-time recovery, PITR).
+- **Export / Import**: _Export a shard to NDJSON, or import NDJSON rows, or a CSV file into a table you pick._ The import mode decides what happens to a row whose `_id` already exists. Append leaves it unchanged and counts it as a conflict. Upsert overwrites it. Replace overwrites it and also deletes the shard's rows in the file's tables that the file lacks. Require empty refuses the import unless the file's tables hold no rows in this shard.
 
 ## Functions
 
@@ -147,7 +164,10 @@ Everything that reads or shapes stored state.
 - **Workflows**: _Inspect declared Cloudflare Workflows and their bindings._
   Lists every [durable workflow](/docs/packages/workflow) with its export name,
   generated class, binding, and deployed name; starts an instance from a
-  JSON-params form; and tracks instances with their live status (queued /
+  JSON-params form; sends an event (type plus JSON payload) to a waiting
+  instance, validated against the app's `defineWorkflowEvent` declaration of that
+  type, so an undeclared type or a payload that does not parse is refused before
+  anything is sent; and tracks instances with their live status (queued /
   running / complete / errored) and output.
 - **Queues**: _Inspect declared Cloudflare Queues: their producer bindings,
   consumer mode, and dead-letter queue_ ([`@lunora/queue`](/docs/packages/queue)).
@@ -202,6 +222,10 @@ Operational streams and per-shard signal from a running deployment.
 The [advisors](/docs/concepts/advisors) surface: splinter-style lints over your
 schema, functions, and runtime signal.
 
+- **Health score**: _One score for the deployment, the coverage split, and every
+  procedure ranked worst-first._ Computed with [`scoreAdvisor()`](/docs/packages/advisor)
+  against the procedure list from the dev host or, for a hosted studio, the
+  companion Worker (see `advisorProcedures` and `advisorCompanion` above).
 - **Security**: _Review admin gates, credentials, and log redaction_, the
   security-category findings.
 - **RLS Policies**: _Inspect row-level-security policies and roles, per table._
@@ -261,6 +285,8 @@ orchestrators mint into their forwarded calls for an Access-only request.
 
 The components issue no credentials of their own. Configure the client's auth
 token at the host.
+
+The following worker entry passes a single admin token, so both planes are gated by it:
 
 ```ts
 // worker entry — token-only, so both planes are gated by adminToken

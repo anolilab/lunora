@@ -25,6 +25,7 @@ own directory:
 | `lunora-migration-helper`        | Schema/data migrations, `.global()` DDL flow, the drift gate.                |
 | `lunora-deploy`                  | Deploying to Cloudflare — wrangler bindings, secrets, the gate.              |
 | `lunora-performance-audit`       | `lunora insights`, scans, indexes, OCC conflicts, sharding/`.global()`.      |
+| `lunora-cloudflare-audit`        | Launch/bill audit: doctor + advisor signal, fan-out, cron, public-path cost. |
 
 These are mirrored (via symlinks) into `.agents/skills/` and `.claude/skills/`,
 so agents working inside this repo pick them up directly, and into

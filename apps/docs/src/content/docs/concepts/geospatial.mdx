@@ -57,7 +57,7 @@ export const nearMe = query.input({ lat: v.number(), lng: v.number(), radiusMete
 ## Bounding box: `within(box)`
 
 `within` takes a rectangle by its north-east and south-west corners and returns
-every point inside it (inclusive), in creation-time order. Use it for
+every point inside it (inclusive), newest first. Use it for
 map-viewport queries: pass the visible bounds and get back the pins to draw.
 
 ```ts
@@ -88,5 +88,7 @@ or region) rather than expecting a global nearest-across-all-shards result.
 ## How the Advisors catch geo mistakes
 
 The [Advisors](/docs/concepts/advisors) lint your schema and discovered queries:
-a `.geoIndex()` that is declared but never read through, and a `near`/`within`
-read against a table with no geo index, are both surfaced in the Studio.
+a `.geoIndex()` that is declared but never read through (`geo_index_unused`, info),
+and a `.geoIndex()` whose `field` is not a `v.geoPoint()` column
+(`geo_index_field_not_geopoint`, error). A `withGeoIndex` read that calls neither `.near()` nor
+`.within()` throws at runtime instead; no advisor reports it.

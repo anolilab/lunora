@@ -1,3 +1,210 @@
+## @lunora/notify [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.112...@lunora/notify@1.0.0-alpha.113) (2026-11-07)
+
+- feat(notify): forward FCM platform fields, add topic sends (#1505)
+
+## @lunora/notify [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.111...@lunora/notify@1.0.0-alpha.112) (2026-11-04)
+
+- feat(config): ask an fcm channel with its own token only for FCM_PROJECT_ID (#1479)
+
+## @lunora/notify [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.110...@lunora/notify@1.0.0-alpha.111) (2026-11-04)
+
+- fix(notify): mint FCM access tokens from a service-account key (#1471)
+
+## @lunora/notify [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.109...@lunora/notify@1.0.0-alpha.110) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+
+## @lunora/notify [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.108...@lunora/notify@1.0.0-alpha.109) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+
+## @lunora/notify [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.107...@lunora/notify@1.0.0-alpha.108) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+
+## @lunora/notify [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.106...@lunora/notify@1.0.0-alpha.107) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+
+## @lunora/notify [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.105...@lunora/notify@1.0.0-alpha.106) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+
+## @lunora/notify [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.104...@lunora/notify@1.0.0-alpha.105) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+
+## @lunora/notify [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.103...@lunora/notify@1.0.0-alpha.104) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+
+## @lunora/notify [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.102...@lunora/notify@1.0.0-alpha.103) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+
+## @lunora/notify [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.100...@lunora/notify@1.0.0-alpha.101) (2026-10-28)
+
+### Performance Improvements
+
+* single-pass email render, cached scheduler hmac key, linear notify grouping ([#1382](https://github.com/anolilab/lunora/issues/1382)) ([7ac5bb2](https://github.com/anolilab/lunora/commit/7ac5bb2bb9e839ed4da1c2667031c880531cc02e))
+
+## @lunora/notify [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.99...@lunora/notify@1.0.0-alpha.100) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
+## @lunora/notify [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.98...@lunora/notify@1.0.0-alpha.99) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+
+## @lunora/notify [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.97...@lunora/notify@1.0.0-alpha.98) (2026-10-26)
+
+
+### Dependencies
+
+* **@visulima/notification:** 1.2.0 → 2.0.2
+
+## @lunora/notify [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.96...@lunora/notify@1.0.0-alpha.97) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
+## @lunora/notify [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.95...@lunora/notify@1.0.0-alpha.96) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/notify [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.94...@lunora/notify@1.0.0-alpha.95) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+
+## @lunora/notify [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.93...@lunora/notify@1.0.0-alpha.94) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+
+## @lunora/notify [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.92...@lunora/notify@1.0.0-alpha.93) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+
+## @lunora/notify [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.91...@lunora/notify@1.0.0-alpha.92) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+
+## @lunora/notify [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.90...@lunora/notify@1.0.0-alpha.91) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+
+## @lunora/notify [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.89...@lunora/notify@1.0.0-alpha.90) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+
+## @lunora/notify [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.88...@lunora/notify@1.0.0-alpha.89) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+
+## @lunora/notify [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.87...@lunora/notify@1.0.0-alpha.88) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+
+## @lunora/notify [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.86...@lunora/notify@1.0.0-alpha.87) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+
+## @lunora/notify [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.85...@lunora/notify@1.0.0-alpha.86) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+
+## @lunora/notify [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.84...@lunora/notify@1.0.0-alpha.85) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+
+## @lunora/notify [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.83...@lunora/notify@1.0.0-alpha.84) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+
+## @lunora/notify [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.82...@lunora/notify@1.0.0-alpha.83) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+
+## @lunora/notify [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.81...@lunora/notify@1.0.0-alpha.82) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.57
+
 ## @lunora/notify [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/notify@1.0.0-alpha.80...@lunora/notify@1.0.0-alpha.81) (2026-10-15)
 
 

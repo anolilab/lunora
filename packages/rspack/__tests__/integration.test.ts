@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
@@ -125,7 +126,7 @@ const closeCompiler = async (compiler: Compiler): Promise<void> =>
 const watchRun = async (
     root: string,
     act: (buildNumber: number) => void,
-    options: { expectedBuilds: number; settleMs: number },
+    options: { expectedBuilds: number; schemaDir?: string; settleMs: number },
 ): Promise<{ builds: string[][]; devVarsExists: boolean }> =>
     new Promise((resolve, reject) => {
         ageFixture(root);
@@ -135,7 +136,7 @@ const watchRun = async (
             entry: "./index.js",
             mode: "development",
             output: { path: join(root, "dist") },
-            plugins: [lunoraRspack({ projectRoot: root })],
+            plugins: [lunoraRspack({ projectRoot: root, schemaDir: options.schemaDir })],
         });
 
         const builds: string[][] = [];
@@ -504,6 +505,42 @@ describe("rspack watch (real compiler)", () => {
     );
 
     it(
+        "warns about a cloudflare.config.ts that appears mid-session even when the rebuild only touched app code",
+        async () => {
+            expect.assertions(1);
+
+            vi.stubEnv(CLOUDFLARE_CLI_CONFIG_WARNING_ENV, "");
+
+            const root = fixture();
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            try {
+                // An app-code rebuild skips the codegen pass outright (nothing it reads
+                // moved), but the Cloudflare CLI warning is asked on every compile. The
+                // first edit only lets the first pass's own writes settle, so the build
+                // that sees the new file is a pure app-code one.
+                await watchRun(
+                    root,
+                    (buildNumber) => {
+                        if (buildNumber === 2) {
+                            writeFileSync(join(root, "cloudflare.config.ts"), "export default {};\n", "utf8");
+                        }
+
+                        writeFileSync(join(root, "index.js"), `console.log(${String(buildNumber)});\n`, "utf8");
+                    },
+                    { expectedBuilds: 3, settleMs: 1000 },
+                );
+
+                expect(cfWarnings(warn)).toHaveLength(1);
+            } finally {
+                warn.mockRestore();
+                vi.unstubAllEnvs();
+            }
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
         "scaffolds .dev.vars, which only runs when watchMode is actually true",
         async () => {
             expect.assertions(3);
@@ -581,6 +618,211 @@ describe("rspack watch (real compiler)", () => {
 
             expect(builds[0]).toStrictEqual([]);
             expect(builds.at(-1)?.join("\n")).toContain("SHARD");
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
+        "re-runs the pass when lunora.config changes, since `codegen.exclude` decides which files the cached Project is seeded with",
+        async () => {
+            expect.assertions(1);
+
+            // Every `postcodegen` run appends a line, so the file counts passes. The
+            // config sits outside `lunora/`, so only registering it as a dependency of
+            // the compilation and folding it into the fingerprint lets an edit reach codegen.
+            const root = fixture({ scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x')"` } });
+
+            await runOnce(productionCompiler(root));
+
+            await watchRun(
+                root,
+                () => {
+                    // Cleared AFTER build 1, whose pass always runs the hook: only a second
+                    // pass, started by the config edit, can bring the file back.
+                    rmSync(join(root, ".hook-runs"), { force: true });
+                    writeFileSync(join(root, "lunora.config.ts"), 'export default { codegen: { exclude: ["seed/**"] } };\n', "utf8");
+                },
+                { expectedBuilds: 2, settleMs: 2500 },
+            );
+
+            expect(existsSync(join(root, ".hook-runs"))).toBe(true);
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
+        "follows a `target` edit to another runnable target mid-watch, regenerating for the new one",
+        async () => {
+            expect.assertions(2);
+
+            // `deliveryAuthorization` is a Cloudflare-only surface: codegen omits it for celld.
+            const root = fixture();
+
+            writeFileSync(join(root, "lunora.config.ts"), 'export default { target: "cloudflare" };\n', "utf8");
+
+            const appPath = join(root, "lunora", "_generated", "app.ts");
+            let beforeEdit = "";
+
+            await watchRun(
+                root,
+                () => {
+                    // Read on the first build's callback, when the cloudflare output is on disk.
+                    beforeEdit = readFileSync(appPath, "utf8");
+                    writeFileSync(join(root, "lunora.config.ts"), 'export default { target: "celld" };\n', "utf8");
+                },
+                { expectedBuilds: 2, settleMs: 2500 },
+            );
+
+            expect(beforeEdit).toContain("deliveryAuthorization");
+            expect(readFileSync(appPath, "utf8")).not.toContain("deliveryAuthorization");
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
+        "re-runs the pass when a lunora.config appears above a nested schema directory",
+        async () => {
+            expect.assertions(1);
+
+            // The schema directory is `web/lunora`, so the nearest config codegen reads is
+            // `web/lunora.config.ts`, which does not exist at the start.
+            const root = fixture({ scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x')"` } });
+
+            mkdirSync(join(root, "web"));
+            renameSync(join(root, "lunora"), join(root, "web", "lunora"));
+
+            // A one-shot pass first, so codegen's own writes land before the watch starts. Without
+            // it, the writes after the first watch build fire a second build that runs the pass
+            // with the nested config already in place, and the test passes with the watch broken.
+            await runOnce(
+                rspack({
+                    context: root,
+                    entry: "./index.js",
+                    mode: "production",
+                    output: { path: join(root, "dist") },
+                    plugins: [lunoraRspack({ projectRoot: root, schemaDir: "web/lunora" })],
+                }),
+            );
+
+            await watchRun(
+                root,
+                () => {
+                    // Cleared AFTER build 1, whose pass always runs the hook: only a pass started
+                    // by the new config can bring the file back.
+                    rmSync(join(root, ".hook-runs"), { force: true });
+                    writeFileSync(join(root, "web", "lunora.config.ts"), 'export default { codegen: { exclude: ["seed/**"] } };\n', "utf8");
+                },
+                { expectedBuilds: 2, schemaDir: "web/lunora", settleMs: 2500 },
+            );
+
+            expect(existsSync(join(root, ".hook-runs"))).toBe(true);
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
+        "re-runs the pass when a package.json appears between a nested schema directory and the config above it",
+        async () => {
+            expect.assertions(1);
+
+            // `apps/lunora.config.ts` governs `apps/web/lunora` until `apps/web/package.json`
+            // makes `apps/web/` the project boundary and cuts it off.
+            const root = fixture({ scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x')"` } });
+
+            mkdirSync(join(root, "apps", "web"), { recursive: true });
+            renameSync(join(root, "lunora"), join(root, "apps", "web", "lunora"));
+            writeFileSync(join(root, "apps", "lunora.config.ts"), 'export default { codegen: { exclude: ["seed/**"] } };\n', "utf8");
+
+            await runOnce(
+                rspack({
+                    context: root,
+                    entry: "./index.js",
+                    mode: "production",
+                    output: { path: join(root, "dist") },
+                    plugins: [lunoraRspack({ projectRoot: root, schemaDir: "apps/web/lunora" })],
+                }),
+            );
+
+            await watchRun(
+                root,
+                () => {
+                    rmSync(join(root, ".hook-runs"), { force: true });
+                    writeFileSync(join(root, "apps", "web", "package.json"), "{}\n", "utf8");
+                },
+                { expectedBuilds: 2, schemaDir: "apps/web/lunora", settleMs: 2500 },
+            );
+
+            expect(existsSync(join(root, ".hook-runs"))).toBe(true);
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
+        "re-runs the pass when the target of a source symlinked from outside lunora/ changes",
+        async () => {
+            expect.assertions(1);
+
+            const root = fixture({ scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x')"` } });
+            const outside = mkdtempSync(join(tmpdir(), "lunora-linked-"));
+            const target = join(outside, "linked.ts");
+
+            onTestFinished(() => {
+                rmSync(outside, { force: true, recursive: true });
+            });
+
+            writeFileSync(target, "export const linked = 1;\n", "utf8");
+            symlinkSync(target, join(root, "lunora", "linked.ts"));
+
+            await runOnce(productionCompiler(root));
+
+            await watchRun(
+                root,
+                () => {
+                    // The edit lands under the target's path only, which the watch on `lunora/` does not cover.
+                    rmSync(join(root, ".hook-runs"), { force: true });
+                    writeFileSync(target, "export const linked = 2;\n", "utf8");
+                },
+                { expectedBuilds: 2, settleMs: 2500 },
+            );
+
+            expect(existsSync(join(root, ".hook-runs"))).toBe(true);
+        },
+        TEST_TIMEOUT_MS,
+    );
+
+    it(
+        "re-runs the pass when a tsconfig.json appears nearer a nested schema directory",
+        async () => {
+            expect.assertions(1);
+
+            // With the schema directory at `web/lunora`, a new `web/tsconfig.json` is the one
+            // codegen resolves from then on. It does not exist yet, so only watching it as a
+            // missing file starts a build, and only listing it as a pass input lets that build regenerate.
+            const root = fixture({ scripts: { postcodegen: `node -e "require('fs').appendFileSync('.hook-runs', 'x')"` } });
+
+            mkdirSync(join(root, "web"));
+            renameSync(join(root, "lunora"), join(root, "web", "lunora"));
+
+            await runOnce(
+                rspack({
+                    context: root,
+                    entry: "./index.js",
+                    mode: "production",
+                    output: { path: join(root, "dist") },
+                    plugins: [lunoraRspack({ projectRoot: root, schemaDir: "web/lunora" })],
+                }),
+            );
+
+            await watchRun(
+                root,
+                () => {
+                    rmSync(join(root, ".hook-runs"), { force: true });
+                    writeFileSync(join(root, "web", "tsconfig.json"), '{ "compilerOptions": { "strict": true } }\n', "utf8");
+                },
+                { expectedBuilds: 2, schemaDir: "web/lunora", settleMs: 2500 },
+            );
+
+            expect(existsSync(join(root, ".hook-runs"))).toBe(true);
         },
         TEST_TIMEOUT_MS,
     );

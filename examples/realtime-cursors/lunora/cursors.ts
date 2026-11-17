@@ -63,7 +63,7 @@ export const joinRoom = mutation
             .first();
 
         if (existing) {
-            await ctx.db.patch(existing._id, { name, color, lastSeen: Date.now() });
+            await ctx.db.patch("cursors", existing._id, { name, color, lastSeen: Date.now() });
 
             return;
         }
@@ -101,5 +101,5 @@ export const updateCursor = mutation
             return;
         }
 
-        await ctx.db.patch(existing._id, { x, y, lastSeen: Date.now() });
+        await ctx.db.patch("cursors", existing._id, { x, y, lastSeen: Date.now() });
     });

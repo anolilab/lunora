@@ -25,30 +25,37 @@ interface MysqlHarness {
     close: () => Promise<void>;
     /** Connection details, e.g. for building an `env.HYPERDRIVE`-shaped binding double. */
     connection: { database: string; host: string; port: number; user: string };
-    /** The {@link SqlExec} the store core / migrations run against (wraps `connection.execute`). */
+    /** The {@link SqlExec} the store core / migrations run against (wraps `connection.query`). */
     exec: SqlExec;
     /** Raw query escape hatch (text protocol) for assertions + per-test table resets. */
     query: (sql: string, parameters?: ReadonlyArray<unknown>) => Promise<Record<string, unknown>[]>;
+    /** The same server through ONE connection (not a pool), which a global write must refuse. */
+    singleConnectionExec: SqlExec;
 }
 
 const createMysqlHarness = async (): Promise<MysqlHarness> => {
     const database = await createDB({ version: "8.0.x" });
-    const connection = await mysql.createConnection({
+    const options = {
         database: database.dbName,
         // The store's affected-rows OCC guard needs matched- (not changed-) row counts.
         flags: ["FOUND_ROWS"],
         host: "127.0.0.1",
         port: database.port,
         user: database.username,
-    });
+    };
+    // A pool, as production hands one: a global write holds one pooled connection for its transaction.
+    const connection = mysql.createPool(options);
+    const single = await mysql.createConnection(options);
 
     return {
         close: async () => {
+            await single.end();
             await connection.end();
             await database.stop?.();
         },
         connection: { database: database.dbName, host: "127.0.0.1", port: database.port, user: database.username },
-        exec: buildMysqlExec(connection),
+        exec: buildMysqlExec(() => connection),
+        singleConnectionExec: buildMysqlExec(() => single),
         query: async (sql, parameters = []) => {
             const [rows] = await connection.query(sql, parameters as unknown[]);
 

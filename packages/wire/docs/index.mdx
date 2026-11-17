@@ -1,0 +1,158 @@
+---
+title: "@lunora/wire"
+description: Tagged JSON codec and stable cache keys that carry bigint, bytes, Date, Map, Set and URL values across the Lunora RPC and WebSocket transport.
+---
+
+`@lunora/wire` is the value codec every Lunora tier shares: the client SDK, the
+framework adapters, the Durable Object (DO) runtime, the scheduler and the
+queue all encode call arguments and results with it. The transport is plain
+JSON, and JSON cannot carry several values that `@lunora/values` validators
+produce. `JSON.stringify(1n)` throws, and `JSON.stringify(new ArrayBuffer(8))`
+silently yields `{}`. The codec encodes those leaves into a JSON-safe tagged
+form and decodes them back, so a `v.bigint()` or `v.bytes()` value round-trips
+over the socket.
+
+Application code rarely imports this package. Every `@lunora/*` package that
+needs it already depends on it. Import it directly when you build your own
+transport (for example, a custom HTTP client for Lunora RPC), store wire values
+outside Lunora, or need the same cache keys Lunora uses.
+
+## Installation
+
+```bash
+pnpm add @lunora/wire
+```
+
+## Usage
+
+The following example encodes a payload with a `bigint` and a `Uint8Array`,
+sends it as JSON, and decodes it on the other side:
+
+```ts title="transport.ts"
+import { encodeWire, parseWire } from "@lunora/wire";
+
+const payload = { balance: 12_345_678_901_234_567_890n, avatar: new Uint8Array([1, 2, 3]) };
+
+const text = JSON.stringify(encodeWire(payload));
+const decoded = parseWire(text) as typeof payload;
+
+decoded.balance; // 12345678901234567890n
+decoded.avatar; // Uint8Array [1, 2, 3]
+```
+
+A value with no special leaves encodes to the same JSON tree it started as, so
+pure-JSON payloads are byte-identical with and without the codec.
+
+## What the codec carries
+
+| Value                                                         | Encoded as                                                              |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `bigint`                                                      | Decimal digits, at most 1024 (larger values throw a `RangeError`)       |
+| `ArrayBuffer`, typed arrays (`Uint8Array`, `Float32Array`, …) | Base64 plus the view type name                                          |
+| `Date`                                                        | Epoch milliseconds                                                      |
+| `Error`                                                       | `name`, `message`, own properties and `cause`; never the `stack`        |
+| `URL`, `Map`, `Set`                                           | Their contents; `Map` and `Set` keep insertion order                    |
+| `NaN`, `Infinity`, `-Infinity`                                | Distinct tokens instead of `null`                                       |
+| `undefined` in an array position                              | A tagged token instead of `null`; `undefined` object fields are dropped |
+
+Tagged values are JSON arrays whose first element is the sentinel
+`"$lunora.wire$"` (exported as `WIRE_TAG`). A user array that starts with the
+sentinel is escaped, so it cannot be mistaken for a tag.
+
+<Callout type="warn">
+    A non-plain object (a `RegExp`, `Headers`, a class instance) throws a `TypeError` instead of encoding to `{}`. A plain object with a `toJSON()` method is
+    encoded from its enumerable fields, and the method is not called, so convert it yourself first if you rely on its output. Nesting deeper than 64 levels
+    throws a `RangeError`, and so does a cyclic graph, which recurses until it hits that limit. Functions and symbols are **not** rejected: `encodeWire` returns
+    them unchanged, and `JSON.stringify` then drops them from an object or writes `null` in an array. Strip them before encoding.
+</Callout>
+
+## API
+
+### `encodeWire(value, depth?)`
+
+**Type:** `(value: unknown, depth?: number) => unknown`
+
+Returns a JSON-safe tree for `value`, with every non-JSON leaf replaced by its
+tagged form. Pass the result to `JSON.stringify`. Throws a `TypeError` on a
+non-plain object and a `RangeError` past 64 levels of nesting (a cyclic graph
+included) or on a `bigint` longer than 1024 digits. Functions and symbols are
+returned unchanged.
+
+### `decodeWire(value, depth?)`
+
+**Type:** `(value: unknown, depth?: number) => unknown`
+
+Rebuilds the original value from a parsed tree that `encodeWire` produced. Use
+`decodeWire(JSON.parse(text))` when a peer you do not trust controls the text,
+because it always enforces the 64-level nesting cap. It never assigns a
+`__proto__` key, so a decoded object cannot pollute its prototype.
+
+### `parseWire(text)`
+
+**Type:** `(text: string) => unknown`
+
+`JSON.parse` followed by `decodeWire`. It skips the decode step when the text
+contains no tag, which makes pure-JSON payloads cheaper. That fast path also
+skips the nesting cap, so prefer `decodeWire(JSON.parse(text))` for untrusted
+input.
+
+### `decodeDocument(text)`
+
+**Type:** `(text: string) => Record<string, unknown> | undefined`
+
+Parses a stored JSON blob into a document. Returns `undefined` instead of
+throwing when the text is not valid JSON, when decoding throws (a `bigint` over
+1024 digits, or tagged text nested past 64 levels), or when the result is not a
+plain object. It does not validate every tag: a malformed frame that
+`decodeWire` accepts comes back decoded as it is. Use it on read paths that must
+degrade rather than fail.
+
+### `encodeArgsOrThrow(label, path, args)`
+
+**Type:** `(label: string, path: string, args: unknown) => unknown`
+
+`encodeWire` for an outbound call's arguments. When encoding fails, it throws a
+`TypeError` whose message names the calling surface (`label`, for example
+`ctx.scheduler.runAt`) and the target function (`path`), with the original
+error as `cause`. Every Lunora producer of a call envelope encodes through it.
+
+### `needsWireEncoding(value, depth?)`
+
+**Type:** `(value: unknown, depth?: number) => boolean`
+
+Returns `true` when `value` must go through `encodeWire`: it holds at least
+one leaf that `encodeWire` would tag, or it is a value `encodeWire` rejects (a
+cyclic graph or nesting past the cap), so the real error is thrown there. When it
+returns `false`, `JSON.stringify(encodeWire(value))` equals
+`JSON.stringify(value)`, so the encode step can be skipped.
+
+### `stableWireKey(value)`
+
+**Type:** `(value: unknown) => string`
+
+Returns a deterministic string key for `value`: object keys sorted, wire-typed
+leaves as their tagged tokens. For pure-JSON values it is byte-identical to
+`stableStringify(value)`. Lunora uses it as the cache and deduplication key for
+subscription and `useQuery` arguments, so two calls whose arguments differ only
+by a `bigint` or `Date` get distinct keys. Two `Map` values with the same
+entries in a different order get different keys.
+
+### `stableStringify(value)`
+
+**Type:** `(value: unknown) => string`
+
+JSON serialization with object keys sorted, so equal objects produce equal
+strings. Throws on values plain JSON cannot carry, such as a `bigint`; use
+`stableWireKey` for those.
+
+### `isPlainObject(value)`
+
+**Type:** `(value: unknown) => value is Record<string, unknown>`
+
+Returns `true` for an object whose prototype is `Object.prototype` or `null`.
+
+### `WIRE_TAG`
+
+**Type:** `"$lunora.wire$"`
+
+The sentinel string that marks a tagged array in the encoded tree.

@@ -1,7 +1,7 @@
 import type { PollingFallback } from "./polling-fallback";
 import type { ReconnectCalculator } from "./reconnect";
 import type { SubscriptionState } from "./subscription";
-import type { ClientMessage } from "./types";
+import type { ClientMessage, ServerMessage } from "./types";
 
 type WSState = "idle" | "connecting" | "open" | "closed";
 
@@ -17,6 +17,18 @@ const isLiveStatus = (status: ConnectionStatus): boolean => status === "connecte
  */
 interface ShardConnection {
     /**
+     * Fingerprint of the verified claims this socket is authenticated with, from its `identity` frame.
+     * Stamped on a value read over it, so a later resume can say which claims the value was read under.
+     */
+    claims?: string;
+
+    /**
+     * The server-minted id of this socket, from its `identity` frame. Names the socket to the
+     * live-stream control route. Reset on every new socket, like `identityConfirmed`.
+     */
+    connectionId?: string;
+
+    /**
      * Fail-fast timer armed while the socket is `connecting`; cleared on `open`.
      * If the handshake doesn't complete within `connectTimeoutMs` (a hung proxy /
      * cold worker that never upgrades) it force-closes the socket and routes
@@ -24,8 +36,16 @@ interface ShardConnection {
      * channel silently stuck on the browser's much longer default WS timeout.
      */
     connectTimer: ReturnType<typeof setTimeout> | undefined;
+
     /** Active keepalive interval while the socket is open; cleared on disconnect/close. */
     heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+
+    /**
+     * Frames held since this socket's `batchStart`, applied together at its `batchEnd`.
+     * Dropped with the socket: nothing held was applied, so the reconnect's resume or
+     * snapshot answers from the cursor before the batch.
+     */
+    heldFrames?: ServerMessage[];
 
     /**
      * The `LunoraClient.identityFingerprint` captured when this connection's
@@ -47,11 +67,19 @@ interface ShardConnection {
     identity?: string | null;
 
     /**
+     * The server has answered this socket's `connect` with its identity (the user the
+     * socket was authenticated as). Reset on every new socket: room sends wait for it.
+     */
+    identityConfirmed?: boolean;
+
+    /**
      * The `LunoraClient.identityQuestions` id this connection's CURRENT
-     * socket was upgraded under, when the cookie was its only credential (no
-     * bearer token held, no `?token=`). `undefined` otherwise: the `identity`
-     * frame such a socket gets answers for the token, not for the cookie session
-     * this client's identity tracks, and is ignored.
+     * socket was upgraded under, when the cookie was its only subject (no ticket
+     * or auth token held). The server takes the subject from the upgrade, and a
+     * session credential sent in `connect` only clears the shared gate, so the
+     * `identity` frame still describes the cookie session this client tracks.
+     * `undefined` otherwise: the frame answers for the ticket or the auth token,
+     * not for that cookie session, and is ignored.
      */
     identityQuestion?: number;
 
@@ -77,23 +105,38 @@ interface ShardConnection {
 
     /** Stream-start frames buffered while the socket was (re)connecting. Flushed on `open`. */
     pendingStreams?: ClientMessage[];
+
     /** Unsubscribes that couldn't be sent while the socket was down, each tagged with its wire type so a shape sub is torn down as `shape_unsubscribe`, never the legacy `unsubscribe`. */
     pendingUnsubscribes: { id: string; type: "shape_unsubscribe" | "unsubscribe" }[];
     /** HTTP polling fallback for this shard's live queries (see `polling-fallback.ts`). */
     readonly polling: PollingFallback;
-    reconnect: ReconnectCalculator;
-    reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
     /**
-     * Subscriptions whose `subscribe` frame is on the wire but unanswered,
-     * keyed by subscription id, each holding the watchdog that frees its slot
-     * if the server never replies. Its size is the live concurrency the drain
-     * meters against `RESUBSCRIBE_CONCURRENCY`.
+     * Names the connect attempt currently waiting on a credential provider. An
+     * answer that arrives after its attempt timed out (or was superseded) no longer
+     * holds this value and is dropped, instead of opening a socket on top of the
+     * retry that replaced it.
      */
-    resubscribePending: Map<string, ReturnType<typeof setTimeout>>;
+    providerAttempt?: symbol;
+    /** Counts the socket's re-auth requests; only the latest one may act on its answer, so an older refusal cannot undo a newer success. */
+    reauthAttempt?: number;
+    /** A re-auth request is awaiting its answer: its answer re-arms the schedule, so a repeated identity frame must not. */
+    reauthPending?: boolean;
+
+    reconnect: ReconnectCalculator;
+
+    reconnectTimer: ReturnType<typeof setTimeout> | undefined;
 
     /** Subscriptions waiting their turn to be re-sent on this shard (see `RESUBSCRIBE_CONCURRENCY`). */
     resubscribeQueue: SubscriptionState[];
+
+    /**
+     * Subscription ids holding a pacing slot: their `subscribe` frame went out through the paced
+     * resubscribe drain and nothing bearing the id has come back. Its size is the live concurrency
+     * the drain meters against `RESUBSCRIBE_CONCURRENCY`. Each id's slot is freed by its watchdog in
+     * `unackedWatchdogs`.
+     */
+    resubscribeSlots: Set<string>;
 
     /**
      * Set when the client's bounce-shard-sockets sweep retires this
@@ -114,6 +157,28 @@ interface ShardConnection {
      * nothing will ever replace.
      */
     retired?: boolean;
+
+    /** The socket's revalidation window from its `identity` frame; `undefined` when it announced none. */
+    revalidateMs?: number;
+
+    /**
+     * Re-auths the socket in place within the `revalidateMs` window its `identity` frame
+     * announced; past that window the server closes it with `4005`. Cleared with the socket.
+     */
+    revalidateTimer?: ReturnType<typeof setTimeout>;
+
+    /**
+     * This socket has sent its room rejoins. Reset on every new socket: room sends wait for
+     * it, so a send never reaches the server ahead of its `whisper_subscribe`.
+     */
+    roomsRejoined?: boolean;
+
+    /**
+     * The session credential this socket opened under, sent in its `connect` frame
+     * (protocol §6) and never in the upgrade URL. Absent when the client holds none.
+     */
+    sessionToken?: string;
+
     /** `undefined` for the default shard (connects without a `shard` param). */
     readonly shardKey: string | undefined;
     socket: undefined | WebSocket;
@@ -134,7 +199,33 @@ interface ShardConnection {
      * it, and that path clears this timer before it can fire.
      */
     stableTimer: ReturnType<typeof setTimeout> | undefined;
+
+    /** The socket upgraded with an admin ticket, which its re-auth must present afresh: a ticket outlives the upgrade by a minute at most. */
+    ticketed?: boolean;
+
+    /**
+     * Per subscription id, the one watchdog armed when its `subscribe` frame goes out. If the server
+     * answers nothing for `RESUBSCRIBE_ACK_TIMEOUT_MS` it frees the id's pacing slot (if it holds one)
+     * and re-sends the frame once, recovering a frame the server silently dropped. Cleared by the
+     * first frame bearing the id and by every teardown of the socket.
+     */
+    unackedWatchdogs: Map<string, ReturnType<typeof setTimeout>>;
+
+    /**
+     * The bearer this socket is authenticated with, or `undefined` when it upgraded on the cookie session alone.
+     * Pinned when the socket opens, and moved only when the server accepts a refreshed one in place: a later
+     * bearer for the same subject does not reconnect it, so re-auth must present this, not the client's current one.
+     */
+    upgradeBearer?: string;
+
     wasEverConnected: boolean;
+
+    /**
+     * Whether this socket's `identity` frame advertised `whisperAck`: the shard answers every live
+     * join with `whisper_subscribed`, so a live grant waits for that answer. An older shard omits it
+     * and the grant is posted at once. Reset on every new socket, like `connectionId`.
+     */
+    whisperAck?: boolean;
     wsState: WSState;
 }
 

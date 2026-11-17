@@ -1,85 +1,20 @@
-import { LunoraError } from "@lunora/errors";
+import { LunoraError, OFFLINE_NOT_QUEUED_HINT } from "@lunora/errors";
 import { decodeWire, encodeWire, stableWireKey } from "@lunora/wire";
 
 import { MAX_BATCH_ENTRIES } from "../../../shared/batch-wire";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import { encodeExpectedSubjectHeader, EXPECT_SUBJECT_HEADER } from "../../../shared/identity-header";
 import { PAGE_DELTA_CAPABILITY } from "../../../shared/page-result";
+import { REFRESH_BATCH_CAPABILITY } from "../../../shared/refresh-batch";
 import { onSessionChanged } from "../../../shared/session-change";
-import { fetchArchitecture, fetchOpenApi, fetchOpenRpc, getCronJobs, listFunctions, runCronJob } from "./admin/functions";
-import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "./admin/global-tables";
+import { CLAIMS_FINGERPRINT_PATH, IDENTITY_CHANGED_CLOSE_REASON, IDENTITY_STALE_CLOSE_CODE, SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
+import { encodeBearerProtocol, LUNORA_WS_PROTOCOL } from "../../../shared/ws-bearer-protocol";
 import type { AdminHost } from "./admin/host";
-import { deleteKvKey, getKvValue, listKvKeys, listKvNamespaces, putKvValue } from "./admin/kv";
-import { queryLogArchive, shardTraffic } from "./admin/observability";
-import {
-    cancelScheduledJob,
-    decodeRecordArgs,
-    getWorkflowInstance,
-    listDeadJobs,
-    listScheduledJobs,
-    listWorkflowInstances,
-    removeDeadJob,
-    retryDeadJob,
-    schedulerStatus,
-    setWorkflowInstanceStatus,
-} from "./admin/scheduler";
-import { deleteStorageObject, listStorageBuckets, listStorageObjects, signedStorageUrl, uploadStorageObject } from "./admin/storage";
-import { listVectorIndexes, queryVectorIndex } from "./admin/vector-indexes";
+import { decodeRecordArgs } from "./admin/scheduler";
 import createInMemoryBookmarkStorage from "./bookmark";
 import type { BatchSlot } from "./call-wire";
 import { demuxBatchResults, encodeCallArgs, isEncodable, replayExpectation } from "./call-wire";
-import {
-    AUTH_ACCOUNTS_PATH,
-    AUTH_ADD_MEMBER_PATH,
-    AUTH_ADD_TEAM_MEMBER_PATH,
-    AUTH_BAN_PATH,
-    AUTH_CANCEL_INVITATION_PATH,
-    AUTH_CAPABILITIES_PATH,
-    AUTH_CONFIG_PATH,
-    AUTH_CREATE_ORG_PATH,
-    AUTH_CREATE_ROLE_PATH,
-    AUTH_CREATE_SIGN_UP_INVITATION_PATH,
-    AUTH_CREATE_TEAM_PATH,
-    AUTH_CREATE_USER_PATH,
-    AUTH_DELETE_PASSKEY_PATH,
-    AUTH_DISABLE_2FA_PATH,
-    AUTH_IMPERSONATE_PATH,
-    AUTH_INVITE_MEMBER_PATH,
-    AUTH_MEMBER_ROLE_PATH,
-    AUTH_ORG_INVITATIONS_PATH,
-    AUTH_ORG_MEMBERS_PATH,
-    AUTH_ORG_ROLES_PATH,
-    AUTH_ORG_TEAM_MEMBERS_PATH,
-    AUTH_ORG_TEAMS_PATH,
-    AUTH_ORGS_PATH,
-    AUTH_PASSKEYS_PATH,
-    AUTH_REMOVE_MEMBER_PATH,
-    AUTH_REMOVE_ORG_PATH,
-    AUTH_REMOVE_ROLE_PATH,
-    AUTH_REMOVE_TEAM_MEMBER_PATH,
-    AUTH_REMOVE_TEAM_PATH,
-    AUTH_REMOVE_USER_PATH,
-    AUTH_REVOKE_SESSION_PATH,
-    AUTH_REVOKE_SESSIONS_PATH,
-    AUTH_REVOKE_SIGN_UP_INVITATION_PATH,
-    AUTH_SESSIONS_PATH,
-    AUTH_SET_PASSWORD_PATH,
-    AUTH_SET_ROLE_PATH,
-    AUTH_SIGN_UP_INVITATIONS_PATH,
-    AUTH_UNBAN_PATH,
-    AUTH_UNLINK_ACCOUNT_PATH,
-    AUTH_UPDATE_ORG_PATH,
-    AUTH_UPDATE_ROLE_PATH,
-    AUTH_UPDATE_TEAM_PATH,
-    AUTH_UPDATE_USER_PATH,
-    AUTH_USERS_PATH,
-    DEFAULT_AUTH_BASE_PATH,
-    GET_SESSION_PATH,
-    RPC_BATCH_PATH,
-    RPC_PATH,
-    SCHEDULED_WS_PATH,
-    WS_PATH,
-} from "./client-paths";
+import { DEFAULT_AUTH_BASE_PATH, GET_SESSION_PATH, RPC_BATCH_PATH, RPC_PATH, SCHEDULED_WS_PATH, WS_PATH } from "./client-paths";
 import type { ClientQueryRef } from "./client-query-store";
 import { ClientQueryStore } from "./client-query-store";
 import {
@@ -87,7 +22,9 @@ import {
     DEFAULT_HEARTBEAT_INTERVAL_MS,
     DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS,
     DEFAULT_POLLING_FALLBACK_INTERVAL_MS,
+    DEFAULT_RPC_TIMEOUT_MS,
     IDLE_SHARD_CLOSE_MS,
+    MAX_AMBIGUOUS_SEND_ATTEMPTS,
     MAX_PENDING_STREAMS,
     MAX_WATERMARK_IDENTITIES,
     QUERY_CACHE_DEBOUNCE_MS,
@@ -95,20 +32,20 @@ import {
     RESUBSCRIBE_CONCURRENCY,
     SOCKET_STABLE_MS,
 } from "./client-tuning";
-import { deriveWsUrl, joinUrl, withQuery } from "./client-urls";
+import { deriveWsUrl, joinUrl, parseSocketUrl, serializeSocketUrl } from "./client-urls";
 import type { ConnectionStatus, ManagedSocketState, ShardConnection, WSState } from "./connection-state";
 import { connectionKey, decodeServerFrame, flushPendingStreams, isLiveStatus, sendOn } from "./connection-state";
 import { TabCoordinator } from "./cross-tab";
 import { resolveDataPayload, UNMERGEABLE_DELTA } from "./delta-merge";
 import { isAuthReplayFailure, TransportError } from "./errors";
-import { httpStream } from "./http-stream";
+import { httpStream, pumpSseBody } from "./http-stream";
 import Listeners from "./listeners";
 import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
 import type { ManagedSocketOptions } from "./managed-socket";
 import { openManagedSocket, stopHeartbeat } from "./managed-socket";
 import type { QueuedMutation } from "./offline-queue";
-import { nextId, OfflineQueue, reportPersistenceError } from "./offline-queue";
+import { nextId, OfflineQueue } from "./offline-queue";
 import type { OptimisticLayerHandle } from "./optimistic-layers";
 import {
     acknowledgementMark,
@@ -117,6 +54,7 @@ import {
     dropConfirmedLayers,
     refoldSubscription,
     rollbackOptimistic,
+    withDeferredNotifications,
 } from "./optimistic-layers";
 import isStaleVersion from "./persisted-version";
 import { resolvePersistenceAdapter } from "./persistence";
@@ -134,16 +72,27 @@ import {
     replaySlotVerdict,
     undecodableResultError,
     unparseableResponseError,
+    unreadableSlotError,
     utf8ByteLength,
 } from "./replay";
+import { abortReason, raceAbort, withinRpcDeadline } from "./rpc-deadline";
 import type { PokeBuffer, ShapeCallback, ShapeSubscriptionState } from "./shape-state";
 import { commitPokeSlice, emitShapeRows, failUndecodableShapes, PokeAssembler } from "./shape-state";
 import createSnapshotPrecondition from "./snapshot-precondition";
+import { registerSnapshotSource, snapshotSourceOf } from "./snapshot-precondition-source";
 import type { StreamHandle, StreamIterable } from "./stream";
 import { createStream } from "./stream";
 import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState, SyncWatermark } from "./subscription";
-import { fanSubscriptionError, SubscriptionRegistry, wrapSubscriber } from "./subscription";
-import { advanceWatermark, commitDataFrame, fanCheckpoints } from "./subscription-frames";
+import {
+    failSubscription,
+    fanSubscriptionError,
+    releaseSubscribeFrame,
+    replaySubscriptionRefusal,
+    setSubscriptionAck,
+    SubscriptionRegistry,
+    wrapSubscriber,
+} from "./subscription";
+import { advanceWatermark, commitDataFrame, fanCheckpoints, isNonFinalRunFrame, isStaleDataFrame, replayableValue } from "./subscription-frames";
 import type { LeaderMirror, TabLeadershipHost } from "./tab-leadership";
 import {
     onBecomeLeader,
@@ -156,60 +105,43 @@ import {
 } from "./tab-leadership";
 import type {
     ArgsOf,
-    AuthCapabilities,
-    AuthConfigInfo,
-    AuthImpersonation,
-    AuthPage,
-    AuthSession,
-    AuthUser,
     BookmarkStorage,
     CachedQuery,
     ClientMessage,
-    CronJobInfo,
-    FunctionDescriptor,
     FunctionReference,
-    GlobalFacetResult,
-    GlobalFilterClause,
-    GlobalTableInfo,
-    GlobalTablePage,
     HttpStreamArgsOf,
     HttpStreamChunkOf,
     HttpStreamRef,
-    KvKeyListResult,
-    KvNamespaceSummary,
-    KvValueResult,
     LunoraClientOptions,
+    OnlineOnlyOption,
     OutboxSink,
     PersistenceAdapter,
-    PersistenceErrorContext,
-    PipelineLogPage,
-    PipelineLogQuery,
     QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
+    RoomRef,
     ScheduleRecord,
-    SchedulerStatus,
     ServerDataMessage,
     ServerErrorMessage,
     ServerIdentityMessage,
+    ServerLiveMessage,
     ServerMessage,
     ServerPokeEndMessage,
     ServerResumeMessage,
     ServerSettledMessage,
     ServerWhisperMessage,
-    ShardTrafficResult,
-    StorageListPage,
     Unsubscribe,
     User,
-    VectorIndexSummary,
-    VectorQueryMatch,
-    WorkflowInstanceAction,
-    WorkflowInstanceDetail,
-    WorkflowInstancePage,
-    WorkflowInstanceStatus,
     WsTokenProvider,
 } from "./types";
-import { buildStreamError, buildSubscriptionError, errorEnvelopeOf, reconstructError, reconstructErrorWithRetryAfter } from "./wire-errors";
+import {
+    buildStreamError,
+    buildSubscriptionError,
+    errorEnvelopeOf,
+    reconstructError,
+    reconstructErrorWithRetryAfter,
+    withResponseHeaders,
+} from "./wire-errors";
 
 /**
  * Whether an identity change leaves a session behind that must be retired: a
@@ -274,6 +206,23 @@ interface ClientDebugSnapshot {
 }
 
 /**
+ * Whether the client is actually caught up, which `connectionStatus()` alone cannot
+ * say: it reads `"connected"` as soon as any socket is open, though a subscription
+ * on it may not have been acknowledged yet (it has no data) and writes may still be
+ * waiting in the offline queue. See {@link LunoraClient.syncStatus}.
+ */
+interface SyncStatus {
+    /** The aggregate socket status, as {@link LunoraClient.connectionStatus} reports it. */
+    connection: ConnectionStatus;
+    /** Live queries and shapes the server has not answered yet on the current connection. */
+    pendingSubscriptions: number;
+    /** Writes queued or being replayed from the built-in offline queue (not the `@lunora/db` outbox). */
+    pendingWrites: number;
+    /** `true` only on a live connection with every subscription answered and no write queued. */
+    synced: boolean;
+}
+
+/**
  * Terminal verdict for a mutation that passed through the offline queue,
  * delivered to {@link LunoraClient.onMutationSettled}.
  *
@@ -326,7 +275,42 @@ interface MutationSettledEvent {
 interface ActionCallOptions {
     /** Route the call to a specific shard. */
     shardKey?: string;
+
+    /**
+     * Abort the call. The request is cancelled and the promise rejects with the
+     * signal's reason (an `AbortError` by default). The server may already have
+     * started — or finished — the action, which is not transactional, so an abort
+     * releases the caller; it does not undo the work.
+     */
+    signal?: AbortSignal;
 }
+
+/**
+ * True when `function_` is a reference to a function with a `v.sensitive`
+ * argument: the generated `api` types it `& { readonly sensitive: true }` and emits
+ * the same flag at runtime.
+ */
+const isSensitiveReference = (function_: FunctionReference): boolean => (function_ as { sensitive?: unknown }).sensitive === true;
+
+/**
+ * The options a call really runs under. A sensitive function is always
+ * online-only, so its arguments are never queued; an explicit `onlineOnly: false`
+ * is refused rather than quietly overridden, because it can only be a mistake.
+ */
+const forceOnlineOnlyWhenSensitive = <O extends { onlineOnly?: boolean }>(function_: FunctionReference, options: O): O => {
+    if (!isSensitiveReference(function_)) {
+        return options;
+    }
+
+    if (options.onlineOnly === false) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `'${function_.__lunoraRef}' takes a sensitive argument and is always online-only; onlineOnly: false is not allowed`,
+        );
+    }
+
+    return { ...options, onlineOnly: true };
+};
 
 /**
  * Per-call options for {@link LunoraClient.mutation} — the optimistic-update
@@ -343,6 +327,24 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      * each then gets a fresh key.
      */
     mutationId?: string;
+
+    /**
+     * Never queue, persist or replay this write. When the shard's connection is
+     * down or reconnecting — the states in which a normal write is queued — the
+     * call rejects at once with `OFFLINE_NOT_QUEUED`, and its args never reach the
+     * offline queue, the persistence adapter or the outbox. Use it for a write whose
+     * arguments must not sit on disk: a credential a person typed in, a one-time
+     * token. A function with a `v.sensitive` argument is always online-only, whatever
+     * this option says: the client forces it on, and `false` is refused.
+     *
+     * Ordering: an online-only call neither waits for a queue flush nor queues
+     * behind writes already queued for its shard. When it is sent it can overtake
+     * them, so it may land on the server before an older queued write to the same
+     * document. Optimistic layers are in-memory and are not applied to a refused call.
+     *
+     * Omit for normal calls, which queue as usual.
+     */
+    onlineOnly?: boolean;
 
     /**
      * Single-query shortcut: the transform is layered onto the subscription
@@ -415,6 +417,15 @@ interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unkn
      */
     replayCredential?: ReplayCredential;
     shardKey?: string;
+
+    /**
+     * Stop waiting for the mutation. The promise rejects with the signal's reason
+     * (an `AbortError` by default), and nothing is sent when the signal is already
+     * aborted. A write already on the wire or in the offline queue is NOT
+     * retracted: it still commits or replays on its own, and its optimistic patch
+     * is settled by that outcome — an abort releases the caller, not the write.
+     */
+    signal?: AbortSignal;
 }
 
 declare const replayCredentialBrand: unique symbol;
@@ -441,15 +452,205 @@ type ReplayIdentityVerdict = { credential: ReplayCredential; verdict: "match" } 
  * query with row deltas instead of re-sending the whole page on every write.
  *
  * Strictly additive: a server that does not recognise a token ignores it and
- * keeps sending what it always did. The token comes from `shared/` rather than
+ * keeps sending what it always did. `REFRESH_BATCH_CAPABILITY` says the client
+ * holds a `batchStart` … `batchEnd` bracket and applies it as one update.
+ *
+ * The tokens come from `shared/` rather than
  * being retyped here, so a mismatch with the server's gate is impossible.
  */
-const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY] as const;
+const CLIENT_CAPABILITIES = [PAGE_DELTA_CAPABILITY, REFRESH_BATCH_CAPABILITY] as const;
+
+/**
+ * Whether a frame arriving inside a `batchStart` bracket waits for its `batchEnd`:
+ * every frame that moves a subscription's value or position. The rest (pokes, rooms,
+ * streams, identity) is not part of a refresh and is handled as it lands. An `error`
+ * without an id is the socket's own (`TOKEN_EXPIRED` before a close), never held.
+ */
+const isHeldInBatch = (message: ServerMessage): boolean =>
+    message.type === "data" ||
+    message.type === "delta" ||
+    message.type === "settled" ||
+    message.type === "resume" ||
+    (message.type === "error" && typeof message.id === "string");
+
+/** Room sends held before the socket opens; past this a `send` is refused rather than queued without bound. */
+const ROOM_PENDING_LIMIT = 100;
+
+/** Longest a live-grant control POST may take, headers and body. Past it the POST is aborted so the chain behind it moves on. */
+const LIVE_CONTROL_TIMEOUT_MS = 10_000;
+
+/** Retries of a failed claims request while frames wait on it, and the first delay; each doubles the last. */
+const OWN_CLAIMS_MAX_RETRIES = 5;
+const OWN_CLAIMS_RETRY_BASE_MS = 500;
+
+/** Longest a supplementary socket waits on a ticket provider before it mints again: a provider that never settles must not stall the channel. */
+const WS_TICKET_MINT_TIMEOUT_MS = 10_000;
+
+/**
+ * Resolve a ticket provider, or reject once `ms` passes. A timed-out provider is abandoned, not cancelled: its result is dropped by the caller.
+ */
+const mintWithin = (provider: WsTokenProvider, ms: number): Promise<string | undefined> => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+            reject(new Error("ws ticket mint timed out"));
+        }, ms);
+    });
+
+    // An async call runs the provider synchronously and turns a synchronous throw into a rejection.
+    const minting = (async (): Promise<string | undefined> => provider())();
+
+    return Promise.race([minting, deadline]).finally(() => {
+        clearTimeout(timer);
+    });
+};
+
+/**
+ * A whisper topic's join on one socket. The shard acknowledges each `whisper_subscribe` once, and a
+ * leave does not change the count: `pending` is the number of joins sent for the topic whose ack is
+ * still outstanding, and `joined` is set once it reaches zero. `waiters` run when the topic is
+ * joined, or on timeout.
+ */
+interface WhisperJoin {
+    joined: boolean;
+    pending: number;
+    waiters: WhisperWaiter[];
+}
+
+/** A grant waiting on a join: `run` once the topic is joined, or when `timer` fires first. */
+interface WhisperWaiter {
+    run: () => void;
+    timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+/** The two WebSocket credentials a shard socket opens under: the session (`connect` frame) and the URL ticket. */
+interface ShardSocketCredentials {
+    session: string | undefined;
+    ticket: string | undefined;
+}
+
+/** A WebSocket credential as configured: a static value, a provider, or unset. */
+type WsCredentialSource = string | undefined | WsTokenProvider;
+
+/** The re-auth route for a shard (`shard=` kept even when empty, as on the upgrade URL), with the admin ticket in `token=` as the upgrade carries it. */
+const reauthPath = (shardKey: string | undefined, ticket: string | undefined): string => {
+    const query = [shardKey === undefined ? "" : `shard=${encodeURIComponent(shardKey)}`, ticket === undefined ? "" : `token=${encodeURIComponent(ticket)}`]
+        .filter(Boolean)
+        .join("&");
+
+    return query === "" ? SOCKET_REAUTH_PATH : `${SOCKET_REAUTH_PATH}?${query}`;
+};
+
+/** Resolve a static credential or a {@link WsTokenProvider}; a provider is called fresh on every connect. */
+const resolveWsCredential = async (credential: WsCredentialSource): Promise<string | undefined> =>
+    typeof credential === "function" ? await credential() : credential;
+
+/**
+ * One control POST (a live grant, a socket re-auth), bounded by {@link LIVE_CONTROL_TIMEOUT_MS}.
+ * The clock starts when the POST is sent, not when it was queued, and covers the body read too: a
+ * stalled response must not hold the chain behind it, nor keep a re-auth from falling back.
+ */
+const sendControl = async (fetchImpl: typeof fetch, url: string, body: string, headers: Record<string, string>): Promise<{ status: number; text: string }> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+        controller.abort();
+    }, LIVE_CONTROL_TIMEOUT_MS);
+
+    try {
+        const response = await fetchImpl(url, { body, credentials: "include", headers, method: "POST", signal: controller.signal });
+
+        return { status: response.status, text: await response.text() };
+    } finally {
+        clearTimeout(timer);
+    }
+};
+
+/**
+ * The refusal of an `onlineOnly` mutation whose connection is not live. `cause`
+ * is set when the request was attempted and failed on the wire.
+ */
+const offlineNotQueuedError = (functionPath: string, cause?: unknown): LunoraError =>
+    new LunoraError("OFFLINE_NOT_QUEUED", `'${functionPath}' is online-only and the connection is not live, so it was not queued`, {
+        cause,
+        hint: OFFLINE_NOT_QUEUED_HINT,
+    });
+
+/**
+ * A request that failed on the wire: fetch rejects with a `TypeError`, and the args
+ * encode, so the codec did not reject them. Anything else is the server's answer.
+ */
+const isWireFailure = (error: unknown, args: Record<string, unknown>): boolean => error instanceof TypeError && isEncodable(args);
+
+/**
+ * Whether the browser reports the device as offline. Only then is a network failure no verdict on the write: an online device
+ * with a closed socket (a CORS or TLS failure, a blocked request, or a follower tab, whose own socket is never open) still counts.
+ */
+const deviceOffline = (): boolean => (globalThis as { navigator?: { onLine?: boolean } }).navigator?.onLine === false;
+
+/**
+ * Whether a failed direct send is refused as `OFFLINE_NOT_QUEUED`: a write that would have been queued,
+ * or an online-only write whose transport failed while no socket was open. An online-only write is
+ * never queued, so a refusal before the first connect is the same refusal.
+ */
+const refusesAsNotQueued = (onlineOnly: boolean | undefined, networkDown: boolean, wireFailure: boolean, socketOpen: boolean): boolean =>
+    networkDown || (onlineOnly === true && wireFailure && !socketOpen);
 
 /**
  * @internal
  */
 const RESOLVED_PROMISE = Promise.resolve();
+
+/**
+ * Pump a `streamRpc` body to its terminal frame. The pump runs off its own controller, tied here to the caller's
+ * signal: one read can carry several frames, so a cancel can land between frames already buffered, and nothing
+ * after it may be delivered. An aborted call rejects with the signal's reason rather than resolving.
+ */
+const pumpStreamRpcBody = async (
+    body: ReadableStream<Uint8Array>,
+    signal: AbortSignal | undefined,
+    onFrame: ((frame: unknown) => void) | undefined,
+): Promise<{ failure: Error | undefined; terminal: string | undefined }> => {
+    let terminal: string | undefined;
+    let failure: Error | undefined;
+    const pumpAbort = new AbortController();
+    const forwardAbort = (): void => {
+        pumpAbort.abort(signal?.reason);
+    };
+
+    signal?.addEventListener("abort", forwardAbort, { once: true });
+
+    try {
+        // No resume state to track on a one-shot call, so the pump's observers are empty.
+        await pumpSseBody(
+            body,
+            {
+                complete: (data: string) => {
+                    if (signal?.aborted !== true) {
+                        terminal = data;
+                    }
+                },
+                fail: (error: Error) => {
+                    failure = error;
+                },
+                push: (frame: unknown) => {
+                    if (signal?.aborted !== true) {
+                        onFrame?.(frame);
+                    }
+                },
+            },
+            {},
+            pumpAbort,
+        );
+    } finally {
+        signal?.removeEventListener("abort", forwardAbort);
+    }
+
+    if (signal?.aborted === true) {
+        throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted.", "AbortError");
+    }
+
+    return { failure, terminal };
+};
 
 /**
  * Lunora browser/edge client. Talks RPC over HTTP and real-time deltas over
@@ -478,7 +679,7 @@ class LunoraClient {
 
     public readonly wsUrl: string;
     /** The admin modules reach the client only through this host. The arrows read `this` when called, so spies and overrides installed after construction still take effect. */
-    private readonly adminHost: AdminHost = {
+    protected readonly adminHost: AdminHost = {
         adminFetch: (...args) => this.adminFetch(...args),
         assertOpen: () => {
             this.assertOpen();
@@ -487,7 +688,14 @@ class LunoraClient {
     /** Local reactive store for {@link ClientQueryRef} values — no server round-trip. Private; reach it via `getClientQuery` / `setClientQuery` / `subscribeClientQuery`. */
     private readonly clientQueryStore: ClientQueryStore;
 
-    private wsToken: string | undefined | WsTokenProvider;
+    /** The session credential, sent in the `connect` frame and never in the URL (protocol §6). */
+    private wsToken: WsCredentialSource;
+    /** The short-lived ticket appended to the upgrade URL as `?token=` (protocol §6). */
+    private wsTicket: WsCredentialSource;
+    /** Bumped on every `setWsToken` / `setWsTicket` change: a provider request started under an older value is superseded. */
+    private wsCredentialGeneration = 0;
+    /** The credential generation the server last refused with 4003, so that refusal notifies once. */
+    private refusedCredentialGeneration: number | undefined;
 
     /** Better-auth base path (trailing slash stripped) for the `get-session` lookup. */
     private readonly authBasePath: string;
@@ -504,6 +712,8 @@ class LunoraClient {
     private readonly connectTimeoutMs: number;
     /** Keepalive cadence (ms); `0` disables the heartbeat. See {@link LunoraClientOptions.heartbeatIntervalMs}. */
     private readonly heartbeatIntervalMs: number;
+    /** Deadline (ms) for one HTTP RPC round trip; `0` disables it. See {@link LunoraClientOptions.rpcTimeoutMs}. */
+    private readonly rpcTimeoutMs: number;
     /** The socket-lifecycle inputs, built once after the constructor assigns them (none is reassigned later). */
     private readonly managedSocketOptions: ManagedSocketOptions;
 
@@ -512,6 +722,37 @@ class LunoraClient {
 
     /** Polling-fallback cadence (ms); `0` disables it. See {@link LunoraClientOptions.pollingFallback}. */
     private readonly pollingFallbackIntervalMs: number;
+
+    /** This tab's own claims fingerprint, fetched from the worker; `undefined` until known and again after any credential change, `null` once the server is known to announce none. */
+    private ownClaimsValue: null | string | undefined;
+
+    /** Frames a follower held for want of `ownClaimsValue`, one per subscription, applied once it is known. */
+    private readonly heldLeaderFrames = new Map<string, () => void>();
+
+    private ownClaimsFetch: Promise<unknown> | undefined;
+
+    /** Leader fingerprints this tab already re-verified its own against, so a tab that truly differs asks once, not per frame. */
+    private readonly claimsVerifiedAgainst = new Set<string>();
+
+    /** The claims request failed while frames were held: its retry timer and how many have failed in a row. */
+    private ownClaimsRetryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    private ownClaimsFailures = 0;
+
+    /** What a reset hid from a follower's subscriptions, put back if the answer shows the same claims. */
+    private readonly suspendedFollowerValues = new Map<
+        SubscriptionState,
+        { base: unknown; claims: string; cursor: number | undefined; epoch: string | undefined }
+    >();
+
+    /**
+     * The claims fingerprint of the socket whose `data`, `delta`, `resume` or poke frame is being applied, set only
+     * for the synchronous span of that handler. A value and its cursor are stamped with it as they are committed.
+     */
+    private frameClaims: string | undefined;
+
+    /** See {@link LunoraClientOptions.authTokenOnUpgrade}. */
+    private readonly authTokenOnUpgrade: boolean;
 
     private readonly offlineQueue: OfflineQueue;
 
@@ -586,18 +827,34 @@ class LunoraClient {
     /** Monotonic per-client mutation counter backing the server `__client_watermark`. */
     private outboxMutationCounter = 0;
 
-    private readonly onPersistenceError: ((context: PersistenceErrorContext) => void) | undefined;
+    /** Orders offline-queued writes by when they were issued; see {@link QueuedMutation.issueSeq}. */
+    private mutationIssueCounter = 0;
+
+    /** Bumped each time an identity's optimistic layers are dropped, so a mutation can tell its user was signed out mid-update. */
+    private identityRetirements = 0;
 
     private readonly persistence: PersistenceAdapter | undefined;
 
     /** App/schema version stamped on persisted writes + cached reads; mismatches are purged. */
     private readonly persistenceVersion: string | undefined;
 
+    /** Removes the page-hide flush listeners on close (see `installPageHideFlush`). */
+    private releasePageHideFlush: (() => void) | undefined;
+
     /** Releases the multi-tab outbox-leader Web Lock on close (see `hydrateAsOutboxLeader`). */
     private outboxLeaderRelease: (() => void) | undefined;
 
     /** Durable read cache (Pillar 2); `undefined` when `queryCache` is omitted or `false`. */
     private readonly queryCache: QueryCacheAdapter | undefined;
+
+    /**
+     * Counts the clears of the read cache. A load or a write batch begun before a clear belongs to the identity
+     * the clear retired, so it is dropped when its epoch no longer matches.
+     */
+    private queryCacheEpoch = 0;
+
+    /** Durable cache writes and clears, run in order so a clear cannot finish over a later write. */
+    private queryCacheChain: Promise<unknown> = Promise.resolve();
 
     /**
      * Values restored from the `queryCache` at construction, keyed by the
@@ -631,6 +888,9 @@ class LunoraClient {
     private cacheFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
     private readonly subscriptions = new SubscriptionRegistry();
+
+    /** The re-subscribe a server retry hint asked for, per subscription id, until any frame for it shows the server has answered. */
+    private readonly pendingSubscriptionRetries = new Map<string, ReturnType<typeof setTimeout>>();
 
     /**
      * Cross-tab coordinator; created only when `crossTabSync: true`. When the
@@ -691,6 +951,9 @@ class LunoraClient {
     // setAuthToken / onAuthTokenChange — part of the exported API contract.
     // eslint-disable-next-line unicorn/no-null -- public auth-token contract sentinel
     private authToken: string | null = null;
+
+    /** Hash of the current bearer, keyed on the token so a new token misses once. `setAuthToken` drops it on every change, so a replaced or signed-out bearer is not retained. */
+    private tokenFingerprint: { hash: string; token: string } | undefined;
 
     /**
      * Optional STABLE identity subject (a user id), the basis of the offline-queue
@@ -821,6 +1084,12 @@ class LunoraClient {
     /** Subscribers to aggregate connection-status changes (see `onConnectionStatus`). */
     private readonly statusListeners = new Listeners<ConnectionStatus>();
 
+    /** Room handles' held-send flushers, keyed by the shard connection they send on. */
+    private readonly roomFlushes = new Map<string, Set<() => void>>();
+
+    /** Room handles' pending-send resets, run when the identity changes so queued sends never cross identities. */
+    private readonly roomIdentityResets = new Set<() => void>();
+
     /** Subscribers notified when the server drops a socket for an expired token (see `onTokenExpired`). */
     private readonly tokenExpiredListeners = new Listeners();
 
@@ -842,12 +1111,44 @@ class LunoraClient {
     /** Subscribers to the offline-queue pending-count (see `onPendingChange`). */
     private readonly pendingChangeListeners = new Listeners<number>();
 
+    private readonly syncStatusListeners = new Listeners<SyncStatus>();
+
+    /** The last value `syncStatusListeners` was told, to emit only on a real change. */
+    private lastSyncStatus: SyncStatus | undefined;
+
     /**
      * Whisper-topic handlers, keyed by `connectionKey(shardKey)` → topic → set
      * of callbacks. Membership doubles as the resubscribe set replayed on every
      * (re)connect so a topic survives a socket bounce.
      */
     private readonly whisperHandlers = new Map<string, Map<string, Set<(data: unknown, from?: string) => void>>>();
+
+    /**
+     * Live-topic grants this client asked for over a WebSocket, keyed `connectionKey(shardKey)` →
+     * subscription id → the stream and topic, and `release`, which leaves the topic's whisper membership once. Replayed on every
+     * `identity` frame: each socket is a new connection id with no grants, so a bounce would otherwise stop delivery silently.
+     */
+    private readonly liveSocketGrants = new Map<
+        string,
+        Map<
+            string,
+            {
+                onError?: (error: { status: number; topic: string }) => void;
+                onEvent: (payload: unknown) => void;
+                release: () => void;
+                stream: string;
+                topic: string;
+            }
+        >
+    >();
+
+    /** Tail of the live-grant control posts. One chain keeps a subscribe and its unsubscribe in order. */
+    private liveControlChain: Promise<unknown> = Promise.resolve();
+
+    /** Join state of each whisper topic, per `connectionKey(shardKey)`, on the current socket. Reset on every open. */
+    private readonly whisperJoins = new Map<string, Map<string, WhisperJoin>>();
+
+    private nextLiveSocketId = 0;
 
     /** Last status broadcast, so we only notify listeners on an actual change. */
     private lastStatus: ConnectionStatus = "idle";
@@ -889,6 +1190,12 @@ class LunoraClient {
     private readonly adminSocketTeardowns = new Set<() => void>();
 
     /**
+     * Per-channel hooks that drop a supplementary (route / scheduled) socket so it
+     * reconnects under the current credential. Run when the credential changes.
+     */
+    private readonly supplementaryBounces = new Set<() => void>();
+
+    /**
      * The in-flight offline-queue replay per shard (`connectionKey`), while one
      * is running. Two jobs:
      *
@@ -905,6 +1212,31 @@ class LunoraClient {
      */
     private readonly offlineFlushes = new Map<string, Promise<void>>();
     /* eslint-enable jsdoc/check-indentation */
+
+    /**
+     * Subscriptions a socket `open` un-answered that no value-bearing frame has
+     * answered since. What they hold is the previous socket's value, or a blank
+     * after a cold reconnect, and the server acks a `subscribe` before it seeds
+     * it, so neither `lastValue` nor `ack` says the value is current. A queued
+     * write whose snapshot precondition reads one of them is not evaluated yet:
+     * see {@link LunoraClient.snapshotAnswer}. On a follower the open is the
+     * leader's, see {@link LunoraClient.awaitLeaderAnswers}.
+     */
+    private readonly awaitingAnswer = new WeakSet<SubscriptionState>();
+
+    /**
+     * Subscriptions whose wait ended without a value to read: the seed was
+     * refused or undecodable, or the resubscribe was given up on. Still acked and
+     * blank after a cold reconnect, so a snapshot comparison would read the blank
+     * as a change; a guard over one of them is no evidence either way.
+     */
+    private readonly answeredUnreadable = new WeakSet<SubscriptionState>();
+
+    /** Connection keys whose last flush left a write waiting on {@link LunoraClient.awaitingAnswer}; an answer there flushes again. */
+    private readonly answerHeldShards = new Set<string>();
+
+    /** Gives up on the leader relaying an answer, one per subscription, see {@link LunoraClient.awaitLeaderAnswer}. */
+    private readonly leaderAnswerTimers = new Map<SubscriptionState, ReturnType<typeof setTimeout>>();
 
     /**
      * Per-shard replay backoff, keyed by {@link connectionKey} exactly as the
@@ -925,6 +1257,9 @@ class LunoraClient {
      */
     private readonly replayRetryState = new Map<string, { attempts: number; delayMs: number | undefined }>();
 
+    /** Failed replay attempts collected so far, per ambiguous-send write id (see `spendsLastReplayAttempt`); cleared when the write settles. */
+    private readonly replayAttempts = new Map<string, number>();
+
     /** Pending rate-limit retry flushes, keyed by {@link connectionKey}, so `close()` can cancel them. */
     private readonly replayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -939,6 +1274,7 @@ class LunoraClient {
         this.url = options.url;
         this.wsUrl = options.wsUrl ?? joinUrl(deriveWsUrl(options.url), WS_PATH);
         this.wsToken = options.wsToken;
+        this.wsTicket = options.wsTicket;
         const authBase = options.authBasePath ?? DEFAULT_AUTH_BASE_PATH;
 
         this.authBasePath = authBase.endsWith("/") ? authBase.slice(0, -1) : authBase;
@@ -948,12 +1284,14 @@ class LunoraClient {
         this.reconnectOptions = options.reconnect;
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.connectTimeoutMs = options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
+        this.rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
         this.managedSocketOptions = {
             connectTimeoutMs: this.connectTimeoutMs,
             heartbeatIntervalMs: this.heartbeatIntervalMs,
             WebSocketImpl: this.WebSocketImpl,
         };
         this.pollingFallbackIntervalMs = options.pollingFallback?.intervalMs ?? DEFAULT_POLLING_FALLBACK_INTERVAL_MS;
+        this.authTokenOnUpgrade = options.authTokenOnUpgrade ?? false;
         this.pollingFallbackAfterFailedAttempts = options.pollingFallback?.afterFailedAttempts ?? DEFAULT_POLLING_FALLBACK_AFTER_FAILED_ATTEMPTS;
         this.defaultConnectionContext = options.connectionContext;
         // Auto-probe durable stores: an omitted option defaults to IndexedDB when
@@ -964,7 +1302,6 @@ class LunoraClient {
         this.persistence = resolvePersistenceAdapter(options.persistence, options.outbox === undefined);
         this.persistenceVersion = options.persistenceVersion;
         this.queryCache = resolveQueryCacheAdapter(options.queryCache);
-        this.onPersistenceError = options.offlineQueue?.onPersistenceError;
         this.clientQueryStore = new ClientQueryStore();
 
         // Cross-tab coordinator: when `crossTabSync` is set, tabs coordinate
@@ -992,8 +1329,12 @@ class LunoraClient {
                 // The evicted write may have been what held its shard's socket open.
                 this.releaseIdleShard(entry.shardKey);
             },
+            onReplayingChange: () => {
+                this.emitSyncStatus();
+            },
             onSizeChange: (size) => {
                 this.pendingChangeListeners.emit(size);
+                this.emitSyncStatus();
             },
             persistence: this.persistence,
             version: options.persistenceVersion,
@@ -1013,6 +1354,8 @@ class LunoraClient {
                 this.hydrateAsOutboxLeader();
             });
         }
+
+        this.installPageHideFlush();
 
         if (this.queryCache) {
             // Load the durable read cache into `hydratedQueryCache` so the first
@@ -1081,13 +1424,21 @@ class LunoraClient {
      * {@link replayIdentityVerdict} — so a refresh can't replay them and an
      * account switch can't replay the previous user's writes as the new one.
      *
-     * Does NOT update the WebSocket auth — the WS token is fixed at upgrade
-     * time and lives in the URL. To refresh live WS auth, call
+     * Does NOT update the WebSocket auth — a socket keeps the session credential
+     * it connected with for its life. To refresh live WS auth, call
      * {@link setWsToken} explicitly, which closes existing shard sockets to
-     * force a reconnect with the new credential.
+     * force a reconnect with the new credential. With
+     * {@link LunoraClientOptions.authTokenOnUpgrade} (React Native's
+     * `Authorization` header), a sign-in from signed-out (a token where there was
+     * none) reconnects the sockets, cold, so the upgrade presents it.
      */
     public setAuthToken(token: string | null, subject?: string | null): void {
         const tokenChanged = this.authToken !== token;
+
+        if (tokenChanged) {
+            this.resetOwnClaims();
+        }
+
         // Compare the IDENTITY (subject when supplied, else token hash), not the
         // raw token, so a same-subject refresh doesn't trip the identity-change
         // drain. Capture the old fingerprint before mutating the inputs.
@@ -1105,6 +1456,13 @@ class LunoraClient {
         const previousToken = this.authToken;
 
         this.authToken = token;
+
+        // The cache holds the raw bearer it hashed. Neither a sign-out nor a
+        // subject-labelled identity ever re-hashes, so nothing else evicts it.
+        if (tokenChanged) {
+            this.tokenFingerprint = undefined;
+        }
+
         this.applySubject(token, subject);
 
         const newIdentity = this.identityFingerprint();
@@ -1129,7 +1487,10 @@ class LunoraClient {
         // on it is a new session, not the same one getting a name.
         const subjectFirstNamed = !tokenChanged && token === null && previousIdentity === null && subjectWasConfirmed && !wasKnownNobody;
 
-        if (newIdentity !== previousIdentity) {
+        const identityChanged = newIdentity !== previousIdentity;
+        let evicted = false;
+
+        if (identityChanged) {
             if (sameCredential) {
                 // The token is unchanged (same credential) — the identity label
                 // just got more stable (a subject resolved). Migrate queued writes
@@ -1160,35 +1521,16 @@ class LunoraClient {
                 this.restampConnectionIdentity(previousIdentity, newIdentity);
                 this.reseedFromHydratedCache();
             } else {
-                // A genuine credential change — reject the in-memory offline
-                // writes that can no longer replay as the identity now signed in.
-                // Writes whose stamp still matches (or is still undecidable) are
-                // kept: this path is reached on a plain sign-in too, where the
-                // queue belongs to the very user who just signed in.
-                this.rejectQueuedForIdentityChange(previousIdentity);
-                this.warnRefreshWithoutSubject(previousToken, token);
-
-                // And evict what the PREVIOUS identity left live. A socket pins
-                // its credential in the upgrade URL and cannot be rotated in
-                // place, so without this it keeps delivering the previous user's
-                // rows (see `ShardConnection.identity`), and every subscription
-                // keeps replaying the last of them to each new subscriber.
-                //
-                // Only when there WAS a previous identity, the same test
-                // `rejectQueuedForIdentityChange` applies to the read cache: a
-                // sign-in from signed-out has no other user's session to retire,
-                // and bouncing every socket there would cost a reconnect on the
-                // most common auth transition there is.
-                //
-                // Except under a cookie session the server said was nobody's:
-                // its socket is authenticated by the cookie as it was at the
-                // upgrade — anonymous — and keeps serving that, never the user
-                // who signed in since, until it is replaced.
-                if (leavesSessionBehind(previousIdentity, wasKnownNobody, token)) {
-                    this.evictPreviousIdentitySession();
-                }
+                evicted = this.retirePreviousIdentity(previousIdentity, wasKnownNobody, previousToken, token);
             }
+        }
 
+        // An eviction already reconnected every socket cold.
+        if (!evicted) {
+            this.applyUpgradeBearer(this.reconcileUpgradeBearer(previousToken, token, identityChanged));
+        }
+
+        if (identityChanged) {
             // Last, so drained/restamped writes settle before the new group's
             // leader election begins.
             this.restartTabCoordinatorForIdentity();
@@ -1613,13 +1955,12 @@ class LunoraClient {
     }
 
     /**
-     * Replace the token appended to WS upgrade URLs as `?token=…` and close
-     * every open shard socket so the reconnect picks up the new value. Call
-     * this whenever the user's WS credential changes (rotating the admin token
-     * in the studio, switching workspaces, etc.). Accepts a static string or a
-     * {@link WsTokenProvider} resolved fresh at every (re)connect — the channel
-     * for short-lived credentials like the minted ephemeral admin sub-token.
-     * Bearer tokens for HTTP RPC are independent — see {@link setAuthToken}.
+     * Replace the session credential sent in the `connect` frame, and close
+     * every open shard socket so the reconnect presents the new value. The
+     * credential never rides the WebSocket URL. Call this when the user's session
+     * changes (sign-in, sign-out, switching workspaces). Accepts a static string
+     * or a {@link WsTokenProvider} resolved fresh at every (re)connect. Bearer
+     * tokens for HTTP RPC are independent — see {@link setAuthToken}.
      */
     public setWsToken(token: string | undefined | WsTokenProvider): void {
         if (this.wsToken === token) {
@@ -1627,11 +1968,24 @@ class LunoraClient {
         }
 
         this.wsToken = token;
+        this.applyWsCredentialChange();
+    }
 
-        // Close every open/connecting socket so the reconnect uses the new
-        // token. Don't tear down the connection record itself — pending
-        // subscriptions/streams need to ride the next socket.
-        this.bounceShardSockets();
+    /**
+     * Replace the short-lived ticket appended to WS upgrade URLs as `?token=…`,
+     * and close every open shard socket so the reconnect picks up the new value.
+     * Only an ephemeral admin sub-token belongs here (minted by
+     * `POST /_lunora/admin/ws-token`): a URL is logged by every proxy on the way,
+     * so a session credential never goes here — see {@link setWsToken}. Accepts a
+     * static string or a {@link WsTokenProvider} resolved fresh at every (re)connect.
+     */
+    public setWsTicket(ticket: string | undefined | WsTokenProvider): void {
+        if (this.wsTicket === ticket) {
+            return;
+        }
+
+        this.wsTicket = ticket;
+        this.applyWsCredentialChange();
     }
 
     /**
@@ -1798,7 +2152,7 @@ class LunoraClient {
             const conn = this.getConnection(options.shardKey);
 
             if (conn) {
-                sendOn(conn, { topic, type: "whisper_subscribe" });
+                this.sendWhisperJoin(conn, key, topic);
             }
         }
 
@@ -1824,7 +2178,103 @@ class LunoraClient {
                 sendOn(conn, { topic, type: "whisper_unsubscribe" });
             }
 
+            this.releaseWhisperJoin(key, topic);
             this.releaseIdleShard(options.shardKey);
+        };
+    }
+
+    /**
+     * Follow a live topic of a `defineLiveStream` stream over this client's WebSocket, instead of
+     * an SSE connection (`connectLiveStream`). Joins the bare topic as a whisper member, then asks
+     * the stream's control route (`/live/<stream>/control`) to grant this socket the topic, naming
+     * the socket's connection id. A live publish reaches the socket only with both in place.
+     *
+     * The join needs the app's `onWhisper` approval, the same as any whisper join. The shard runs
+     * the authorizer with `action: "subscribe"` on the bare topic, and a denied join is silent:
+     * the shard acknowledges every join once processed, admitted or not, so the client cannot tell
+     * a denial from a quiet topic. The grant is posted only after that acknowledgement (or after
+     * `LIVE_CONTROL_TIMEOUT_MS` if it never arrives), so a publish cannot outrun the membership it
+     * needs. A grant posted for a denied join still has no membership, so the shard relays no
+     * `live` frame and `onEvent` never fires. An app that streams private data here must declare an
+     * `onWhisper` that allows the topic; without one the join is open to any socket on the shard.
+     *
+     * Grants are re-issued on every reconnect, because each socket gets a new connection id.
+     * A control call that fails is not retried here, so a failed grant delivers nothing. A refusal
+     * (a 4xx other than 404 and 401) is final: the local grant is dropped, so a later subscribe can
+     * be tried again, and `onError` is called with the status. A transient failure keeps the grant.
+     * @returns an unsubscribe function that revokes the grant and leaves the topic
+     */
+    public subscribeLiveTopic(options: {
+        onError?: (error: { status: number; topic: string }) => void;
+        onEvent: (payload: unknown) => void;
+        shardKey?: string;
+        stream: string;
+        topic: string;
+    }): Unsubscribe {
+        const { onError, onEvent, shardKey, stream, topic } = options;
+
+        // Refused before the join: an empty topic is never acknowledged, so its grant would wait out the timer.
+        if (topic.length === 0) {
+            throw new LunoraError("INTERNAL", "LunoraClient: subscribeLiveTopic needs a non-empty topic");
+        }
+
+        this.nextLiveSocketId += 1;
+
+        const subscriptionId = `ws-live-${String(this.nextLiveSocketId)}`;
+        const key = connectionKey(shardKey);
+        const controlPath = `/live/${stream}/control`;
+        // The membership join only: a live publish arrives as a `live` frame (see `dispatchLive`),
+        // so a peer's whisper on this topic reaches no handler here.
+        const leaveTopic = this.whisperSubscribe(topic, () => undefined, { shardKey });
+
+        // Leaves the membership at most once, whether the grant is refused or its handle is released.
+        let membership: (() => void) | undefined = leaveTopic;
+        const release = (): void => {
+            const leave = membership;
+
+            membership = undefined;
+            leave?.();
+        };
+
+        let grants = this.liveSocketGrants.get(key);
+
+        if (grants === undefined) {
+            grants = new Map();
+            this.liveSocketGrants.set(key, grants);
+        }
+
+        grants.set(subscriptionId, { onError, onEvent, release, stream, topic });
+
+        const connectionId = this.getConnection(shardKey)?.connectionId;
+
+        if (connectionId !== undefined) {
+            this.grantWhenJoined(shardKey, subscriptionId, connectionId);
+        }
+
+        let released = false;
+
+        return () => {
+            if (released) {
+                return;
+            }
+
+            released = true;
+
+            const current = this.liveSocketGrants.get(key);
+            // A grant the shard refused was already dropped locally, so there is nothing to revoke.
+            const wasGranted = current?.delete(subscriptionId) === true;
+
+            if (current?.size === 0) {
+                this.liveSocketGrants.delete(key);
+            }
+
+            const liveConnectionId = this.getConnection(shardKey)?.connectionId;
+
+            if (wasGranted && liveConnectionId !== undefined) {
+                this.postLiveControl(controlPath, shardKey, { action: "unsubscribe", connectionId: liveConnectionId, stream, subscriptionId, topic });
+            }
+
+            release();
         };
     }
 
@@ -1836,6 +2286,10 @@ class LunoraClient {
      * whisper rate budget. The sender never receives its own whisper. Omitting
      * `data` delivers JSON `null` to receivers (not `undefined`).
      *
+     * Returns `true` when the frame was handed to an open socket, `false` when it
+     * was dropped, so a caller that must not lose a message (one sent right after
+     * connecting, before the socket opens) can detect the drop and retry.
+     *
      * That best-effort drop is for a socket that is momentarily down. A
      * `crossTabSync` FOLLOWER tab has no socket and never will (see
      * {@link LunoraClientOptions.crossTabSync}), so every whisper from it would
@@ -1845,33 +2299,266 @@ class LunoraClient {
      * way, for the same reason: there is no ack frame to report it on. See
      * {@link whisperSubscribe} for the security model.
      */
-    public whisper(topic: string, data?: unknown, options: { shardKey?: string } = {}): void {
+    public whisper(topic: string, data?: unknown, options: { shardKey?: string } = {}): boolean {
         this.assertLeaderOwnedSurface("whisper");
 
-        this.ensureSocket(options.shardKey);
+        // Wire-encode before send so `bigint`/bytes payloads survive (raw
+        // `JSON.stringify` would throw on a bigint). The shard relays the
+        // encoded value verbatim and the receiving client `decodeWire`s it —
+        // `encodeWire` is identity for JSON-safe data, so this stays
+        // backward-compatible with older shards/clients. Omitted `data`
+        // becomes an explicit `null` (the documented receiver contract).
+        // eslint-disable-next-line unicorn/no-null -- an omitted whisper body is delivered as an explicit JSON `null`, never `undefined`
+        return this.sendEncodedWhisper(topic, encodeCallArgs(data ?? null, `whisper data for topic '${topic}'`), options);
+    }
 
-        const conn = this.getConnection(options.shardKey);
+    /**
+     * Join a `defineRoom` room from the client: subscribe to the room's server
+     * dispatches and send typed messages to it. A thin, typed wrapper over
+     * {@link whisperSubscribe} / {@link whisper} on the room's topic
+     * (`room:<name>`, the topic the shard resolves to the room's handler).
+     *
+     * The room is passed as its generated reference, so `onMessage` and `send` are
+     * typed from the room's own message validator:
+     *
+     * ```ts
+     * import { rooms } from "./_generated/api";
+     *
+     * const chat = client.connectRoom(rooms.chat, {
+     *     onMessage: (message) => append(message.text),
+     * });
+     * chat.send({ text: "hello" });
+     * chat.close();
+     * ```
+     *
+     * `onMessage` receives what the room's server handler broadcasts (via its
+     * `socket.broadcast`), NOT the sender's own raw send — the handler is
+     * authoritative. Returns a handle with `send` and `close`.
+     */
+    public connectRoom<Message>(
+        room: RoomRef<Message>,
+        handlers: { onMessage: (message: Message) => void },
+        options: { shardKey?: string } = {},
+    ): { close: () => void; send: (message: Message) => boolean } {
+        const topic = `room:${room.name}`;
+        const unsubscribe = this.whisperSubscribe(
+            topic,
+            (data) => {
+                handlers.onMessage(data as Message);
+            },
+            options,
+        );
+        let closed = false;
+        // Sends made before the socket is open are held here and flushed, in order, when
+        // the connection reports connected. Bounded: past the cap a send is refused.
+        // Held as encoded snapshots, taken at send time: a later mutation of the caller's object
+        // cannot change what goes out, and an unencodable payload was refused to the caller already.
+        const pending: unknown[] = [];
+        const reset = (): void => {
+            pending.length = 0;
+        };
+        const flush = (): void => {
+            // Nothing is sent until the socket is admitted: confirmed, and rejoined.
+            while (pending.length > 0 && this.roomSendsAdmitted(options.shardKey)) {
+                if (!this.sendEncodedWhisper(topic, pending[0], options)) {
+                    return;
+                }
 
-        if (conn) {
-            // Wire-encode before send so `bigint`/bytes payloads survive (raw
-            // `JSON.stringify` would throw on a bigint). The shard relays the
-            // encoded value verbatim and the receiving client `decodeWire`s it —
-            // `encodeWire` is identity for JSON-safe data, so this stays
-            // backward-compatible with older shards/clients. Omitted `data`
-            // becomes an explicit `null` (the documented receiver contract).
-            // eslint-disable-next-line unicorn/no-null -- an omitted whisper body is delivered as an explicit JSON `null`, never `undefined`
-            sendOn(conn, { data: encodeCallArgs(data ?? null, `whisper data for topic '${topic}'`), topic, type: "whisper" });
+                pending.shift();
+            }
+        };
+        // Flushed from the shard's own open handler, which runs after the room is rejoined: a
+        // send can never reach the server ahead of its `whisper_subscribe`. The aggregate
+        // connection status is not used, since it can change before that rejoin is sent.
+        const flushKey = connectionKey(options.shardKey);
+        const flushers = this.roomFlushes.get(flushKey) ?? new Set<() => void>();
+
+        flushers.add(flush);
+        this.roomFlushes.set(flushKey, flushers);
+        // A change of identity drops what was queued under the previous one.
+        this.roomIdentityResets.add(reset);
+
+        return {
+            close: () => {
+                closed = true;
+                pending.length = 0;
+                flushers.delete(flush);
+
+                if (flushers.size === 0) {
+                    this.roomFlushes.delete(flushKey);
+                }
+
+                this.roomIdentityResets.delete(reset);
+                unsubscribe();
+            },
+            // `true` when the message was sent now or queued for the connection; `false`
+            // when the handle is closed or the queue is full.
+            send: (message: Message) => {
+                // A closed handle, or a closed client (whose sockets never reopen), accepts nothing.
+                // Without a WebSocket implementation no socket can ever open, so nothing is queued.
+                if (closed || this.closed || this.WebSocketImpl === undefined) {
+                    return false;
+                }
+
+                // Encode now, to the caller: an unencodable payload throws here instead of being
+                // accepted, and the held copy is a snapshot the caller can no longer change.
+                const wire: unknown = encodeCallArgs(message, `room message for '${topic}'`);
+                // `structuredClone` is absent on some runtimes (React Native/Hermes). The wire value is
+                // JSON-safe by construction, so a JSON round-trip is an exact copy there.
+                const encoded: unknown =
+                    typeof structuredClone === "function"
+                        ? structuredClone(wire)
+                        : // eslint-disable-next-line unicorn/prefer-structured-clone -- fallback for runtimes without structuredClone; the input is JSON-safe
+                          JSON.parse(JSON.stringify(wire));
+
+                flush();
+
+                if (pending.length === 0 && this.roomSendsAdmitted(options.shardKey) && this.sendEncodedWhisper(topic, encoded, options)) {
+                    return true;
+                }
+
+                if (pending.length >= ROOM_PENDING_LIMIT) {
+                    return false;
+                }
+
+                pending.push(encoded);
+
+                return true;
+            },
+        };
+    }
+
+    /**
+     * Open a `defineWebSocket` route: a dedicated socket at the route's declared
+     * `path`, typed `send`/`onMessage` like a query's args/result. `path` is the
+     * exact path the server declared (`defineWebSocket({ path: "/chat", … })`).
+     *
+     * `Message` is the route's message type. Codegen does NOT yet infer it from
+     * the route's validator, so pass it explicitly (or rely on a route-typed
+     * wrapper in your app):
+     *
+     * ```ts
+     * const chat = client.connectWebSocket<{ text: string }>("/chat", {
+     *     onMessage: (message) => append(message.text),
+     * });
+     * chat.send({ text: "hello" });
+     * chat.close();
+     * ```
+     *
+     * The socket carries the browser's session cookie, or an `Authorization` header
+     * where the client can set one, and either establishes a user. A route declared `auth: true` on
+     * the server refuses a socket with no verified session. The `wsToken` is
+     * sent only on shard sockets, in their first `connect` frame; a route socket
+     * has no `connect` frame, so `wsToken` does not authenticate it. The `wsTicket`
+     * (`?token=`, see {@link setWsTicket}) is an ephemeral admin credential
+     * appended to the URL, and it does not sign a user in to a route, so a
+     * private route needs a verified session from the cookie or an `Authorization`
+     * header. Reconnects with the
+     * client's configured backoff. `onMessage` receives what the route's server
+     * handler sent (via its `socket.send`/`socket.broadcast`), never the sender's
+     * own raw frame — the handler is authoritative. Returns a handle with `send`
+     * and `close`; a `send` while the socket is not open is dropped (the channel
+     * is transient, like a whisper).
+     */
+    public connectWebSocket<Message>(
+        path: string,
+        handlers: { onClose?: () => void; onMessage: (message: Message) => void; onOpen?: () => void },
+        options: { shardKey?: string } = {},
+    ): { close: () => void; send: (message: Message) => void } {
+        this.assertLeaderOwnedSurface("connectWebSocket");
+
+        if (this.WebSocketImpl === undefined || this.closed) {
+            return { close: () => undefined, send: () => undefined };
         }
 
-        // A send-only whisper may be all that opened this shard: let it idle out.
-        this.releaseIdleShard(options.shardKey);
+        const notify = (callback: (() => void) | undefined): void => {
+            try {
+                callback?.();
+            } catch (error) {
+                // eslint-disable-next-line no-console -- a route callback throwing must not unwind into the host's event loop
+                console.error("[lunora] socket route handler threw", error);
+            }
+        };
+
+        // An accepted upgrade is not yet proof of a usable socket: the shard can still drop it (an expired identity) right after.
+        // The backoff resets only once the socket has stayed open for the stability window, as the main connection does.
+        let stableTimer: ReturnType<typeof setTimeout> | undefined;
+
+        const channel = this.openSupplementarySocket(this.supplementaryUrl(path), {
+            offerBearer: true,
+            onClose: () => {
+                clearTimeout(stableTimer);
+                notify(handlers.onClose);
+            },
+            onMessage: (event: MessageEvent) => {
+                let frame: { data?: unknown; type?: string };
+
+                try {
+                    frame = JSON.parse(typeof event.data === "string" ? event.data : "") as { data?: unknown; type?: string };
+                } catch {
+                    // A non-JSON frame (the keepalive pong, for one) is dropped.
+                    return;
+                }
+
+                if (frame.type === "message") {
+                    // A payload frame is proof of a live, ACCEPTED socket —
+                    // reset the backoff so a rejected `auth: true` upgrade
+                    // backs off instead of reconnecting at the initial delay
+                    // forever.
+                    channel.resetBackoff();
+                    notify(() => {
+                        handlers.onMessage(decodeWire(frame.data) as Message);
+                    });
+                }
+            },
+            onOpen: () => {
+                // A route that stays open but quiet must not keep doubling its reconnect delay, so a stable socket
+                // restarts the backoff even with no payload frame.
+                clearTimeout(stableTimer);
+
+                const opened = channel.socket();
+
+                stableTimer = setTimeout(() => {
+                    if (channel.socket() === opened) {
+                        channel.resetBackoff();
+                    }
+                }, SOCKET_STABLE_MS);
+                notify(handlers.onOpen);
+            },
+            shardKey: options.shardKey,
+        });
+
+        return {
+            close: () => {
+                clearTimeout(stableTimer);
+                channel.close();
+            },
+            send: (message: Message) => {
+                // Encoding runs outside the send guard: an unencodable payload is the caller's
+                // error and must surface, not vanish as if the socket had dropped.
+                const payload = JSON.stringify(encodeCallArgs(message, `socket message for '${path}'`));
+                const socket = channel.socket();
+
+                if (socket === undefined) {
+                    return;
+                }
+
+                try {
+                    socket.send(payload);
+                } catch {
+                    // A send race against a closing socket is harmless — the close
+                    // handler tears the connection down and reconnects.
+                }
+            },
+        };
     }
 
     /**
      * Subscribe to token-expiry events: invoked whenever the server drops a
      * shard socket because the connection's credential lapsed (close code
-     * `4001`). The client already reconnects automatically (re-resolving
-     * identity from the cookie/token in effect); use this to refresh a
+     * `4001`) or the server refused the session credential (close code `4003`,
+     * notified once per credential). The client already reconnects automatically
+     * (re-resolving identity from the cookie/token in effect); use this to refresh a
      * short-lived token first — e.g. call {@link setWsToken} / {@link setAuthToken}
      * with a freshly minted one. Returns an unsubscribe function.
      *
@@ -1908,6 +2595,66 @@ class LunoraClient {
         const unsubscribe = this.statusListeners.add(listener);
 
         listener(this.computeStatus());
+
+        return unsubscribe;
+    }
+
+    /**
+     * Whether the client is caught up: a live connection, every subscription
+     * answered by the server, and no write waiting in the offline queue. Use this
+     * rather than `connectionStatus() === "connected"` for a "synced" indicator —
+     * that reads `"connected"` the moment a socket opens, while subscriptions still
+     * have no data and queued writes are still waiting to go out.
+     *
+     * Over the HTTP polling fallback (judged per shard, so one polling shard does
+     * not wait on an ack while another holds an open socket), and on a cross-tab
+     * follower (neither sees server acknowledgements), a subscription counts as
+     * answered once the current connection has delivered a value for it; a
+     * hydrated cache does not.
+     * A write counts as pending from the moment it is queued until the server
+     * settles it, including while its replay request is on the wire.
+     */
+    public syncStatus(): SyncStatus {
+        const connection = this.computeStatus();
+        const follower = this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader();
+        let pendingSubscriptions = 0;
+
+        for (const state of this.subscriptions.all()) {
+            // Neither the polling fallback nor a follower tab sees a server `ack`; a delivered value is the evidence
+            // there is. Judged per shard: one shard may poll while another holds an open socket.
+            const ackless = follower || this.connectionGateState(state.shardKey).polling;
+
+            // `acked` is no evidence there: a mirrored `settled` frame sets it without delivering a value.
+            if (!(ackless ? state.valueReceived : state.ack === "acked")) {
+                pendingSubscriptions += 1;
+            }
+        }
+
+        for (const state of this.shapeSubscriptions.values()) {
+            if (!state.answered) {
+                pendingSubscriptions += 1;
+            }
+        }
+
+        // A write the flush has sent and not yet settled is still on the wire; `size` alone reads 0 for the whole round trip.
+        const pendingWrites = this.offlineQueue.size + this.offlineQueue.replaying;
+
+        return { connection, pendingSubscriptions, pendingWrites, synced: isLiveStatus(connection) && pendingSubscriptions === 0 && pendingWrites === 0 };
+    }
+
+    /**
+     * Subscribe to {@link syncStatus} changes. Invokes `listener` immediately with
+     * the current value, then whenever the connection status, the number of
+     * unanswered subscriptions or the number of unsettled writes (queued, or
+     * being replayed) changes. Returns an unsubscribe function.
+     */
+    public onSyncStatus(listener: (status: SyncStatus) => void): Unsubscribe {
+        const unsubscribe = this.syncStatusListeners.add(listener);
+        const status = this.syncStatus();
+
+        // `emitSyncStatus` computes nothing while nobody listens, so what it remembered may be stale.
+        this.lastSyncStatus = status;
+        listener(status);
 
         return unsubscribe;
     }
@@ -1967,7 +2714,7 @@ class LunoraClient {
 
         const subscriptions: ClientDebugSubscription[] = this.subscriptions.all().map((state) => {
             return {
-                acked: state.acked,
+                acked: state.ack === "acked",
                 functionPath: state.fn.__lunoraRef,
                 id: state.id,
                 kind: "query",
@@ -1983,9 +2730,9 @@ class LunoraClient {
 
         for (const state of this.shapeSubscriptions.values()) {
             subscriptions.push({
-                // A shape has no separate ack frame; arrival of a cursor means the
-                // server has served it.
-                acked: state.serverCursor !== undefined,
+                // A shape has no separate ack frame; the first poke applied on this
+                // connection means the server has served it.
+                acked: state.answered,
                 functionPath: `shape:${state.name}`,
                 id: state.id,
                 kind: "shape",
@@ -2046,9 +2793,64 @@ class LunoraClient {
      * constructor to inject the auth-headers factory's credential onto the
      * upgrade request (`createLunoraClient`'s `withAuthWebSocket`), which a raw
      * `new globalThis.WebSocket(url)` would silently bypass.
+     *
+     * A socket to this client's own WebSocket host over the same transport
+     * security, constructed without its own subprotocols, offers this client's
+     * bearer the way the client's sockets do (see `authTokenOnUpgrade`), read at
+     * construction so it is the token current when the socket opens. Any other
+     * host, or a plaintext `ws:` socket beside a `wss:` endpoint, gets its
+     * arguments untouched: the bearer is a Lunora credential.
      */
     public getWebSocketImpl(): typeof WebSocket | undefined {
-        return this.WebSocketImpl;
+        const { WebSocketImpl } = this;
+
+        if (WebSocketImpl === undefined) {
+            return undefined;
+        }
+
+        const isSecure = (url: URL): boolean => url.protocol === "wss:" || url.protocol === "https:";
+        const own = parseSocketUrl(this.wsUrl);
+        const isOwnEndpoint = (url: string | URL): boolean => {
+            const target = parseSocketUrl(String(url));
+
+            return target.host === own.host && isSecure(target) === isSecure(own);
+        };
+        // React Native's constructor takes a third `{ headers }` argument, forwarded as given.
+        const Construct = WebSocketImpl as unknown as new (url: string | URL, protocols?: string | string[], ...rest: unknown[]) => WebSocket;
+
+        return new Proxy(WebSocketImpl, {
+            construct: (_target, [url, protocols, ...rest]: [string | URL, (string | string[])?, ...unknown[]]) =>
+                new Construct(url, protocols ?? (isOwnEndpoint(url) ? this.upgradeProtocols() : undefined), ...rest),
+        });
+    }
+
+    /**
+     * `true` while {@link LunoraClientOptions.crossTabSync} is on and this tab
+     * is not the elected leader, including the election window before it knows
+     * whether another tab leads. Such a tab holds no socket: its subscriptions
+     * see only the frames the leader relays for queries the leader holds too,
+     * so a read that must resolve goes over HTTP instead of waiting on a push.
+     */
+    public isCrossTabFollower(): boolean {
+        return this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader();
+    }
+
+    /**
+     * Whether a live query on `shardKey` can expect its value to be pushed: by a
+     * socket that is open or still on its first connect attempt, or by the
+     * polling fallback. `false` once a connect attempt has failed to reach `open`
+     * since the socket last did and polling is not delivering instead, where a
+     * read that must resolve should go over HTTP rather than wait on a push. A
+     * shard with no connection yet expects one: subscribing opens it.
+     */
+    public expectsPush(options: { shardKey?: string } = {}): boolean {
+        const conn = this.getConnection(options.shardKey);
+
+        if (conn === undefined || conn.wsState === "open") {
+            return true;
+        }
+
+        return conn.polling.isPolling() || !conn.polling.hasFailedOpen();
     }
 
     // --- Client Query (local state) ----------------------------------------
@@ -2119,8 +2921,9 @@ class LunoraClient {
      * (enabled) render of a live query behind hydration, so the user sees
      * cached data instead of an undefined flash before the socket round-trip.
      */
-    public whenReady(): Promise<void> {
-        return this.readyPromise;
+    public whenReady(options: { signal?: AbortSignal } = {}): Promise<void> {
+        // The shared promise itself when there is nothing to abort: a caller may rely on its identity.
+        return options.signal === undefined ? this.readyPromise : raceAbort(this.readyPromise, options.signal);
     }
 
     /**
@@ -2173,7 +2976,9 @@ class LunoraClient {
      * whether one exists at all rather than just its value. `present` is `false`
      * when no subscription is open for the given `(functionPath, args, shardKey)`;
      * `value` is the subscription's `lastValue`, which includes any optimistic
-     * overlay.
+     * overlay. `answered` is `false` while an open subscription holds no answer
+     * (never answered, or blanked by a cold reconnect), when `value` is absence
+     * rather than evidence.
      *
      * The two are separate because a caller like the snapshot precondition has to
      * tell "no subscription is active, so this read knows nothing" apart from
@@ -2185,19 +2990,35 @@ class LunoraClient {
      * and is independent of active subscriptions), this reflects the current
      * in-memory state of an already-opened subscription.
      */
-    public peekActiveQuerySnapshot(functionPath: string, args: Record<string, unknown>, shardKey?: string): { present: boolean; value: unknown } {
+    public peekActiveQuerySnapshot(
+        functionPath: string,
+        args: Record<string, unknown>,
+        shardKey?: string,
+    ): { answered: boolean; present: boolean; value: unknown } {
         const key = SubscriptionRegistry.key(functionPath, args, shardKey);
         const state = this.subscriptions.get(key);
 
-        return { present: state !== undefined, value: state?.lastValue };
+        return {
+            // False for a subscription holding no answer: never answered, or blanked by a cold reconnect. Its `value` is then absence, not evidence.
+            answered: state !== undefined && (state.lastValue !== undefined || state.ack === "acked" || state.valueReceived),
+            present: state !== undefined,
+            value: state?.lastValue,
+        };
     }
 
     // --- RPC ---------------------------------------------------------------
 
-    public async query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): Promise<ReturnOf<F>> {
+    public async query<F extends FunctionReference>(
+        function_: F,
+        args: ArgsOf<F>,
+        options: { shardKey?: string; signal?: AbortSignal } = {},
+    ): Promise<ReturnOf<F>> {
         this.assertOpen();
 
-        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, { attachBookmark: true })) as ReturnOf<F>;
+        return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, {
+            attachBookmark: true,
+            signal: options.signal,
+        })) as ReturnOf<F>;
     }
 
     /**
@@ -2213,9 +3034,15 @@ class LunoraClient {
      * No promise pipelining and no capability passing — a call's args cannot
      * reference another call's result (see plan 088 §fence; capabilities are
      * incompatible with DO hibernation).
+     *
+     * The whole exchange, response body included, is bounded by
+     * {@link LunoraClientOptions.rpcTimeoutMs}, rejecting with a retryable
+     * {@link TransportError}. A function's kind is a type-level phantom with no
+     * runtime marker, so unlike {@link action} a batched call cannot be exempted:
+     * call a long-running action through `action()` instead.
      */
     public async batch(calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>): Promise<BatchSlot[]> {
-        return this.sendBatch(calls);
+        return withinRpcDeadline(this.rpcTimeoutMs, undefined, async (signal) => this.sendBatch(calls, signal));
     }
 
     /* eslint-disable jsdoc/check-indentation, no-secrets/no-secrets -- intentional bullet list; the back-ticked `Promise<ReturnOf<F>>` type is prose, not a credential */
@@ -2228,7 +3055,8 @@ class LunoraClient {
      * (`wasEverConnected`), so the registry / resubscribe handshake has run.
      * Mutations issued before the very first WS connect to a shard fail fast.
      * Opt into queueing-before-first-connect via
-     * `OfflineQueueOptions.queueBeforeFirstConnect`.
+     * `OfflineQueueOptions.queueBeforeFirstConnect`. Pass `onlineOnly: true` to
+     * refuse a write instead of queueing it — see {@link MutationCallOptions.onlineOnly}.
      *
      * **Return-value caveat — the queued paths do not carry the server's result.**
      * The declared `Promise<ReturnOf<F>>` only holds when the write goes straight
@@ -2250,9 +3078,14 @@ class LunoraClient {
     public async mutation<F extends FunctionReference>(
         function_: F,
         args: ArgsOf<F>,
-        options: MutationCallOptions<unknown, unknown, ArgsOf<F>> = {},
+        options: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F> = {},
     ): Promise<ReturnOf<F>> {
-        const { value } = await this.runMutation(function_, args, options);
+        // Checked before anything starts: an aborted call applies no optimistic patch and sends nothing.
+        if (options.signal?.aborted) {
+            throw abortReason(options.signal);
+        }
+
+        const { value } = await raceAbort(this.runMutation(function_, args, options), options.signal);
 
         return value;
     }
@@ -2284,6 +3117,8 @@ class LunoraClient {
         return (await this.rpc(function_.__lunoraRef, args as Record<string, unknown>, options.shardKey, {
             attachBookmark: true,
             captureBookmark: true,
+            signal: options.signal,
+            unbounded: true,
         })) as ReturnOf<F>;
     }
 
@@ -2398,121 +3233,14 @@ class LunoraClient {
         return { chunks, imported, queued: done - imported };
     }
 
-    // --- Advisor admin ------------------------------------------------------
-
-    /**
-     * Read the cross-shard request distribution for a `.shardBy(...)` table —
-     * the feed the studio's `hot_shard` advisor lint consumes. Hits the
-     * admin-gated `POST /_lunora/admin/shard-traffic` endpoint, which fans the
-     * cheap per-shard `getMetrics` read out across every live shard and returns
-     * each shard's `{ shardKey, requests }` total (a failed shard surfaces with
-     * `requests: 0`). Requires the worker to be built with a `queryCoordinator`
-     * and `adminToken`, and this client's auth token to match; defaults any
-     * absent field so an older worker yields an empty-but-valid shape.
-     */
-    public async shardTraffic(table: string): Promise<ShardTrafficResult> {
-        return shardTraffic(this.adminHost, table);
-    }
-
-    // --- Scheduler admin ----------------------------------------------------
-
-    /**
-     * List the functions queued via `runAfter` / `runAt`, soonest-due last
-     * (the worker returns them in storage order). Hits the admin-gated
-     * `/_lunora/admin/scheduled` endpoint, so the worker must be built with a
-     * `schedulerDO` namespace and `adminToken`, and this client's auth token
-     * must match. Powers `@lunora/studio`'s scheduled-jobs panel.
-     */
-    public async listScheduledJobs(): Promise<ScheduleRecord[]> {
-        return listScheduledJobs(this.adminHost);
-    }
-
-    /**
-     * Read the app-level workpool backlog that powers `@lunora/studio`'s SLO
-     * view: per-pool `{ name, queued, inFlight, maxConcurrency }` plus the
-     * app-wide `backlog` (total queued) and `inFlight` (total held slots) sums.
-     * Hits the admin-gated `GET /_lunora/admin/scheduled/status` endpoint, so the
-     * same preconditions as {@link listScheduledJobs} apply (a `schedulerDO`
-     * namespace + `adminToken` on the worker and a matching auth token here).
-     * Defaults any absent field so an older worker still yields a valid shape.
-     */
-    public async schedulerStatus(): Promise<SchedulerStatus> {
-        return schedulerStatus(this.adminHost);
-    }
-
-    /** Cancel a pending scheduled job by id. Returns whether a job was removed. */
-    public async cancelScheduledJob(id: string): Promise<{ cancelled: boolean }> {
-        return cancelScheduledJob(this.adminHost, id);
-    }
-
-    /**
-     * List the dead-letter jobs: schedules that exhausted their retry budget
-     * and were parked instead of dropped. These never appear in
-     * {@link listScheduledJobs} (their live header is gone), so this is the only
-     * way the studio surfaces a permanently-failed job. Hits the admin-gated
-     * `GET /_lunora/admin/scheduled/dead`; same preconditions as
-     * {@link listScheduledJobs}. Powers `@lunora/studio`'s dead-letter panel.
-     */
-    public async listDeadJobs(): Promise<ScheduleRecord[]> {
-        return listDeadJobs(this.adminHost);
-    }
-
-    /**
-     * Resurrect a dead-letter job by id: it re-enters the schedule with a fresh
-     * retry budget and fires on the next drain. Returns whether a parked record
-     * matched. Hits the admin-gated `POST /_lunora/admin/scheduled/dead/retry`.
-     */
-    public async retryDeadJob(id: string): Promise<{ retried: boolean }> {
-        return retryDeadJob(this.adminHost, id);
-    }
-
-    /**
-     * Permanently drop a dead-letter job by id (the operator has decided not to
-     * recover it). Returns whether a parked record was removed. Hits the
-     * admin-gated `POST /_lunora/admin/scheduled/dead/cancel`.
-     */
-    public async removeDeadJob(id: string): Promise<{ removed: boolean }> {
-        return removeDeadJob(this.adminHost, id);
-    }
-
-    /**
-     * List a workflow's instances via the admin Workflows proxy
-     * (`/_lunora/admin/workflows/instances`) — the Cloudflare control-plane data
-     * the `Workflow` binding can't expose. Requires the worker to be built with a
-     * `workflowsClient` (Cloudflare account id + API token). When one isn't
-     * configured this does NOT reject: the proxy returns a `200 { configured:
-     * false }` sentinel, so the result resolves with `configured === false` and an
-     * empty `instances` list — callers should branch on that flag rather than
-     * try/catch. (The instance-detail / status endpoints still reject with 501.)
-     * `name` is the deployed workflow name.
-     */
-    public async listWorkflowInstances(options: {
-        name: string;
-        page?: number;
-        perPage?: number;
-        status?: WorkflowInstanceStatus;
-    }): Promise<WorkflowInstancePage> {
-        return listWorkflowInstances(this.adminHost, options);
-    }
-
-    /** Read one workflow instance with its step timeline (`/_lunora/admin/workflows/instance`). */
-    public async getWorkflowInstance(options: { id: string; name: string }): Promise<WorkflowInstanceDetail> {
-        return getWorkflowInstance(this.adminHost, options);
-    }
-
-    /** Pause / resume / terminate a workflow instance (`/_lunora/admin/workflows/status`). Needs an Edit-scoped Cloudflare token. */
-    public async setWorkflowInstanceStatus(options: { action: WorkflowInstanceAction; id: string; name: string }): Promise<{ status: WorkflowInstanceStatus }> {
-        return setWorkflowInstanceStatus(this.adminHost, options);
-    }
-
     /**
      * Subscribe to the live scheduled-jobs list over the SchedulerDO's admin
      * WebSocket. `onJobs` fires with the full list on connect and on every
      * change (schedule / cancel / alarm-fire). Reconnects with the client's
-     * configured backoff. Requires `wsToken` to be set to an admin credential
-     * (the browser can't send an `Authorization` header on a WS) — the master
-     * token, or preferably a {@link WsTokenProvider} minting the ephemeral
-     * sub-token so the master credential stays out of the URL. Returns an
+     * configured backoff. Requires `wsTicket` to be set to an admin credential
+     * (the browser can't send an `Authorization` header on a WS) — a
+     * {@link WsTokenProvider} minting the ephemeral sub-token, so the master
+     * credential stays out of the URL. Returns an
      * unsubscribe function that closes the socket and stops reconnecting.
      */
     public subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe {
@@ -2522,787 +3250,75 @@ class LunoraClient {
             return () => undefined;
         }
 
-        const base = joinUrl(deriveWsUrl(this.url), SCHEDULED_WS_PATH);
-        const reconnect = createReconnect(this.reconnectOptions);
+        // The admin socket lives on the shard's own origin, as it always has: a custom `wsUrl` (a proxy, a query) does not move it.
+        const channel = this.openSupplementarySocket(joinUrl(deriveWsUrl(this.url), SCHEDULED_WS_PATH), {
+            onMessage: (event: MessageEvent) => {
+                // `lastFrameAt` is stamped by `openManagedSocket` itself (its
+                // `message` listener) for every caller — nothing to do here
+                // beyond parsing.
+                let message: { records?: ScheduleRecord[]; type?: string };
 
-        // This subscription's own connection state — the identity-guard
-        // comparand `openManagedSocket` re-checks before every action, exactly
-        // like the shard socket's `ShardConnection`. Built on the same shared
-        // helper (plan 217's connect-timeout + heartbeat/watchdog, plan 231's
-        // identity guard) instead of a second, hand-rolled implementation
-        // (CLIENT-05).
-        const conn: ManagedSocketState = {
-            connectTimer: undefined,
-            heartbeatTimer: undefined,
-            lastFrameAt: 0,
-            socket: undefined,
-        };
+                try {
+                    message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
+                } catch {
+                    // A non-JSON frame, and the ONLY thing this catch ever
+                    // meant. It used to wrap the decode and the consumer
+                    // callback as well, so a `decodeWire` throw on a
+                    // malformed tag — or anything `onJobs` itself raised —
+                    // was discarded under a comment about JSON, and the
+                    // operator's live job list silently stopped updating
+                    // with no error reported anywhere.
+                    return;
+                }
 
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        let closed = false;
-
-        /** Arm the next reconnect attempt, unless `unsubscribe()` — or `close()` — already ran. */
-        const scheduleReconnect = (): void => {
-            if (closed || this.closed) {
-                return;
-            }
-
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the reconnect re-enters `connect`, declared just below with `openWith` in scope
-            timer = setTimeout(connect, reconnect.next());
-        };
-
-        const openWith = (token: string | undefined): void => {
-            if (closed || this.WebSocketImpl === undefined) {
-                return;
-            }
-
-            const url = token === undefined ? base : `${base}?token=${encodeURIComponent(token)}`;
-
-            openManagedSocket(conn, url, this.managedSocketOptions, {
-                onClose: () => {
-                    scheduleReconnect();
-                },
-                onMessage: (event: MessageEvent) => {
-                    // `lastFrameAt` is stamped by `openManagedSocket` itself
-                    // (its `message` listener) for every caller — nothing to
-                    // do here beyond parsing.
-                    let message: { records?: ScheduleRecord[]; type?: string };
-
-                    try {
-                        message = JSON.parse(typeof event.data === "string" ? event.data : "") as { records?: ScheduleRecord[]; type?: string };
-                    } catch {
-                        // A non-JSON frame, and the ONLY thing this catch ever
-                        // meant. It used to wrap the decode and the consumer
-                        // callback as well, so a `decodeWire` throw on a
-                        // malformed tag — or anything `onJobs` itself raised —
-                        // was discarded under a comment about JSON, and the
-                        // operator's live job list silently stopped updating
-                        // with no error reported anywhere.
-                        return;
-                    }
-
-                    if (message.type === "jobs" && Array.isArray(message.records)) {
-                        // A payload frame is the proof of a live, ACCEPTED
-                        // socket that `open` alone never was: the upgrade
-                        // succeeds before the admin credential is checked,
-                        // so resetting on `open` made a rejected token
-                        // reconnect at the initial delay forever instead of
-                        // backing off (mirrors the shard socket's fix).
-                        reconnect.reset();
-                        onJobs(message.records.map((record) => decodeRecordArgs(record)));
-                    }
-                },
-            });
-        };
-
-        /** Resolve the provider-shaped token, then open; a failed mint re-arms the reconnect timer. */
-        const connectWithProvider = async (provider: WsTokenProvider): Promise<void> => {
-            let token: string | undefined;
-
-            try {
-                token = await provider();
-            } catch {
-                scheduleReconnect();
-
-                return;
-            }
-
-            openWith(token);
-        };
-
-        // Read `this.wsToken` at connect time (not once at subscribe time) so a
-        // post-subscribe `setWsToken()` rotation is picked up on the next
-        // reconnect attempt instead of looping forever with a stale token the
-        // admin gate rejects. A provider-shaped token is resolved fresh per
-        // attempt (re-minting the ephemeral admin sub-token); a provider failure
-        // re-arms the reconnect timer so a broken mint endpoint degrades to
-        // backoff retries.
-        const connect = (): void => {
-            if (closed || this.WebSocketImpl === undefined) {
-                return;
-            }
-
-            const { wsToken } = this;
-
-            if (typeof wsToken === "function") {
-                // `connectWithProvider` never rejects (its awaits are try/caught),
-                // so the fire-and-forget catch is belt-and-braces.
-                connectWithProvider(wsToken).catch(() => undefined);
-
-                return;
-            }
-
-            openWith(wsToken);
-        };
-
-        connect();
-
-        const teardown = (): void => {
-            closed = true;
-
-            if (timer !== undefined) {
-                clearTimeout(timer);
-                timer = undefined;
-            }
-
-            if (conn.connectTimer !== undefined) {
-                clearTimeout(conn.connectTimer);
-                conn.connectTimer = undefined;
-            }
-
-            stopHeartbeat(conn);
-
-            conn.socket?.close();
-            conn.socket = undefined;
-        };
-
-        // Registered so `close()` stops this socket too — its reconnect loop is
-        // driven by the closure-local `closed` flag above, which nothing outside
-        // the returned unsubscribe could ever set.
-        this.adminSocketTeardowns.add(teardown);
-
-        return () => {
-            this.adminSocketTeardowns.delete(teardown);
-            teardown();
-        };
-    }
-
-    // --- Functions admin ----------------------------------------------------
-
-    /**
-     * List the registered public functions (queries / mutations / actions) with
-     * their kinds. Hits the admin-gated `GET /_lunora/admin/functions` endpoint —
-     * the worker must be built with a `functions` registry and `adminToken`, and
-     * this client's auth token must match. Powers `@lunora/studio`'s function
-     * runner auto-discovery.
-     */
-    public async listFunctions(): Promise<FunctionDescriptor[]> {
-        return listFunctions(this.adminHost);
-    }
-
-    /**
-     * List the code-defined cron triggers (the `cronJobs()` map injected on the
-     * worker), each flattened to its firing `cron` expression. Hits the
-     * admin-gated `GET /_lunora/admin/cron-jobs` endpoint — the worker must be
-     * built with a `cronJobs` map and `adminToken`, and this client's auth token
-     * must match. These are static (Cloudflare exposes no runtime cron
-     * introspection), so the studio renders them read-only alongside the dynamic
-     * scheduler jobs.
-     */
-    public async getCronJobs(): Promise<CronJobInfo[]> {
-        return getCronJobs(this.adminHost);
-    }
-
-    /**
-     * Manually fire one code-defined cron job by name — the same dispatch the
-     * scheduled trigger runs (dispatch the function, or start the durable
-     * workflow), on demand. Hits the admin-gated `POST /_lunora/admin/cron-jobs/run`
-     * endpoint; the worker must be built with a `cronJobs` map and `adminToken`,
-     * and this client's auth token must match. Resolves when the job has run (a
-     * function job's shard response is 2xx, or the workflow instance was created)
-     * and rejects with the dispatch error otherwise.
-     */
-    public async runCronJob(name: string): Promise<{ name: string; ran: boolean }> {
-        return runCronJob(this.adminHost, name);
-    }
-
-    /**
-     * Fetch the generated OpenAPI 3.1 document. Hits the admin-gated
-     * `GET /_lunora/admin/openapi` endpoint — the worker must be built with an
-     * `openApiSpec` and `adminToken`, and this client's auth token must match.
-     * Powers `@lunora/studio`'s API-reference (Scalar) view. When the worker has
-     * no spec wired, the endpoint still resolves with an empty-but-valid OpenAPI
-     * document (no `paths`), so callers can render a "not configured" state.
-     */
-    public async fetchOpenApi(): Promise<Record<string, unknown>> {
-        return fetchOpenApi(this.adminHost);
-    }
-
-    /**
-     * Fetch the generated architecture manifest (module catalog + static call
-     * graph). Hits the admin-gated `GET /_lunora/admin/architecture` endpoint.
-     * Codegen emits the manifest once the app declares a module
-     * (`lunora/<dir>/module.ts`); until then the endpoint answers an empty one
-     * (no modules, nodes or edges). Powers `@lunora/studio`'s Architecture view.
-     */
-    public async fetchArchitecture(): Promise<Record<string, unknown>> {
-        return fetchArchitecture(this.adminHost);
-    }
-
-    /**
-     * Fetch the generated OpenRPC 1.x document. Hits the admin-gated
-     * `GET /_lunora/admin/openrpc` endpoint — the worker must be built with an
-     * `openRpcSpec` and `adminToken`, and this client's auth token must match.
-     * OpenRPC is the RPC-native spec (a `methods` array over the JSON-RPC-shaped
-     * `POST /_lunora/rpc` transport); it documents the RPC functions only.
-     * Powers `@lunora/studio`'s OpenRPC API-reference view. When the worker has
-     * no spec wired, the endpoint still resolves with an empty-but-valid OpenRPC
-     * document (no `methods`), so callers can render a "not configured" state.
-     */
-    public async fetchOpenRpc(): Promise<Record<string, unknown>> {
-        return fetchOpenRpc(this.adminHost);
-    }
-
-    // --- Storage admin ------------------------------------------------------
-
-    /**
-     * List objects in the storage bucket, optionally under a `prefix` and from a
-     * pagination `cursor`. Hits the admin-gated `GET /_lunora/admin/storage`
-     * endpoint — the worker must be built with a `storageList` function and
-     * `adminToken`, and this client's auth token must match. Powers
-     * `@lunora/studio`'s file browser.
-     */
-    public async listStorageObjects(options: { bucket?: string; cursor?: string; limit?: number; prefix?: string } = {}): Promise<StorageListPage> {
-        return listStorageObjects(this.adminHost, options);
-    }
-
-    /**
-     * Delete one object from the storage bucket by key. Hits the admin-gated
-     * `DELETE /_lunora/admin/storage?key=…` endpoint — the worker must be built
-     * with a `storageDelete` function and `adminToken`. Powers the studio file
-     * browser's per-row delete; resolves `{ deleted, key }`.
-     *
-     * An absent `deleted` field reads as `false`, matching every sibling admin
-     * verb (`runCronJob`'s `ran`, …): the studio renders this value as the row's
-     * outcome, so defaulting a missing field to success would report a delete
-     * that a mismatched/older worker never performed.
-     */
-    public async deleteStorageObject(key: string, options?: { bucket?: string }): Promise<{ deleted: boolean; key: string }> {
-        return deleteStorageObject(this.adminHost, key, options);
-    }
-
-    /**
-     * List the storage bucket names the worker exposes, for the studio file
-     * browser's bucket picker. Hits the admin-gated
-     * `GET /_lunora/admin/storage/buckets` endpoint — always resolves (an empty
-     * array when the worker configures no `storageBuckets`, i.e. single-bucket).
-     */
-    public async listStorageBuckets(): Promise<string[]> {
-        return listStorageBuckets(this.adminHost);
-    }
-
-    /**
-     * Upload one object to the storage bucket. Hits the admin-gated
-     * `PUT /_lunora/admin/storage?key=…` endpoint with the raw body and an
-     * optional `contentType` header — the worker must be built with a
-     * `storageUpload` function and `adminToken`. Powers the studio file
-     * browser's upload control; resolves `{ etag?, key }`.
-     */
-    public async uploadStorageObject(options: {
-        body: ArrayBuffer | Blob;
-        bucket?: string;
-        contentType?: string;
-        key: string;
-    }): Promise<{ etag?: string; key: string }> {
-        return uploadStorageObject(this.adminHost, options);
-    }
-
-    /**
-     * Build a (signed or public) URL for one object. Hits the admin-gated
-     * `GET /_lunora/admin/storage/url?key=…` endpoint — the worker must be built
-     * with a `storageSignedUrl` function and `adminToken`. Powers the studio
-     * file browser's copy-URL action; resolves the URL string.
-     *
-     * `options.expiresInSeconds` requests a share-link lifetime, which is
-     * validated/clamped server-side. The options object mirrors the worker's
-     * `StorageSignedUrlFunction` options (a `password` / download-limit are noted
-     * as future fields there).
-     */
-    public async signedStorageUrl(key: string, options?: { bucket?: string; expiresInSeconds?: number }): Promise<string> {
-        return signedStorageUrl(this.adminHost, key, options);
-    }
-
-    // --- Global (D1) tables admin -------------------------------------------
-
-    /**
-     * List the `.global()` (D1-backed) tables with their row counts. Hits the
-     * admin-gated `GET /_lunora/admin/global/tables` endpoint — the worker must
-     * be built with a `globalIntrospector` and `adminToken`. Powers the data
-     * browser's global mode.
-     */
-    public async listGlobalTables(): Promise<GlobalTableInfo[]> {
-        return listGlobalTables(this.adminHost);
-    }
-
-    /**
-     * Read a page of rows from one `.global()` table. `filters` AND-narrows the
-     * page to rows matching each `column = value` eq constraint — the drill-down a
-     * facet-value click applies; the array is wire-encoded, JSON-encoded into the
-     * `filters` query param, and the values are bound server-side.
-     *
-     * The response is `decodeWire`d. The worker encodes it (`readGlobalTablePage`
-     * in `@lunora/d1`) because JSON cannot carry a `v.bigint()` column at all and
-     * silently flattens a `v.bytes()` one to `{}` — so without the decode here the
-     * grid renders the raw 3-element tagged array instead of the value. The shard
-     * browser's twin already pairs the same way through `rpc`; this is the global
-     * half of that symmetry.
-     */
-    public async readGlobalTablePage(options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }): Promise<GlobalTablePage> {
-        return readGlobalTablePage(this.adminHost, options);
-    }
-
-    /**
-     * Summarise the distinct values of one column in a `.global()` table over the
-     * active view (the same eq `filters` the browser is previewing) — the global
-     * twin of the shard browser's facet. Hits the admin-gated
-     * `GET /_lunora/admin/global/facet` endpoint; `column` is validated + bound
-     * server-side. Powers the global data browser's facet sidebar.
-     *
-     * Wire-encoded/decoded on both legs for the same reason
-     * {@link LunoraClient.readGlobalTablePage} is: a facet over a BLOB column
-     * returns bytes, which `Response.json` flattens to `{}` — and since a facet
-     * value is exactly what a click sends back as a `filters` clause, that is a
-     * broken drill-down rather than a display glitch.
-     */
-    public async facetGlobalColumn(options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }): Promise<GlobalFacetResult> {
-        return facetGlobalColumn(this.adminHost, options);
-    }
-
-    // --- Vector indexes admin -----------------------------------------------
-
-    /**
-     * List the schema's Vectorize indexes with their declared shape (table,
-     * field, dimensions, metric, metadata) and live stats (vector count,
-     * processing watermark) when the binding is reachable. Hits the admin-gated
-     * `GET /_lunora/admin/vector/indexes` endpoint — the worker must be built
-     * with a `vectorIntrospector` and `adminToken`. Powers the studio's vector
-     * browser. Vectorize can't enumerate indexes at runtime, so this list comes
-     * from the generated `LUNORA_VECTOR_INDEXES` registry.
-     */
-    public async listVectorIndexes(): Promise<VectorIndexSummary[]> {
-        return listVectorIndexes(this.adminHost);
-    }
-
-    /**
-     * Run a nearest-neighbour similarity query against one vector index: the
-     * worker embeds `text` via the index's embedder and returns the top matches.
-     * Hits the admin-gated `POST /_lunora/admin/vector/query` endpoint. Throws
-     * `VECTOR_QUERY_UNSUPPORTED` when the worker's introspector has no embedder
-     * wired (the index lists read-only).
-     */
-    public async queryVectorIndex(options: { name: string; text: string; topK?: number }): Promise<VectorQueryMatch[]> {
-        return queryVectorIndex(this.adminHost, options);
-    }
-
-    /**
-     * Read one keyset-paginated page of the durable `ctx.log` archive that
-     * `pipelineLogSink` writes to R2. Server-side only — the worker holds the R2
-     * SQL credentials and runs the reader; the browser only sees the decoded
-     * `{ rows, nextCursor }`. Pass the previous page's `nextCursor` as
-     * `query.cursor` to page. Admin-gated. When the operator hasn't wired the
-     * archive, `adminFetch` throws a `LunoraClientError` with `.code ===
-     * "LOG_ARCHIVE_NOT_CONFIGURED"`, so a caller can render a "not configured"
-     * state rather than an error.
-     */
-    public async queryLogArchive(query: PipelineLogQuery = {}): Promise<PipelineLogPage> {
-        return queryLogArchive(this.adminHost, query);
-    }
-
-    // --- KV namespace admin -------------------------------------------------
-
-    /**
-     * List the worker's registered Workers KV namespaces (binding names). Hits
-     * the admin-gated `GET /_lunora/admin/kv/namespaces` endpoint — the worker
-     * must be built with a `kvIntrospector` and `adminToken`. Powers the
-     * studio's KV browser.
-     */
-    public async listKvNamespaces(): Promise<KvNamespaceSummary[]> {
-        return listKvNamespaces(this.adminHost);
-    }
-
-    /**
-     * List keys in a KV namespace, optionally filtered by `prefix` and
-     * paginated via `cursor`. Hits the admin-gated
-     * `GET /_lunora/admin/kv/keys` endpoint.
-     */
-    public async listKvKeys(options: { cursor?: string; limit?: number; namespace: string; prefix?: string }): Promise<KvKeyListResult> {
-        return listKvKeys(this.adminHost, options);
-    }
-
-    /**
-     * Read a KV value (as text) and its metadata. Hits the admin-gated
-     * `GET /_lunora/admin/kv/value` endpoint. Returns `{ value: null, metadata: null }`
-     * when the key is absent.
-     */
-    public async getKvValue(options: { key: string; namespace: string }): Promise<KvValueResult> {
-        return getKvValue(this.adminHost, options);
-    }
-
-    /**
-     * Write a string value to a KV namespace. Accepts an absolute `expiration`
-     * (Unix seconds) or a relative `expirationTtl`, plus optional `metadata` —
-     * re-send the loaded values on edit so a save preserves rather than clears
-     * them. Hits the admin-gated `PUT /_lunora/admin/kv/value` endpoint.
-     */
-    public async putKvValue(options: {
-        expiration?: number;
-        expirationTtl?: number;
-        key: string;
-        metadata?: unknown;
-        namespace: string;
-        value: string;
-    }): Promise<void> {
-        return putKvValue(this.adminHost, options);
-    }
-
-    /**
-     * Delete a key from a KV namespace. No-op when the key is absent. Hits the
-     * admin-gated `DELETE /_lunora/admin/kv/value` endpoint.
-     */
-    public async deleteKvKey(options: { key: string; namespace: string }): Promise<void> {
-        return deleteKvKey(this.adminHost, options);
-    }
-
-    // --- Auth admin ---------------------------------------------------------
-
-    /**
-     * List authenticated users, paged and optionally searched / filtered / sorted.
-     * Hits the admin-gated `GET /_lunora/admin/auth/users` endpoint — the worker
-     * must be built with an `authAdmin` and `adminToken`. Powers the studio's
-     * users dashboard.
-     */
-    public async listAuthUsers(
-        options: {
-            filterField?: string;
-            filterValue?: string;
-            limit?: number;
-            offset?: number;
-            search?: string;
-            searchField?: string;
-            sortBy?: string;
-            sortDirection?: "asc" | "desc";
-        } = {},
-    ): Promise<AuthPage<AuthUser>> {
-        this.assertOpen();
-
-        const path = withQuery(AUTH_USERS_PATH, {
-            filterField: options.filterField,
-            filterValue: options.filterValue,
-            limit: options.limit,
-            offset: options.offset,
-            search: options.search,
-            searchField: options.searchField,
-            sortBy: options.sortBy,
-            sortDirection: options.sortDirection,
+                if (message.type === "jobs" && Array.isArray(message.records)) {
+                    // A payload frame is the proof of a live, ACCEPTED socket
+                    // that `open` alone never was: the upgrade succeeds before
+                    // the admin credential is checked, so resetting on `open`
+                    // made a rejected token reconnect at the initial delay
+                    // forever instead of backing off (mirrors the shard
+                    // socket's fix).
+                    channel.resetBackoff();
+                    onJobs(message.records.map((record) => decodeRecordArgs(record)));
+                }
+            },
         });
 
-        return (await this.adminFetch(path, "GET")) as AuthPage<AuthUser>;
-    }
-
-    /**
-     * Create a user. Hits the admin-gated `POST /_lunora/admin/auth/users/create`
-     * endpoint (requires the worker's `authAdmin` to implement `createUser`).
-     * `data` carries any app-defined `user.additionalFields`.
-     */
-    public async createAuthUser(input: {
-        data?: Record<string, unknown>;
-        email: string;
-        name: string;
-        password?: string;
-        role?: string | string[];
-    }): Promise<AuthUser> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_CREATE_USER_PATH, "POST", input)) as AuthUser;
-    }
-
-    /** Set a user's role (string, or array joined comma-wise server-side). */
-    public async setAuthUserRole(input: { role: string | string[]; userId: string }): Promise<AuthUser> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_SET_ROLE_PATH, "POST", input)) as AuthUser;
-    }
-
-    /** Ban a user. `expiresInSeconds` sets a temporary ban; omit it for a permanent one. Revokes the user's live sessions. */
-    public async banAuthUser(input: { expiresInSeconds?: number; reason?: string; userId: string }): Promise<AuthUser> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_BAN_PATH, "POST", input)) as AuthUser;
-    }
-
-    /** Lift a user's ban. */
-    public async unbanAuthUser(input: { userId: string }): Promise<AuthUser> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_UNBAN_PATH, "POST", input)) as AuthUser;
-    }
-
-    /** Set a user's password (admin override — no current-password challenge). */
-    public async setAuthUserPassword(input: { newPassword: string; userId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_SET_PASSWORD_PATH, "POST", input);
-    }
-
-    /** Permanently delete a user and revoke their sessions. */
-    public async removeAuthUser(input: { userId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_REMOVE_USER_PATH, "POST", input);
-    }
-
-    /**
-     * Mint an impersonation session for a user, returning its bearer `token`.
-     * The caller is responsible for using the token (e.g. setting the session
-     * cookie); the server performs no cookie round-trip.
-     */
-    public async impersonateAuthUser(input: { userId: string }): Promise<AuthImpersonation> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_IMPERSONATE_PATH, "POST", input)) as AuthImpersonation;
-    }
-
-    /** Revoke a single session by its id (force sign-out of one device). */
-    public async revokeAuthSession(input: { sessionId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_REVOKE_SESSION_PATH, "POST", input);
-    }
-
-    /** Revoke every session for a user (force sign-out everywhere). */
-    public async revokeAuthUserSessions(input: { userId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_REVOKE_SESSIONS_PATH, "POST", input);
-    }
-
-    /**
-     * Report which auth dashboard surfaces are available — derived server-side
-     * from the enabled better-auth plugins. The studio renders only the panels
-     * whose capability is `true`.
-     */
-    public async getAuthCapabilities(): Promise<AuthCapabilities> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_CAPABILITIES_PATH, "GET")) as AuthCapabilities;
-    }
-
-    /** Update a user's fields (name/email/app-defined `additionalFields`). */
-    public async updateAuthUser(input: { data: Record<string, unknown>; userId: string }): Promise<AuthUser> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_UPDATE_USER_PATH, "POST", input)) as AuthUser;
-    }
-
-    /** List a user's linked accounts (credential / OAuth providers). Token material is stripped server-side. */
-    public async listAuthAccounts(input: { userId: string }): Promise<Record<string, unknown>[]> {
-        this.assertOpen();
-        return (await this.adminFetch(withQuery(AUTH_ACCOUNTS_PATH, { userId: input.userId }), "GET")) as Record<string, unknown>[];
-    }
-
-    /** Unlink a linked account from a user. */
-    public async unlinkAuthAccount(input: { accountId: string; userId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_UNLINK_ACCOUNT_PATH, "POST", input);
-    }
-
-    /** List a user's registered passkeys (requires the passkey plugin). */
-    public async listAuthPasskeys(input: { userId: string }): Promise<Record<string, unknown>[]> {
-        this.assertOpen();
-        return (await this.adminFetch(withQuery(AUTH_PASSKEYS_PATH, { userId: input.userId }), "GET")) as Record<string, unknown>[];
-    }
-
-    /** Delete a passkey by id (requires the passkey plugin). */
-    public async deleteAuthPasskey(input: { passkeyId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_DELETE_PASSKEY_PATH, "POST", input);
-    }
-
-    /** Disable two-factor auth for a user (requires the two-factor plugin). */
-    public async disableAuthTwoFactor(input: { userId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_DISABLE_2FA_PATH, "POST", input);
-    }
-
-    /** List organizations, paged (requires the organization plugin). */
-    public async listAuthOrganizations(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<Record<string, unknown>>> {
-        this.assertOpen();
-        return (await this.adminFetch(withQuery(AUTH_ORGS_PATH, { limit: options.limit, offset: options.offset }), "GET")) as AuthPage<Record<string, unknown>>;
-    }
-
-    /** List the members of an organization (requires the organization plugin). */
-    public async listAuthOrgMembers(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        this.assertOpen();
-        const path = withQuery(AUTH_ORG_MEMBERS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
-
-        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
-    }
-
-    /** List an organization's pending invitations (requires the organization plugin). */
-    public async listAuthOrgInvitations(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        this.assertOpen();
-        const path = withQuery(AUTH_ORG_INVITATIONS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
-
-        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
-    }
-
-    /**
-     * List sign-up invitations, newest first (requires the `inviteOnly` plugin).
-     * Unfiltered: a row is pending when `acceptedAt` is null and `expiresAt` is in
-     * the future, and the caller labels it — filtering server-side after the page
-     * would let page 1 come back empty while pending rows sat on page 2.
-     */
-    public async listAuthSignUpInvitations(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<Record<string, unknown>>> {
-        this.assertOpen();
-        const path = withQuery(AUTH_SIGN_UP_INVITATIONS_PATH, { limit: options.limit, offset: options.offset });
-
-        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
-    }
-
-    /** Invite an address to sign up, or refresh an existing invitation for it. */
-    public async createAuthSignUpInvitation(input: { email: string; expiresInSeconds?: number; invitedBy?: string }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_CREATE_SIGN_UP_INVITATION_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Withdraw a sign-up invitation. Not retroactive — an account already created keeps existing. */
-    public async revokeAuthSignUpInvitation(input: { email: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_REVOKE_SIGN_UP_INVITATION_PATH, "POST", input);
-    }
-
-    /** Remove a member from an organization. */
-    public async removeAuthOrgMember(input: { memberId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_REMOVE_MEMBER_PATH, "POST", input);
-    }
-
-    /** Cancel a pending organization invitation. */
-    public async cancelAuthOrgInvitation(input: { invitationId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_CANCEL_INVITATION_PATH, "POST", input);
-    }
-
-    /**
-     * Report the deployment's auth configuration — enabled plugins, sign-in
-     * methods, user-settable create-user fields, organization sub-features
-     * (teams / roles), and session / rate-limit policy. Drives the config panel
-     * and the dynamic create-user form. Never carries a secret.
-     */
-    public async getAuthConfig(): Promise<AuthConfigInfo> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_CONFIG_PATH, "GET")) as AuthConfigInfo;
-    }
-
-    /** Create an organization; optionally seed an `owner` member for `ownerId`. */
-    public async createAuthOrganization(input: {
-        logo?: string;
-        metadata?: Record<string, unknown>;
-        name: string;
-        ownerId?: string;
-        slug?: string;
-    }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_CREATE_ORG_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Update an organization's name/slug/logo/metadata. */
-    public async updateAuthOrganization(input: {
-        logo?: string;
-        metadata?: Record<string, unknown>;
-        name?: string;
-        organizationId: string;
-        slug?: string;
-    }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_UPDATE_ORG_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Delete an organization and cascade its members, invitations, teams, and custom roles. */
-    public async deleteAuthOrganization(input: { organizationId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_REMOVE_ORG_PATH, "POST", input);
-    }
-
-    /** Directly add an existing user to an organization (no invitation/acceptance). */
-    public async addAuthOrgMember(input: { organizationId: string; role?: string; userId: string }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_ADD_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Create a pending email invitation to an organization. */
-    public async inviteAuthOrgMember(input: { email: string; inviterId?: string; organizationId: string; role?: string }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_INVITE_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Change a member's role. */
-    public async setAuthOrgMemberRole(input: { memberId: string; role: string | string[] }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_MEMBER_ROLE_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** List an organization's teams (requires the organization plugin with teams enabled). */
-    public async listAuthOrgTeams(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        this.assertOpen();
-        const path = withQuery(AUTH_ORG_TEAMS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
-
-        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
-    }
-
-    /** Create a team under an organization. */
-    public async createAuthOrgTeam(input: { name: string; organizationId: string }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_CREATE_TEAM_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Rename a team. */
-    public async updateAuthOrgTeam(input: { name: string; teamId: string }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_UPDATE_TEAM_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Delete a team and its memberships. */
-    public async removeAuthOrgTeam(input: { teamId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_REMOVE_TEAM_PATH, "POST", input);
-    }
-
-    /** List a team's members. */
-    public async listAuthOrgTeamMembers(input: { limit?: number; offset?: number; teamId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        this.assertOpen();
-        const path = withQuery(AUTH_ORG_TEAM_MEMBERS_PATH, { limit: input.limit, offset: input.offset, teamId: input.teamId });
-
-        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
-    }
-
-    /** Add a user to a team. */
-    public async addAuthOrgTeamMember(input: { teamId: string; userId: string }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_ADD_TEAM_MEMBER_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Remove a member from a team. */
-    public async removeAuthOrgTeamMember(input: { teamMemberId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_REMOVE_TEAM_MEMBER_PATH, "POST", input);
-    }
-
-    /** List an organization's custom roles (requires the organization plugin with dynamic access control). */
-    public async listAuthOrgRoles(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        this.assertOpen();
-        const path = withQuery(AUTH_ORG_ROLES_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
-
-        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
-    }
-
-    /** Create a custom org role with a permission grant (a `resource -> actions[]` map). */
-    public async createAuthOrgRole(input: { organizationId: string; permission: Record<string, string[]>; role: string }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_CREATE_ROLE_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Replace a custom org role's permission grant. */
-    public async updateAuthOrgRole(input: { permission: Record<string, string[]>; roleId: string }): Promise<Record<string, unknown>> {
-        this.assertOpen();
-        return (await this.adminFetch(AUTH_UPDATE_ROLE_PATH, "POST", input)) as Record<string, unknown>;
-    }
-
-    /** Delete a custom org role. */
-    public async deleteAuthOrgRole(input: { roleId: string }): Promise<void> {
-        this.assertOpen();
-        await this.adminFetch(AUTH_REMOVE_ROLE_PATH, "POST", input);
-    }
-
-    /** List auth sessions, paged and optionally filtered to one user. */
-    public async listAuthSessions(options: { limit?: number; offset?: number; userId?: string } = {}): Promise<AuthPage<AuthSession>> {
-        this.assertOpen();
-
-        const path = withQuery(AUTH_SESSIONS_PATH, { limit: options.limit, offset: options.offset, userId: options.userId });
-
-        return (await this.adminFetch(path, "GET")) as AuthPage<AuthSession>;
+        return channel.close;
     }
 
     // --- Subscriptions ------------------------------------------------------
+
+    /**
+     * Ask the server for a fresh, full snapshot of a live subscription, for when the value it
+     * holds is known to be stale: a paginated feed restarting after `INVALID_CURSOR` resnapshots
+     * its head page, whose `continueCursor` came from the same build as the cursor just refused.
+     *
+     * The subscription's resume position is dropped, so the server answers with a snapshot
+     * rather than a `resume`. Subscribers already holding the value keep it until the snapshot
+     * lands; one that joins meanwhile is not handed the stale value and waits for the fresh
+     * one. A no-op when nothing subscribes to `(function_, args, shardKey)`. Without an open
+     * socket (a cross-tab follower, or a dropped connection) the snapshot is taken when one
+     * opens, and joiners are handed the held value meanwhile, since nothing else is coming.
+     */
+    public resnapshot<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: { shardKey?: string } = {}): void {
+        this.assertOpen();
+
+        const state = this.subscriptions.get(SubscriptionRegistry.key(function_.__lunoraRef, args ?? {}, options.shardKey));
+
+        if (state === undefined) {
+            return;
+        }
+
+        // Only a snapshot actually asked for may hold joiners off the stale value. Without an open
+        // socket (a cross-tab follower, or a dropped connection) nothing is coming to replace it.
+        // This subscribe supersedes a pending hinted retry; left armed, the timer would send a second one.
+        this.cancelSubscriptionRetry(state.id);
+
+        if (this.resnapshotSubscription(state)) {
+            state.awaitingSnapshot = true;
+        }
+    }
 
     /**
      * Subscribe to a live query. The callback fires with the current value (from
@@ -3324,9 +3340,14 @@ class LunoraClient {
         function_: F,
         args: ArgsOf<F>,
         callback: (data: ReturnOf<F>) => void,
-        options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string } = {},
+        options: { onCheckpoint?: (watermark: SyncWatermark) => void; onError?: SubscriptionErrorCallback; shardKey?: string; signal?: AbortSignal } = {},
     ): Unsubscribe {
         this.assertOpen();
+
+        // Aborted before it started: nothing is registered.
+        if (options.signal?.aborted) {
+            return () => undefined;
+        }
 
         // NOT guarded by `assertLeaderOwnedSurface`, unlike the other
         // socket-backed surfaces: a follower's `subscribe` is exactly how the
@@ -3359,7 +3380,7 @@ class LunoraClient {
             const cached = this.takeHydratedCache(function_.__lunoraRef, argsKey, options.shardKey);
 
             state = {
-                acked: false,
+                ack: "idle",
                 args: argsRecord,
                 argsKey,
                 callbacks: new Set<SubscriptionCallback>(),
@@ -3371,7 +3392,9 @@ class LunoraClient {
                 optimisticLayers: [],
                 serverBase: cached?.value,
                 serverCursor: cached?.serverCursor,
+                serverClaims: cached?.claims,
                 shardKey: options.shardKey,
+                valueReceived: false,
                 // Encode ONCE, here, so an unsupported arg value throws at this
                 // call site instead of inside a reconnect's open handler — and
                 // so a caller mutating its own `args` object afterwards cannot
@@ -3380,6 +3403,14 @@ class LunoraClient {
                 ...(cached?.serverEpoch === undefined ? {} : { serverEpoch: cached.serverEpoch }),
             };
             this.subscriptions.add(state);
+            this.emitSyncStatus();
+
+            // Opened while the leader is live, after the transition that armed `awaitLeaderAnswers` for the subscriptions
+            // then open. A hydrated value would otherwise read as answered, and a write guarded by it would be judged
+            // against that value before the leader's relay.
+            if (this.isCrossTabFollower() && isLiveStatus(this.computeStatus())) {
+                this.awaitLeaderAnswer(state);
+            }
 
             if (cached !== undefined) {
                 this.cacheSeededQueries.set(key, cached);
@@ -3401,20 +3432,32 @@ class LunoraClient {
         }
 
         // Replay last value to new subscriber synchronously if available.
-        if (state.lastValue !== undefined) {
+        const replay = replayableValue(state);
+
+        if (replay !== undefined) {
             try {
-                subscriptionCallback(state.lastValue);
+                subscriptionCallback(replay);
             } catch {
                 /* user callback threw — ignore */
             }
         }
 
+        replaySubscriptionRefusal(state, errorCallback);
+
         this.ensureSocket(options.shardKey);
         this.sendSubscribeIfOpen(state);
 
         const subscriptionState = state;
+        let unsubscribed = false;
 
-        return () => {
+        const unsubscribe = (): void => {
+            // Once: the signal and a hand-called unsubscribe must not both tear the registration down.
+            if (unsubscribed) {
+                return;
+            }
+
+            unsubscribed = true;
+            options.signal?.removeEventListener("abort", unsubscribe);
             subscriptionState.callbacks.delete(subscriptionCallback);
 
             if (errorCallback) {
@@ -3429,9 +3472,30 @@ class LunoraClient {
                 this.sendOrQueueUnsubscribe(subscriptionState.shardKey, subscriptionState.id, "unsubscribe");
                 this.returnCacheSeed(SubscriptionRegistry.keyOf(subscriptionState));
                 this.subscriptions.remove(subscriptionState);
+                this.cancelSubscriptionRetry(subscriptionState.id);
+
+                // Its frame will never be answered now: stand the watchdog down and free the pacing slot it holds.
+                const conn = this.getConnection(subscriptionState.shardKey);
+
+                if (conn) {
+                    this.settleSubscribeWatchdog(conn, subscriptionState.id);
+                }
+
                 this.releaseIdleShard(subscriptionState.shardKey);
+                this.emitSyncStatus();
+                // Unwatched, a guard has no subscription to wait for.
+                this.settleAwaitedAnswer(subscriptionState, true);
             }
         };
+
+        options.signal?.addEventListener("abort", unsubscribe, { once: true });
+
+        // A callback may abort during the synchronous replay above, before the listener existed: `abort` never fires again.
+        if (options.signal?.aborted) {
+            unsubscribe();
+        }
+
+        return unsubscribe;
     }
 
     /**
@@ -3495,6 +3559,7 @@ class LunoraClient {
         this.nextShapeId += 1;
         const id = `shape_${this.nextShapeId.toString()}`;
         const state: ShapeSubscriptionState = {
+            answered: false,
             args: shape.args,
             callbacks: new Set([callback]),
             errorCallbacks: options.onError ? new Set([options.onError]) : new Set(),
@@ -3509,6 +3574,7 @@ class LunoraClient {
         };
 
         this.shapeSubscriptions.set(id, state);
+        this.emitSyncStatus();
         this.ensureSocket(options.shardKey);
         this.sendShapeSubscribeIfOpen(state);
 
@@ -3516,6 +3582,7 @@ class LunoraClient {
             this.shapeSubscriptions.delete(id);
             this.sendOrQueueUnsubscribe(state.shardKey, id, "shape_unsubscribe");
             this.releaseIdleShard(state.shardKey);
+            this.emitSyncStatus();
         };
     }
 
@@ -3698,11 +3765,126 @@ class LunoraClient {
         });
     }
 
+    /**
+     * Call a worker-served RPC that answers **Server-Sent Events** instead of one
+     * JSON body, reporting each frame as it arrives and resolving with the result
+     * the terminal frame carries.
+     *
+     * The request is the ordinary `/_lunora/rpc` envelope — same path, same
+     * headers, same admin bearer — so authorization, the reserved-op interception
+     * and the operation tape are unchanged; only the RESPONSE is framed
+     * differently. The only op that answers this way today is the Studio's
+     * assistant turn (`__lunora_admin__:aiChat`), which is served at the worker
+     * rather than a shard precisely so a multi-turn exchange cannot occupy a
+     * Durable Object's single-threaded admin dispatch. {@link LunoraClient.stream}
+     * cannot serve it for exactly that reason: it rides the subscription socket
+     * and is answered by the DO.
+     *
+     * **A frame is narration; the resolved value is the answer.** `onFrame`
+     * receives every intermediate `data:` frame verbatim, and a caller that
+     * ignores them all is still correct. That asymmetry is deliberate: it is what
+     * lets a consumer treat an interrupted stream as having produced nothing. A
+     * body that ends without its terminal frame REJECTS
+     * (`HTTP_STREAM_INTERRUPTED`) rather than resolving with whatever arrived, so
+     * a half-finished call can never be mistaken for a finished one.
+     *
+     * A non-2xx response is surfaced as the coded error its JSON envelope
+     * describes, exactly as {@link LunoraClient.query} would — an admin refusal
+     * reads the same on both.
+     * @experimental Ships for the assistant turn; the shape may change if a second op needs it.
+     */
+    public async streamRpc(
+        function_: FunctionReference,
+        args: Record<string, unknown> = {},
+        options: { onFrame?: (frame: unknown) => void; shardKey?: string; signal?: AbortSignal } = {},
+    ): Promise<unknown> {
+        if (this.closed) {
+            throw new LunoraError("CLIENT_CLOSED", "LunoraClient is closed");
+        }
+
+        if (!this.fetchImpl) {
+            throw new LunoraError("INTERNAL", "LunoraClient: no `fetch` implementation available");
+        }
+
+        const functionPath = function_.__lunoraRef;
+        const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
+            body: JSON.stringify({ args: encodeCallArgs(args, `args for '${functionPath}'`), functionPath, shardKey: options.shardKey }),
+            // `accept` states what this reader can parse. Nothing negotiates on it
+            // — the op answers one way — but a proxy or a future second reader
+            // should not have to guess.
+            headers: { accept: "text/event-stream", ...this.rpcRequestHeaders({}, options.shardKey) },
+            method: "POST",
+            ...(options.signal ? { signal: options.signal } : {}),
+        });
+
+        if (!response.ok) {
+            const body: unknown = await response.json().catch(() => undefined);
+            const envelope = body as { error?: { code?: string; message?: string } } | undefined;
+
+            if (envelope?.error) {
+                throw reconstructError(envelope.error);
+            }
+
+            const statusText = response.statusText ? ` ${response.statusText}` : "";
+
+            throw new LunoraError("INTERNAL", `LunoraClient: request failed (status ${response.status.toString()}${statusText})`);
+        }
+
+        if (!response.body) {
+            throw new LunoraError("HTTP_STREAM_NO_BODY", "LunoraClient: streaming response has no body");
+        }
+
+        const { failure, terminal } = await pumpStreamRpcBody(response.body, options.signal, options.onFrame);
+
+        if (failure !== undefined) {
+            throw failure;
+        }
+
+        // `pumpSseBody` reports a bare EOF as `false` rather than throwing, so no
+        // terminal frame reaching this point means the body ended early.
+        if (terminal === undefined) {
+            throw new LunoraError("HTTP_STREAM_INTERRUPTED", "LunoraClient: stream ended without a complete frame");
+        }
+
+        let parsed: unknown;
+
+        try {
+            parsed = JSON.parse(terminal);
+        } catch {
+            throw new LunoraError("HTTP_STREAM_BAD_CHUNK", "LunoraClient: streaming result is not valid JSON");
+        }
+
+        // Fail closed: a terminal frame that is not an envelope carrying a `result`
+        // (`{}`, `null`, a bare string) is a malformed or truncated answer, not a
+        // success whose value happens to be `undefined`. `{ result: null }` is a
+        // real answer and passes.
+        if (typeof parsed !== "object" || parsed === null || !("result" in parsed)) {
+            throw new LunoraError("HTTP_STREAM_INTERRUPTED", "LunoraClient: stream ended without a result");
+        }
+
+        // The same envelope every other worker-served op answers with, so the
+        // wire codec's bigint/bytes sentinels survive a streamed result too.
+        return decodeWire(parsed.result);
+    }
+
     public close(): void {
         this.closed = true;
 
+        for (const timer of this.pendingSubscriptionRetries.values()) {
+            clearTimeout(timer);
+        }
+
+        this.pendingSubscriptionRetries.clear();
+
+        for (const key of this.whisperJoins.keys()) {
+            this.dropWhisperJoinWaiters(key);
+        }
+
         this.releaseSessionChangeListener?.();
         this.releaseSessionChangeListener = undefined;
+
+        this.releasePageHideFlush?.();
+        this.releasePageHideFlush = undefined;
 
         // Release multi-tab outbox leadership so another tab can take over.
         this.outboxLeaderRelease?.();
@@ -3728,6 +3910,7 @@ class LunoraClient {
         }
 
         this.adminSocketTeardowns.clear();
+        this.supplementaryBounces.clear();
 
         // Rate-limit retry flushes are the one timer that outlives the socket
         // teardown above (they fire against an open connection, not a reconnect).
@@ -3737,6 +3920,15 @@ class LunoraClient {
 
         this.replayRetryTimers.clear();
         this.replayRetryState.clear();
+
+        this.stopOwnClaimsRetry();
+        this.suspendedFollowerValues.clear();
+
+        for (const timer of this.leaderAnswerTimers.values()) {
+            clearTimeout(timer);
+        }
+
+        this.leaderAnswerTimers.clear();
 
         this.offlineQueue.clear();
         this.queuedIdentities.clear();
@@ -3761,7 +3953,12 @@ class LunoraClient {
         this.identityChangeListeners.clear();
         this.mutationSettledListeners.clear();
         this.pendingChangeListeners.clear();
+        this.syncStatusListeners.clear();
         this.whisperHandlers.clear();
+        this.liveSocketGrants.clear();
+        // Room handles still open keep their held-send closures reachable through these; a closed client drops them.
+        this.roomFlushes.clear();
+        this.roomIdentityResets.clear();
 
         // Shape subscriptions retain user row/error callbacks and replicated
         // rows; poke buffers hold partially-assembled membership. Neither is
@@ -3787,6 +3984,100 @@ class LunoraClient {
         // Stop cross-tab coordination and release the BroadcastChannel.
         this.tabCoordinator?.stop();
         this.tabCoordinator = undefined;
+    }
+
+    /**
+     * A genuine credential change: reject the queued writes that can no longer
+     * replay as the incoming identity, and evict the session the previous one
+     * left live. `true` when it evicted, which reconnects every socket cold.
+     */
+    private retirePreviousIdentity(previousIdentity: string | null, wasKnownNobody: boolean, previousToken: string | null, token: string | null): boolean {
+        const leaving = leavesSessionBehind(previousIdentity, wasKnownNobody, token);
+
+        // Before the rejections below: each rolls back synchronously, and a
+        // subscriber it notifies may already write as the incoming user,
+        // whose layer must survive.
+        if (leaving) {
+            this.discardOptimisticLayers();
+        }
+
+        // Writes whose stamp still matches (or is still undecidable) are
+        // kept: this path is reached on a plain sign-in too, where the
+        // queue belongs to the very user who just signed in.
+        this.rejectQueuedForIdentityChange(previousIdentity);
+        this.warnRefreshWithoutSubject(previousToken, token);
+
+        // And evict what the PREVIOUS identity left live. A socket pins
+        // its credential in the upgrade URL and cannot be rotated in
+        // place, so without this it keeps delivering the previous user's
+        // rows (see `ShardConnection.identity`), and every subscription
+        // keeps replaying the last of them to each new subscriber.
+        // Sign-out under an upgrade bearer lands here too: it leaves the
+        // previous identity behind.
+        //
+        // Only when there WAS a previous identity, the same test
+        // `rejectQueuedForIdentityChange` applies to the read cache: a
+        // sign-in from signed-out has no other user's session to retire,
+        // so nothing is evicted there (a bearer sign-in still reconnects,
+        // see `reconcileUpgradeBearer`).
+        //
+        // Except under a cookie session the server said was nobody's:
+        // its socket is authenticated by the cookie as it was at the
+        // upgrade — anonymous — and keeps serving that, never the user
+        // who signed in since, until it is replaced.
+        if (!leaving) {
+            return false;
+        }
+
+        this.evictPreviousIdentitySession();
+
+        return true;
+    }
+
+    /**
+     * How the open sockets must follow a bearer change when the transport
+     * presents the bearer on the upgrade (React Native's `Authorization`
+     * header). An open upgrade keeps the token it was made with for its whole
+     * life, and a browser socket never carries it, so without
+     * `authTokenOnUpgrade` nothing reconnects.
+     *
+     * A sign-in from signed-out is `"cold"`: the sockets upgraded anonymously,
+     * and no view may resume from an anonymous cursor. A refreshed bearer under
+     * an unchanged identity is `"warm"`: it is handed to the open sockets in
+     * place, and a socket that refuses it reconnects and resumes from its cursors.
+     *
+     * A sign-out or an account switch leaves a previous identity behind and is
+     * evicted by `setAuthToken` before this is asked.
+     */
+    private reconcileUpgradeBearer(previousToken: string | null, token: string | null, identityChanged: boolean): "cold" | "none" | "warm" {
+        if (!this.authTokenOnUpgrade || token === null || previousToken === token) {
+            return "none";
+        }
+
+        if (identityChanged) {
+            return previousToken === null ? "cold" : "none";
+        }
+
+        return previousToken === null ? "none" : "warm";
+    }
+
+    /**
+     * The subprotocols a socket the worker authenticates offers on its upgrade.
+     * With {@link LunoraClientOptions.authTokenOnUpgrade} and a bearer set, the
+     * bearer rides `Sec-WebSocket-Protocol` (see `shared/ws-bearer-protocol.ts`),
+     * the one handshake header a browser can set, and never the URL.
+     */
+    private upgradeProtocols(): string[] | undefined {
+        return this.authTokenOnUpgrade && this.authToken ? [LUNORA_WS_PROTOCOL, encodeBearerProtocol(this.authToken)] : undefined;
+    }
+
+    private applyUpgradeBearer(reconnect: "cold" | "none" | "warm"): void {
+        if (reconnect === "cold") {
+            this.resetRoomSends();
+            this.reconnectCold();
+        } else if (reconnect === "warm") {
+            this.bounceShardSockets(true);
+        }
     }
 
     /** Guard shared by every public entry point: a closed client accepts no further calls. */
@@ -3873,9 +4164,11 @@ class LunoraClient {
         clearTimeout(conn.reconnectTimer);
         clearTimeout(conn.connectTimer);
         clearTimeout(conn.stableTimer);
+        clearTimeout(conn.revalidateTimer);
         conn.reconnectTimer = undefined;
         conn.connectTimer = undefined;
         conn.stableTimer = undefined;
+        conn.revalidateTimer = undefined;
         /* eslint-enable no-param-reassign */
     }
 
@@ -3988,6 +4281,9 @@ class LunoraClient {
         // none of them needs a message.
         conn.pendingStreams = undefined;
         conn.pendingUnsubscribes = [];
+        // `handleDisconnect` never runs for this socket (see above), so un-ack its
+        // subscriptions here: a frame in flight on it will never be answered.
+        this.markShardPendingAck(conn.shardKey);
         this.clearResubscribeQueue(conn);
         this.clearConnectionTimers(conn);
         clearTimeout(conn.idleTimer);
@@ -4038,7 +4334,11 @@ class LunoraClient {
         // The leader and follower hooks run against this host. It exposes operations on the
         // client, so the hooks reach no state of their own.
         const leadership: TabLeadershipHost = {
+            activeShapes: () => [...this.shapeSubscriptions.values()],
             activeSubscriptions: () => this.subscriptions.all(),
+            awaitLeaderAnswers: () => {
+                this.awaitLeaderAnswers();
+            },
             broadcastStatus: (status, identity) => this.tabCoordinator?.broadcastConnectionStatus(status, identity),
             closeConnections: () => {
                 for (const [key, conn] of this.connections) {
@@ -4059,6 +4359,7 @@ class LunoraClient {
             identityFingerprint: () => this.identityFingerprint(),
             isLeader: () => this.tabCoordinator?.isLeader() === true,
             leader: this.leader,
+            ownClaims: (key, retry, frameClaims) => this.followerClaims(key, retry, frameClaims),
             queueResubscribe: (state) => {
                 this.queueResubscribe(state);
             },
@@ -4069,6 +4370,9 @@ class LunoraClient {
             },
             ackAndAdvanceCursor: (state, cursor, epoch) => {
                 this.ackAndAdvanceCursor(state, cursor, epoch);
+            },
+            settleAwaitedAnswer: (state, readable) => {
+                this.settleAwaitedAnswer(state, readable);
             },
             subscription: (key) => this.subscriptions.get(key),
         };
@@ -4084,24 +4388,24 @@ class LunoraClient {
             onConnectionStatus: (status, identity) => {
                 onLeaderStatus(leadership, status, identity);
             },
-            onSubscriptionData: (key, data, cursor, epoch, identity) => {
-                onFollowerSubscriptionData(leadership, key, data, cursor, epoch, identity);
+            onSubscriptionData: (key, data, cursor, epoch, identity, claims) => {
+                onFollowerSubscriptionData(leadership, key, data, cursor, epoch, identity, claims);
             },
             onLeaderClaimAnswered: () => {
                 onLeaderClaimAnswered(leadership);
             },
-            onSubscriptionError: (key, error, identity) => {
-                onFollowerSubscriptionError(leadership, key, error, identity);
+            onSubscriptionError: (key, error, identity, claims) => {
+                onFollowerSubscriptionError(leadership, key, error, identity, claims);
             },
-            onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId, identity) => {
-                onFollowerSubscriptionSettled(leadership, key, cursor, epoch, lastMutationId, clientId, identity);
+            onSubscriptionSettled: (key, cursor, epoch, lastMutationId, clientId, identity, claims) => {
+                onFollowerSubscriptionSettled(leadership, key, cursor, epoch, lastMutationId, clientId, identity, claims);
             },
         });
     }
 
     // --- Internals ----------------------------------------------------------
 
-    /** The body of {@link batch}, optionally abortable (the polling fallback's timeout). */
+    /** The body of {@link batch}, abortable by the caller's deadline (`batch`'s own, or the polling fallback's timeout). */
     private async sendBatch(
         calls: ReadonlyArray<{ args?: Record<string, unknown>; fn: FunctionReference; shardKey?: string }>,
         signal?: AbortSignal,
@@ -4143,7 +4447,10 @@ class LunoraClient {
         try {
             body = await response.json();
         } catch {
-            throw new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`);
+            throw withResponseHeaders(
+                new LunoraError("INTERNAL", `LunoraClient: batch response was not JSON (status ${response.status.toString()})`),
+                response.headers,
+            );
         }
 
         const envelope = errorEnvelopeOf(body);
@@ -4156,10 +4463,13 @@ class LunoraClient {
         // instead, per §4.2.
         if (!response.ok || (envelope !== undefined && !body.results)) {
             if (envelope !== undefined) {
-                throw reconstructError(envelope);
+                throw withResponseHeaders(reconstructError(envelope), response.headers);
             }
 
-            throw new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`);
+            throw withResponseHeaders(
+                new LunoraError("INTERNAL", `LunoraClient: batch request failed (status ${response.status.toString()})`),
+                response.headers,
+            );
         }
 
         // Each entry is dispatched as an independent single call server-side, so
@@ -4180,7 +4490,7 @@ class LunoraClient {
             }
         }
 
-        return demuxBatchResults(body.results ?? [], calls.length);
+        return demuxBatchResults(body.results ?? [], calls.length, response.headers);
     }
 
     /**
@@ -4191,9 +4501,13 @@ class LunoraClient {
     private async runMutation<F extends FunctionReference>(
         function_: F,
         args: ArgsOf<F>,
-        options: MutationCallOptions<unknown, unknown, ArgsOf<F>>,
+        callOptions: MutationCallOptions<unknown, unknown, ArgsOf<F>>,
     ): Promise<{ committed: boolean; value: ReturnOf<F> }> {
         this.assertOpen();
+
+        // Forced here, where every mutation path converges, so no caller can route a
+        // sensitive argument into the offline queue or the outbox.
+        const options = forceOnlineOnlyWhenSensitive(function_, callOptions);
 
         const argsRecord = args as Record<string, unknown>;
 
@@ -4204,16 +4518,24 @@ class LunoraClient {
         // its retry stays server-idempotent instead of minting a fresh key.
         const mutationId = options.mutationId ?? nextId();
 
+        // Taken before any await or send: a write that only reaches the queue after its direct send fails
+        // must still replay ahead of the ones issued while that send was in flight.
+        this.mutationIssueCounter += 1;
+
+        const issueSeq = this.mutationIssueCounter;
+
         // A durable replay's credential, redeemed before any await: the request
         // below is sent with the bearer its verdict judged, not the live one.
         const replay = this.takeReplayCredential(options.replayCredential);
 
-        // Read BEFORE the first `await` below, and reused by every path out of this
-        // call. `await replaying` can sit here for the length of a queue flush, and
-        // frames landing during it advance `serverCursor` — so a baseline sampled
-        // after the wait would claim the caller had seen changes that arrived after
-        // their write was composed. See `OutboxMutation.baselineSeq`.
-        const composedBaselineSeq = options.replayBaseline === undefined ? this.baselineCursorFor(options.shardKey) : (options.replayBaseline ?? undefined);
+        // Read BEFORE the first `await` below, and reused by every path out of this call. See `composedBaselineFor`.
+        const composedBaselineSeq = this.composedBaselineFor(options.replayBaseline, options.shardKey);
+
+        // Before any optimistic layer is applied and before anything can reach the
+        // queue or a persistence adapter.
+        this.refuseOnlineOnlyWhenDown(function_.__lunoraRef, options);
+
+        const retirements = this.identityRetirements;
 
         // Apply optimistic updates to any subscriber listening on this fn. Both
         // APIs ride the same rebaseable, cursor-gated layer engine: the per-call
@@ -4229,9 +4551,14 @@ class LunoraClient {
             options.optimistic,
         );
 
-        if (options.optimisticUpdate) {
-            this.applyOptimisticUpdate(options.optimisticUpdate, args, options.shardKey, optimisticRollbacks, optimisticConfirms);
-        }
+        this.applyOptionalOptimisticUpdate(
+            options.optimisticUpdate,
+            args,
+            options.shardKey,
+            optimisticRollbacks,
+            optimisticConfirms,
+            () => this.identityRetirements === retirements,
+        );
 
         // Ordering barrier: a post-reconnect replay of THIS shard's queued writes
         // may be in flight. `onOpen` sets `wsState = "open"` before it starts the
@@ -4241,31 +4568,18 @@ class LunoraClient {
         // Undefined (no replay running) is the overwhelmingly common case and
         // costs nothing; the gate is re-read AFTER the wait so a socket that
         // dropped again in the meantime queues this write instead of sending it.
-        const replaying = this.offlineFlushes.get(connectionKey(options.shardKey));
+        // An online-only write does not wait for the flush: it is sent or refused
+        // now, never queued behind it (see `MutationCallOptions.onlineOnly`).
+        const replaying = options.onlineOnly ? undefined : this.offlineFlushes.get(connectionKey(options.shardKey));
 
         if (replaying !== undefined) {
             await replaying;
         }
 
-        // Queue while offline (only mutations — queries fail fast). We also
-        // queue when we're mid-reconnect (wsState === "connecting") provided
-        // we've been connected before — otherwise the mutation would race
-        // the resubscribe. State is scoped to the mutation's own shard so a
-        // dropped shard only queues writes destined for it. A follower tab
-        // has no `ShardConnection` of its own — `connectionGateState` derives
-        // the same triple from the mirrored leader status instead.
-        const { hasSocket, idleClosed, polling, wasEverConnected, wsState } = this.connectionGateState(options.shardKey);
-        const { queueBeforeFirstConnect } = this.offlineQueue;
-        const connectedGate = wasEverConnected || queueBeforeFirstConnect;
-        const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
-        // While polling reaches the origin, a reconnect attempt is always armed
-        // behind it, so `wsState` reads `"connecting"` or `"idle"` for as long as
-        // the upgrade is refused. HTTP works, so neither may queue the write. A
-        // shard whose idle socket was closed is tried over HTTP first too: it is
-        // not offline, it just has no socket (see `connectionGateState`).
-        const httpFirst = polling || idleClosed;
-        const midReconnect = wsState === "connecting" && connectedGate && !httpFirst;
-        const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !httpFirst;
+        // Queue while offline (only mutations — queries fail fast). The gate is
+        // read after the wait above, so a socket that dropped meanwhile queues
+        // this write instead of sending it.
+        const { httpFirst, midReconnect, shouldQueueOffline, socketDown } = this.writeQueueGate(options.shardKey);
 
         // Second half of the ordering barrier above, for the case the barrier
         // cannot cover: a queued write can be HELD at flush time (its identity
@@ -4285,9 +4599,10 @@ class LunoraClient {
         // With a durable outbox this is process-wide, not per shard: the sink
         // reports only its total depth. Over-inclusion costs a write a trip
         // through the outbox, under its own `mutationId`, which is safe.
-        const queuedAhead = shouldQueueOffline && options.replayBaseline === undefined && this.hasPendingWriteAhead(options.shardKey);
+        // An online-only write is never queued behind the backlog: it goes out now.
+        const queuedAhead = !options.onlineOnly && shouldQueueOffline && options.replayBaseline === undefined && this.hasPendingWriteAhead(options.shardKey);
 
-        const enqueue = async (): Promise<{ committed: boolean; value: ReturnOf<F> }> =>
+        const enqueue = async (ambiguousSend = false): Promise<{ committed: boolean; value: ReturnOf<F> }> =>
             this.enqueueOfflineMutation(
                 function_,
                 argsRecord,
@@ -4296,10 +4611,18 @@ class LunoraClient {
                 mutationId,
                 optimisticRollbacks,
                 optimisticConfirms,
-                options.precondition,
+                // Its precondition already held when the direct send went out. Re-running it before the retry
+                // would fail on the very frame the write's own commit pushed, and reject a write that landed.
+                ambiguousSend ? undefined : options.precondition,
                 options.mutationId,
                 replay?.stamp,
+                ambiguousSend,
+                issueSeq,
             );
+
+        // The early refusal ran before the optimistic updates above, and those are
+        // user code that can drop the shard, so the gate is read again here.
+        this.refuseOnlineOnlyWhenDown(function_.__lunoraRef, options, optimisticRollbacks);
 
         if (socketDown || midReconnect || queuedAhead) {
             return enqueue();
@@ -4333,14 +4656,126 @@ class LunoraClient {
             // network is down. Queue it under the same key, as it would have been
             // had the drop been noticed first. A `TypeError` from an arg the codec cannot
             // encode is not a network failure, hence the re-check.
-            if (httpFirst && shouldQueueOffline && error instanceof TypeError && isEncodable(argsRecord)) {
-                return enqueue();
+            // `httpFirst` is kept from the send: it says which transport the request
+            // took, which does not change while it is in flight. The socket is read
+            // live, because a socket that dropped during the request is the failure
+            // an online-only write must be refused for.
+            const wireFailure = isWireFailure(error, argsRecord);
+            const networkDown = httpFirst && shouldQueueOffline && wireFailure;
+            const socketOpenNow = this.ownSocketOpen(options.shardKey);
+
+            //
+            // The same holds for any failure that leaves the write's fate unknown — a
+            // `fetch` that rejected after the request left, a request that timed out, an
+            // edge page with no verdict in it. The server may well have committed, so
+            // rolling back and rethrowing would show the user a write that is in fact
+            // there (and invite a double submit). Retry it from the queue under the
+            // same `mutationId`, which the server dedups. A coded server verdict is not
+            // ambiguous and still rejects; a durable replay (it carries a baseline) is
+            // already owned by a queue and reports to it.
+            //
+            // Not for an outbox app: its sink would accept the write and resolve `undefined`
+            // where this used to reject, and it owns its own retry policy.
+            if (
+                shouldQueueOffline &&
+                // An online-only write is refused, never queued or retried from the queue.
+                !options.onlineOnly &&
+                // Without a `fetch` nothing was sent and nothing ever will be: tell the caller now rather than retry to the cap.
+                this.fetchImpl !== undefined &&
+                !this.outbox &&
+                options.replayBaseline === undefined &&
+                (error instanceof TypeError || error instanceof TransportError) &&
+                isEncodable(argsRecord)
+            ) {
+                // A failed HTTP send may have committed before its response was lost, so the write is always queued as
+                // ambiguous: it drops its precondition and replays under its mutation id, which the origin deduplicates.
+                const queued = enqueue(true);
+
+                // Over a socket that is still open nothing else will flush the queue.
+                this.noteHeldRetryDelay(options.shardKey);
+                this.scheduleRateLimitedRetry(options.shardKey);
+
+                return queued;
             }
 
             this.settleFailedDirectWrite(error, commitCursor, optimisticConfirms, optimisticRollbacks, replay?.flags.authToken);
 
+            // An online-only write is never queued, so a transport failure with no open
+            // socket is refused with the typed error whether or not the shard ever
+            // connected: before the first connect nothing was queued either way. The
+            // transport failure rides along as its `cause`.
+            if (refusesAsNotQueued(options.onlineOnly, networkDown, wireFailure, socketOpenNow)) {
+                throw offlineNotQueuedError(function_.__lunoraRef, error);
+            }
+
             throw error;
         }
+    }
+
+    /**
+     * Refuses an `onlineOnly` write whose shard's connection is down or reconnecting,
+     * the states in which a normal write is queued. Reads the gate synchronously, so
+     * the refusal is immediate. Called again after the optimistic updates have been
+     * applied, which is user code and may have dropped the shard: `optimisticRollbacks`
+     * unwinds those layers before the refusal.
+     */
+    private refuseOnlineOnlyWhenDown(
+        functionPath: string,
+        options: Pick<MutationCallOptions, "onlineOnly" | "shardKey">,
+        optimisticRollbacks: (() => void)[] = [],
+    ): void {
+        if (!options.onlineOnly) {
+            return;
+        }
+
+        const gate = this.writeQueueGate(options.shardKey);
+
+        if (gate.socketDown || gate.midReconnect) {
+            rollbackOptimistic(optimisticRollbacks);
+
+            throw offlineNotQueuedError(functionPath);
+        }
+    }
+
+    /**
+     * Whether this tab's own socket is open for the shard. A follower tab has no socket
+     * of its own: the status it reads is the leader's, which carried no part of the
+     * request that just failed, so it never counts as open.
+     */
+    private ownSocketOpen(shardKey: string | undefined): boolean {
+        if (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader()) {
+            return false;
+        }
+
+        return this.writeQueueGate(shardKey).socketOpen;
+    }
+
+    /**
+     * Whether a write on `shardKey` would be queued if it failed right now, and
+     * which gate would queue it. A follower tab has no `ShardConnection` of its own —
+     * `connectionGateState` derives the same triple from the mirrored leader status.
+     */
+    private writeQueueGate(shardKey: string | undefined): {
+        httpFirst: boolean;
+        midReconnect: boolean;
+        shouldQueueOffline: boolean;
+        socketDown: boolean;
+        socketOpen: boolean;
+    } {
+        const { hasSocket, idleClosed, polling, wasEverConnected, wsState } = this.connectionGateState(shardKey);
+        const { queueBeforeFirstConnect } = this.offlineQueue;
+        const connectedGate = wasEverConnected || queueBeforeFirstConnect;
+        const shouldQueueOffline = this.WebSocketImpl !== undefined && connectedGate;
+        // While polling reaches the origin, a reconnect attempt is always armed
+        // behind it, so `wsState` reads `"connecting"` or `"idle"` for as long as
+        // the upgrade is refused. HTTP works, so neither may queue the write. A
+        // shard whose idle socket was closed is tried over HTTP first too: it is
+        // not offline, it just has no socket (see `connectionGateState`).
+        const httpFirst = polling || idleClosed;
+        const midReconnect = wsState === "connecting" && connectedGate && !httpFirst;
+        const socketDown = wsState !== "open" && !hasSocket && shouldQueueOffline && !httpFirst;
+
+        return { httpFirst, midReconnect, shouldQueueOffline, socketDown, socketOpen: wsState === "open" };
     }
 
     /**
@@ -4399,6 +4834,8 @@ class LunoraClient {
         precondition: (() => boolean) | undefined,
         callerMutationId: string | undefined,
         replayStamp: null | string | undefined,
+        ambiguousSend: boolean,
+        issueSeq: number,
     ): Promise<{ committed: boolean; value: ReturnOf<F> }> {
         // Bind the issuing identity at enqueue time so the write can only replay
         // under the same identity (see flushOfflineQueue). A durable replay going
@@ -4456,6 +4893,7 @@ class LunoraClient {
 
         const value = await new Promise<ReturnOf<F>>((resolve, reject) => {
             const entry: QueuedMutation<ReturnOf<F>> = {
+                ambiguousSend,
                 args: argsRecord,
                 functionPath: function_.__lunoraRef,
                 // A live caller is awaiting this Promise, so a terminal verdict
@@ -4468,6 +4906,7 @@ class LunoraClient {
                 // Reuse the call's idempotency key as the queue id so the replay
                 // carries the same `x-lunora-mutation-id` the server dedups on.
                 id: mutationId,
+                issueSeq,
                 // Persisted alongside the write so a replay (including one after a
                 // reload) namespaces server-side under the id that ISSUED it — the
                 // standalone client's own id is per-session, and an anonymous
@@ -4477,7 +4916,7 @@ class LunoraClient {
                 // only replay under the identity that queued it.
                 identity: issuingIdentity,
                 // Optional precondition checked before replay — see drainConflict.
-                precondition,
+                precondition: this.holdWhileUnanswered(precondition),
                 // Confirm the per-call optimistic layer(s) against the commit cursor
                 // the flush replay echoes (see flushOfflineQueue).
                 onCommit: (commitCursor) => {
@@ -4642,7 +5081,13 @@ class LunoraClient {
         }
 
         try {
+            const epoch = this.queryCacheEpoch;
             const entries = await this.queryCache.load();
+
+            // The identity this was loaded for was retired while it ran: none of it may seed anything.
+            if (epoch !== this.queryCacheEpoch) {
+                return;
+            }
 
             // Index the already-open subscriptions by READ-CACHE key (the
             // registry keys on the raw args object, the cache on `argsKey`).
@@ -4699,6 +5144,8 @@ class LunoraClient {
         state.serverBase = entry.value;
         // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
         state.serverCursor = entry.serverCursor;
+        // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
+        state.serverClaims = entry.claims;
 
         if (entry.serverEpoch !== undefined) {
             // eslint-disable-next-line no-param-reassign -- in-place seed of the shared subscription state
@@ -4788,6 +5235,7 @@ class LunoraClient {
 
             if (state !== undefined) {
                 state.serverBase = undefined;
+                state.serverBaseCommitted = false;
                 state.serverCursor = undefined;
                 state.serverEpoch = undefined;
                 refoldSubscription(state, undefined);
@@ -4875,8 +5323,8 @@ class LunoraClient {
         // Stamp the identity the delivering SOCKET is authenticated as, not the
         // one the client currently advertises — see `ShardConnection.identity`.
         // After a `setAuthToken` user switch the previous user's socket is still
-        // open (nothing closes it: the WS credential lives in the upgrade URL and
-        // only `setWsToken` bounces it), so its frames would otherwise be
+        // open (nothing closes it: the socket keeps the credentials it connected with,
+        // and only `setWsToken` / `setWsTicket` bounce it), so its frames would otherwise be
         // persisted under the NEW user's stamp and hydrate into their session on
         // the next reload. A follower tab holds no connection of its own; its
         // values arrive over the identity-checked cross-tab channel, so the live
@@ -4900,6 +5348,7 @@ class LunoraClient {
             serverCursor: state.serverCursor,
             ts: Date.now(),
             value: authoritative,
+            ...(state.serverClaims === undefined ? {} : { claims: state.serverClaims }),
             // Only stamp the credential when the delivering identity IS the one
             // this client holds a token for — a frame from a previous user's
             // still-open socket must not be labelled with the current bearer.
@@ -4929,6 +5378,7 @@ class LunoraClient {
         }
 
         const batch = [...this.pendingCacheWrites.entries()];
+        const { queryCacheEpoch: epoch } = this;
 
         this.pendingCacheWrites.clear();
 
@@ -4936,7 +5386,55 @@ class LunoraClient {
         // failures (a quota error on one key must not drop the others). Each
         // `put` is deferred into promise-land so a synchronously-throwing
         // adapter is captured per-entry too, not allowed to escape `.map()`.
-        await Promise.allSettled(batch.map(async ([key, entry]) => queryCache.put(key, entry)));
+        // Queued behind any clear, and dropped if one began after this batch was taken.
+        const written = this.queryCacheChain.then(async () =>
+            epoch === this.queryCacheEpoch ? Promise.allSettled(batch.map(async ([key, entry]) => queryCache.put(key, entry))) : undefined,
+        );
+
+        this.queryCacheChain = written.catch(() => undefined);
+        await written;
+    }
+
+    /**
+     * Flush what is buffered for durable storage when the page is hidden or going
+     * away: writes whose append was rejected get another try, and the debounced
+     * read-cache writes (which would otherwise wait out their timer on a page
+     * that never gets to run it) are written out. Browser lifecycle events only —
+     * a runtime without them (SSR, workers, React Native) installs nothing.
+     */
+    private installPageHideFlush(): void {
+        const target = globalThis as {
+            addEventListener?: EventTarget["addEventListener"];
+            document?: EventTarget & { visibilityState?: string };
+            removeEventListener?: EventTarget["removeEventListener"];
+        };
+
+        // `document` is what tells a page from a worker, which also has `addEventListener` but no page lifecycle.
+        if ((!this.persistence && !this.queryCache) || !("document" in globalThis) || typeof target.addEventListener !== "function") {
+            return;
+        }
+
+        const flush = (): void => {
+            this.offlineQueue.flushUnpersisted();
+
+            if (this.cacheFlushTimer !== undefined) {
+                clearTimeout(this.cacheFlushTimer);
+                this.flushQueryCacheWrites().catch(() => undefined);
+            }
+        };
+        const onVisibilityChange = (): void => {
+            if (target.document?.visibilityState === "hidden") {
+                flush();
+            }
+        };
+
+        target.addEventListener("pagehide", flush);
+        target.document?.addEventListener("visibilitychange", onVisibilityChange);
+
+        this.releasePageHideFlush = (): void => {
+            target.removeEventListener?.("pagehide", flush);
+            target.document?.removeEventListener("visibilitychange", onVisibilityChange);
+        };
     }
 
     /** Derive the aggregate status from the per-shard socket states. */
@@ -5008,6 +5506,18 @@ class LunoraClient {
     }
 
     /**
+     * The baseline a mutation is composed against. A replay keeps the one it was
+     * queued with. A fresh write takes the shard's cursor here, before the first
+     * `await` in `runMutation`: frames landing during a queue flush advance
+     * `serverCursor`, so a baseline sampled after the wait would claim the caller
+     * had seen changes that arrived after the write was composed. See
+     * `OutboxMutation.baselineSeq`.
+     */
+    private composedBaselineFor(replayBaseline: null | number | undefined, shardKey: string | undefined): number | undefined {
+        return replayBaseline === undefined ? this.baselineCursorFor(shardKey) : (replayBaseline ?? undefined);
+    }
+
+    /**
      * One polling-fallback pass for a shard: re-run every live query bound to it
      * over the batch-RPC endpoint and feed each result into the same frame-apply
      * path a server `data` frame takes.
@@ -5061,7 +5571,10 @@ class LunoraClient {
             if (isEncodable(state.args)) {
                 states.push(state);
             } else {
-                fanSubscriptionError(state.errorCallbacks, { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" });
+                // A refusal answers the request, as for a refused slot below.
+                this.markQueryRejected(state, true);
+                state.refusal = { code: "WIRE_ENCODE_FAILED", message: "could not encode this subscription's args for a poll" };
+                failSubscription(state, state.refusal);
             }
         }
 
@@ -5108,10 +5621,10 @@ class LunoraClient {
             }
 
             if (!slot.ok) {
-                fanSubscriptionError(state.errorCallbacks, {
-                    code: slot.error.code,
-                    message: slot.error.message,
-                });
+                // A refusal answers the request: without this a denied query on a polling shard stays pending forever.
+                this.markQueryRejected(state, true);
+                state.refusal = { code: slot.error.code, message: slot.error.message };
+                failSubscription(state, state.refusal);
 
                 continue;
             }
@@ -5151,9 +5664,35 @@ class LunoraClient {
         }
     }
 
+    /** Recompute {@link syncStatus} and notify its listeners if any field changed. */
+    private emitSyncStatus(): void {
+        // The common case, and a walk over every subscription: skip it when nobody can hear the answer.
+        if (this.syncStatusListeners.size === 0) {
+            return;
+        }
+
+        const next = this.syncStatus();
+        const last = this.lastSyncStatus;
+
+        if (
+            last?.connection === next.connection &&
+            last.pendingSubscriptions === next.pendingSubscriptions &&
+            last.pendingWrites === next.pendingWrites &&
+            last.synced === next.synced
+        ) {
+            return;
+        }
+
+        this.lastSyncStatus = next;
+        this.syncStatusListeners.emit(next);
+    }
+
     /** Recompute the aggregate status and notify listeners if it changed. */
     private emitConnectionStatus(): void {
         const next = this.computeStatus();
+
+        // A reconnect un-acks subscriptions without necessarily moving the aggregate status.
+        this.emitSyncStatus();
 
         if (next === this.lastStatus) {
             return;
@@ -5236,6 +5775,19 @@ class LunoraClient {
         return { confirms, rollbacks };
     }
 
+    private applyOptionalOptimisticUpdate<F extends FunctionReference>(
+        optimisticUpdate: OptimisticUpdate<ArgsOf<F>> | undefined,
+        args: ArgsOf<F>,
+        shardKey: string | undefined,
+        optimisticRollbacks: (() => void)[],
+        optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+        identityInForce: () => boolean,
+    ): void {
+        if (optimisticUpdate) {
+            this.applyOptimisticUpdate(optimisticUpdate, args, shardKey, optimisticRollbacks, optimisticConfirms, identityInForce);
+        }
+    }
+
     /**
      * Run a Convex-parity `optimisticUpdate` callback against a localStore bound
      * to the live subscription registry. Each `setQuery` registers a constant
@@ -5253,8 +5805,9 @@ class LunoraClient {
         shardKey: string | undefined,
         optimisticRollbacks: (() => void)[],
         optimisticConfirms: ((commitCursor: number | undefined) => void)[],
+        identityInForce: () => boolean,
     ): void {
-        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey);
+        const { confirms, rollbacks, store } = createLocalStore(this.subscriptions, shardKey, identityInForce);
 
         try {
             optimisticUpdate(store, args);
@@ -5371,11 +5924,12 @@ class LunoraClient {
                 }),
                 reconnect: createReconnect(this.reconnectOptions),
                 reconnectTimer: undefined,
-                resubscribePending: new Map(),
                 resubscribeQueue: [],
+                resubscribeSlots: new Set(),
                 shardKey,
                 socket: undefined,
                 stableTimer: undefined,
+                unackedWatchdogs: new Map(),
                 // A shard reopened after an idle close was connected before: its
                 // writes stay queue-eligible while it reconnects.
                 wasEverConnected: this.idleClosedShards.delete(key),
@@ -5389,24 +5943,273 @@ class LunoraClient {
         return conn;
     }
 
-    private wsUrlFor(shardKey: string | undefined, token: string | undefined): string {
-        const params: string[] = [];
+    /**
+     * Open a managed WebSocket to a NON-shard endpoint and own its reconnect
+     * loop + teardown. Two callers share it — {@link subscribeScheduledJobs}'s
+     * admin socket and {@link connectWebSocket}'s `defineWebSocket` route — and
+     * they must share it rather than each hand-roll it: the connect-timeout +
+     * heartbeat/watchdog/identity-guard live in `openManagedSocket`, the backoff
+     * policy in `createReconnect`, and reading `wsTicket` at connect time is what
+     * lets a post-connect `setWsTicket()` rotation be picked up on the next
+     * reconnect attempt instead of looping with a stale token. Registered on
+     * {@link adminSocketTeardowns} so `close()` stops it too.
+     *
+     * `base` is the endpoint URL without `shard`/`token` params. `handlers`
+     * parses the frames and observes the lifecycle; `handlers.shardKey` routes
+     * the connection. The returned `resetBackoff` clears the reconnect backoff
+     * once a payload frame proves the socket live, and `socket` is the current
+     * transport (for a send), or `undefined` while it is not open.
+     */
+    private openSupplementarySocket(
+        base: string,
+        handlers: { offerBearer?: boolean; onClose?: () => void; onMessage: (event: MessageEvent) => void; onOpen?: () => void; shardKey?: string },
+    ): { close: () => void; resetBackoff: () => void; socket: () => WebSocket | undefined } {
+        // The callers all check this before calling, but the helper stays
+        // self-contained: a no-op channel is the honest answer. A closed client
+        // has already run its teardown sweep, so a channel opened now would never be closed.
+        if (this.WebSocketImpl === undefined || this.closed) {
+            return { close: () => undefined, resetBackoff: () => undefined, socket: () => undefined };
+        }
+
+        const reconnect = createReconnect(this.reconnectOptions);
+
+        // This channel's own connection state — the identity-guard comparand
+        // `openManagedSocket` re-checks before every action, exactly like the
+        // shard socket's `ShardConnection`.
+        const conn: ManagedSocketState = { connectTimer: undefined, heartbeatTimer: undefined, lastFrameAt: 0, socket: undefined };
+
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        let closed = false;
+
+        /** Arm the next reconnect attempt, unless `close()` — or the client's `close()` — already ran. */
+        const scheduleReconnect = (): void => {
+            if (closed || this.closed) {
+                return;
+            }
+
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the reconnect re-enters `connect`, declared just below with `openWith` in scope
+            timer = setTimeout(connect, reconnect.next());
+        };
+
+        const openWith = (token: string | undefined): void => {
+            if (closed || this.WebSocketImpl === undefined) {
+                return;
+            }
+
+            openManagedSocket(conn, this.wsUrlFor(handlers.shardKey, token, base), this.managedSocketOptions, {
+                onClose: (event) => {
+                    // A route socket opened on a lapsed credential is accepted and closed with 4001; telling the
+                    // listener is what gets the token refreshed before the reconnect repeats the same bearer.
+                    if (event?.code === 4001) {
+                        this.notifyTokenExpired();
+                    }
+
+                    scheduleReconnect();
+                    handlers.onClose?.();
+                },
+                onMessage: handlers.onMessage,
+                ...(handlers.onOpen === undefined ? {} : { onOpen: handlers.onOpen }),
+                // Only an upgrade the worker answers through its shard-socket handler selects `lunora`; the scheduled-jobs
+                // socket's 101 selects none, and a browser aborts a handshake whose offer went unanswered.
+                ...(handlers.offerBearer === true ? { protocols: this.upgradeProtocols() } : {}),
+            });
+        };
+
+        // The newest mint, and the generation it started under while still unresolved. A bounce that finds
+        // no socket uses the second to restart a mint that would otherwise never open the channel.
+        let mintId = 0;
+        let mintingGeneration: number | undefined;
+
+        /** Resolve the provider-shaped token, then open; a failed or stalled mint re-arms the reconnect timer. */
+        const connectWithProvider = async (provider: WsTokenProvider): Promise<void> => {
+            const generation = this.wsCredentialGeneration;
+            mintId += 1;
+            const id = mintId;
+            let token: string | undefined;
+
+            mintingGeneration = generation;
+
+            try {
+                token = await mintWithin(provider, WS_TICKET_MINT_TIMEOUT_MS);
+            } catch {
+                if (id === mintId) {
+                    mintingGeneration = undefined;
+                    scheduleReconnect();
+                }
+
+                return;
+            }
+
+            // A newer mint started while this one was pending: its result is the one that opens.
+            if (id !== mintId) {
+                return;
+            }
+
+            mintingGeneration = undefined;
+
+            // The credential was replaced while this one was minted: it is superseded, so the
+            // channel must not open on it. Mint again under the current credential.
+            if (generation !== this.wsCredentialGeneration) {
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- re-enters `connect`, declared just below with `openWith` in scope
+                connect();
+
+                return;
+            }
+
+            openWith(token);
+        };
+
+        // Read `this.wsTicket` at connect time (not once at open time) so a
+        // post-open `setWsTicket()` rotation is picked up on the next reconnect
+        // attempt. A provider-shaped ticket is resolved fresh per attempt; a
+        // provider failure re-arms the reconnect timer so a broken mint
+        // endpoint degrades to backoff retries.
+        const connect = (): void => {
+            if (closed || this.WebSocketImpl === undefined) {
+                return;
+            }
+
+            const { wsTicket } = this;
+
+            if (typeof wsTicket === "function") {
+                // `connectWithProvider` never rejects (its awaits are try/caught),
+                // so the fire-and-forget catch is belt-and-braces.
+                connectWithProvider(wsTicket).catch(() => undefined);
+
+                return;
+            }
+
+            openWith(wsTicket);
+        };
+
+        connect();
+
+        const teardown = (): void => {
+            closed = true;
+
+            if (timer !== undefined) {
+                clearTimeout(timer);
+                timer = undefined;
+            }
+
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
+            stopHeartbeat(conn);
+
+            const { socket } = conn;
+
+            conn.socket = undefined;
+
+            // A socket can throw on close; this runs inside `close()`'s loop over every teardown, which must reach the rest.
+            try {
+                socket?.close();
+            } catch {
+                // Nothing to recover: the socket is already detached.
+            }
+        };
+
+        this.adminSocketTeardowns.add(teardown);
+
+        // Closing the live socket re-arms the reconnect (`onClose` → `scheduleReconnect`),
+        // which opens again under whatever credential is current.
+        const bounce = (): void => {
+            const { socket } = conn;
+
+            if (socket === undefined) {
+                // A mint still pending under an older credential would never open the channel: mint again.
+                if (mintingGeneration !== undefined && mintingGeneration !== this.wsCredentialGeneration) {
+                    // Supersede the pending mint, so its late result is dropped rather than opening a second socket.
+                    mintId += 1;
+                    mintingGeneration = undefined;
+                    connect();
+                }
+
+                return;
+            }
+
+            // Detach first: the identity guard in `openManagedSocket` then drops this socket's late frames, and its
+            // close event no longer arms the reconnect, so the reconnect is armed here under the current credential.
+            conn.socket = undefined;
+
+            // The abandoned attempt's connect timeout would otherwise fire later and clear the replacement's handle.
+            if (conn.connectTimer !== undefined) {
+                clearTimeout(conn.connectTimer);
+                conn.connectTimer = undefined;
+            }
+
+            stopHeartbeat(conn);
+
+            // A throw here would skip this channel's reconnect and every bounce after it.
+            try {
+                socket.close();
+            } catch {
+                // The socket is already detached, so the reconnect below still replaces it.
+            }
+
+            handlers.onClose?.();
+            scheduleReconnect();
+        };
+
+        this.supplementaryBounces.add(bounce);
+
+        return {
+            close: () => {
+                teardown();
+                this.adminSocketTeardowns.delete(teardown);
+                this.supplementaryBounces.delete(bounce);
+            },
+            resetBackoff: () => {
+                reconnect.reset();
+            },
+            socket: () => conn.socket,
+        };
+    }
+
+    /**
+     * The URL a supplementary socket — route and scheduled — is reached on: the configured
+     * socket URL with its shard path replaced by `path`. The origin, any path prefix, and
+     * any query the configured URL carries are kept, so a custom `wsUrl` host or proxy
+     * applies to them too and the path never lands inside a query string.
+     */
+    private supplementaryUrl(path: string): string {
+        const url = parseSocketUrl(this.wsUrl);
+        const prefix = url.pathname.endsWith(WS_PATH) ? url.pathname.slice(0, -WS_PATH.length) : url.pathname;
+
+        url.pathname = joinUrl(prefix, path);
+
+        return serializeSocketUrl(url, this.wsUrl);
+    }
+
+    private wsUrlFor(shardKey: string | undefined, token: string | undefined, base: string = this.wsUrl): string {
+        const url = parseSocketUrl(base);
+
+        if (shardKey === undefined && token === undefined && !url.searchParams.has("token")) {
+            return base;
+        }
+
+        // The server reads the first value of a repeated parameter, so a copy already on the configured URL would
+        // win over this connection's own. Set replaces it instead of appending after it. `token` is always replaced:
+        // only the ticket may ride the URL, so a leftover `token` on the configured URL is dropped even when this
+        // connection carries none.
+        const replaced = new Set<string>([...(shardKey === undefined ? [] : ["shard"]), "token"]);
+        const kept = [...url.searchParams]
+            .filter(([name]) => !replaced.has(name))
+            .map(([name, value]) => `${encodeURIComponent(name)}=${encodeURIComponent(value)}`);
 
         if (shardKey !== undefined) {
-            params.push(`shard=${encodeURIComponent(shardKey)}`);
+            kept.push(`shard=${encodeURIComponent(shardKey)}`);
         }
 
         if (token !== undefined) {
-            params.push(`token=${encodeURIComponent(token)}`);
+            kept.push(`token=${encodeURIComponent(token)}`);
         }
 
-        if (params.length === 0) {
-            return this.wsUrl;
-        }
+        url.search = kept.join("&");
 
-        const separator = this.wsUrl.includes("?") ? "&" : "?";
-
-        return `${this.wsUrl}${separator}${params.join("&")}`;
+        return serializeSocketUrl(url, base);
     }
 
     /**
@@ -5519,23 +6322,40 @@ class LunoraClient {
             onCommitCursor?: (commitCursor: number | undefined) => void;
             /** Invoked on a successful response with the server's echoed custom-mutator watermark (if any). */
             onMutationAck?: (lastMutationId: number | undefined) => void;
+            /** Cancels the request when it aborts; see `ActionCallOptions.signal`. */
+            signal?: AbortSignal;
+            /** Exempts the call from {@link LunoraClientOptions.rpcTimeoutMs} (an action may legitimately run long). */
+            unbounded?: boolean;
         } = {},
     ): Promise<unknown> {
-        if (!this.fetchImpl) {
+        const { fetchImpl } = this;
+
+        if (!fetchImpl) {
             throw new TransportError("LunoraClient: no `fetch` implementation available");
         }
 
         const headers = this.rpcRequestHeaders(flags, shardKey);
         const sentToken = flags.authToken === undefined ? this.authToken : flags.authToken;
+        // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
+        // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`
+        // encodes byte-identically, so a pre-codec server still interops.
+        const requestBody = JSON.stringify({ args: encodeCallArgs(args, `args for '${functionPath}'`), functionPath, shardKey });
 
-        const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
-            // `encodeWire` tags leaves plain JSON can't carry (`bigint`,
-            // `ArrayBuffer`/typed arrays, `NaN`/±Infinity); a pure-JSON `args`
-            // encodes byte-identically, so a pre-codec server still interops.
-            body: JSON.stringify({ args: encodeCallArgs(args, `args for '${functionPath}'`), functionPath, shardKey }),
-            headers,
-            method: "POST",
-        });
+        // The deadline covers the body read as well as the connection: a stalled
+        // response holds the shard's whole write chain just as a stalled connect does.
+        const { body, response } = await withinRpcDeadline<{ body: RpcEnvelopeBody | undefined; response: Response }>(
+            flags.unbounded ? 0 : this.rpcTimeoutMs,
+            flags.signal,
+            async (signal) => {
+                const reply = await fetchImpl(joinUrl(this.url, RPC_PATH), { body: requestBody, headers, method: "POST", signal });
+
+                try {
+                    return { body: await reply.json(), response: reply };
+                } catch {
+                    return { body: undefined, response: reply };
+                }
+            },
+        );
 
         if (flags.captureBookmark) {
             const value = response.headers.get("x-d1-bookmark");
@@ -5545,16 +6365,12 @@ class LunoraClient {
             }
         }
 
-        let body: RpcEnvelopeBody;
-
-        try {
-            body = await response.json();
-        } catch {
+        if (body === undefined) {
             // Not a Lunora envelope at all — an edge's HTML page, a captive
             // portal, a truncated body. The HTTP status is the only verdict
             // there is, and `unparseableResponseError` is where the outbox's
             // "unknown fate, re-queue" / "refused, settle" split is decided.
-            throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
+            throw unparseableResponseError(response.status, response.statusText, response.headers);
         }
 
         // Valid JSON that is not an object (`null`, `[]`, a bare string) carries
@@ -5564,7 +6380,7 @@ class LunoraClient {
         const parsed: unknown = body;
 
         if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-            throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
+            throw unparseableResponseError(response.status, response.statusText, response.headers);
         }
 
         const envelope = errorEnvelopeOf(body);
@@ -5573,7 +6389,7 @@ class LunoraClient {
             // Rebuilt with its `.code` and (for an app `LunoraError`) wire-decoded
             // `.data`, plus any `Retry-After` normalised into that `data` — the
             // one channel the hint travels on.
-            throw reconstructErrorWithRetryAfter(envelope, response.headers.get("retry-after"));
+            throw reconstructErrorWithRetryAfter(envelope, response.headers);
         }
 
         // A non-2xx response whose body parsed as JSON but carried no READABLE
@@ -5584,7 +6400,7 @@ class LunoraClient {
         // dropping it over a gateway blip, a 4xx settles it rather than replaying
         // a refusal forever.
         if (!response.ok) {
-            throw unparseableResponseError(response.status, response.statusText, response.headers.get("retry-after"));
+            throw unparseableResponseError(response.status, response.statusText, response.headers);
         }
 
         flags.onMutationAck?.(body.lastMutationId);
@@ -5601,7 +6417,7 @@ class LunoraClient {
         try {
             return decodeWire(body.result);
         } catch (error) {
-            throw undecodableResultError(error);
+            throw withResponseHeaders(undecodableResultError(error), response.headers);
         }
     }
 
@@ -5669,10 +6485,9 @@ class LunoraClient {
         const envelope = errorEnvelopeOf(body);
 
         if (envelope !== undefined) {
-            const error = new Error(envelope.message ?? "admin request failed");
-
-            (error as Error & { code?: string }).code = envelope.code;
-            throw error;
+            // Built by the same path as an RPC rejection, so the server-verdict mark that tool results
+            // trust is set here too; a bare `Error` with a `code` would be read as the caller's own text.
+            throw reconstructError({ ...envelope, message: envelope.message ?? "admin request failed" });
         }
 
         // A non-2xx response with a JSON body but no READABLE `error` envelope
@@ -5739,6 +6554,8 @@ class LunoraClient {
             id: "connect",
             type: "connect",
             ...(context === undefined ? {} : { context }),
+            // The session credential travels here, never in the upgrade URL (protocol §6).
+            ...(conn.sessionToken === undefined ? {} : { token: conn.sessionToken }),
         });
     }
 
@@ -5782,73 +6599,156 @@ class LunoraClient {
         conn.wsState = "connecting";
         this.emitConnectionStatus();
 
-        // A provider-shaped `wsToken` is resolved fresh per connect attempt (so a
-        // short-lived credential is re-minted on every reconnect, including the
-        // one after a 4001 token-expired drop); a static string keeps the fully
-        // synchronous connect path callers and tests rely on.
-        if (typeof this.wsToken === "function") {
-            // `openSocketWithProvidedToken` never rejects (its awaits are
-            // try/caught), so the fire-and-forget catch is belt-and-braces.
-            this.openSocketWithProvidedToken(conn, shardKey, this.wsToken).catch(() => undefined);
+        // A provider-shaped credential is resolved fresh per connect attempt (so a
+        // short-lived one is re-minted on every reconnect, including the one after
+        // a 4001 token-expired drop); static strings keep the fully synchronous
+        // connect path callers and tests rely on.
+        // A throw while opening (a refused URL, a socket constructor that throws) must fail the
+        // attempt the way a socket error does, or the connection stays `connecting` with no
+        // reconnect armed.
+        this.startShardSocket(conn, shardKey).catch(() => {
+            this.handleDisconnect(conn);
+        });
+    }
+
+    /** Supersede any in-flight credential mint, drop held sends, and bounce the shard sockets onto the new credentials. */
+    private applyWsCredentialChange(): void {
+        this.wsCredentialGeneration += 1;
+
+        // A send held under the previous credential must not reach the identity that replaced it.
+        this.resetRoomSends();
+
+        // Close every open/connecting socket so the reconnect uses the new
+        // credentials. Don't tear down the connection record itself — pending
+        // subscriptions/streams need to ride the next socket.
+        this.bounceShardSockets();
+    }
+
+    /**
+     * Open the shard socket now when both credentials are static, or after
+     * resolving whichever is a {@link WsTokenProvider}. An async function runs
+     * synchronously up to its first `await`, so the static path stays synchronous.
+     */
+    private async startShardSocket(conn: ShardConnection, shardKey: string | undefined): Promise<void> {
+        const { wsToken, wsTicket } = this;
+
+        if (typeof wsToken === "function" || typeof wsTicket === "function") {
+            await this.openSocketWithProvidedCredentials(conn, shardKey);
 
             return;
         }
 
-        this.openSocket(conn, shardKey, this.wsToken);
+        this.openSocket(conn, shardKey, { session: wsToken, ticket: wsTicket });
     }
 
     /**
-     * Resolve the {@link WsTokenProvider} and open the shard socket with the
-     * minted token. The connection is already in the `connecting` state, so the
-     * async gap is race-guarded: a client `close()`, a `setWsToken` bounce, or a
+     * Resolve each {@link WsTokenProvider} and open the shard socket with the
+     * minted credentials. The connection is already in the `connecting` state, so the
+     * async gap is race-guarded: a client `close()`, a `setWsToken` / `setWsTicket` bounce, or a
      * competing connect that landed first all abandon this attempt. A provider
      * failure fails the attempt through {@link handleDisconnect}, which arms the
      * normal reconnect backoff — a broken mint endpoint degrades to retries, not
      * a silent tokenless socket the admin gate would reject.
      */
-    private async openSocketWithProvidedToken(conn: ShardConnection, shardKey: string | undefined, provider: WsTokenProvider): Promise<void> {
-        let token: string | undefined;
+    private async openSocketWithProvidedCredentials(conn: ShardConnection, shardKey: string | undefined): Promise<void> {
+        const generation = this.wsCredentialGeneration;
+        const attempt = Symbol("ws-token-attempt");
+        let credentials: ShardSocketCredentials;
 
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.providerAttempt = attempt;
+
+        // A provider that never answers would hold the connection in `connecting`
+        // forever — `ensureSocket` returns early while it is. Bound the wait by the
+        // same budget as the socket handshake and fail the attempt the way a
+        // provider rejection does, so the reconnect backoff re-mints.
         try {
-            token = await provider();
+            credentials = await withinRpcDeadline(
+                this.connectTimeoutMs,
+                undefined,
+                async () => {
+                    return { session: await resolveWsCredential(this.wsToken), ticket: await resolveWsCredential(this.wsTicket) };
+                },
+                () => new Error("LunoraClient: ws credential provider timed out"),
+            );
         } catch {
-            this.handleDisconnect(conn);
+            if (conn.providerAttempt === attempt) {
+                // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+                conn.providerAttempt = undefined;
+                this.handleDisconnect(conn);
+            }
 
             return;
         }
+
+        if (conn.providerAttempt !== attempt) {
+            return;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.providerAttempt = undefined;
 
         if (this.closed || this.WebSocketImpl === undefined || conn.wsState !== "connecting" || conn.socket !== undefined) {
             return;
         }
 
-        this.openSocket(conn, shardKey, token);
+        // A credential was replaced while these were being minted: they are superseded, so the
+        // socket must not open on them. Mint again under the current credentials.
+        if (generation !== this.wsCredentialGeneration) {
+            await this.startShardSocket(conn, shardKey);
+
+            return;
+        }
+
+        this.openSocket(conn, shardKey, credentials);
     }
 
     /** Construct the shard socket and wire its lifecycle handlers. The connection must already be in the `connecting` state. */
-    private openSocket(conn: ShardConnection, shardKey: string | undefined, token: string | undefined): void {
+    private openSocket(conn: ShardConnection, shardKey: string | undefined, credentials: ShardSocketCredentials): void {
         if (this.WebSocketImpl === undefined) {
             return;
         }
 
+        // A socket that opens now supersedes any mint still pending for this connection: its late result must not
+        // touch the socket this call is about to open.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.providerAttempt = undefined;
+
         // Pin the identity this socket is being upgraded under — see
         // `ShardConnection.identity`. Captured here (not at frame time) because
-        // the credential in the upgrade URL is what the server authenticates,
-        // and it can't change for the life of the socket.
-        /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
+        // the credentials are what the server authenticates, and they can't change
+        // for the life of the socket.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
         conn.identity = this.identityFingerprint();
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.ticketed = credentials.ticket !== undefined;
+        // The bearer the upgrade presents (`upgradeProtocols`), pinned for the socket's life; see `ShardConnection.upgradeBearer`.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.upgradeBearer = this.authTokenOnUpgrade ? (this.authToken ?? undefined) : undefined;
 
-        if (token === undefined && this.authToken === null) {
+        if (credentials.ticket === undefined && this.authToken === null) {
             this.identityQuestions += 1;
+            // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
             conn.identityQuestion = this.identityQuestions;
         } else {
+            // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
             conn.identityQuestion = undefined;
         }
 
-        // A fresh socket is nobody's leftover — see `ShardConnection.retired`.
-        conn.retired = false;
-        /* eslint-enable no-param-reassign */
+        // Kept for the `connect` envelope, which is re-sent on every open and on a
+        // context change: the value must be the one this socket was opened under.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.sessionToken = credentials.session;
 
-        openManagedSocket(conn, this.wsUrlFor(shardKey, token), this.managedSocketOptions, {
+        // A fresh socket is nobody's leftover — see `ShardConnection.retired`.
+        // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+        conn.retired = false;
+
+        // The credential generation this socket opens under. A close from a socket a rotation has since
+        // superseded reports on a credential that is no longer the one in force, so it notifies nothing.
+        const openedUnder = this.wsCredentialGeneration;
+
+        openManagedSocket(conn, this.wsUrlFor(shardKey, credentials.ticket), this.managedSocketOptions, {
             onClose: (event) => {
                 // Close code 4001 is the server's `token_expired` signal: notify
                 // listeners so the app can refresh its credential before the
@@ -5856,7 +6756,30 @@ class LunoraClient {
                 // optional — some WS doubles fire `close` without one, and a
                 // synthesized disconnect (connect-timeout, watchdog, bare error)
                 // never carries one either.
-                if (event?.code === 4001) {
+                // A socket refused at its connect frame opened and then closed without being admitted: count it as a failed open.
+                if (event?.code === 4003) {
+                    conn.polling.noteFailedOpen();
+                }
+
+                if (event?.code === IDENTITY_STALE_CLOSE_CODE && event.reason === IDENTITY_CHANGED_CLOSE_REASON) {
+                    // The shard closes a socket whose claims changed before it answers the re-auth, so the 409 can
+                    // arrive after this close has cleared the socket's id. Re-seeding on the close itself means
+                    // the reconnect is never warm; a socket an eviction already retired has been handled by it.
+                    if (conn.retired !== true && !this.closed) {
+                        this.retireChangedClaims();
+                    }
+                } else if (event?.code === 4001) {
+                    this.notifyTokenExpired();
+                } else if (
+                    event?.code === 4003 &&
+                    event.reason !== "connect deadline" &&
+                    openedUnder === this.wsCredentialGeneration &&
+                    this.refusedCredentialGeneration !== openedUnder
+                ) {
+                    // 4003 is the session the server refused (see protocol §6). It repeats on every
+                    // backoff retry, so the listener is told once per credential, not once per retry.
+                    // The connect deadline also closes with 4003, but it refuses no credential.
+                    this.refusedCredentialGeneration = openedUnder;
                     this.notifyTokenExpired();
                 }
 
@@ -5880,11 +6803,13 @@ class LunoraClient {
                 /* eslint-disable no-param-reassign -- mutate the shared ShardConnection state machine in place */
                 conn.wsState = "open";
                 conn.wasEverConnected = true;
-
-                // A socket opened, so whatever was refusing the upgrade is gone:
-                // stop polling and let the resubscribe handshake below take the
-                // subscriptions back onto the live channel.
-                conn.polling.noteOpen();
+                // A new socket has confirmed no identity and rejoined no room yet.
+                conn.identityConfirmed = false;
+                conn.connectionId = undefined;
+                conn.reauthPending = false;
+                conn.claims = undefined;
+                conn.heldFrames = undefined;
+                conn.roomsRejoined = false;
 
                 // See `ShardConnection.stableTimer` for why `open` is not proof.
                 clearTimeout(conn.stableTimer);
@@ -5905,18 +6830,22 @@ class LunoraClient {
                 // close 4001, repeat. The reset now happens in
                 // `handleServerMessage` when a non-`error` frame proves the
                 // socket is live (see there).
-                this.emitConnectionStatus();
-
-                // Announce the connection (and its app context) before resubscribing,
-                // so the server's `onConnect` hooks run with context in place and the
-                // context is recorded for replay to `onDisconnect` at close.
+                //
+                // Announce the connection (and its app context) before anything else on
+                // this socket: the server refuses any frame that precedes `connect` on a
+                // socket that has not proved its credential, and `emitConnectionStatus`
+                // below lets listeners send frames of their own.
                 this.sendConnectEnvelope(conn);
+
+                // Un-answer the shard's subscriptions FIRST: a listener told `"connected"` must not
+                // also be told the previous socket's answers still stand.
+                this.markShardPendingAck(shardKey, true);
+                this.emitConnectionStatus();
 
                 // Resubscribe everyone bound to this shard, a bounded few frames
                 // at a time (see `queueResubscribe`) — every one of them runs its
                 // query server-side to build a snapshot, and on the default shard
                 // they all land on one Durable Object.
-                this.markShardPendingAck(shardKey);
                 this.clearResubscribeQueue(conn);
 
                 for (const state of this.subscriptions.all()) {
@@ -5953,16 +6882,27 @@ class LunoraClient {
 
                 // Rejoin every whisper topic registered for this shard so ephemeral
                 // channels survive a socket bounce.
-                const byTopic = this.whisperHandlers.get(connectionKey(shardKey));
+                // A new socket has joined nothing yet, so every join state starts over.
+                const key = connectionKey(shardKey);
+                const byTopic = this.whisperHandlers.get(key);
+
+                this.dropWhisperJoinWaiters(key);
+                this.whisperJoins.set(key, new Map());
 
                 if (byTopic) {
                     for (const topic of byTopic.keys()) {
-                        sendOn(conn, { topic, type: "whisper_subscribe" });
+                        this.sendWhisperJoin(conn, key, topic);
                     }
                 }
 
+                // The rejoins are on the wire: room sends on this socket may now go out, behind them.
+                // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place
+                conn.roomsRejoined = true;
+                this.releaseRoomSends(shardKey);
+
                 this.flushOfflineQueue(shardKey).catch(() => undefined);
             },
+            protocols: this.upgradeProtocols(),
         });
     }
 
@@ -6030,8 +6970,15 @@ class LunoraClient {
 
         conn.socket = undefined;
         conn.wsState = "idle";
-        this.emitConnectionStatus();
+        // The socket's connection id names a socket that no longer exists: clear it so no grant
+        // (or unsubscribe) posts against it, and drop the joins still waiting on its ack.
+        conn.connectionId = undefined;
+        conn.heldFrames = undefined;
+        conn.whisperAck = undefined;
+        this.dropWhisperJoinWaiters(connectionKey(conn.shardKey));
+        // Before the emit, so a listener never sees the dead socket's answers still counted.
         this.markShardPendingAck(conn.shardKey);
+        this.emitConnectionStatus();
         // Frames still queued (or in flight) belong to the socket that just
         // died; the `open` handler re-queues every subscription on this shard.
         this.clearResubscribeQueue(conn);
@@ -6091,13 +7038,32 @@ class LunoraClient {
         /* eslint-enable no-param-reassign */
     }
 
-    /** Mark every subscription bound to `shardKey` as needing a fresh ack. */
-    private markShardPendingAck(shardKey: string | undefined): void {
+    /**
+     * Mark every subscription and shape bound to `shardKey` as needing a fresh answer from the server.
+     * `socketOpened` also forgets the values a poll delivered: the socket replaces that connection,
+     * whereas a socket that merely failed to open (or dropped) leaves polling, and its answers, in place.
+     */
+    private markShardPendingAck(shardKey: string | undefined, socketOpened = false): void {
         const key = connectionKey(shardKey);
 
         for (const state of this.subscriptions.all()) {
             if (connectionKey(state.shardKey) === key) {
-                state.acked = false;
+                this.cancelSubscriptionRetry(state.id);
+                setSubscriptionAck(state, "idle");
+                // A delta run is one socket's stream: whatever of it arrived ends with that socket.
+                state.pendingDeltaRun = undefined;
+
+                if (socketOpened) {
+                    state.valueReceived = false;
+                    this.awaitingAnswer.add(state);
+                    this.answeredUnreadable.delete(state);
+                }
+            }
+        }
+
+        for (const state of this.shapeSubscriptions.values()) {
+            if (connectionKey(state.shardKey) === key) {
+                state.answered = false;
             }
         }
     }
@@ -6127,12 +7093,12 @@ class LunoraClient {
      * Cannot wedge: a queued subscription whose frame does not actually go out
      * (socket closed, already acked, unsubscribed while queued) takes no slot,
      * every sent frame is released by the first server frame carrying its id
-     * (see {@link handleServerMessage}) or by its own watchdog, and a disconnect
+     * (see {@link handleServerMessage}) or by its watchdog, and a disconnect
      * drops the queue wholesale — the next `open` re-queues every subscription
      * on the shard, because `markShardPendingAck` un-acked them all.
      */
     private drainResubscribeQueue(conn: ShardConnection): void {
-        while (conn.resubscribePending.size < RESUBSCRIBE_CONCURRENCY) {
+        while (conn.resubscribeSlots.size < RESUBSCRIBE_CONCURRENCY) {
             const state = conn.resubscribeQueue.shift();
 
             if (!state) {
@@ -6148,26 +7114,21 @@ class LunoraClient {
                 continue;
             }
 
-            conn.resubscribePending.set(
-                state.id,
-                setTimeout(() => {
-                    this.releaseResubscribeSlot(conn, state.id);
-                }, RESUBSCRIBE_ACK_TIMEOUT_MS),
-            );
+            conn.resubscribeSlots.add(state.id);
         }
     }
 
-    /** Free the in-flight slot `id` holds on `conn` (if any) and let the next queued subscribe go out. */
-    private releaseResubscribeSlot(conn: ShardConnection, id: string): void {
-        const watchdog = conn.resubscribePending.get(id);
+    /**
+     * Stand down `id`'s watchdog on `conn` — its `subscribe` frame was answered or the socket went
+     * away — and, if it held a pacing slot, free it so the next queued subscribe goes out.
+     */
+    private settleSubscribeWatchdog(conn: ShardConnection, id: string): void {
+        clearTimeout(conn.unackedWatchdogs.get(id));
+        conn.unackedWatchdogs.delete(id);
 
-        if (watchdog === undefined) {
-            return;
+        if (conn.resubscribeSlots.delete(id)) {
+            this.drainResubscribeQueue(conn);
         }
-
-        clearTimeout(watchdog);
-        conn.resubscribePending.delete(id);
-        this.drainResubscribeQueue(conn);
     }
 
     /**
@@ -6178,20 +7139,22 @@ class LunoraClient {
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive connection helper; pairs with the teardown paths that call it
     private clearResubscribeQueue(conn: ShardConnection): void {
-        for (const watchdog of conn.resubscribePending.values()) {
+        for (const watchdog of conn.unackedWatchdogs.values()) {
             clearTimeout(watchdog);
         }
 
-        conn.resubscribePending.clear();
+        conn.unackedWatchdogs.clear();
+        conn.resubscribeSlots.clear();
         // eslint-disable-next-line no-param-reassign -- mutate the shared ShardConnection state machine in place, as its callers do
         conn.resubscribeQueue = [];
     }
 
     /** Send `state`'s `subscribe` frame when the shard's socket can carry it; `true` when a frame actually went out. */
-    private sendSubscribeIfOpen(state: SubscriptionState): boolean {
+    private sendSubscribeIfOpen(state: SubscriptionState, isRetry = false): boolean {
         const conn = this.getConnection(state.shardKey);
 
-        if (conn?.wsState !== "open" || state.acked) {
+        // A retry replaces a frame presumed lost, so it may go out while one is in flight.
+        if (conn?.wsState !== "open" || state.ack === "acked" || (!isRetry && state.ack === "inflight")) {
             return false;
         }
 
@@ -6205,7 +7168,7 @@ class LunoraClient {
         // Drop `sinceSeq` there and take the full snapshot.
         const resumable = state.serverCursor !== undefined && state.serverBase !== undefined;
 
-        return sendOn(conn, {
+        const sent = sendOn(conn, {
             id: state.id,
             // `sinceSeq` rides along when we hold a persisted cursor for this
             // sub (a hydrated read or an earlier frame), so the server can
@@ -6231,10 +7194,63 @@ class LunoraClient {
                 // real table name here; see `protocol/README.md` §5.1.
                 table: state.fn.__lunoraRef,
                 ...(resumable ? { sinceSeq: state.serverCursor } : {}),
+                ...(resumable && state.serverClaims !== undefined ? { sinceClaims: state.serverClaims } : {}),
                 ...(resumable && state.serverEpoch !== undefined ? { sinceEpoch: state.serverEpoch } : {}),
             },
             type: "subscribe",
         });
+
+        if (sent) {
+            setSubscriptionAck(state, "inflight");
+        }
+
+        if (sent && !isRetry) {
+            this.armUnackedWatchdog(conn, state);
+        }
+
+        return sent;
+    }
+
+    /**
+     * Watch `state`'s `subscribe` frame: if no frame bearing its id arrives within
+     * {@link RESUBSCRIBE_ACK_TIMEOUT_MS}, free the pacing slot it holds (if any) and
+     * re-send the frame once. A server that drops the frame without replying (a
+     * shard still waking, a swallowed message) would otherwise leave the
+     * subscription un-acked on a perfectly live socket until the next reconnect.
+     * One retry, not a loop: a query that is merely slow must not be re-run repeatedly.
+     *
+     * The retry gets one ack window of its own (`final`), after which the frame is
+     * stood down so a later `subscribe()` can send again; otherwise a lost retry
+     * refuses every send until the next reconnect. Kept in `unackedWatchdogs`, so
+     * an ack or a teardown cancels either phase.
+     */
+    private armUnackedWatchdog(conn: ShardConnection, state: SubscriptionState, final = false): void {
+        clearTimeout(conn.unackedWatchdogs.get(state.id));
+        conn.unackedWatchdogs.set(
+            state.id,
+            setTimeout(() => {
+                if (final) {
+                    conn.unackedWatchdogs.delete(state.id);
+                    releaseSubscribeFrame(state);
+                    // Nothing is waiting for its answer any more, so neither may a write.
+                    this.settleAwaitedAnswer(state, false);
+
+                    return;
+                }
+
+                const retried = state.ack !== "acked" && this.subscriptions.getById(state.id) === state && this.sendSubscribeIfOpen(state, true);
+
+                this.settleSubscribeWatchdog(conn, state.id);
+
+                if (retried) {
+                    this.armUnackedWatchdog(conn, state, true);
+                } else {
+                    // No retry went out, so no frame is outstanding: a `send` that threw on a
+                    // socket still reading "open" would otherwise refuse every later send.
+                    releaseSubscribeFrame(state);
+                }
+            }, RESUBSCRIBE_ACK_TIMEOUT_MS),
+        );
     }
 
     private sendShapeSubscribeIfOpen(state: ShapeSubscriptionState): void {
@@ -6255,6 +7271,7 @@ class LunoraClient {
             // Resume from the last applied checkpoint when we hold one; a cold
             // subscribe omits it and the server seeds the full membership.
             ...(state.serverCursor === undefined ? {} : { sinceCheckpoint: state.serverCursor }),
+            ...(state.serverCursor === undefined || state.serverClaims === undefined ? {} : { sinceClaims: state.serverClaims }),
             ...(state.serverEpoch === undefined ? {} : { sinceEpoch: state.serverEpoch }),
         });
     }
@@ -6283,8 +7300,10 @@ class LunoraClient {
         // the server's `TOKEN_EXPIRED` rejection arrives as one, immediately
         // before it closes with 4001, so counting it would restore the reconnect
         // storm this moved the reset out of `onOpen` to fix.
+        const conn = this.getConnection(shardKey);
+
         if (message.type !== "error") {
-            this.getConnection(shardKey)?.reconnect.reset();
+            conn?.reconnect.reset();
         }
 
         // ANY frame bearing a subscription's id proves the server has taken that
@@ -6292,20 +7311,53 @@ class LunoraClient {
         // `error` that refuses it, or a `data`/`resume`/`settled` that overtakes
         // its own ack. Releasing here rather than in each handler is what keeps a
         // frame shape nobody anticipated from stalling the drain.
-        if (typeof (message as { id?: unknown }).id === "string") {
-            const conn = this.getConnection(shardKey);
-
-            if (conn) {
-                this.releaseResubscribeSlot(conn, (message as { id: string }).id);
-            }
+        if (conn && typeof (message as { id?: unknown }).id === "string") {
+            this.settleSubscribeWatchdog(conn, (message as { id: string }).id);
         }
 
+        if (message.type === "batchStart") {
+            if (conn) {
+                conn.heldFrames = [];
+            }
+        } else if (message.type === "batchEnd") {
+            // Apply every frame held since `batchStart` in arrival order, then notify each
+            // subscription they moved once: without the hold, a write that changed a count
+            // and the list it counts rendered one of them a frame ahead of the other.
+            const held = conn?.heldFrames;
+
+            if (conn && held) {
+                const { socket } = conn;
+
+                conn.heldFrames = undefined;
+                withDeferredNotifications(
+                    () => {
+                        for (const frame of held) {
+                            // An `onError` that retired this socket (a sign-out, an account switch) ends the
+                            // batch: what is left belongs to the old session, and the reconnect re-seeds.
+                            if (conn.retired === true || conn.socket !== socket) {
+                                break;
+                            }
+
+                            this.dispatchServerMessage(frame, shardKey);
+                        }
+                    },
+                    () => !this.closed,
+                );
+            }
+        } else if (conn?.heldFrames && isHeldInBatch(message)) {
+            conn.heldFrames.push(message);
+        } else {
+            this.dispatchServerMessage(message, shardKey);
+        }
+    }
+
+    private dispatchServerMessage(message: ServerMessage, shardKey: string | undefined): void {
         switch (message.type) {
             case "ack": {
                 const state = this.subscriptions.getById(message.id);
 
                 if (state) {
-                    state.acked = true;
+                    this.ackAndAdvanceCursor(state, undefined, undefined);
                 }
 
                 return;
@@ -6340,22 +7392,35 @@ class LunoraClient {
             }
             case "data":
             case "delta": {
-                this.handleDataMessage(message);
+                this.withFrameClaims(shardKey, () => {
+                    this.handleDataMessage(message);
+                });
 
                 return;
             }
             case "error": {
-                this.handleErrorMessage(message);
+                this.handleErrorMessage(message, shardKey);
 
                 break;
             }
             case "identity": {
                 this.handleIdentityFrame(message, shardKey);
+                this.adoptSocketConnectionId(message, shardKey);
+                // The identity is confirmed only after the handler above has acted on it: an
+                // identity change has already dropped any room sends queued under the old one.
+                this.confirmShardIdentity(shardKey);
+
+                break;
+            }
+            case "live": {
+                this.dispatchLive(message, shardKey);
 
                 break;
             }
             case "pokeEnd": {
-                this.handlePokeEnd(message, shardKey);
+                this.withFrameClaims(shardKey, () => {
+                    this.handlePokeEnd(message, shardKey);
+                });
 
                 break;
             }
@@ -6370,7 +7435,9 @@ class LunoraClient {
                 break;
             }
             case "resume": {
-                this.handleResumeMessage(message);
+                this.withFrameClaims(shardKey, () => {
+                    this.handleResumeMessage(message);
+                });
 
                 break;
             }
@@ -6384,13 +7451,18 @@ class LunoraClient {
 
                 break;
             }
+            case "whisper_subscribed": {
+                this.acknowledgeWhisperJoin(connectionKey(shardKey), message.topic);
+
+                break;
+            }
             default: {
                 break;
             }
         }
     }
 
-    private handleErrorMessage(message: ServerErrorMessage): void {
+    private handleErrorMessage(message: ServerErrorMessage, shardKey: string | undefined): void {
         // Token-expiry rejection (sent just before the server closes the socket
         // with code 4001). Surface it to listeners; the close handler also fires
         // and arms the reconnect, so nothing else to do here.
@@ -6399,6 +7471,12 @@ class LunoraClient {
         if (errorCode === "TOKEN_EXPIRED") {
             this.notifyTokenExpired();
 
+            return;
+        }
+
+        // The server keeps the incumbent stream when it refuses a duplicate
+        // id. That refusal must not fail the client stream already using it.
+        if (errorCode === "STREAM_ID_IN_USE") {
             return;
         }
 
@@ -6422,6 +7500,9 @@ class LunoraClient {
         const state = id === undefined ? undefined : this.subscriptions.getById(id);
 
         if (state) {
+            // The server answered with a rejection, so the frame is no longer outstanding.
+            releaseSubscribeFrame(state);
+
             const subscriptionError = buildSubscriptionError(message);
 
             // Snapshot the identity and key BEFORE fanning. `fanSubscriptionError`
@@ -6438,8 +7519,18 @@ class LunoraClient {
             // (correct), so there is no need to also suppress the broadcast.
             const identity = this.identityFingerprint();
             const key = SubscriptionRegistry.keyOf(state);
+            // The claims the refusal was decided under, so a follower holding others does not take it as its own answer.
+            const claims = this.getConnection(shardKey)?.claims;
 
-            fanSubscriptionError(state.errorCallbacks, subscriptionError);
+            // A refusal answers the request: the subscription stops counting as pending on this connection.
+            // Marked before fanning, so a callback that resets the session (see above) is not undone by it.
+            this.markQueryRejected(state);
+            // After `markQueryRejected`, whose `"acked"` write clears the refusal.
+            state.refusal = subscriptionError;
+
+            // Armed before fanning, so a callback that closes the client or drops the last subscriber cancels it.
+            this.scheduleSubscriptionRetry(state, (message.error as { retryAfterMs?: unknown } | undefined)?.retryAfterMs);
+            failSubscription(state, subscriptionError);
 
             // Fan it to follower tabs too. `broadcastSubscriptionError` existed
             // with no caller, so the follower error handler wired to it
@@ -6449,7 +7540,7 @@ class LunoraClient {
             // like its `data` and `settled` siblings — only the leader holds the
             // socket that produced this frame.
             if (this.tabCoordinator?.isLeader()) {
-                this.tabCoordinator.broadcastSubscriptionError(key, subscriptionError, identity);
+                this.tabCoordinator.broadcastSubscriptionError(key, subscriptionError, identity, claims);
             }
 
             return;
@@ -6462,8 +7553,37 @@ class LunoraClient {
         const shapeState = id === undefined ? undefined : this.shapeSubscriptions.get(id);
 
         if (shapeState) {
+            // Answered by refusal, as for a query above: marked before the callbacks run.
+            if (!shapeState.answered) {
+                shapeState.answered = true;
+                this.emitSyncStatus();
+            }
+
             fanSubscriptionError(shapeState.errorCallbacks, buildSubscriptionError(message));
         }
+    }
+
+    /** Count a query the server refused as answered, by the evidence {@link syncStatus} asks of it, emitting only on a change. */
+    private markQueryRejected(
+        state: SubscriptionState,
+        // A poll's own refusal is ackless by construction, even on the pass that proves the origin reachable, before the gate reads `polling`.
+        ackless = (this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader()) || this.connectionGateState(state.shardKey).polling,
+    ): void {
+        // Before the early return: a refused seed arrives after the subscribe's own `ack`.
+        this.settleAwaitedAnswer(state, false);
+
+        if (ackless ? state.valueReceived : state.ack === "acked") {
+            return;
+        }
+
+        if (ackless) {
+            // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place, as `ackAndAdvanceCursor` does
+            state.valueReceived = true;
+        } else {
+            setSubscriptionAck(state, "acked");
+        }
+
+        this.emitSyncStatus();
     }
 
     private handlePokeEnd(message: ServerPokeEndMessage, shardKey: string | undefined): void {
@@ -6490,7 +7610,12 @@ class LunoraClient {
      * `commitPokeSlice`; this method only performs the I/O that follows it.
      */
     private applyPokePart(state: ShapeSubscriptionState, buffer: PokeBuffer, message: ServerPokeEndMessage): void {
+        const wasAnswered = state.answered;
         const outcome = commitPokeSlice(state, buffer, message);
+
+        if (state.answered !== wasAnswered) {
+            this.emitSyncStatus();
+        }
 
         emitShapeRows(state);
 
@@ -6499,6 +7624,9 @@ class LunoraClient {
 
             return;
         }
+
+        // eslint-disable-next-line no-param-reassign -- commit the shared shape state in place, as `commitPokeSlice` does
+        state.serverClaims = this.frameClaims;
 
         // Fired after the emit, as before: `@lunora/db` drops its optimistic overlay on
         // this callback, so it must run once the rows have rendered.
@@ -6513,17 +7641,95 @@ class LunoraClient {
      * `sendSubscribeIfOpen` put the frame on the wire at all. Mirrors the shape
      * path's re-seed on a diverged base.
      */
-    private resnapshotSubscription(state: SubscriptionState): void {
+    private resnapshotSubscription(state: SubscriptionState): boolean {
         /* eslint-disable no-param-reassign -- reset the shared subscription state in place, as the other recovery paths do */
-        state.acked = false;
+        setSubscriptionAck(state, "idle");
         state.serverCursor = undefined;
         state.serverEpoch = undefined;
+        state.pendingDeltaRun = undefined;
         /* eslint-enable no-param-reassign */
+        this.emitSyncStatus();
 
-        // eslint-disable-next-line no-console -- last-resort visibility: the client recovers on its own, but a frame it cannot apply is a protocol-level surprise worth surfacing.
-        console.warn("[lunora] could not merge a row delta into the cached result; re-subscribing for a full snapshot");
+        return this.sendSubscribeIfOpen(state);
+    }
 
-        this.sendSubscribeIfOpen(state);
+    /**
+     * Re-subscribe once after the server's retry hint. The server keeps the failure streak across this re-subscribe, so
+     * a re-run that fails again is answered with a longer hint rather than retried on every write. An error without a
+     * usable hint cancels a pending retry: the server sends one when it has ended the subscription.
+     */
+    private scheduleSubscriptionRetry(state: SubscriptionState, retryAfterMs: unknown): void {
+        this.cancelSubscriptionRetry(state.id);
+
+        if (this.closed || typeof retryAfterMs !== "number" || !Number.isFinite(retryAfterMs) || retryAfterMs < 0) {
+            return;
+        }
+
+        const timer = setTimeout(() => {
+            this.pendingSubscriptionRetries.delete(state.id);
+
+            // A joiner waits for the retry's snapshot rather than taking the value the failure left behind.
+            if (!this.closed && this.subscriptions.getById(state.id) === state && this.resnapshotSubscription(state)) {
+                // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
+                state.awaitingSnapshot = true;
+            }
+        }, retryAfterMs);
+
+        this.pendingSubscriptionRetries.set(state.id, timer);
+    }
+
+    private cancelSubscriptionRetry(id: string): void {
+        const timer = this.pendingSubscriptionRetries.get(id);
+
+        if (timer === undefined) {
+            return;
+        }
+
+        clearTimeout(timer);
+        this.pendingSubscriptionRetries.delete(id);
+    }
+
+    /**
+     * Discard a held delta run and ask for a full snapshot. The run's rows are lost, so the cursor
+     * and epoch stay where the committed base left them: the snapshot request omits them, but a
+     * reconnect before it lands still resumes from before the run. Deltas are refused until the
+     * snapshot lands (see `handleDataMessage`).
+     */
+    private resnapshotDiscardedRun(state: SubscriptionState): void {
+        const { serverCursor, serverEpoch } = state;
+
+        // Set whether or not the snapshot request went out: a base missing rows stays refused until a
+        // data frame commits, even if the send fails.
+        // eslint-disable-next-line no-param-reassign -- the flag is the subscription's own state, read by the frame handlers
+        state.baseIncomplete = true;
+
+        if (this.resnapshotSubscription(state)) {
+            // eslint-disable-next-line no-param-reassign -- the flag is the subscription's own state, read by handleDataMessage
+            state.awaitingSnapshot = true;
+        }
+
+        // The snapshot request drops the resume position; put it back so a reconnect still resumes before the run.
+        // eslint-disable-next-line no-param-reassign -- restores the cursor the snapshot request just dropped
+        state.serverCursor = serverCursor;
+        // eslint-disable-next-line no-param-reassign -- restores the epoch the snapshot request just dropped
+        state.serverEpoch = serverEpoch;
+    }
+
+    /** Report one `WIRE_DECODE_FAILED` for a frame `decodeWire` refused, and re-snapshot when it cut a held run short. */
+    private failUndecodableFrame(state: SubscriptionState, error: unknown, heldRun: boolean): void {
+        failSubscription(state, {
+            code: "WIRE_DECODE_FAILED",
+            message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
+        });
+
+        // The refused frame's rows never applied, so the rest of the run cannot either. The error
+        // callback may have removed the last listener; a removed subscription has nothing to recover.
+        if (heldRun && this.subscriptions.getById(state.id) === state) {
+            this.resnapshotDiscardedRun(state);
+        }
+
+        // The answer arrived and cannot be read: waiting longer only wedges the shard's writes.
+        this.settleAwaitedAnswer(state, false);
     }
 
     /**
@@ -6538,10 +7744,25 @@ class LunoraClient {
             return;
         }
 
+        // The older of two seeds from a re-sent `subscribe`, arriving last: it would roll the value and the resume cursor back.
+        // It answers nothing, so a pending hinted retry stays armed.
+        if (message.type === "data" && isStaleDataFrame(state, message)) {
+            return;
+        }
+
+        // The base is known to be incomplete: a delta would merge onto it and advance the cursor past rows it lacks.
+        if (message.type === "delta" && state.baseIncomplete === true) {
+            return;
+        }
+
+        this.cancelSubscriptionRetry(state.id);
+
         let payload: unknown;
+        const pendingRun = state.pendingDeltaRun;
 
         try {
-            payload = resolveDataPayload(message, state.serverBase);
+            // A run's later frames merge onto the frames before them, not onto the committed base.
+            payload = resolveDataPayload(message, pendingRun === undefined ? state.serverBase : pendingRun.payload);
         } catch (error) {
             // The frame carried a value `decodeWire` refuses (an over-long
             // bigint, an over-depth tree, a malformed map entry). Left to throw
@@ -6550,24 +7771,51 @@ class LunoraClient {
             // value dies identically — the subscription frozen with the
             // indicator still reading `connected`. Surface it to the subscriber
             // instead and leave the cached value + cursor untouched.
-            fanSubscriptionError(state.errorCallbacks, {
-                code: "WIRE_DECODE_FAILED",
-                message: `could not decode a server frame for this subscription — ${error instanceof Error ? error.message : String(error)}`,
-            });
+            // A refused row change never reaches the base, so a later frame must not merge onto a base
+            // missing it: drop any held run and recover. A refused `data` frame is not a row change
+            // and stays a plain error.
+            state.pendingDeltaRun = undefined;
+            this.failUndecodableFrame(state, error, message.type === "delta");
 
             return;
         }
 
         if (payload === UNMERGEABLE_DELTA) {
+            // eslint-disable-next-line no-console -- last-resort visibility: the client recovers on its own, but a frame it cannot apply is a protocol-level surprise worth surfacing.
+            console.warn("[lunora] could not merge a row delta into the cached result; re-subscribing for a full snapshot");
             this.resnapshotSubscription(state);
 
             return;
         }
 
+        // A non-final frame of a run (`more: true`) is held, so the run commits, notifies and
+        // broadcasts once. Frames whose run never ends (a dropped socket) are discarded with the
+        // socket, and the reconnect's snapshot or `resume` answers from the cursor before the run.
+        // The server stamps `lastMutationId` on every frame of a run, so the final frame's
+        // own watermark is the run's.
+        if (isNonFinalRunFrame(message)) {
+            state.pendingDeltaRun = { payload };
+
+            return;
+        }
+
+        state.pendingDeltaRun = undefined;
+
         // Drop the cache seed before the value moves, then commit the payload and its
         // position. The watermark and the checkpoint fan-out follow the commit.
         this.dropCacheSeed(SubscriptionRegistry.keyOf(state));
-        commitDataFrame(state, payload, { cursor: message.cursor, epoch: message.epoch });
+
+        // Over the polling fallback a polled value is the only evidence a subscription was answered.
+        const firstPolledValue = snapshotMark !== undefined && !state.valueReceived;
+
+        commitDataFrame(state, payload, { claims: this.frameClaims, cursor: message.cursor, epoch: message.epoch });
+        // A value has landed, so the refusal a late subscriber would be handed is no longer the answer.
+        state.refusal = undefined;
+
+        if (firstPolledValue) {
+            state.valueReceived = true;
+            this.emitSyncStatus();
+        }
 
         if (message.lastMutationId !== undefined) {
             advanceWatermark(state, message.lastMutationId);
@@ -6598,7 +7846,243 @@ class LunoraClient {
         if (this.tabCoordinator?.isLeader()) {
             const key = SubscriptionRegistry.keyOf(state);
 
-            this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch, this.identityFingerprint());
+            this.tabCoordinator.broadcastSubscriptionData(key, payload, state.serverCursor, state.serverEpoch, this.identityFingerprint(), state.serverClaims);
+        }
+
+        this.settleAwaitedAnswer(state, true);
+    }
+
+    private followerClaims(key: string, retry: () => void, frameClaims?: string): null | string | undefined {
+        // No credential, nothing to differ from: an anonymous tab and its leader read under the same (no) claims.
+        if (this.identityFingerprint() === null && !this.identityUnresolved()) {
+            // eslint-disable-next-line unicorn/no-null -- `null` is the follower hook's "no claims of my own"
+            return null;
+        }
+
+        // Rows with no claims stamp (`frameClaims === ""`): a server that announces fingerprints makes the frame an
+        // anomaly, so it is held until the tab knows its own, verified once if it has one, and shown only to a tab the
+        // server is known to give none.
+        if (frameClaims === "") {
+            if (this.ownClaimsValue === undefined || (this.ownClaimsValue !== null && !this.claimsVerifiedAgainst.has(""))) {
+                this.claimsVerifiedAgainst.add("");
+                this.heldLeaderFrames.set(key, retry);
+                this.fetchOwnClaims();
+            }
+
+            return this.ownClaimsValue;
+        }
+
+        if (this.ownClaimsValue === undefined) {
+            this.heldLeaderFrames.set(key, retry);
+            this.fetchOwnClaims();
+        } else if (frameClaims !== undefined && frameClaims !== this.ownClaimsValue && !this.claimsVerifiedAgainst.has(frameClaims)) {
+            // The server may have changed this credential's claims (an org switch, a role change) without the tab's
+            // credential changing, so the leader's new fingerprint is not proof of a different tab. Ask once per
+            // fingerprint; the frame is held and judged against the answer.
+            this.claimsVerifiedAgainst.add(frameClaims);
+            this.heldLeaderFrames.set(key, retry);
+            this.fetchOwnClaims();
+
+            return undefined;
+        }
+
+        return this.ownClaimsValue;
+    }
+
+    private isFollowerTab(): boolean {
+        return this.tabCoordinator !== undefined && !this.tabCoordinator.isLeader();
+    }
+
+    /** Forget this tab's own fingerprint: the credential it described may have changed. */
+    private resetOwnClaims(): void {
+        this.ownClaimsValue = undefined;
+        this.ownClaimsFetch = undefined;
+        this.claimsVerifiedAgainst.clear();
+        this.stopOwnClaimsRetry();
+        this.suspendFollowerValues();
+
+        // Frames held for the discarded answer would otherwise wait for the next one.
+        if (this.heldLeaderFrames.size > 0) {
+            queueMicrotask(() => {
+                this.fetchOwnClaims();
+            });
+        }
+    }
+
+    /**
+     * A follower's claims-stamped values were read under claims this tab may no longer hold. They are taken off the
+     * views and the caches until the tab knows its own fingerprint again; {@link applyOwnClaims} puts back those that
+     * were read under the claims it finds, so a plain token refresh does not leave the tab blank.
+     */
+    private suspendFollowerValues(): void {
+        if (!this.isFollowerTab()) {
+            return;
+        }
+
+        for (const state of this.subscriptions.all()) {
+            if (state.serverClaims !== undefined && state.serverBase !== undefined) {
+                this.suspendedFollowerValues.set(state, {
+                    base: state.serverBase,
+                    claims: state.serverClaims,
+                    cursor: state.serverCursor,
+                    epoch: state.serverEpoch,
+                });
+            }
+
+            if (state.serverClaims !== undefined) {
+                state.serverBase = undefined;
+                state.serverBaseCommitted = false;
+                state.serverCursor = undefined;
+                state.serverClaims = undefined;
+                refoldSubscription(state, undefined);
+            }
+        }
+    }
+
+    /** Take `claims` as this tab's own: drop what a leader committed under others, from memory and the restored cache, and run the held frames. */
+    private applyOwnClaims(claims: string): void {
+        if (claims !== this.ownClaimsValue) {
+            this.claimsVerifiedAgainst.clear();
+        }
+
+        this.ownClaimsValue = claims;
+        this.ownClaimsFailures = 0;
+
+        for (const [state, suspended] of this.suspendedFollowerValues) {
+            if (suspended.claims === claims && state.serverBase === undefined) {
+                state.serverBase = suspended.base;
+                state.serverCursor = suspended.cursor;
+                state.serverEpoch = suspended.epoch;
+                state.serverClaims = claims;
+                refoldSubscription(state, suspended.base);
+            }
+        }
+
+        this.suspendedFollowerValues.clear();
+
+        for (const state of this.subscriptions.all()) {
+            if (state.serverClaims !== undefined && state.serverClaims !== claims) {
+                state.serverBase = undefined;
+                state.serverBaseCommitted = false;
+                state.serverCursor = undefined;
+                state.serverClaims = undefined;
+                refoldSubscription(state, undefined);
+            }
+        }
+
+        this.dropClaimedEntries(claims);
+
+        this.releaseHeldFrames();
+    }
+
+    private releaseHeldFrames(): void {
+        const held = [...this.heldLeaderFrames.values()];
+
+        this.heldLeaderFrames.clear();
+
+        for (const apply of held) {
+            apply();
+        }
+    }
+
+    /** Remove what was read under claims other than `claims` from every cache a subscription could be seeded from. */
+    private dropClaimedEntries(claims: string): void {
+        // A seed handed to a subscription is handed back to the hydrated cache when it unsubscribes, so both go, with
+        // the durable copy (removed in order behind any write already in flight) and any write still waiting.
+        for (const cache of [this.hydratedQueryCache, this.cacheSeededQueries]) {
+            for (const [key, entry] of cache) {
+                if (entry.claims !== undefined && entry.claims !== claims) {
+                    cache.delete(key);
+                    this.pendingCacheWrites.delete(key);
+
+                    const { queryCache } = this;
+
+                    if (queryCache) {
+                        this.queryCacheChain = this.queryCacheChain.then(async () => queryCache.remove(key)).catch(() => undefined);
+                    }
+                }
+            }
+        }
+    }
+
+    private fetchOwnClaims(): void {
+        const { authToken, fetchImpl } = this;
+
+        if (fetchImpl === undefined || this.ownClaimsFetch !== undefined) {
+            return;
+        }
+
+        const fetching: Promise<unknown> = sendControl(
+            fetchImpl,
+            joinUrl(this.url, CLAIMS_FINGERPRINT_PATH),
+            "{}",
+            authToken === null || !this.authTokenOnUpgrade
+                ? { "content-type": "application/json" }
+                : { authorization: `Bearer ${authToken}`, "content-type": "application/json" },
+        )
+            .then(({ status, text }) => {
+                const { claims } = JSON.parse(text) as { claims?: string };
+
+                // A credential change since the request began makes the answer about another credential.
+                if (this.ownClaimsFetch !== fetching) {
+                    return undefined;
+                }
+
+                if (typeof claims === "string") {
+                    this.applyOwnClaims(claims);
+                } else if (status === 200) {
+                    // An answer with no fingerprint: the server announces none, so frames without a stamp are its norm.
+                    // eslint-disable-next-line unicorn/no-null -- `null` is "known to have no claims"
+                    this.ownClaimsValue = null;
+                    this.releaseHeldFrames();
+                }
+
+                return undefined;
+            })
+            // Unanswered, the tab stays without claims and shows nothing claims-stamped; held frames ask again.
+            .catch(() => {
+                if (this.ownClaimsFetch === fetching) {
+                    this.scheduleOwnClaimsRetry();
+                }
+            })
+            .finally(() => {
+                if (this.ownClaimsFetch === fetching) {
+                    this.ownClaimsFetch = undefined;
+                }
+            });
+
+        this.ownClaimsFetch = fetching;
+    }
+
+    /** Ask for the tab's claims again, with a growing delay and a bound, for as long as frames wait on the answer. */
+    private scheduleOwnClaimsRetry(): void {
+        if (this.closed || this.heldLeaderFrames.size === 0 || this.ownClaimsRetryTimer !== undefined || this.ownClaimsFailures >= OWN_CLAIMS_MAX_RETRIES) {
+            return;
+        }
+
+        const delay = OWN_CLAIMS_RETRY_BASE_MS * 2 ** this.ownClaimsFailures;
+
+        this.ownClaimsFailures += 1;
+        this.ownClaimsRetryTimer = setTimeout(() => {
+            this.ownClaimsRetryTimer = undefined;
+            this.fetchOwnClaims();
+        }, delay);
+    }
+
+    private stopOwnClaimsRetry(): void {
+        clearTimeout(this.ownClaimsRetryTimer);
+        this.ownClaimsRetryTimer = undefined;
+        this.ownClaimsFailures = 0;
+    }
+
+    /** Run `apply` with the claims fingerprint of the socket that delivered the frame, for the values and cursors it commits. */
+    private withFrameClaims(shardKey: string | undefined, apply: () => void): void {
+        this.frameClaims = this.getConnection(shardKey)?.claims;
+
+        try {
+            apply();
+        } finally {
+            this.frameClaims = undefined;
         }
     }
 
@@ -6617,7 +8101,29 @@ class LunoraClient {
             return;
         }
 
+        // The cached value is current as of the cursor it resumed from, so a run cut off before it is void.
+        state.pendingDeltaRun = undefined;
+        // A reconnect after a discarded run resumes from the cursor before it, which proves the base current.
+        state.awaitingSnapshot = false;
+        state.baseIncomplete = false;
+        // A resume is only answered when the shard found these claims to be the ones the cursor was read under.
+        state.serverClaims = this.frameClaims;
         this.ackAndAdvanceCursor(state, message.cursor, message.epoch);
+
+        // Relayed as a value, because a follower is answered only by one: its held writes are judged against the
+        // value this resume just proved current. The base, never `lastValue`, which carries this tab's optimistic layers.
+        if (this.tabCoordinator?.isLeader() && state.serverBase !== undefined) {
+            this.tabCoordinator.broadcastSubscriptionData(
+                SubscriptionRegistry.keyOf(state),
+                state.serverBase,
+                state.serverCursor,
+                state.serverEpoch,
+                this.identityFingerprint(),
+                state.serverClaims,
+            );
+        }
+
+        this.settleAwaitedAnswer(state, true);
     }
 
     /**
@@ -6635,6 +8141,20 @@ class LunoraClient {
         const state = this.subscriptions.getById(message.id);
 
         if (!state) {
+            return;
+        }
+
+        // A held run's rows, or a snapshot still on its way, mean this base is missing rows the server
+        // has already confirmed. The settled cursor and watermark would resume after those rows and
+        // confirm a write whose rows are absent, so they wait for the snapshot, which carries both.
+        const runHeld = state.pendingDeltaRun !== undefined;
+
+        if (runHeld) {
+            state.pendingDeltaRun = undefined;
+            this.resnapshotDiscardedRun(state);
+        }
+
+        if (runHeld || state.baseIncomplete === true) {
             return;
         }
 
@@ -6669,6 +8189,7 @@ class LunoraClient {
                 state.lastMutationId,
                 this.clientId,
                 this.identityFingerprint(),
+                state.serverClaims,
             );
         }
     }
@@ -6676,12 +8197,22 @@ class LunoraClient {
     /**
      * Mark `state` acked and, when the frame carries a newer cursor/epoch than
      * the cached position, advance the resume watermark and re-persist. Shared by
-     * the `resume` and `settled` frame handlers — both acknowledge "nothing the
-     * client must re-render changed, but the resume position may have moved".
+     * the `ack`, `resume` and `settled` frame handlers — each acknowledges the
+     * subscription ("nothing the client must re-render changed, but the resume
+     * position may have moved"; an `ack` carries no position at all). The sync
+     * status is only recomputed when this is the acknowledgement that changes it.
      */
     private ackAndAdvanceCursor(state: SubscriptionState, cursor: number | undefined, epoch: string | undefined): void {
+        this.cancelSubscriptionRetry(state.id);
+
         /* eslint-disable no-param-reassign -- advance the shared subscription state in place (same pattern as the optimistic-update path above) */
-        state.acked = true;
+        const newlyAcked = state.ack !== "acked";
+
+        setSubscriptionAck(state, "acked");
+
+        if (newlyAcked) {
+            this.emitSyncStatus();
+        }
 
         if ((cursor !== undefined && cursor !== state.serverCursor) || (epoch !== undefined && epoch !== state.serverEpoch)) {
             if (cursor !== undefined) {
@@ -6704,6 +8235,270 @@ class LunoraClient {
             }
         }
         /* eslint-enable no-param-reassign */
+    }
+
+    /**
+     * Record the socket's connection id from its `identity` frame, then re-issue every live grant
+     * this shard holds: a new socket starts with none.
+     */
+    private adoptSocketConnectionId(message: ServerIdentityMessage, shardKey: string | undefined): void {
+        const conn = this.getConnection(shardKey);
+
+        if (conn === undefined || typeof message.connectionId !== "string") {
+            return;
+        }
+
+        // A re-sent `connect` (a context update) is answered with the same socket's identity again, which
+        // does not move the server's deadline: re-arming on it would push the re-auth out past that deadline.
+        const sameSocket = conn.connectionId === message.connectionId;
+
+        conn.connectionId = message.connectionId;
+        conn.claims = message.claims;
+        conn.whisperAck = message.whisperAck === true;
+
+        if (!sameSocket || (conn.revalidateTimer === undefined && conn.reauthPending !== true)) {
+            this.armSocketRevalidation(conn, message.revalidateMs);
+        }
+
+        for (const subscriptionId of this.liveSocketGrants.get(connectionKey(shardKey))?.keys() ?? []) {
+            this.grantWhenJoined(shardKey, subscriptionId, message.connectionId);
+        }
+    }
+
+    /**
+     * Post the live grant `subscriptionId` for the socket `connectionId`, once the socket has
+     * acknowledged the join of the grant's topic. A publish reaches a member only with both in
+     * place, so a grant that landed first would drop a publish made before the join took effect.
+     * The post is skipped if the grant was released or refused meanwhile, or if the socket changed
+     * since `connectionId` was read: the new socket's identity posts its own grants.
+     */
+    private grantWhenJoined(shardKey: string | undefined, subscriptionId: string, connectionId: string): void {
+        const key = connectionKey(shardKey);
+        const grant = this.liveSocketGrants.get(key)?.get(subscriptionId);
+
+        if (grant === undefined) {
+            return;
+        }
+
+        const { stream, topic } = grant;
+
+        const post = (): void => {
+            const current = this.liveSocketGrants.get(key)?.get(subscriptionId);
+
+            if (current === undefined || this.getConnection(shardKey)?.connectionId !== connectionId) {
+                return;
+            }
+
+            this.postLiveControl(`/live/${stream}/control`, shardKey, { action: "subscribe", connectionId, stream, subscriptionId, topic }, (status) => {
+                this.refuseLiveGrant(shardKey, subscriptionId, status, connectionId);
+            });
+        };
+
+        // A shard that does not advertise `whisperAck` never answers the join, so waiting would only
+        // delay the grant by the fallback timer. Post it now, as before the ack existed.
+        if (this.getConnection(shardKey)?.whisperAck === true) {
+            this.whenWhisperJoined(key, topic, post);
+        } else {
+            post();
+        }
+    }
+
+    /** Send a `whisper_subscribe` for `topic` on `conn`, and count it as pending until the shard acknowledges it. */
+    private sendWhisperJoin(conn: ShardConnection, key: string, topic: string): void {
+        const join = this.whisperJoinState(key, topic);
+
+        join.pending += 1;
+        join.joined = false;
+        sendOn(conn, { topic, type: "whisper_subscribe" });
+    }
+
+    /** One `whisper_subscribed` frame arrived: the topic is joined once every join sent for it is acknowledged. */
+    private acknowledgeWhisperJoin(key: string, topic: string): void {
+        const join = this.whisperJoins.get(key)?.get(topic);
+
+        if (join === undefined) {
+            return;
+        }
+
+        join.pending = Math.max(0, join.pending - 1);
+
+        if (join.pending > 0) {
+            return;
+        }
+
+        join.joined = true;
+
+        for (const waiter of join.waiters.splice(0)) {
+            clearTimeout(waiter.timer);
+            waiter.run();
+        }
+
+        this.releaseWhisperJoin(key, topic);
+    }
+
+    /**
+     * Forget a topic's join state once no handler holds the topic and no join is still unacknowledged.
+     * A join still in flight keeps its entry, and {@link acknowledgeWhisperJoin} drops it when the ack
+     * lands: dropping it early would let that stale ack count toward a rejoin of the same topic.
+     */
+    private releaseWhisperJoin(key: string, topic: string): void {
+        if (this.whisperHandlers.get(key)?.has(topic) === true) {
+            return;
+        }
+
+        const byTopic = this.whisperJoins.get(key);
+        const join = byTopic?.get(topic);
+
+        if (byTopic === undefined || join === undefined || join.pending > 0) {
+            return;
+        }
+
+        for (const waiter of join.waiters.splice(0)) {
+            clearTimeout(waiter.timer);
+        }
+
+        byTopic.delete(topic);
+
+        if (byTopic.size === 0) {
+            this.whisperJoins.delete(key);
+        }
+    }
+
+    /**
+     * Run `run` once `topic` is joined on the current socket, or after {@link LIVE_CONTROL_TIMEOUT_MS}.
+     * A lost ack must not hold a grant forever, so the timeout runs it anyway: an unacknowledged
+     * join is not necessarily a failed one, and a grant for a join that never landed delivers nothing.
+     */
+    private whenWhisperJoined(key: string, topic: string, run: () => void): void {
+        const join = this.whisperJoinState(key, topic);
+
+        if (join.joined) {
+            run();
+
+            return;
+        }
+
+        const waiter: WhisperWaiter = { run, timer: undefined };
+
+        waiter.timer = setTimeout(() => {
+            join.waiters = join.waiters.filter((other) => other !== waiter);
+
+            run();
+        }, LIVE_CONTROL_TIMEOUT_MS);
+
+        join.waiters.push(waiter);
+    }
+
+    /**
+     * Forget the waiters of a socket that is going away, without running them: a grant for the old
+     * socket's connection id is never valid, and the next socket's identity posts its own grants.
+     */
+    private dropWhisperJoinWaiters(key: string): void {
+        for (const join of this.whisperJoins.get(key)?.values() ?? []) {
+            for (const waiter of join.waiters.splice(0)) {
+                clearTimeout(waiter.timer);
+            }
+        }
+    }
+
+    private whisperJoinState(key: string, topic: string): WhisperJoin {
+        let byTopic = this.whisperJoins.get(key);
+
+        if (byTopic === undefined) {
+            byTopic = new Map();
+            this.whisperJoins.set(key, byTopic);
+        }
+
+        let join = byTopic.get(topic);
+
+        if (join === undefined) {
+            join = { joined: false, pending: 0, waiters: [] };
+            byTopic.set(topic, join);
+        }
+
+        return join;
+    }
+
+    /**
+     * Drop a live grant the shard refused for good, and tell its caller. A grant already released
+     * by its unsubscribe handle is gone from the map, so a late refusal reports nothing. A refusal
+     * for a socket that has since been replaced is ignored too: the new socket posts the grant
+     * again and hears its own answer, and releasing now would strip the new socket's membership.
+     */
+    private refuseLiveGrant(shardKey: string | undefined, subscriptionId: string, status: number, connectionId: string): void {
+        const key = connectionKey(shardKey);
+        const grants = this.liveSocketGrants.get(key);
+        const grant = grants?.get(subscriptionId);
+
+        if (grants === undefined || grant === undefined || this.getConnection(shardKey)?.connectionId !== connectionId) {
+            return;
+        }
+
+        grants.delete(subscriptionId);
+
+        if (grants.size === 0) {
+            this.liveSocketGrants.delete(key);
+        }
+
+        // A refused grant is final, so its join goes too: an idle socket with a no-op membership would otherwise stay open.
+        grant.release();
+        grant.onError?.({ status, topic: grant.topic });
+    }
+
+    /**
+     * POST one live-grant control call, behind every earlier one. The body names the shard when
+     * the socket is not the default one, as the SSE control call does. A refusal (a 4xx other
+     * than 404 and 401) is handed to `onRefused`. Failures are swallowed: a denied grant must
+     * never surface as an unhandled rejection.
+     */
+    private postLiveControl(controlPath: string, shardKey: string | undefined, body: Record<string, unknown>, onRefused?: (status: number) => void): void {
+        const { fetchImpl } = this;
+
+        if (!fetchImpl) {
+            return;
+        }
+
+        const payload = JSON.stringify(shardKey === undefined ? body : { ...body, shardKey });
+        const headers = this.rpcRequestHeaders({}, shardKey);
+
+        this.liveControlChain = this.liveControlChain
+            .then(() => sendControl(fetchImpl, joinUrl(this.url, controlPath), payload, headers))
+            .then(({ status }) => {
+                // 404 and 401 are transient: a reconnect registers the grant again.
+                if (status >= 400 && status < 500 && status !== 404 && status !== 401) {
+                    onRefused?.(status);
+                }
+
+                return undefined;
+            })
+            .catch(() => undefined);
+    }
+
+    /**
+     * Route an inbound live publish to the grants on the originating shard whose stream and topic
+     * match. A grant exists only for a subscribed stream and topic, so a frame naming another
+     * stream reaches no handler.
+     */
+    private dispatchLive(message: ServerLiveMessage, shardKey?: string): void {
+        const grants = this.liveSocketGrants.get(connectionKey(shardKey));
+
+        if (!grants) {
+            return;
+        }
+
+        const data = decodeWire(message.data);
+
+        for (const grant of grants.values()) {
+            if (grant.stream !== message.stream || grant.topic !== message.topic) {
+                continue;
+            }
+
+            try {
+                grant.onEvent(data);
+            } catch {
+                /* user callback threw — ignore */
+            }
+        }
     }
 
     /** Route an inbound whisper to the topic's handlers on the originating shard. */
@@ -6760,16 +8555,16 @@ class LunoraClient {
         const state = this.subscriptions.getById(id);
 
         if (state) {
-            state.acked = false;
-            fanSubscriptionError(state.errorCallbacks, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
+            setSubscriptionAck(state, "idle");
+            this.emitSyncStatus();
+            failSubscription(state, { code: "SUBSCRIPTION_CANCELLED", message: "subscription was cancelled by the server" });
         }
     }
 
     private unpersist(id: string | undefined): void {
         if (id) {
-            this.persistence?.remove(id).catch((error: unknown) => {
-                reportPersistenceError(this.onPersistenceError, "remove", error, id);
-            });
+            this.replayAttempts.delete(id);
+            this.offlineQueue.discard(id);
         }
     }
 
@@ -6809,7 +8604,11 @@ class LunoraClient {
             return null;
         }
 
-        return this.hashToken(token);
+        if (this.tokenFingerprint?.token !== token) {
+            this.tokenFingerprint = { hash: this.hashToken(token), token };
+        }
+
+        return this.tokenFingerprint.hash;
     }
 
     /**
@@ -6908,6 +8707,12 @@ class LunoraClient {
         // before any socket frame. Cases 2 and 3 need a credential this client
         // holds, which it does not have here either.
         if (this.identityFingerprint() === null && this.identityUnresolved()) {
+            return false;
+        }
+
+        // Read under claims this tab has since found are not its own. A follower that does not know its own yet shows
+        // none: it is fed by the leader, and the entry could come back after `applyOwnClaims` dropped it.
+        if (entry.claims !== undefined && entry.claims !== this.ownClaimsValue && (this.ownClaimsValue !== undefined || this.isFollowerTab())) {
             return false;
         }
 
@@ -7074,6 +8879,60 @@ class LunoraClient {
     }
 
     /**
+     * Frame an already-encoded whisper body onto the topic's shard socket. Returns `false`
+     * when the socket is not open, so the caller can hold the body and send it later.
+     */
+    private sendEncodedWhisper(topic: string, encoded: unknown, options: { shardKey?: string }): boolean {
+        this.ensureSocket(options.shardKey);
+
+        const conn = this.getConnection(options.shardKey);
+        const sent = conn !== undefined && sendOn(conn, { data: encoded, topic, type: "whisper" });
+
+        // A send-only whisper may be all that opened this shard: let it idle out.
+        this.releaseIdleShard(options.shardKey);
+
+        return sent;
+    }
+
+    /**
+     * Whether room sends on `shardKey` may go straight to its socket: the socket is open,
+     * the server has confirmed its identity, and its room rejoins are on the wire.
+     */
+    private roomSendsAdmitted(shardKey: string | undefined): boolean {
+        const conn = this.getConnection(shardKey);
+
+        // A retired socket belongs to a session that was replaced: nothing is admitted on it.
+        return conn?.wsState === "open" && conn.retired !== true && conn.identityConfirmed === true && conn.roomsRejoined === true;
+    }
+
+    /** Flush the held room sends on `shardKey`, once that socket is admitted. */
+    private releaseRoomSends(shardKey: string | undefined): void {
+        if (!this.roomSendsAdmitted(shardKey)) {
+            return;
+        }
+
+        for (const flush of this.roomFlushes.get(connectionKey(shardKey)) ?? []) {
+            flush();
+        }
+    }
+
+    /** The server answered this socket's identity: record it, and release the sends that waited on it. */
+    private confirmShardIdentity(shardKey: string | undefined): void {
+        const conn = this.getConnection(shardKey);
+
+        if (conn !== undefined) {
+            conn.identityConfirmed = true;
+
+            // Only an admitted socket proves the channel works. An upgrade the server then refuses at
+            // its connect frame opens and closes, and must not reset the failed-open run that polling needs.
+            // Stopping polling reports status, so it runs after the identity is recorded.
+            conn.polling.noteOpen();
+        }
+
+        this.releaseRoomSends(shardKey);
+    }
+
+    /**
      * A cookie socket's `identity` frame: the user the shard authenticated this
      * socket as, sent in reply to every `connect`.
      *
@@ -7083,9 +8942,9 @@ class LunoraClient {
      * since changed hands, and is still delivering that user's rows: the
      * session it belongs to is retired, which replaces the socket.
      *
-     * Ignored for a socket that authenticated with a token rather than the
-     * cookie (see `ShardConnection.identityQuestion`) — its answer is about that
-     * token, not about the cookie session this client's identity tracks.
+     * Ignored for a socket that authenticated with a ticket or an auth token rather
+     * than the cookie (see `ShardConnection.identityQuestion`) — its answer is about
+     * that credential, not about the cookie session this client's identity tracks.
      */
     private handleIdentityFrame(message: ServerIdentityMessage, shardKey: string | undefined): void {
         const question = this.getConnection(shardKey)?.identityQuestion;
@@ -7331,7 +9190,38 @@ class LunoraClient {
 
         this.pendingCacheWrites.clear();
         this.hydratedQueryCache.clear();
-        this.queryCache?.clear().catch(() => undefined);
+        this.queryCacheEpoch += 1;
+
+        const { queryCache } = this;
+
+        if (queryCache) {
+            this.queryCacheChain = this.queryCacheChain.then(async () => queryCache.clear()).catch(() => undefined);
+        }
+    }
+
+    /**
+     * Drop every pending optimistic layer, for a session that is changing hands.
+     *
+     * {@link evictPreviousIdentitySession} blanks each server base, but the
+     * re-fold runs the base back through the layers, and a layer is the
+     * outgoing user's predicted rows: a `setQuery` constant ignores the blank
+     * base entirely, so the incoming user was shown the previous one's pending
+     * message. The writes themselves are not settled here — a queued one is
+     * judged by the replay gate and an in-flight one settles on its own — and
+     * a later `confirm`/`rollback` on a dropped layer finds nothing to remove
+     * and re-folds from the base the new identity was served.
+     *
+     * Only where the user changes. A claims change ({@link retireChangedClaims})
+     * and a stale cookie socket retired by its `identity` frame keep the
+     * identity in force, and the pending writes are that user's own.
+     */
+    private discardOptimisticLayers(): void {
+        this.identityRetirements += 1;
+
+        for (const state of this.subscriptions.all()) {
+            state.optimisticLayers = [];
+            state.retirements = (state.retirements ?? 0) + 1;
+        }
     }
 
     /**
@@ -7353,38 +9243,14 @@ class LunoraClient {
      * the socket lets the next frame put them straight back.
      */
     private evictPreviousIdentitySession(): void {
+        this.resetOwnClaims();
+        this.resetRoomSends();
+
         // Cache-seeded values go back to `hydratedQueryCache`, where the identity
         // gate decides whether they are ever shown again, rather than being
         // dropped outright — `revokeCacheSeededValues` also blanks their state.
         this.revokeCacheSeededValues();
-
-        for (const state of this.subscriptions.all()) {
-            state.serverBase = undefined;
-            state.serverCursor = undefined;
-            state.serverEpoch = undefined;
-            // The resubscribe rides the next socket, so this one is no longer
-            // acknowledged by anything.
-            state.acked = false;
-
-            refoldSubscription(state, undefined);
-        }
-
-        // Shapes are the same rows by another protocol, and were left untouched
-        // here: their `rows` map kept the previous user's membership (which
-        // every shape callback goes on exposing) and their `serverCursor` /
-        // `serverEpoch` kept that user's checkpoint, so the reconnect resumed
-        // from it under the NEW identity — asking the server for the diff since
-        // a cursor this view was never at, and splicing it onto rows that are
-        // not this user's. Cleared, so the resubscribe below is a cold one and
-        // the server re-seeds the membership the new identity can actually see.
-        for (const shapeState of this.shapeSubscriptions.values()) {
-            shapeState.rows.clear();
-            shapeState.serverCursor = undefined;
-            shapeState.serverEpoch = undefined;
-            emitShapeRows(shapeState);
-        }
-
-        this.bounceShardSockets();
+        this.reconnectCold();
 
         // Last: a listener reads the retired state (every value blanked).
         this.retiredIdentities += 1;
@@ -7425,29 +9291,260 @@ class LunoraClient {
         }
     }
 
+    /** Drop every room send held before the socket opened: they were made under the identity that is now going away. */
+    private resetRoomSends(): void {
+        for (const reset of this.roomIdentityResets) {
+            reset();
+        }
+    }
+
+    /**
+     * Blank every live subscription and shape, forget their resume cursors, and
+     * reconnect every socket, so each resubscribe is a cold one the server
+     * re-seeds for the identity the new socket carries. Used when the socket's
+     * credential changes: resuming from a cursor taken under the previous one
+     * would splice a diff onto rows that identity was never shown.
+     */
+    private reconnectCold(): void {
+        for (const state of this.subscriptions.all()) {
+            state.serverBase = undefined;
+            state.serverBaseCommitted = false;
+            state.serverCursor = undefined;
+            state.serverEpoch = undefined;
+            state.pendingDeltaRun = undefined;
+            // The resubscribe rides the next socket, so this one is no longer
+            // acknowledged by anything.
+            setSubscriptionAck(state, "idle");
+            state.valueReceived = false;
+
+            refoldSubscription(state, undefined);
+        }
+
+        // Shapes are the same rows by another protocol, and were left untouched
+        // here: their `rows` map kept the previous user's membership (which
+        // every shape callback goes on exposing) and their `serverCursor` /
+        // `serverEpoch` kept that user's checkpoint, so the reconnect resumed
+        // from it under the NEW identity — asking the server for the diff since
+        // a cursor this view was never at, and splicing it onto rows that are
+        // not this user's. Cleared, so the resubscribe below is a cold one and
+        // the server re-seeds the membership the new identity can actually see.
+        for (const shapeState of this.shapeSubscriptions.values()) {
+            shapeState.rows.clear();
+            shapeState.serverCursor = undefined;
+            shapeState.serverEpoch = undefined;
+            shapeState.answered = false;
+            emitShapeRows(shapeState);
+        }
+
+        // Every subscription above just lost its answer; an open socket would otherwise leave listeners counting it.
+        this.emitSyncStatus();
+
+        this.bounceShardSockets();
+    }
+
     /**
      * Close every open shard socket so each reconnects carrying the credential
      * in effect now.
      *
      * Non-terminal, unlike {@link close}: the `ShardConnection` records and the
      * subscriptions riding them survive, and the registered `close` handler
-     * (`handleDisconnect`) schedules the retry and replays the subscribes. This
-     * is the only way to move a WS credential — it lives in the upgrade URL.
+     * (`handleDisconnect`) schedules the retry and replays the subscribes. A
+     * credential rides the upgrade, so this is how a socket moves to a new
+     * identity.
+     *
+     * `inPlace` is a refreshed bearer for the same user: it is handed to each open
+     * shard socket (`SOCKET_REAUTH_PATH`), so a token lifetime no longer costs a
+     * reconnect and a full re-seed. A socket the server will not re-authenticate —
+     * not yet named by its `identity` frame, held under different claims, or behind a
+     * server without the route — is bounced. Route and scheduled sockets carry their
+     * bearer on the upgrade, so they are always bounced.
      */
-    private bounceShardSockets(): void {
-        for (const conn of this.connections.values()) {
-            if (conn.socket) {
-                // Retired as of now, not as of the `close` event — the gap
-                // between the two is where an already-queued frame lands with
-                // `conn.socket` still pointing here. See `ShardConnection.retired`.
-                conn.retired = true;
+    private bounceShardSockets(inPlace = false): void {
+        const { authToken: token, fetchImpl } = this;
 
-                try {
-                    conn.socket.close();
-                } catch {
-                    /* ignore */
-                }
+        for (const conn of this.connections.values()) {
+            const { connectionId } = conn;
+
+            if (inPlace && token !== null && fetchImpl !== undefined && conn.socket !== undefined && connectionId !== undefined && conn.retired !== true) {
+                this.reauthenticateShardSocket(conn, connectionId, token);
+            } else {
+                this.bounceShardSocket(conn);
             }
+        }
+
+        // Route and scheduled sockets carry the same identity, so they reconnect too:
+        // otherwise a signed-out user keeps receiving on them.
+        for (const bounce of this.supplementaryBounces) {
+            bounce();
+        }
+    }
+
+    /**
+     * The same user resolved under different claims. The identity fingerprint names the user, not the claims, so the
+     * read cache's own gate would accept what was read under the old ones: drop it (hydrated, pending and durable) as
+     * well as the views, so nothing read under the old claims is shown or resumed from. Queued offline mutations are
+     * kept: they carry no read data, and the server authorizes each under the new claims when it replays.
+     */
+    private retireChangedClaims(): void {
+        this.clearQueryCacheForIdentityChange();
+        this.evictPreviousIdentitySession();
+
+        // Follower tabs hold the values the leader relayed under the old claims, and a refused re-subscribe relays only
+        // an error. A blank, with no cursor, is committed by them as the value; the leader's reseed then refills it.
+        if (this.tabCoordinator?.isLeader()) {
+            for (const state of this.subscriptions.all()) {
+                this.tabCoordinator.broadcastSubscriptionData(SubscriptionRegistry.keyOf(state), undefined, undefined, undefined, this.identityFingerprint());
+            }
+        }
+    }
+
+    /**
+     * Post a credential for `conn`'s socket to {@link SOCKET_REAUTH_PATH} and bounce the socket
+     * unless the server took it. `bearer` is `null` to present the cookie session alone, which
+     * the request carries on its own (`credentials: "include"`).
+     */
+    private reauthenticateShardSocket(conn: ShardConnection, connectionId: string, bearer: null | string): void {
+        const { authToken: heldToken, fetchImpl } = this;
+        const { socket } = conn;
+
+        if (fetchImpl === undefined) {
+            return;
+        }
+
+        const attempt = (conn.reauthAttempt ?? 0) + 1;
+
+        // The periodic timer must not fire over this request with an older credential; a success re-arms it.
+        clearTimeout(conn.revalidateTimer);
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.revalidateTimer = undefined;
+
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.reauthAttempt = attempt;
+
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.reauthPending = true;
+
+        // An admin socket presents a freshly minted ticket, as its upgrade did; a failed mint is a refusal.
+        (conn.ticketed === true
+            ? withinRpcDeadline(
+                  this.connectTimeoutMs,
+                  undefined,
+                  async () => resolveWsCredential(this.wsTicket),
+                  () => new Error("LunoraClient: ws ticket provider timed out"),
+              ).catch(() => undefined)
+            : Promise.resolve(undefined)
+        )
+            .then(async (ticket) =>
+                sendControl(
+                    fetchImpl,
+                    joinUrl(this.url, reauthPath(conn.shardKey, ticket)),
+                    JSON.stringify({ connectionId }),
+                    bearer === null ? { "content-type": "application/json" } : { authorization: `Bearer ${bearer}`, "content-type": "application/json" },
+                ),
+            )
+            .then(({ text }): "changed" | "ok" | "refused" => {
+                const body = JSON.parse(text) as { error?: { code?: unknown }; ok?: unknown } | null;
+
+                // Only the route's own `{ ok: true }` counts: a catch-all 200 (an SPA fallback, a proxy) did not refresh anything.
+                if (body?.ok === true) {
+                    return "ok";
+                }
+
+                return body?.error?.code === "IDENTITY_CHANGED" ? "changed" : "refused";
+            })
+            .catch(() => "refused" as const)
+            .then((outcome) => {
+                // A newer token (for a request that presented one), or a socket that has since been replaced, is already handled by whatever replaced it.
+                if (conn.reauthAttempt !== attempt) {
+                    return undefined;
+                }
+
+                // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+                conn.reauthPending = false;
+
+                // `retired` covers a socket another socket's claims change just re-seeded everything for.
+                if (
+                    this.closed ||
+                    (bearer !== null && this.authToken !== heldToken) ||
+                    conn.connectionId !== connectionId ||
+                    conn.socket !== socket ||
+                    conn.retired === true
+                ) {
+                    return undefined;
+                }
+
+                if (outcome === "ok") {
+                    // The server now holds the refreshed bearer for this socket.
+                    // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+                    conn.upgradeBearer = bearer ?? conn.upgradeBearer;
+                    this.armSocketRevalidation(conn, conn.revalidateMs);
+                } else if (outcome === "changed") {
+                    // Same user, different claims (a role, an `orgId`): every value and shape row held was resolved
+                    // under the old ones, and a warm resume would only diff on top of them. Re-seed cold, everywhere.
+                    this.retireChangedClaims();
+                } else {
+                    this.bounceShardSocket(conn);
+                }
+
+                return undefined;
+            })
+            .catch(() => undefined);
+    }
+
+    /**
+     * Re-auth `conn`'s socket at half its revalidation window, leaving the other half for a slow
+     * worker before the server closes the socket with `4005`. A server that announced no window
+     * holds the socket to nothing, so nothing is armed.
+     */
+    private armSocketRevalidation(conn: ShardConnection, windowMs: number | undefined): void {
+        clearTimeout(conn.revalidateTimer);
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.revalidateTimer = undefined;
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.revalidateMs = typeof windowMs === "number" && windowMs > 0 ? windowMs : undefined;
+
+        if (conn.revalidateMs === undefined) {
+            return;
+        }
+
+        // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+        conn.revalidateTimer = setTimeout(() => {
+            // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+            conn.revalidateTimer = undefined;
+
+            // The credential the upgrade presented: a bearer only when it rode the handshake, else the cookie.
+            // Presenting the other one could resolve different claims and close a socket nothing changed on.
+            // A socket admitted by a single-use `wsToken` used no cookie, and the ticket cannot be replayed: it
+            // re-auths with the bearer it was minted from, or not at all (the server then closes it at the window's
+            // end and the reconnect mints again), never as a cookie socket.
+            // eslint-disable-next-line unicorn/no-null -- `null` is `reauthenticateShardSocket`'s "cookie alone", mirroring `authToken`'s cleared value
+            const bearer = conn.upgradeBearer ?? (conn.sessionToken === undefined ? null : (this.authToken ?? undefined));
+
+            if (bearer !== undefined && conn.connectionId !== undefined && conn.socket !== undefined && conn.retired !== true) {
+                this.reauthenticateShardSocket(conn, conn.connectionId, bearer);
+            }
+        }, conn.revalidateMs / 2);
+    }
+
+    private bounceShardSocket(conn: ShardConnection): void {
+        if (conn.socket) {
+            // Retired as of now, not as of the `close` event — the gap
+            // between the two is where an already-queued frame lands with
+            // `conn.socket` still pointing here. See `ShardConnection.retired`.
+            // eslint-disable-next-line no-param-reassign -- the shared ShardConnection record is advanced in place
+            conn.retired = true;
+
+            try {
+                conn.socket.close();
+            } catch {
+                /* ignore */
+            }
+        } else if (conn.providerAttempt !== undefined) {
+            // A mint still pending under the old credential would never open the shard. Restarting claims the
+            // attempt, so the superseded mint's late result returns early and only the restarted one opens.
+            this.startShardSocket(conn, conn.shardKey).catch(() => {
+                this.handleDisconnect(conn);
+            });
         }
     }
 
@@ -7529,6 +9626,128 @@ class LunoraClient {
         }
     }
 
+    /**
+     * Where a snapshot precondition's subscription stands on its socket, when
+     * comparing would mislead: `"awaiting"` while a reconnect has un-answered it
+     * and no value has answered since (the comparison would judge the previous
+     * socket's value, or a blank), `"unreadable"` once that wait ended with no
+     * value to read. `undefined` for any other precondition or subscription.
+     */
+    private snapshotAnswer(precondition: (() => boolean) | undefined): "awaiting" | "unreadable" | undefined {
+        const source = snapshotSourceOf(precondition);
+        const state = source && this.subscriptions.get(SubscriptionRegistry.key(source.functionPath, source.args, source.shardKey));
+
+        if (state === undefined) {
+            return undefined;
+        }
+
+        if (this.awaitingAnswer.has(state)) {
+            return "awaiting";
+        }
+
+        return this.answeredUnreadable.has(state) ? "unreadable" : undefined;
+    }
+
+    /**
+     * The precondition a queued write carries. A snapshot precondition reads as
+     * holding while its subscription is awaited, so `drainConflict` keeps the
+     * write rather than drop it on a blank the server acked but has not seeded
+     * yet (the drain then holds it back, {@link drainOfflineQueue}), and once the
+     * wait ended unreadable, which is no evidence the value changed.
+     */
+    private holdWhileUnanswered(precondition: (() => boolean) | undefined): (() => boolean) | undefined {
+        const source = snapshotSourceOf(precondition);
+
+        if (precondition === undefined || source === undefined) {
+            return precondition;
+        }
+
+        const guarded = (): boolean => this.snapshotAnswer(precondition) !== undefined || precondition();
+
+        registerSnapshotSource(guarded, source);
+
+        return guarded;
+    }
+
+    /**
+     * A follower's counterpart of a socket open in {@link markShardPendingAck}: every
+     * subscription awaits the leader's next relay. A follower cannot ask the leader for
+     * one, and the leader relays only the queries it holds itself, so the wait is bounded
+     * by the leader's own (an ack window and one retry) and ends unreadable, as the
+     * leader's does when it gives up.
+     */
+    private awaitLeaderAnswers(): void {
+        for (const state of this.subscriptions.all()) {
+            this.awaitLeaderAnswer(state);
+        }
+    }
+
+    /**
+     * Holds `state` for the leader's next relay. Its timer is its own, so settling
+     * one subscription early never releases another.
+     */
+    private awaitLeaderAnswer(state: SubscriptionState): void {
+        this.awaitingAnswer.add(state);
+        this.answeredUnreadable.delete(state);
+
+        clearTimeout(this.leaderAnswerTimers.get(state));
+        this.leaderAnswerTimers.set(
+            state,
+            setTimeout(() => {
+                this.leaderAnswerTimers.delete(state);
+
+                // A tab promoted since is answered by its own socket, which bounds its own wait.
+                if (this.isCrossTabFollower()) {
+                    this.settleAwaitedAnswer(state, false);
+                }
+            }, 2 * RESUBSCRIBE_ACK_TIMEOUT_MS),
+        );
+    }
+
+    /**
+     * `state` has been answered on its socket (`readable`), or will not be: release
+     * any write held for it. Not called for an `ack`, which the server sends
+     * before the seed.
+     */
+    private settleAwaitedAnswer(state: SubscriptionState, readable: boolean): void {
+        clearTimeout(this.leaderAnswerTimers.get(state));
+        this.leaderAnswerTimers.delete(state);
+
+        if (readable) {
+            this.answeredUnreadable.delete(state);
+        }
+
+        if (!this.awaitingAnswer.delete(state)) {
+            return;
+        }
+
+        if (!readable) {
+            this.answeredUnreadable.add(state);
+        }
+
+        if (this.answerHeldShards.delete(connectionKey(state.shardKey))) {
+            this.flushOfflineQueue(state.shardKey).catch(() => undefined);
+        }
+    }
+
+    /**
+     * Put back a drained write whose snapshot cannot be compared yet, and every
+     * write behind it (replaying those first would reorder the shard), recording
+     * the hold so the answer flushes again. Returns the writes that may go on.
+     */
+    private holdUndecidedWrites(key: string, drained: QueuedMutation[]): QueuedMutation[] {
+        const undecidedAt = drained.findIndex((item) => this.snapshotAnswer(item.precondition) === "awaiting");
+
+        if (undecidedAt === -1) {
+            return drained;
+        }
+
+        this.offlineQueue.requeue(drained.slice(undecidedAt));
+        this.answerHeldShards.add(key);
+
+        return drained.slice(0, undecidedAt);
+    }
+
     private async drainOfflineQueue(shardKey: string | undefined, authToken: null | string): Promise<void> {
         // Drop stale writes whose precondition no longer holds before draining
         // the remaining valid mutations for replay. Each conflicted entry is
@@ -7546,7 +9765,10 @@ class LunoraClient {
         }
 
         const key = connectionKey(shardKey);
-        const drained = this.offlineQueue.drain((item) => connectionKey(item.shardKey) === key);
+        const drained = this.holdUndecidedWrites(
+            key,
+            this.offlineQueue.drain((item) => connectionKey(item.shardKey) === key),
+        );
 
         if (drained.length === 0) {
             return;
@@ -7628,9 +9850,11 @@ class LunoraClient {
 
             toRequeue.push(...outcome.requeue);
 
-            if (outcome.stop) {
-                // A whole-batch transport failure — leave every not-yet-sent write
-                // queued (in order) for the next reconnect rather than sending on.
+            if (outcome.stop || outcome.requeue.length > 0) {
+                // A whole-batch transport failure, or a write of this chunk the
+                // server asked to retry — leave every not-yet-sent write queued (in
+                // order) rather than sending on: a later chunk committing first
+                // would put the retried write after writes issued behind it.
                 toRequeue.push(...encodable.slice(start + MAX_BATCH_ENTRIES));
 
                 break;
@@ -7706,13 +9930,12 @@ class LunoraClient {
      * Consume this shard's retry delay and re-flush it once the delay has
      * elapsed.
      *
-     * Two things record a delay for it to consume: a failure the server or an
-     * edge ANSWERED (see {@link replayRetryDelayMs}) and a flush that HELD every
-     * entry it drained (see {@link LunoraClient.noteHeldRetryDelay}). Both happen
-     * over a socket that stays open, so without this the writes sit queued
-     * indefinitely; a `fetch` that never landed records nothing, because the
-     * reconnect that follows flushes the queue anyway. One pending timer per
-     * shard; a second delay replaces it rather than stacking flushes.
+     * Two things record a delay for it to consume: a transient failure (a server
+     * or edge answer, or a `fetch` that rejected; see {@link replayRetryDelayMs})
+     * and a flush that HELD every entry it drained (see
+     * {@link LunoraClient.noteHeldRetryDelay}). Both happen over a socket that
+     * stays open, so without this the writes sit queued indefinitely. One pending
+     * timer per shard; a second delay replaces it rather than stacking flushes.
      *
      * Nothing left to retry on this key (drained, closed, or no delay) drops its
      * backoff state, which is both the reset after progress and what bounds the
@@ -8071,6 +10294,59 @@ class LunoraClient {
         this.emitItemSettled(item, "committed", error);
     }
 
+    /**
+     * Count a failed replay attempt against `item` and report whether it was the
+     * last attempt the write gets.
+     *
+     * Only a write queued after an ambiguous direct send is capped: its caller is
+     * still waiting, so every transient failure of it except a rate limit, a
+     * refused credential, or a network failure while the device is offline
+     * (a `TypeError` or a transport error, which say nothing about the origin's verdict
+     * and can last as long as the device is offline) counts against {@link MAX_AMBIGUOUS_SEND_ATTEMPTS}.
+     * A timeout, `SHARD_UNAVAILABLE`, or a network failure while the device is online still counts. Any other write is never
+     * capped here: a write the shard fails deterministically arrives with a coded
+     * verdict (the handler's own code, `RPC_FAILED`, `BATCH_ENTRY_FAILED`) that
+     * {@link isTransientReplayFailure} settles terminally on the first attempt, and
+     * a transient failure says nothing about the write itself.
+     */
+    private spendsLastReplayAttempt(item: QueuedMutation, error: unknown): boolean {
+        if (item.id === undefined) {
+            return false;
+        }
+
+        const code = (error as { code?: string } | null | undefined)?.code;
+
+        if (
+            item.ambiguousSend !== true ||
+            isAuthReplayFailure(error) ||
+            code === "RATE_LIMITED" ||
+            code === "TOO_MANY_REQUESTS" ||
+            ((error instanceof TypeError || error instanceof TransportError) && deviceOffline()) ||
+            !isTransientReplayFailure(error)
+        ) {
+            return false;
+        }
+
+        const attempts = (this.replayAttempts.get(item.id) ?? 0) + 1;
+
+        this.replayAttempts.set(item.id, attempts);
+
+        return attempts >= MAX_AMBIGUOUS_SEND_ATTEMPTS;
+    }
+
+    /** Settle, terminally, the ambiguous-send writes among `items` that `error` was the last attempt for; the rest stay queued. */
+    private keepUnexhaustedAmbiguousWrites(items: QueuedMutation[], error: unknown): QueuedMutation[] {
+        return items.filter((item) => {
+            if (item.ambiguousSend === true && this.spendsLastReplayAttempt(item, error)) {
+                this.settleReplayTerminal(item, error);
+
+                return false;
+            }
+
+            return true;
+        });
+    }
+
     /** Settle a write the server reached a coded verdict on: replaying would re-trigger the same failure (a poison-message loop), so drop it. */
     private settleReplayTerminal(item: QueuedMutation, error: unknown): void {
         this.unpersist(item.id);
@@ -8130,7 +10406,7 @@ class LunoraClient {
                     continue;
                 }
 
-                if (!this.shouldRequeueReplayFailure(error, authToken)) {
+                if (!this.shouldRequeueReplayFailure(error, authToken) || this.spendsLastReplayAttempt(item, error)) {
                     this.settleReplayTerminal(item, error);
 
                     continue;
@@ -8208,30 +10484,53 @@ class LunoraClient {
             return await this.replayBatchedHalves(items, shardKey, authToken);
         }
 
+        const { fetchImpl } = this;
         let response: Response;
+        let payload: { error?: unknown; results?: { body?: RpcEnvelopeBody; id?: number }[] } | undefined;
 
         try {
-            response = await this.fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
-                body,
-                // No shard key: a batch's entries may target several shards, and
-                // one outbound `x-lunora-min-seq` cannot state a requirement for
-                // all of them. Writes go to the owner regardless, so omitting it
-                // costs nothing — the per-entry cursors are recorded on the way
-                // back out (`settleReplaySuccess`).
-                //
-                // One request, one identity: every write in the chunk passed the
-                // replay gate against the same one, so the first stamped write
-                // speaks for all of them (an unstamped legacy write has none).
-                headers: this.rpcRequestHeaders({
-                    attachBookmark: true,
-                    authToken,
-                    ...replayExpectation(items.find((item) => item.identity !== undefined)?.identity, authToken),
-                }),
-                method: "POST",
-            });
-        } catch {
-            // Transport failure (offline mid-flush) — nothing committed; retry all.
-            return { requeue: items, stop: true };
+            // The deadline covers the body read too: a batch that stalls mid-body
+            // would otherwise hold this shard's replay chain, and every write
+            // behind it, open for as long as the platform lets the request live.
+            ({ payload, response } = await withinRpcDeadline(this.rpcTimeoutMs, undefined, async (signal) => {
+                const reply = await fetchImpl(joinUrl(this.url, RPC_BATCH_PATH), {
+                    body,
+                    // No shard key: a batch's entries may target several shards, and
+                    // one outbound `x-lunora-min-seq` cannot state a requirement for
+                    // all of them. Writes go to the owner regardless, so omitting it
+                    // costs nothing — the per-entry cursors are recorded on the way
+                    // back out (`settleReplaySuccess`).
+                    //
+                    // One request, one identity: every write in the chunk passed the
+                    // replay gate against the same one, so the first stamped write
+                    // speaks for all of them (an unstamped legacy write has none).
+                    headers: this.rpcRequestHeaders({
+                        attachBookmark: true,
+                        authToken,
+                        ...replayExpectation(items.find((item) => item.identity !== undefined)?.identity, authToken),
+                    }),
+                    method: "POST",
+                    signal,
+                });
+
+                // A `413` is not a batch reply; the halving below handles it.
+                if (reply.status === 413 && items.length > 1) {
+                    return { payload: undefined, response: reply };
+                }
+
+                try {
+                    return { payload: await reply.json(), response: reply };
+                } catch {
+                    return { payload: undefined, response: reply };
+                }
+            }));
+        } catch (error) {
+            // Transport failure (a `fetch` that rejected, or the exchange timed out) —
+            // nothing is known to have committed; retry all. The socket may well be
+            // open, so no reconnect will re-flush: schedule one.
+            this.noteReplayRetryDelay(shardKey, error, authToken);
+
+            return { requeue: this.keepUnexhaustedAmbiguousWrites(items, error), stop: true };
         }
 
         const bookmark = response.headers.get("x-d1-bookmark");
@@ -8249,17 +10548,12 @@ class LunoraClient {
             return await this.replayBatchedHalves(items, shardKey, authToken);
         }
 
-        let payload: { error?: unknown; results?: { body?: RpcEnvelopeBody; id?: number }[] };
-
-        const retryAfterHeader = response.headers.get("retry-after");
-
-        try {
-            payload = await response.json();
-        } catch {
+        // `null` parses as JSON but is no more an envelope than an HTML page is.
+        if (!payload) {
             // Not a Lunora envelope at all (an edge's HTML page) — classified by
             // HTTP status, since re-queuing every such reply unconditionally
             // parks a chunk the edge REFUSED at the head of the outbox forever.
-            return this.settleWholeBatchError(items, unparseableResponseError(response.status, response.statusText, retryAfterHeader), shardKey, authToken);
+            return this.settleWholeBatchError(items, unparseableResponseError(response.status, response.statusText, response.headers), shardKey, authToken);
         }
 
         // Whole-batch rejection with no per-slot results: one outcome covering
@@ -8269,17 +10563,17 @@ class LunoraClient {
         // codeless failure terminally, so a proxy's `{"error": "bad gateway"}`
         // read as an envelope destroyed every durable write in the chunk, where
         // the same reply classified by its 502 re-queues them.
-        if (!payload.results) {
+        if (!Array.isArray(payload.results)) {
             const whole = errorEnvelopeOf(payload);
             const error =
                 whole === undefined
-                    ? unparseableResponseError(response.status, response.statusText, retryAfterHeader)
-                    : reconstructErrorWithRetryAfter(whole, retryAfterHeader);
+                    ? unparseableResponseError(response.status, response.statusText, response.headers)
+                    : reconstructErrorWithRetryAfter(whole, response.headers);
 
             return this.settleWholeBatchError(items, error, shardKey, authToken);
         }
 
-        return { requeue: this.settleReplayBatchSlots(items, payload.results, shardKey, authToken), stop: false };
+        return { requeue: this.settleReplayBatchSlots(items, payload.results, shardKey, authToken, response.headers), stop: false };
     }
 
     /**
@@ -8300,7 +10594,7 @@ class LunoraClient {
         if (error instanceof TransportError || (error.code !== undefined && this.shouldRequeueReplayFailure(error, authToken))) {
             this.noteReplayRetryDelay(shardKey, error, authToken);
 
-            return { requeue: items, stop: true };
+            return { requeue: this.keepUnexhaustedAmbiguousWrites(items, error), stop: true };
         }
 
         for (const item of items) {
@@ -8324,7 +10618,9 @@ class LunoraClient {
         const middle = Math.ceil(items.length / 2);
         const first = await this.replayBatched(items.slice(0, middle), shardKey, authToken);
 
-        if (first.stop) {
+        // A retried write in the first half holds the second back too, as between chunks:
+        // sending on would let writes issued behind it commit first.
+        if (first.stop || first.requeue.length > 0) {
             return { requeue: [...first.requeue, ...items.slice(middle)], stop: true };
         }
 
@@ -8351,6 +10647,7 @@ class LunoraClient {
         results: { body?: RpcEnvelopeBody; id?: number }[],
         shardKey: string | undefined,
         authToken: null | string,
+        responseHeaders: Headers,
     ): QueuedMutation[] {
         const bySlot = indexReplaySlots(results);
         const requeue: QueuedMutation[] = [];
@@ -8358,7 +10655,7 @@ class LunoraClient {
         let refused = false;
 
         for (const [index, item] of items.entries()) {
-            const verdict = replaySlotVerdict(bySlot.get(index));
+            const verdict = replaySlotVerdict(bySlot.get(index), responseHeaders);
 
             switch (verdict.kind) {
                 case "committed": {
@@ -8370,7 +10667,7 @@ class LunoraClient {
                 case "errored": {
                     refused ||= isAuthReplayFailure(verdict.error);
 
-                    if (this.shouldRequeueReplayFailure(verdict.error, authToken)) {
+                    if (this.shouldRequeueReplayFailure(verdict.error, authToken) && !this.spendsLastReplayAttempt(item, verdict.error)) {
                         this.noteReplayRetryDelay(shardKey, verdict.error, authToken);
                         requeue.push(item);
                     } else {
@@ -8381,7 +10678,17 @@ class LunoraClient {
                 }
                 case "unanswered": {
                     // The server never returned this slot. It may or may not have committed,
-                    // so retry under the same `mutationId` (idempotent).
+                    // so retry under the same `mutationId` (idempotent). Over a socket that
+                    // stays open no reconnect will flush it, so schedule the retry here.
+                    const unanswered = withResponseHeaders(unreadableSlotError(), responseHeaders);
+
+                    if (this.spendsLastReplayAttempt(item, unanswered)) {
+                        this.settleReplayTerminal(item, unanswered);
+
+                        break;
+                    }
+
+                    this.noteReplayRetryDelay(shardKey, unanswered, authToken);
                     requeue.push(item);
 
                     break;
@@ -8413,4 +10720,5 @@ export type {
     MutationSettledEvent,
     ReplayCredential,
     ReplayIdentityVerdict,
+    SyncStatus,
 };

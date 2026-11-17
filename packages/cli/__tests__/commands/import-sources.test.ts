@@ -49,7 +49,12 @@ const importRecorder = () => {
     const imported: { doc: Record<string, unknown>; table: string }[] = [];
 
     return {
-        handle: (body: string | Uint8Array | undefined) => {
+        handle: (body: string | Uint8Array | undefined, dryRun = false) => {
+            // A check writes nothing and records nothing: it only answers whether the rows would be refused.
+            if (dryRun) {
+                return jsonResponse({ conflicts: 0, dryRun: true, errors: [], inserted: {}, received: 0 });
+            }
+
             const inserted: Record<string, number> = {};
 
             for (const line of (typeof body === "string" ? body : new TextDecoder().decode(body)).split("\n").filter((entry) => entry.trim().length > 0)) {
@@ -72,8 +77,8 @@ const sink = (): Sink => {
     return {
         fetchImpl: async (input, init) =>
             new URL(input).pathname === "/_lunora/admin/import"
-                ? recorder.handle(init?.body)
-                : jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 }),
+                ? recorder.handle(init?.body, new URL(input).searchParams.get("dryRun") === "true")
+                : jsonResponse({ conflicts: 0, dryRun: new URL(input).searchParams.get("dryRun") === "true", errors: [], inserted: {}, received: 0 }),
         imported: recorder.imported,
     };
 };
@@ -485,6 +490,64 @@ describe("lunora import --from firebase", () => {
         expect(imported.map((row) => row.doc["_id"])).toStrictEqual(["p1", "p2"]);
     });
 
+    it("imports bare NDJSON documents carrying __name__, taking the id from it", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({
+            "t.ndjson": [
+                JSON.stringify({ __name__: "projects/p/databases/(default)/documents/t/x1", title: { stringValue: "a" } }),
+                JSON.stringify({ __name__: "projects/p/databases/(default)/documents/t/x2", title: { stringValue: "b" } }),
+            ].join("\n"),
+        });
+
+        const { imported } = await runImport(root, "firebase");
+
+        expect(imported.map((row) => row.doc)).toStrictEqual([
+            { _id: "x1", title: "a" },
+            { _id: "x2", title: "b" },
+        ]);
+    });
+
+    it("takes a bare document's id from __name__ even when it has a typed name field", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({
+            "t.ndjson": JSON.stringify({ __name__: "projects/p/databases/(default)/documents/t/x1", name: { stringValue: "Ada" } }),
+        });
+
+        const { imported } = await runImport(root, "firebase");
+
+        expect(imported.map((row) => row.doc)).toStrictEqual([{ _id: "x1", name: "Ada" }]);
+    });
+
+    it("imports bare array documents carrying __name__, taking the id from it", async () => {
+        expect.assertions(1);
+
+        const root = writeDump({
+            "t.json": JSON.stringify([
+                { __name__: "projects/p/databases/(default)/documents/t/x1", title: { stringValue: "a" } },
+                { __name__: "projects/p/databases/(default)/documents/t/x2", title: { stringValue: "b" } },
+            ]),
+        });
+
+        const { imported } = await runImport(root, "firebase");
+
+        expect(imported.map((row) => row.doc)).toStrictEqual([
+            { _id: "x1", title: "a" },
+            { _id: "x2", title: "b" },
+        ]);
+    });
+
+    it("rejects a bare document field that is a raw value rather than a typed one", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({
+            "t.json": JSON.stringify([{ __name__: "projects/p/databases/(default)/documents/t/x1", oops: 5 }]),
+        });
+
+        await expectAbort(root, "firebase", /expected a Firestore typed value/);
+    });
+
     it("rejects a document with no id rather than inventing one", async () => {
         expect.assertions(3);
 
@@ -501,6 +564,31 @@ describe("lunora import --from firebase", () => {
         });
 
         await expectAbort(root, "firebase", /unrecognised Firestore value/);
+    });
+
+    it.each(["NaN", "Infinity", "-Infinity", "", " ", null, true, "0x10"])(
+        "rejects a non-finite or malformed doubleValue %j rather than writing a number",
+        async (doubleValue) => {
+            expect.assertions(3);
+
+            const root = writeDump({
+                "t.json": JSON.stringify({ documents: [{ fields: { ratio: { doubleValue } }, name: "projects/p/databases/(default)/documents/t/x1" }] }),
+            });
+
+            await expectAbort(root, "firebase", /not a finite number/);
+        },
+    );
+
+    it("rejects a document whose own `_id` field would collide with the reserved id", async () => {
+        expect.assertions(3);
+
+        const root = writeDump({
+            "t.json": JSON.stringify({
+                documents: [{ fields: { _id: { stringValue: "mine" } }, name: "projects/p/databases/(default)/documents/t/x1" }],
+            }),
+        });
+
+        await expectAbort(root, "firebase", /collides with the reserved id field/);
     });
 
     it("refuses --with-storage without --storage-dir, which would migrate nothing", async () => {
@@ -536,7 +624,7 @@ describe("storage transfer with a resumable checkpoint", () => {
             const method = init?.method ?? "GET";
 
             if (url.pathname === "/_lunora/admin/import") {
-                return recorder.handle(init?.body);
+                return recorder.handle(init?.body, url.searchParams.get("dryRun") === "true");
             }
 
             if (url.pathname === "/_lunora/admin/storage" && method === "GET") {
@@ -1057,7 +1145,7 @@ describe("the live Supabase storage path", () => {
             }
 
             if (url.pathname === "/_lunora/admin/import") {
-                return jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 });
+                return jsonResponse({ conflicts: 0, dryRun: url.searchParams.get("dryRun") === "true", errors: [], inserted: {}, received: 0 });
             }
 
             throw new Error(`unexpected ${method} ${input}`);
@@ -1150,7 +1238,7 @@ describe("the live Supabase storage path", () => {
                           status: 401,
                           text: async () => "Invalid JWT",
                       }
-                    : jsonResponse({ conflicts: 0, errors: [], inserted: {}, received: 0 }),
+                    : jsonResponse({ conflicts: 0, dryRun: new URL(input).searchParams.get("dryRun") === "true", errors: [], inserted: {}, received: 0 }),
             file: root,
             from: "supabase",
             logger,

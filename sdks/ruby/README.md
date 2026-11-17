@@ -4,7 +4,7 @@ A **protocol-conformant** Ruby client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, which hands back an `Enumerator` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, which hands back an `Enumerator` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribe_shape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -41,14 +41,101 @@ messages = client.query("messages:list", { "channel" => "general" })
 client.mutation("messages:send", { "channel" => "general", "text" => "hi" })
 client.mutation("ledger:add", { "amount" => Lunora::WireBigInt.new(1000) })
 
-# Live subscription: attach your socket, then feed it frames.
+# Live subscription: attach your socket (it sends connect first), then feed it frames.
 client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) })
 unsubscribe = client.subscribe("messages:list", { "channel" => "general" }, method(:render))
 ```
 
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. `Net::HTTP` does not follow
+redirects on its own; keep it that way and do not add a redirect-following wrapper
+around the poster.
+
 `client.handle_frame(raw)` is what you call with each inbound WebSocket message;
 `client.resend_subscriptions` re-subscribes everything after a reconnect —
 queries and shape views alike — carrying each one's resume cursor or checkpoint.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handle_frame` returns the frame's type). `attach_socket` sends the `connect` frame
+first on each socket open, then the whisper joins; `resend_subscriptions` follows it
+with the queries and shape views, and the loop then replays this shard's queued writes:
+
+```ruby
+client.session_token = session # the WebSocket session credential; see "Token expiry" below
+client.on_token_expired(-> { client.session_token = refresh_session }) # your refresh; assumed to return the new credential
+
+attempt = 0
+loop do
+  retry_thread = nil
+  retry_stop = false # set in ensure, so the retry thread does not flush after the run ends
+  socket = nil
+  close_code = close_reason = nil # the close frame that ended the run; nil when the socket dropped without one
+  begin
+    socket = connect # your socket library
+    client.attach_socket(->(frame) { socket.send(JSON.generate(frame)) }) # sends connect first, under session_token
+    client.resend_subscriptions
+    report = client.flush_offline_queue # HTTP replay; transient failures stay queued
+    if report.retry_after_ms || report.requeued.any?
+      # requeued writes never stop the read loop: retry on a thread, stopped in ensure
+      retry_thread = Thread.new do
+        backoff = 1.0
+        wait = report.retry_after_ms ? report.retry_after_ms / 1000.0 : backoff / 2 + rand * backoff / 2
+        loop do
+          break if retry_stop # the run ended during the last flush: do not sleep before exiting
+          sleep(wait)
+          break if retry_stop
+          again = client.flush_offline_queue
+          break if again.requeued.empty? && again.retry_after_ms.nil?
+          # a persistent transient failure backs off instead of replaying every second
+          backoff = [backoff * 2, 30.0].min
+          wait = again.retry_after_ms ? again.retry_after_ms / 1000.0 : backoff / 2 + rand * backoff / 2
+        end
+      end
+    end
+    while (raw = socket.receive)
+      attempt = 0 if client.handle_frame(raw) == "ack"
+    end
+    close_code, close_reason = socket.close_frame # assumed: your socket library reports the close code and reason
+  rescue StandardError
+    nil
+  ensure
+    retry_stop = true
+    begin
+      retry_thread&.wakeup # end a pending sleep; an in-flight flush finishes first
+    rescue ThreadError
+      nil # the thread finished between the last check and this wakeup
+    end
+    begin
+      retry_thread&.join # so a requeued write is seen by the next run's flush
+    rescue StandardError
+      nil # a flush that raised must not skip the close below
+    end
+    socket&.close # assumed: connect returns an IO-like socket; close it so each reconnect frees the last one
+  end
+  client.detach_socket(close_code, close_reason)
+  delay = [30.0, 2.0**[attempt, 5].min].min
+  sleep(delay / 2 + rand * delay / 2)
+  attempt += 1
+end
+```
+
+A requeued or rate-limited replay must not stop the read loop: the retry runs on a thread that is killed when the socket run ends, so live updates keep flowing meanwhile.
+
+`attach_socket(sender, context = nil)` sends `connect` as the first frame of every socket open: the client id, the `context` when you pass one, and the session credential as `token` when one is set. The session credential is `client.session_token`, separate from the RPC bearer (`auth_token`), and it never goes in the socket URL. A deployment that sets `LUNORA_WS_BEARER` closes a socket whose first frame is not that `connect` with a matching `token` (close code 4003). The only `?token=` a client sends is an admin ticket.
+
+### Token expiry
+
+`detach_socket(close_code, close_reason)` takes the close frame that ended the socket (`nil` for none), marks the client offline, and notifies the `on_token_expired` listeners when the credential needs replacing:
+
+- A `4001` close always notifies.
+- A `4003` close notifies once per credential generation. A new `session_token` starts a new generation. A socket that opened under a credential you have since replaced notifies nothing. A `4003` whose reason is exactly `connect deadline` notifies nothing, because that socket never sent `connect`.
+- A `TOKEN_EXPIRED` error frame notifies, and is not routed to its subscription. An `UNAUTHENTICATED` error frame is routed to its subscription like any other error.
+
+`client.on_token_expired(listener)` returns a handle that unregisters the listener. A listener that raises does not stop the others or the socket read loop.
+
+### Whispers and rooms
+
+`client.whisper_subscribe(topic) { |value| ... }` joins a topic: the first listener sends `whisper_subscribe`, and removing the last one sends `whisper_unsubscribe`. Each attach rejoins every topic after `connect`. `client.whisper(topic, data)` relays `data` to the topic's other members. It is not queued: it returns `false`, and sends nothing, when no socket is attached. `client.connect_room(name) { |message| ... }` joins the topic `room:<name>` and returns a handle whose `send(message)` relays to the room and whose `close` leaves it. A room is never acknowledged, so there is nothing to wait for before sending.
 
 `handle_frame` never raises into your read loop: a frame that is not JSON, or
 JSON not shaped like a server frame, is ignored (a non-integer `cursor` is not
@@ -64,7 +151,7 @@ a cold `shape_subscribe` so the server re-seeds it.
 parsed JSON response — or the raw text when it is not JSON. A body that is not a
 JSON object raises `Lunora::ApiError` `INTERNAL`, never a `NoMethodError`.
 
-`client.close` rejects every queued write and ends every `stream` enumerator
+`client.close` rejects every queued write and ends every `watch` enumerator
 once it has yielded what it already received. The client's `inspect` (and so
 `p`/`pp`) never shows the auth token.
 
@@ -115,6 +202,16 @@ flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.on_mutation_settled`.
 
+A write that must never sit on disk — a credential, a one-time token — passes
+`online_only: true`. It is never queued, persisted or replayed: where a normal
+write would be queued, `submit` raises `Lunora::OfflineError` coded
+`OFFLINE_NOT_QUEUED` before any optimistic layer is installed, and its arguments
+never reach the persistence adapter. It does not wait for a flush or queue behind
+pending writes, so it may land before an older queued write to the same document.
+A send that fails with no server reply while the socket is down (a refused
+connection, a DNS failure, a timeout) raises the same `OfflineError`, with the
+transport error as its `cause`.
+
 The durable record holds the **wire** form of the args, so a store that
 serialises (a file, a SQLite text column) round-trips a `WireBigInt`,
 `WireBytes`, `WireDate` or `WireMap` argument unchanged. A restored record whose
@@ -127,7 +224,7 @@ re-queued, never dropped; `FlushReport#retry_after_ms` carries the envelope's
 time remaining.
 
 A replay is classified the same way whether the write went out alone or in a
-batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+batch: a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
 the rate-limit codes and a refused credential — `UNAUTHORIZED`, `TOKEN_EXPIRED`,
 `UNAUTHENTICATED`, held until a token refresh: nothing flushes on its own when
 `client.auth_token` changes, so call `flush_offline_queue` after setting it, as

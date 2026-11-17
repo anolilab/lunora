@@ -137,10 +137,37 @@ export function Chat() {
 `useQuery` opens a live WebSocket subscription; `send` is optimistic and, thanks
 to the AsyncStorage persistence, queued and retried when offline.
 
+## HTTP streams
+
+`useHttpStream` (`httpRoute.<verb>(path).stream()` routes) runs on native, but
+**buffered**: React Native's `fetch` is the `whatwg-fetch` polyfill, which
+defines no `response.body` stream, so the client reads the whole payload through
+`response.text()` and every chunk arrives together when the response lands
+rather than as the handler yields it. Under `react-native-web` a real browser
+`fetch` is in charge, so the chunks stream incrementally there.
+
+To render a long route's chunks as they are written — tokens as a model emits
+them — pass a `fetch` that exposes `response.body`; Expo's does:
+
+```ts
+import { fetch as expoFetch } from "expo/fetch";
+
+import { createLunoraClient, withoutAmbientCookies } from "@lunora/react-native";
+
+const client = createLunoraClient({ fetch: withoutAmbientCookies(expoFetch), url: process.env.EXPO_PUBLIC_LUNORA_URL! });
+```
+
+A custom `fetch` skips the `credentials: "omit"` wrapper
+`createLunoraClient` applies to the global one (see the warning above), so wrap
+it in `withoutAmbientCookies` yourself — otherwise the native cookie jar
+reintroduces the `FORBIDDEN_ORIGIN` loop. The client's `fetch` option feeds
+`client.httpStream` and `useHttpStream`; a standalone
+`httpStream(route, args, { fetch })` call takes its own.
+
 ## Local-first (shapes, custom mutators, TanStack DB)
 
 Lunora's [local-first tier](/docs/concepts/local-first) — `defineShape`,
-`defineMutator`, `defineCollections`, `bindMutators`, `useLiveQuery` — runs on
+`defineMutator`, `defineCollections`, `bindMutators`, plus TanStack DB's `useLiveQuery` — runs on
 React Native unchanged. One platform prerequisite:
 
 <Callout type="warn">
@@ -150,7 +177,7 @@ client-side id through `@tanstack/db`'s `safeRandomUUID`, which needs
 `crypto.randomUUID` or `crypto.getRandomValues`. Hermes ships **neither**.
 Without the polyfill `@lunora/db` throws at setup naming this; before that guard
 existed the first write failed as an unhandled promise rejection with
-`No secure random number generator available` — no UI error, the row simply
+`No secure random number generator available` — no UI error, and the row
 never appeared.
 
 </Callout>
@@ -185,8 +212,8 @@ write has to survive being made offline.
 
 ## Authentication (better-auth + Expo)
 
-The session is sent as a **bearer** token: the HTTP RPC carries it in the
-`Authorization` header and the live socket in the `?token=` query param (see
+The session is sent as a **bearer** token: the HTTP RPC and, on native, the live
+socket's upgrade both carry it in the `Authorization` header (see
 [How auth reaches the live socket](#how-auth-reaches-the-live-socket)).
 The [better-auth Expo](https://www.better-auth.com/docs/integrations/expo)
 plugin persists the session in `SecureStore`; `expoBearerToken` reads the token
@@ -213,8 +240,10 @@ export const client = createLunoraClient({
 });
 ```
 
-Bridge the session into the client whenever it changes: `setAuthToken` for HTTP,
-`setWsToken` for the socket.
+Bridge the session into the client whenever it changes with `setAuthToken`. It
+rides HTTP RPC as `Authorization: Bearer …`, and on native `createLunoraClient`
+sends it as the WebSocket upgrade's `Authorization` header too (a sign-in
+reconnects the socket to present it).
 
 ```tsx title="App.tsx"
 import { expoBearerToken } from "@lunora/react-native/auth";
@@ -226,7 +255,7 @@ import { client } from "./lunora";
 // inside a component that renders once the session is known:
 const { data: session } = authClient.useSession();
 
-// `expoBearerToken` is async since better-auth 1.7.1, and an async function is
+// `expoBearerToken` is async since better-auth 1.7, and an async function is
 // not a valid effect cleanup return — so kick off a promise instead. `cancelled`
 // is load-bearing: two session changes in quick succession leave two reads in
 // flight, and without it the slower one reinstates the previous session's token.
@@ -236,8 +265,7 @@ useEffect(() => {
     void (async () => {
         const token = await expoBearerToken(authClient);
         if (cancelled) return;
-        client.setAuthToken(token); // HTTP `Authorization: Bearer …`
-        client.setWsToken(token ?? undefined); // WS `?token=…`
+        client.setAuthToken(token); // HTTP + native WS upgrade `Authorization: Bearer …`
     })();
 
     return () => {
@@ -246,8 +274,8 @@ useEffect(() => {
 }, [session]);
 ```
 
-On the **server**, add better-auth's `expo()` and `bearer()` plugins, and fold
-the socket's `?token=` into an `Authorization` header in `resolveIdentity`:
+On the **server**, add better-auth's `expo()` and `bearer()` plugins and read
+the session from the request headers in `resolveIdentity`:
 
 ```ts
 import { bearer } from "@lunora/auth/plugins";
@@ -257,11 +285,9 @@ import { expo } from "@better-auth/expo";
 // authOptions.trustedOrigins: ["myapp://"]
 
 // createWorker({
+//   // HTTP RPC and the native WebSocket upgrade both carry `Authorization`.
 //   resolveIdentity: async (request) => {
-//     const headers = new Headers(request.headers);
-//     const wsToken = new URL(request.url).searchParams.get("token");
-//     if (wsToken && !headers.has("authorization")) headers.set("authorization", `Bearer ${wsToken}`);
-//     const session = await auth.api.getSession({ headers });
+//     const session = await auth.api.getSession({ headers: request.headers });
 //     return session?.user?.id ? { userId: session.user.id } : null;
 //   },
 // });
@@ -275,10 +301,16 @@ Lunora's runtime enables a CSRF Origin-check by default: it rejects any
 state-changing HTTP request or WebSocket upgrade that carries a `Cookie` but no
 trusted `Origin`. React Native sends no `Origin`, so a cookie credential is
 rejected once signed in. A **bearer** token is the credential instead: the HTTP
-RPC sends `Authorization: Bearer <token>`; the socket can't set headers from a
-browser, so the token rides `?token=`, and the worker's `resolveIdentity` folds it
-back into an `Authorization` header for better-auth's `bearer` plugin. The same
-wiring works unchanged on `react-native-web`.
+RPC sends `Authorization: Bearer <token>`, and on native the WebSocket upgrade
+carries the same header (`createLunoraClient` adds it from `setAuthToken`), so
+better-auth's `bearer` plugin resolves both in `resolveIdentity`. The bearer is
+never sent in the URL. `setWsToken` is not for the session token: it sends its
+value in the `connect` frame, which the server checks against the shared
+`LUNORA_WS_BEARER` gate. Leave that variable unset for an Expo app: a shipped app
+cannot hold the shared secret, and a session token does not match it, so a server
+that sets it closes every Expo socket with `4003`. Under `react-native-web`
+the browser socket cannot set a header; the better-auth session cookie
+authenticates it there, so serve the worker same-site with the web app.
 
 <Callout type="warn">
 

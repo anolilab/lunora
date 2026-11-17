@@ -12,11 +12,15 @@ library;
 /// rejected the write, which is terminal; an uncoded throw is a transport
 /// failure, which is transient and re-queues.
 class LunoraApiException implements Exception {
-  const LunoraApiException(this.code, this.message, [this.data, this.transient = false]);
+  const LunoraApiException(this.code, this.message, [this.data, this.transient = false, this.cause]);
 
   final String code;
   final String message;
   final Object? data;
+
+  /// The transport error behind a refusal that was raised instead of the raw
+  /// throw, so the caller can still see why the write never reached the server.
+  final Object? cause;
 
   /// The call never reached a verdict: a reply carrying no error envelope at all
   /// (an edge error page, a WAF block, a proxy, a body that is not a JSON
@@ -51,6 +55,10 @@ const String offlineQueueOverflow = 'OFFLINE_QUEUE_OVERFLOW';
 /// write was discarded instead of being sent against state it no longer suits.
 const String offlinePreconditionFailed = 'OFFLINE_PRECONDITION_FAILED';
 
+/// An `onlineOnly` write was refused because the connection is not live, so it
+/// was never queued, persisted or sent.
+const String offlineNotQueued = 'OFFLINE_NOT_QUEUED';
+
 /// The client was closed with writes still queued.
 const String clientClosed = 'CLIENT_CLOSED';
 
@@ -75,7 +83,7 @@ const String offlineWriteUnencodable = 'OFFLINE_WRITE_UNENCODABLE';
 /// and the distinction is load-bearing: a replay treats every OTHER coded error
 /// as terminal, so without this list a shard that was briefly unreachable would
 /// permanently reject a durable write the server never even saw.
-const Set<String> transientBatchErrorCodes = <String>{'SHARD_ERROR', 'SHARD_UNAVAILABLE'};
+const Set<String> transientBatchErrorCodes = <String>{'DELIVERY_FENCED', 'SHARD_ERROR', 'SHARD_UNAVAILABLE'};
 
 /// Codes that say "not now" rather than "no".
 ///

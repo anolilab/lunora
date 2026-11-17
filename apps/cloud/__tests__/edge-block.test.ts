@@ -271,13 +271,13 @@ describe("edge block — stale mappings fail closed", () => {
 
         return {
             ...store,
-            get: async (id, table) => {
+            get: async (table, id) => {
                 if (id === "dom_1" && !changed) {
                     changed = true;
                     change();
                 }
 
-                return store.get(id, table);
+                return store.get(table, id);
             },
         };
     };

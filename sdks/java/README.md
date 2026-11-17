@@ -4,7 +4,7 @@ A **protocol-conformant** Java client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, a closeable `Iterable` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, a closeable `Iterable` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -31,6 +31,7 @@ retries and socket library:
 Client client = new Client("https://my-app.example.com", myPoster);
 client.identity(currentUserId);
 client.authToken(currentBearer);
+client.wsToken(() -> currentBearer); // the session credential, sent in the first connect frame
 // The client id is minted per instance. Pin a stable per-device one only when
 // the offline queue is durable — a replayed write is namespaced server-side
 // under the id that issued it.
@@ -39,9 +40,15 @@ Object messages = client.query("messages:list", Map.of("channel", "general"), nu
 client.mutation("messages:send", Map.of("channel", "general", "text", "hi"), null, null);
 
 // Live subscription: attach your socket, then feed it frames.
-client.attachSocket(frame -> socket.send(Json.write(frame)));
+// attachSocket sends the connect frame itself, carrying the wsToken supplier: do not send another.
+client.attachSocket(frame -> socket.send(Json.write(frame)), null);
 Runnable unsubscribe = client.subscribe("messages:list", args, onData, onError, null);
 ```
+
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. `java.net.http.HttpClient`
+already refuses them (`HttpClient.Redirect.NEVER` is its default); keep it that way
+and do not set `followRedirects(...)` on the builder.
 
 `client.handleFrame(raw)` is what you call with each inbound WebSocket message;
 no frame makes it throw — one that is not JSON, not an object, or not shaped
@@ -55,7 +62,89 @@ were and its `onError` receives `WIRE_DECODE_FAILED`. A later part whose
 whose epoch differs from the view's, is not spliced on: unless it is a `reset`,
 the view is emptied (its `onRows` told `[]`), its checkpoint and epoch cleared,
 and a cold `shape_subscribe` sent at once so the server re-seeds it.
-`client.close()` also ends every open `stream`.
+`client.close()` also ends every open `watch`.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handleFrame` returns the frame's type):
+
+```java
+int attempt = 0;
+String shard = null; // this socket's shard key; null is the default shard
+while (!Thread.currentThread().isInterrupted()) {
+    Thread retry = null;
+    Integer closeCode = null; // the close frame's code; null when the socket failed without one
+    String closeReason = null;
+    try (Socket socket = connect()) { // your socket library
+        // attachSocket sends connect before it attaches the sender, so a subscribe on another thread cannot write ahead of it.
+        client.attachSocket(frame -> socket.send(Json.write(frame)), null);
+        client.resendSubscriptions();
+        var report = client.flushOfflineQueue(shard);
+        if (!report.requeued.isEmpty() || report.retryAfterMs != null) {
+            // Requeued writes never stop the read loop: retry on a daemon thread, stopped below.
+            Long first = report.retryAfterMs;
+            retry = new Thread(() -> {
+                Long wait = first;
+                long backoff = 1_000L;
+                try {
+                    while (true) {
+                        Thread.sleep(wait != null ? wait : backoff / 2 + ThreadLocalRandom.current().nextLong(backoff / 2 + 1));
+                        var again = client.flushOfflineQueue(shard);
+                        if (again.requeued.isEmpty() && again.retryAfterMs == null) return;
+                        // a persistent transient failure backs off instead of replaying every second
+                        backoff = Math.min(30_000L, backoff * 2);
+                        wait = again.retryAfterMs;
+                    }
+                } catch (InterruptedException e) {
+                    // the socket run ended
+                }
+            });
+            retry.setDaemon(true);
+            retry.start();
+        }
+        for (String raw; (raw = socket.receive()) != null; ) {
+            if ("ack".equals(client.handleFrame(raw))) attempt = 0;
+        }
+        closeCode = socket.closeCode(); // your socket library's close frame
+        closeReason = socket.closeReason();
+    } catch (Exception e) {
+        if (e instanceof InterruptedException) { // a socket call may throw it
+            Thread.currentThread().interrupt();
+            break;
+        }
+    } finally {
+        if (retry != null) {
+            retry.interrupt();
+            // Wait out an in-flight flush: if it requeues a write, the next run's flush must see it.
+            try {
+                retry.join();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        client.detachSocket(closeCode, closeReason);
+    }
+    long ms = Math.min(30_000L, 1_000L << Math.min(attempt++, 5));
+    try {
+        Thread.sleep(ms / 2 + ThreadLocalRandom.current().nextLong(ms / 2 + 1));
+    } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        break;
+    }
+}
+```
+
+A requeued or rate-limited replay must not tear the socket down: the loop keeps reading live updates while a background timer retries the flush, and that timer is stopped when the socket run ends.
+
+`detachSocket(closeCode, reason)` reports how the socket closed; pass `null, null` when there was no close frame. Every detach leaves the client offline.
+
+Token expiry is reported to `client.onTokenExpired(Runnable)` (it returns an unregister handle; a listener that throws is contained):
+
+- a `4001` close, and a `TOKEN_EXPIRED` error frame, always report. The error frame is not routed to its subscription;
+- a `4003` close reports once per session credential. Calling `wsToken(...)` starts a new credential, so the next refusal reports again;
+- a `4003` with the reason `connect deadline` refuses no credential and reports nothing;
+- an `UNAUTHENTICATED` error frame reports nothing and is routed to its subscription like any other error.
+
+Whispers are ephemeral messages between the members of a topic. `whisperSubscribe(topic, listener)` joins a topic and returns an unregister handle, and every attach rejoins each registered topic right after `connect`. `whisper(topic, data)` sends and returns `false`, sending nothing, when no socket is attached: a whisper is never queued. `connectRoom(name, listener)` joins the topic `room:<name>` and returns a `Room` with `send(message)` and `close()`. A room topic is never acknowledged, so a send does not wait for the join.
 
 ## Optimistic updates and offline writes
 
@@ -102,6 +191,16 @@ record whose args no longer decode is purged and settled
 `OFFLINE_WRITE_UNDECODABLE` rather than replayed with substitute args, which
 would commit a different write than the caller made.
 
+A write that must never sit on disk — a credential, a one-time token — is built
+with `.onlineOnly(true)` on its `SubmitOptions`. It is never queued, persisted or
+replayed: where a normal write would be queued, `submit` throws an
+`OfflineException` coded `Offline.OFFLINE_NOT_QUEUED` before any optimistic layer
+is installed, and its arguments never reach the persistence adapter. It does not
+wait for a flush or queue behind pending writes, so it may land before an older
+queued write to the same document. A transport failure on such a write, sent
+directly while the connection is down, is refused the same way, with the
+transport error as its `cause`.
+
 The durable record holds the **wire** form of a write's args, so a store that
 serialises — a file, a SQLite column, a preferences store — round-trips a
 `bigint`, `bytes`, date or map argument intact.
@@ -112,7 +211,7 @@ client also holds the next flush off until that delay passes.
 
 A replay failure is classified the same way whether the write went out alone or
 in a batch: a coded error envelope by its code alone, whatever the HTTP status —
-only `SHARD_ERROR`, `SHARD_UNAVAILABLE`, `RATE_LIMITED`, `TOO_MANY_REQUESTS` and
+only `SHARD_ERROR`, `SHARD_UNAVAILABLE`, `DELIVERY_FENCED`, `RATE_LIMITED`, `TOO_MANY_REQUESTS` and
 the refused-credential codes `UNAUTHORIZED`, `TOKEN_EXPIRED` and
 `UNAUTHENTICATED` (held until a token refresh, never settled — set the fresh
 `client.authToken(token)` and call `flushOfflineQueue` yourself: this client

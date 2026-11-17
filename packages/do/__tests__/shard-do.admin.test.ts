@@ -16,6 +16,7 @@ import type {
     RankIndexDefinitionLike,
     RecordQueueMessageInput,
     RelatedPage,
+    SchedulerLike,
     SchemaLike,
     ShardRankPageResult,
     SocketAttachment,
@@ -29,7 +30,11 @@ import {
     ADMIN_FUNCTIONS,
     applyCdcChanges,
     createShardCtxDb as createShardContextDatabase,
+    migrateScheduleOutbox,
+    parkScheduleOutbox,
     rankKeyFromDoc,
+    readAuditLog,
+    recordScheduleOutbox,
     recordSchemaVersion,
     runDataMigration,
     runShardMigrations,
@@ -240,6 +245,25 @@ type ExplainIssueArm<D extends boolean> = Omit<Extract<ExplainIssueResult, { deg
  */
 type ExplainIssueResultView = Partial<ExplainIssueArm<false> & ExplainIssueArm<true>> & { degraded: boolean };
 
+/** An admin shard whose configured scheduler can cancel, as the real client can. */
+class SchedulingAdminShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; admin RPCs never dispatch through it
+    public override async handleRpc(): Promise<unknown> {
+        throw new Error("handleRpc must not run for admin RPCs");
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test double for the configured scheduler
+    protected override scheduleOutboxScheduler(): SchedulerLike {
+        return {
+            cancel: async () => {
+                return { cancelled: false };
+            },
+            runAfter: async () => "job",
+            runAt: async () => "job",
+        } as unknown as SchedulerLike;
+    }
+}
+
 /**
  * A real-SQLite-backed ShardDO whose `handleRpc` throws — proving the admin
  * branch in `fetch` short-circuits before user dispatch is ever reached.
@@ -251,17 +275,55 @@ class AdminShard extends ShardDO {
     }
 }
 
+/** Exposes the companions the shard's ctx-db memo holds as verified. */
+class CompanionMemoShard extends AdminShard {
+    public verifiedCompanions(): Set<string> {
+        return this.ctxDbTuning().companionMemo.verified;
+    }
+}
+
 /**
  * Mirrors the codegen subclass that overrides `workflowsMetadata()` with the
  * project's discovered workflow declarations — shared by every test that needs
  * a shard which "sees" the order-pipeline workflow.
  */
+
+/**
+ * Stands in for a `defineWorkflowEvent` validator. It trims while parsing, so a
+ * test can tell the parsed payload from the raw one on the wire.
+ */
+const approvalValidator = {
+    parse: (value: unknown): { approvedBy: string } => {
+        const approvedBy = (value as { approvedBy?: unknown } | undefined)?.approvedBy;
+
+        if (typeof approvedBy !== "string") {
+            throw new TypeError("approvedBy must be a string");
+        }
+
+        return { approvedBy: approvedBy.trim() };
+    },
+};
+
+const DECLARED_EVENTS = new Map([
+    [" approved ", { payload: { parse: (value: unknown) => value } }],
+    ["order-approved", { payload: approvalValidator }],
+]);
+
 class DeclaredWorkflowShard extends AdminShard {
     // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-    protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
+    protected override workflowsMetadata(): {
+        eventTypes: string[];
+        workflows: { binding: string; className: string; exportName: string; name: string }[];
+    } {
         return {
+            eventTypes: [...DECLARED_EVENTS.keys()],
             workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
         };
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+    protected override async workflowEvent(type: string): Promise<{ payload: { parse: (value: unknown) => unknown } } | undefined> {
+        return DECLARED_EVENTS.get(type);
     }
 }
 
@@ -922,6 +984,7 @@ describe("shardDO admin introspection", () => {
 
         await expect(response.json()).resolves.toEqual({
             result: {
+                eventTypes: [" approved ", "order-approved"],
                 workflows: [{ binding: "OrderPipelineWorkflow", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
             },
         });
@@ -1230,18 +1293,189 @@ describe("shardDO admin introspection", () => {
         expect(read.result.entries).toHaveLength(0);
     });
 
+    describe("schedule outbox", () => {
+        /** Shape of a `getScheduleOutbox` admin response. */
+        interface OutboxResponse {
+            result: { entries: { attempts: number; id: string; parked: boolean; target?: string }[]; nextCursor?: string };
+        }
+
+        const seed = (): void => {
+            migrateScheduleOutbox(database.sql);
+            recordScheduleOutbox(database.sql, "job-live", JSON.stringify({ args: {}, target: { __lunoraRef: "billing:sync" }, when: 0 }), 100);
+            recordScheduleOutbox(database.sql, "job-parked", JSON.stringify({ args: {}, target: { __lunoraRef: "billing:charge" }, when: 0 }), 200);
+            parkScheduleOutbox(database.sql, "job-parked", 8, 300);
+        };
+
+        const readOutbox = async (shard: AdminShard): Promise<OutboxResponse["result"]["entries"]> => {
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, {}, ADMIN_TOKEN));
+            const body = await response.json<OutboxResponse>();
+
+            return body.result.entries;
+        };
+
+        it("lists what the shard holds for the scheduler, live and parked", async () => {
+            expect.assertions(1);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await expect(readOutbox(shard)).resolves.toMatchObject([
+                { id: "job-live", parked: false, target: "billing:sync" },
+                { attempts: 8, id: "job-parked", parked: true, target: "billing:charge" },
+            ]);
+        });
+
+        it("requeues a parked entry back onto the retry ladder and audits it", async () => {
+            expect.assertions(3);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.retryOutboxEntry, { id: "job-parked" }, ADMIN_TOKEN));
+
+            await expect(response.json()).resolves.toEqual({ result: { retried: true } });
+            await expect(readOutbox(shard)).resolves.toMatchObject([
+                { id: "job-live", parked: false },
+                { attempts: 0, id: "job-parked", parked: false },
+            ]);
+            expect(readAuditLog(database.sql).map((entry) => entry.op)).toContain("retryOutboxEntry");
+        });
+
+        it("drops an entry so it is never handed to the scheduler", async () => {
+            expect.assertions(2);
+
+            seed();
+
+            const shard = new SchedulingAdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }, ADMIN_TOKEN));
+
+            await expect(response.json()).resolves.toEqual({ result: { dropped: true } });
+            await expect(readOutbox(shard)).resolves.toMatchObject([{ id: "job-parked" }]);
+        });
+
+        it("keeps a dropped entry, parked, when no scheduler is configured to confirm the cancel", async () => {
+            expect.assertions(2);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }, ADMIN_TOKEN));
+
+            // Not the redacted "internal error": the operator is told the entry was parked and what to do.
+            await expect(response.json()).resolves.toMatchObject({ error: { code: "SERVICE_UNAVAILABLE", message: expect.stringContaining("parked") } });
+            await expect(readOutbox(shard)).resolves.toMatchObject([{ id: "job-live", parked: true }, { id: "job-parked" }]);
+        });
+
+        it("pages to the parked entries behind the live ones", async () => {
+            expect.assertions(2);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const firstResponse = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, { limit: 1 }, ADMIN_TOKEN));
+            const first = await firstResponse.json<OutboxResponse>();
+            const secondResponse = await shard.fetch(
+                tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, { cursor: first.result.nextCursor, limit: 1 }, ADMIN_TOKEN),
+            );
+            const second = await secondResponse.json<OutboxResponse>();
+
+            expect(first.result.entries.map((entry) => entry.id)).toStrictEqual(["job-live"]);
+            expect(second.result).toMatchObject({ entries: [{ id: "job-parked" }] });
+        });
+
+        it("reads a shard with no outbox table as empty", async () => {
+            expect.assertions(1);
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            await expect(readOutbox(shard)).resolves.toStrictEqual([]);
+        });
+
+        it("fails the read rather than reporting an empty outbox when the table cannot be read", async () => {
+            expect.assertions(1);
+
+            // The name exists, the columns the read needs do not.
+            database.raw(`CREATE TABLE "__schedule_outbox" ("id" TEXT PRIMARY KEY)`);
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getScheduleOutbox, {}, ADMIN_TOKEN));
+
+            expect(response.ok).toBe(false);
+        });
+
+        it("reports a Retry now whose poll alarm could not be armed", async () => {
+            expect.assertions(1);
+
+            seed();
+
+            const refusing: ShardDOState = {
+                ...state,
+                storage: {
+                    ...state.storage,
+                    setAlarm: async () => {
+                        throw new Error("alarm refused");
+                    },
+                },
+            };
+            const shard = new AdminShard(refusing, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.retryOutboxEntry, { id: "job-parked" }, ADMIN_TOKEN));
+
+            expect(response.ok).toBe(false);
+        });
+
+        it("admin-gates the outbox read, retry and drop (403 without the bearer)", async () => {
+            expect.assertions(4);
+
+            seed();
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            for (const [name, args] of [
+                [ADMIN_FUNCTIONS.getScheduleOutbox, {}],
+                [ADMIN_FUNCTIONS.retryOutboxEntry, { id: "job-parked" }],
+                [ADMIN_FUNCTIONS.dropOutboxEntry, { id: "job-live" }],
+            ] as const) {
+                // eslint-disable-next-line no-await-in-loop -- three independent refusals, order is irrelevant
+                const response = await shard.fetch(tokenAdminRequest(name, args));
+
+                expect(response.status).toBe(403);
+            }
+
+            // Nothing was dropped or requeued by the refused calls.
+            await expect(readOutbox(shard)).resolves.toMatchObject([
+                { id: "job-live", parked: false },
+                { attempts: 8, id: "job-parked", parked: true },
+            ]);
+        });
+
+        it("refuses a drop without an id", async () => {
+            expect.assertions(1);
+
+            const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.dropOutboxEntry, {}, ADMIN_TOKEN));
+
+            expect(response.status).toBe(400);
+        });
+    });
+
     it("forgets every companion rebuild marker on rebuildCompanions", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         // A marker as a migrated shard holds it; the base class never migrates one.
         database.raw(`CREATE TABLE "__lunora_companion_state" ("companion" TEXT PRIMARY KEY, "signature" TEXT NOT NULL)`);
         database.raw(`INSERT INTO "__lunora_companion_state" VALUES ('todos__agg_byProject', 'sig')`);
 
-        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new CompanionMemoShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Verified by an earlier write: left in the memo, the next write would skip the rebuild.
+        shard.verifiedCompanions().add("todos__agg_byProject");
+
         const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.rebuildCompanions, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({ result: { ok: true } });
         expect(database.raw(`SELECT * FROM "__lunora_companion_state"`)).toHaveLength(0);
+        expect(shard.verifiedCompanions().size).toBe(0);
     });
 
     it("starts a workflow instance through the declared workflow on ctx.exports", async () => {
@@ -1320,6 +1554,198 @@ describe("shardDO admin introspection", () => {
         );
 
         await expect(response.json()).resolves.toEqual({ result: { id: "wf-1", output: { total: 42 }, status: "complete" } });
+    });
+
+    it("sends the parsed payload of a declared event to a workflow's instance and audits it", async () => {
+        expect.assertions(3);
+
+        const sent: { id: string; payload?: unknown; type: string }[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { payload?: unknown; type: string }) => {
+                        sent.push({ id, ...event });
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(
+            tokenAdminRequest(
+                ADMIN_FUNCTIONS.sendWorkflowEvent,
+                { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "  ops  " }, type: "order-approved" },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        await expect(response.json()).resolves.toEqual({ result: { sent: true } });
+        expect(sent).toStrictEqual([{ id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" }]);
+
+        const audit = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.getAuditLog, {}, ADMIN_TOKEN));
+
+        const { result } = await audit.json<{ result: { entries: { op: string }[] } }>();
+
+        expect(result.entries.map((entry) => entry.op)).toContain("sendWorkflowEvent");
+    });
+
+    it("starts an instance under the trimmed explicit id, the one status and send-event look up", async () => {
+        expect.assertions(1);
+
+        const created: { id?: string }[] = [];
+        const binding = {
+            create: (options: { id?: string }) => {
+                created.push(options);
+
+                return Promise.resolve({ id: options.id ?? "wf-generated", status: () => Promise.resolve({ status: "queued" }) });
+            },
+            get: () => Promise.reject(new Error("get must not run for create")),
+        };
+
+        const shard = new DeclaredWorkflowShard({ ...state, exports: { OrderPipelineWorkflow: binding } }, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline", id: " wf-1 " }, ADMIN_TOKEN));
+
+        expect(created).toStrictEqual([{ id: "wf-1", params: undefined }]);
+    });
+
+    it("still answers sent when the audit write fails after the event was delivered", async () => {
+        expect.assertions(2);
+
+        const sent: string[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { type: string }) => {
+                        sent.push(event.type);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+
+        vi.spyOn(shard as unknown as { recordAudit: () => void }, "recordAudit").mockImplementation(() => {
+            throw new Error("sqlite is read-only");
+        });
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        try {
+            const response = await shard.fetch(
+                tokenAdminRequest(
+                    ADMIN_FUNCTIONS.sendWorkflowEvent,
+                    { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" },
+                    ADMIN_TOKEN,
+                ),
+            );
+
+            await expect(response.json()).resolves.toEqual({ result: { sent: true } });
+            expect(sent).toStrictEqual(["order-approved"]);
+        } finally {
+            consoleError.mockRestore();
+        }
+    });
+
+    it.each([
+        ["a missing type", { exportName: "orderPipeline", id: "wf-1" }],
+        ["a blank type", { exportName: "orderPipeline", id: "wf-1", type: "  " }],
+        ["a missing id", { exportName: "orderPipeline", type: "order-approved" }],
+        ["a missing exportName", { id: "wf-1", type: "order-approved" }],
+        ["a reserved lunora: type", { exportName: "orderPipeline", id: "wf-1", type: "lunora:branch:x" }],
+        ["an undeclared type", { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-shipped" }],
+        ["a payload its declared validator rejects", { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: 7 }, type: "order-approved" }],
+    ])("rejects (400) sendWorkflowEvent with %s, and never sends", async (_label, args) => {
+        expect.assertions(2);
+
+        const sent: unknown[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: unknown) => {
+                        sent.push(event);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, args, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
+        expect(sent).toHaveLength(0);
+    });
+
+    it("delivers the event type untrimmed, so it matches a type the workflow waits for byte for byte", async () => {
+        expect.assertions(1);
+
+        const sentTypes: string[] = [];
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) =>
+                Promise.resolve({
+                    id,
+                    sendEvent: async (event: { type: string }) => {
+                        sentTypes.push(event.type);
+                    },
+                    status: () => Promise.resolve({ status: "waiting" }),
+                }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+
+        await shard.fetch(tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, { exportName: "orderPipeline", id: "wf-1", type: " approved " }, ADMIN_TOKEN));
+
+        expect(sentTypes).toStrictEqual([" approved "]);
+    });
+
+    it.each([
+        [
+            "an undeclared type",
+            { type: "order-shipped" },
+            'no `defineWorkflowEvent` export declares type "order-shipped" (known types: " approved ", "order-approved")',
+        ],
+        [
+            "an invalid payload",
+            { payload: { approvedBy: 7 }, type: "order-approved" },
+            'event "order-approved" payload validation failed: approvedBy must be a string',
+        ],
+    ])("explains why sendWorkflowEvent refused %s", async (_label, event, message) => {
+        expect.assertions(1);
+
+        const binding = { create: () => Promise.reject(new Error("unused")), get: () => Promise.reject(new Error("get must not run")) };
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(
+            tokenAdminRequest(ADMIN_FUNCTIONS.sendWorkflowEvent, { exportName: "orderPipeline", id: "wf-1", ...event }, ADMIN_TOKEN),
+        );
+
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST", message: expect.stringContaining(message) } });
+    });
+
+    it("rejects (400) sendWorkflowEvent when the instance handle has no sendEvent", async () => {
+        expect.assertions(1);
+
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for sendEvent")),
+            get: (id: string) => Promise.resolve({ id, status: () => Promise.resolve({ status: "waiting" }) }),
+        };
+
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, OrderPipelineWorkflow: binding });
+        const response = await shard.fetch(
+            tokenAdminRequest(
+                ADMIN_FUNCTIONS.sendWorkflowEvent,
+                { exportName: "orderPipeline", id: "wf-1", payload: { approvedBy: "ops" }, type: "order-approved" },
+                ADMIN_TOKEN,
+            ),
+        );
+
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST", message: expect.stringContaining("do not accept events") } });
     });
 
     it("rejects starting an undeclared workflow with a 400", async () => {
@@ -1580,6 +2006,8 @@ describe("shardDO admin introspection", () => {
             instance: "do-abc123",
             level: "info",
             message: "stop: runtime_signal (exit 137)",
+            // The buffer gives each line an id, which is what the Studio keys a row by.
+            id: expect.any(String),
             timestamp: 1_700_000_000_000,
         });
     });
@@ -2629,18 +3057,18 @@ class EditableShard extends ShardDO {
         }
 
         if (args.op === "delete") {
-            await writer.delete(args.id ?? "");
+            await writer.delete(args.table, args.id ?? "");
 
             return { id: args.id ?? null, op: "delete" };
         }
 
         if (args.op === "replace") {
-            await writer.replace(args.id ?? "", args.doc ?? {});
+            await writer.replace(args.table, args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "replace" };
         }
 
-        await writer.patch(args.id ?? "", args.doc ?? {});
+        await writer.patch(args.table, args.id ?? "", args.doc ?? {});
 
         return { id: args.id ?? null, op: "patch" };
     }
@@ -3028,7 +3456,7 @@ describe("shardDO admin cdcSync", () => {
         const writer = createShardContextDatabase({ cdc: true, schema: usersSchema, sql: database.sql });
 
         await writer.insert("users", { _id: "u_1", name: "Ada", version: 1 }, { allowExplicitId: true });
-        await writer.patch("u_1", { name: "Ada Lovelace" });
+        await writer.patch("users", "u_1", { name: "Ada Lovelace" });
 
         const shard = new AdminShard(stateFor(database.sql), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(cdcRequest({ sinceSeq: 0 }));
@@ -3123,12 +3551,89 @@ describe("shardDO admin CDC bigint/bytes egress", () => {
 
             expect(replayed.status).toBe(200);
 
-            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("s1", "sessions");
+            const row = await createShardContextDatabase({ schema: moneySchema, sql: target.sql }).get("sessions", "s1");
 
             expect([row?.["amountMinor"], new Uint8Array(row?.["receipt"] as ArrayBuffer)]).toStrictEqual([10n, new Uint8Array([1, 2, 3])]);
         } finally {
             target.close();
         }
+    });
+});
+
+describe("shardDO admin filters — nested paths and array membership", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let shard: AdminShard;
+    // Every statement the shard issues, so a test can prove a request touched no row.
+    let statements: string[];
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        database.raw(`CREATE TABLE "orders" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+        database.raw(
+            `INSERT INTO "orders" VALUES ('o1', 1, '{"address":{"city":"Berlin"},"tags":["red","blue"],"status":"open"}'), ('o2', 2, '{"address":{"city":"Paris"},"tags":["green"],"status":"closed"}')`,
+        );
+
+        statements = [];
+        const recording: SqlExec = {
+            exec: (query, ...params) => {
+                statements.push(query);
+
+                return database.sql.exec(query, ...params);
+            },
+        };
+
+        shard = new AdminShard(stateFor(recording), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+        statements = [];
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const pageIds = async (filters: unknown): Promise<unknown[]> => {
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { filters, table: "orders" }));
+        const { result } = await response.json<{ result: { rows: Record<string, unknown>[] } }>();
+
+        return result.rows.map((row) => row["id"]);
+    };
+
+    it("filters a nested field through the path the browser sends", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "address", operator: "eq", path: ["city"], value: "Berlin" }])).resolves.toStrictEqual(["o1"]);
+    });
+
+    it("filters array membership through has", async () => {
+        expect.assertions(1);
+
+        await expect(pageIds([{ column: "tags", operator: "has", value: "green" }])).resolves.toStrictEqual(["o2"]);
+    });
+
+    it("refuses an explicit null path on a bulk delete before selecting or deleting any row", async () => {
+        expect.assertions(4);
+
+        // `status` is a top-level field on o1 only. Dropping the null path would
+        // test that parent column and delete o1.
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "status", operator: "eq", path: null, value: "open" }], table: "orders" }),
+        );
+
+        expect(response.status).toBe(400);
+        // Only statements that touch the table: the shard's own bookkeeping reads run on every request.
+        expect(statements.filter((query) => query.includes('"orders"'))).toStrictEqual([]);
+        expect(database.raw(`SELECT COUNT(*) AS c FROM "orders"`)[0]?.["c"]).toBe(2);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+    });
+
+    it("answers 400 to a path that is not a list of field names, rather than testing the parent field", async () => {
+        expect.assertions(2);
+
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "address", operator: "eq", path: "city", value: "Berlin" }], table: "orders" }),
+        );
+
+        expect(response.status).toBe(400);
+        expect(database.raw(`SELECT COUNT(*) AS c FROM "orders"`)[0]?.["c"]).toBe(2);
     });
 });
 
@@ -3150,7 +3655,7 @@ class MoneyBulkShard extends MoneyApplyShard {
     }
 
     protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        await createShardContextDatabase({ schema: moneySchema, sql: this.sql as SqlExec }).delete(args.id ?? "", args.table, { hard: true });
+        await createShardContextDatabase({ schema: moneySchema, sql: this.sql as SqlExec }).delete(args.table, args.id ?? "", { hard: true });
 
         return { id: args.id ?? null, op: args.op };
     }
@@ -3429,9 +3934,9 @@ class BulkOpsShard extends ShardDO {
             // Codegen's exact forwarding — the harness has to carry it or the bulk
             // arm's `hard: true` is invisible here, which is how the non-converging
             // soft-delete drain shipped.
-            await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
+            await writer.delete(args.table, args.id ?? "", { hard: args.hard === true });
         } else if (args.op === "patch") {
-            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+            await writer.patch(args.table, args.id ?? "", args.doc ?? {});
         } else {
             throw new Error(`unexpected op in the bulk harness: ${args.op}`);
         }

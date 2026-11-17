@@ -9,5 +9,6 @@
         // the inlined `../../../shared/uuid` import (a file outside this
         // package, bundled in at build time). See shared/uuid.ts.
     },
-    "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"]
+    "include": ["src/**/*", "__tests__/**/*", "__bench__/**/*"],
+    "exclude": ["__tests__/workerd/**", "node_modules", "dist"]
 }

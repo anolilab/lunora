@@ -31,11 +31,8 @@ bun add @lunora/flags
 
 </Tabs>
 
-Scaffold the flags singleton:
-
-```bash
-vis generate lunora-flags
-```
+Create `lunora/flags.ts` with the `defineFlags` export shown in the next section.
+Inside the Lunora repository, `vis generate lunora-flags` scaffolds the same file.
 
 ## Configure
 
@@ -182,6 +179,60 @@ const darkMode = flag("dark-mode", false); // Readable<boolean>
 ```
 
 Astro and Nuxt are server-rendered: read flags through `ctx.flags` in a server endpoint or loader and pass the resolved values to an interactive island built with one of the client adapters above.
+
+## API
+
+The entries below cover the public exports. The full list is in
+`api-snapshots/flags.api.md`.
+
+### `defineFlags(config)`
+
+**Type:** `(config: FlagsConfig) => FlagsDefinition`
+
+Configures the flags provider for the app. `config.provider` is required and takes
+a Flagship config or an `(env) => Provider` factory. `identify` and `logger` are
+optional. Codegen imports the default export of `lunora/flags.ts`.
+
+### `flagshipProvider(options)`
+
+**Type:** `(options: FlagshipProviderOptions) => FlagsProviderFactory`
+
+Creates a Cloudflare Flagship provider. Binding mode takes `binding`. HTTP mode takes
+`appId`, `accountId` and `authToken`, where `authToken` is a string or an
+`(env) => unknown` thunk.
+
+### `memoryProvider(flags)`
+
+**Type:** `(flags: Record<string, MemoryFlagValue>) => FlagsProviderFactory`
+
+Creates an in-memory provider from a flat map of flag keys to values.
+
+### `envProvider(options?)`
+
+**Type:** `(options?: EnvProviderOptions) => FlagsProviderFactory`
+
+Reads flags from the Worker `env`. `prefix` defaults to `"FLAG_"`. `name` maps a flag
+key to the variable name, and when set it replaces the prefix derivation.
+
+### `createFlags(definition, env, options?)`
+
+**Type:** `(definition: FlagsDefinition, env: Record<string, unknown>, options?: CreateFlagsOptions) => LunoraFlags`
+
+Binds a `defineFlags` definition to a Worker `env` and returns the `ctx.flags` surface.
+Codegen calls it for each request, so application code does not normally call it.
+
+### `isFlagsDefinition(value)`
+
+**Type:** `(value: unknown) => value is FlagsDefinition`
+
+Returns `true` when `value` is a `defineFlags` result.
+
+### `FlagshipClientProvider`
+
+**Type:** `class` (re-exported from `@cloudflare/flagship`)
+
+The Flagship client provider class that `flagshipProvider` uses. See the
+`@cloudflare/flagship` package for its constructor options.
 
 ## Studio
 

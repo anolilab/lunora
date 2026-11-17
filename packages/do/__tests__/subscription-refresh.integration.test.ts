@@ -26,7 +26,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { SocketAttachment, SubscriptionEnvelope } from "@lunora/shard-engine";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ShardDOState, SubscriptionOutcome } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
@@ -361,7 +361,7 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
     // Case 2 — MEMO-MISS RE-RUNS TO BE SAFE
     //
     // A subscription has no memo (its first execute returned null so
-    // pushSubscriptionData was never called, leaving subMemos unpopulated).
+    // pushSubscriptionData was never called, leaving its memo unpopulated).
     // When any table is mutated the subscription must still re-execute because
     // a missing memo means "unknown deps — run to be safe".
     //
@@ -749,11 +749,14 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         expect(subFrames(ws, "sub-A")).toHaveLength(1); // seeded
 
-        // Credential lapses, then a write triggers a refresh.
-        ws.serializeAttachment({ expiresAt: Date.now() - 1, subs: { "sub-A": { args: {}, functionPath: "messages:list" } } });
+        // Credential lapses as time passes, then a write triggers a refresh.
+        const lapsed = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 120_000);
+
         shard.outcomes.set("messages:list", { result: [{ _id: "m1" }, { _id: "m2" }], tables: new Set(["messages"]) });
         shard.changedTableOnRpc = "messages";
-        await shard.writeRpc();
+        await shard.writeRpc().finally(() => {
+            lapsed.mockRestore();
+        });
 
         // No new data/delta frame after the seed — the expired socket was dropped.
         expect(subFrames(ws, "sub-A")).toHaveLength(1);
@@ -947,5 +950,59 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         expect(subFrames(ws, "sub-healthy").length).toBeGreaterThan(healthyBefore);
         expect(subFrames(ws, "sub-denied")).toHaveLength(0);
+    });
+
+    describe("table → socket index", () => {
+        /** Three sockets on tables a/b/c, each indexed by one flush that visits all of them. */
+        const indexedShard = async (): Promise<{ shard: SubscriptionRefreshShard; sockets: FakeWebSocket[] }> => {
+            const shard = new SubscriptionRefreshShard(state, {});
+            const sockets: FakeWebSocket[] = [];
+
+            for (const table of ["a", "b", "c"]) {
+                const ws = createFakeWebSocket();
+
+                shard.registerSocket(ws);
+                shard.outcomes.set(`${table}:list`, { result: [{ _id: table }], tables: new Set([table]) });
+                // eslint-disable-next-line no-await-in-loop -- sockets subscribe one after another, like real clients
+                await subscribeSocket(shard, ws, `sub-${table}`, `${table}:list`);
+                sockets.push(ws);
+            }
+
+            // Freshly subscribed sockets have no index entry yet, so this flush visits (and indexes) all three.
+            shard.changedTableOnRpc = "a";
+            await shard.writeRpc();
+
+            return { shard, sockets };
+        };
+
+        it("a write reads the attachment of only the sockets whose tables it touched", async () => {
+            expect.assertions(2);
+
+            const { shard, sockets } = await indexedShard();
+            const readAttachment = vi.spyOn(shard as unknown as { readAttachment: (ws: unknown) => SocketAttachment }, "readAttachment");
+
+            shard.outcomes.set("a:list", { result: [{ _id: "a" }, { _id: "a2" }], tables: new Set(["a"]) });
+            await shard.writeRpc();
+
+            expect(new Set(readAttachment.mock.calls.map(([ws]) => ws))).toEqual(new Set([sockets[0]]));
+            expect(subFrames(sockets[0]!, "sub-a").length).toBeGreaterThan(1);
+        });
+
+        it("still visits a socket with no memo (a fresh socket after hibernation)", async () => {
+            expect.assertions(2);
+
+            const { shard } = await indexedShard();
+            // Woken from hibernation: the attachment carries the subscription, the in-memory memo is gone.
+            const woken = createFakeWebSocket();
+
+            shard.registerSocket(woken, { subs: { "sub-c": { args: {}, functionPath: "c:list" } } });
+
+            const readAttachment = vi.spyOn(shard as unknown as { readAttachment: (ws: unknown) => SocketAttachment }, "readAttachment");
+
+            await shard.writeRpc();
+
+            expect(readAttachment.mock.calls.map(([ws]) => ws)).toContain(woken);
+            expect(subFrames(woken, "sub-c")).toHaveLength(1);
+        });
     });
 });

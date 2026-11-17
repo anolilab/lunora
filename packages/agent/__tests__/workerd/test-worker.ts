@@ -27,15 +27,18 @@ const functions = agentComponent().functions as unknown as Record<string, Compon
 class AgentStoreDO extends DurableObject<Env> {
     private db: DatabaseWriterLike | undefined;
 
-    /** Run one component function (`agentPatchThread`, `agentHistory`, ...) by name; the result crosses RPC as JSON. */
-    public async call(name: string, args: Record<string, unknown>): Promise<string> {
+    /**
+     * Run one component function (`agentPatchThread`, `agentHistory`, ...) by name; the
+     * result crosses RPC as JSON. `auth` is the caller's identity, empty by default.
+     */
+    public async call(name: string, args: Record<string, unknown>, auth: { userId?: string } = {}): Promise<string> {
         const fn = functions[name];
 
         if (!fn) {
             throw new Error(`unknown component function "${name}"`);
         }
 
-        return JSON.stringify((await fn.handler({ auth: {}, db: this.getDb() }, args)) ?? null);
+        return JSON.stringify((await fn.handler({ auth, db: this.getDb() }, args)) ?? null);
     }
 
     private getDb(): DatabaseWriterLike {

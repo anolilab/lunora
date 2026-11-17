@@ -1,0 +1,29 @@
+{
+    "$schema": "./node_modules/@visulima/vis/schemas/project.schema.json",
+    "name": "root",
+    "tags": ["type:root"],
+    "targets": {
+        "lint:all": {
+            "description": "every project's eslint, then oxlint and oxfmt",
+            "dependsOn": ["lint:oxlint", "lint:oxfmt"]
+        },
+        "lint:oxlint": {
+            "cache": false,
+            "dependsOn": [
+                {
+                    "projects": "*",
+                    "target": "lint:eslint"
+                }
+            ]
+        },
+        "lint:oxfmt": {
+            "cache": false,
+            "dependsOn": [
+                {
+                    "projects": "*",
+                    "target": "lint:eslint"
+                }
+            ]
+        }
+    }
+}

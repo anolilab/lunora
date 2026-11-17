@@ -1,4 +1,6 @@
-import type { CallExpression, Project, SourceFile } from "ts-morph";
+import { LunoraError } from "@lunora/errors";
+import type { CallExpression, Project, SourceFile, VariableStatement } from "ts-morph";
+import { Node } from "ts-morph";
 
 import declaredOutputWins from "../../declared-output";
 import type { ExposeCacheIR, FunctionIR, ValidatorIR } from "../../ir";
@@ -6,24 +8,35 @@ import { sanitizeNamespace } from "../../paths";
 import { listLunoraSourceFiles, lunoraRelativePath } from "../ast";
 import { exportNamesByLocalOf, isAddressableExportName } from "../attribution";
 import { collectErasures, reportErasures } from "../erased-returns";
-import type { LifecycleMoment } from "./classify-procedure-call";
+import mayReadIp from "../ip-reads";
+import type { LifecycleMoment, ProcedureClassification } from "./classify-procedure-call";
 import { classifyProcedureCall } from "./classify-procedure-call";
+import { procedureHandler } from "./handler";
 import { argsFromBuilderChain, outputFromBuilderChain, returnTypeFromBuilderCall, returnTypeFromCall } from "./internal/builder-chain";
-import { argsFromCall, exposeFromBuilderChain } from "./internal/expose";
-import { exportCallsOfDeclaration, resolveExpressionToCall } from "./internal/resolve-call";
+import { argsFromCall, exposeFromBuilderChain, x402FromBuilderChain } from "./internal/expose";
+import lazyMetadataFromBuilderChain from "./internal/lazy-metadata";
+import publishedFunctionIr from "./internal/published-function";
+import { exportCallsOfDeclaration, exportPublishedBindingsOfDeclaration, resolveExpressionToCall } from "./internal/resolve-call";
 
 interface DiscoveredFunction {
     /** Set when the builder chain carries `.use(platformAdmin(...))` — see `classifyProcedureCall`. */
     adminOnly?: true;
     args: Record<string, ValidatorIR>;
+    /** A channel registration (`defineRoom`): its kind and literal name. */
+    channel?: { kind: "room"; name: string };
     /** Set when the builder chain includes `.expose({ rest: true })` (plan 167). */
     expose?: { cache?: ExposeCacheIR; rest?: boolean };
     kind: string;
     lifecycle?: LifecycleMoment;
+    /** The chain's literal `.meta(...)`, lazy builds only — see `FunctionIR.meta`. */
+    meta?: FunctionIR["meta"];
     /** The `.output(validator)` declaration, when the chain has one. */
     output?: ValidatorIR;
     returnType: string;
+    /** A `defineWebSocket` route: its literal path and auth requirement (see `socketRouteOf`). */
+    socket?: { auth: boolean; origin?: string; path: string };
     visibility: "internal" | "public";
+    x402?: { price?: number | string };
 }
 
 /**
@@ -32,44 +45,161 @@ interface DiscoveredFunction {
  * form (`query({...})` / `internalQuery({...})`) and the builder terminal
  * (`c.query(...)`).
  */
-const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined => {
-    const classified = classifyProcedureCall(call);
+
+/**
+ * The literal `name` of a `defineRoom({ name: "…" })` call. The name is the room's
+ * whisper-topic key and the `connectRoom` reference, so codegen must read it at
+ * build time: a computed name cannot be typed or deduplicated.
+ */
+const roomNameOf = (call: CallExpression): string => {
+    const options = call.getArguments()[0];
+    const name = Node.isObjectLiteralExpression(options) ? options.getProperty("name") : undefined;
+    const initializer = Node.isPropertyAssignment(name) ? name.getInitializer() : undefined;
+
+    if (!initializer || !Node.isStringLiteral(initializer)) {
+        throw new LunoraError(
+            "ROOM_NAME_NOT_LITERAL",
+            'defineRoom needs a string-literal `name` (e.g. `defineRoom({ name: "chat", … })`) so codegen can type its reference.',
+        );
+    }
+
+    return initializer.getLiteralValue();
+};
+
+/** Whether `path` is its own URL pathname and outside the reserved `/_lunora` prefix (the `defineWebSocket` rule). */
+const isPlainRoutePath = (path: string): boolean =>
+    path.startsWith("/") && new URL(path, "https://lunora.invalid").pathname === path && path !== "/_lunora" && !path.startsWith("/_lunora/");
+
+/**
+ * The literal `path` and `auth` of a `defineWebSocket({ … })` call. The path is the URL the worker upgrades and the
+ * key of the `LUNORA_SOCKETS` map, so codegen reads it at build time, as it does a room name.
+ *
+ * `auth` fails closed. Only an absent `auth` property means `false`; a literal `true`/`false` is read; anything else
+ * (shorthand, a variable, a spread that could hide it, a computed key) is refused, because a guess that fell to `false`
+ * would open an `auth: true` route to anonymous sockets.
+ */
+const socketRouteOf = (call: CallExpression): { auth: boolean; path: string } => {
+    const options = call.getArguments()[0];
+
+    if (!Node.isObjectLiteralExpression(options)) {
+        throw new LunoraError("SOCKET_PATH_NOT_LITERAL", "defineWebSocket needs an object-literal options argument so codegen can read its `path` and `auth`.");
+    }
+
+    const path = options.getProperty("path");
+    const pathValue = Node.isPropertyAssignment(path) ? path.getInitializer() : undefined;
+
+    if (!pathValue || !Node.isStringLiteral(pathValue)) {
+        throw new LunoraError(
+            "SOCKET_PATH_NOT_LITERAL",
+            'defineWebSocket needs a string-literal `path` (e.g. `defineWebSocket({ path: "/chat", … })`) so codegen can route its upgrade.',
+        );
+    }
+
+    const routePath = pathValue.getLiteralValue();
+
+    // The same rule `defineWebSocket` applies at load: a path the worker's pathname match could never reach, or one under
+    // the framework prefix, would otherwise be emitted as a registry key that no upgrade resolves.
+    if (!isPlainRoutePath(routePath)) {
+        throw new LunoraError(
+            "SOCKET_PATH_INVALID",
+            `defineWebSocket path "${routePath}" must be a plain URL path starting with "/" (no "?", "#", ".." or unencoded characters) and not under "/_lunora".`,
+        );
+    }
+
+    const hidden = options
+        .getProperties()
+        .some((property) => Node.isSpreadAssignment(property) || (Node.isPropertyAssignment(property) && Node.isComputedPropertyName(property.getNameNode())));
+
+    if (hidden) {
+        throw new LunoraError(
+            "SOCKET_AUTH_NOT_LITERAL",
+            "defineWebSocket cannot spread its options or use a computed key: codegen must read `auth` as a literal `auth: true` or `auth: false`.",
+        );
+    }
+
+    const authProperty = options.getProperty("auth");
+
+    if (authProperty === undefined) {
+        return { auth: false, path: routePath };
+    }
+
+    const authValue = Node.isPropertyAssignment(authProperty) ? authProperty.getInitializer() : undefined;
+
+    if (authValue === undefined || !(Node.isTrueLiteral(authValue) || Node.isFalseLiteral(authValue))) {
+        throw new LunoraError(
+            "SOCKET_AUTH_NOT_LITERAL",
+            "defineWebSocket needs a literal `auth: true` or `auth: false`, so codegen can read whether the route requires a session. A shorthand or a variable is not read.",
+        );
+    }
+
+    return { auth: Node.isTrueLiteral(authValue), path: routePath };
+};
+
+const discoverBuilderTerminal = (call: CallExpression, receiver: Node, classified: ProcedureClassification, lazyFunctions: boolean): DiscoveredFunction => {
+    const metadata = lazyFunctions ? lazyMetadataFromBuilderChain(receiver) : undefined;
+    const expose = lazyFunctions ? metadata?.expose : exposeFromBuilderChain(receiver);
+    const x402 = lazyFunctions ? metadata?.x402 : x402FromBuilderChain(receiver);
+    // Both types are computed, but `api.ts` carries only one of them — see
+    // `declaredOutputWins`. An erasure in the other reaches nothing, so it is
+    // not reported: the handler behind a declared output, or the inert
+    // `.output()` of a `stream`.
+    const output = collectErasures(() => outputFromBuilderChain(receiver));
+    const returnType = collectErasures(() => returnTypeFromBuilderCall(call));
+    const outputWins = declaredOutputWins({ kind: classified.kind, output: output.value });
+
+    reportErasures(outputWins ? output.erased : returnType.erased);
+
+    return {
+        args: argsFromBuilderChain(receiver),
+        ...(expose ? { expose } : {}),
+        ...(x402 ? { x402 } : {}),
+        ...(metadata?.meta === undefined ? {} : { meta: metadata.meta }),
+        ...(classified.adminOnly ? { adminOnly: true as const } : {}),
+        kind: classified.kind,
+        ...(output.value ? { output: output.value } : {}),
+        returnType: returnType.value,
+        visibility: metadata?.visibility === "internal" || classified.visibility === "internal" ? "internal" : "public",
+    };
+};
+
+const discoverFromCall = (call: CallExpression, lazyFunctions: boolean): DiscoveredFunction | undefined => {
+    const classified = classifyProcedureCall(call, lazyFunctions);
 
     if (!classified) {
         return undefined;
+    }
+
+    if (classified.channel) {
+        return {
+            args: {},
+            channel: { kind: classified.channel, name: roomNameOf(call) },
+            kind: classified.kind,
+            returnType: "void",
+            visibility: classified.visibility,
+        };
     }
 
     // Builder terminal: pull args/return type from the chain; bare factory: from the call.
     const { receiver } = classified;
 
     if (receiver) {
-        const expose = exposeFromBuilderChain(receiver);
-        // Both types are computed, but `api.ts` carries only one of them — see
-        // `declaredOutputWins`. An erasure in the other reaches nothing, so it is
-        // not reported: the handler behind a declared output, or the inert
-        // `.output()` of a `stream`.
-        const output = collectErasures(() => outputFromBuilderChain(receiver));
-        const returnType = collectErasures(() => returnTypeFromBuilderCall(call));
-        const outputWins = declaredOutputWins({ kind: classified.kind, output: output.value });
-
-        reportErasures(outputWins ? output.erased : returnType.erased);
-
-        return {
-            args: argsFromBuilderChain(receiver),
-            ...(expose ? { expose } : {}),
-            ...(classified.adminOnly ? { adminOnly: true as const } : {}),
-            kind: classified.kind,
-            ...(output.value ? { output: output.value } : {}),
-            returnType: returnType.value,
-            visibility: classified.visibility,
-        };
+        return discoverBuilderTerminal(call, receiver, classified, lazyFunctions);
     }
 
     // Lifecycle hooks (`onConnect`/`onDisconnect`) take a bare handler, not the
     // `{ args, handler }` literal — their args are framework-fixed (empty) and
     // their return is void, so skip the object-literal extraction.
     if (classified.lifecycle) {
-        return { args: {}, kind: classified.kind, lifecycle: classified.lifecycle, returnType: "void", visibility: classified.visibility };
+        return {
+            args: {},
+            kind: classified.kind,
+            lifecycle: classified.lifecycle,
+            returnType: "void",
+            ...(classified.lifecycle === "socket"
+                ? { socket: { ...socketRouteOf(call), origin: `${call.getSourceFile().getFilePath()}@${String(call.getStart())}` } }
+                : {}),
+            visibility: classified.visibility,
+        };
     }
 
     return {
@@ -80,25 +210,79 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
     };
 };
 
+/**
+ * The JSDoc description of the statement that declares a registration, so the
+ * spec can describe the function to a model. Read from the doc comment placed
+ * above `export const name = query(...)`; tags are dropped. `export default`
+ * carries no statement JSDoc, so it yields nothing.
+ */
+const descriptionOfStatement = (statement: VariableStatement | undefined): string | undefined => {
+    const text = statement?.getJsDocs().at(-1)?.getDescription().trim();
+
+    return text === "" ? undefined : text;
+};
+
+const documentDescriptionOf = (call: CallExpression): string | undefined =>
+    descriptionOfStatement(call.getFirstAncestor((ancestor): ancestor is VariableStatement => Node.isVariableStatement(ancestor)));
+
+/**
+ * The JSDoc of the exported statement that names each export. A re-export such as
+ * `export const query = bundle.query` is documented there, while the registration call
+ * sits in an earlier declaration of the bundle, so the call's own comment is the wrong one.
+ * Indexed once per file: a lookup per export would rescan every statement.
+ */
+const exportedDescriptionsOf = (source: SourceFile): ((exportName: string) => string | undefined) => {
+    const statements = new Map<string, VariableStatement>();
+
+    for (const statement of source.getVariableStatements()) {
+        if (!statement.isExported()) {
+            continue;
+        }
+
+        for (const declaration of statement.getDeclarations()) {
+            if (!statements.has(declaration.getName())) {
+                statements.set(declaration.getName(), statement);
+            }
+        }
+    }
+
+    return (exportName) => descriptionOfStatement(statements.get(exportName));
+};
+
 /** Build a {@link FunctionIR} entry from one classified registration call, or `undefined` when it isn't a Lunora registration. */
-const functionIrFromCall = (call: CallExpression, exportName: string, relativePath: string): FunctionIR | undefined => {
-    const discovered = discoverFromCall(call);
+const functionIrFromCall = (
+    call: CallExpression,
+    exportName: string,
+    relativePath: string,
+    lazyFunctions: boolean,
+    exportedDescription?: string,
+): FunctionIR | undefined => {
+    const discovered = discoverFromCall(call, lazyFunctions);
 
     if (!discovered) {
         return undefined;
     }
 
+    const description = exportedDescription ?? documentDescriptionOf(call);
+
     return {
         args: discovered.args,
+        ...(description ? { description } : {}),
         exportName,
         filePath: relativePath,
         kind: discovered.kind as FunctionIR["kind"],
         returnType: discovered.returnType,
         ...(discovered.output ? { output: discovered.output } : {}),
+        ...(discovered.meta === undefined ? {} : { meta: discovered.meta }),
         visibility: discovered.visibility,
         ...(discovered.adminOnly ? { adminOnly: true as const } : {}),
+        // Only a query is ever resumed, so only a query needs the mark. A handler passed by reference is a body the scan never sees.
+        ...(discovered.kind === "query" && (procedureHandler(call) === undefined || mayReadIp(call)) ? { readsIp: true as const } : {}),
         ...(discovered.expose ? { expose: discovered.expose } : {}),
+        ...(discovered.x402 ? { x402: discovered.x402 } : {}),
         ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),
+        ...(discovered.channel ? { channel: discovered.channel } : {}),
+        ...(discovered.socket ? { socket: discovered.socket } : {}),
     };
 };
 
@@ -115,8 +299,8 @@ const functionIrFromCall = (call: CallExpression, exportName: string, relativePa
  * (`export default cronJobs()`, a workflow registry) classify to `undefined`
  * and are skipped like any other non-registration call.
  */
-const defaultExportFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
-    const found: FunctionIR[] = [];
+const defaultExportFunctions = (source: SourceFile, relativePath: string, lazyFunctions: boolean): { call: CallExpression; entry: FunctionIR }[] => {
+    const found: { call: CallExpression; entry: FunctionIR }[] = [];
 
     for (const assignment of source.getExportAssignments()) {
         if (assignment.isExportEquals()) {
@@ -124,10 +308,10 @@ const defaultExportFunctions = (source: SourceFile, relativePath: string): Funct
         }
 
         const call = resolveExpressionToCall(assignment.getExpression());
-        const entry = call ? functionIrFromCall(call, "default", relativePath) : undefined;
+        const entry = call ? functionIrFromCall(call, "default", relativePath, lazyFunctions) : undefined;
 
-        if (entry) {
-            found.push(entry);
+        if (call && entry) {
+            found.push({ call, entry });
         }
     }
 
@@ -144,8 +328,28 @@ const defaultExportFunctions = (source: SourceFile, relativePath: string): Funct
  * A name that is not an identifier (`export { run as "kebab-name" }`) cannot be
  * emitted that way and is left to `procedure_not_registered`.
  */
-const discoverFileFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
+const discoverFileFunctions = (source: SourceFile, relativePath: string, lazyFunctions: boolean): FunctionIR[] => {
     const exportNames = exportNamesByLocalOf(source);
+    const exportedDescriptionOf = exportedDescriptionsOf(source);
+    // The call each room name was first registered by. Two export names of one call are aliases of
+    // one room; two different calls under one name are a clash, which the emitters cannot represent.
+    const roomCalls = new Map<string, CallExpression>();
+    const rememberRoomCall = (entry: FunctionIR | undefined, call: CallExpression): void => {
+        if (entry?.channel?.kind !== "room") {
+            return;
+        }
+
+        const prior = roomCalls.get(entry.channel.name);
+
+        if (prior !== undefined && prior !== call) {
+            throw new LunoraError(
+                "DUPLICATE_ROOM_NAME",
+                `Duplicate room name "${entry.channel.name}" in ${relativePath}: two defineRoom calls share it. Room names must be unique.`,
+            );
+        }
+
+        roomCalls.set(entry.channel.name, call);
+    };
     const found = source
         .getVariableStatements()
         .flatMap((statement) => statement.getDeclarations())
@@ -153,12 +357,38 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string): Functi
         .flatMap(([localName, call]) =>
             (exportNames.get(localName) ?? [])
                 .filter((name) => isAddressableExportName(name))
-                .flatMap((name) => functionIrFromCall(call, name, relativePath) ?? []),
+                .flatMap((name) => {
+                    const entry = functionIrFromCall(call, name, relativePath, lazyFunctions, exportedDescriptionOf(name));
+                    rememberRoomCall(entry, call);
+
+                    return entry ? [entry] : [];
+                }),
         );
     const named = new Set(found.map((entry) => entry.exportName));
 
-    // `export default <expression>` that is not a local binding.
-    found.push(...defaultExportFunctions(source, relativePath).filter((entry) => !named.has(entry.exportName)));
+    // A component published to `node_modules` has no call to follow — read its functions off their type.
+    for (const declaration of source.getVariableStatements().flatMap((statement) => statement.getDeclarations())) {
+        for (const [localName, at] of exportPublishedBindingsOfDeclaration(declaration, (name) => exportNames.has(name))) {
+            for (const name of (exportNames.get(localName) ?? []).filter((candidate) => isAddressableExportName(candidate) && !named.has(candidate))) {
+                const entry = publishedFunctionIr(at, name, relativePath, exportedDescriptionOf(name));
+
+                if (entry) {
+                    found.push(entry);
+                    named.add(name);
+                }
+            }
+        }
+    }
+
+    // `export default <expression>`, including a local registration alias.
+    for (const { call, entry } of defaultExportFunctions(source, relativePath, lazyFunctions)) {
+        if (named.has(entry.exportName)) {
+            continue;
+        }
+
+        rememberRoomCall(entry, call);
+        found.push(entry);
+    }
 
     return found;
 };
@@ -175,6 +405,39 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string): Functi
  * exact `filePath`. So a migration-only file that sanitizes to the same namespace
  * as a function file cannot collide — only function↔function pairs can.
  */
+
+/**
+ * Two `defineRoom`s under one name would share a whisper topic, and the generated
+ * room map would keep whichever came last. Caught here, at build time, naming both.
+ *
+ * Two exports of one module under one name are an alias of a single registration
+ * (`export const lobby = chat`), so they are not a clash here; the generated room
+ * map checks that they are one object at load. Across modules the same name is a
+ * clash, since a re-export is not visible to discovery.
+ */
+const assertUniqueRoomNames = (functions: ReadonlyArray<FunctionIR>): void => {
+    const origins = new Map<string, { file: string; origin: string }>();
+
+    for (const entry of functions) {
+        if (entry.channel?.kind !== "room") {
+            continue;
+        }
+
+        const prior = origins.get(entry.channel.name);
+
+        if (prior !== undefined && prior.file !== entry.filePath) {
+            throw new LunoraError(
+                "DUPLICATE_ROOM_NAME",
+                `Duplicate room name "${entry.channel.name}": defined in ${prior.origin} and ${entry.filePath}:${entry.exportName}. Room names must be unique across the project.`,
+            );
+        }
+
+        if (prior === undefined) {
+            origins.set(entry.channel.name, { file: entry.filePath, origin: `${entry.filePath}:${entry.exportName}` });
+        }
+    }
+};
+
 const assertNoNamespaceCollision = (functions: ReadonlyArray<FunctionIR>): void => {
     const namespaceOrigins = new Map<string, string>();
 
@@ -199,7 +462,7 @@ const assertNoNamespaceCollision = (functions: ReadonlyArray<FunctionIR>): void 
  * Scan all .ts files under `lunoraDir` (skipping `_generated/` and `schema.ts`)
  * for top-level `export const x = query/mutation/action({...})` registrations.
  */
-const discoverFunctions = (project: Project, lunoraDirectory: string): FunctionIR[] => {
+const discoverFunctions = (project: Project, lunoraDirectory: string, options: { lazyFunctions?: boolean } = {}): FunctionIR[] => {
     const filePaths = listLunoraSourceFiles(lunoraDirectory);
     const functions: FunctionIR[] = [];
 
@@ -207,12 +470,13 @@ const discoverFunctions = (project: Project, lunoraDirectory: string): FunctionI
         const source: SourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        functions.push(...discoverFileFunctions(source, relativePath));
+        functions.push(...discoverFileFunctions(source, relativePath, options.lazyFunctions === true));
     }
 
     functions.sort((a, b) => `${a.filePath}:${a.exportName}`.localeCompare(`${b.filePath}:${b.exportName}`));
 
     assertNoNamespaceCollision(functions);
+    assertUniqueRoomNames(functions);
 
     return functions;
 };

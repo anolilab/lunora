@@ -2,13 +2,13 @@
 
 import type { FunctionReference, SubscriptionError, SubscriptionErrorCallback } from "@lunora/client";
 import type { Page, PaginatedCoreResult, PaginationResult } from "@lunora/client/pagination";
-import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, headPage, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import type { QueryKey } from "@tanstack/react-query";
-import { CancelledError, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
-import { useLunora } from "./lunora-provider";
+import isCancelledFetch from "./cancelled-fetch";
+import { useLunora, useLunoraQueryClient } from "./lunora-provider";
 import useLazyRef from "./use-lazy-ref";
 
 /**
@@ -75,7 +75,7 @@ const usePaginatedCore = function <T>(
     options: { initialNumItems: number; onError?: SubscriptionErrorCallback; shardKey?: string },
 ): PaginatedCoreReactResult<T> {
     const client = useLunora();
-    const queryClient = useQueryClient();
+    const queryClient = useLunoraQueryClient();
     const { initialNumItems, shardKey } = options;
 
     const skipped = args === "skip";
@@ -107,39 +107,80 @@ const usePaginatedCore = function <T>(
     const resetKey = `${serializeQueryKey(lunoraQueryKey(function_, baseArgs, shardKey))}::${String(initialNumItems)}`;
     const resetKeyRef = useRef(resetKey);
 
+    /** Set by a silent `INVALID_CURSOR` restart, cleared by the next frame for a page past the head. */
+    const restartedSinceLoadRef = useRef(false);
+
+    /**
+     * The head page's hash while a restart waits for its fresh snapshot. The query cache can still
+     * hold the head's value from before the refusal (a sibling feed over the same query keeps it),
+     * with a `continueCursor` as stale as the one refused, so the feed shows the head as loading
+     * until a fresh value lands rather than offering `loadMore` back into the refusal.
+     */
+    const awaitingHeadRef = useRef<string | undefined>(undefined);
+
     // react-doctor-disable-next-line react-hooks-js/refs -- intentional: React's sanctioned "reset state when an input changes" pattern — compare a render-phase ref to the current reset key and set state during render, guarded so it runs once per change (see comment above).
     if (resetKeyRef.current !== resetKey) {
         // react-doctor-disable-next-line react-hooks-js/refs -- intentional: writing the ref guard here is what makes the render-phase reset fire exactly once per input change (see above).
         resetKeyRef.current = resetKey;
+        // react-doctor-disable-next-line react-hooks-js/refs -- intentional: part of the same render-phase reset, guarded to run once per input change.
+        restartedSinceLoadRef.current = false;
+        // react-doctor-disable-next-line react-hooks-js/refs -- intentional: part of the same render-phase reset, guarded to run once per input change.
+        awaitingHeadRef.current = undefined;
         setPages(initialPages(initialNumItems));
         setError(undefined);
     }
 
+    // Every frame on any page re-renders the whole feed, so the entries are cached
+    // per `Page` object: re-deriving them costs two full serialisations of each
+    // loaded page's args per render. `Page` objects survive renders untouched
+    // until a boundary moves, and a `resetKey` change (fn, base-args content,
+    // shard, page size) starts a fresh map, so a cached entry always carries the
+    // current generation's base args.
+    const pageEntryCache = useMemo(
+        () => new WeakMap<Page, { args: Record<string, unknown>; hash: string; key: QueryKey }>(),
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: `resetKey` is the content hash of every input the entries derive from; keying on it rather than the raw `function_`/`baseArgs` identities is what lets the cache survive an inline args object.
+        [resetKey],
+    );
     // Build the (queryKey, args) pair for each loaded page. `cursor`/`endCursor`
     // carry the page's fixed `(lower, upper]` range so the client opens one
     // dedup'd subscription per range.
     // react-doctor-disable-next-line react-doctor/no-event-handler -- false positive: `pageEntries` is derived render state (the per-page (queryKey, args) list), not a faked event handler; the attach effect below reads it via `desiredRef` and keys on `pageKeysHash`. No user event triggers this derivation.
     const pageEntries = pages.map((page) => {
-        const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } };
-        const key: QueryKey = lunoraQueryKey(function_, pageArgs, shardKey);
+        let entry = pageEntryCache.get(page);
 
-        return { args: pageArgs, key };
+        if (entry === undefined) {
+            const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } };
+            const key: QueryKey = lunoraQueryKey(function_, pageArgs, shardKey);
+
+            entry = { args: pageArgs, hash: serializeQueryKey(key), key };
+            // react-doctor-disable-next-line react-hooks-js/immutability -- intentional: an idempotent memo cache keyed by the immutable `Page`; a discarded render only leaves an entry the next render would compute identically. The render-phase `resetKeyRef` read already bails React Compiler for this hook.
+            pageEntryCache.set(page, entry);
+        }
+
+        return entry;
     });
     // Stable hash of every loaded page key — the effect dep so we only re-attach
     // when the page set actually changes.
-    const pageKeysHash = pageEntries.map(({ key }) => serializeQueryKey(key)).join("|");
+    const pageKeysHash = pageEntries.map(({ hash }) => hash).join("|");
 
     // Read latest desired entries from a ref so the attach effect's dep list can
     // stay keyed on `pageKeysHash` alone — args/fn changes already move the hash.
-    const desiredRef = useRef<{ baseArgs: Record<string, unknown>; entries: typeof pageEntries; fn: FunctionReference; shardKey: string | undefined }>({
+    const desiredRef = useRef<{
+        baseArgs: Record<string, unknown>;
+        entries: typeof pageEntries;
+        fn: FunctionReference;
+        pages: Page[];
+        shardKey: string | undefined;
+    }>({
         baseArgs,
         entries: [],
         fn: function_,
+        pages,
         shardKey,
     });
 
     useEffect(() => {
-        desiredRef.current = { baseArgs, entries: pageEntries, fn: function_, shardKey };
+        desiredRef.current = { baseArgs, entries: pageEntries, fn: function_, pages, shardKey };
     });
 
     /**
@@ -149,19 +190,54 @@ const usePaginatedCore = function <T>(
      * computed from the same fn/args the subscription was opened with.
      */
     const failPage = (hash: string, queryKey: QueryKey, pageError: SubscriptionError): void => {
+        // The subscription was opened under this render's `resetKey`. Once the args, shard or page
+        // size moved, the feed was reset and this page is on its way out: its failure, a restart in
+        // particular, must not touch the new generation, nor restart it at this render's page size.
+        if (resetKeyRef.current !== resetKey) {
+            return;
+        }
+
+        const desired = desiredRef.current;
+        const argsOf = (page: Page): Record<string, unknown> => {
+            return { ...desired.baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } };
+        };
+        const hashOf = (page: Page): string => serializeQueryKey(lunoraQueryKey(desired.fn, argsOf(page), desired.shardKey));
+        const failure = classifyPageFailure(desired.pages, (page) => hashOf(page) === hash, pageError, restartedSinceLoadRef.current);
+
+        if (failure === "restart") {
+            const head = headPage(initialNumItems);
+            const restarted = [head];
+
+            // A sibling feed's head page still carries the refused build's `continueCursor`: ask for a
+            // fresh snapshot of it, stop the registry handing back the pushed value meanwhile, and
+            // treat the head as loading until the fresh one lands.
+            client.resnapshot(desired.fn, argsOf(head), { shardKey: desired.shardKey });
+            getSubscriptionRegistry(client).awaitFreshPush(lunoraQueryKey(desired.fn, argsOf(head), desired.shardKey));
+            awaitingHeadRef.current = hashOf(head);
+
+            // Ahead of the effect that would refresh it: the other pages of the dropped feed can fail in
+            // the same burst, and must find no page of theirs here (`ignore`), not the feed this restart
+            // replaced, where the restart flag would surface them.
+            desiredRef.current = { ...desired, pages: restarted };
+            restartedSinceLoadRef.current = true;
+            setPages(restarted);
+            setError(undefined);
+        }
+
+        if (failure !== "surface") {
+            return;
+        }
+
         setError(pageError);
 
         setPages((current) => {
-            const desired = desiredRef.current;
             const tail = current.at(-1);
 
             if (current.length <= 1 || !tail || queryClient.getQueryData(queryKey) !== undefined) {
                 return current;
             }
 
-            const tailArgs = { ...desired.baseArgs, paginationOpts: { cursor: tail.lower, endCursor: tail.upper, numItems: tail.numItems } };
-
-            return serializeQueryKey(lunoraQueryKey(desired.fn, tailArgs, desired.shardKey)) === hash ? current.slice(0, -1) : current;
+            return hashOf(tail) === hash ? current.slice(0, -1) : current;
         });
 
         onErrorRef.current?.(pageError);
@@ -206,7 +282,7 @@ const usePaginatedCore = function <T>(
 
         const desired = desiredRef.current;
         const registry = getSubscriptionRegistry(client);
-        const wanted = new Set(desired.entries.map(({ key }) => serializeQueryKey(key)));
+        const wanted = new Set(desired.entries.map(({ hash }) => hash));
 
         for (const [hash, detach] of detaches) {
             if (!wanted.has(hash)) {
@@ -216,18 +292,21 @@ const usePaginatedCore = function <T>(
         }
 
         for (const entry of desired.entries) {
-            const hash = serializeQueryKey(entry.key);
+            const { hash } = entry;
 
             if (detaches.has(hash)) {
                 continue;
             }
 
             // Trigger the initial fetch via TanStack so its dedup applies even
-            // when two mounts ask for the same page range. `staleTime: 0` is
-            // deliberate here (unlike `useQuery`): split/join recycle page-range
-            // queryKeys, so a key can reappear carrying a *prior* boundary
-            // configuration's cached rows, and forcing the queryFn to run on
-            // every fresh attach re-fetches those rows rather than trusting them.
+            // when two mounts ask for the same page range. The fetch resolves
+            // from the page's subscription (attached right below) — its first
+            // frame is the page snapshot — and goes over HTTP only when there
+            // is no socket. `staleTime: 0` is deliberate here (unlike
+            // `useQuery`): split/join recycle page-range queryKeys, so a key can
+            // reappear carrying a *prior* boundary configuration's cached rows,
+            // and forcing the queryFn to run on every fresh attach reads the
+            // live value rather than trusting them.
             //
             // `staleTime: 0` alone does NOT keep a recycled key from *serving*
             // the corpse first: this effect runs post-commit while `pageResults`
@@ -237,6 +316,10 @@ const usePaginatedCore = function <T>(
             // below removing the entry when the page is detached — the recycle
             // then finds nothing to read. The attach only fires once per
             // newly-desired page, so this stays a single fetch per page.
+            const fetchSnapshot = async (): Promise<unknown> =>
+                (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(desired.fn, entry.args, {
+                    shardKey: desired.shardKey,
+                });
             const fetchPage = (): void => {
                 // eslint-disable-next-line @tanstack/query/exhaustive-deps -- the client is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache; `LunoraProvider` clears the `["lunora", …]` entries on a client swap instead. Client swaps are handled explicitly via detachClientRef above. Unlike the sibling call sites, this one still needs the directive: the callee is wrapped in a type assertion, so the `client.query` MemberExpression's parent is a TSAsExpression rather than the CallExpression, and the rule's `isFunctionCallTarget` check (added in 5.101.4) does not see through it.
                 const initialFetch = queryClient.fetchQuery({
@@ -256,24 +339,7 @@ const usePaginatedCore = function <T>(
                     // hook the owner of the entry's whole lifecycle, so the release
                     // closure below removes it on detach rather than leaking it.
                     gcTime: Number.POSITIVE_INFINITY,
-                    queryFn: async () => {
-                        const sample = registry.openSnapshotSample(entry.key);
-                        const snapshot = await (
-                            client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>
-                        )(desired.fn, entry.args, {
-                            shardKey: desired.shardKey,
-                        });
-
-                        // Same race `useQuery` carries: TanStack applies a resolved
-                        // fetch unconditionally, so a page frame pushed while this
-                        // snapshot was in flight would be reverted to the older
-                        // rows. The push is strictly newer; yield to it.
-                        if (registry.closeSnapshotSample(sample)) {
-                            return snapshot;
-                        }
-
-                        return queryClient.getQueryData(entry.key) ?? snapshot;
-                    },
+                    queryFn: async ({ signal }) => registry.liveValue(queryClient, entry.key, signal, { fetch: fetchSnapshot, shardKey: desired.shardKey }),
                     queryKey: entry.key,
                     staleTime: 0,
                 });
@@ -287,7 +353,8 @@ const usePaginatedCore = function <T>(
                     // requested under the retired credential (see `blankQuery`). Ask
                     // again under the new one while the page is still held; a detach
                     // cancels too, and then nobody wants it.
-                    if (error_ instanceof CancelledError) {
+                    // A client from another TanStack copy rejects with that copy's class, so the shape decides, not the class.
+                    if (isCancelledFetch(error_)) {
                         if (registry.hasConsumers(entry.key)) {
                             fetchPage();
                         }
@@ -352,6 +419,17 @@ const usePaginatedCore = function <T>(
     // triggers a re-render here.
     useEffect(() => {
         const cache = queryClient.getQueryCache();
+        const pageHashes = new Set<string>();
+        const pastHeadHashes = new Set<string>();
+
+        for (const [index, { hash }] of pageEntries.entries()) {
+            pageHashes.add(hash);
+
+            if (pages[index] !== undefined && !isHeadPage(pages[index])) {
+                pastHeadHashes.add(hash);
+            }
+        }
+        const pageFunctionRef = function_.__lunoraRef;
         const unsubscribe = cache.subscribe((event) => {
             // The registry pushes page data via `setQueryData`, which emits an
             // `"updated"` event. Every other event type (observer lifecycle,
@@ -362,20 +440,46 @@ const usePaginatedCore = function <T>(
                 return;
             }
 
-            const hash = serializeQueryKey(event.query.queryKey as QueryKey);
+            const eventKey = event.query.queryKey as QueryKey;
 
-            if (pageEntries.some(({ key }) => serializeQueryKey(key) === hash)) {
-                // A frame for one of our pages landed — the feed is healthy again.
-                setError(undefined);
+            // Every live query in the app pushes through this shared cache, so
+            // most "updated" events belong to some other function. Rejecting them
+            // on the key's function-ref slot keeps the full key canonicalisation
+            // off every unrelated push.
+            if (eventKey[1] !== pageFunctionRef) {
+                return;
+            }
+
+            const hash = serializeQueryKey(eventKey);
+
+            if (pageHashes.has(hash)) {
+                // Only a `success` action (a frame, or a fetch that resolved) means a page loaded and the
+                // feed is healthy again. A fetch starting or rejecting updates the same query, and must not
+                // clear the error, nor the restart guard ahead of the `failPage` that rejection is about to run.
+                if (event.action.type === "success") {
+                    if (pastHeadHashes.has(hash)) {
+                        restartedSinceLoadRef.current = false;
+                    }
+
+                    if (awaitingHeadRef.current === hash) {
+                        awaitingHeadRef.current = undefined;
+                    }
+
+                    setError(undefined);
+                }
+
                 forceRender();
             }
         });
 
         return unsubscribe;
-        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the cache subscription re-attaches only when `pageKeysHash` (or the stable `queryClient`) changes. The inner `pageEntries.some(...)` membership check reads this render's entries by closure, but the subscription itself must not re-attach every render — keying on the hash is the point.
+        // react-doctor-disable-next-line react-doctor/exhaustive-deps -- intentional: the cache subscription re-attaches only when `pageKeysHash` (or the stable `queryClient`) changes. The `pageHashes` set is built from this render's entries and captured by closure, but the subscription itself must not re-attach every render — keying on the hash is the point.
     }, [queryClient, pageKeysHash]);
 
-    const pageResults: (PaginationResult<T> | undefined)[] = skipped ? [] : pageEntries.map(({ key }) => queryClient.getQueryData<PaginationResult<T>>(key));
+    const pageResults: (PaginationResult<T> | undefined)[] = skipped
+        ? []
+        : // react-doctor-disable-next-line react-hooks-js/refs -- intentional: the head waits for its fresh snapshot (see `awaitingHeadRef`); the cache event that clears it also forces this render.
+          pageEntries.map(({ hash, key }) => (awaitingHeadRef.current === hash ? undefined : queryClient.getQueryData<PaginationResult<T>>(key)));
 
     // SPLIT/JOIN maintenance: after results resolve, rebalance page boundaries so
     // no page's live range strays far from its target size. Guarded so we only
@@ -417,8 +521,10 @@ const usePaginatedCore = function <T>(
                 const desired = desiredRef.current;
                 const results = current.map((page) => {
                     const pageArgs = { ...desired.baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } };
+                    const key = lunoraQueryKey(desired.fn, pageArgs, desired.shardKey);
 
-                    return queryClient.getQueryData<PaginationResult<T>>(lunoraQueryKey(desired.fn, pageArgs, desired.shardKey));
+                    // A head still waiting for its fresh snapshot has no cursor to load more from.
+                    return awaitingHeadRef.current === serializeQueryKey(key) ? undefined : queryClient.getQueryData<PaginationResult<T>>(key);
                 });
 
                 const { nextCursor, status: liveStatus } = derivePaginationStatus(false, results);

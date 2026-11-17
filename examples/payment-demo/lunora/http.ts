@@ -1,4 +1,4 @@
-import { webhookResponse } from "@lunora/payment";
+import { readWebhookBody, webhookResponse } from "@lunora/payment";
 import { httpAction, httpRouter } from "lunorash/server";
 
 import { processWebhook } from "./billing.js";
@@ -48,7 +48,9 @@ const SIGNATURE_HEADERS = [
 app.post(
     "/payment/webhook",
     httpAction(async (ctx, request) => {
-        const body = await request.text();
+        // Capped (413 past 1 MiB): the route is public and the body is read before its signature can be checked.
+        const body = await readWebhookBody(request);
+
         const headers = Object.fromEntries(
             SIGNATURE_HEADERS.flatMap((name): [string, string][] => {
                 const value = request.headers.get(name);

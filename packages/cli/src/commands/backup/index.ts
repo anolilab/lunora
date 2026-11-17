@@ -12,6 +12,8 @@ const backupCommand: Command = {
         ["lunora backup restore <id>", "Restore a snapshot by id"],
         ["lunora backup create --bucket default", "Snapshot into an R2 bucket instead of a directory"],
         ["lunora backup restore <id> --bucket default --verify", "Restore from R2, checksum first"],
+        ["lunora backup restore <id> --mode replace --dry-run", "Show what restoring over existing rows would add, overwrite and delete"],
+        ["lunora backup restore <id> --mode replace", "Restore over existing rows: each snapshot table ends up holding exactly its rows"],
         ["lunora backup retention", "Show what the platform's retention would delete next"],
         ["lunora backup prune", "Delete the snapshots past the retention window (the only command that deletes backups)"],
         ["lunora backup pitr --at 2026-06-01T00:00:00Z", "Point-in-time recovery (≤30 days)"],
@@ -27,6 +29,13 @@ const backupCommand: Command = {
         { description: "Store snapshots in this R2 bucket instead of a directory (use `default` for the app's default bucket)", name: "bucket", type: String },
         { description: "Key prefix for bucket-backed snapshots (default backups/)", name: "prefix", type: String },
         { description: "restore: verify the snapshot's checksum before importing anything", name: "verify", type: Boolean },
+        {
+            description:
+                "restore: how rows the target already holds are treated — require-empty (default: refuse unless the snapshot's tables are empty) | append | upsert | replace (make each table match the snapshot; STOP all writes to the target first, or a row updated meanwhile is deleted)",
+            name: "mode",
+            type: String,
+        },
+        { description: "restore: print what the restore would add, overwrite and delete; write nothing", name: "dry-run", type: Boolean },
         { description: "Comma-separated table allowlist (create)", name: "tables", type: String },
         OUTPUT_FORMAT_OPTION,
         { description: "pitr: time to read/restore to (ISO or epoch-ms, ≤30 days)", name: "at", type: String },
@@ -52,7 +61,9 @@ export type BackupOptions = CreateOptions<{
     bookmark: string | undefined;
     bucket: string | undefined;
     dir: string | undefined;
+    "dry-run": boolean | undefined;
     format: string | undefined;
+    mode: string | undefined;
     prefix: string | undefined;
     prod: boolean | undefined;
     restart: boolean | undefined;

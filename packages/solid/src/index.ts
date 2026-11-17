@@ -4,6 +4,7 @@ export { createAction, createActionForClient } from "./create-action";
 export type { AgentThreadRecord, AgentThreadStatus, CreateAgentApi, CreateAgentOptions, CreateAgentResult } from "./create-agent";
 export { createAgent } from "./create-agent";
 export type {
+    AgentApprovalGrant,
     AgentChatMessage,
     AgentLiveEvent,
     AgentProgressEvent,
@@ -22,6 +23,8 @@ export { Authenticated, AuthLoading, createAuth, Unauthenticated } from "./creat
 export { default as createConnectionStatus } from "./create-connection-status";
 export type { FlagValue } from "./create-flag";
 export { createFlag, createFlags } from "./create-flag";
+export type { CreateLiveTopicResult } from "./create-live-topic";
+export { createLiveTopic } from "./create-live-topic";
 export type { MutationClient, MutationHandle } from "./create-mutation";
 export { createMutation, createMutationForClient } from "./create-mutation";
 export type { MutatorHandle, MutatorHook, MutatorTransaction } from "./create-mutator";

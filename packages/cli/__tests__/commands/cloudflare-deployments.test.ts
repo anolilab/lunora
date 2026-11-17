@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { runDeploymentsCommand } from "../../src/commands/cloudflare/deployments/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { Logger } from "../../src/util/logger";
+import type { Spawner } from "../../src/util/spawn";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
 const silentLogger = (): { errors: string[]; logger: Logger } => {
@@ -33,6 +34,20 @@ const npmProjectCwd = (): string => {
     return dir;
 };
 
+/** A spawner that answers `deployments status` with `statusResult` and records every call. */
+const statusSpawner = (statusResult: { code: number; stdout?: string }): ReturnType<typeof createRecordingSpawner> => {
+    const { calls, spawner: recorder } = createRecordingSpawner();
+    const spawner: Spawner = async (descriptor) => {
+        await recorder(descriptor);
+
+        return descriptor.args.includes("status") ? statusResult : { code: 0 };
+    };
+
+    return { calls, spawner };
+};
+
+const liveDocument = JSON.stringify({ versions: [{ percentage: 100, version_id: "live1" }] });
+
 describe("lunora cloudflare deployments", () => {
     it("list spawns `wrangler deployments list` and forwards --format json/--env", async () => {
         expect.assertions(3);
@@ -45,6 +60,39 @@ describe("lunora cloudflare deployments", () => {
         expect(result.code).toBe(0);
         expect(argsOf(calls)).toContain("wrangler deployments list");
         expect(argsOf(calls)).toContain("--json");
+    });
+
+    it("status spawns `wrangler deployments status` and forwards --format json as --json", async () => {
+        expect.assertions(3);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await runDeploymentsCommand({ cwd: "/tmp", env: "production", format: "json", logger, spawner, subcommand: "status" });
+
+        expect(result.code).toBe(0);
+        expect(argsOf(calls)).toContain("wrangler deployments status --env production");
+        expect(argsOf(calls)).toContain("--json");
+    });
+
+    it("status refuses the split flags, which only apply to promote", async () => {
+        expect.assertions(2);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await runDeploymentsCommand({
+            confirmSharedState: true,
+            cwd: "/tmp",
+            from: "live1",
+            logger,
+            percent: 10,
+            spawner,
+            subcommand: "status",
+        });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(calls).toHaveLength(0);
     });
 
     it("launches wrangler through npx when the project declares npm", async () => {
@@ -117,6 +165,102 @@ describe("lunora cloudflare deployments", () => {
         await runDeploymentsCommand({ cwd: "/tmp", logger, spawner, subcommand: "promote", versionId: "v9", yes: true });
 
         expect(argsOf(calls)).toContain("wrangler versions deploy v9@100% --yes");
+    });
+
+    it("promote --percent N --from <live> splits traffic as `versions deploy <id>@N% <live>@(100-N)%`", async () => {
+        expect.assertions(3);
+
+        const { calls, spawner } = statusSpawner({ code: 0, stdout: liveDocument });
+        const { logger } = silentLogger();
+
+        const result = await runDeploymentsCommand({
+            confirmSharedState: true,
+            cwd: "/tmp",
+            from: "live1",
+            logger,
+            percent: 10,
+            spawner,
+            subcommand: "promote",
+            versionId: "v9",
+            yes: true,
+        });
+
+        expect(result.code).toBe(0);
+        expect(calls[0]?.descriptor.args.join(" ")).toContain("wrangler deployments status --json");
+        expect(calls[1]?.descriptor.args.join(" ")).toContain("wrangler versions deploy v9@10% live1@90% --yes");
+    });
+
+    it.each([
+        ["a --from that is not live", { code: 0, stdout: liveDocument }, "is not a live version"],
+        ["a status that exits non-zero", { code: 1 }, "could not read the live deployment"],
+        ["a status that is not JSON", { code: 0, stdout: "not json" }, "could not read the live deployment"],
+        ["a status without versions", { code: 0, stdout: "{}" }, "could not read the live deployment"],
+    ])("promote --from refuses %s and deploys nothing", async (_label, status, expected) => {
+        expect.assertions(3);
+
+        const { calls, spawner } = statusSpawner(status);
+        const { errors, logger } = silentLogger();
+
+        const result = await runDeploymentsCommand({
+            confirmSharedState: true,
+            cwd: "/tmp",
+            from: "stale9",
+            logger,
+            percent: 10,
+            spawner,
+            subcommand: "promote",
+            versionId: "v9",
+            yes: true,
+        });
+
+        expect(result.code).not.toBe(0);
+        expect(errors.join("\n")).toContain(expected);
+        expect(calls.some((call) => call.descriptor.args.includes("deploy"))).toBe(false);
+    });
+
+    it("promote --percent 100 keeps the single-version argv and needs no --from", async () => {
+        expect.assertions(1);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        await runDeploymentsCommand({ cwd: "/tmp", logger, percent: 100, spawner, subcommand: "promote", versionId: "v9", yes: true });
+
+        expect(argsOf(calls)).toContain("wrangler versions deploy v9@100% --yes");
+    });
+
+    it.each([
+        ["without --from", { confirmSharedState: true, percent: 10 }, "needs --from"],
+        ["without --confirm-shared-state", { from: "live1", percent: 10 }, "--confirm-shared-state"],
+        ["with --from equal to the promoted version", { confirmSharedState: true, from: "v9", percent: 10 }, "must name a different version"],
+        ["with a fraction", { confirmSharedState: true, from: "live1", percent: 12.5 }, "whole number from 1 to 100"],
+        ["with zero", { confirmSharedState: true, from: "live1", percent: 0 }, "whole number from 1 to 100"],
+        ["above 100", { confirmSharedState: true, from: "live1", percent: 101 }, "whole number from 1 to 100"],
+        ["with NaN", { confirmSharedState: true, from: "live1", percent: Number.NaN }, "whole number from 1 to 100"],
+        ["with --from at 100%", { from: "live1", percent: 100 }, "applies only to a partial promote"],
+    ])("promote refuses %s and spawns nothing", async (_label, extra, expected) => {
+        expect.assertions(3);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { errors, logger } = silentLogger();
+
+        const result = await runDeploymentsCommand({ cwd: "/tmp", logger, spawner, subcommand: "promote", versionId: "v9", yes: true, ...extra });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(errors.join("\n")).toContain(expected);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("rejects the split flags on subcommands other than promote", async () => {
+        expect.assertions(2);
+
+        const { calls, spawner } = createRecordingSpawner();
+        const { logger } = silentLogger();
+
+        const result = await runDeploymentsCommand({ cwd: "/tmp", from: "live1", logger, percent: 10, spawner, subcommand: "rollback", yes: true });
+
+        expect(result.code).toBe(EXIT_CODE.USAGE);
+        expect(calls).toHaveLength(0);
     });
 
     it("promote without --yes refuses to spawn", async () => {

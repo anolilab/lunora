@@ -21,7 +21,7 @@ const makeCtx = (targetOrg: string) => {
         // Revoke/remove stamp `ctx.now` on the row they patch.
         now: Date.now(),
         db: withRateLimitStore({
-            delete: (id: string) => {
+            delete: (_table: string, id: string) => {
                 writes.push(id);
 
                 return Promise.resolve();
@@ -36,7 +36,7 @@ const makeCtx = (targetOrg: string) => {
                                 : [],
                     }),
             },
-            patch: (id: string) => {
+            patch: (_table: string, id: string) => {
                 writes.push(id);
 
                 return Promise.resolve();

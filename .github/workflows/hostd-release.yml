@@ -52,7 +52,7 @@
             "tag": "${{ steps.version.outputs.tag }}"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -110,12 +110,12 @@
             "CARGO_TERM_COLOR": "always"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             # apps/hostd/rust-toolchain.toml pins the same channel.
             - "name": "Install Rust stable toolchain"
@@ -190,7 +190,7 @@
                   echo "${binary} prints ${printed}."
 
             - "name": "Upload the binary"
-              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
               "with":
                   "name": "lunora-hostd-${{ matrix.platform }}"
                   "path": "apps/hostd/dist/release/lunora-hostd-${{ matrix.platform }}"
@@ -227,12 +227,12 @@
             "XCADDY_VERSION": "v0.4.7" # caddyserver/xcaddy release, 2026-08-17
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             # No module cache: a release build starts from a clean module download,
             # verified against the Go checksum database.
@@ -297,7 +297,7 @@
                   echo "Built Caddy ${printed} with $(( ${#with[@]} / 2 )) module(s)."
 
             - "name": "Upload the binary"
-              "uses": "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" # v4.6.2
+              "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
               "with":
                   "name": "caddy-${{ matrix.platform }}"
                   "path": "dist/caddy-${{ matrix.platform }}.gz"
@@ -320,12 +320,12 @@
             "attestations": "write" # to store the provenance attestations
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             # apps/hostd/rust-toolchain.toml pins the same channel.
             - "name": "Install Rust stable toolchain"
@@ -483,12 +483,12 @@
             "contents": "write" # to create the hostd-latest release and replace its latest.json
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
 
             # apps/hostd/rust-toolchain.toml pins the same channel.
             - "name": "Install Rust stable toolchain"

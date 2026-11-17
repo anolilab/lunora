@@ -575,8 +575,8 @@ const SECRETS_STORE_RULE: RequiredFieldsRule = {
 
 /**
  * Hint-style binding arrays: each entry needs a non-empty `binding` (error); its
- * secondary field is a remote resource Lunora can't mint (a KV namespace id, a
- * Hyperdrive id, a Pipelines pipeline name, an AE dataset), so a missing one is
+ * secondary field is a remote resource Lunora can't mint (a Hyperdrive id, a
+ * Pipelines pipeline name, an AE dataset), so a missing one is
  * a warning — the binding can't resolve/connect without it, but only the user
  * can supply it. One descriptor table replaces four near-identical validators.
  */
@@ -584,9 +584,8 @@ const HINT_BINDING_RULES = [
     {
         arrayMessage: "kv_namespaces must be an array of { binding, id } entries",
         bindingMessage: (label: string) => `${label} must have a non-empty "binding" naming the KV namespace binding`,
-        hintField: "id",
-        hintMessage: (label: string, binding: string) =>
-            `${label} ("${binding}") has no "id" — run \`wrangler kv namespace create\` and set the namespace id, or the binding can't resolve`,
+        // No `hintField`: wrangler creates a namespace declared without an `id`
+        // on the first deploy and writes the id back.
         key: "kv_namespaces",
     },
     {
@@ -627,9 +626,9 @@ const HINT_BINDING_RULES = [
 ] as const satisfies ReadonlyArray<{
     arrayMessage: string;
     bindingMessage: (label: string) => string;
-    /** Field carrying the un-mintable remote id, or every accepted spelling of it. */
-    hintField: ReadonlyArray<string> | string;
-    hintMessage: (label: string, binding: string) => string;
+    /** Field carrying the un-mintable remote id, or every accepted spelling of it. Absent when the id may be left out. */
+    hintField?: ReadonlyArray<string> | string;
+    hintMessage?: (label: string, binding: string) => string;
     key: keyof WranglerConfig;
 }>;
 
@@ -664,6 +663,10 @@ const validateHintBinding = (wrangler: WranglerConfig, rule: (typeof HINT_BINDIN
         // renamed still satisfies the rule under its old name (see `pipelines`).
         // Narrowed with `typeof`, not `Array.isArray`: the latter widens a
         // `ReadonlyArray<string> | string` union to `any[]`.
+        if (!("hintField" in rule)) {
+            continue;
+        }
+
         const hintFields = typeof rule.hintField === "string" ? [rule.hintField] : rule.hintField;
 
         if (!hintFields.some((field) => isNonEmptyString(entry[field]))) {

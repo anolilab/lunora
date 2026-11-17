@@ -48,16 +48,15 @@ const primedKey = reactiveCacheKey("primed:handler", { id: "p1" }, null);
 const missCache = new ReactiveCache({ maxEntries: 1 });
 let missCounter = 0;
 
-describe("ReactiveCache.run — hit vs miss vs no-cache", () => {
-    // Prime the hit-path cache in beforeAll: CodSpeed's instrumented runner
-    // (@codspeed/vitest-plugin) runs each bench against the suite's
-    // beforeAll/beforeEach hooks but does NOT pick up module-top-level await
-    // state, so a top-level prime would leave the "hit" bench cold (a miss).
-    // beforeAll is honored in both the plain `vitest bench` runner and CodSpeed.
-    beforeAll(async () => {
-        await primedCache.run(primedKey, createDependencyTracker().collect(), syntheticHandler);
-    });
+// Prime the hit-path cache in a file-level beforeAll. CodSpeed's instrumented runner does not pick up
+// module-top-level await state, and vitest's own bench runner skips hooks registered inside a `describe` (its
+// `runBenchmarkSuite` recurses into sub-suites without running their hooks), which left the "hit" arm timing a
+// miss. A file-level hook runs under both.
+beforeAll(async () => {
+    await primedCache.run(primedKey, createDependencyTracker().collect(), syntheticHandler);
+});
 
+describe("ReactiveCache.run — hit vs miss vs no-cache", () => {
     bench("hit: cache.run returns memoized result", async () => {
         await primedCache.run(primedKey, createDependencyTracker().collect(), syntheticHandler);
     });

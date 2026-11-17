@@ -2,7 +2,7 @@
  * `memoizePromise` — the keyed "initialise this once, and let a failure retry"
  * cache shared by every lazily-built async singleton in the codebase: the
  * per-tool x402 charge middleware (`@lunora/mcp`), the per-procedure one
- * (`@lunora/x402`), and the per-secret HMAC key cache (`shared/hmac-url.ts`).
+ * (`@lunora/x402`), and the per-secret HMAC key cache (`shared/hmac-key.ts`).
  *
  * Each had hand-rolled the same three moves — look the key up, start the work
  * and store the PROMISE (not the value, so concurrent callers coalesce onto one

@@ -24,4 +24,8 @@ const baseUrl = import.meta.env.PROD ? (import.meta.env.VITE_LUNORA_URL as strin
 // read, so the token is pasted into the header field at runtime instead.
 const adminToken = import.meta.env.DEV ? ((import.meta.env.VITE_LUNORA_ADMIN_TOKEN as string | undefined) ?? undefined) : undefined;
 
-mountStudio({ adminToken, baseUrl });
+// Setting VITE_LUNORA_ADVISOR_COMPANION to "true" at build time says the worker has the companion
+// advisor Worker deployed (`studio.companion`). Without it the Advisors tab makes no request.
+const advisorCompanion = (import.meta.env.VITE_LUNORA_ADVISOR_COMPANION as string | undefined) === "true";
+
+mountStudio({ adminToken, baseUrl, studio: { advisorCompanion } });

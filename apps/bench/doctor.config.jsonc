@@ -1,0 +1,9 @@
+{
+    // The bench's loops await one call at a time on purpose: queue messages are acked only after
+    // their own writes land, and the scripts time each call or runtime alone, which parallel
+    // calls would turn into a measure of contention. The root .oxlintrc.json turns this rule off
+    // for the same reason (eslint does not enforce it); React Doctor reads its own config.
+    "rules": {
+        "react-doctor/async-await-in-loop": "off",
+    },
+}

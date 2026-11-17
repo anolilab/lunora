@@ -81,6 +81,96 @@ describe("discover/http-routes", () => {
         expect(routes[0]?.chunkType).toBe("{ text: string; }");
     });
 
+    /** A stand-in for the published `@lunora/server` package, so its `SseEvent` resolves to a real declaration. */
+    const writeServerPackage = (): void => {
+        writeSource("node_modules/@lunora/server/package.json", JSON.stringify({ name: "@lunora/server", types: "index.d.ts" }));
+        writeSource(
+            "node_modules/@lunora/server/index.d.ts",
+            `
+            export interface SseEvent<R> { readonly data: R; readonly id: string; }
+            export declare const httpRoute: any;
+            export declare function sseEvent<R>(frame: { data: R; id: string }): SseEvent<R>;
+        `,
+        );
+    };
+
+    it("collapses a genuine @lunora/server `SseEvent` wrapper out of a `.stream()` chunk type", () => {
+        expect.assertions(1);
+
+        // The wrapper is transport, not part of the user's chunk contract: the
+        // server puts only its inner `data` on the wire, so the client chunk type
+        // must be the inner type even when a handler mixes branded + plain chunks.
+        writeServerPackage();
+        writeSource(
+            "http.ts",
+            `
+            import { httpRoute, type SseEvent } from "@lunora/server";
+
+            const iterate = async function* (): AsyncGenerator<SseEvent<{ text: string }> | { text: string }, void, void> {
+                yield { text: "a" };
+            };
+
+            export const streamTokens = httpRoute.get("/api/tokens").stream(() => iterate());
+        `,
+        );
+
+        const routes = discoverHttpRoutes(newProject(), workdir);
+
+        expect(routes[0]?.chunkType).toBe("{ text: string; }");
+    });
+
+    it("keeps a user's own `SseEvent` type: only the genuine envelope is unwrapped", () => {
+        expect.assertions(1);
+
+        // A local `SseEvent<T>` is an ordinary payload — the wire sends it whole — so it must not collapse.
+        writeSource(
+            "http.ts",
+            `
+            import { httpRoute } from "@lunora/server";
+
+            interface SseEvent<R> {
+                readonly data: R;
+                readonly id: string;
+            }
+
+            const iterate = async function* (): AsyncGenerator<SseEvent<{ text: string }>, void, void> {
+                yield { data: { text: "a" }, id: "1" };
+            };
+
+            export const streamTokens = httpRoute.get("/api/tokens").stream(() => iterate());
+        `,
+        );
+
+        const routes = discoverHttpRoutes(newProject(), workdir);
+
+        expect(routes[0]?.chunkType).not.toBe("{ text: string; }");
+    });
+
+    it("renders a union envelope `SseEvent<A | B> | A | B` as the flattened chunk union", () => {
+        expect.assertions(1);
+
+        writeServerPackage();
+        writeSource(
+            "http.ts",
+            `
+            import { httpRoute, type SseEvent } from "@lunora/server";
+
+            type A = { kind: "a" };
+            type B = { kind: "b" };
+
+            const iterate = async function* (): AsyncGenerator<SseEvent<A | B> | A | B, void, void> {
+                yield { kind: "a" };
+            };
+
+            export const streamTokens = httpRoute.get("/api/tokens").stream(() => iterate());
+        `,
+        );
+
+        const routes = discoverHttpRoutes(newProject(), workdir);
+
+        expect(routes[0]?.chunkType).toBe('{ kind: "a" } | { kind: "b" }');
+    });
+
     it("captures the chunk type of an arrow handler returning an AsyncIterable", () => {
         expect.assertions(2);
 

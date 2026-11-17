@@ -1,4 +1,5 @@
-import type { FunctionDescriptor, LunoraClient } from "@lunora/client";
+import type { FunctionDescriptor } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 import { describe, expect, it, vi } from "vitest";
 
@@ -44,7 +45,7 @@ const mockClient = (
     token = "admin-token",
 ): {
     action: ReturnType<typeof vi.fn>;
-    asClient: LunoraClient;
+    asClient: LunoraAdminClient;
     listFunctions: ReturnType<typeof vi.fn>;
     listGlobalTables: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
@@ -70,7 +71,7 @@ const mockClient = (
         mutation,
         query,
         url: deploymentUrl,
-    } as unknown as LunoraClient;
+    } as unknown as LunoraAdminClient;
 
     return { action, asClient: client, listFunctions, listGlobalTables, mutation, query };
 };
@@ -94,11 +95,11 @@ interface ActionRequired {
 const parseResult = (result: ToolResult): unknown => JSON.parse(result.content[0]!.text);
 
 /** Step one of the handshake: propose the write and read back its digest. */
-const propose = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ActionRequired> =>
+const propose = async (client: LunoraAdminClient, name: string, input: Record<string, unknown>): Promise<ActionRequired> =>
     parseResult(await callTool(client, name, input, true)) as ActionRequired;
 
 /** Both steps, for the tests that care about what happens AFTER a valid confirmation. */
-const proposeAndConfirm = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+const proposeAndConfirm = async (client: LunoraAdminClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
     const { actionDigest } = await propose(client, name, input);
 
     return callTool(client, name, { ...input, actionDigest, confirmed: true }, true);
@@ -318,7 +319,7 @@ describe("callTool", () => {
 
         await proposeAndConfirm(mock.asClient, "lunora_run_mutation", { functionPath: "messages:send" });
 
-        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, {}, { shardKey: undefined });
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, {}, { onlineOnly: true, shardKey: undefined });
     });
 
     it("coerces an empty-string shardKey to undefined so the unsharded default is used", async () => {
@@ -408,8 +409,9 @@ describe("callTool", () => {
 
         const result = await proposeAndConfirm(mock.asClient, "lunora_run_action", { functionPath: "sync:stripe" });
 
+        // A plain Error may carry raw upstream text, so only the fixed INTERNAL message reaches the model.
         expect(result.isError).toBe(true);
-        expect(result.content[0]!.text).toContain("boom");
+        expect(result.content[0]!.text).toBe("INTERNAL: the tool call failed unexpectedly");
     });
 
     it("refuses a write tool when writes are disabled (read-only default), without touching the client", async () => {
@@ -695,7 +697,7 @@ describe("write confirmation handshake", () => {
         const result = await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest, confirmed: true }, true);
 
         expect(result.isError).toBeUndefined();
-        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, { roomId: "r1", text: "hi" }, { shardKey: undefined });
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, { roomId: "r1", text: "hi" }, { onlineOnly: true, shardKey: undefined });
         expect(parseResult(result)).toStrictEqual({ id: "m1" });
     });
 
@@ -997,5 +999,105 @@ describe("write confirmation handshake", () => {
         // Only `functionPath` may be required — the first call is the one that
         // proposes, so it cannot be made to carry a digest.
         expect(WRITE_TOOL_DEFINITIONS.every((tool) => tool.inputSchema.required?.length === 1)).toBe(true);
+    });
+});
+
+describe("write confirmation with a v.sensitive argument", () => {
+    /** A mutation whose `value` argument is secret; the name is innocuous on purpose. */
+    const VAULT_FUNCTION: FunctionDescriptor = {
+        args: [
+            { kind: "string", name: "label", optional: false },
+            { kind: "string", name: "value", optional: false, sensitive: true },
+        ],
+        kind: "mutation",
+        path: "vault:store",
+    };
+    const SECRET = "hunter2-the-real-secret";
+    const input = { args: { label: "primary", value: SECRET }, functionPath: "vault:store" };
+
+    it("shows the sensitive value masked, and keeps its sibling argument", async () => {
+        expect.assertions(4);
+
+        const mock = mockClient();
+
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, VAULT_FUNCTION]);
+
+        const result = await callTool(mock.asClient, "lunora_run_mutation", input, true);
+        const payload = parseResult(result) as ActionRequired;
+
+        expect(payload.proposedAction.args).toStrictEqual({ label: "primary", value: "«sensitive»" });
+        expect(result.content[0]!.text).not.toContain(SECRET);
+        expect(payload.nextStep).toContain("Resend the REAL values");
+        expect(mock.mutation).not.toHaveBeenCalled();
+    });
+
+    it("binds the digest to the real value: the confirmed call runs with the secret, through a sensitive reference", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, VAULT_FUNCTION]);
+
+        const { actionDigest } = await propose(mock.asClient, "lunora_run_mutation", input);
+
+        await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest, confirmed: true }, true);
+
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "vault:store", sensitive: true }, input.args, { onlineOnly: true, shardKey: undefined });
+        expect(mock.mutation.mock.calls[0]?.[1]).toStrictEqual({ label: "primary", value: SECRET });
+    });
+
+    it("masks an argument that a redeploy marked sensitive after the function list was cached", async () => {
+        expect.assertions(3);
+
+        const mock = mockClient();
+        const stale: FunctionDescriptor = { ...VAULT_FUNCTION, args: VAULT_FUNCTION.args?.map(({ sensitive: _sensitive, ...rest }) => rest) };
+
+        // The list is read (and cached) before the redeploy, then the deployment reports the marker.
+        mock.listFunctions.mockResolvedValueOnce([...MOCK_FUNCTIONS, stale]);
+        await callTool(mock.asClient, "lunora_list_functions", {}, true);
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, VAULT_FUNCTION]);
+
+        const result = await callTool(mock.asClient, "lunora_run_mutation", input, true);
+        const payload = parseResult(result) as ActionRequired;
+
+        expect(payload.proposedAction.args).toStrictEqual({ label: "primary", value: "«sensitive»" });
+        expect(result.content[0]!.text).not.toContain(SECRET);
+        expect(mock.mutation).not.toHaveBeenCalled();
+    });
+
+    it("never queues a write, even when the cached descriptor does not yet mark the argument sensitive", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+        // The descriptor read before a redeploy: `value` is not marked yet.
+        const stale: FunctionDescriptor = { ...VAULT_FUNCTION, args: VAULT_FUNCTION.args?.map(({ sensitive: _sensitive, ...rest }) => rest) };
+
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, stale]);
+
+        const { actionDigest } = await propose(mock.asClient, "lunora_run_mutation", input);
+
+        await callTool(mock.asClient, "lunora_run_mutation", { ...input, actionDigest, confirmed: true }, true);
+
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "vault:store" }, input.args, { onlineOnly: true, shardKey: undefined });
+        expect(mock.mutation.mock.calls[0]?.[2]).toMatchObject({ onlineOnly: true });
+    });
+
+    it("refuses a confirmation that resends the masked placeholder in place of the value", async () => {
+        expect.assertions(2);
+
+        const mock = mockClient();
+
+        mock.listFunctions.mockResolvedValue([...MOCK_FUNCTIONS, VAULT_FUNCTION]);
+
+        const { actionDigest } = await propose(mock.asClient, "lunora_run_mutation", input);
+        const result = await callTool(
+            mock.asClient,
+            "lunora_run_mutation",
+            { ...input, args: { label: "primary", value: "«sensitive»" }, actionDigest, confirmed: true },
+            true,
+        );
+
+        expect(result.isError).toBe(true);
+        expect(mock.mutation).not.toHaveBeenCalled();
     });
 });

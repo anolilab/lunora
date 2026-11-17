@@ -14,14 +14,24 @@
  * `lunoraDoAdapter` against the *real* `state.storage.transaction` — a Node suite can
  * only approximate it with BEGIN/COMMIT, which reproduces atomicity but not workerd's
  * dispatch isolation.
+ *
+ * **{@link OrgAuthDO}** is the same subclass with the organization plugin (teams on)
+ * and email/password sign-in, so the identity route's membership reads (`member`,
+ * `team`, `teamMember`) and the organization cache-cookie refresh run on workerd's
+ * SQLite. A separate object, so the tables it adds stay out of the suites that
+ * assert {@link AuthStorageDO}'s schema and move order.
  */
 import { scim } from "@better-auth/scim";
 import { sso } from "@better-auth/sso";
+import { organization } from "better-auth/plugins/organization";
 
 import { LunoraAuthDO, RESOLVE_SESSION_PATH } from "../../src/auth-do";
 import { admin } from "../../src/plugins";
 
 const SECRET = "lunora-workerd-do-secret-lunora-workerd-do-xx";
+
+/** {@link OrgAuthDO}'s base URL; https, so its cookies carry the `__Secure-` prefix. */
+const ORG_AUTH_ORIGIN = "https://example.test";
 
 /** The credential the suite presents as the IdP. */
 const SCIM_TOKEN = "workerd-do-scim-token"; // secret-scanner:allow
@@ -72,8 +82,31 @@ class AuthStorageDO extends LunoraAuthDO {
     }
 }
 
+/** The app's auth Durable Object with organizations and teams. */
+class OrgAuthDO extends LunoraAuthDO {
+    public constructor(state: DurableObjectState) {
+        super(
+            state,
+            () => {
+                // `session.cookieCache` is left to `createAuth`'s default (on), which is what
+                // makes the organization endpoints' cache-cookie refresh observable.
+                return {
+                    baseURL: ORG_AUTH_ORIGIN,
+                    emailAndPassword: { enabled: true },
+                    plugins: [organization({ teams: { enabled: true } })],
+                    rateLimit: { enabled: false },
+                    secret: SECRET,
+                };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
+    }
+}
+
 interface TestEnv {
     AUTH_DO: DurableObjectNamespace;
+    /** Driven directly from `cloudflare:test`, one object per spec, not through this worker. */
+    ORG_AUTH_DO: DurableObjectNamespace;
     /** Used by the D1 migration suite directly from `cloudflare:test`, not by this worker. */
     TEST_DB: D1Database;
 }
@@ -105,8 +138,8 @@ const testWorker = {
 };
 
 export default testWorker;
-// Exports last, per the repo's `import/exports-last` rule. `AuthStorageDO` is named
-// by wrangler.jsonc's DO binding; `SCIM_TOKEN` is shared with the suite so the
-// credential is declared once.
+// Exports last, per the repo's `import/exports-last` rule. `AuthStorageDO` and
+// `OrgAuthDO` are named by wrangler.jsonc's DO bindings; the constants are shared
+// with the suites so each credential is declared once.
 export type { TestEnv };
-export { AuthStorageDO, INTERNAL_SECRET, SCIM_TOKEN };
+export { AuthStorageDO, INTERNAL_SECRET, ORG_AUTH_ORIGIN, OrgAuthDO, SCIM_TOKEN, SECRET };

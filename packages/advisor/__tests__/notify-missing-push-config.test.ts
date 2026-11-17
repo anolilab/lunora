@@ -25,7 +25,7 @@ describe("notify_missing_push_config", () => {
     it("flags push usage with neither channel configured", () => {
         expect.assertions(2);
 
-        const findings = run({ hasFcm: false, hasWebPush: false, usesPush: true });
+        const findings = run({ hasFcm: false, hasWebPush: false, usesFcmOnlySend: false, usesPush: true });
 
         expect(findings).toHaveLength(1);
         expect(findings[0]).toMatchObject({ level: "WARN", name: "notify_missing_push_config" });
@@ -34,18 +34,33 @@ describe("notify_missing_push_config", () => {
     it("is clean when a Web Push channel is configured", () => {
         expect.assertions(1);
 
-        expect(run({ hasFcm: false, hasWebPush: true, usesPush: true })).toHaveLength(0);
+        expect(run({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: false, usesPush: true })).toHaveLength(0);
     });
 
     it("is clean when an FCM channel is configured", () => {
         expect.assertions(1);
 
-        expect(run({ hasFcm: true, hasWebPush: false, usesPush: true })).toHaveLength(0);
+        expect(run({ hasFcm: true, hasWebPush: false, usesFcmOnlySend: false, usesPush: true })).toHaveLength(0);
     });
 
     it("is clean when the app does not push", () => {
         expect.assertions(1);
 
-        expect(run({ hasFcm: false, hasWebPush: false, usesPush: false })).toHaveLength(0);
+        expect(run({ hasFcm: false, hasWebPush: false, usesFcmOnlySend: false, usesPush: false })).toHaveLength(0);
+    });
+
+    it("flags a topic or condition send when Web Push is wired but FCM is not", () => {
+        expect.assertions(2);
+
+        const findings = run({ hasFcm: false, hasWebPush: true, usesFcmOnlySend: true, usesPush: true });
+
+        expect(findings).toHaveLength(1);
+        expect(findings[0]?.detail).toContain("sendToTopic");
+    });
+
+    it("does not flag a topic send once FCM is wired", () => {
+        expect.assertions(1);
+
+        expect(run({ hasFcm: true, hasWebPush: true, usesFcmOnlySend: true, usesPush: true })).toHaveLength(0);
     });
 });

@@ -12,6 +12,8 @@ separate API service, no platform sign-up.
 
 ## `wrangler.jsonc`
 
+The following `wrangler.jsonc` declares the Worker, its Durable Object classes, the D1 database and the R2 bucket:
+
 ```jsonc
 {
     "$schema": "node_modules/wrangler/config-schema.json",
@@ -23,12 +25,17 @@ separate API service, no platform sign-up.
         "bindings": [
             { "name": "SHARD", "class_name": "ShardDO" },
             { "name": "SCHEDULER", "class_name": "SchedulerDO" },
+            // Remembers revoked named admin tokens where a restore of the shard cannot rewind them.
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     "d1_databases": [{ "binding": "DB", "database_name": "my-lunora-app", "database_id": "<from-wrangler-d1-create>" }],
     "r2_buckets": [{ "binding": "FILES", "bucket_name": "my-lunora-files" }],
-    // Required whenever a SchedulerDO is declared. The DO reads its dispatch
+    // Required whenever a SchedulerDO is declared. The Durable Object (DO) reads its dispatch
     // target from this binding on its own env — never off the schedule request,
     // which would let a caller steer the callback — and refuses to enqueue
     // without it, failing every ctx.scheduler.runAfter/runAt.
@@ -60,7 +67,9 @@ deploy `target`, the `remote`-binding dev preference, the `app` hook a
 Vite-first project composes its worker with, and `advisor.minSeverity`, the
 lowest advisory level codegen reports and writes into `_generated/shard.ts`
 (`"info"`, `"warn"` or `"error"`; an ERROR is never dropped, so the codegen gate
-stays on). It replaces `lunora.json`: the two
+stays on), and `security.headers`, the baseline security headers for the Worker
+and the static assets ([Configuring the
+headers](/docs/concepts/security#configuring-the-headers)). It replaces `lunora.json`: the two
 were always the same question, split across a format boundary that existed only
 because the CLI could not read TypeScript. It can now (`jiti`), so there is one
 file and it is real code.
@@ -73,7 +82,7 @@ export default {
     target: "cloudflare",
     remote: true,
     advisor: { minSeverity: "warn" },
-    codegen: { exclude: ["seed/**", "**/*.fixture.ts"] },
+    codegen: { exclude: ["seed/**", "**/*.fixture.ts"], lazyFunctions: true },
 } satisfies LunoraConfig;
 ```
 
@@ -89,10 +98,49 @@ module may carry those names. Secret scanning is
 the one exception: it still reads test and excluded files, because a live
 vendor key committed anywhere is still a leak.
 
+`codegen.lazyFunctions: true` makes `_generated/functions.ts` load each function
+module with `import()` instead of importing all of them up front. Codegen reads
+the key on every run, so `lunora codegen`, `dev`, `prepare`, `verify`, `build`,
+`deploy` and the Vite and Rspack plugins all emit the same registry. The
+`--lazy-functions` flag and `LUNORA_LAZY_FUNCTIONS=1` turn it on for one run;
+neither can turn off what the config enables.
+
+Codegen does not parse your whole tsconfig. Its TypeScript program starts from
+the `lunora/` sources, the worker entry, the `.d.ts` files your `tsconfig.json`
+includes, and any other tsconfig-included file whose declarations apply to the
+whole program: a script, a `declare global` block, or a triple-slash directive.
+A `declare module "x"` in such a file counts only when a file the program reaches
+imports `x`. Everything else (your UI, your tests) is reached only by import, and
+the tsconfig's compiler options and path aliases still apply. A project whose
+tsconfig includes a large `src/` no longer pays to parse it on a cold run. The
+tsconfig's file list is read on a cold start, so a declaration added to `src/`
+mid-session is picked up on the next start.
+
 `lunora.config.mts`, `.js` and `.mjs` are read too, so a JS-authored project is
 not forced into TypeScript for one file. `.cts` / `.cjs` are deliberately not:
 Vite's default `resolve.extensions` does not cover them, so the specifier the
 generated worker entry imports for the `app` hook would not resolve.
+
+Codegen checks the file before it reads it, on every `lunora dev`, `codegen`,
+`build` and `deploy` run and in the Vite and Rspack plugins. A key that is not
+one of `advisor`, `app`, `codegen`, `durableObjects`, `remote`, `security`,
+`services`, `studio` and `target` (or not one of a section's keys, down to an
+`advisor.accept` entry), a literal of the wrong type such as `remote: "true"`
+or `rpc: true`, and a file with only named exports and no `export default` each
+stop the run with a `PROJECT_CONFIG_INVALID` error that names the key and the
+closest valid spelling:
+
+```text
+lunora.config.ts is invalid:
+  - unknown key `remot`. Did you mean `remote`? Valid keys: advisor, app, codegen, durableObjects, remote, security, services, studio, target.
+```
+
+A computed value (`remote: process.env.REMOTE === "1"`) is not checked, because
+codegen reads the file without running it, and neither is a value in an object
+that also has a spread (`{ ...base, remote: true }`), which the spread may
+override; the key names around it still are. `LunoraConfig` types `remote` as
+a boolean, but a `remote: null` in a file that is not type-checked is read as no
+preference, the same as leaving `remote` out.
 
 Every template that declares a tsconfig `include` lists `lunora.config.ts` in it,
 which is what gets the file type-checked (nuxt declares none — it extends the
@@ -145,13 +193,14 @@ Three things are worth knowing about this file:
   will throw, and the build warns that the hook was not composed. `import type`
   is erased on both counts, which is why the shape above uses `satisfies` rather
   than a `defineConfig()` call.
-- **Write `target`, `remote`, `advisor.minSeverity`, `advisor.accept` and `codegen.exclude` as literals.** `lunora codegen` resolves the
+- **Write `target`, `remote`, `advisor.minSeverity`, `advisor.accept`, `codegen.exclude` and `codegen.lazyFunctions` as literals.** `lunora codegen` resolves the
   target synchronously, by parsing this file rather than running it, so a computed
   value, a getter or a spread is not seen. It is not silently defaulted either —
   `lunora verify` reports `platform_unreadable_target`, and an unreadable
   `minSeverity` reports `advisor_min_severity_invalid` and filters nothing, an
   unreadable `advisor.accept` reports `advisor_accept_invalid` and accepts nothing,
-  and an unreadable `codegen.exclude` logs a warning and excludes nothing extra. A
+  an unreadable `codegen.exclude` logs a warning and excludes nothing extra, and an
+  unreadable `codegen.lazyFunctions` logs a warning and stays eager. A
   `const` in the same file and a shorthand property both work.
 
 A config that throws, or whose `app` is not a function, is ignored rather than
@@ -262,6 +311,8 @@ Container egress is billed separately from Workers. See [Limits](/docs/limits).
 
 ## Deploy
 
+Deploy the Worker from the project root:
+
 ```bash
 pnpm lunora deploy
 ```
@@ -275,10 +326,43 @@ This runs:
 3. a Docker preflight when Dockerfile-backed containers are declared
 4. `wrangler deploy` against the resolved Worker (building/pushing container images)
 
-No step applies the SQL that `lunora migrate generate` emits — see
-[Migrations](/docs/concepts/migrations). Data migrations run **after** the
-deploy, and only under `--migrate` (which also requires `--migrate-yes` and, on
-an unlinked checkout, `--migrate-url`).
+Three bindings are written for you on a Cloudflare target when your code uses them and you
+have not declared your own:
+
+- `ctx.kv` gets `kv_namespaces: [{ "binding": "KV" }]` with no `id`. Wrangler
+  creates the namespace on the first deploy and writes the id back. Declare your
+  own `kv_namespaces` entry to name it yourself. A schema that pins a
+  `.jurisdiction("…")` is told to create the namespace itself
+  (`wrangler kv namespace create <name> --jurisdiction <j>`), because one wrangler
+  creates is unrestricted.
+- `ctx.sql` ([Hyperdrive](/docs/packages/hyperdrive)) gets a `HYPERDRIVE` binding with a placeholder
+  `id`. `lunora dev` serves it from an embedded Postgres, and `lunora deploy`
+  creates the config from the connection string in `LUNORA_HYPERDRIVE_URL` and writes
+  the real `id`, in `wrangler.jsonc` and in the generated config a framework build
+  points wrangler at. `lunora prepare` stops while the placeholder is still there.
+- `ctx.artifacts` gets `artifacts: [{ "binding": "ARTIFACTS", "namespace": "<worker name>" }]`.
+  Artifacts only runs remotely, so a `lunora dev` or `vite dev` session without a Cloudflare
+  login leaves the binding out (and `ctx.artifacts` throws if something calls it) instead of
+  failing to start. A schema that pins a `.jurisdiction("…")` is told to create the namespace
+  itself (the warning has the REST call) and add the binding, because the first `create()` against
+  a missing namespace makes it unrestricted for good, and a logged-in dev session would make that
+  call. Once the binding names a namespace, `lunora deploy` creates it in that jurisdiction when it
+  is missing, and stops when it is in another. That needs `CLOUDFLARE_API_TOKEN` and
+  `CLOUDFLARE_ACCOUNT_ID`. A dry run says what it would create and only warns when it cannot check,
+  and `--temporary`, which deploys to a throwaway account, checks nothing and says so.
+
+Under `--migrate`, the deploy applies the SQL that `lunora migrate generate` emits
+(`lunora migrate apply`) and then runs the data migrations, both **after** the
+deploy. Both require `--migrate-yes` for a production target and, on an unlinked
+checkout, `--migrate-url`. A committed file that drops or replaces data also needs
+`--migrate-allow-destructive`: `--migrate-yes` confirms the target and never a DROP
+by itself. The SQL step takes the root admin token, or a token
+minted with `--scope migrations`. The scoped token runs only additive files (a new
+table or index, an added column); a file with a DROP, a row write or a trigger is
+refused, and `deploy --migrate` then stops before the data migrations. A pipeline
+that needs those runs `deploy --migrate` with the root token. A deploy tool other
+than `lunora deploy` runs `lunora migrate apply --url <worker> --yes` as its own
+step; see [Migrations](/docs/concepts/migrations).
 
 CI should run one of these before the deploy job, so codegen drift and a stale
 `_generated/` are a build failure rather than a deploy that silently ships old
@@ -321,8 +405,8 @@ Cloudflare caps an account at
 [**100 Durable Object classes on Workers Free and 500 on Workers Paid**](https://developers.cloudflare.com/durable-objects/platform/limits/).
 Every Worker that binds a class spends its own, so each environment of an app
 (production, staging, previews) counts separately. A Lunora app spends up to
-three framework classes: `ShardDO` always, `SchedulerDO` with a scheduler, and
-`ShardRegistryDO` with `.shardBy()` tables. Each container and voice agent adds
+four framework classes: `ShardDO` and `AdminRevocationDO` always, `SchedulerDO`
+with a scheduler, and `ShardRegistryDO` with `.shardBy()` tables. Each container and voice agent adds
 one more.
 
 `lunora doctor` reports how close the account is (`do-class-budget-*`), and
@@ -331,7 +415,7 @@ Cloudflare API only when `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` (or
 `account_id` in `wrangler.jsonc`) are set. The API does not say which plan an
 account is on, so the check judges the count against both caps.
 
-To spend one class instead of three, merge the framework classes **before the
+To spend one class instead of four, merge the framework classes **before the
 app's first deploy**:
 
 ```ts
@@ -342,8 +426,8 @@ export default {
 ```
 
 Codegen then writes `_generated/durableObjects.ts`, and the generated worker
-entry exports one `LunoraDO` class that hosts the shard, the scheduler and the
-shard registry. Only the `SHARD` binding remains, bound to `LunoraDO`. The
+entry exports one `LunoraDO` class that hosts the shard, the scheduler, the
+shard registry and the admin revocation store. Only the `SHARD` binding remains, bound to `LunoraDO`. The
 scheduler and registry instances live in the same namespace under the reserved
 `__lunora_do__:` name prefix, which a client-chosen shard key cannot use.
 
@@ -366,6 +450,7 @@ import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import type { ShardNamespaceLike } from "@lunora/runtime";
 
 import { defineApp } from "./lunora/_generated/app";
+import { AdminRevocationDO } from "./lunora/_generated/adminRevocations";
 import { mergeDurableObjects, roleNamespace } from "./lunora/_generated/durableObjects";
 import { SchedulerDO } from "./lunora/_generated/scheduler";
 import { ShardRegistryDO } from "./lunora/_generated/shardRegistry";
@@ -377,11 +462,17 @@ interface Env {
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
+    .adminRevocations((env) => roleNamespace(env.SHARD, "adminRevocations"))
     .scheduler({ namespace: (env) => roleNamespace(env.SHARD, "scheduler") })
     .shardRegistry((env) => roleNamespace(env.SHARD, "shardRegistry"))
     .build();
 
-export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, shardRegistry: ShardRegistryDO });
+export const LunoraDO = mergeDurableObjects({
+    shard: app.ShardDO,
+    adminRevocations: AdminRevocationDO,
+    scheduler: SchedulerDO,
+    shardRegistry: ShardRegistryDO,
+});
 export default app;
 ```
 
@@ -407,13 +498,13 @@ pnpm lunora build --format json | jq .data.bundle
 
 Only the uploaded files are counted: the sourcemap and the esbuild metafile
 sitting in the same out-dir are not part of the script, and counting them would
-roughly triple the number. Compare `rawBytes` against the 64 MiB limit; a bundle
+inflate the number. Compare `rawBytes` against the 64 MiB limit; a bundle
 over it is reported as a warning. `gzipBytes` matches the `gzip:` figure in
 wrangler's `Total Upload: … / gzip: …` line and is useful for tracking what
 crosses the wire, but Cloudflare does not limit it.
 
-A starter app is around **1.7 MiB raw**, so most projects have a lot of room.
-Bundle size still affects cold-start time, so if yours is growing:
+A starter app is small next to that limit, so most projects have a lot of room.
+A large bundle can also add to startup time, so if yours is growing:
 
 - **Drop add-ons you no longer import.** Every `@lunora/*` add-on your Worker
   entry reaches is bundled, whether or not a request ever uses it.
@@ -422,6 +513,13 @@ Bundle size still affects cold-start time, so if yours is growing:
   dependency tree into the deployed bundle.
 - **Look at what is actually heavy.** `lunora analyze` bundles the Worker and
   prints the largest modules, which is usually enough to name the culprit.
+- **Studio's documents are not in it** when wrangler bundles the Worker: they
+  ship as static assets, which do not count toward the limit (see
+  [Studio's documents](#studios-documents)).
+
+Size is not the only upload check. A Worker whose global scope takes more than
+1 second to evaluate is rejected with error 10021 however small it is; see
+[Worker startup CPU limit](/docs/startup-cpu-limit).
 
 ## Streaming logs
 
@@ -456,7 +554,7 @@ and the wrangler validator flags any `tail_consumers` entry missing its
 
 ### Logpush
 
-To ship logs to a retention/SIEM sink (R2, HTTP, Splunk, Datadog, S3) without a
+To ship logs to a retention or security information and event management (SIEM) sink (R2, HTTP, Splunk, Datadog, S3) without a
 consumer Worker, enable [Cloudflare
 Logpush](https://developers.cloudflare.com/workers/observability/logs/logpush/)
 with a single flag:
@@ -497,8 +595,10 @@ regional database, instead of close to the user. Opt in with:
 }
 ```
 
-`"smart"` is the only supported mode. The validator rejects any other value (a
-typo like `"fast"`) and a non-object `placement`.
+`"smart"` opts into Smart Placement, `"targeted"` pins the Worker to a region, host
+or hostname, and `"off"` disables placement for a Worker that inherits an account
+default. The validator rejects any other value (a typo like `"fast"`) and a
+non-object `placement`.
 
 ### mTLS client certificates
 
@@ -583,9 +683,194 @@ SSR/API fetch handler still runs underneath:
 ```
 
 The validator requires a non-empty `directory` (pointing at the built client
-output) and shape-checks the optional `binding` / `html_handling` /
-`not_found_handling` fields. Lunora does **not** auto-inject this block; the
-output directory is framework-adapter-specific, so you declare it.
+output), a non-empty `binding` when one is set, an `html_handling` / `not_found_handling` value
+wrangler accepts, and a `run_worker_first` that is a boolean or a list wrangler
+accepts: path rules starting with `/` or `!/`, at least one of them `/`, at most
+100 rules (duplicates included) of 100 characters, none repeated, and none
+already covered by another rule ending in `*`.
+Lunora does **not** auto-inject this block for your client build; the output
+directory is framework-adapter-specific, so you declare it. (A Worker with no
+`assets` block of its own gets one for [Studio's documents](#studios-documents),
+which serves nothing publicly.)
+
+Once the block exists, Lunora adds one key to it. Cloudflare answers from the
+assets directory before the Worker whenever a file matches, so a request meant
+for the Worker could get a static file instead. So the dev server and `lunora
+deploy` write `run_worker_first` (for the top-level block and for each
+`env.<name>.assets` block) with every path the Worker serves that they can see
+(a [single-page app](#single-page-apps) gets the reverse list):
+
+- Lunora's reserved paths, `/_lunora/*` and `/__lunora/*`;
+- each [`httpRoute`](/docs/concepts/http-endpoints) path under `lunora/`;
+- when the app imports `@lunora/auth`: its base path (a string-literal
+  `basePath` passed to `createAuth`, or a literal `authBasePath` Worker option,
+  else the default `/api/auth`), and the OAuth discovery documents under
+  `/.well-known/oauth-protected-resource` and
+  `/.well-known/oauth-authorization-server`.
+
+```jsonc
+{
+    "assets": {
+        "directory": "./dist/client",
+        "run_worker_first": ["/_lunora/*", "/__lunora/*", "/api/auth", "/api/auth/*", "/api/todos/*"],
+    },
+}
+```
+
+A rule cannot hold a route parameter, so each parameter becomes a `*` where it
+stands: `/api/todos/:id` becomes `/api/todos/*`, `/users/:id/avatar.png` becomes
+`/users/*/avatar.png` (so the SPA keeps `/users/42`), and `/files/*` becomes
+`/files` plus `/files/*`. A `*` in a rule matches across `/` too, so a rule also
+takes deeper paths in the parameter's place (`/api/todos/1/x`,
+`/users/a/b/avatar.png`), which the Worker answers with its 404. A route whose first segment is a parameter
+(`/:tenant/api`), or the site root `/`, would send every path to the Worker and is
+reported instead. Rules another rule covers are dropped, and the list stays
+within Cloudflare's limits (100 rules of at most 100 characters); anything over
+is reported.
+
+Lunora records the list it wrote under `lunora.runWorkerFirst` in
+`package.json`, and rewrites it when your routes change. It also takes over a
+list an earlier version wrote (the reserved pair, or the old `rspack-react`
+template's `["/_lunora/*"]`). When the files under `lunora/` cannot be parsed,
+the list is left as it is until they can. A `run_worker_first`
+you wrote, or edited after Lunora wrote it, is never changed. If it leaves out
+one of the paths above, or a `!/…` rule takes part of one back, Lunora warns and
+names it. Two kinds of route are invisible at config time, so add them yourself:
+an auth `basePath` that is not a string literal, and routes you add to a Hono
+`httpRouter()` directly rather than with `httpRoute`.
+
+### Single-page apps
+
+With `not_found_handling: "single-page-application"`, a list that names only
+the Worker's routes is not enough. Once `run_worker_first` is a list, Cloudflare
+answers every request no rule names with `index.html` and a `200`, a `fetch` or
+a webhook `POST` included: the asset router keeps the SPA fallback whenever
+static routing is configured, not only for browser navigations. So a Worker path
+Lunora cannot see, such as an auth `basePath` that is not a string literal or a
+route on a Hono `httpRouter()`, would never reach the Worker.
+
+When the block also sets a `binding`, Lunora writes the reverse list: the Worker
+first for every path, except the static output it can name. That means the
+hashed directories bundlers write (`assets/`, `static/`, `_astro/`) and each
+top-level entry of `public/`. An exemption that would take a Worker route back
+is left out.
+
+```jsonc
+{
+    "assets": {
+        "binding": "ASSETS",
+        "directory": "./dist",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/*", "!/_astro/*", "!/assets/*", "!/favicon.ico", "!/static/*"],
+    },
+}
+```
+
+The generated Worker then answers what no route serves from that binding:
+
+- a static file the list did not exempt is served as is;
+- a `GET` or `HEAD` page navigation (`Sec-Fetch-Mode: navigate`, or an `Accept`
+  that names `text/html`) gets the app shell, so client-side routes deep-link;
+- any other request keeps the Worker's 404, so a `fetch` to a mistyped API path
+  never gets `index.html`.
+
+Only a request no route matched falls back. A 404 or 403 that one of your
+handlers returns stays as it is, and a `POST`, `PUT`, `PATCH` or `DELETE` that
+misses keeps its 404. That holds for a not-found handler you set on an
+`httpRouter()` with `app.notFound(…)`: it still answers every miss that is not a
+page load. A router that is not built by `httpRouter()` (a plain `new Hono()`)
+never reports a miss, so its deep links keep the 404.
+
+Files served this way go through the Worker. Cloudflare applies your `_headers`
+rules to responses from the binding too, and the Worker then adds each of its
+security headers the response does not already carry. A value your `_headers`
+sets wins, but a rule that only detaches a header (`! X-Frame-Options`) is
+undone on these responses, since the Worker adds the default back. Set the value
+you want instead, or change it in `security.headers`.
+
+Without a `binding`, the Worker cannot reach the shell, so Lunora keeps the list
+of routes it can see and warns: add `"binding": "ASSETS"` to the block. The
+generated `defineApp` wires the binding for you; a worker built with
+`createWorker` directly passes it as the `spaAssets` option.
+
+Because an asset hit never runs the Worker, it also skips the Worker's security
+headers. The production build writes them into the assets' `_headers` file
+instead (from the Vite, Rsbuild, Nuxt or Astro integration), in a block it
+manages beside your own rules. See [Static
+assets](/docs/concepts/security#static-assets) on the security page.
+
+The same block makes Vite's content-hashed output cacheable. Cloudflare's
+default for an asset is `Cache-Control: public, max-age=0, must-revalidate`, so
+a browser revalidates every chunk on every navigation. Every file Vite writes
+into `build.assetsDir` has a content hash in its name, so the block gives that
+directory a year-long immutable policy:
+
+```text
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+```
+
+The rule is left out when it could cache something that is not a hashed file:
+
+- your `public/` has a folder with the same name, which Vite copies in unhashed;
+- an output file name (`entryFileNames`, `chunkFileNames`, `assetFileNames`) is
+  a function, or a pattern without `[hash]`;
+- `build.assetsDir` is empty;
+- no `wrangler.jsonc` / `wrangler.json` was found, or it does not parse, so
+  `not_found_handling` (below) is unknown;
+- `assets.not_found_handling` is `"single-page-application"` or `"404-page"`.
+  `_headers` matches the request path, so after a deploy removes a chunk, a
+  request for it would get `index.html` or `404.html` with the immutable policy,
+  and the browser would keep that page for a year. With `"none"` (or the key
+  unset), a miss goes to the Worker, and `_headers` never touches a Worker
+  response.
+
+It is also left out when one of your own `_headers` rules sets `Cache-Control`
+on a path that reaches that directory (`/*`, `/assets/*`, `/:dir/*`, …). A
+`Cache-Control` rule for another path, such as `/img/*`, does not affect it.
+`LUNORA_SECURITY_HEADERS=off` does not affect it either.
+
+### Studio's documents
+
+Studio's API tab and Architecture view read three generated documents: the
+OpenAPI and OpenRPC specs and the architecture manifest. They grow with the app
+(hundreds of KiB in a large one) and only the admin routes
+`/_lunora/admin/openapi`, `/openrpc` and `/architecture` read them, so the Worker
+never loads one before that route's first request. Where they live depends on
+how the Worker is built:
+
+| Build                                                                                                                                                                             | Where the documents live                                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| wrangler bundles the Worker (no `@lunora/vite` / `@lunora/rspack`, no framework), Cloudflare target, no `assets` block of your own, entry composed with the generated `defineApp` | Workers Static Assets, outside the Worker script                                                   |
+| an entry that calls `createWorker` itself                                                                                                                                         | wherever that entry loads them from (usually `import()` of `lunora/_generated/openapi`)            |
+| Vite or Rsbuild                                                                                                                                                                   | their own chunks of the Worker, loaded with `import()`                                             |
+| a project with its own `assets` block                                                                                                                                             | in the Worker bundle, loaded with `import()` (your assets directory is your client build's output) |
+| `--target node` / `celld`                                                                                                                                                         | in the Worker bundle, loaded with `import()` (no Workers Static Assets)                            |
+
+In the first case codegen writes each document to
+`.lunora/studio-assets/_lunora/studio/<name>.json`, and `lunora codegen`, the
+dev server and `lunora deploy` add this block to `wrangler.jsonc`:
+
+```jsonc
+{
+    "assets": { "binding": "ASSETS", "directory": ".lunora/studio-assets", "run_worker_first": true },
+}
+```
+
+`run_worker_first: true` sends every request to the Worker first, exactly as
+with no `assets` block, so the files are reachable only through the `ASSETS`
+binding. The Worker answers a direct request for `/_lunora/studio/*` with a 404,
+an encoded spelling of that path gets a redirect to it, and the admin route
+reads the file through the binding after checking the admin token. Its response
+carries `Cache-Control: no-store`. A deploy replaces the files, and each isolate
+reads a document at most once.
+
+The block is removed again when the project moves to a bundler plugin or a
+framework. Lunora recognises it by its exact shape, so a block you edit is left
+alone, and codegen then deletes the documents it wrote there, since your edited
+block may serve that directory before the Worker checks the admin token. Run
+`lunora build` or `lunora deploy` (or `lunora codegen` before a plain `wrangler
+deploy`): wrangler refuses an `assets.directory` that does not exist.
 
 ## Non-goals
 
@@ -594,8 +879,8 @@ A couple of Cloudflare products are deliberately **not** wired into Lunora:
 - **Cloudflare Pages.** The Lunora Worker is the deploy unit; there is no second
   Pages artifact. Serve your client build from the same Worker with the
   [Static assets](#static-assets) block above instead.
-- **Pub/Sub (MQTT).** Realtime fan-out is handled by Durable-Object-hibernated
+- **Pub/Sub (MQTT, Message Queuing Telemetry Transport).** Realtime fan-out is handled by Durable-Object-hibernated
   WebSocket subscriptions (see [Real-time](/docs/concepts/realtime)), which need
-  no external broker. Cloudflare Pub/Sub is a beta MQTT broker with no Worker
-  binding; the only thing it adds is native-MQTT device ingest, a narrow case
-  we'll revisit if it reaches GA and a concrete need appears.
+  no external broker. Cloudflare Pub/Sub, an MQTT broker, never shipped a Worker
+  binding and no longer has a page in Cloudflare's docs; the only thing it would
+  add is native-MQTT device ingest, a narrow case.

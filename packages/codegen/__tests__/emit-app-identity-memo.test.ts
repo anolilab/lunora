@@ -200,7 +200,7 @@ describe("emitApp — identity memoisation", () => {
         expect(spy.ttlMs).toBe(ttlMs);
     });
 
-    it("keys the cross-request cache on x-api-key as well as the cookie", async () => {
+    it("never memoises an x-api-key request across requests, so a revoked key stops resolving at once", async () => {
         expect.assertions(2);
 
         let calls = 0;
@@ -212,13 +212,15 @@ describe("emitApp — identity memoisation", () => {
         const withKey = (key: string): Request => new Request("https://app.example/x", { headers: { cookie: "s=a", "x-api-key": key } });
 
         await resolve(withKey("k1"));
-        await resolve(withKey("k2"));
-
-        expect(calls).toBe(2);
-
         await resolve(withKey("k1"));
 
+        // Same key, same cookie, two requests: both must resolve, because the second
+        // one is what would otherwise return a revoked key's identity from the memo.
         expect(calls).toBe(2);
+
+        await resolve(withKey("k2"));
+
+        expect(calls).toBe(3);
     });
 
     describe("strict session preset", () => {
@@ -335,7 +337,7 @@ describe("emitApp — identity memoisation", () => {
             const { build } = await prepare();
             const env = {};
 
-            // A framework-hosted worker rebuilds its options (and so the inner resolver) per request.
+            // Each options build wraps a fresh inner resolver; the memo store spans the builds.
             await build(resolver, env)(withCookie("s=a"));
             await build(resolver, env)(withCookie("s=a"));
 

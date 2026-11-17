@@ -68,8 +68,12 @@ export interface DeployRequest {
     environment?: string;
     /** Write the built bundle (and any build metadata) to this directory. */
     outDir?: string;
-    /** Upload a preview/versioned artifact instead of taking production traffic. */
+    /** Also write the upload-ready artifact (what the host would receive) to this file, for tools that profile it. */
+    outFile?: string;
+    /** Upload a preview/versioned artifact instead of taking production traffic. No built-in driver can produce one yet: the Cloudflare driver refuses it. */
     preview?: boolean;
+    /** A file of secrets (JSON object of name to value) uploaded with the deployment, so a Worker's first version boots with them. */
+    secretsFile?: string;
     /** Deploy to a short-lived, unauthenticated account where the host offers one. */
     temporary?: boolean;
 }
@@ -165,6 +169,8 @@ export interface ProjectedConfig {
     configPath: string;
     /** Every key removed, as a dotted path (`observability`, `containers[0].rollout_step_percentage`). */
     dropped: ReadonlyArray<string>;
+    /** The `vars` the projection deploys — for a host with no secret store, the only channel a secret has. */
+    vars: Readonly<Record<string, unknown>>;
     /** Write the projection (and any build-artifact cleanup it planned). */
     write: () => void;
 }

@@ -10,7 +10,8 @@ operator reads.
 
 Like the engine, it is host-neutral: it takes a `SqlExec` and plain event
 objects. `@lunora/do` wires it into `ctx.log` / `ctx.trace` / `ctx.metrics` and
-the `__lunora_admin__` read RPCs, so an app gets it without importing it.
+the `__lunora_admin__` read RPCs, so an app gets it without importing it. To use
+the helpers directly, import them from the package:
 
 ```ts
 import { recordFunctionMetric, readFunctionMetrics } from "@lunora/observability";
@@ -29,6 +30,102 @@ import { recordFunctionMetric, readFunctionMetrics } from "@lunora/observability
 | Issue explainer | `explainIssue`: grounds a folded issue in the error catalog, optionally rewritten by Workers AI |
 | Auth & security | `auth-metrics`, `security-audit`                                                                |
 | Correlation     | `database-telemetry`, `storage-correlation`, `trace-context`                                    |
+
+## API
+
+The entries below cover the main exports. The full list, including helpers and
+table-name constants, is in `api-snapshots/observability.api.md`.
+
+### `LogBuffer`
+
+**Type:** `class`
+
+In-memory ring of `ctx.log` lines for one Durable Object instance. It resets on
+hibernation. Use `push`, `entries`, `clear`, and read `size` and `dropped`.
+
+### `SpanBuffer`
+
+**Type:** `class`
+
+In-memory ring of spans for one instance, for the Traces panel. `hasTrace(traceId)`
+reports whether a trace is still buffered.
+
+### `MetricBuffer`
+
+**Type:** `class`
+
+In-memory aggregation of `ctx.metrics.*` measurements for one instance. It folds
+measurements into aggregates rather than keeping raw samples.
+
+### `foldTraces(spans, limit?)`
+
+**Type:** `(spans: ReadonlyArray<SpanEvent>, limit?: number) => FoldedTraces`
+
+Groups a flat span list by trace, nests spans by parent, and offsets each span
+from its trace root.
+
+### `recordFunctionMetric(sql, input)` and `readFunctionMetrics(sql)`
+
+**Type:** `(sql: SqlExec, input: RecordFunctionMetricInput) => void` and
+`(sql: SqlExec) => FunctionCallStat[]`
+
+Write and read the durable per-function counters and latency aggregates. The
+data survives hibernation.
+
+### `recordQueryMetric(...)` and `readQueryInsights(sql, rangeMs, now?)`
+
+**Type:** `(sql: SqlExec, rawSql: string, durationMs: number, rowsRead: number, rowsWritten: number, now?: number, execCount?: number) => void`
+and `(sql: SqlExec, rangeMs: number, now?: number) => QueryInsightsResult`
+
+Record one SQL statement, normalized to its text with literal values replaced, and
+read the query insights over a time range.
+
+### `recordAuthEvent(sql, input)` and `readAuthMetrics(sql)`
+
+**Type:** `(sql: SqlExec, input: RecordAuthEventInput) => void` and
+`(sql: SqlExec) => AuthMetrics`
+
+Record an auth attempt or failure and read the failure rate. Attempts are kept in
+60-second buckets (`AUTH_METRICS_BUCKET_MS`), and the table keeps 1440 buckets
+(`AUTH_METRICS_BUCKET_RETENTION`).
+
+### `appendRequestLogEntry(sql, entry, options?)` and `readRequestLog(sql, options?)`
+
+**Type:** `(sql: SqlExec, entry: AppendRequestLogEntry, options?: RequestLogWriteOptions) => void`
+and `(sql: SqlExec, options?: ReadRequestLogOptions) => RequestLogEntry[]`
+
+Append one row per function dispatch to the durable request log and read the rows
+back.
+
+### `readMetricHistory(sql, options?)`
+
+**Type:** `(sql: SqlExec, options?: { maxSeries?: number; sinceMs?: number }) => MetricHistoryResult`
+
+Read the durable per-minute series for `ctx.metrics.*`. Each bucket is 60 seconds
+(`METRIC_HISTORY_BUCKET_MS`).
+
+### `readErrorIssues(sql, options?)`
+
+**Type:** `(sql: SqlExec, options?: ReadIssuesOptions) => ErrorIssue[]`
+
+Read the error issues that the request log groups by fingerprint.
+
+### `explainIssue(binding, args, options?)`
+
+**Type:** `(binding: unknown, args: Record<string, unknown>, options?: { defaultModel?: string }) => Promise<ExplainIssueResult>`
+
+Explain an issue from the error catalog. `binding` is the Workers AI binding
+(`env.AI`) and can be `unknown`, because the function checks its shape. When the
+binding is missing, the call returns the `degraded: true` result. `defaultModel`
+defaults to `DEFAULT_EXPLAIN_ISSUE_MODEL`, which is
+`@cf/meta/llama-3.3-70b-instruct-fp8-fast`.
+
+### `buildSecurityAudit(rawEnv, options)`
+
+**Type:** `(rawEnv: unknown, options: { dev: boolean }) => SecurityAuditResult`
+
+Build the security audit from the environment bindings. Each finding has a
+severity (`error`, `warning` or `info`).
 
 ## Two design notes
 

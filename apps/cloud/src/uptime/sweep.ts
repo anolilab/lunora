@@ -153,7 +153,7 @@ const advanceState = (
     const patch = { consecutiveFailures: failures, lastCheckedAt: now, lastOk: ok, updatedAt: now };
 
     return prior
-        ? database.patch(prior._id, patch, "uptimeState")
+        ? database.patch("uptimeState", prior._id, patch)
         : database.insert("uptimeState", { createdAt: now, deploymentId: deployment._id, organizationId: deployment.organizationId, ...patch });
 };
 

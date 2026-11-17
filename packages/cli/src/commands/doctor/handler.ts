@@ -3,11 +3,13 @@ import { join } from "node:path";
 
 import { DEFAULT_TARGET, readProjectTarget } from "@lunora/codegen";
 import {
+    D1_PLACEHOLDER_ID,
     DEV_VARS_FILE,
     discoverSchemaInfo,
     inferLunoraBindings,
     isPlaceholderValue,
     parseDevVariableEntries,
+    probeCelldToolchain,
     readProjectDependencies,
     resolveSchemaDirectory,
 } from "@lunora/config";
@@ -36,9 +38,11 @@ import isInsideDirectory from "../../util/path-containment";
 import { createMetadataIndexArgs, metadataTypeFor } from "../../util/vectorize-metadata";
 import checkAi from "./ai-checks";
 import checkCimdFetchFlag from "./cimd-checks";
-import { applyDoctorFixes, isD1PlaceholderId } from "./fix";
+import { checkCloudflareToken } from "./cloudflare-token-checks";
+import { applyDoctorFixes, isD1PlaceholderId, isUnfinishedD1Id } from "./fix";
 import type { DoctorOptions } from "./index";
 import checkObservabilitySampling from "./observability-checks";
+import checkQueryStringRedaction from "./observability-redaction-checks";
 import checkPaidProducts from "./paid-product-checks";
 import checkServices from "./service-checks";
 
@@ -64,9 +68,15 @@ const DOCTOR_CODES = [
     "artifacts-jurisdiction-ok",
     "artifacts-jurisdiction-unchecked",
     "artifacts-namespace-missing",
+    "celld-toolchain-missing",
+    "celld-toolchain-ok",
+    "celld-toolchain-warn",
     "cf-config-present",
     "cimd-fetch-not-strictly-public",
     "cli-shadowed",
+    "cloudflare-token-ok",
+    "cloudflare-token-rejected",
+    "cloudflare-token-unchecked",
     "cpu-limit-missing",
     "d1-placeholder-id",
     "declared-export-missing",
@@ -79,6 +89,7 @@ const DOCTOR_CODES = [
     "do-class-budget-unchecked",
     "email-destination-placeholder",
     "observability-full-sampling",
+    "observability-query-unredacted",
     "paid-product-bound",
     "paid-product-unknown",
     "r2-lifecycle-unset",
@@ -396,27 +407,60 @@ const checkVectorMetadataIndexes = (cwd: string, findings: Finding[]): void => {
     }
 };
 
+type D1Declaration = { binding?: string; database_id?: string };
+
+/** A block's `d1_databases` entries. An env block is read as written, so a malformed value yields none rather than throwing. */
+const declaredD1Databases = (config: unknown): D1Declaration[] => {
+    const declared = (config as { d1_databases?: unknown } | undefined)?.d1_databases;
+
+    return Array.isArray(declared) ? ((declared as (D1Declaration | null | undefined)[]).filter(Boolean) as D1Declaration[]) : [];
+};
+
+const d1PlaceholderFindings = (config: unknown, suffix: string, celld: boolean): Finding[] => {
+    const databases = declaredD1Databases(config);
+    const found: Finding[] = [];
+
+    for (const database of databases) {
+        const databaseId = typeof database.database_id === "string" ? database.database_id : "";
+        const blocks = celld ? isUnfinishedD1Id(databaseId) && databaseId !== D1_PLACEHOLDER_ID : isD1PlaceholderId(databaseId);
+
+        if (blocks) {
+            const label = typeof database.binding === "string" && database.binding.length > 0 ? database.binding : "<unnamed>";
+
+            found.push({
+                code: "d1-placeholder-id",
+                // celld takes the id as the database's identity, so there is no Cloudflare database to create.
+                fix: celld
+                    ? "Set database_id to the database celld should use."
+                    : "Run `lunora doctor --fix` to create the database and write its id into wrangler.jsonc, or run `wrangler d1 create <name>` and paste the returned database_id in yourself.",
+                level: "fail",
+                message: `D1 binding "${label}"${suffix} has a placeholder database_id ("${databaseId || "<empty>"}").`,
+            });
+        }
+    }
+
+    return found;
+};
+
 /** Any D1 `database_id` still a placeholder → FAIL (the binding can't resolve). */
-const checkD1Placeholders = (parsed: WranglerConfig | undefined, findings: Finding[]): void => {
+const checkD1Placeholders = (cwd: string, parsed: WranglerConfig | undefined, findings: Finding[]): void => {
     if (parsed === undefined) {
         return;
     }
 
-    const databases = ((parsed as { d1_databases?: ReadonlyArray<{ binding?: string; database_id?: string }> }).d1_databases ?? []).filter(Boolean);
+    // celld's projection replaces only the exact placeholder with a name-derived id; any other placeholder still reaches it.
+    const celld = (readProjectTarget(cwd) ?? DEFAULT_TARGET) === "celld";
+    // `deploy --env` reads each env block's own array, so a placeholder there blocks that deploy too.
+    // celld has no `--env` and projects only the top level, so its env blocks never reach a deploy.
+    const scopes: { config: unknown; suffix: string }[] = [
+        { config: parsed, suffix: "" },
+        ...Object.entries(celld ? {} : (parsed.env ?? {})).map(([name, block]) => {
+            return { config: block, suffix: ` in env.${name}` };
+        }),
+    ];
 
-    for (const database of databases) {
-        const databaseId = typeof database.database_id === "string" ? database.database_id : "";
-
-        if (isD1PlaceholderId(databaseId)) {
-            const label = typeof database.binding === "string" && database.binding.length > 0 ? database.binding : "<unnamed>";
-
-            findings.push({
-                code: "d1-placeholder-id",
-                fix: "Run `wrangler d1 create <name>` and paste the returned database_id into wrangler.jsonc.",
-                level: "fail",
-                message: `D1 binding "${label}" has a placeholder database_id ("${databaseId || "<empty>"}").`,
-            });
-        }
+    for (const { config, suffix } of scopes) {
+        findings.push(...d1PlaceholderFindings(config, suffix, celld));
     }
 };
 
@@ -782,8 +826,8 @@ const configuredAccounts = (parsed: WranglerConfig | undefined): Map<string, str
 
 /**
  * How close the Cloudflare account is to its Durable Object class cap (plan
- * 462). The one doctor check that goes online, and only with credentials in the
- * environment; without them it says it did not check.
+ * 462). One of the doctor checks that go online, and only with credentials in
+ * the environment; without them it says it did not check.
  *
  * Doctor takes no `--env`, so it checks every account the config deploys to,
  * naming each when there is more than one. `CLOUDFLARE_ACCOUNT_ID` overrides
@@ -815,6 +859,37 @@ const checkDurableObjectClassBudget = async (
             message: results.length > 1 ? `account ${String(accountId)} (${blocks.join(", ")}): ${budget.message}` : budget.message,
             ...(budget.fix === undefined ? {} : { fix: budget.fix }),
         });
+    }
+};
+
+const BUCKET_UNSET = "CELLD_BUCKET is not set — a live `lunora deploy` needs it to name the fleet bucket; `lunora dev` and a dry run do not.";
+
+/**
+ * The celld toolchain a deploy needs (`celld`, `esbuild`, `CELLD_BUCKET`), checked
+ * the way `lunora deploy` checks it. Only for a celld project. A missing bucket
+ * only warns: a project that runs `lunora dev` or dry-run deploys never needs it.
+ */
+const checkCelldToolchain = async (cwd: string, options: RunDoctorOptions, findings: Finding[]): Promise<void> => {
+    if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) !== "celld") {
+        return;
+    }
+
+    // The override carries credentials, not the host PATH: the probe spawns celld and esbuild with this
+    // environment, so without the host variables a tool on PATH reads as missing. The bucket check reads the same merge.
+    const environment = { ...process.env, ...options.environment };
+    const probe = await probeCelldToolchain({ dryRun: true, env: environment, purpose: "deploy" });
+    const warnings = (environment["CELLD_BUCKET"] ?? "").trim() === "" ? [...probe.warnings, BUCKET_UNSET] : probe.warnings;
+
+    for (const message of probe.errors) {
+        findings.push({ code: "celld-toolchain-missing", level: "fail", message });
+    }
+
+    for (const message of warnings) {
+        findings.push({ code: "celld-toolchain-warn", level: "warn", message });
+    }
+
+    if (probe.errors.length === 0 && warnings.length === 0) {
+        findings.push({ code: "celld-toolchain-ok", level: "pass", message: "celld, esbuild and CELLD_BUCKET are in place for a deploy." });
     }
 };
 
@@ -864,7 +939,11 @@ const checkArtifactsJurisdictions = async (
 
     const results = await Promise.all(
         [...lookups.values()].map(async ({ label, ...lookup }) => {
-            return { check: await checkArtifactsJurisdiction({ ...lookup, environment: options.environment, fetch: options.fetch, jurisdiction }), label };
+            // Read-only: a namespace that does not exist yet is not a failure, `lunora deploy` creates it in the jurisdiction.
+            return {
+                check: await checkArtifactsJurisdiction({ ...lookup, environment: options.environment, fetch: options.fetch, jurisdiction, missingOk: true }),
+                label,
+            };
         }),
     );
 
@@ -891,11 +970,12 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
 
     checkWrangler(cwd, parsed, path, findings);
     checkCloudflareCliConfig(cwd, findings);
-    checkD1Placeholders(parsed, findings);
+    checkD1Placeholders(cwd, parsed, findings);
     checkEmailDestination(parsed, findings);
     checkCpuLimit(parsed, findings);
     checkR2Lifecycle(parsed, findings);
     checkObservabilitySampling(parsed, findings);
+    checkQueryStringRedaction(parsed, findings);
     checkDevVariables(cwd, findings);
     checkAdminToken(cwd, findings);
     checkVersionSkew(cwd, findings);
@@ -912,7 +992,11 @@ const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     }
 
     checkAi(parsed, cwd, inferred?.usesAi === true, findings);
+    await checkCelldToolchain(cwd, options, findings);
     await checkDurableObjectClassBudget(cwd, parsed, options, findings);
+    if ((readProjectTarget(cwd) ?? DEFAULT_TARGET) === "cloudflare") {
+        await checkCloudflareToken(parsed, options, findings);
+    }
     await checkArtifactsJurisdictions(cwd, parsed, inferred?.jurisdiction, options, findings);
     checkCimdFetchFlag(parsed, inferred?.usesCimdWorkers === true, findings);
 

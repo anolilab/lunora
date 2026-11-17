@@ -155,7 +155,7 @@ export const teardownPorts = (
             );
         },
         markTornDown: async (id) => {
-            await database.patch(id, { teardownAt: now, updatedAt: now }, "deployments");
+            await database.patch("deployments", id, { teardownAt: now, updatedAt: now });
         },
         releaseAlias: async (alias, projectId) => {
             // Drop the torn-down project's claim on the alias so the label is free to
@@ -167,7 +167,7 @@ export const teardownPorts = (
 
             for (const row of page as { _id: string }[]) {
                 // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)
-                await database.delete(row._id, "aliasOwnership");
+                await database.delete("aliasOwnership", row._id);
             }
 
             // An emergency stop of the torn-down tenant holds nothing any more, and must not hold whoever claims the alias next.
@@ -175,7 +175,7 @@ export const teardownPorts = (
 
             for (const row of halts as { _id: string }[]) {
                 // eslint-disable-next-line no-await-in-loop -- at most one row per alias (by_alias is unique)
-                await database.delete(row._id, "halts");
+                await database.delete("halts", row._id);
             }
         },
     };
@@ -231,7 +231,7 @@ const upsertRow = async (
     options: { now: number; scopeKey: string; target: TargetId },
 ): Promise<string> => {
     if (rowId !== undefined) {
-        await database.patch(rowId, { ...fields, updatedAt: options.now }, table);
+        await database.patch(table, rowId, { ...fields, updatedAt: options.now });
 
         return rowId;
     }
@@ -332,11 +332,11 @@ const accrueOrganizationSpend = async (
     row: { kind: string; periodStart: number; quantity: number },
     now: number,
 ): Promise<void> => {
-    const organization = (await database.get(organizationId, "organizations")) as null | SpendAccrual;
+    const organization = (await database.get("organizations", organizationId)) as null | SpendAccrual;
     const next = organization === null ? null : accruedSpend(organization, row, now);
 
     if (next !== null) {
-        await database.patch(organizationId, next, "organizations");
+        await database.patch("organizations", organizationId, next);
     }
 };
 

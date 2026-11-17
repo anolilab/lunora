@@ -1,0 +1,9 @@
+// Minimal wrangler config used ONLY by `@cloudflare/vitest-plugin` to boot the test Worker in workerd.
+// It is not deployed, and the package declares no bindings.
+{
+    "$schema": "../../../../node_modules/wrangler/config-schema.json",
+    "name": "lunora-privacy-test-worker",
+    "main": "test-worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+}

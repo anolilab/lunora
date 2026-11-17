@@ -107,6 +107,45 @@ mask({
   a `count` whose `where` references a masked column throws.
 - **A throwing `MaskFn` redacts to `null`.** It never leaks the raw value.
 
+## Sensitive arguments
+
+Masking covers what a procedure _returns_. A value a caller _sends_ (a password,
+an API key a person typed in) is marked on the argument itself with
+`v.sensitive(...)`:
+
+```ts
+const storeKey = mutation.input({ label: v.string(), apiKey: v.sensitive(v.string()) });
+```
+
+The marker follows the value, not the name. The request log and the Studio run
+history keep `«sensitive»` in its place, the validation error does not echo it,
+the JSON Schema marks it `writeOnly`, and the generated client never queues the
+call offline. The name carries no weight: `value` is protected exactly as
+`apiKey` is.
+
+Within that call, the value is also scrubbed from what the handler itself
+records: `ctx.log` lines, `ctx.trace` spans and their errors, the `ctx.span`
+wide event, `ctx.fetch` spans, `ctx.metrics` attributes, `ctx.db` failure
+messages and the dispatch's root span. A composed call (`ctx.runQuery`,
+`ctx.runMutation`, `ctx.runAction`) runs inside the same call, so the callee's
+own marked arguments are scrubbed as well. A value of four or more characters is
+replaced wherever it appears in a recorded string. A value of three characters (a
+CVV or a three-digit PIN) is replaced wherever it appears as a whole word or number,
+so `invalid code 123` loses the `123` but `1234` is left alone. A value of one or
+two characters is replaced only when it is the whole string, because a single digit
+replaced inside text would erase every standalone digit from the line.
+A value of four or more characters is also matched in its JSON-escaped spelling (a newline
+written as `\n`, a quote as `\"`), because a handler that logs `JSON.stringify(args)` never
+writes the raw form. A shorter value is not, so escaping cannot push it into a looser rule.
+A marked value is also masked when it is used as a field or attribute name. A property
+name of a marked object is masked as a whole name, and two names that mask to the same
+placeholder are kept apart with a `#2`, `#3` suffix rather than one overwriting the other.
+A span, fetch or database call still in flight when the call returns is scrubbed when it
+is recorded, and the value is forgotten then. Nothing else outside the call keeps it.
+
+The scrub does not yet cover a live subscription's re-runs: their records carry
+the arguments as the subscription sent them.
+
 ## Tooling
 
 - **Studio**: the [data browser](/docs/packages/studio#database) shows a "Mask

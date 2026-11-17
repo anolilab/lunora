@@ -41,7 +41,7 @@ const lastUsed = computed(() => (context.value.plugins.lastLoginMethod ? lastUse
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.submit">
             <FormBanner :error="state.formError" :success="state.successMessage" />
             <FormField :actions="actions" field="email" :fields="state.fields" :label="t.emailLabel" type="email" autoComplete="email" />
-            <SubmitButton :pending="state.status === 'submitting'">
+            <SubmitButton :available-at="state.resendAvailableAt" :pending="state.status === 'submitting'">
                 {{ t.magicLink }}
                 <span v-if="lastUsed === LAST_METHOD_MAGIC_LINK" class="lunora-auth-social__badge">{{ t.lastUsed }}</span>
             </SubmitButton>

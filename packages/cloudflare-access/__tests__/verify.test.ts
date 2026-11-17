@@ -2,7 +2,7 @@ import type { CryptoKey } from "jose";
 import { generateKeyPair, SignJWT } from "jose";
 import { describe, expect, it } from "vitest";
 
-import { accessIssuer, verifyAccessJwt, verifyRequest } from "../src/verify";
+import { accessIssuer, requestVerifier, verifyAccessJwt } from "../src/verify";
 
 const TEAM = "acme";
 const ISSUER = "https://acme.cloudflareaccess.com";
@@ -151,13 +151,13 @@ describe("verifyAccessJwt", () => {
     });
 });
 
-describe("verifyRequest", () => {
+describe("requestVerifier", () => {
     const requestWith = (token: string): Request => new Request("https://app.example.com/", { headers: { "cf-access-jwt-assertion": token } });
 
     it("returns undefined (anonymous) when no token is present", async () => {
         expect.assertions(1);
 
-        await expect(verifyRequest(new Request("https://app.example.com/"), { aud: AUD, keySet: publicKey, teamDomain: TEAM })).resolves.toBeUndefined();
+        await expect(requestVerifier({ aud: AUD, keySet: publicKey, teamDomain: TEAM })(new Request("https://app.example.com/"))).resolves.toBeUndefined();
     });
 
     it("returns the claims for a valid token", async () => {
@@ -165,7 +165,7 @@ describe("verifyRequest", () => {
 
         const token = await sign({ sub: "user-1" });
 
-        await expect(verifyRequest(requestWith(token), { aud: AUD, keySet: publicKey, teamDomain: TEAM })).resolves.toMatchObject({ sub: "user-1" });
+        await expect(requestVerifier({ aud: AUD, keySet: publicKey, teamDomain: TEAM })(requestWith(token))).resolves.toMatchObject({ sub: "user-1" });
     });
 
     it("fails closed (undefined) even when the onError observer itself throws", async () => {
@@ -177,14 +177,14 @@ describe("verifyRequest", () => {
         const token = await sign({ sub: "user-1" }, { aud: "wrong-aud" });
 
         await expect(
-            verifyRequest(requestWith(token), {
+            requestVerifier({
                 aud: AUD,
                 keySet: publicKey,
                 onError: () => {
                     throw new Error("observer blew up");
                 },
                 teamDomain: TEAM,
-            }),
+            })(requestWith(token)),
         ).resolves.toBeUndefined();
     });
 });

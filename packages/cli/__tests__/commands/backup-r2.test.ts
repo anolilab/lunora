@@ -15,6 +15,7 @@ import { join, posix, win32 } from "node:path";
 import { decodeWire, encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import { temporaryFileName } from "../../src/commands/backup/r2-destination";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
@@ -45,7 +46,7 @@ const DOCUMENTS = [
 ];
 
 /** Exactly what the admin export endpoint streams: wire-encoded envelopes, one per line. */
-const NDJSON = `${DOCUMENTS.map((document_) => JSON.stringify(encodeWire({ doc: document_, table: "users" }))).join("\n")}\n`;
+const NDJSON = `${DOCUMENTS.map((document_) => JSON.stringify(encodeWire({ doc: document_, table: "users" }))).join("\n")}\n${exportEndLine(DOCUMENTS.length)}`;
 
 const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
 
@@ -95,6 +96,19 @@ const createWorkerDouble = (): { bucket: Map<string, Buffer>; fetchImpl: Streami
     const bucket = new Map<string, Buffer>();
     const imported: string[] = [];
 
+    /** A `dryRun` POST is the check before the import: it records nothing. A real POST records its rows and reports them inserted. */
+    const importAnswer = (url: URL, body: string): ReturnType<typeof jsonResponse> => {
+        if (url.searchParams.get("dryRun") === "true") {
+            return jsonResponse({ dryRun: true, inserted: {}, received: 0 });
+        }
+
+        imported.push(body);
+
+        const rows = body.split("\n").filter(Boolean).length;
+
+        return jsonResponse({ inserted: { users: rows }, received: rows });
+    };
+
     const fetchImpl: StreamingFetchLike = async (input, init) => {
         const url = new URL(input);
         const method = init?.method ?? "GET";
@@ -105,11 +119,7 @@ const createWorkerDouble = (): { bucket: Map<string, Buffer>; fetchImpl: Streami
         }
 
         if (url.pathname === "/_lunora/admin/import") {
-            const body = String(init?.body ?? "");
-
-            imported.push(body);
-
-            return jsonResponse({ inserted: { users: body.split("\n").filter(Boolean).length }, received: body.split("\n").filter(Boolean).length });
+            return importAnswer(url, String(init?.body ?? ""));
         }
 
         if (url.pathname === "/_lunora/admin/storage/object") {
@@ -286,6 +296,7 @@ describe("lunora backup --bucket", () => {
                 cwd: workDir,
                 fetchImpl: worker.fetchImpl,
                 logger,
+                mode: "append",
                 subcommand: "restore",
                 target: "2026-06-03T12:00:00.000Z",
                 token: "t",
@@ -324,6 +335,7 @@ describe("lunora backup --bucket", () => {
             cwd: workDir,
             fetchImpl: worker.fetchImpl,
             logger,
+            mode: "append",
             subcommand: "restore",
             target: "2026-06-03T12:00:00.000Z",
             token: "t",
@@ -344,6 +356,7 @@ describe("lunora backup --bucket", () => {
             cwd: workDir,
             fetchImpl: worker.fetchImpl,
             logger,
+            mode: "append",
             subcommand: "restore",
             target: "2026-06-03T12:00:00.000Z",
             token: "t",
@@ -453,6 +466,7 @@ describe("lunora backup --bucket", () => {
             cwd: workDir,
             fetchImpl: worker.fetchImpl,
             logger,
+            mode: "append",
             subcommand: "restore",
             target: "2026-06-02T03:00:00.000Z",
             token: "t",

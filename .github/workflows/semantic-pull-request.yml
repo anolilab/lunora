@@ -28,7 +28,7 @@
         "name": "Semantic Pull Request"
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
@@ -64,7 +64,7 @@
                       test
                       translation
 
-            - "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
+            - "uses": "marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88" # v3.0.5
               "if": "always() && (steps.lint_pr_title.outputs.error_message != null)"
               # Only reached once `lint_pr_title` has already failed, so the comment is
               # a courtesy and must not add a second failure of its own.
@@ -83,7 +83,7 @@
                       ```
 
             - "if": "${{ steps.lint_pr_title.outputs.error_message == null }}"
-              "uses": "marocchino/sticky-pull-request-comment@0ea0beb66eb9baf113663a64ec522f60e49231c0" # v3.0.4
+              "uses": "marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88" # v3.0.5
               # The mirror image: this one runs when the title PASSES, so an unreachable
               # comment API here would turn a green check red — as it did on #410, with a
               # self-signed certificate from behind the harden-runner egress proxy.

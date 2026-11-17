@@ -38,6 +38,16 @@ const fakeAdapter = (records: AuthRecords): AuthRecordReader => {
 
 const workerFetch = vi.hoisted(() => vi.fn<(request: Request) => Promise<Response>>());
 
+// The migration-only instance and its migrator: both need a real database, which a unit test has none of.
+vi.mock("@lunora/auth/migrate", () => {
+    return {
+        createMigrationAuth: () => {
+            return {};
+        },
+        ensureMigrated: () => Promise.resolve(),
+    };
+});
+
 // eslint-disable-next-line vitest/prefer-import-in-mock -- partial stubs, which the real module types reject
 vi.mock("@lunora/auth", async (importOriginal) => {
     const actual = await importOriginal<Record<string, unknown>>();

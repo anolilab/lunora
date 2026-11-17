@@ -154,7 +154,7 @@ describe("queue-backed fan-out", () => {
         // The FCM-only patterns must not be applied to a web-push failure whose
         // body happens to echo them — the same provider-scoping `isGoneError` takes
         // a `kind` for. A receipt carries no kind, but the subscription id does.
-        const fcmSend = vi.fn().mockResolvedValue({ errorMessages: ["[@visulima/notification] [fcm] Requested entity was not found."], successful: false });
+        const fcmSend = vi.fn().mockResolvedValue({ errorMessages: ["FCM 404 UNREGISTERED: Requested entity was not found."], successful: false });
         const webPushSend = vi.fn().mockResolvedValue({ errorMessages: ["HTTP 403: sender not registered for this endpoint"], successful: false });
 
         await expect(

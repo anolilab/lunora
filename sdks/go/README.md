@@ -4,7 +4,7 @@ A **protocol-conformant** Go client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `Query` / `Mutation` / `Action` round-trips over `POST /_lunora/rpc`.
-- Live `Subscribe` — and `Stream`, which hands back a receive channel — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `Subscribe` — and `Watch`, which hands back a receive channel — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `SubscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -40,6 +40,8 @@ retries and socket library:
 ```go
 client := lunora.NewClient("https://my-app.example.com", myPoster)
 client.SetAuthToken("…")
+// The WebSocket session credential (connect.token) is separate from the RPC bearer above.
+client.SetSessionToken("…")
 // ClientID is minted per instance. Pin a stable per-device one only when the
 // offline queue is durable — a replayed write is namespaced server-side under
 // the id that issued it.
@@ -48,9 +50,16 @@ messages, err := client.Query("messages:list", map[string]any{"channel": "genera
 _, err = client.Mutation("messages:send", map[string]any{"channel": "general", "text": "hi"}, "", "")
 _, err = client.Mutation("ledger:add", map[string]any{"amount": lunora.BigInt{Value: big.NewInt(1000)}}, "", "")
 
-// Live subscription: attach your socket, then feed it frames.
-client.AttachSocket(func(frame map[string]any) error { return conn.WriteJSON(frame) })
+// Live subscription: attach your socket (it sends connect first), then feed it frames.
+client.AttachSocket(func(frame map[string]any) error { return conn.WriteJSON(frame) }, nil)
 unsubscribe := client.Subscribe("messages:list", args, onData, onError, "")
+```
+
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. With `net/http`:
+
+```go
+httpClient := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 ```
 
 `HandleFrame(raw)` is what you call with each inbound WebSocket message;
@@ -65,8 +74,123 @@ view, checkpoint and epoch untouched and reaches its error callback as
 the view's, is not spliced on: unless it is a `reset`, the view is emptied, its
 callback receives `[]`, and a cold `shape_subscribe` (no `sinceCheckpoint` or
 `sinceEpoch`) goes out at once so the server re-seeds it.
+`AttachSocket(send, context)` opens the socket channel. It sends `connect` as the first
+frame of every open, carrying the client id, `context` when it is non-nil, and the session
+credential set with `SetSessionToken`. It then rejoins the whisper topics and only after
+that routes frames to `send`, so call `ResendSubscriptions()` after it. A deployment with
+`LUNORA_WS_BEARER` closes a socket whose first frame is not that `connect` with a
+matching `token` (close code 4003). The session credential never goes in the socket URL,
+and `SetAuthToken` (the RPC bearer) never goes in `connect`; `WSURL` carries only an admin
+ticket. If the connect write fails, the client stays offline (`Online()` is false) and the
+socket should be dropped.
 
-`Stream` returns a channel for `for event := range …`; it closes when the
+`DetachSocket(closeCode, reason)` ends the channel. Pass the close code and reason of the
+socket close, or `0` and `""` when there is none. It classifies the close for the
+`OnTokenExpired` listeners: 4001 always notifies; 4003 notifies once per credential
+generation (a `SetSessionToken` with a new value starts one), and only for a socket that
+opened under the credential in force, since a socket opened under an earlier one refused a
+credential no longer in use; a 4003 whose reason is exactly `connect deadline` refuses no
+credential; any other close notifies nothing.
+A `TOKEN_EXPIRED` error frame notifies too and is not delivered to its subscription. An
+`UNAUTHENTICATED` error frame is delivered to its subscription's error callback like any
+other error.
+
+Whisper topics: `WhisperSubscribe(topic, listener)` joins a topic (`whisper_subscribe` when
+a socket is attached, and again after every reconnect) and returns an unsubscribe.
+`Whisper(topic, data)` relays a value to that topic and reports whether it was sent; it is
+never queued. `ConnectRoom(name, listener)` joins `room:<name>` and returns a `*Room` with
+`Send` and `Close`. A room join is never acknowledged, so there is nothing to wait for.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`HandleFrame` returns the frame's type). Each new socket attaches (which sends `connect`
+first), then resubscribes and flushes that shard's offline queue; if the attach or the
+resend fails, the socket is dropped and the loop backs off. A flush that requeues writes
+(or returns `RetryAfterMs`) must schedule its own retry, or those writes wait for the next
+reconnect.
+The retry is a `time.AfterFunc` timer owned by one socket run: the run marks itself
+finished and stops the timer under a mutex, a flush still in flight at that moment
+schedules no further retry, and the run waits for it to return before it detaches, so
+its requeue cannot land after the next run has drained newer writes.
+
+```go
+for attempt := 0; ; attempt++ {
+	if conn, err := dial(); err == nil { // your socket library
+		// One set per socket run: the flush callback runs on its own goroutine, so
+		// `timer` and `alive` are guarded by `mu`; `inflight` counts the callbacks past that check.
+		var mu sync.Mutex
+		var inflight sync.WaitGroup
+		var timer *time.Timer // pending flush retry
+		alive := true         // false once this socket run has ended
+		var scheduleFlush func(r lunora.FlushReport, backoff time.Duration)
+		scheduleFlush = func(r lunora.FlushReport, backoff time.Duration) {
+			if len(r.Requeued) == 0 && r.RetryAfterMs == 0 {
+				return
+			}
+			delay := backoff/2 + rand.N(backoff/2) // jittered; the server's retryAfter wins when given
+			if r.RetryAfterMs > 0 {
+				delay = time.Duration(r.RetryAfterMs) * time.Millisecond
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if !alive {
+				return
+			}
+			timer = time.AfterFunc(delay, func() {
+				mu.Lock()
+				live := alive
+				if live {
+					inflight.Add(1) // under `mu`, so teardown's Wait never races an Add
+				}
+				mu.Unlock()
+				if live {
+					defer inflight.Done()
+					scheduleFlush(client.FlushOfflineQueue(""), min(2*backoff, 30*time.Second))
+				}
+			})
+		}
+
+		// The sender and AttachSocket's connect both write, and subscribe calls reach the
+		// sender from other goroutines, so every write takes the same lock.
+		var wmu sync.Mutex
+		write := func(f map[string]any) error {
+			wmu.Lock()
+			defer wmu.Unlock()
+			return conn.WriteJSON(f)
+		}
+		// AttachSocket sends connect before it routes anything to write, so a subscribe
+		// on another goroutine cannot write ahead of connect.
+		var closeCode int     // 0 until the socket reports a close
+		var closeReason string // "" with no close frame
+		client.AttachSocket(write, nil)
+		if client.Online() && client.ResendSubscriptions() == nil {
+			scheduleFlush(client.FlushOfflineQueue(""), time.Second) // "" is the default shard
+			for {
+				_, raw, err := conn.ReadMessage()
+				if err != nil {
+					closeCode, closeReason = closeFrameOf(err) // your library's close code and reason
+					break
+				}
+				if t, _ := client.HandleFrame(raw); t == "ack" {
+					attempt = 0
+				}
+			}
+		}
+		mu.Lock()
+		alive = false
+		if timer != nil {
+			timer.Stop()
+		}
+		mu.Unlock()
+		inflight.Wait() // a flush already running must requeue before the next run drains
+		client.DetachSocket(closeCode, closeReason)
+		conn.Close()
+	}
+	d := min(30*time.Second, time.Second<<min(attempt, 5))
+	time.Sleep(d/2 + rand.N(d/2)) // math/rand/v2
+}
+```
+
+`Watch` returns a channel for `for event := range …`; it closes when the
 returned `Unsubscribe` runs or when `client.Close()` does, and closing it never
 races a frame being delivered.
 
@@ -133,8 +257,16 @@ flush (`OFFLINE_WRITE_UNENCODABLE`) rather than being retried forever, and every
 discard — including one the capacity cap evicts out of a _restored_ queue, which
 has no caller left to tell — reaches `client.OnMutationSettled`.
 
+A write that must never sit on disk — a credential, a one-time token — sets
+`OnlineOnly: true`. It is never queued, persisted or replayed: where a normal write
+would be queued, `Submit` returns an `OfflineError` coded `OFFLINE_NOT_QUEUED`
+before anything reaches the queue or the persistence adapter. A send that gets no
+reply while the socket is down is refused the same way, with the transport error
+as its cause (`errors.Unwrap`). It does not wait for a flush or queue behind
+pending writes, so it may land before an older queued write to the same document.
+
 A replay failure is classified by ONE rule on the single-call and batch paths:
-a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`,
+a coded envelope by its code alone (`SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
 `RATE_LIMITED`, `TOO_MANY_REQUESTS` re-queue, and so do the refused-credential
 codes `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — the write is held
 until the app sets a fresh token and calls `FlushOfflineQueue` again, since Go

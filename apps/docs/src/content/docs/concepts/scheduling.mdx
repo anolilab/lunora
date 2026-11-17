@@ -15,16 +15,19 @@ Triggers, both backed by a `SchedulerDO` you mount once per app.
 `ctx.scheduler` is available on `MutationCtx` and `ActionCtx` (not on a
 read-only `QueryCtx`). It enqueues a function to run later:
 
-- `ctx.scheduler.runAfter(delayMs, target, args?)` runs after a delay.
-- `ctx.scheduler.runAt(timestampMs, target, args?)` runs at an absolute
-  epoch-millisecond time.
+- `ctx.scheduler.runAfter(delayMs, target, args?, options?)` runs after a delay.
+- `ctx.scheduler.runAt(timestampMs, target, args?, options?)` runs at an absolute
+  time, given as an epoch-millisecond number. Pass `date.getTime()` for a
+  `Date`: anything that is not a finite number is refused with `INVALID_INPUT`.
+
+`options.retry` sets the job's [retry policy](#retry-policy).
 
 Both return the scheduled job's id (a string) so you can track or cancel it. The
 target is either a generated reference (`internal.notifications.notifySubscribers`,
 `api.…`) or the equivalent `"namespace:function"` path string, and it may be a
 mutation or an action — not a query. A reference is the better habit: it is
 checked against what actually exists, where a path string is not.
-[Internal](/docs/concepts/function-context) functions, which aren't exposed to
+[Internal](/docs/concepts/internal-functions) functions, which aren't exposed to
 clients, are the usual choice for follow-up work.
 
 ```ts
@@ -32,7 +35,7 @@ import { internal } from "@/lunora/_generated/internal";
 import { mutation, v } from "@/lunora/_generated/server";
 
 export const publishPost = mutation.input({ postId: v.id("posts") }).mutation(async ({ ctx, args: { postId } }) => {
-    await ctx.db.patch(postId, { status: "published" });
+    await ctx.db.patch("posts", postId, { status: "published" });
 
     // Fire-and-forget follow-up: notify subscribers 30s later.
     await ctx.scheduler.runAfter(30_000, internal.notifications.notifySubscribers, { postId });
@@ -52,15 +55,14 @@ await ctx.scheduler.runAt(trial.endsAt, "billing:expireTrial", { userId });
 (`agents.<name>` from [`@lunora/agent`](/docs/packages/agent) or
 `workflows.<name>` from [`@lunora/workflow`](/docs/packages/workflow)) instead
 of a `"namespace:function"` path. Each fire starts a **fresh durable instance**
-of that agent/workflow, so a one-shot delayed agent run is just a scheduled
-target:
+of that agent/workflow, so a one-shot delayed agent run is a scheduled target:
 
 ```ts
 import { mutation, v } from "@/lunora/_generated/server";
 import { agents } from "@/lunora/_generated/api";
 
 export const ticketOpened = mutation.input({ ticketId: v.id("tickets") }).mutation(async ({ ctx, args: { ticketId } }) => {
-    await ctx.db.patch(ticketId, { state: "open" });
+    await ctx.db.patch("tickets", ticketId, { state: "open" });
 
     // Kick off a durable support-agent run five minutes from now.
     await ctx.scheduler.runAfter(5 * 60_000, agents.support, { prompt: "Draft a first reply", ticketId });
@@ -91,7 +93,7 @@ The two contexts schedule identically, but the intent differs:
 import { mutation, v } from "@/lunora/_generated/server";
 
 export const orderPlaced = mutation.input({ orderId: v.id("orders") }).mutation(async ({ ctx, args: { orderId } }) => {
-    await ctx.db.patch(orderId, { state: "placed" });
+    await ctx.db.patch("orders", orderId, { state: "placed" });
     // The action does the external work the mutation isn't allowed to.
     await ctx.scheduler.runAfter(0, "payments:charge", { orderId });
 });
@@ -118,10 +120,55 @@ that did land is recognised rather than scheduled twice, and the `cancel(id)` yo
 stored on a row keeps working throughout.
 
 A job the scheduler refuses eight times over is **parked**: it stops being
-retried, is logged at `error` naming its id and target, and is kept for a week so
+retried, is logged at `error` naming its id and target, and is kept for a week from then so
 you can see what was promised and never enqueued. That is the one case where a
 scheduled job is dropped without the mutation being rolled back — and it is
 reported rather than silent.
+
+Studio's **Schedule → Outbox** view lists what a shard is holding for the
+scheduler, retrying or parked. **Retry now** puts an entry back on the ladder
+from its first rung, which is how a parked job gets a second chance once the
+cause is fixed. **Drop** removes it for good, which is the only way to cancel a
+job the scheduler has not accepted: `ctx.scheduler.cancel(id)` reaches only
+jobs the `SchedulerDO` holds. A drop also asks the scheduler to cancel the id,
+because the hand-off may have landed without the shard learning of it; if a
+hand-off is in flight when you drop, the job is cancelled as soon as it lands.
+If the scheduler cannot be reached to confirm the cancel, the entry is parked so it is never handed over,
+and the drop reports the error; drop it again once the scheduler answers. On a shard with no scheduler
+configured nothing will ever answer, so the first drop parks the entry and a second drop removes it,
+recorded as unconfirmed. A drop the scheduler answers with "not found" still applies, but is logged:
+that is also its answer for a job an earlier hand-off delivered without the shard hearing back, which
+may already have run.
+Entries are listed oldest first, parked or not. Both are admin RPCs (`__lunora_admin__:retryOutboxEntry`
+and `dropOutboxEntry`), are recorded in the audit log, and act on one
+shard at a time. The MCP server's `lunora_get_schedule_outbox` tool reads the
+same list.
+
+### Retry policy
+
+A job whose handler throws is retried by the `SchedulerDO`: five retries with
+exponential backoff from 30 seconds, then a dead-letter park. Pass a `retry`
+option as the fourth argument to change that for one job:
+
+```ts
+await ctx.scheduler.runAfter(0, internal.billing.syncInvoice, { invoiceId }, { retry: { maxAttempts: 10, maxMs: 600_000 } });
+```
+
+`retry.forever: true` keeps retrying instead of dead-lettering, for work that
+must eventually happen. Its delay is clamped to between 1 second and 30 minutes:
+the default backoff climbs to 30 minutes, while a `maxMs` below that keeps it
+retrying more often. The `SchedulerDO` logs it once at `warn` at the attempt that
+would have dead-lettered it. The same opt-in keeps a job in the shard's custody
+past the eight attempts above: it is logged once at `warn` when it reaches that
+point and retried every 30 minutes after, until the scheduler accepts it. A call
+the scheduler refuses as invalid is still parked. While a forever job is still
+waiting in custody, drop it from the Outbox view; once the scheduler holds it,
+`ctx.scheduler.cancel(id)` works as usual.
+
+`ctx.scheduler` always goes to the `SchedulerDO` namespace the app declares, so
+`forever` is honoured wherever that runs. Calling a `SchedulerHost` directly is
+different: the Node host's `schedule()` refuses `retry.forever` with
+`INVALID_INPUT`, since its job table has no unbounded retry.
 
 ### Inspecting and cancelling
 
@@ -133,8 +180,16 @@ the action first:
 const { cancelled } = await ctx.scheduler.cancel(reminderId);
 ```
 
+`get(id)` reports where a job is in its life as `state`: `pending`, `running`,
+then how it ended — `succeeded` (the dispatch returned 2xx; for a workflow or
+agent target, that its instance started), `failed` (its retry budget ran out and
+it was dead-lettered, with the reason in `error`) or `canceled`. Finished jobs
+keep answering, with `completedAt`, for seven days; after that `get` returns
+`null`, as it does for an id that was never scheduled. Studio's Schedule tab
+lists them under **History**.
+
 You can also read pending jobs from a query via the `_scheduled_functions`
-[system table](/docs/concepts/function-context) (`ctx.db.system`), which is
+[system table](/docs/concepts/system-tables) (`ctx.db.system`), which is
 read-only and eventually consistent.
 
 ## Recurring jobs (Cron Triggers)
@@ -151,7 +206,7 @@ import { internal } from "@/lunora/_generated/internal";
 
 export const triggers = [
     createCronTrigger({ schedule: "0 3 * * *", fn: internal.cleanup.cleanupOldMessages }),
-    createCronTrigger({ schedule: "*/15 * * * *", fn: internal.presence.sweep }),
+    createCronTrigger({ schedule: "*/15 * * * *", fn: internal.presence.sweep, args: { roomId: "lobby", tenantId: "" } }),
 ];
 ```
 
@@ -167,9 +222,27 @@ firing.
 
 <Callout type="warn">
     **A cron fire gets none of the `SchedulerDO`'s durability.** The retry ladder, exponential backoff, and dead-letter park described above belong to
-    `ctx.scheduler` jobs, which the DO owns. A cron trigger is dispatched once from the worker's `scheduled()` handler; a failure is logged as `CRON_JOB_FAILED`
-    and the tick is gone until the next one. Make cron handlers idempotent, and re-derive missed work from your own data rather than assuming a redelivery.
+    `ctx.scheduler` jobs, which the Durable Object (DO) owns. A cron trigger is dispatched once from the worker's `scheduled()` handler; a failure is logged as
+    `CRON_JOB_FAILED` and the tick is gone until the next one. Make cron handlers idempotent, and re-derive missed work from your own data rather than assuming
+    a redelivery.
 </Callout>
+
+A code-defined cron job (`cronJobs()`) never overlaps itself. Before a run
+starts, the worker takes a per-job lease held in the `SchedulerDO`. A tick that
+lands while the previous run of the same job is still going is **skipped**
+instead of run alongside it, whichever isolate it lands in, and the skip is
+recorded. **Run now** in Studio answers `409 CRON_JOB_IN_FLIGHT` in the same
+situation. A run that never reports back (its invocation was torn down) gives
+up its lease after fifteen minutes, the platform's cron wall-clock limit, and is
+recorded as failed. If the `SchedulerDO` can't be reached, the run goes ahead
+without the guard rather than stopping the cron, and a warning is logged. A cron
+that targets a workflow holds the lease only while it starts the instance, so a
+long-running workflow can still overlap the next tick's instance.
+
+Every fire is recorded: start, duration, outcome, the error of a failed run, and
+how many ticks it caused to be skipped. The last 50 per job are kept, and
+Studio's **Cron triggers** view shows each job's last run plus the recent
+history.
 
 ## How dispatch works
 
@@ -177,13 +250,28 @@ A scheduled job is stored in the `SchedulerDO` sorted by its fire time and
 dispatched on the DO's alarm. When it fires, the DO calls back into your worker
 and the runtime runs the target function on the same code path as an RPC: same
 context, same `ctx.db`. There's no separate "background worker" mental model to
-keep. A scheduled mutation is just your mutation, run later.
+keep. A scheduled mutation is your mutation, run later.
 
 The one difference is the caller. A scheduled or cron dispatch is
 **server-initiated**: it carries no end-user identity, so `ctx.auth.userId` is
 `null` and `ctx.ip` is `undefined`. That is also what lets it reach `internal`
 functions. Pass whatever the job needs to know about a user in its `args`, and
 don't gate a scheduled function on `ctx.auth`.
+
+### Start lag
+
+Each scheduled job's dispatch records a `scheduler.lag_ms` histogram on the
+shard that runs it: the time from the job's due time to the moment it started,
+one series per function (the `function` attribute). A code-defined cron job
+records it too, measured from the tick's planned time. It rides the same metric
+pipeline as `ctx.metrics`, so a configured sink exports it, and the Studio's
+Schedule → Pools view lists it per job. A pooled job that waited for a free
+slot counts the wait from its original due time; a retry counts only its own
+attempt's lateness, not the backoff. A lag that keeps climbing means the queue
+is falling behind. On the Node host, `createNodePlatform` dispatches due jobs
+to the shard itself (when `onFetch` is wired) and stamps `scheduledFor`, so the
+metric is recorded. If you pass your own `onDispatch` it replaces that
+delivery; forward `scheduledFor` in the dispatch body to get the same metric.
 
 ## See also
 

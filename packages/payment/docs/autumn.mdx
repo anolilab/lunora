@@ -3,7 +3,7 @@ title: "@lunora/payment — Autumn"
 description: End-to-end tutorial for wiring the Autumn adapter into ctx.payments — attach a product, check/track features Autumn owns, verify Svix webhooks, and reconcile.
 ---
 
-[Autumn](https://useautumn.com) is an open-source, **entitlement-first** billing
+[Autumn](https://useautumn.com) is an open-source billing
 layer that runs on **your own** Stripe account. This page is a standalone,
 copy-pasteable walkthrough: install the adapter, wire it onto `ctx.payments`,
 attach your first product, gate features and meter usage (both of which Autumn
@@ -12,7 +12,7 @@ maps to a real method on the adapter; nothing is invented. For the
 provider-agnostic concepts (`ctx.payments` surface, the state machine, the store,
 `reconcile`) read the [package overview](/docs/packages/payment) first.
 
-## Autumn is entitlement-first and runs on your own Stripe
+## Autumn runs on your own Stripe
 
 Autumn sits between your app and **your** Stripe account and becomes your source
 of truth for subscription state, credit balances, feature entitlements, and usage
@@ -34,6 +34,7 @@ The adapter advertises its shape in `capabilities`:
 
 <TypeTable
     type={{
+        checkoutExpiry: { type: "false", description: "createCheckout refuses an expiresAt with PROVIDER_ERROR." },
         merchantOfRecord: { type: "false", description: "Autumn runs on your own Stripe — you own tax, invoicing, and remittance. Not a Merchant-of-Record." },
         portal: { type: "true", description: "Native hosted billing portal — createPortalSession opens Autumn's Stripe-backed portal." },
         usageMetering: { type: "true", description: "Metered/usage-based features via track — reportUsage forwards usage to Autumn." },
@@ -106,8 +107,8 @@ AUTUMN_WEBHOOK_SECRET=...            # Autumn dashboard → webhook settings (si
 
 ## Install
 
-The package never imports the `autumn-js` SDK: you inject the client, so
-`autumn-js` stays an optional peer dependency you install alongside it:
+The package never imports the `autumn-js` SDK: you pass a loader for the client,
+so `autumn-js` stays an optional peer dependency you install alongside it:
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -139,13 +140,20 @@ carries your secret key, comes from a `config.payment(env)` thunk you pass to
 <Steps>
 <Step>
 
-**Construct an `Autumn` client** from `env.AUTUMN_SECRET_KEY`:
+**Write a loader for the `Autumn` client** that builds it from `env.AUTUMN_SECRET_KEY`:
 
 ```ts
-import { Autumn } from "autumn-js";
+const loadAutumn = async () => {
+    const { Autumn } = await import("autumn-js");
 
-const client = new Autumn({ secretKey: env.AUTUMN_SECRET_KEY });
+    return new Autumn({ secretKey: env.AUTUMN_SECRET_KEY });
+};
 ```
+
+The adapter calls the loader on its first provider call and reuses the client,
+so `autumn-js` stays out of the Worker's startup graph. A static
+`import { Autumn } from "autumn-js"` in the entry is evaluated at startup and
+defeats this.
 
 </Step>
 <Step>
@@ -159,7 +167,7 @@ import type { AutumnClientLike } from "@lunora/payment/autumn";
 import { createAutumnAdapter } from "@lunora/payment/autumn";
 
 const adapter = createAutumnAdapter({
-    client: client as unknown as AutumnClientLike,
+    client: async () => (await loadAutumn()) as unknown as AutumnClientLike,
     webhookSecret: env.AUTUMN_WEBHOOK_SECRET,
     webhookToleranceSeconds: 300, // optional clock-skew tolerance for the signed timestamp
 });
@@ -175,12 +183,15 @@ const adapter = createAutumnAdapter({
 import type { AutumnClientLike } from "@lunora/payment/autumn";
 import { createAutumnAdapter } from "@lunora/payment/autumn";
 import { createShardDO } from "./_generated/shard";
-import { Autumn } from "autumn-js";
 
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createAutumnAdapter({
-            client: new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnClientLike,
+            client: async () => {
+                const { Autumn } = await import("autumn-js");
+
+                return new Autumn({ secretKey: env.AUTUMN_SECRET_KEY }) as unknown as AutumnClientLike;
+            },
             webhookSecret: env.AUTUMN_WEBHOOK_SECRET,
         }),
         // Override the default "caller owns the referenceId" rule for org/workspace keys. The thunk
@@ -200,7 +211,10 @@ The adapter options:
 
 <TypeTable
     type={{
-        client: { type: "AutumnClientLike", description: "An injected Autumn instance (structural subset). Required." },
+        client: {
+            type: "() => AutumnClientLike | Promise<AutumnClientLike>",
+            description: "Loads an Autumn instance (structural subset) on the first provider call; reused after. Required.",
+        },
         webhookSecret: { type: "string", description: "The Svix (Standard Webhooks) signing secret used to verify inbound webhooks. Required." },
         webhookToleranceSeconds: {
             type: "number",
@@ -226,13 +240,14 @@ and usage. Autumn also ships concepts with no cross-provider equivalent:
 **plan catalog**, and a native **checkout** (prepaid feature quantities, entity
 scoping, reward codes, opting out of a plan's trial). These live in a companion facade,
 `createAutumnFeatures`, kept separate so the provider-agnostic surface stays
-generic. Share the same injected client between the two:
+generic. It takes the same kind of loader as the adapter and runs it on its first
+call, so it can be built at module scope without loading the SDK at startup:
 
 ```ts
 import type { AutumnFeaturesClientLike } from "@lunora/payment/autumn-features";
 import { createAutumnFeatures } from "@lunora/payment/autumn-features";
 
-const autumnFeatures = createAutumnFeatures({ client: client as unknown as AutumnFeaturesClientLike });
+const autumnFeatures = createAutumnFeatures({ client: async () => (await loadAutumn()) as unknown as AutumnFeaturesClientLike });
 
 await autumnFeatures.entities.create(userId, { featureId: "seats", id: "workspace_a", name: "Workspace A" });
 const usage = await autumnFeatures.events.aggregate(userId, { featureId: "api_calls", range: "30d" });
@@ -242,8 +257,9 @@ const { url } = await autumnFeatures.checkout(userId, { planId: "pro" });
 <Callout type="warn">
     **`createAutumnFeatures` does not authorize the caller.** Unlike the `ctx.payments` facade, which checks the caller owns the `referenceId` on every call,
     these methods take the `referenceId` (and `entityId`) positionally and trust them. Forwarding an unvalidated reference straight from a request is an
-    app-layer IDOR: before exposing any of these on a handler, match the reference against the authenticated user (e.g. `ctx.auth.userId`). Credit systems need
-    no method here: Autumn models them as features, so their balances flow through `check` / `listBalances` like any other.
+    app-layer insecure direct object reference (IDOR): before exposing any of these on a handler, match the reference against the authenticated user (e.g.
+    `ctx.auth.userId`). Credit systems need no method here: Autumn models them as features, so their balances flow through `check` / `listBalances` like any
+    other.
 </Callout>
 
 ## Attach a product, then check and track
@@ -253,7 +269,7 @@ attach flow: when the change needs a payment it returns a **hosted checkout URL*
 to redirect the browser to; when Autumn can apply the change directly (e.g. a free
 plan or an update within an existing subscription) the `url` is empty. `attach` is
 the plan-oriented alias with `mode` defaulting to `"subscription"`, so attaching a
-product is just `{ referenceId, priceId, successUrl, cancelUrl }`:
+product needs only `{ referenceId, priceId, successUrl, cancelUrl }`:
 
 ```ts
 import { action, v } from "./_generated/server";
@@ -353,6 +369,8 @@ app.post(
 );
 ```
 
+The following internal action runs in the shard and passes the Svix headers to `handleWebhook`:
+
 ```ts
 // lunora/billing.ts
 import { internalAction, v } from "./_generated/server";
@@ -440,10 +458,10 @@ Autumn dashboard instead.
 <Callout type="warn">
     **`reconcile` does not retry a failed usage forward on Autumn.** For Stripe, Polar and Dodo the sweep re-sends usage events the provider never accepted,
     because the event's `idempotencyKey` travels in the ingestion body (`identifier`, `externalId`, `event_id`) and the provider collapses a re-send onto the
-    original. `autumn-js` has no idempotency surface at all — `TrackParams` carries no such field — so every `client.track` call applies. A row is unreported
-    whether the request failed or only its response was lost, and those are indistinguishable, so re-sending would debit the customer's allowance a second time
-    for usage that happened once. The sweep is skipped for Autumn and `checkedUsage` stays `0`; a forward that genuinely failed is lost (Autumn under-counts)
-    and surfaces as the `usage.report_failed` observability signal. Alert on it, and re-issue by hand if you must.
+    original. `autumn-js`'s `client.track` has no idempotency surface — `TrackParams` carries no such field — so every `client.track` call applies. A row is
+    unreported whether the request failed or only its response was lost, and those are indistinguishable, so re-sending would debit the customer's allowance a
+    second time for usage that happened once. The sweep is skipped for Autumn and `checkedUsage` stays `0`; a forward that genuinely failed is lost (Autumn
+    under-counts) and surfaces as the `usage.report_failed` observability signal. Alert on it, and re-issue by hand if you must.
 </Callout>
 
 ## Troubleshooting

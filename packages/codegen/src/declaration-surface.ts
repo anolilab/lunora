@@ -36,10 +36,12 @@ import { join } from "node:path";
 import { LunoraError } from "@lunora/errors";
 import type { Project } from "ts-morph";
 
-import assertRequiredPackages from "./assert-required-packages";
+import { assertRequiredPackages } from "./assert-required-packages";
 import type { CapabilityKey } from "./capabilities";
 import { usedCapabilities } from "./capabilities";
 import { discoverAgents } from "./discover/agents";
+import type { AuthClaim } from "./discover/auth-claims";
+import discoverAuthClaims from "./discover/auth-claims";
 import { discoverContainers } from "./discover/containers";
 import discoverCrons from "./discover/crons";
 import { discoverEnv } from "./discover/env";
@@ -50,6 +52,7 @@ import readPackageDependencies from "./discover/package-dependencies";
 import { discoverPlatformSignals } from "./discover/platform-signals";
 import { discoverQueueDeclarations } from "./discover/queues";
 import { discoverSandboxUsage } from "./discover/sandbox";
+import discoverSecretValueToolUsage from "./discover/secret-value-tool";
 import { resolveServiceBindings } from "./discover/service-bindings";
 import discoverStorageRulesMetadata from "./discover/storage-rules";
 import discoverWorkerEntryCrons from "./discover/worker-entry-crons";
@@ -70,7 +73,15 @@ import type {
 } from "./ir";
 import { isShardByTable } from "./ir";
 import type { PlatformGateResult } from "./platform-target";
-import { gatePlatformFeatures, readTargetDiagnostics, resolveCodegenTarget, vectorizeDimensionDiagnostics } from "./platform-target";
+import {
+    gatePlatformFeatures,
+    liveStreamsDeliveryAuthorizationDiagnostic,
+    readTargetDiagnostics,
+    resolveCodegenTarget,
+    socketRoutesDeliveryAuthorizationDiagnostic,
+    vectorizeDimensionDiagnostics,
+} from "./platform-target";
+import { findProjectConfigFile } from "./project-config-path";
 import schemaDeclaresRelationGraph from "./relation-graph";
 
 /**
@@ -130,6 +141,8 @@ const assertNoWorkflowAgentCollision = (workflows: ReadonlyArray<WorkflowIR>, ag
  */
 interface DeclarationSurface {
     agents: ReadonlyArray<AgentIR>;
+    /** App-declared user columns the session forwards as claims (`user.additionalFields` of `.auth()`), typed onto `ctx.auth`. */
+    authClaims: ReadonlyArray<AuthClaim>;
     /** {@link DeclarationSurface.featureUsage} as the capability set every emitter takes — derived once, here. */
     capabilities: ReadonlySet<CapabilityKey>;
     containers: ReadonlyArray<ContainerIR>;
@@ -216,6 +229,14 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     const { lunoraDirectory, project, projectRoot, schema } = options;
 
     const identity = discoverIdentity(project, lunoraDirectory);
+    const authClaimDiscovery = discoverAuthClaims(project, lunoraDirectory);
+    const authClaims = authClaimDiscovery.claims;
+
+    // A column left out must say so: the typed claims would otherwise silently lack it.
+    for (const diagnostic of authClaimDiscovery.diagnostics) {
+        // eslint-disable-next-line no-console -- matches the other skip warnings in this package; there is no diagnostic sink here.
+        console.warn(`@lunora/codegen: ${diagnostic}.`);
+    }
     const env = discoverEnv(project, lunoraDirectory);
 
     // Workflows before agents before the collision guard: each discoverer dedups
@@ -263,8 +284,9 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // consulted by nothing, so e.g. a durable stream on `target: "node"` emitted
     // its full surface and silently behaved as ephemeral, and a declared cron
     // built green on a host where no runtime dispatches one.
-    const codeSignals = discoverPlatformSignals(project, lunoraDirectory);
+    const codeSignals = discoverPlatformSignals(project, lunoraDirectory, findProjectConfigFile(projectRoot));
     const sandboxUsage = discoverSandboxUsage(project, lunoraDirectory);
+    const secretValueToolUsed = discoverSecretValueToolUsage(project, lunoraDirectory);
     const usage = discoverFeatureUsage(project, lunoraDirectory);
 
     // `@lunora/agent`'s `browserTool` drives `ctx.browser` too, so it is browser
@@ -295,8 +317,12 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // already lifts statically, so no separate AST signal is needed.
         containerRuntimeScheduling: containers.some((container) => container.schedulingPolicy === "durable_object"),
         containerSandboxTools: containers.some((container) => container.sandbox === true),
+        deliveryAuthorization: codeSignals.deliveryAuthorization,
         durableStreams: codeSignals.durableStreams,
         globalTables: schema.tables.some((table) => table.shardMode === "global"),
+        liveContext: codeSignals.liveContext,
+        liveStreams: codeSignals.liveStreams,
+        typedWebSockets: codeSignals.typedWebSockets,
         queues: queues.length > 0,
         // Read off the schema like `globalTables`: `ctx.db.related` is a core
         // `ctx.db` method with no capability row to notice, and the thing that
@@ -304,6 +330,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // declaration. A schema with no foreign key declares no graph, so a host
         // that cannot serve the traversal only refuses apps that would use one.
         relationGraph: schemaDeclaresRelationGraph(schema),
+        secretValues: secretValueToolUsed,
         secrets: codeSignals.secrets,
         services: services.length > 0,
         topics: topics.length > 0,
@@ -367,6 +394,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         featureUsage,
         hasFlags,
         hasNotify,
+        authClaims,
         identity,
         platformGate: {
             ...platformGate,
@@ -376,6 +404,8 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
                 ...readTargetDiagnostics(projectRoot, options.target),
                 ...platformGate.diagnostics,
                 ...vectorizeDimensionDiagnostics(target, schema.vectorIndexes),
+                ...(codeSignals.liveStreams && codeSignals.deliveryAuthorization ? [liveStreamsDeliveryAuthorizationDiagnostic(target)] : []),
+                ...(codeSignals.socketRoutes && codeSignals.deliveryAuthorization ? [socketRoutesDeliveryAuthorizationDiagnostic(target)] : []),
             ],
         },
         queues,
@@ -389,6 +419,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
             // never sees it. The emitter AND's it with `schema.vectorIndexes`.
             hasVectors: vectorStoreSupported,
             hasFlags,
+            authClaims,
             hasNotify,
             identity,
             queues,

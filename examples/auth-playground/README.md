@@ -27,7 +27,7 @@ pnpm install
 pnpm --filter @lunora-example/auth-playground dev
 ```
 
-That spins up Vite + Wrangler in Miniflare; open <http://localhost:5173>.
+That spins up Vite + Wrangler in Miniflare; open the URL the dev server prints (<http://localhost:5173> in the main checkout).
 
 Before deploying to a real Cloudflare account:
 

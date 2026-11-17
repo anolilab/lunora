@@ -37,6 +37,15 @@ interface OpenRpcDocument {
     methods: ReadonlyArray<OpenRpcMethod>;
 }
 
+/**
+ * The methods a generated SDK can call. A `stream` is listed in the document for
+ * MCP and other tooling, but it runs over the WebSocket, not the RPC envelope.
+ * {@link verbForKind} would send it to `mutation`, so it is removed here, once,
+ * for every reader of the document.
+ */
+const invocableMethods = (document: OpenRpcDocument): ReadonlyArray<OpenRpcMethod> =>
+    document.methods.filter((method) => method["x-lunora-function-kind"] !== "stream");
+
 /** The runtime verbs a generated SDK can call. Mirrors the client transports. */
 type RuntimeVerb = "action" | "mutation" | "query";
 
@@ -566,7 +575,7 @@ const parseMethod = (method: OpenRpcMethod): SdkMethod => {
 const parseSpec = (document: OpenRpcDocument): ReadonlyArray<SdkNamespace> => {
     const byNamespace = new Map<string, SdkMethod[]>();
 
-    for (const method of document.methods) {
+    for (const method of invocableMethods(document)) {
         const parsed = parseMethod(method);
         const existing = byNamespace.get(parsed.namespace);
 
@@ -590,7 +599,7 @@ const parseSpec = (document: OpenRpcDocument): ReadonlyArray<SdkNamespace> => {
  * never disagree.
  */
 const modelSources = (document: OpenRpcDocument): ReadonlyArray<{ name: string; schema: Record<string, unknown> }> =>
-    document.methods
+    invocableMethods(document)
         .flatMap((method) => {
             const parsed = parseMethod(method);
 
@@ -809,7 +818,7 @@ const withDeclaredModels = (namespaces: ReadonlyArray<SdkNamespace>, models: str
  * deliberate, documented limitation.
  */
 const unrepresentableFunctions = (document: OpenRpcDocument): ReadonlyArray<string> =>
-    document.methods
+    invocableMethods(document)
         .filter((method) => hasUnrepresentableWireType(method.params?.[0]?.schema) || hasUnrepresentableWireType(method.result?.schema))
         .map((method) => method.name)
         .toSorted((a, b) => a.localeCompare(b));

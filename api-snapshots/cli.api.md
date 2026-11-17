@@ -55,6 +55,7 @@ const COMMANDS: readonly [
     "build",
     "deploy",
     "prepare",
+    "preview",
     "link",
     "cloudflare",
     "logs",
@@ -67,6 +68,8 @@ const COMMANDS: readonly [
     "import",
     "seed",
     "shards",
+    "pause",
+    "resume",
     "backup",
     "eval",
     "verify",
@@ -78,7 +81,8 @@ const COMMANDS: readonly [
     "docs",
     "registry",
     "rules",
-    "mcp"
+    "mcp",
+    "workflow"
 ];
 ```
 
@@ -108,8 +112,14 @@ const DEFAULT_IMPORT_BATCH_SIZE = 500;
 
 ```ts
 interface DeployCommandOptions {
+    allowOpenShards?: boolean;
     allowSchemaDrift?: boolean;
     apiSpec?: ApiSpec;
+    bundleMetaPath?: string;
+    celldToolchain?: (options: CelldToolchainProbeOptions) => Promise<CelldToolchainProbe>;
+    clientBuildEnvironment?: string;
+    clientBuildOutputJson?: boolean;
+    clientBuildRan?: boolean;
     commandName?: PreDeployCommand;
     cwd?: string;
     discoveryCache?: DiscoveryCache;
@@ -117,29 +127,37 @@ interface DeployCommandOptions {
     dryRun?: boolean;
     emitBindings?: string;
     env?: string;
-    fetchImpl?: FetchLike;
+    fetchImpl?: StreamingFetchLike;
     format?: OutputFormat;
+    frameworkBuild?: boolean;
     healthCheck?: boolean;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
     interactive?: boolean;
+    isolatedPreview?: boolean;
+    lazyFunctions?: boolean;
     logger: Logger;
     migrate?: boolean;
+    migrateAllowDestructive?: boolean;
     migrateToken?: string;
     migrateUrl?: string;
     migrateYes?: boolean;
+    openShardGatePassed?: boolean;
     outDir?: string;
+    outFile?: string;
     preview?: boolean;
     railpackAvailable?: DockerProbe;
     secretConfirm?: (message: string) => Promise<boolean>;
     secretLister?: (inputs: ListRemoteSecretsInputs) => Promise<ListRemoteSecretsResult>;
+    secretsFile?: string;
     skipCodegen?: boolean;
     skipServices?: boolean;
+    smokeLauncher?: DevProcessSpawner;
+    smokeLoad?: boolean;
     spawner?: Spawner;
     strictAdvisories?: boolean;
     target?: string;
     temporary?: boolean;
-    updateSchemaBaseline?: boolean;
 }
 ```
 
@@ -176,7 +194,6 @@ interface DeployedIdentity {
     deployedAt: string;
     dryRun: boolean;
     env?: string;
-    preview: boolean;
     url?: string;
     workerName?: string;
 }
@@ -198,6 +215,7 @@ interface DevCommandOptions {
     hasIpv6Loopback?: () => boolean;
     inspectorPort?: number;
     jsonLogs?: boolean;
+    lazyFunctions?: boolean;
     local?: boolean;
     logger: Logger;
     materializeDev?: typeof materializeDevWranglerConfig;
@@ -207,6 +225,7 @@ interface DevCommandOptions {
     remote?: boolean;
     startCelldSession?: typeof startCelldDevSession;
     startCodegen?: typeof startCodegenWatch;
+    startHyperdrive?: typeof startLocalHyperdrive;
     startStudio?: typeof startStudioServer;
     startWorker?: WorkerSpawner;
     studio?: boolean;
@@ -215,6 +234,7 @@ interface DevCommandOptions {
     waitForInterrupt?: (logger: Logger) => Promise<number>;
     worker?: boolean;
     workerPort?: number;
+    writeCelldProjection?: typeof writeCelldDevProjection;
 }
 ```
 
@@ -226,7 +246,7 @@ interface DevCommandPlan {
     flavor: DevFlavor;
     frameworkHint?: string;
     ipv4LoopbackForced: boolean;
-    remote: DevRemotePlan;
+    remote: RemotePlan;
     runsCodegenWatch: boolean;
     serviceConfigCleanup?: () => void;
     sidecar?: SpawnDescriptor & {
@@ -324,17 +344,17 @@ interface ImportCommandOptions {
     batchSize?: number;
     confirm?: (prompt: string) => Promise<boolean>;
     cwd?: string;
+    dryRun?: boolean;
     fetchImpl?: StreamingFetchLike;
     file: string;
     format?: OutputFormat;
     from?: ImportSourceName;
     logger: Logger;
+    mode?: ImportMode;
     prod?: boolean;
-    replace?: boolean;
     scan?: boolean;
     storageDir?: string;
     table?: string;
-    tables?: string;
     token?: string;
     url?: string;
     verify?: boolean;
@@ -349,6 +369,7 @@ interface ImportCommandOptions {
 interface ImportCommandResult extends CommandResult<ImportCommandData> {
     body: ImportSummary | undefined;
     inserted: number;
+    replaced?: number;
 }
 ```
 
@@ -368,6 +389,7 @@ interface IndexSnapshot {
 interface InitCommandOptions {
     add?: string;
     allowUnsafeSource?: boolean;
+    auth?: string;
     ci?: CiProvider;
     cwd?: string;
     dryRun?: boolean;
@@ -383,7 +405,7 @@ interface InitCommandOptions {
     name?: string;
     overlayBaseFrom?: string;
     packageManagerProbe?: PackageManagerProbe;
-    prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
+    prompt?: Partial<Pick<OfferDeps, "selectAuth">> & Pick<OfferDeps, "multiSelect" | "select" | "text">;
     ref?: string;
     registryFrom?: string;
     registrySource?: string;
@@ -589,6 +611,7 @@ interface SchemaSnapshot {
 interface SpawnDescriptor {
     args: ReadonlyArray<string>;
     captureStderr?: boolean;
+    captureStderrSilently?: boolean;
     captureStdout?: boolean;
     captureStdoutSilently?: boolean;
     command: string;
@@ -596,6 +619,7 @@ interface SpawnDescriptor {
     env?: Readonly<Record<string, string>>;
     input?: string;
     stdoutToStderr?: boolean;
+    timeoutMs?: number;
 }
 ```
 
@@ -645,7 +669,7 @@ interface TableSnapshot {
 ### `Template` (type)
 
 ```ts
-type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "react-router" | "rspack-react" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-react-rspack" | "tanstack-start-solid" | "vinext" | "vinext-pages";
+type Template = "analog" | "astro" | "expo" | "next" | "nuxt" | "rspack-react" | "saas" | "solid-v2" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-react-rspack" | "tanstack-start-solid" | "vinext" | "vinext-pages";
 ```
 
 ### `UnsupportedEntry` (interface)
@@ -889,6 +913,34 @@ Re-exported from `@lunora/config` — signature tracked at its source.
 const validatorKindToSqlType: (kind: string) => ColumnSnapshot["sqlType"];
 ```
 
+## `@lunora/cli/cli`
+
+### `COMMANDS` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `CommandName` (type)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `REGISTERED_COMMAND_NAMES` (const)
+
+```ts
+const REGISTERED_COMMAND_NAMES: ReadonlyArray<string>;
+```
+
+### `RunCliOptions` (interface)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `VERSION` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
+### `runCli` (const)
+
+Re-exported from `@lunora/cli` — signature tracked in that section.
+
 ## Referenced internal declarations
 
 Not exported, and reachable only through a signature above. Their members
@@ -899,6 +951,12 @@ public API and is gated as one. Listed once per package, sorted by name.
 
 ```ts
 type ApiSpec = NonNullable<CodegenOptions["apiSpec"]>;
+```
+
+### `AuthChoice` (type)
+
+```ts
+type AuthChoice = ExternalAuthProvider | "lunora" | "none";
 ```
 
 ### `AuthUiItem` (type)
@@ -931,6 +989,7 @@ interface CodegenCommandData {
         level: Finding["level"];
         name: string;
         remediation: string;
+        suppressed?: Finding["suppressed"];
     }>;
     cronTriggers: ReadonlyArray<string>;
     failedAdvisories: number;
@@ -945,6 +1004,7 @@ interface CodegenCommandOptions {
     apiSpec?: ApiSpec;
     cwd?: string;
     format?: OutputFormat;
+    lazyFunctions?: boolean;
     logger: Logger;
     strictAdvisories?: boolean;
     target?: string;
@@ -977,6 +1037,7 @@ interface CodegenWatcherOptions {
     apiSpec?: CodegenOptions["apiSpec"];
     debounceMs?: number;
     jsonLogs?: boolean;
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     logger: Logger;
     lunoraDirectory?: string;
     projectRoot: string;
@@ -1000,18 +1061,6 @@ interface CommandResult<TData> {
 
 ```ts
 type DevFlavor = "framework-worker" | "vite" | "wrangler";
-```
-
-### `DevRemotePlan` (interface)
-
-```ts
-interface DevRemotePlan {
-    bindings: string[];
-    cleanup: () => void;
-    enabled: boolean;
-    reason?: string;
-    withheld: string[];
-}
 ```
 
 ### `DevTunnelRequest` (interface)
@@ -1050,10 +1099,17 @@ interface ExportCommandData {
 }
 ```
 
+### `ExternalAuthProvider` (type)
+
+```ts
+type ExternalAuthProvider = "auth0" | "clerk" | "workos";
+```
+
 ### `FeatureApply` (interface)
 
 ```ts
 interface FeatureApply {
+    externalAuth?: ExternalAuthProvider;
     label: string;
     names: ReadonlyArray<string>;
     transformManifest?: OfferTransformManifest;
@@ -1069,7 +1125,13 @@ type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | AuthUiItem | "mail";
 ### `HealthFetch` (type)
 
 ```ts
-type HealthFetch = (url: string) => Promise<{
+type HealthFetch = (url: string, init: {
+    headers: Record<string, string>;
+    redirect: RequestRedirect;
+}) => Promise<{
+    headers: {
+        get: (name: string) => string | null;
+    };
     ok: boolean;
     status: number;
 }>;
@@ -1092,6 +1154,12 @@ interface ImportCommandData {
     inserted: number;
     summary: ImportSummary;
 }
+```
+
+### `ImportMode` (type)
+
+```ts
+type ImportMode = "append" | "replace" | "require-empty" | "upsert";
 ```
 
 ### `ImportRowError` (interface)
@@ -1126,11 +1194,13 @@ type ImportSourceName = (typeof IMPORT_SOURCE_NAMES)[number];
 ```ts
 interface ImportSummary {
     conflicts: number;
-    deleted?: Record<string, number>;
+    deleted: number;
     errors: ImportRowError[];
     failed?: ImportShardFailure[];
     inserted: Record<string, number>;
+    plan?: TablePlan[];
     received: number;
+    replaced: number;
     storage?: {
         ambiguous: StorageRemapReport["ambiguous"];
         ambiguousTotal: number;
@@ -1182,6 +1252,7 @@ interface ListRemoteSecretsInputs {
     cwd: string;
     env?: string;
     runner?: SecretListRunner;
+    target?: string;
     temporary?: boolean;
 }
 ```
@@ -1219,6 +1290,7 @@ type LongLivedSpawner = (descriptor: LongLivedDescriptor, onLine: (line: string,
 ```ts
 interface OfferDeps {
     applyAll: (plans: ReadonlyArray<FeatureApply>) => Promise<boolean>;
+    auth?: AuthChoice;
     interactive: boolean;
     logger: Logger;
     multiSelect: (message: string, options: ReadonlyArray<{
@@ -1238,6 +1310,13 @@ interface OfferDeps {
     }>, settings?: {
         default?: FeatureItem;
     }) => Promise<FeatureItem | undefined>;
+    selectAuth: (message: string, options: ReadonlyArray<{
+        description?: string;
+        label: string;
+        value: AuthChoice;
+    }>, settings?: {
+        default?: AuthChoice;
+    }) => Promise<AuthChoice | undefined>;
     text: (message: string, settings?: {
         default?: string;
         placeholder?: string;
@@ -1377,11 +1456,26 @@ interface StudioServerOptions {
     apiSpec?: CodegenOptions["apiSpec"];
     cwd: string;
     host?: string;
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     logger?: {
         warnOnce?: (message: string) => void;
     };
     port: number;
     workerOrigin: string;
+}
+```
+
+### `TablePlan` (interface)
+
+```ts
+interface TablePlan {
+    add: number;
+    delete: number;
+    existing: number;
+    matched: number;
+    source: number;
+    table: string;
+    target: number;
 }
 ```
 

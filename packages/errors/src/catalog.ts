@@ -1,40 +1,19 @@
 /**
  * The central Lunora error catalog — the single source of truth mapping a
- * machine-readable `code` to its transport `status`, a short human `title`, and
- * (where useful) an actionable Markdown `hint` plus a `docsUrl`.
+ * machine-readable `code` to its transport `status`, a short human `title`,
+ * and whether its message is redacted on the wire.
  *
- * This table is consumed everywhere an error is surfaced: the runtime/DO wire
- * mappers (status), the client SDK (code discrimination), the CLI renderer and
- * the Vite overlay (hint), and the Studio UI (title + hint + docs link). It also
- * absorbs the former `@lunora/codegen` "solutions" table (see {@link MESSAGE_SOLUTIONS})
- * so codegen build-time errors — which are thrown as plain messages into
- * generated code and lose their class identity before a consumer sees them —
- * keep their message-matched hints.
+ * Only what every runtime needs lives here: the browser client derives its code
+ * set from this table and `LunoraError` reads its status from it, so it ships in
+ * every client bundle. The actionable Markdown fix per code, and the
+ * message-matched solution tables, live in `hints.ts`, which only server-side
+ * renderers (the envelope builder, CLI, overlay, MCP, Studio) import.
  */
 
 /* eslint-disable import/exports-last -- a data + types module: the public error-code types are declared next to the catalog they describe; grouping all exports at the end would scatter the taxonomy. */
 
-/**
- * Canonical Cloudflare support-docs pages for the two platform-error families.
- * Private module constants, referenced by the {@link CLOUDFLARE_PLATFORM_ERRORS}
- * table below.
- */
-const CF_5XX_DOCS = "https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-5xx-errors/";
-const CF_1XXX_DOCS = "https://developers.cloudflare.com/support/troubleshooting/http-status-codes/cloudflare-1xxx-errors/";
-
-/** SQLite phrases `SQLITE_TOOBIG` as "string or blob too big"; D1 surfaces the same text through its own error envelope. */
-const ROW_TOO_BIG_RE = /string or blob too big/iu;
-
-/** Markdown hint: a single string or an array of lines. Shape matches `@visulima/error`'s `hint`. */
-export type ErrorHint = string | ReadonlyArray<string>;
-
 /** A catalog entry: the fixed metadata for one error `code`. */
 export interface ErrorCatalogEntry {
-    /** Optional URL to deeper docs for this error. */
-    docsUrl?: string;
-    /** Optional actionable fix, authored as Markdown (rendered by CLI/overlay/Studio). */
-    hint?: ErrorHint;
-
     /**
      * When `true`, this code's `message` must NOT cross the wire — an internal
      * failure or unhandled invariant may carry SQL fragments, file paths, or
@@ -55,28 +34,36 @@ export interface ErrorCatalogEntry {
  */
 export const ERROR_CATALOG = {
     BAD_REQUEST: { status: 400, title: "Bad request" },
+
+    /**
+     * A page cursor that does not decode: minted by an older build's order (the
+     * engine bumps its cursor prefix whenever a payload would otherwise be read
+     * as the wrong column), or not minted by the server at all. Its own code so a
+     * paginated feed can tell it from any other refusal and restart from page one.
+     */
+    INVALID_CURSOR: { status: 400, title: "Invalid cursor" },
     UNAUTHORIZED: { status: 401, title: "Unauthorized" },
     FORBIDDEN: { status: 403, title: "Forbidden" },
     NOT_FOUND: { status: 404, title: "Not found" },
     SOLE_ORGANIZATION_OWNER: { status: 409, title: "Sole organization owner" },
     YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS: { status: 403, title: "Not allowed to delete users" },
+    /** A payment state change that the subscription's current state does not allow. */
+    INVALID_TRANSITION: { status: 409, title: "Invalid state transition" },
+    DELIVERY_FENCED: {
+        status: 409,
+        title: "Delivery authorization changed",
+    },
+
+    DELIVERY_RECEIPT_FENCED: {
+        status: 409,
+        title: "Committed receipt authorization changed",
+    },
 
     CONFLICT: {
-        hint: [
-            "Another write changed this row while your mutation was running (optimistic concurrency conflict).",
-            "",
-            "Re-read the row and retry the mutation with the fresh value. Lunora serializes a DO's mutations, so a persistent conflict usually means the handler conflicts **with itself** (e.g. a trigger or cascade touching the same row) — split that work rather than adding a retry loop.",
-        ],
         status: 409,
         title: "Conflict",
     },
     NOT_UNIQUE: {
-        hint: [
-            "`.unique()` matched more than one document — it expects the query to identify at most one row.",
-            "",
-            "- If several matches are legitimate, use `.first()` (take one) or `.collect()` (take all) instead.",
-            "- Otherwise tighten the query (e.g. filter on a unique/indexed field) so it can only match one row.",
-        ],
         status: 400,
         title: "Query matched more than one document",
     },
@@ -102,11 +89,6 @@ export const ERROR_CATALOG = {
     MASK_UNSUPPORTED: { status: 422, title: "Aggregation over a masked column is unsupported" },
     RELATION_PREDICATE_UNSUPPORTED: { status: 422, title: "Relation predicate is unsupported in a write policy" },
     RLS_REQUIRED: {
-        hint: [
-            "This table is secure-by-default: it has no `.public()` marker and no RLS policy resolved for the caller, so the read fails closed.",
-            "",
-            "Add a read policy with `.rls(...)`, or mark the table `.public()` if it is intentionally world-readable.",
-        ],
         status: 403,
         title: "RLS policy required",
     },
@@ -124,27 +106,37 @@ export const ERROR_CATALOG = {
      */
     RUN_KIND_FORBIDDEN: { status: 500, title: "Function kind may not be composed from a query" },
     TRANSACTION_LIMIT_EXCEEDED: {
-        hint: [
-            "A single mutation may only read and write a bounded amount before it is stopped.",
-            "",
-            "Narrow the read with an index (`.withIndex(...)`) instead of scanning the table, or split the write across several mutations — for a large backfill use `defineMigration` + `lunora migrate up`, which batches and checkpoints for you.",
-            "",
-            "The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class.",
-        ],
         status: 413,
         title: "Transaction limit exceeded",
     },
     MIGRATION_NOT_FOUND: { status: 404, title: "Data migration not found" },
     /** `@lunora/d1`'s `MigrationRunner` refused to run: an applied migration's SQL changed, or the tracking table cannot say which migrations already ran. */
     MIGRATION_DRIFT: {
-        hint: [
-            "An applied SQL migration is never re-run, so the runner stopped before applying anything.",
-            "",
-            "- **Its text changed after it ran:** revert the edit and put the change in a new migration. If the edit is inert (a comment, whitespace, line endings), record the new hash with the `UPDATE` the message prints.",
-            "- **Tracking rows predate versions and match no migration:** set each row's `version` with the `UPDATE` the message prints, so the runner can tell what already ran.",
-        ],
         status: 409,
         title: "Migration drift",
+    },
+    /** `@lunora/d1`'s `MigrationRunner` refused a pending migration that drops, renames, truncates or replaces without the opt-in comment. */
+    MIGRATION_DESTRUCTIVE: {
+        status: 409,
+        title: "Destructive migration not confirmed",
+    },
+    /** A migration file holds a statement that only the root admin token may run (a DROP, a row write, or a trigger, for a scoped caller). */
+    MIGRATION_ROOT_REQUIRED: { status: 403, title: "Root admin token required for this migration" },
+
+    /**
+     * The SQL migration route has no D1 binding to run files against, so the CLI skips the files. A worker that has a D1
+     * binding but no `applySqlMigrations` option answers `MISCONFIGURED` instead, since skipping would hide the unapplied files.
+     */
+    SQL_MIGRATIONS_NOT_CONFIGURED: { status: 400, title: "SQL migrations not configured" },
+
+    /**
+     * A UNIQUE index cannot be built because existing rows already share its key. The shard refuses user traffic until a later
+     * build succeeds. 503, not 409: the refusal lifts on its own once the rows are repaired, and clients retry or reconnect on a
+     * 5xx but treat a 4xx as final, so a live subscription refused with a 409 never came back.
+     */
+    UNIQUE_INDEX_DUPLICATES: {
+        status: 503,
+        title: "Unique index blocked by duplicate rows",
     },
     UNKNOWN_TABLE: { status: 404, title: "Unknown table" },
     GLOBAL_TABLE_NOT_EDITABLE: { status: 400, title: "Global table is not editable" },
@@ -155,35 +147,46 @@ export const ERROR_CATALOG = {
     SHARD_TIMEOUT: { status: 504, title: "Shard timeout" },
     /** A fan-out shard call answered with a non-2xx status; the status is in the message, the body is not. */
     SHARD_HTTP_ERROR: { status: 502, title: "Shard HTTP error" },
+    /** A shard running an older build cannot check import rows without writing them, so the dry run was refused before sending any. */
+    SHARD_DRY_RUN_UNSUPPORTED: { status: 501, title: "Shard cannot dry-run an import" },
     /** The shard could not write a subscription's attachment to storage, so the subscription was refused. */
     SUBSCRIPTION_PERSIST_FAILED: { status: 500, title: "Subscription persist failed" },
+    /** A subscription's first run threw something other than a deliberate `LunoraError`; the message is redacted. */
+    SUBSCRIPTION_SEED_FAILED: { status: 500, title: "Subscription seed failed" },
     /** A connection asked for more concurrent subscriptions than the shard allows. */
     TOO_MANY_SUBSCRIPTIONS: { status: 429, title: "Too many subscriptions" },
+    /** A live control call arrived after a later one for the same key had already applied. */
+    LIVE_CONTROL_SUPERSEDED: { status: 409, title: "A later live control call already applied" },
     OFFLINE_IDENTITY_CHANGED: { status: 409, title: "Offline identity changed" },
+    /** The offline queue reached `offlineQueue.maxItems`, so its oldest write was dropped. Client-side only. */
+    OFFLINE_QUEUE_OVERFLOW: { status: 503, title: "Offline queue full, oldest write dropped" },
+
+    /**
+     * A mutation sent with `onlineOnly: true` found its connection not live, so it
+     * was refused rather than queued. Nothing was persisted or replayed: to retry,
+     * the caller issues the call again once the connection is back.
+     */
+    OFFLINE_NOT_QUEUED: {
+        status: 503,
+        title: "Offline, write not queued",
+    },
     /** A replayed write named, in `x-lunora-expect-subject`, a different user than the request resolved to. */
     IDENTITY_MISMATCH: {
-        hint: [
-            "A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.",
-            "",
-            "`@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie.",
-        ],
         status: 409,
         title: "Session changed since the write was queued",
     },
 
     /** Package-specific codes. Build-time-only — never cross the RPC wire, so deliberately not `internal`. */
     CODEGEN_DIAGNOSTIC: { status: 500, title: "Codegen diagnostic" },
+    /** Build-time-only (codegen): `lunora.config` would be read as something other than what it says. */
+    PROJECT_CONFIG_INVALID: { status: 500, title: "lunora.config has an unknown key, a mistyped value or no default export" },
     /** Build-time-only (codegen): `.jurisdiction()` would move DO-backed auth to a new, empty object without `{ pinAuth: true }`. */
     JURISDICTION_MOVE: {
-        hint: [
-            "The schema declares `.jurisdiction(...)` and the project has DO-backed auth (`.auth({ namespace })`). Pinning the auth object to the jurisdiction resolves it to a new, empty one: every user, account and session stays in the unpinned object until copied across. Voice sessions are pinned without an acknowledgement: they store nothing, and their transcripts are rows in the already-pinned shards.",
-            "",
-            // eslint-disable-next-line no-secrets/no-secrets -- admin op names, not credentials
-            'Acknowledge with `.jurisdiction("eu", { pinAuth: true })` and deploy, then copy the auth tables across with the `__lunora_admin__:copyAuthToJurisdiction` admin op and, once the counts check out, purge the unpinned copy with `__lunora_admin__:purgeUnpinnedAuth` (see [Pinning auth and voice](/docs/concepts/data-residency#pinning-auth-and-voice)). For D1-mode auth the acknowledgement changes nothing.',
-        ],
         status: 422,
         title: "Unacknowledged jurisdiction move",
     },
+    /** Schema-time only (`defineSchema`): an index names a dotted path. Never crosses the RPC wire. */
+    INDEX_FIELD_NESTED_PATH: { status: 500, title: "Index field is a nested path" },
     /** Build-time-only — never crosses the RPC wire, so deliberately not `internal`. */
     SCHEMA_SNAPSHOT_PARSE: { status: 500, title: "Schema snapshot parse error" },
     /** Runtime-reachable (env.ts): message enumerates failing env key names — redact on the wire. */
@@ -206,11 +209,6 @@ export const ERROR_CATALOG = {
      * offending domain class, never a secret, so it is echoed rather than redacted.
      */
     EMAIL_DOMAIN_BLOCKED: {
-        hint: [
-            "This address's domain is on the disposable/throwaway blocklist (or your configured deny-list).",
-            "",
-            "Sign up with a permanent mailbox. To tune the policy, pass `blockDisposable` / `allowDomains` / `denyDomains` in the `EmailGateConfig` you hand `assertEmailAllowed` / `classifyEmail` / `emailGateMiddleware` (`@lunora/auth/email-guard`).",
-        ],
         status: 400,
         title: "Email domain not allowed",
     },
@@ -221,11 +219,6 @@ export const ERROR_CATALOG = {
      * Client-safe: names only the domain, no secret.
      */
     EMAIL_UNDELIVERABLE: {
-        hint: [
-            "The address's domain publishes no MX (or fallback A/AAAA) records, so it can't receive mail.",
-            "",
-            "Check for a typo in the domain. MX verification is opt-in (`mx: true`) and needs DNS — leave it off on the edge path if DNS is unavailable.",
-        ],
         status: 400,
         title: "Email domain cannot receive mail",
     },
@@ -306,6 +299,10 @@ export const ERROR_CATALOG = {
      * `internal: true` individually, with the reason noted alongside.
      */
     ADMIN_FORBIDDEN: { status: 403, title: "Admin access forbidden" },
+    ADMIN_ROOT_REQUIRED: { status: 403, title: "Root admin token required" },
+    /** A named admin token without the `migrations` scope asked for the SQL migration route. */
+    ADMIN_SCOPE_REQUIRED: { status: 403, title: "Migrations scope required" },
+    ADMIN_TOKEN_EXISTS: { status: 409, title: "Admin token name already in use" },
     ADMIN_TOKEN_NOT_CONFIGURED: { status: 400, title: "Admin token not configured" },
 
     /**
@@ -316,13 +313,6 @@ export const ERROR_CATALOG = {
      * backend detail to leak.
      */
     AUTH_MIGRATOR_UNSUPPORTED: {
-        hint: [
-            "better-auth migrates only through its Kysely adapter, so `ensureMigrated` / `compileMigrationsSql` need the raw D1 binding as `database` — a custom adapter (`lunoraD1Adapter`, `lunoraAuthAdapter`, `lunoraDoAdapter`) cannot be migrated through, and neither can an absent `database`.",
-            "",
-            "Build a SECOND, migration-only instance over the raw binding — `createMigrationAuth({ ...options, database: env.DB })` (from `@lunora/auth/migrate`) — and hand that one to `ensureMigrated`. Keep the adapter on the instance that serves requests: the adapter exists to dodge a dev-runner hang in `$context`, which the migration instance never resolves.",
-            "",
-            "To compile the SQL off-platform (`compileMigrationsSql`), diff against an empty local database — `new DatabaseSync(':memory:')` from `node:sqlite` — rather than passing no `database` at all.",
-        ],
         status: 500,
         title: "Auth migrator cannot drive the configured database",
     },
@@ -337,54 +327,35 @@ export const ERROR_CATALOG = {
      * served, so it carries no backend detail and redacting it would hide the fix.
      */
     AUTH_CIMD_FETCH_NOT_PUBLIC: {
-        hint: 'Add "global_fetch_strictly_public" to "compatibility_flags" in wrangler.jsonc, so CIMD metadata fetches cannot reach private addresses. `lunora doctor` reports it as `cimd-fetch-not-strictly-public`.',
         status: 500,
         title: "CIMD transport needs the global_fetch_strictly_public flag",
     },
     AUTH_MCP_RESOURCE_AMBIGUOUS: {
-        hint: 'Use `mcp` from "@lunora/auth/plugins" (not `@better-auth/mcp`) and pass the plugin object as is: it records its `resource`, which the worker needs to serve the protected-resource metadata when the provider names several resources.',
         status: 500,
         title: "MCP resource cannot be told apart from the provider's other resources",
     },
     AUTH_MCP_RESOURCE_INVALID: {
-        hint: "Pass `resource` to `requireMcpAuth` (and `mcp()`) as the absolute URL of the MCP route, e.g. `https://app.example.com/mcp`: issued tokens are audience-bound to it.",
         status: 500,
         title: "MCP resource missing or not an absolute URL",
     },
     MCP_STEP_UP_MISCONFIGURED: {
-        hint: "Give `createAuthedMcpFetchHandler`'s `stepUp` a non-empty `scope` (such as `lunora:write`) and a `challenge` (`createInsufficientScopeError` from `@lunora/auth/plugins`), or leave `stepUp` out.",
         status: 500,
         title: "MCP step-up misconfigured",
     },
     BACKUP_NOT_CONFIGURED: { status: 500, title: "Scheduled backup not configured" },
     BACKUP_RETENTION_NOT_CONFIGURED: {
-        hint: [
-            "`lunora backup prune` removes snapshots past the retention window, and this worker has no window: set `backupRetain` (how many to keep) and `backupCron` (which decides whose snapshots retention owns) on `createWorker`.",
-            "",
-            "Nothing was deleted. A default is deliberately not invented here — retention deleting on its own is exactly what this command exists to replace.",
-        ],
         status: 400,
         title: "Backup retention window not configured",
     },
     BACKUP_TOO_LARGE: {
-        hint: [
-            "The scheduled backup is assembled inside the Worker isolate, so it caps the snapshot it will build. Nothing was written.",
-            "",
-            "The cap is on the NDJSON, not on peak memory: the export fan-out resolves every shard's rows before the first row is encoded, so a snapshot under the cap can still exhaust the isolate. It is set well below the isolate's limit for that reason.",
-            "",
-            "Narrow the snapshot with `backupTables`, or take this backup off-platform with `lunora backup create --bucket`, which runs on a machine rather than in an isolate. Backing up more often does not help — every run is a full snapshot.",
-        ],
         status: 507,
         title: "Backup too large to assemble in a Worker",
     },
     CRON_JOBS_NOT_CONFIGURED: { status: 400, title: "Cron jobs not configured" },
+    CRON_JOB_IN_FLIGHT: { status: 409, title: "Cron job is already running" },
     CRON_JOB_NOT_FOUND: { status: 404, title: "Cron job not found" },
+    DEPLOYMENT_PAUSED: { status: 503, title: "Deployment is paused" },
     EXPORT_SHARD_FAILED: {
-        hint: [
-            "One or more shards failed to export, so the snapshot would have been short. Nothing is written when this fires — a partial export must never be mistaken for a complete one.",
-            "",
-            "The message names each failed shard key and its error. Re-run the export once those shards are reachable; a shard that fails repeatedly is usually over the per-request memory budget, which `backupTables` narrows.",
-        ],
         status: 502,
         title: "Export failed on one or more shards",
     },
@@ -411,34 +382,21 @@ export const ERROR_CATALOG = {
     FUNCTIONS_NOT_CONFIGURED: { status: 400, title: "Functions registry not configured" },
     GLOBALS_NOT_CONFIGURED: { status: 400, title: "Global-table introspector not configured" },
     ID_COLLISION: {
-        hint: [
-            "The imported row carries an `_id` that is already held by a DIFFERENT table in this shard. Ids are per-table, so inserting it would leave two tables claiming one id and make a later lookup resolve to whichever one it reached first.",
-            "",
-            "This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.",
-        ],
         status: 409,
         title: "Document id already belongs to another table",
     },
     KV_NOT_CONFIGURED: { status: 400, title: "KV introspector not configured" },
     MIGRATION_ID_REQUIRED: { status: 400, title: "Migration id required" },
+    PAUSE_INSTANCES_FAILED: { status: 502, title: "Pause did not reach every scheduler instance" },
+    PAUSE_NOT_CONFIGURED: { status: 400, title: "Deployment pause not configured" },
     PITR_UNAVAILABLE: { status: 409, title: "Point-in-time recovery unavailable" },
     SCHEDULER_NOT_CONFIGURED: { status: 400, title: "Scheduler not configured" },
     STORAGE_CHECKSUM_MISMATCH: {
-        hint: [
-            "The upload body did not match the declared `expectedSize` or `expectedSha256`, so nothing was written — this check fails closed.",
-            "",
-            "Re-read the bytes from the source export and retry the transfer. A persistent mismatch means the source blob is corrupt or truncated; fix the export rather than bypassing the check.",
-        ],
         status: 400,
         title: "Storage checksum mismatch",
     },
     STORAGE_DELETE_NOT_CONFIGURED: { status: 400, title: "Storage delete not configured" },
     STORAGE_DOWNLOAD_NOT_CONFIGURED: {
-        hint: [
-            "`GET /_lunora/admin/storage/object` needs a `storageDownload` function on the worker. The generated app worker wires it up; a hand-written `createWorker({ ... })` has to pass `(key, opts) => pick(opts?.bucket).download(key)` — forwarding `opts.bucket` to the right bucket, and wrapping rather than passing `createStorage(...).download` itself, whose second parameter is a byte range.",
-            "",
-            "Without it a bucket-backed `lunora backup restore --bucket` cannot read the snapshot. The object is still readable out of band with `wrangler r2 object get`.",
-        ],
         status: 400,
         title: "Storage download not configured",
     },
@@ -446,12 +404,8 @@ export const ERROR_CATALOG = {
     STORAGE_OBJECT_NOT_FOUND: { status: 404, title: "Storage object not found" },
     STORAGE_UPLOAD_NOT_CONFIGURED: { status: 400, title: "Storage upload not configured" },
     STORAGE_URL_NOT_CONFIGURED: { status: 400, title: "Storage signed URL not configured" },
+    AI_UNKNOWN_IMAGE_MODEL: { status: 400, title: "Unknown image model" },
     RAG_DIMENSION_MISMATCH: {
-        hint: [
-            "A stored vector and the query embedding have different widths, so they cannot be compared.",
-            "",
-            "This is what changing a RAG index's `embeddingModel` (or a provider's `dimensions` option) without reindexing looks like. Either put the previous model back, or reindex the namespace under the new one — bump `embeddingModelVersion` so the index rebuilds instead of mixing widths.",
-        ],
         status: 409,
         title: "Embedding dimension mismatch",
     },
@@ -472,33 +426,26 @@ export const ERROR_CATALOG = {
 
     /** Copying DO-backed auth into its jurisdiction-pinned object (`__lunora_admin__:copyAuthToJurisdiction` / `purgeUnpinnedAuth`). */
     AUTH_MOVE_NOT_CONFIGURED: {
-        hint: "The copy needs DO-backed auth (`.auth({ namespace })`) pinned with `.jurisdiction(…, { pinAuth: true })`, and the auth object's `internalSecret` set.",
         status: 400,
         title: "Auth jurisdiction move not configured",
     },
     AUTH_MOVE_TARGET_NOT_EMPTY: {
-        hint: "The pinned auth object holds users the copy did not write (someone signed up there), so copying into it would merge two user bases. Pass `force: true` to copy anyway: a copied row that collides with one of the pinned object's rows is left out and counted under `conflicts`.",
         status: 409,
         title: "Pinned auth object is not empty",
     },
     AUTH_MOVE_CONFLICT: {
-        hint: "A copied row has the same key or unique value (such as an email) as a row the pinned auth object holds on its own, or the pinned object changed a row the source changed too. Nothing from that page was written. Pass `force: true` to keep the pinned object's rows and count the collisions under `conflicts`.",
         status: 409,
         title: "Auth copy conflict",
     },
     AUTH_MOVE_SOURCE_CHANGED: {
-        hint: "The un-pinned auth object changed after the copy read it (an update, a delete, or a new row), for example during a gradual rollout or a rollback. Run the copy again: it reconciles the changed tables. Then purge.",
         status: 409,
         title: "Un-pinned auth object changed since the copy",
     },
     AUTH_MOVE_SOURCE_PURGED: {
-        hint: "The un-pinned auth object was already purged. Its tables may exist again (a rollback served requests there), but they hold only rows written since, so the copy refuses rather than read them as deletions and remove the pinned object's users. Nothing is left to copy.",
         status: 409,
         title: "Un-pinned auth object already purged",
     },
     AUTH_MOVE_INCOMPLETE: {
-        // eslint-disable-next-line no-secrets/no-secrets -- an admin op name, not a credential
-        hint: "Run `__lunora_admin__:copyAuthToJurisdiction` until it answers `done: true`, check the per-table counts, then purge.",
         status: 409,
         title: "Auth copy not finished",
     },
@@ -509,7 +456,6 @@ export const ERROR_CATALOG = {
      * the admin caller sees why; the object logs the full error.
      */
     AUTH_MOVE_FAILED: {
-        hint: "The message names the step, the table and the class of the SQLite error; the auth object's log has the full error. The copy resumes where it stopped once the cause is fixed.",
         status: 500,
         title: "Auth jurisdiction move failed",
     },
@@ -538,17 +484,44 @@ export const ERROR_CATALOG = {
     DUPLICATE_MIGRATION_ID: { status: 500, title: "Duplicate migration id" },
     DUPLICATE_QUEUE_BINDING: { status: 500, title: "Duplicate queue binding" },
     DUPLICATE_QUEUE_NAME: { status: 500, title: "Duplicate queue name" },
+    DUPLICATE_ROOM_NAME: { status: 500, title: "Duplicate room name" },
+    ROOM_NAME_NOT_LITERAL: { status: 500, title: "Room name is not a string literal" },
+    DUPLICATE_SOCKET_PATH: { status: 500, title: "Duplicate socket route path" },
+    SOCKET_AUTH_NOT_LITERAL: { status: 500, title: "Socket route auth is not a literal boolean" },
+    SOCKET_PATH_INVALID: { status: 500, title: "Socket route path is not a plain URL path" },
+    SOCKET_PATH_NOT_LITERAL: { status: 500, title: "Socket route path is not a string literal" },
+    LIVE_STREAM_DUPLICATE: { status: 500, title: "Duplicate live stream id or export name" },
+    LIVE_STREAM_NOT_EXPORTED: { status: 500, title: "Live stream is not a named export" },
+    LIVE_STREAM_NOT_LITERAL: { status: 500, title: "Live stream declaration is not a literal" },
+    LIVE_TOPIC_INVALID: { status: 500, title: "Live topic name or key field is not allowed" },
     DUPLICATE_WORKFLOW_CLASS: { status: 500, title: "Duplicate workflow generated class name" },
+    WORKFLOW_EVENT_DUPLICATE: { status: 500, title: "Duplicate workflow event type" },
+    WORKFLOW_EVENT_NOT_LITERAL: { status: 500, title: "Workflow event type is not a string literal" },
     MIGRATION_ID_NOT_STATIC: { status: 500, title: "Migration id is not statically analyzable" },
     NAMESPACE_COLLISION: { status: 500, title: "Function namespace collision" },
+    PUBLISHED_FUNCTION_UNSUPPORTED: { status: 500, title: "Published function cannot be registered from its declaration" },
+    PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN: { status: 500, title: "Published function does not declare its visibility" },
+
+    /**
+     * `procedureMeta(fn)` on a lazily registered stub whose `.meta()` codegen
+     * could not copy. Tooling-side — never crosses the RPC wire — and not
+     * `internal`: the message is fixed text that says how to fix it.
+     */
+    PROCEDURE_META_UNLOADED: { status: 500, title: "Procedure meta is not loaded" },
 
     /**
      * `@lunora/runtime`'s dispatch/security-boundary codes — RPC/HTTP entry, not
      * admin-gated. Fixed, non-sensitive messages throughout, so none are `internal`.
      */
+    /** The studio assistant's stream transport failed. Fixed, safe message — the turn's internals are never echoed to a browser. */
+    AI_CHAT_FAILED: { status: 500, title: "Assistant turn failed" },
     BAD_ROW: { status: 400, title: "Malformed import row" },
     BAD_SUBSCRIPTION_ARGS: { status: 400, title: "Invalid subscription arguments" },
+    /** A subscribe named a table instead of a function on a socket that carries claims; the raw-delta path is not claim-scoped, so it is refused. */
+    SUBSCRIPTION_FUNCTION_REQUIRED: { status: 400, title: "Subscription needs a function path" },
     BATCH_LIMIT_EXCEEDED: { status: 400, title: "Batch limit exceeded" },
+    /** An `onDelete` cascade / `set null` would touch more holder rows than one delete may (`CASCADE_MAX_ROWS` in `@lunora/shard-engine`). */
+    CASCADE_LIMIT: { status: 400, title: "Cascade limit exceeded" },
     CROSS_SHARD_RANK_UNSUPPORTED: { status: 400, title: "Cross-shard rank() is unsupported" },
 
     /**
@@ -563,7 +536,6 @@ export const ERROR_CATALOG = {
      * `@lunora/dispatch`.
      */
     DISPATCH_UNAUTHENTICATED: {
-        hint: "The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.",
         status: 403,
         title: "Dispatch caller not authenticated",
     },
@@ -582,14 +554,21 @@ export const ERROR_CATALOG = {
      * ladder, a queue consumer, a workflow step) must keep retrying it.
      */
     DISPATCH_IN_PROGRESS: {
-        hint: "A dispatch with this idempotency id is still running on the shard. Retry it; once the first attempt settles the same id is served from the replay cache.",
         status: 409,
         title: "Dispatch already in progress",
     },
+    /** A socket re-auth carried a credential older than the one the socket already holds; the socket keeps its newer one. */
+    STALE_CREDENTIAL: { status: 409, title: "Stale credential" },
+    /** A socket re-auth resolved to different claims than the socket was opened with; the client must reconnect to change identity. */
+    IDENTITY_CHANGED: { status: 409, title: "Socket identity changed" },
+    /** A socket re-auth arrived after the socket's revalidation window had passed; the socket is closed and the client must reconnect. */
+    IDENTITY_STALE: { status: 409, title: "Socket identity stale" },
     FORBIDDEN_FANOUT: { status: 403, title: "Fan-out forbidden" },
     GLOBAL_SEARCH_SCORES_UNSUPPORTED: { status: 400, title: "collectWithScores() is unsupported on a global table" },
     FORBIDDEN_ORIGIN: { status: 403, title: "Origin forbidden" },
     FORBIDDEN_SHARD: { status: 403, title: "Shard access forbidden" },
+    FORBIDDEN_TOPIC: { status: 403, title: "Live topic publish forbidden" },
+    GLOBAL_DRY_RUN_UNSUPPORTED: { status: 400, title: "Global table dry run not supported" },
     GLOBAL_NOT_CONFIGURED: { status: 400, title: "Global table import not configured" },
     INVALID_INPUT: { status: 400, title: "Invalid input" },
     /** App catalog: a fetched file could not be read. Internal: the message can carry the upstream's own failure text. */
@@ -696,6 +675,10 @@ export const ERROR_CATALOG = {
     /** A resume below the compacted prefix: the keys survive but their post-images do not, so only a payload consumer (streaming export, replay-PITR, a read replica) is refused. */
     CDC_PAYLOAD_COMPACTED: { status: 409, title: "CDC payloads compacted" },
     EXPIRED: { status: 404, title: "Session expired" },
+    GLOBAL_TRANSACTION_UNSUPPORTED: { status: 500, title: "Global transaction unsupported by driver" },
+    LIVE_CONNECTION_LIMIT: { status: 503, title: "Live connection limit reached" },
+    LIVE_CONNECTION_NOT_FOUND: { status: 404, title: "Live connection not found" },
+    LIVE_STREAMS_UNSUPPORTED: { status: 501, title: "Live streams are not served by this worker" },
     NESTED_TRANSACTION: { internal: true, status: 500, title: "Nested transaction" },
     OUT_OF_ORDER: { status: 409, title: "Out-of-order mutation" },
     SHAPE_GLOBAL_TOO_LARGE: { status: 413, title: "Global shape too large" },
@@ -703,17 +686,15 @@ export const ERROR_CATALOG = {
     SHAPE_REQUIRES_CDC: { status: 409, title: "Shape requires change-data-capture" },
     SQL_UNAVAILABLE: { internal: true, status: 500, title: "SQL storage unavailable" },
     STREAM_ID_IN_USE: { status: 409, title: "Stream id already in use" },
+    STREAM_IDLE: { status: 504, title: "Stream went idle" },
     STREAM_INTERRUPTED: { status: 503, title: "Durable stream interrupted" },
     STREAM_TOO_LONG: { status: 507, title: "Durable stream exceeded its chunk ceiling" },
+    SUBSCRIPTION_RESULT_TOO_LARGE: { status: 413, title: "Subscription result too large" },
     TOKEN_EXPIRED: {
-        hint: [
-            "The caller's credential verified but its expiry has passed. The worker refuses an HTTP call with this code before it runs; a shard drops a socket with close code `4001` and the same code.",
-            "",
-            "It is a refusal of the credential, not of the call: `@lunora/client` holds a queued write, fires `onTokenExpired`, and re-sends it after `setAuthToken`. The held write survives the refresh only if you pass the same `subject` (the user id) with the new token, `setAuthToken(freshToken, user.id)`; without one a refresh reads as a user switch and the write is rejected `OFFLINE_IDENTITY_CHANGED`. Under a cookie session there is no token to replace: renew the cookie and the write is re-sent on a backoff. The worker can only tell expired from anonymous if your `resolveIdentity` returns the identity with its past `exp` (or `expiresAtMs`), or throws a `LunoraError` with this code. Returning `null` runs the call anonymous.",
-        ],
         status: 401,
         title: "Authentication token expired",
     },
+    TOO_MANY_LIVE_TOPICS: { status: 429, title: "Too many live topics" },
     TOO_MANY_STREAMS: { status: 429, title: "Too many streams" },
 
     /**
@@ -723,7 +704,6 @@ export const ERROR_CATALOG = {
      * the wire and not `internal`.
      */
     TOO_MANY_WHISPER_TOPICS: {
-        hint: "Reuse a stable set of whisper topic names, or reconnect — the per-socket verdict memo is in-memory, so a new connection starts empty. Leaving a topic does not free its entry.",
         status: 429,
         title: "Too many whisper topics",
     },
@@ -777,9 +757,21 @@ export const ERROR_CATALOG = {
     BROWSER_TIMEOUT: { status: 504, title: "Browser operation timed out" },
     CLIENT_CLOSED: { status: 400, title: "Client is closed" },
     HTTP_STREAM_BAD_CHUNK: { status: 502, title: "Malformed HTTP stream chunk" },
+    HTTP_STREAM_CALLBACK: { status: 500, title: "HTTP stream callback threw" },
     HTTP_STREAM_INTERRUPTED: { status: 502, title: "HTTP stream interrupted" },
     HTTP_STREAM_MISSING_PARAM: { status: 400, title: "HTTP stream missing path parameter" },
-    HTTP_STREAM_NO_BODY: { status: 502, title: "HTTP stream response has no body" },
+
+    /**
+     * Fires only for a `fetch` whose Response exposes neither a `body` stream
+     * nor a `text()` read — a broken substitute, not a runtime limitation. A
+     * body-less response that can still be read as text (React Native's
+     * `whatwg-fetch`) never reaches this code: `httpStream` buffers it through
+     * `text()` instead.
+     */
+    HTTP_STREAM_NO_BODY: {
+        status: 502,
+        title: "HTTP stream response has no body",
+    },
     HTTP_STREAM_STATUS: { status: 502, title: "HTTP stream request failed" },
     HTTP_STREAM_TRANSPORT: { status: 502, title: "HTTP stream transport error" },
     STREAM_BACKPRESSURE: { status: 429, title: "Stream backpressure" },
@@ -801,11 +793,6 @@ export const ERROR_CATALOG = {
      * status means "that program isn't installed".
      */
     LOCAL_DEPENDENCY_MISSING: {
-        hint: [
-            "The command Lunora tried to run is not on your PATH, so nothing ran.",
-            "",
-            "Install it (or put it on PATH) and retry — `wrangler` ships as a dependency of a Lunora app, so `pnpm install` usually fixes that one; `git` and `docker` are installed separately.",
-        ],
         status: 500,
         title: "Required local tool not found",
     },
@@ -827,7 +814,7 @@ export type LunoraErrorCode = keyof typeof ERROR_CATALOG;
  * read for an inherited key (e.g. `"constructor"`, `"toString"`) would resolve
  * to `Object.prototype`'s member instead of `undefined`, so this uses
  * `Object.hasOwn` to only ever return an own entry. Reused by the
- * `LunoraError` constructor, {@link isInternalCode}, and {@link resolveHint}.
+ * `LunoraError` constructor and {@link isInternalCode}.
  */
 export const getCatalogEntry = (code: string): ErrorCatalogEntry | undefined =>
     Object.hasOwn(ERROR_CATALOG, code) ? (ERROR_CATALOG as Record<string, ErrorCatalogEntry>)[code] : undefined;
@@ -841,512 +828,3 @@ export const getCatalogEntry = (code: string): ErrorCatalogEntry | undefined =>
  * its message is client-safe; an unknown/unregistered code is treated as safe.
  */
 export const isInternalCode = (code: string): boolean => getCatalogEntry(code)?.internal === true;
-
-/**
- * A message-matched solution for errors that reach a consumer without a `code`
- * — chiefly `@lunora/codegen` build errors, which are thrown as plain messages
- * into generated code (and flattened to `{ message }` by the Vite overlay), so
- * the message text is the only stable join key. Ordered most- to least-specific;
- * the first matching rule wins.
- */
-export interface Solution {
-    /** Markdown body shown under the header. */
-    body: string;
-    /** Short header for the solution. */
-    header: string;
-    /** Stable id (used in DEBUG logs and tests). */
-    id: string;
-}
-
-/** A {@link Solution} plus its message matcher. */
-export interface SolutionRule extends Solution {
-    /** True when this rule recognizes the error message. */
-    test: (message: string) => boolean;
-}
-
-/**
- * Message-matched solutions (migrated verbatim from the former
- * `@lunora/codegen` solutions table). Re-exported by `@lunora/codegen` as
- * `LUNORA_SOLUTION_RULES` for backward compatibility.
- */
-export const MESSAGE_SOLUTIONS: ReadonlyArray<SolutionRule> = [
-    {
-        body: [
-            "A single row exceeded the storage engine's per-row ceiling — 2 MB on a Durable Object's SQLite, and 2,000,000 bytes on D1.",
-            "",
-            "The limit is on the STORED bytes, which are UTF-8: a document of multi-byte text (CJK, emoji) costs up to 3x its character count. `v.bytes()` and `v.bigint()` columns cost more again on a shard-local table, where the row stores both a SQL-comparable projection and the original.",
-            "",
-            "Keep the large payload out of the row and store a reference to it:",
-            "",
-            "```ts",
-            // eslint-disable-next-line no-template-curly-in-string -- markdown code sample shown to the developer, not a template literal
-            "const key = `uploads/${crypto.randomUUID()}`;",
-            "await ctx.storage.uploads.put(key, bytes);",
-            'await ctx.db.insert("documents", { storageKey: key, title });',
-            "```",
-            "",
-            "R2 has no practical object-size ceiling, and the row stays small enough to read, index, and replicate.",
-        ].join("\n"),
-        header: "Row too large for the storage engine",
-        id: "lunora-row-too-big",
-        test: (message) => ROW_TOO_BIG_RE.test(message),
-    },
-    {
-        body: [
-            "Lunora codegen couldn't find a schema to generate from.",
-            "",
-            "Create `lunora/schema.ts` exporting a `defineSchema(...)` call:",
-            "",
-            "```ts",
-            'import { defineSchema, defineTable, v } from "@lunora/server";',
-            "",
-            "export default defineSchema({",
-            "  messages: defineTable({ body: v.string() }),",
-            "});",
-            "```",
-            "",
-            "Or run `lunora init` to scaffold Lunora (a sample `lunora/schema.ts` included) into your app.",
-        ].join("\n"),
-        header: "No Lunora schema found",
-        id: "lunora-schema-missing",
-        test: (message) => message.includes("defineSchema() not found") || message.includes("schema.ts not found at"),
-    },
-    {
-        body: [
-            "`defineSchema(...)` must be called with an **inline object literal** mapping table names to `defineTable(...)`:",
-            "",
-            "```ts",
-            "export default defineSchema({",
-            "  todos: defineTable({ title: v.string(), done: v.boolean() }),",
-            "});",
-            "```",
-            "",
-            "Codegen reads the schema statically, so it can't follow a variable or a spread — pass the object literal directly.",
-        ].join("\n"),
-        header: "`defineSchema()` needs an inline object literal",
-        id: "lunora-schema-not-object-literal",
-        test: (message) => message.includes("defineSchema() expects an object literal"),
-    },
-    {
-        body: [
-            "This table name collides with a built-in `ctx.db` member, so the generated client can't expose it.",
-            "",
-            "Rename the table to anything that isn't a `ctx.db` member (the error names the one it hit) — e.g. `userAccounts` instead of `insert`, or `pageViews` instead of `count`.",
-        ].join("\n"),
-        header: "Table name is reserved",
-        id: "lunora-table-reserved",
-        test: (message) => message.includes("is reserved") && message.includes("ctx.db"),
-    },
-    {
-        body: [
-            "Two tables resolve to the same name — usually a base table and a schema **extension** both defining it.",
-            "",
-            "Rename one of them, or drop the duplicate from the extension. Each table name must be unique across `defineSchema(...)` and every `.extend(...)`.",
-        ].join("\n"),
-        header: "Duplicate table name",
-        id: "lunora-table-duplicate",
-        // Anchor on `.extend(` — the only Lunora throw for this is
-        // `defineSchema(...).extend(...): table "x" already exists …`. Matching a
-        // bare "already exists"/"extension" pair would false-positive on
-        // unrelated forwarded errors (e.g. a "file already exists" + "extension").
-        test: (message) => message.includes("already exists") && message.includes(".extend("),
-    },
-    {
-        body: [
-            '`.jurisdiction(...)` accepts only a **string literal** of `"eu"`, `"us"`, or `"fedramp"`:',
-            "",
-            "```ts",
-            'defineSchema({ /* … */ }).jurisdiction("eu");',
-            "```",
-        ].join("\n"),
-        header: "Invalid `.jurisdiction(...)` value",
-        id: "lunora-jurisdiction",
-        test: (message) => message.includes("unknown jurisdiction") || (message.includes("jurisdiction") && message.includes('"eu", "us", or "fedramp"')),
-    },
-    {
-        body: [
-            "The `unique` flag on an index must be a **literal** `true` or `false`, not a computed value — codegen needs to read it statically:",
-            "",
-            "```ts",
-            'defineTable({ email: v.string() }).index("by_email", ["email"], { unique: true });',
-            "```",
-        ].join("\n"),
-        header: "`unique` must be a literal",
-        id: "lunora-unique-literal",
-        test: (message) => message.includes("must be a literal") && message.includes("unique"),
-    },
-    {
-        body: [
-            "A declared container/workflow class isn't re-exported by your worker entry, so `wrangler deploy` would reject it.",
-            "",
-            "Add the generated re-export shown in the error to your worker entry (e.g. `src/index.ts`):",
-            "",
-            "```ts",
-            'export * from "./lunora/_generated/containers";',
-            "```",
-        ].join("\n"),
-        header: "Binding not exported by your worker entry",
-        id: "lunora-worker-entry-export-gap",
-        test: (message) => message.includes("not exported by your worker entry"),
-    },
-    {
-        // Deliberately NOT ERROR_CATALOG.NOT_UNIQUE.hint: that code (and hint)
-        // describes the read-side `.unique()` multi-match, while this matcher
-        // fires on the WRITE-path message ("unique constraint violation on
-        // <table>") thrown as a CONFLICT by an insert/patch breaching a
-        // `unique` index — a different error class needing insert remediation.
-        body: [
-            "A row with the same value already exists in a `unique` index.",
-            "",
-            "- If you meant to upsert, use `ctx.db.<table>().upsert(...)` (or `.patch(...)` an existing row) instead of `.insert(...)`.",
-            '- Otherwise pick a value that isn\'t already taken, and consider surfacing a friendly "already exists" message to the user.',
-        ].join("\n"),
-        header: "Unique constraint violation",
-        id: "lunora-runtime-unique",
-        test: (message) => message.includes("unique constraint violation on"),
-    },
-    {
-        body: ERROR_CATALOG.CONFLICT.hint.join("\n"),
-        header: "Optimistic concurrency conflict",
-        id: "lunora-runtime-occ",
-        test: (message) => message.includes("optimistic concurrency conflict"),
-    },
-];
-
-/**
- * One documented Cloudflare **platform** error — an edge/origin (5xx) or
- * Cloudflare-service (1xxx) failure surfaced in an error *message* rather than
- * thrown by Lunora as a coded `LunoraError`. These reach a Lunora app as
- * plain text: a Worker that fetches a Cloudflare-fronted origin sees `Error 522`,
- * a deploy that throws surfaces as `Error 1101`, and so on. The fields are the
- * curated facts a grounded explainer elaborates on — never invents beyond.
- */
-export interface CloudflarePlatformError {
-    /** Documented likely causes (a short, comma-joined clause). */
-    causes: string;
-    /** The numeric Cloudflare error code, as it appears in the message (e.g. `"522"`, `"1101"`). */
-    code: string;
-    /** Canonical Cloudflare support-docs URL for this error's family. */
-    docsUrl: string;
-    /** Which docs family the code belongs to — shown in the "see docs" line. */
-    family: "1xxx" | "5xx";
-    /** The documented remediation. */
-    fix: string;
-    /** One-line summary of what the code means. */
-    summary: string;
-    /** Cloudflare's short name for the code (e.g. `"Connection timed out"`). */
-    title: string;
-}
-
-/**
- * The curated Cloudflare platform-error table. Sourced from Cloudflare's official
- * support docs — the codes surfaced to app authors on Workers/DO deployments (the
- * origin-connection 52x family and the Worker/DNS/security 1xxx family). `1101`
- * (a Worker threw) and `1102` (a Worker exceeded CPU) are the most Lunora-relevant.
- */
-export const CLOUDFLARE_PLATFORM_ERRORS: ReadonlyArray<CloudflarePlatformError> = [
-    {
-        causes: "the origin returned an empty, unknown, or malformed response Cloudflare couldn't interpret (often an origin crash or an oversized response header)",
-        code: "520",
-        docsUrl: CF_5XX_DOCS,
-        family: "5xx",
-        fix: "check your origin's logs for a crash, ensure it returns a valid HTTP response, and keep response headers under the size limit",
-        summary: "Cloudflare got an unknown/empty response from your origin web server.",
-        title: "Web server returns an unknown error",
-    },
-    {
-        causes: "the origin refused the connection — the web server is down, or a firewall is blocking Cloudflare's IP ranges",
-        code: "521",
-        docsUrl: CF_5XX_DOCS,
-        family: "5xx",
-        fix: "confirm the origin process is running and allowlist Cloudflare's published IP ranges in your firewall/security groups",
-        summary: "Cloudflare could not connect to your origin because it refused the connection.",
-        title: "Web server is down",
-    },
-    {
-        causes: "Cloudflare could not establish a TCP connection to the origin in time — the origin is overloaded, a firewall is dropping packets, or the origin IP is wrong",
-        code: "522",
-        docsUrl: CF_5XX_DOCS,
-        family: "5xx",
-        fix: "verify the origin is reachable and not overloaded, and that the DNS record points at the correct origin IP",
-        summary: "The connection to your origin timed out before it was established.",
-        title: "Connection timed out",
-    },
-    {
-        causes: "Cloudflare cannot route to the origin at all — a bad DNS record, an origin IP that changed, or invalid routing",
-        code: "523",
-        docsUrl: CF_5XX_DOCS,
-        family: "5xx",
-        fix: "verify the DNS A/AAAA record points at a reachable origin IP and that no upstream network is blocking Cloudflare",
-        summary: "Cloudflare could not reach your origin server.",
-        title: "Origin is unreachable",
-    },
-    {
-        causes: "Cloudflare made a TCP connection but the origin did not return an HTTP response within 100 seconds — a slow handler or long-running request",
-        code: "524",
-        docsUrl: CF_5XX_DOCS,
-        family: "5xx",
-        fix: "speed up the slow origin handler, or move long work off the request path into a background job (a Durable Object, Queue, or Workflow)",
-        summary: "Cloudflare connected to your origin but it did not respond in time.",
-        title: "A timeout occurred",
-    },
-    {
-        causes: "the TLS handshake between Cloudflare and the origin failed — a missing/invalid origin certificate, or a cipher/SNI mismatch under Full (Strict) SSL",
-        code: "525",
-        docsUrl: CF_5XX_DOCS,
-        family: "5xx",
-        fix: "install a valid certificate on the origin and align your Cloudflare SSL/TLS mode with the origin's certificate setup",
-        summary: "The SSL handshake with your origin failed.",
-        title: "SSL handshake failed",
-    },
-    {
-        causes: "Cloudflare could not validate the origin's certificate under Full (Strict) SSL — it is expired, self-signed, or issued for the wrong hostname",
-        code: "526",
-        docsUrl: CF_5XX_DOCS,
-        family: "5xx",
-        fix: "install a valid, publicly-trusted certificate on the origin (or use a Cloudflare Origin CA cert), matching the request hostname",
-        summary: "Cloudflare could not validate your origin's SSL certificate.",
-        title: "Invalid SSL certificate",
-    },
-    {
-        causes: "a DNS record points at a Cloudflare IP or another prohibited address instead of your real origin",
-        code: "1000",
-        docsUrl: CF_1XXX_DOCS,
-        family: "1xxx",
-        fix: "point the DNS record at your real origin IP, not a Cloudflare-owned or loopback address",
-        summary: "DNS points to a prohibited IP.",
-        title: "DNS points to prohibited IP",
-    },
-    {
-        causes: "Cloudflare could not resolve the requested hostname — a Worker fetched an unresolvable host, or a DNS record is misconfigured",
-        code: "1001",
-        docsUrl: CF_1XXX_DOCS,
-        family: "1xxx",
-        fix: "check the hostname you're requesting and the DNS records for the zone resolve to a valid origin",
-        summary: "Cloudflare could not resolve the origin DNS.",
-        title: "DNS resolution error",
-    },
-    {
-        causes: "a Worker or DNS record targets a restricted IP (for example a Cloudflare-owned or loopback address)",
-        code: "1002",
-        docsUrl: CF_1XXX_DOCS,
-        family: "1xxx",
-        fix: "change the Worker fetch target or DNS record to a valid, non-restricted origin address",
-        summary: "DNS points to a prohibited IP (Worker/restricted).",
-        title: "DNS points to a prohibited IP",
-    },
-    {
-        causes: "the visitor's IP was blocked by an IP Access Rule, WAF rule, or security configuration on the zone",
-        code: "1006",
-        docsUrl: CF_1XXX_DOCS,
-        family: "1xxx",
-        fix: "review the zone's Firewall/WAF and IP Access Rules to see why the address was banned, and adjust if it was blocked in error",
-        summary: "Access denied: the visitor's IP has been banned.",
-        title: "Access denied: your IP has been banned",
-    },
-    {
-        causes: "your Worker threw an unhandled JavaScript exception during the request",
-        code: "1101",
-        docsUrl: CF_1XXX_DOCS,
-        family: "1xxx",
-        fix: "reproduce with `wrangler tail` (or the Workers Logs / Studio Logs panel) to get the stack trace, then handle the throwing code path",
-        summary: "A Worker threw a JavaScript exception.",
-        title: "Worker threw a JavaScript exception",
-    },
-    {
-        causes: "the Worker used more CPU time than a single invocation is allowed — usually a hot loop or heavy synchronous work",
-        code: "1102",
-        docsUrl: CF_1XXX_DOCS,
-        family: "1xxx",
-        fix: "reduce per-request CPU (optimize hot loops, avoid heavy synchronous work) or offload the heavy work to a Durable Object, Queue, or Workflow",
-        summary: "A Worker exceeded its CPU-time resource limit.",
-        title: "Worker exceeded resource limits",
-    },
-];
-
-/** True when `character` is an ASCII digit — the token boundary both matchers below test. */
-const isDigit = (character: string | undefined): boolean => character !== undefined && character >= "0" && character <= "9";
-
-/**
- * True when `code` appears in `haystack` as a standalone numeric token (not part
- * of a longer number like `5200` or a version `1.1011`). A boundary-checked
- * `indexOf` scan rather than a `RegExp` so no per-code pattern is constructed
- * from a (here trusted, but conventionally avoided) dynamic string.
- */
-const hasStandaloneNumber = (haystack: string, code: string): boolean => {
-    for (let from = haystack.indexOf(code); from !== -1; from = haystack.indexOf(code, from + code.length)) {
-        if (!isDigit(haystack[from - 1]) && !isDigit(haystack[from + code.length])) {
-            return true;
-        }
-    }
-
-    return false;
-};
-
-/**
- * True when `haystack` carries Cloudflare's own `Error <code>` / `Error: <code>`
- * phrasing for `code`, with `code` a whole token.
- *
- * The trailing-digit check matters as much here as in the loose matcher. Without
- * it a plain `includes` matches a longer number by prefix, and the two most common
- * socket errors in the wild collide with real Cloudflare codes: `"Error 10061:
- * connect ECONNREFUSED"` (WSAECONNREFUSED) resolved to `1006` — "your IP has been
- * banned" — and `"Error 10060"` (WSAETIMEDOUT) did the same. The wrong hint then
- * became the wrong grounding facts in the explainer prompt.
- */
-const hasCodePhrase = (haystack: string, code: string): boolean => {
-    for (const phrase of [`error ${code}`, `error: ${code}`]) {
-        for (let from = haystack.indexOf(phrase); from !== -1; from = haystack.indexOf(phrase, from + phrase.length)) {
-            if (!isDigit(haystack[from + phrase.length])) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-};
-
-/**
- * Pre-filter over the RAW message, matching what both passes below require. Its
- * only job is speed: it lets a non-matching message skip the `toLowerCase()`
- * allocation as well as the scans. This table is a fallback on `resolveHint`, so
- * the overwhelmingly common call is a message that matches nothing — scanning it
- * unconditionally regressed the `unmatched message (worst case)` benchmark ~1.7x.
- */
-const CF_PLATFORM_PREFILTER = /error|cloudflare/iu;
-
-/** Render one {@link CloudflarePlatformError} as the {@link Solution} the CLI and the Issue explainer ground in. */
-const cloudflarePlatformSolution = (entry: CloudflarePlatformError): Solution => {
-    return {
-        body: [
-            entry.summary,
-            "",
-            `**Likely cause:** ${entry.causes}.`,
-            "",
-            `**Fix:** ${entry.fix}.`,
-            "",
-            `See [Cloudflare's ${entry.family} error docs](${entry.docsUrl}).`,
-        ].join("\n"),
-        header: `Cloudflare Error ${entry.code}: ${entry.title}`,
-        id: `cloudflare-error-${entry.code}`,
-    };
-};
-
-/**
- * Recognize a Cloudflare platform-error {@link CloudflarePlatformError} in a raw
- * error message, conservatively: the message must carry Cloudflare's own
- * `Error <code>` phrasing, or mention `cloudflare` alongside the standalone
- * code. That keeps a bare number (`expected 520 items`) from false-matching a 5xx
- * code, at the cost of missing a context-free code — the safe trade for a
- * grounded hint. Returns the matched code's {@link Solution}, or `undefined`.
- *
- * Matching runs in two passes, strongest first: Cloudflare's own `Error <code>`
- * phrasing is unambiguous, so it must win over the weaker "mentions cloudflare
- * near some number" heuristic regardless of table order. A single pass let a weak
- * match on an earlier entry beat an explicit match on a later one — `"Cloudflare
- * Error 1102: exceeded after 524 ms"` resolved to 524, and that wrong grounded
- * fix is exactly what the explainer prompt is built from.
- */
-export const findCloudflarePlatformSolution = (message: string): Solution | undefined => {
-    // A message carrying neither word cannot match any code — bail before both
-    // the lowercasing and the per-entry scans.
-    if (!CF_PLATFORM_PREFILTER.test(message)) {
-        return undefined;
-    }
-
-    const lower = message.toLowerCase();
-    const mentionsError = lower.includes("error");
-    const mentionsCloudflare = lower.includes("cloudflare");
-
-    // Pass 1 — Cloudflare's own `Error <code>` phrasing is unambiguous.
-    if (mentionsError) {
-        for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
-            if (hasCodePhrase(lower, entry.code)) {
-                return cloudflarePlatformSolution(entry);
-            }
-        }
-    }
-
-    // Pass 2 — the weaker "mentions cloudflare + a standalone code" heuristic.
-    if (mentionsCloudflare) {
-        for (const entry of CLOUDFLARE_PLATFORM_ERRORS) {
-            if (hasStandaloneNumber(lower, entry.code)) {
-                return cloudflarePlatformSolution(entry);
-            }
-        }
-    }
-
-    return undefined;
-};
-
-/**
- * Flatten a Markdown hint to plain text for a terminal / non-Markdown surface:
- * drop code-fence markers and strip inline `**bold**` / `` `code` `` emphasis.
- * Shared by the CLI renderer and the Studio `ErrorAlert` so the two can't drift.
- */
-export const flattenHint = (hint: ErrorHint): string =>
-    (typeof hint === "string" ? hint : hint.join("\n"))
-        .split("\n")
-        .filter((line) => !line.startsWith("```"))
-        .join("\n")
-        .replaceAll(/\*\*(.+?)\*\*/gu, "$1")
-        .replaceAll(/`([^`]+)`/gu, "$1");
-
-/**
- * Find the first message-matched {@link Solution} for `message`, or `undefined`
- * if none recognize it. Re-exported by `@lunora/codegen` as `findLunoraSolution`.
- */
-export const findSolutionByMessage = (message: string): Solution | undefined => {
-    for (const rule of MESSAGE_SOLUTIONS) {
-        if (rule.test(message)) {
-            return { body: rule.body, header: rule.header, id: rule.id };
-        }
-    }
-
-    return undefined;
-};
-
-/**
- * Find a solution for `message` across BOTH Lunora's own rules and the curated
- * Cloudflare platform-error table — the lookup the Studio Issues panel and the
- * `explainIssue` grounding use.
- *
- * Deliberately separate from {@link findSolutionByMessage} rather than folded into
- * it. That function is on `resolveHint`, and therefore on `toErrorBody` — the
- * envelope builder for every failed request. Most `ERROR_CATALOG` entries
- * carry no `hint`, so folding the platform table in there meant an ordinary
- * `BAD_REQUEST` whose message merely mentioned "cloudflare" near a number shipped
- * zone-configuration guidance ("review the zone's Firewall/WAF and IP Access
- * Rules") to unauthenticated browsers. The same fold put the table on the CLI
- * renderer and the Vite overlay, and on `toErrorBody`'s hot path.
- *
- * Platform errors are operator-facing context for an already-persisted Issue, so
- * the operator-facing surfaces opt in here and the wire path stays Lunora-only.
- */
-export const findIssueSolution = (message: string): Solution | undefined => findSolutionByMessage(message) ?? findCloudflarePlatformSolution(message);
-
-/**
- * Resolve an actionable hint for an error: prefer a hint carried on the error
- * (or its `code`'s catalog entry), then fall back to a message match. Returns
- * `undefined` when nothing recognizes it.
- */
-// eslint-disable-next-line sonarjs/function-return-type -- ErrorHint is intentionally `string | string[]`
-export const resolveHint = (input: { code?: string; hint?: ErrorHint; message?: string } | string): ErrorHint | undefined => {
-    if (typeof input === "string") {
-        return findSolutionByMessage(input)?.body;
-    }
-
-    if (input.hint !== undefined) {
-        return input.hint;
-    }
-
-    if (input.code !== undefined) {
-        const entry: ErrorCatalogEntry | undefined = getCatalogEntry(input.code);
-
-        if (entry?.hint !== undefined) {
-            return entry.hint;
-        }
-    }
-
-    return input.message === undefined ? undefined : findSolutionByMessage(input.message)?.body;
-};

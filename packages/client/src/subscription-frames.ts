@@ -1,4 +1,5 @@
 import type { ConnectionStatus } from "./connection-state";
+import { deferNotification } from "./optimistic-layers";
 import type { SubscriptionState } from "./subscription";
 
 /**
@@ -19,13 +20,16 @@ export const advanceWatermark = (state: SubscriptionState, mutationId: number): 
  * frame does not: its value did not change, so no rows follow.
  */
 export const fanCheckpoints = (state: SubscriptionState, rowsFollow = false): void => {
-    for (const onCheckpoint of state.checkpointCallbacks) {
-        onCheckpoint({
-            checkpoint: state.serverCursor,
-            mutationId: state.lastMutationId,
-            ...(rowsFollow && { rowsFollow: true }),
-        });
-    }
+    const checkpoint = state.serverCursor;
+    const mutationId = state.lastMutationId;
+
+    // Held with the value inside a refresh batch, so a checkpoint listener never reads a
+    // sibling query the batch has not committed yet. Captured now: the batch moves both on.
+    deferNotification(() => {
+        for (const onCheckpoint of state.checkpointCallbacks) {
+            onCheckpoint({ checkpoint, mutationId, ...(rowsFollow && { rowsFollow: true }) });
+        }
+    });
 };
 
 /**
@@ -34,9 +38,13 @@ export const fanCheckpoints = (state: SubscriptionState, rowsFollow = false): vo
  * so this has no effect on subscribers. A cross-tab follower passes the same position the
  * leader does, and it decides which parts apply.
  */
-export const commitDataFrame = (state: SubscriptionState, payload: unknown, position: { cursor?: number; epoch?: string }): void => {
+export const commitDataFrame = (state: SubscriptionState, payload: unknown, position: { claims?: string; cursor?: number; epoch?: string }): void => {
     /* eslint-disable no-param-reassign -- commit the shared subscription state in place */
     state.serverBase = payload;
+    state.serverBaseCommitted = true;
+    state.awaitingSnapshot = false;
+    state.baseIncomplete = false;
+    state.serverClaims = position.claims;
 
     if (position.cursor !== undefined) {
         state.serverCursor = position.cursor;
@@ -47,6 +55,33 @@ export const commitDataFrame = (state: SubscriptionState, payload: unknown, posi
     }
     /* eslint-enable no-param-reassign */
 };
+
+/**
+ * The value to replay to a subscriber that joins `state`: its last value, unless a
+ * `resnapshot` marked that stale and the snapshot replacing it has not landed yet.
+ */
+export const replayableValue = (state: SubscriptionState): unknown => (state.awaitingSnapshot === true ? undefined : state.lastValue);
+
+/**
+ * Whether a full data frame is an older snapshot than the one already applied. A re-sent
+ * `subscribe` can leave two seeds of one subscription running, and the older may land last.
+ * Only the same epoch is comparable, and only against a value this subscription holds: a
+ * cursor that a `settled` frame advanced before any value arrived says nothing about it.
+ */
+export const isStaleDataFrame = (state: SubscriptionState, position: { cursor?: number; epoch?: string }): boolean =>
+    position.cursor !== undefined &&
+    state.serverCursor !== undefined &&
+    (state.serverBase !== undefined || state.serverBaseCommitted === true) &&
+    position.epoch !== undefined &&
+    position.epoch === state.serverEpoch &&
+    position.cursor < state.serverCursor;
+
+/**
+ * Whether a frame is a non-final frame of a delta run. The server marks every frame of a run
+ * but the last with `more: true`; the run is applied when its last frame arrives. A
+ * standalone legacy `broadcastDelta` frame carries no flag, so it is applied on arrival.
+ */
+export const isNonFinalRunFrame = (message: { more?: boolean; type: string }): boolean => message.type === "delta" && message.more === true;
 
 /**
  * Whether a cross-tab frame was stamped for another identity. A frame with no stamp

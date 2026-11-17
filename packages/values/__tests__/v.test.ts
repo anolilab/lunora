@@ -2,7 +2,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { describe, expect, it } from "vitest";
 
 import type { Id, Infer } from "../src/index";
-import { isOrWrapsFromValidator, v, ValidationError } from "../src/index";
+import { isOrWrapsFromValidator, isStringValidator, v, ValidationError } from "../src/index";
 import type { Assert, Equal } from "./__helpers__/type-assert";
 
 const assertOk: (condition: unknown, message: string) => asserts condition = (condition, message) => {
@@ -849,6 +849,46 @@ describe("v.union() edge cases", () => {
         expect(plain.error.received).toBe('string "Draft"');
     });
 
+    it("a nullable literal member still accepts null", () => {
+        expect.assertions(2);
+
+        const schema = v.union(v.literal("a"), v.literal("b").nullable());
+
+        expect(schema.parse(null)).toBeNull();
+        expect(schema.parse("b")).toBe("b");
+    });
+
+    it("a refined literal member still runs its refinement", () => {
+        expect.assertions(2);
+
+        const schema = v.union(
+            v.literal("a").check(() => false, "never"),
+            v.string(),
+        );
+
+        // The refined member is tried first and fails its check, so the string branch wins.
+        expect(schema.parse("a")).toBe("a");
+        expect(() =>
+            v
+                .union(
+                    v.literal("a").check(() => false, "never"),
+                    v.literal("b"),
+                )
+                .parse("a"),
+        ).toThrow(ValidationError);
+    });
+
+    it("an all-literal union miss keeps its full diagnostic", () => {
+        expect.hasAssertions();
+
+        const result = v.union(v.literal("admin"), v.literal("user"), v.literal("guest")).safeParse("root");
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.message).toBe('Expected union of 3 member(s) (closest: expected literal(admin) at <root>) at <root>, received string "root"');
+        expect(result.error.expected).toBe("union of 3 member(s) (closest: expected literal(admin) at <root>)");
+    });
+
     it("a single-member union accepts a valid value", () => {
         expect.assertions(1);
 
@@ -1017,5 +1057,45 @@ describe("v.partial", () => {
         expect(doneCheck).toBe(true);
         expect(empty).toStrictEqual({});
         expect(some).toStrictEqual({ title: "a" });
+    });
+});
+
+describe("isStringValidator", () => {
+    it("is true only when every accepted value is a string", () => {
+        expect.assertions(9);
+
+        expect(isStringValidator(v.string())).toBe(true);
+        expect(isStringValidator(v.id("posts"))).toBe(true);
+        expect(isStringValidator(v.literal("a"))).toBe(true);
+        expect(isStringValidator(v.union(v.literal("a"), v.string()))).toBe(true);
+        expect(isStringValidator(v.literal(1))).toBe(false);
+        expect(isStringValidator(v.union(v.literal("a"), v.literal(2)))).toBe(false);
+        expect(isStringValidator(v.number())).toBe(false);
+        expect(isStringValidator(v.optional(v.string()))).toBe(false);
+        expect(isStringValidator(v.union(v.string(), v.number()))).toBe(false);
+    });
+});
+
+describe("rejectUnknownKeys diagnostics", () => {
+    it("names every undeclared key in input order, at the object's path", () => {
+        expect.hasAssertions();
+
+        const schema = v.object({ inner: v.object({ a: v.string(), b: v.number() }) });
+        const result = schema.safeParse({ inner: { a: "x", b: 1, zeta: 1, alpha: 2 } }, { rejectUnknownKeys: true });
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.message).toBe(
+            "object has 2 undeclared key(s): zeta, alpha. Add them to the validator, or call .strip() on it to drop them on purpose.",
+        );
+        expect(result.error.expected).toBe("only the declared keys (a, b)");
+        expect(result.error.received).toBe("zeta, alpha");
+        expect(result.error.path).toStrictEqual(["inner"]);
+    });
+
+    it("accepts an input carrying only declared keys", () => {
+        expect.assertions(1);
+
+        expect(v.object({ a: v.string(), b: v.optional(v.number()) }).parse({ a: "x" }, { rejectUnknownKeys: true })).toStrictEqual({ a: "x" });
     });
 });

@@ -87,7 +87,7 @@ export const claimInstall = internalMutation
                 return { busy: true };
             }
 
-            await context.db.delete(holder._id);
+            await context.db.delete("catalogInstalls", holder._id);
         }
 
         try {
@@ -113,16 +113,16 @@ export const claimInstall = internalMutation
 export const finishInstall = internalMutation
     .input({ deploymentId: boundedString(LIMITS.id), installId: v.id("catalogInstalls") })
     .mutation(async ({ ctx: context, args: { deploymentId, installId } }): Promise<void> => {
-        const row = await context.db.get(installId);
+        const row = await context.db.get("catalogInstalls", installId);
 
         if (row?.status !== "installing") {
             throw new LunoraError("CONFLICT", "no install is in progress for this claim");
         }
 
         // A live row keys on its own install id, so no claim on the project can match it.
-        await context.db.patch(installId, { activeKey: `live:${installId}`, deploymentId, status: "live" });
+        await context.db.patch("catalogInstalls", installId, { activeKey: `live:${installId}`, deploymentId, status: "live" });
         // Keep the install's provenance on its release, so a rollback back onto it can show the badge again.
-        await context.db.patch(deploymentId as Id<"deployments">, {
+        await context.db.patch("deployments", deploymentId as Id<"deployments">, {
             catalogInstalledBy: row.installedBy,
             catalogSlug: row.slug,
             catalogVersion: row.version,
@@ -134,7 +134,7 @@ export const finishInstall = internalMutation
         for (const other of rows) {
             if (other._id !== installId && other.status === "live") {
                 // eslint-disable-next-line no-await-in-loop -- a handful of superseded releases per project
-                await context.db.delete(other._id);
+                await context.db.delete("catalogInstalls", other._id);
             }
         }
     });
@@ -153,7 +153,7 @@ const CLAIM_FENCE_MARGIN_MS = 5 * 60 * 1000;
  * within the fence margin of its lease's end is treated as lost.
  */
 export const holdsClaim = internalQuery.input({ installId: v.id("catalogInstalls") }).query(async ({ ctx: context, args: { installId } }): Promise<boolean> => {
-    const row = await context.db.get(installId);
+    const row = await context.db.get("catalogInstalls", installId);
 
     return row?.status === "installing" && context.now - row.createdAt < RELEASE_LEASE_MS - CLAIM_FENCE_MARGIN_MS;
 });
@@ -185,7 +185,7 @@ export const advanceIndexState = internalMutation
             }
 
             if (args.issuedAt > row.issuedAt) {
-                await context.db.patch(row._id, { issuedAt: args.issuedAt, keyId: args.keyId, updatedAt: context.now });
+                await context.db.patch("catalogIndexState", row._id, { issuedAt: args.issuedAt, keyId: args.keyId, updatedAt: context.now });
             }
 
             return { accepted: true };
@@ -217,9 +217,9 @@ export const advanceIndexState = internalMutation
 export const abandonInstall = internalMutation
     .input({ installId: v.id("catalogInstalls") })
     .mutation(async ({ ctx: context, args: { installId } }): Promise<void> => {
-        const row = await context.db.get(installId);
+        const row = await context.db.get("catalogInstalls", installId);
 
         if (row?.status === "installing") {
-            await context.db.delete(installId);
+            await context.db.delete("catalogInstalls", installId);
         }
     });

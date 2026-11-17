@@ -32,8 +32,9 @@ class LunoraPaymentError extends LunoraError {
     // Narrow the inherited `code` to the payment taxonomy (base sets it).
     declare public readonly code: PaymentErrorCode;
 
-    public constructor(code: PaymentErrorCode, message: string) {
-        super(code, message, { name: "LunoraPaymentError", status: STATUS_BY_CODE[code] });
+    /** `cause` keeps a failure for the operator's logs. It is never part of the message a caller receives. */
+    public constructor(code: PaymentErrorCode, message: string, options: { cause?: unknown } = {}) {
+        super(code, message, { name: "LunoraPaymentError", status: STATUS_BY_CODE[code], cause: options.cause });
     }
 }
 

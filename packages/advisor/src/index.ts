@@ -37,6 +37,7 @@ import containerPublicInternet from "./lints/static/container-public-internet";
 import containerRuntimeEgressRelaxation from "./lints/static/container-runtime-egress-relaxation";
 import containerStartEnableInternetOverride from "./lints/static/container-start-enable-internet-override";
 import countWithoutIndex from "./lints/static/count-without-index";
+import cronEveryMinute from "./lints/static/cron-every-minute";
 import crossModuleTableWrite from "./lints/static/cross-module-table-write";
 import dispatchCycle from "./lints/static/dispatch-cycle";
 import duplicateIndex from "./lints/static/duplicate-index";
@@ -75,6 +76,7 @@ import nondeterministicQueryMutation from "./lints/static/nondeterministic-query
 import normalizeIdUsedAsAuthorization from "./lints/static/normalize-id-used-as-authorization";
 import notifyMissingPushConfig from "./lints/static/notify-missing-push-config";
 import notifySendOutsideAction from "./lints/static/notify-send-outside-action";
+import openShardAccess from "./lints/static/open-shard-access";
 import outputProjectionMissingOnPublicRead from "./lints/static/output-projection-missing-on-public-read";
 import ownerFieldFromArgsNotAuth from "./lints/static/owner-field-from-args-not-auth";
 import paymentCreateWithoutAuthorize from "./lints/static/payment-create-without-authorize";
@@ -150,6 +152,7 @@ export type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 export type { AdvisorContainerOverride } from "./container-overrides";
 export type { AdvisorContainer } from "./containers";
 export type { AdvisorCountRead } from "./counts";
+export type { AdvisorCron } from "./crons";
 export { dedupeCacheKeys } from "./dedupe-cache-keys";
 export type { AdvisorExportSink } from "./export-sinks";
 export type { AdvisorFailOpenGuard } from "./fail-open-guards";
@@ -193,6 +196,7 @@ export { default as containerPublicInternet } from "./lints/static/container-pub
 export { default as containerRuntimeEgressRelaxation } from "./lints/static/container-runtime-egress-relaxation";
 export { default as containerStartEnableInternetOverride } from "./lints/static/container-start-enable-internet-override";
 export { default as countWithoutIndex } from "./lints/static/count-without-index";
+export { default as cronEveryMinute } from "./lints/static/cron-every-minute";
 export { default as crossModuleTableWrite } from "./lints/static/cross-module-table-write";
 export { default as dispatchCycle } from "./lints/static/dispatch-cycle";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
@@ -230,6 +234,7 @@ export { default as nondeterministicQueryMutation } from "./lints/static/nondete
 export { default as normalizeIdUsedAsAuthorization } from "./lints/static/normalize-id-used-as-authorization";
 export { default as notifyMissingPushConfig } from "./lints/static/notify-missing-push-config";
 export { default as notifySendOutsideAction } from "./lints/static/notify-send-outside-action";
+export { default as openShardAccess } from "./lints/static/open-shard-access";
 export { default as outputProjectionMissingOnPublicRead } from "./lints/static/output-projection-missing-on-public-read";
 export { default as ownerFieldFromArgsNotAuth } from "./lints/static/owner-field-from-args-not-auth";
 export { default as paymentCreateWithoutAuthorize } from "./lints/static/payment-create-without-authorize";
@@ -296,12 +301,13 @@ export type { AdvisorMutatorWrite } from "./mutator-writes";
 export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 export type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 export type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
+export type { AdvisorOpenShardAccess } from "./open-shard-access";
 export type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 export type { AdvisorPaymentWebhook } from "./payment-webhooks";
 export type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
-export type { AdvisorProcedureProtection } from "./procedure-protections";
+export type { AdvisorProcedureDocument, AdvisorProcedureProtection } from "./procedure-protections";
 export type { AdvisorQueryRead } from "./queries";
-export type { AdvisorQueue, AdvisorQueueTuning } from "./queues";
+export type { AdvisorQueue, AdvisorQueueTuning, AdvisorTopic } from "./queues";
 export type { AdvisorR2sqlCall } from "./r2sql-calls";
 export type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 export type { AdvisorRawRowReturn } from "./raw-row-returns";
@@ -359,6 +365,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     workflowUnused,
     queueDispatchCycle,
     queueWithoutDlq,
+    cronEveryMinute,
     topicTooManySubscriptions,
     filterOnPrimaryKey,
     filterWithoutIndex,
@@ -423,6 +430,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     ratelimitKeySpoofableOrGlobal,
     publicTableRlsOptoutConfusion,
     allowUnauthenticatedShardAccessEnabled,
+    openShardAccess,
     storageUploadWithoutContentTypeAllowlist,
     storageUploadWithoutMaxSize,
     storageGenerateUploadUrlNoContentTypePin,
@@ -480,7 +488,25 @@ export const runAdvisor = (context: LintContext, options: RunAdvisorOptions = {}
             continue;
         }
 
-        findings.push(...lint.run(context));
+        // One throwing rule must not end the codegen run in dev watch and the deploy
+        // preflight. The failure finding keeps the lint's level so a strict deploy
+        // still fails closed, as it did when the throw escaped.
+        try {
+            findings.push(...lint.run(context));
+        } catch (error) {
+            findings.push({
+                cacheKey: `advisor_lint_failed:${lint.name}`,
+                categories: lint.categories,
+                description: "An advisor lint threw while running, so its check did not run. This is a bug in the lint, not in your app.",
+                detail: `The \`${lint.name}\` lint threw: ${error instanceof Error ? error.message : String(error)}. Its findings are missing from this run.`,
+                facing: "INTERNAL",
+                level: lint.level,
+                metadata: { lint: lint.name },
+                name: "advisor_lint_failed",
+                remediation: "Report the error with the source shape that triggered it. Pass `--no-strict-advisories` to deploy past it in the meantime.",
+                title: `Advisor lint \`${lint.name}\` failed`,
+            });
+        }
     }
 
     // Any two findings that share a `cacheKey` (e.g. two file:line-keyed sinks on

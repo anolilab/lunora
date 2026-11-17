@@ -136,6 +136,22 @@ describe("createFlags", () => {
         expect(provider.contexts[0]).toMatchObject({ plan: "premium", targetingKey: "user-123" });
     });
 
+    it("does not call the targetingKey thunk until a flag is evaluated", async () => {
+        expect.assertions(3);
+
+        const provider = makeProvider({ "dark-mode": true, other: true });
+        const thunk = vi.fn<() => string>(() => "user-123");
+        const flags = createFlags(definition, env, { provider: () => provider, targetingKey: thunk });
+
+        expect(thunk).not.toHaveBeenCalled();
+
+        await flags.boolean("dark-mode", false);
+        await flags.boolean("other", false);
+
+        expect(thunk).toHaveBeenCalledTimes(1);
+        expect(provider.contexts[0]?.targetingKey).toBe("user-123");
+    });
+
     it("fails open to no targetingKey when the thunk throws (a buggy identify)", async () => {
         expect.assertions(2);
 

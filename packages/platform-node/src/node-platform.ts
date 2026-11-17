@@ -17,6 +17,7 @@ import { LunoraError } from "@lunora/errors";
 import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
+import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
 import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-route";
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
@@ -34,6 +35,39 @@ import { createNodeSocketHost } from "./node-socket-host";
 import type { NodeWorkflowHost } from "./node-workflow-host";
 import { createNodeWorkflowHost } from "./node-workflow-host";
 import { createNodeWorkflowStore } from "./node-workflow-store";
+
+/** The shard a request or job without a `shardKey` runs on; the dispatch route and the due-job delivery both default to it. */
+const DEFAULT_SHARD_KEY = "__root__";
+
+/**
+ * Deliver a due job to the shard through `invoke`, carrying its due time so the shard can record
+ * scheduler lag. A non-2xx marks the delivery failed, which re-arms it with backoff.
+ */
+export const createJobDelivery =
+    (invoke: ReturnType<typeof createShardInvoke>, shardKey: string): NonNullable<NodeSchedulerHostOptions["onDispatch"]> =>
+    async (functionPath, args, job) => {
+        // The route refuses an agent run off the default shard; a due job reaches the shard directly, so the same check applies here.
+        if (isAgentRunOffDefaultShard(functionPath, shardKey, DEFAULT_SHARD_KEY)) {
+            throw new LunoraError("BAD_REQUEST", AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE);
+        }
+
+        const response = await invoke({
+            args,
+            functionPath,
+            id: job.id,
+            identity: undefined,
+            scheduledFor: job.scheduledFor,
+            shardKey,
+            traceparent: undefined,
+        });
+
+        if (!response.ok) {
+            throw new LunoraError(
+                "SERVICE_UNAVAILABLE",
+                `@lunora/platform-node: scheduled job ${functionPath} was refused with status ${String(response.status)}`,
+            );
+        }
+    };
 
 /** Every contract this package provides, composed for one Node process. */
 export interface NodePlatform<
@@ -81,8 +115,8 @@ export interface NodePlatform<
      * The scheduler dispatch route, served in-process: `Request` in, shard
      * response out, no listener. It answers the path `@lunora/dispatch` and
      * `@lunora/scheduler` POST to. Pass it to `dispatchQueueBatch` as
-     * `fetchImpl` so a queue handler's `message.run` / `ctx.run` reaches the
-     * shard; the env you pass there must carry `LUNORA_ORIGIN_URL` and the same
+     * `queueFetchImpl` on `createWorker` so a queue handler's `message.run` /
+     * `ctx.run` reaches the shard; the env you pass there must carry `LUNORA_ORIGIN_URL` and the same
      * `LUNORA_ADMIN_TOKEN` as `dispatch.adminToken`. Every request is refused
      * unless `dispatch` supplies a secret.
      */
@@ -200,9 +234,12 @@ export type NodePlatformOptions<
     objectStorageDirectory?: string;
 
     /**
-     * Deliver one assembled queue batch — wire this to `dispatchQueueBatch`.
-     * Required alongside `queues`; without it the messages would be stored
-     * and never consumed.
+     * Deliver one assembled queue batch — wire this to the app worker's `queue`
+     * export from `createWorker`, not to bare `dispatchQueueBatch`. That export
+     * is the only path that hands the consumer `ctx.live`, and it takes
+     * `queueFetchImpl` (this platform's `dispatch`, wrapped as a `fetch`) so
+     * `ctx.run` reaches the shard here rather than `LUNORA_ORIGIN_URL`. Required
+     * alongside `queues`; without it the messages would be stored and never consumed.
      */
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
     /** The app's `defineQueue` results, keyed by export name. Omit when the app declares no queues. */
@@ -243,14 +280,21 @@ export const createNodePlatform = <
 
         // In-process: the route's `invoke` reaches the shard through the same
         // directory the fan-out coordinator uses, so no listener is involved.
+        const invoke = createShardInvoke(directory, options.onFetch !== undefined);
         const dispatch = createNodeDispatchRoute({
             adminToken: options.dispatch?.adminToken,
             defaultShardKey: "__root__",
-            invoke: createShardInvoke(directory, options.onFetch !== undefined),
+            invoke,
             schedulerSecret: options.dispatch?.schedulerSecret,
         });
+
+        // A due job reaches the shard through the same `invoke` the route uses, carrying its due
+        // time so the shard can record scheduler lag. An embedder's own `onDispatch` replaces this
+        // outright, so a job is never delivered twice. Without `onFetch` there is no shard handler
+        // to run it, and the host keeps its old behaviour of completing the delivery.
+        const deliverJob = options.onFetch === undefined ? undefined : createJobDelivery(invoke, options.shardKey ?? "__root__");
+        const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, { ...options, onDispatch: options.onDispatch ?? deliverJob });
         const { socket: sockets } = createNodeSocketHost(database);
-        const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, options);
 
         teardown.push(disposeScheduler);
 
@@ -272,7 +316,7 @@ export const createNodePlatform = <
                           (() => {
                               throw new LunoraError(
                                   "VALIDATION_ERROR",
-                                  "@lunora/platform-node: createNodePlatform was given `queues` without `onQueueBatch`, so a delivered batch has nowhere to go — pass dispatchQueueBatch from @lunora/queue",
+                                  "@lunora/platform-node: createNodePlatform was given `queues` without `onQueueBatch`, so a delivered batch has nowhere to go — pass the worker's queue export from createWorker",
                               );
                           }),
                       queues: options.queues,

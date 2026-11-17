@@ -137,7 +137,7 @@ export const ingest = mutation
         // tenant can attribute its rows to another org's deployment. Reads stay
         // org-scoped either way; what breaks is per-deployment attribution.
         if (args.deploymentId !== undefined) {
-            await assertRowInOrg(context, args.deploymentId, args.organizationId, "deployment");
+            await assertRowInOrg(context, "deployments", args.deploymentId, args.organizationId, "deployment");
         }
 
         const { now } = context;
@@ -201,7 +201,7 @@ export const prune = internalMutation.mutation(async ({ ctx: context }): Promise
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-        await context.db.delete(row._id);
+        await context.db.delete("metricPoints", row._id);
     }
 
     return { pruned: stale.length };

@@ -17,8 +17,13 @@ export interface CronJobIR {
     args: Record<string, unknown>;
     /** Compiled standard cron expression, e.g. `"0 9 * * *"`. */
     cron: string;
+    /** Lunora-relative module of the `cronJobs()` registration, without extension. */
+    file?: string;
     /** Target function ref `namespace:fn`. Present for a function target; absent when {@link CronJobIR.workflow} is set. */
     functionPath?: string;
+
+    /** 1-based start line of the statement registering the job, without leading comments. */
+    line?: number;
     /** Unique, human-readable job name. */
     name: string;
 
@@ -34,7 +39,9 @@ export interface CronJobIR {
 
 /** A normalized container image source, as written into `wrangler.jsonc`. */
 export type ContainerImageIR =
-    { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
+    | { buildContext: string; dockerfilePath: string; kind: "dockerfile" }
+    | { buildDir: string; kind: "build" }
+    | { kind: "registry"; reference: string };
 
 /** A `durable_object` container's named image — a Dockerfile or a registry digest, never a Railpack build. */
 export type ContainerNamedImageIR = Exclude<ContainerImageIR, { kind: "build" }>;
@@ -57,13 +64,20 @@ export interface ContainerIRBase {
     /** The `lunora/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
 
+    /** Lunora-relative module of the declaration, without extension: always `containers`. */
+    file?: string;
+
     /**
      * The static `hardTimeout` value, when it was a literal. It caps total lifetime,
      * so it also bounds how long an idle instance can run. Lifted for the advisor.
      */
     hardTimeout?: number | string;
+
     /** Static `instanceType`, when declared (the default size, under `durable_object`). */
     instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
+
+    /** 1-based start line of the `export const` declaring the container, without leading comments. */
+    line?: number;
 
     /** Static wrangler `containers[].name` override, when declared. */
     name?: string;
@@ -138,6 +152,9 @@ export interface WorkflowIR {
     /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
 
+    /** Lunora-relative module of the `defineWorkflow()` export, without extension. */
+    file?: string;
+
     /**
      * The file declaring the `handler:` when it is a function passed by reference
      * and declared in another file — the file {@link WorkflowIR.steps}' lines are
@@ -146,8 +163,12 @@ export interface WorkflowIR {
     handlerFile?: string;
     /** See {@link HandlerSiteIR}. */
     handlerSite?: HandlerSiteIR;
+
     /** Static `limits` literal → `exports.<Class>.limits`. */
     limits?: { steps?: number };
+
+    /** 1-based start line of the `export const` declaring the workflow, without leading comments. */
+    line?: number;
 
     /**
      * The stable wrangler `exports.<Class>.name`. Defaults to the kebab-cased export
@@ -267,6 +288,9 @@ export interface QueueIR {
 
     /** See {@link HandlerSiteIR}. */
     handlerSite?: HandlerSiteIR;
+    /** 1-based start line of the `export const` declaring the queue or subscription, without leading comments. */
+    line?: number;
+
     /** How the queue is consumed: `"push"` (a worker `queue()` handler) or `"pull"` (external HTTP). */
     mode: "pull" | "push";
 
@@ -304,6 +328,8 @@ export interface TopicIR {
     exportName: string;
     /** The declaring file, as {@link QueueIR.filePath}. */
     filePath: string;
+    /** 1-based start line of the `defineTopic(...)` statement, when recorded. */
+    line?: number;
 }
 
 /** The queues published to through `ctx.queues` — every queue except a topic subscription. */
@@ -525,6 +551,8 @@ export interface AdminRouteIR {
     exportName: string;
     /** Source file relative to `<projectRoot>/lunora/`, without extension. */
     file: string;
+    /** 1-based start line of the declaring statement (the `export const`), without leading comments. */
+    line?: number;
     /** HTTP verb the route binds to (uppercased), e.g. `"POST"`. */
     method: string;
     /** The route path, e.g. `/admin/users`. */
@@ -549,6 +577,8 @@ export interface WranglerVariableIR {
     key: string;
     /** Heuristic that matched, e.g. `stripe_live_key` / `private_key` / `secret_named_var`. */
     kind: string;
+    /** 1-based line of the key inside the `wrangler.jsonc` file, when the reader could locate it. */
+    line?: number;
     /** Redacted preview of the value (first few chars + length) for the finding detail — never the full secret. */
     preview: string;
 }
@@ -575,4 +605,36 @@ export interface ProjectIR {
     httpRoutes: ReadonlyArray<HttpRouteIR>;
     migrations: ReadonlyArray<MigrationIR>;
     schema: SchemaIR;
+}
+
+/**
+ * A `defineLiveStream` export, read from its literals. Codegen needs only the names: the
+ * payload and key TYPES come from inference over the declaration, so no validator is lowered.
+ */
+export interface LiveStreamIR {
+    /** The export name, which is also the key under `live` in `_generated/live.ts`. */
+    exportName: string;
+    /** The declaring file, lunora-relative without `.ts`. */
+    filePath: string;
+    /** The literal `id`, which names the stream's routes and scopes its subscriptions. */
+    id: string;
+    /** The declared topics in declaration order. */
+    topics: ReadonlyArray<LiveTopicIR>;
+}
+
+/** One exported `defineWorkflowEvent(type, payload)` — what the admin `sendWorkflowEvent` RPC validates a payload against. */
+export interface WorkflowEventIR {
+    /** The export name the generated shard imports. */
+    exportName: string;
+    /** The declaring file, lunora-relative without `.ts`. */
+    filePath: string;
+    /** The literal wire type, exactly as written (never trimmed). */
+    type: string;
+}
+
+/** One topic of a {@link LiveStreamIR}. */
+export interface LiveTopicIR {
+    /** The key fields in DECLARED order: the generated encoder lays segments out in this order, never the caller's. Empty for a keyless topic. */
+    fields: ReadonlyArray<string>;
+    name: string;
 }

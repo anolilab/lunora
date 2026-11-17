@@ -5,6 +5,7 @@ import { withX402 } from "../src/charge/http-action";
 import { createChargeMiddleware } from "../src/charge/middleware";
 
 const chargeConfig = {
+    facilitator: { url: "https://facilitator.example/x402" },
     network: "base",
     price: "$0.01",
     recipient: { evm: "0x1111111111111111111111111111111111111111" },

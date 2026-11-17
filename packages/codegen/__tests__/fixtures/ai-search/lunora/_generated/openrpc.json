@@ -112,6 +112,20 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "search:ask",
@@ -254,6 +268,20 @@
             "code": "VALIDATION_ERROR"
           },
           "message": "VALIDATION_ERROR"
+        },
+        {
+          "code": -32015,
+          "data": {
+            "code": "UNIQUE_INDEX_DUPLICATES"
+          },
+          "message": "UNIQUE_INDEX_DUPLICATES"
+        },
+        {
+          "code": -32016,
+          "data": {
+            "code": "INVALID_CURSOR"
+          },
+          "message": "INVALID_CURSOR"
         }
       ],
       "name": "search:count",

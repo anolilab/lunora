@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
 
+import type { DiscoveryCache } from "@lunora/config";
 import { lunoraLine } from "@lunora/config";
 import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { assertWranglerSatisfiesSchema, findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 import type { Plugin } from "vite";
 
+import { oncePerBuildSync } from "./build-session";
 import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Mirrors the config-layer heuristic: a container image that is a local path. */
@@ -61,35 +63,49 @@ const warnWhenDockerMissing = (wranglerPath: string, dockerAvailable: () => bool
  * Skipped under `vite preview`, which resolves with `command: "serve"` and so
  * runs `apply: "serve"` plugins: previewing a built app must not probe Docker.
  */
-const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
+const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions, discovery?: DiscoveryCache): Plugin => {
     let isPreview = false;
+    let isBuild = false;
+
+    const validate = (): void => {
+        // Shared with `@lunora/rspack` — same rules, same messages, only the
+        // closing remedy differs.
+        assertWranglerSatisfiesSchema(
+            { ...options, cache: discovery },
+            (message) => {
+                // eslint-disable-next-line no-console -- runs in `configResolved`, before Vite's logger reaches plugins
+                console.warn(message);
+            },
+            "Update your wrangler.jsonc and restart the dev server.",
+        );
+
+        const wranglerPath = findWranglerFile(options.projectRoot);
+
+        if (wranglerPath !== undefined) {
+            warnWhenDockerMissing(wranglerPath);
+        }
+    };
 
     return {
         // `isPreview` is on the config-hook env only — never on the resolved config.
         config(_userConfig, env) {
             isPreview = env.isPreview === true;
+            isBuild = env.command === "build";
         },
+        // Once per `vite build`, not once per environment pass — see `oncePerBuild`.
+        // Synchronous either way, so a refusal throws before any other plugin's hook runs on.
         configResolved() {
             if (isPreview) {
                 return;
             }
 
-            // Shared with `@lunora/rspack` — same rules, same messages, only the
-            // closing remedy differs.
-            assertWranglerSatisfiesSchema(
-                options,
-                (message) => {
-                    // eslint-disable-next-line no-console
-                    console.warn(message);
-                },
-                "Update your wrangler.jsonc and restart the dev server.",
-            );
+            if (isBuild) {
+                oncePerBuildSync(options, "validate-wrangler", validate);
 
-            const wranglerPath = findWranglerFile(options.projectRoot);
-
-            if (wranglerPath !== undefined) {
-                warnWhenDockerMissing(wranglerPath);
+                return;
             }
+
+            validate();
         },
         enforce: "pre",
         name: "lunora:wrangler-validator",

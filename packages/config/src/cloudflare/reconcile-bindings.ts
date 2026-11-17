@@ -14,7 +14,6 @@
  * exported — are returned as warnings rather than written, since a binding
  * referencing an unexported class would make `wrangler deploy` fail.
  */
-import { writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 
@@ -22,30 +21,28 @@ import type { DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } f
 import { containerBuildTag } from "@lunora/container";
 import { readJsonSync } from "@visulima/fs";
 
+import celldBindingId from "../celld/celld-binding-id";
 import type { InferredAgent, InferredBindings, InferredContainer, InferredWorkflow } from "../infer-bindings";
 import { applyModify } from "../jsonc-edit";
 import type { DurableObjectSpec, GeneratedClassModule } from "../worker-entry";
+import bindingNameOwner from "./binding-name-owner";
 import type { Manifest } from "./lunora-manifest";
 import { readManifest } from "./lunora-manifest";
+import { D1_PLACEHOLDER_ID, HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
+import { reconcileAssetRouting } from "./reconcile-assets";
 import type { OwnedTuning } from "./reconcile-queues";
 import { readOwnedTuning, reconcileEnvQueues, reconcileQueues, recordOwnedTuning } from "./reconcile-queues";
-import type { OwnedServices } from "./reconcile-services";
-import { readOwnedServices, reconcileDevConfigServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
+import type { DevConfigServicesPlan, OwnedServices } from "./reconcile-services";
+import { planDevConfigServices, readOwnedServices, reconcileServices, recordOwnedServices } from "./reconcile-services";
 import collectWarnings from "./reconcile-warnings";
+import { spaStaticPaths } from "./spa-assets";
+import { studioAssetsPlan } from "./studio-assets";
 import { objectBindingEntries, stringEntries } from "./validate-bindings";
 import { scanAppChains } from "./worker-entry-checks";
 import { settingLeaf, WORKFLOW_SETTING_KEYS, WORKFLOW_SETTINGS, workflowSettingsFor } from "./workflow-settings";
 import { DEFAULT_OBSERVABILITY } from "./wrangler-config";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
-import type { MigrationEntry, ReconcileStep, WranglerShape } from "./wrangler-shape";
-
-/**
- * Placeholder `database_id` written for an auto-provisioned `DB` binding. It is
- * intentionally not a valid id so a deploy can't silently target the wrong
- * database; reconciliation warns the user to replace it (see the D1 warning in
- * `reconcileWranglerBindings`).
- */
-const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
+import type { MigrationEntry, OwnershipRecord, ReconcileStep, WranglerShape } from "./wrangler-shape";
 
 /**
  * A container/workflow that is declared (so codegen emits its class) but the
@@ -100,6 +97,25 @@ interface ReconcileBindingsResult {
 }
 
 /**
+ * What a {@link planWranglerBindings} pass would change, before anything is
+ * written. `edit` is absent when there is no readable wrangler config to edit.
+ */
+interface WranglerBindingsPlan extends Omit<ReconcileBindingsResult, "changed" | "devConfig"> {
+    /** The dev sidecar's planned config, when the project declares services. */
+    devConfig?: DevConfigServicesPlan;
+
+    edit?: {
+        /** The Studio assets directory the planned config points at, relative to `wrangler.jsonc`; created on apply. */
+        assetsDirectory?: string;
+        manifest: Manifest | undefined;
+        original: string;
+        /** The ownership each step claims, written once the config is. */
+        records: OwnershipRecord[];
+        text: string;
+    };
+}
+
+/**
  * The declared-but-not-re-exported containers and workflows, as structured
  * {@link ExportGap}s. The same gaps `collectWarnings` renders into prose — kept
  * here as data so the Vite plugin can raise them in the error overlay with a
@@ -107,7 +123,7 @@ interface ReconcileBindingsResult {
  *
  * Exported because reconciliation is not the only caller that needs the answer:
  * `lunora codegen` and `lunora doctor` both want the gaps WITHOUT rewriting
- * `wrangler.jsonc`, which is the rest of what {@link reconcileWranglerBindings}
+ * `wrangler.jsonc`, which is the rest of what `reconcileWranglerBindings` (`apply-bindings.ts`)
  * does. Deriving them again from `inferred.{containers,workflows,agents}` at each
  * call site is how one kind ends up silently uncovered.
  */
@@ -215,7 +231,25 @@ const reconcileDurableObjects = (text: string, parsed: WranglerShape, required: 
     return { added, text: nextText };
 };
 
-/** Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. */
+/**
+ * Whether reconcile may add the KV and Hyperdrive bindings: their resources are created by
+ * wrangler and `lunora deploy`, which only a Cloudflare target runs. An omitted target is
+ * the default, Cloudflare.
+ */
+const createsCloudflareResources = (target: string | undefined): boolean => target === undefined || target === "cloudflare";
+
+/** The placeholder-id advisory for a DB binding reconcile just wrote. Cloudflare only: celld projects the placeholder onto the database name. */
+const placeholderWarnings = (added: ReadonlyArray<string>, target: string | undefined): string[] =>
+    added.includes("DB (D1)") && createsCloudflareResources(target)
+        ? [`wrote a DB binding with a placeholder database_id ("${D1_PLACEHOLDER_ID}") — run \`wrangler d1 create <name>\` and replace it before deploying.`]
+        : [];
+
+/**
+ * Add the `DB` D1 binding for `.global()` schemas, if absent. Pure. Every target
+ * writes the placeholder `wrangler d1 create` replaces: the file outlives the target,
+ * and a later switch to Cloudflare must find a placeholder, not a fake id. celld
+ * derives the database's identity from the placeholder when it projects the config.
+ */
 const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
     const d1Bindings = parsed.d1_databases ?? [];
 
@@ -244,21 +278,6 @@ const SELF_DESCRIBING_BINDINGS = {
 } as const satisfies Partial<Record<keyof WranglerShape, { binding: string; label: string }>>;
 
 /**
- * Add one {@link SELF_DESCRIBING_BINDINGS} section if absent, written safely
- * like `DB`. Idempotent on `parsed[key].binding`. Pure.
- */
-const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: keyof typeof SELF_DESCRIBING_BINDINGS): ReconcileStep => {
-    const { binding, label } = SELF_DESCRIBING_BINDINGS[key];
-    const current = parsed[key]?.binding;
-
-    if (typeof current === "string" && current.length > 0) {
-        return { added: [], text };
-    }
-
-    return { added: [label], text: applyModify(text, [key], { binding }) };
-};
-
-/**
  * Whether reconcile should write the `analytics` binding: `ctx.analyticsSql` is
  * read and the project does NOT chain `.analyticsSql(...)` onto `defineApp()`.
  * The chain is a parsed call anywhere in the project ({@link scanAppChains}), so
@@ -271,69 +290,112 @@ const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: keyof
 const wantsAnalyticsSqlBinding = (inferred: InferredBindings, projectRoot: string): boolean =>
     inferred.usesAnalyticsSql && scanAppChains(projectRoot, new Set(["analyticsSql"]))?.chained.has("analyticsSql") !== true;
 
-/** Sections that are a list of entries naming their binding with `name`, not `binding`. */
-const NAME_KEYED_LIST_SECTIONS = new Set(["ratelimits", "send_email"]);
+/**
+ * Add one {@link SELF_DESCRIBING_BINDINGS} section if absent, written safely
+ * like `DB`. Idempotent on `parsed[key].binding`. Pure.
+ */
+const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: keyof typeof SELF_DESCRIBING_BINDINGS): ReconcileStep => {
+    const { binding, label } = SELF_DESCRIBING_BINDINGS[key];
+    const current = parsed[key]?.binding;
 
-/** Sections whose `bindings` list names each entry with `name`. */
-const NESTED_NAME_BINDING_SECTIONS = ["durable_objects", "logfwdr", "unsafe"] as const;
-
-/** Sections whose object KEYS are the binding names. */
-const KEYED_MAP_SECTIONS = new Set(["data_blobs", "text_blobs", "vars", "wasm_modules"]);
-
-/** A plain (non-array) object. */
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
-
-const bindsName = (entry: unknown, field: string, name: string): boolean => isRecord(entry) && entry[field] === name;
-
-/** Whether one top-level section's own value (object, list, or keyed map) binds `name`. */
-const sectionBindsName = (section: string, value: unknown, name: string): boolean => {
-    if (KEYED_MAP_SECTIONS.has(section)) {
-        return isRecord(value) && Object.hasOwn(value, name);
+    if (typeof current === "string" && current.length > 0) {
+        return { added: [], text };
     }
 
-    const field = NAME_KEYED_LIST_SECTIONS.has(section) ? "name" : "binding";
+    // Another section holding the name makes wrangler reject the config, so the binding is not written over it.
+    const owner = bindingNameOwner(parsed, binding);
 
-    return Array.isArray(value) ? value.some((entry) => bindsName(entry, field, name)) : bindsName(value, "binding", name);
+    if (owner !== undefined) {
+        return {
+            added: [],
+            text,
+            warnings: [
+                `${key}: not adding the ${label} binding — the name "${binding}" is already bound by \`${owner}\` in wrangler.jsonc. Rename that binding, then set ${key}.binding by hand.`,
+            ],
+        };
+    }
+
+    return { added: [label], text: applyModify(text, [key], { binding }) };
+};
+
+/** The warning for a binding reconcile would add under a name another section already uses. */
+const nameTakenWarning = (key: string, name: string, owner: string): string =>
+    `${key}: not adding "${name}" — the name is already bound by \`${owner}\` in wrangler.jsonc. Add a ${key} entry under another binding name and point the matching \`defineApp()\` override at it.`;
+
+/**
+ * Add a `HYPERDRIVE` binding when the project binds none, carrying the placeholder id. It makes
+ * `ctx.sql` work in dev at once (an embedded Postgres), and `lunora deploy` creates the
+ * Hyperdrive config from the connection string it is given. Pure.
+ */
+const reconcileHyperdrive = (text: string, parsed: WranglerShape, target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || (parsed.hyperdrive?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, "HYPERDRIVE");
+
+    if (owner !== undefined) {
+        return { added: [], text, warnings: [nameTakenWarning("hyperdrive", "HYPERDRIVE", owner)] };
+    }
+
+    return {
+        added: ["HYPERDRIVE (Hyperdrive, created on deploy)"],
+        text: applyModify(text, ["hyperdrive"], [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }]),
+    };
+};
+
+/** The targets that serve a `KV` namespace binding; the others have no KV for `ctx.kv` to bind. */
+const KV_TARGETS: ReadonlySet<string> = new Set(["celld", "cloudflare"]);
+
+/**
+ * Add an id-less `KV` namespace binding when the project binds none. Wrangler
+ * creates the namespace on the first deploy and writes its id back, so nothing
+ * here mints it. celld needs an id, but its projection derives one
+ * (`projectCelldConfig`), so the config never carries a celld-only id into a
+ * later Cloudflare deploy. A project that already binds a namespace (under any
+ * name) is left alone: `createKv()` is handed whichever binding the app chose. Not run for a
+ * jurisdiction-pinned schema: a namespace wrangler creates is unrestricted and
+ * cannot be moved, so that app creates it itself. Pure.
+ */
+const reconcileKv = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
+    if ((target !== undefined && !KV_TARGETS.has(target)) || jurisdiction !== undefined || (parsed.kv_namespaces?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, "KV");
+
+    if (owner !== undefined) {
+        return { added: [], text, warnings: [nameTakenWarning("kv_namespaces", "KV", owner)] };
+    }
+
+    // celld creates nothing on deploy: the label names the id its projection derives.
+    const label = target === "celld" ? `KV (Workers KV, celld namespace ${celldBindingId(parsed.name, "KV")})` : "KV (Workers KV, created on deploy)";
+
+    return { added: [label], text: applyModify(text, ["kv_namespaces"], [{ binding: "KV" }]) };
 };
 
 /**
- * Where `name` is already bound in the top-level config, as `section` (or
- * `section.sub`), else `undefined`. Covers every entry shape wrangler binds a
- * name with: a `{ binding }` object (`ai`, `browser`, …), a list of
- * `{ binding }` entries (`kv_namespaces`, `services`, `ai_search`, …), a list
- * of `{ name }` entries (`ratelimits`, `send_email`), a `bindings[].name` list
- * (`durable_objects`, `unsafe`, `logfwdr`), `queues.producers[].binding`, the
- * keys of `vars` / `wasm_modules` / `text_blobs` / `data_blobs`, and the
- * declared `secrets.required`. `env.*` blocks are skipped: they are separate
- * workers' configs as far as name clashes go.
+ * Add the `ARTIFACTS` binding when the project binds no namespace, naming the namespace after the
+ * Worker. The namespace itself is created on first use. A logged-out dev session leaves the binding
+ * out, since Artifacts only runs remotely. Not run for a jurisdiction-pinned schema: the first
+ * `create()` against a missing namespace makes it unrestricted and its jurisdiction cannot change, and
+ * a logged-in dev session would make that call, so that app creates the namespace itself (the hint
+ * says how) and adds the binding, and `lunora deploy` then checks it. Pure.
  */
-const bindingNameOwner = (parsed: WranglerShape, name: string): string | undefined => {
-    const config = parsed as Record<string, unknown>;
-    const owner = Object.entries(config).find(([section, value]) => section !== "env" && sectionBindsName(section, value, name));
+const reconcileArtifacts = (text: string, parsed: WranglerShape, jurisdiction: InferredBindings["jurisdiction"], target: string | undefined): ReconcileStep => {
+    if (!createsCloudflareResources(target) || jurisdiction !== undefined || (parsed.artifacts?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const owner = bindingNameOwner(parsed, "ARTIFACTS");
 
     if (owner !== undefined) {
-        return owner[0];
+        return { added: [], text, warnings: [nameTakenWarning("artifacts", "ARTIFACTS", owner)] };
     }
 
-    for (const section of NESTED_NAME_BINDING_SECTIONS) {
-        const block = config[section];
+    const namespace = typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora";
 
-        if (isRecord(block) && Array.isArray(block.bindings) && block.bindings.some((entry) => bindsName(entry, "name", name))) {
-            return `${section}.bindings`;
-        }
-    }
-
-    if (parsed.queues?.producers?.some((entry) => entry?.binding === name) === true) {
-        return "queues.producers";
-    }
-
-    const required = parsed.secrets?.required;
-
-    if (Array.isArray(required) && required.includes(name)) {
-        return "secrets.required";
-    }
-
-    return undefined;
+    return { added: ["ARTIFACTS (Cloudflare Artifacts)"], text: applyModify(text, ["artifacts"], [{ binding: "ARTIFACTS", namespace }]) };
 };
 
 /**
@@ -816,19 +878,24 @@ const reconcileWorkflows = (
  * steps below reads AND writes the top-level path) that this fix does not
  * attempt — `lunora deploy --env <name>` now VALIDATES the env-scoped view
  * (closing the reported gap), it just doesn't yet auto-provision it.
+ *
+ * Writes nothing — not `wrangler.jsonc`, not the ownership records in the
+ * manifest, not the dev sidecar's config: `applyWranglerBindings` (`apply-bindings.ts`) does.
+ * The split lets a watcher ask what a pass would change (see
+ * `pendingBindingChanges`) from exactly the steps a real pass runs.
  */
-const reconcileWranglerBindings = (
+const planWranglerBindings = (
     projectRoot: string,
     inferred: InferredBindings,
     { environment, target }: { environment?: string; target?: string } = {},
-): ReconcileBindingsResult => {
+): WranglerBindingsPlan => {
     const wranglerPath = findWranglerFile(projectRoot);
 
     const exportGaps = collectExportGaps(inferred);
 
     if (!wranglerPath) {
         // No config to inspect — emit the raw capability hints unfiltered.
-        return { added: [], changed: false, exportGaps, reason: "wrangler.jsonc not found", updated: [], warnings: collectWarnings(inferred, projectRoot) };
+        return { added: [], exportGaps, reason: "wrangler.jsonc not found", updated: [], warnings: collectWarnings(inferred, projectRoot) };
     }
 
     const { parsed, text: original } = readWranglerJsonc<WranglerShape>(wranglerPath);
@@ -836,7 +903,6 @@ const reconcileWranglerBindings = (
     if (parsed === undefined) {
         return {
             added: [],
-            changed: false,
             exportGaps,
             reason: `failed to parse ${wranglerPath} as JSONC`,
             updated: [],
@@ -846,7 +912,7 @@ const reconcileWranglerBindings = (
     }
 
     // Hints are filtered against the existing config so a wired-up project is quiet.
-    const warnings = collectWarnings(inferred, projectRoot, parsed);
+    const warnings = collectWarnings(inferred, projectRoot, parsed, target);
 
     // See the doc comment above: auto-provisioning has no env-scoped write
     // path, so a `--env <name>` deploy is told plainly rather than silently
@@ -905,21 +971,30 @@ const reconcileWranglerBindings = (
     const ownedScopes: Record<string, OwnedTuning> = {};
     const ownedServicesRecord = readOwnedServices(manifest);
     let ownedServices: OwnedServices | undefined;
+    // The dev config's share of the services record, by whether its write lands.
+    let devOwned: Record<"unwritten" | "written", OwnedServices> = { unwritten: {}, written: {} };
 
     // The reconcile pipeline: each enabled step rewrites `text` but reads the
     // original `parsed`. This is only safe because the steps touch disjoint
     // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
     // ai_search_namespaces vs analytics vs browser vs images vs analytics_engine_datasets vs worker_loaders vs containers /
-    // observability vs exports + workflows vs queues vs services + env.*.services;
+    // observability vs assets + env.*.assets vs exports + workflows vs queues vs services + env.*.services;
     // the env queue step writes only env.<name>.queues). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
     // Self-describing bindings (SELF_DESCRIBING_BINDINGS, plus the array-shaped
     // ai_search_namespaces and analytics_engine_datasets) auto-write here;
-    // their hint-only siblings (kv/hyperdrive/pipelines) carry an un-mintable
-    // remote id and only surface as warnings (see collectWarnings).
+    // kv is written without a remote id (wrangler creates the namespace on
+    // deploy; the celld projection derives one), hyperdrive with a
+    // placeholder id that deploy replaces once it has a connection string, and
+    // artifacts with the Worker's name as its namespace; hyperdrive and artifacts
+    // only for a Cloudflare target. Pipelines stays a hint: it carries an
+    // un-mintable remote resource.
     const pipeline: ReadonlyArray<{ enabled: boolean; run: (text: string) => ReconcileStep }> = [
         { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },
         { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed) },
+        { enabled: inferred.usesKv, run: (text) => reconcileKv(text, parsed, inferred.jurisdiction, target) },
+        { enabled: inferred.usesHyperdrive, run: (text) => reconcileHyperdrive(text, parsed, target) },
+        { enabled: inferred.usesArtifacts, run: (text) => reconcileArtifacts(text, parsed, inferred.jurisdiction, target) },
         { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai") },
         {
             enabled: inferred.usesAiSearch,
@@ -958,6 +1033,19 @@ const reconcileWranglerBindings = (
         { enabled: true, run: (text) => reconcileObservability(text, parsed) },
         // Cloudflare-only; an omitted target is the default, Cloudflare.
         { enabled: target === undefined || target === "cloudflare", run: (text) => reconcileUploadSourceMaps(text, parsed) },
+        // Cloudflare-only (a Workers Static Assets key). Skipped when the routes could not be read: it would cut an owned list to the reserved pair.
+        {
+            enabled: (target === undefined || target === "cloudflare") && inferred.workerRoutes !== undefined,
+            run: (text) =>
+                reconcileAssetRouting(
+                    text,
+                    parsed,
+                    inferred.workerRoutes ?? [],
+                    manifest,
+                    spaStaticPaths(projectRoot),
+                    studioAssetsPlan(projectRoot, parsed, target),
+                ),
+        },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         {
             enabled: exportedWorkflows.length > 0 || exportedAgents.length > 0,
@@ -970,7 +1058,17 @@ const reconcileWranglerBindings = (
 
                 ownedScopes.queues = step.owned;
 
-                return step;
+                // Written after the whole pipeline, so it also carries what the env queue step below owns.
+                const record: OwnershipRecord = {
+                    consequence: "an option removed from defineQueue stays deployed",
+                    key: "queueTuning",
+                    label: "queue tuning",
+                    write: (current) => {
+                        recordOwnedTuning(current, ownedTuning, ownedScopes);
+                    },
+                };
+
+                return { ...step, record };
             },
         },
         {
@@ -983,7 +1081,17 @@ const reconcileWranglerBindings = (
 
                 ownedServices = step.owned;
 
-                return step;
+                // Written after the dev config step below has planned what it owns.
+                const record: OwnershipRecord = {
+                    consequence: "a service removed from lunora.config stays bound",
+                    key: "services",
+                    label: "service bindings",
+                    write: (current, { devConfigWritten }) => {
+                        recordOwnedServices(current, { ...ownedServices, ...(devConfigWritten ? devOwned.written : devOwned.unwritten) });
+                    },
+                };
+
+                return { ...step, record };
             },
         },
         ...(environment === undefined || parsed.env?.[environment] === undefined
@@ -1006,6 +1114,7 @@ const reconcileWranglerBindings = (
     let text = original;
     const added: string[] = [];
     const updated: string[] = [];
+    const records: OwnershipRecord[] = [];
 
     for (const step of pipeline) {
         if (!step.enabled) {
@@ -1018,93 +1127,33 @@ const reconcileWranglerBindings = (
         added.push(...result.added);
         updated.push(...(result.updated ?? []));
         warnings.push(...(result.warnings ?? []));
+        records.push(...[result.record].filter((record) => record !== undefined));
     }
-
-    // Ownership is recorded only once the config it describes is on disk, never
-    // before: a record ahead of the file would let the next pass remove a field
-    // this one never managed to write.
-    const recordOwnership = (wranglerWritten: boolean): void => {
-        if (manifest === undefined) {
-            return;
-        }
-
-        const servicesOwned = ownedServices;
-        const records = [
-            ...(Object.keys(ownedScopes).length > 0
-                ? [
-                      {
-                          consequence: "an option removed from defineQueue stays deployed",
-                          key: "queueTuning",
-                          label: "queue tuning",
-                          write: (current: Manifest) => {
-                              recordOwnedTuning(current, ownedTuning, ownedScopes);
-                          },
-                      },
-                  ]
-                : []),
-            ...(servicesOwned === undefined
-                ? []
-                : [
-                      {
-                          consequence: "a service removed from lunora.config stays bound",
-                          key: "services",
-                          label: "service bindings",
-                          write: (current: Manifest) => {
-                              recordOwnedServices(current, servicesOwned);
-                          },
-                      },
-                  ]),
-        ];
-
-        for (const record of records) {
-            // Its own failure, not the caller's "binding inference skipped": the
-            // config change it describes may already be on disk.
-            try {
-                // Re-read per record: each write starts from the file as the last
-                // one left it, or the second would drop the key the first wrote.
-                record.write(readManifest(projectRoot) ?? manifest);
-            } catch (error: unknown) {
-                warnings.push(
-                    `${wranglerWritten ? "wrangler.jsonc was updated, but " : ""}recording the ${record.label} reconcile owns in ${manifest.path} (lunora.${record.key}) failed: ${error instanceof Error ? error.message : String(error)}. Until it is recorded, ${record.consequence}.`,
-                );
-            }
-        }
-    };
 
     // The SvelteKit / Nuxt dev sidecar runs its own `wrangler.dev.jsonc`; its
     // worker hosts the actions, so it gets the same service bindings. Same
-    // skip-when-unreadable rule as the step above.
-    let devConfig: ReconcileBindingsResult["devConfig"];
+    // skip-when-unreadable rule as the services step. Planned before the
+    // records are returned: the services record's `write` reads `ownedServices`.
+    let devConfig: WranglerBindingsPlan["devConfig"];
 
     if (inferred.services !== undefined) {
-        const devStep = reconcileDevConfigServices(projectRoot, inferred.services, ownedServicesRecord);
+        const devStep = planDevConfigServices(projectRoot, inferred.services, ownedServicesRecord);
 
         warnings.push(...devStep.warnings);
-        ownedServices = { ...ownedServices, ...devStep.owned };
-        devConfig = devStep.added.length > 0 || devStep.updated.length > 0 ? { added: devStep.added, path: devStep.path, updated: devStep.updated } : undefined;
+        devOwned = { unwritten: devStep.previouslyOwned, written: devStep.owned };
+        devConfig = devStep;
     }
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
     // user runs `wrangler d1 create` before the deploy reaches wrangler (which
     // would otherwise fail late on the literal placeholder). `reconcileD1` is the
     // only step that emits this label.
-    if (added.includes("DB (D1)")) {
-        warnings.push(
-            `wrote a DB binding with a placeholder database_id ("${D1_PLACEHOLDER_ID}") — run \`wrangler d1 create <name>\` and replace it before deploying.`,
-        );
-    }
+    warnings.push(...placeholderWarnings(added, target));
 
-    if (text === original) {
-        recordOwnership(false);
+    const assetsDirectory = studioAssetsPlan(projectRoot, parsed, target)?.directory;
 
-        return { added, changed: false, devConfig, exportGaps, reason: "bindings already in sync", updated, warnings, wranglerPath };
-    }
-
-    writeFileSync(wranglerPath, text, "utf8");
-    recordOwnership(true);
-
-    return { added, changed: true, devConfig, exportGaps, updated, warnings, wranglerPath };
+    return { added, devConfig, edit: { assetsDirectory, manifest, original, records, text }, exportGaps, updated, warnings, wranglerPath };
 };
 
-export type { ExportGap, ReconcileBindingsResult };
-export { collectExportGaps, reconcileWranglerBindings };
+export type { ExportGap, ReconcileBindingsResult, WranglerBindingsPlan };
+export { collectExportGaps, planWranglerBindings };

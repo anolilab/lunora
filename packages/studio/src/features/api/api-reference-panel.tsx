@@ -1,10 +1,10 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { EmptyState } from "../../components/ui/empty-state";
 import { Skeleton } from "../../components/ui/skeleton";
 import type { SpecFetchState } from "../../hooks/use-admin-spec";
 import { useAdminSpec } from "../../hooks/use-admin-spec";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { parseOpenApi } from "./openapi/openapi-model";
 import ReferenceView from "./openapi/reference-view";
@@ -51,7 +51,7 @@ const classifySpec = (spec: unknown): SpecFetchState<OpenApiDocument> => {
  */
 const ApiReferencePanel = ({ spec: inlineSpec }: ApiReferencePanelProps): ReactElement => {
     const t = useT();
-    const client = useLunora();
+    const client = useStudioClient();
 
     const fetchOpenApi = () => client.fetchOpenApi();
     const state = useAdminSpec<OpenApiDocument>(inlineSpec, fetchOpenApi, classifySpec);

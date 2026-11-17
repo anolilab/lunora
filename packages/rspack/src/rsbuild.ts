@@ -1,8 +1,9 @@
+import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { join, posix, resolve } from "node:path";
 
 import type { CelldDevSession } from "@lunora/config";
 import { lunoraLine, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
-import { createStudioMiddleware, isNonLoopbackHost, studioMountPath } from "@lunora/config/studio-host";
 
 import { resolveOptions } from "./options";
 import { LunoraRspackPlugin } from "./plugin";
@@ -54,9 +55,27 @@ interface RsbuildApiLike {
     getRsbuildConfig: () => Readonly<RsbuildConfigLike>;
     modifyRsbuildConfig: (callback: (config: RsbuildConfigLike) => RsbuildConfigLike) => void;
     modifyRspackConfig: (callback: (config: RspackConfigLike) => RspackConfigLike) => void;
+    onAfterBuild: (callback: (params: { environments: Record<string, BuildEnvironmentLike>; isWatch: boolean }) => Promise<void> | void) => void;
     onAfterStartDevServer: (callback: (params: { port: number }) => Promise<void> | void) => void;
     onBeforeStartDevServer: (callback: (params: { server: DevServerLike }) => Promise<void> | void) => void;
     onCloseDevServer: (callback: () => Promise<void> | void) => void;
+}
+
+/** The slice of an Rsbuild environment's context, after a build, that the `_headers` step reads. */
+interface BuildEnvironmentLike {
+    config: {
+        /** `production` for `rsbuild build` unless the config says otherwise. */
+        mode?: string;
+        output: {
+            distPath: Record<string, unknown>;
+            filename?: Record<string, unknown>;
+            filenameHash?: unknown;
+            target?: unknown;
+        };
+        server?: { publicDir?: unknown };
+    };
+    /** Absolute output directory (`output.distPath.root`). */
+    distPath: string;
 }
 
 /** The slice of Rsbuild's dev server this uses: its Connect middleware stack. */
@@ -129,14 +148,20 @@ const withLunoraProxy = (existing: ProxyConfigLike | undefined, port: number): P
  * every plugin's `modifyRsbuildConfig`, and before Rsbuild fills in defaults —
  * so an unset host (Rsbuild's `0.0.0.0` default) is told apart from an explicit
  * `--host`.
+ *
+ * `@lunora/config/studio-host` is imported inside the hooks, not at module scope:
+ * only a dev server ever needs it, and it pulls in `@lunora/seed` and faker, which
+ * every `rsbuild build` would otherwise load with its config.
  */
 const mountStudio = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions): void => {
-    api.onBeforeStartDevServer(({ server }) => {
+    api.onBeforeStartDevServer(async ({ server }) => {
         const { base, host } = api.getRsbuildConfig().server ?? {};
+        const { createStudioMiddleware, isNonLoopbackHost } = await import("@lunora/config/studio-host");
 
         server.middlewares.use(
             createStudioMiddleware({
                 apiSpec: options.apiSpec,
+                lazyFunctions: options.lazyFunctions,
                 base,
                 isNonLoopbackBind: isNonLoopbackHost(host),
                 projectRoot: options.projectRoot,
@@ -145,9 +170,132 @@ const mountStudio = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions):
         );
     });
 
-    api.onAfterStartDevServer(({ port }) => {
+    api.onAfterStartDevServer(async ({ port }) => {
+        const { studioMountPath } = await import("@lunora/config/studio-host");
+
         // eslint-disable-next-line no-console -- startup notice, beside Rsbuild's own URL banner
         console.info(lunoraLine(`studio on http://localhost:${String(port)}${studioMountPath(api.getRsbuildConfig().server?.base)}`));
+    });
+};
+
+/** Rsbuild's directory for its emitted JS, CSS and media, all named with a content hash by default. */
+const HASHED_DIRECTORY = "static";
+
+/** The public directories an environment copies into its output, as absolute paths. */
+const publicDirectories = (environment: BuildEnvironmentLike, root: string): string[] => {
+    const { publicDir } = environment.config.server ?? {};
+    const entries = publicDir === undefined || publicDir === false ? [] : [publicDir].flat();
+
+    return entries
+        .map((entry) => (typeof entry === "object" && entry !== null ? (entry as { name?: unknown }).name : undefined))
+        .filter((name): name is string => typeof name === "string")
+        .map((name) => resolve(root, name));
+};
+
+/** `distPath` keys whose files Rsbuild names with a hash; `root`, `html` and `favicon` (default `./`) are copied or named as they are. */
+const HASHABLE_KINDS: ReadonlySet<string> = new Set(["assets", "css", "cssAsync", "font", "image", "js", "jsAsync", "media", "svg", "wasm"]);
+
+/** JS and CSS get a hash only in production (`getJsCssHash(isProd)` in Rsbuild); media, fonts and the rest whenever hashing is on. */
+const JS_CSS_KINDS: ReadonlySet<string> = new Set(["css", "cssAsync", "js", "jsAsync"]);
+
+/** `output.filenameHash` as Rsbuild normalizes it: `true`, `false`, `"always"`, a format string, or `{ enable, format }`. */
+const hashEnabled = (filenameHash: unknown): unknown => {
+    if (typeof filenameHash === "string") {
+        return filenameHash !== "";
+    }
+
+    return typeof filenameHash === "object" && filenameHash !== null ? ((filenameHash as { enable?: unknown }).enable ?? true) : (filenameHash ?? true);
+};
+
+const LEADING_DOT_SLASH = /^\.\//u;
+const ASYNC_SUFFIX = /Async$/u;
+const HASH_PLACEHOLDER = /\[(?:content|chunk|full)?hash/u;
+
+const isInsideHashedDirectory = (path: string): boolean => {
+    const normalized = path.replaceAll("\\", "/").replace(LEADING_DOT_SLASH, "");
+
+    return normalized === HASHED_DIRECTORY || normalized.startsWith(`${HASHED_DIRECTORY}/`);
+};
+
+/**
+ * The directory a kind's files land in: its `distPath` joined with the directory part of its custom `filename`, which
+ * Rsbuild resolves against it, so `distPath.js: "."` with `filename.js: "static/[name].js"` writes into `static/`.
+ */
+const outputDirectoryOf = (distPath: Record<string, unknown>, filename: Record<string, unknown>, kind: string): string => {
+    const directory = distPath[kind];
+    const custom = filename[kind.replace(ASYNC_SUFFIX, "")];
+
+    return posix.join(
+        typeof directory === "string" ? directory.replaceAll("\\", "/") : ".",
+        typeof custom === "string" ? posix.dirname(custom.replaceAll("\\", "/")) : ".",
+    );
+};
+
+/**
+ * `static/` when every file Rsbuild writes there is content-hashed, as Rsbuild's
+ * own `getFilename` decides it: every kind whose files land inside `static/`
+ * (by its `distPath`, or by a directory in its custom `filename`) is one Rsbuild
+ * hashes, hashing is on for it (JS and CSS only in a production client build, or
+ * with `enable: "always"`), a custom `filename` for it carries a hash, and no
+ * public folder copies unhashed files into `static/`.
+ */
+const hashedDirectoryOf = (environment: BuildEnvironmentLike, root: string): string | undefined => {
+    const { mode, output } = environment.config;
+    const { distPath, filename = {}, filenameHash, target } = output;
+    const enable = hashEnabled(filenameHash);
+    const jsCssHashed = enable === "always" || (enable === true && mode === "production" && target !== "node");
+    const kinds = [...new Set([...Object.keys(distPath), ...Object.keys(filename)])].filter((kind) => kind !== "root");
+    const placed = kinds.filter((kind) => isInsideHashedDirectory(outputDirectoryOf(distPath, filename, kind)));
+    const hashed = placed.every((kind) => {
+        const custom = filename[kind.replace(ASYNC_SUFFIX, "")];
+
+        if (custom !== undefined) {
+            return typeof custom === "string" && HASH_PLACEHOLDER.test(custom);
+        }
+
+        return HASHABLE_KINDS.has(kind) && (JS_CSS_KINDS.has(kind) ? jsCssHashed : enable !== false);
+    });
+    const collides = publicDirectories(environment, root).some((directory) => existsSync(join(directory, HASHED_DIRECTORY)));
+
+    return hashed && !collides ? HASHED_DIRECTORY : undefined;
+};
+
+/**
+ * Write the managed `_headers` block into each environment's output that is
+ * wrangler's `assets.directory` — the SPA's `dist/`, or the client half of an
+ * SSR build — after a production build, once Rsbuild has copied `public/` in.
+ * An SSR environment's output never matches, so it never gets a `_headers` file.
+ */
+const writeAssetHeadersAfterBuild = (api: RsbuildApiLike, options: ResolvedLunoraRspackOptions): void => {
+    api.onAfterBuild(async ({ environments, isWatch }) => {
+        if (isWatch) {
+            return;
+        }
+
+        const { emitProjectAssetHeaders } = await import("@lunora/config/cloudflare");
+
+        for (const environment of Object.values(environments)) {
+            emitProjectAssetHeaders(
+                {
+                    hashedDirectory: hashedDirectoryOf(environment, options.projectRoot),
+                    outputDirectory: environment.distPath,
+                    projectRoot: options.projectRoot,
+                    requireAssetsDirectory: true,
+                    schemaDir: options.schemaDir,
+                    target: options.target,
+                },
+                {
+                    info: (message) => {
+                        // eslint-disable-next-line no-console -- build summary line; the structural plugin API carries no logger
+                        console.info(lunoraLine(message));
+                    },
+                    warn: (message) => {
+                        // eslint-disable-next-line no-console -- as above, for a warning
+                        console.warn(lunoraLine(message));
+                    },
+                },
+            );
+        }
     });
 };
 
@@ -211,6 +359,8 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
                 };
             });
 
+            writeAssetHeadersAfterBuild(api, resolved);
+
             if (options?.studio !== false) {
                 mountStudio(api, resolved);
             }
@@ -233,8 +383,12 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
                 await codegenPlugin.prepareDevSession();
                 // Also before the spawn: wrangler bundles the Worker at startup, and
                 // on a fresh clone the `_generated/app` it imports does not exist
-                // until a codegen pass writes it.
-                await codegenPlugin.generateForDev();
+                // until a codegen pass writes it. The target is the one that pass
+                // generated for, so the Worker below matches its output. Re-resolved
+                // on every start, so a `target` edited in `lunora.config.*` takes
+                // effect at the next start; a running worker is not swapped, so a
+                // change still needs `rsbuild dev` restarted.
+                const target = await codegenPlugin.generateForDev();
 
                 // eslint-disable-next-line no-console -- startup notice, before any compilation has a logger
                 console.info(lunoraLine(`starting the worker on http://127.0.0.1:${String(port)} …`));
@@ -242,7 +396,7 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
                 // celld runs its own dev server: `celld dev` serves the Worker,
                 // with each `lunora.config` service registered into its local
                 // state first, behind the same proxy.
-                if (targetRunsOwnDevServer(resolved.target)) {
+                if (targetRunsOwnDevServer(target)) {
                     const session = await startCelldDevSession({
                         // A structured Lunora event formats as under wrangler; a service's own line names it.
                         log: (line, { tag }) => {
@@ -276,5 +430,14 @@ const lunoraRsbuild = (options?: LunoraRsbuildOptions): RsbuildPluginLike => {
     };
 };
 
-export type { DevServerLike, LunoraRsbuildOptions, ProxyConfigLike, RsbuildApiLike, RsbuildConfigLike, RsbuildPluginLike, RspackConfigLike };
+export type {
+    BuildEnvironmentLike,
+    DevServerLike,
+    LunoraRsbuildOptions,
+    ProxyConfigLike,
+    RsbuildApiLike,
+    RsbuildConfigLike,
+    RsbuildPluginLike,
+    RspackConfigLike,
+};
 export { LUNORA_PATH, lunoraRsbuild, RSBUILD_PLUGIN_NAME, withLunoraProxy };

@@ -198,7 +198,7 @@ export const enforceDunning = internalMutation.mutation(async ({ ctx: context })
 
         if (outcome) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch(organization._id as Id<"organizations">, outcome.patch);
+            await context.db.patch("organizations", organization._id as Id<"organizations">, outcome.patch);
 
             if (outcome.counter === "suspended") {
                 // eslint-disable-next-line no-await-in-loop -- one audit row per transition

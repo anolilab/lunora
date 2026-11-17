@@ -246,6 +246,7 @@ describe("jsonSchemaFromNode over an IR-style reader", () => {
             constraints: () => undefined,
             inner: () => undefined,
             isNullable: () => false,
+            sensitive: () => false,
             keyChild: () => undefined,
             kind: (node) => node.kind,
             literalSchema: () => {

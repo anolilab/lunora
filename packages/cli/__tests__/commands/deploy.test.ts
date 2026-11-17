@@ -5,15 +5,15 @@ import { fileURLToPath } from "node:url";
 
 import type { CodegenResult, PlatformDiagnostic } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import type { DiscoveryCache } from "@lunora/config";
-import { createDiscoveryCache } from "@lunora/config";
-import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
+import type { DevProcessSpawner, DiscoveryCache } from "@lunora/config";
+import { createDiscoveryCache, D1_PLACEHOLDER_ID, probeCelldToolchain } from "@lunora/config";
+import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV, HYPERDRIVE_PLACEHOLDER_ID } from "@lunora/config/cloudflare";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runDeployCommand } from "../../src/commands/deploy/handler";
+import type { StreamingFetchLike } from "../../src/commands/data-transfer/shared";
+import { runDeployCommand, runPreDeployPipeline } from "../../src/commands/deploy/handler";
 import type { DeployCommandResult } from "../../src/commands/deploy/types";
-import type { FetchLike } from "../../src/commands/run/handler";
 import { EXIT_CODE } from "../../src/util/exit-code";
 import type { HealthFetch } from "../../src/util/health-probe";
 import type { Logger } from "../../src/util/logger";
@@ -39,7 +39,18 @@ vi.mock("@lunora/codegen", async (importOriginal) => {
 // real wrangler. Stub it to "can't determine" (ok: false) so the gate is a no-op
 // and the deploy proceeds, exactly as before the gate existed. Cases that
 // exercise the gate inject their own lister.
+
+/**
+ * The fixture schema has a `.shardBy()` table, so codegen writes a shard registry and the
+ * deploy requires its `LUNORA_RELAY_SECRET`. Marking it deployed keeps the missing-secret
+ * tests on the one secret they are about.
+ */
+const REGISTRY_SECRET_DEPLOYED = ["LUNORA_RELAY_SECRET"];
+
 const noRemoteSecrets = (): Promise<{ names: string[]; ok: boolean }> => Promise.resolve({ names: [], ok: false });
+
+/** A celld toolchain that is in place, so the deploy tests do not look for `celld` and `esbuild` on this host. */
+const celldReady = (): Promise<{ errors: string[]; warnings: string[] }> => Promise.resolve({ errors: [], warnings: [] });
 
 // The container deploy cases run a full ts-morph codegen pass (container
 // discovery + class generation), which is fast locally (~0.5s) but can blow past
@@ -256,15 +267,219 @@ describe("lunora deploy", () => {
             // always adds `observability`), so the deploy must hand celld the
             // projection — and run the `celld` binary itself, never through
             // `pnpm exec` / `npx --`, which would resolve an npm package instead.
-            it("ships a celld-target app with `celld deploy` on the projected config", async () => {
-                expect.assertions(5);
+            // celld has no secret store, so every required secret (the core admin token and
+            // the push/mail keys this app declares) has to be carried as a plain `vars` entry.
+            const CELLD_VARS = Object.fromEntries(
+                ["LUNORA_ADMIN_TOKEN", "LUNORA_RELAY_SECRET", "FCM_SERVICE_ACCOUNT", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"].map((key) => [
+                    key,
+                    "set",
+                ]),
+            );
+            const CELLD_WRANGLER = JSON.stringify({ ...JSON.parse(VALID_WRANGLER), vars: CELLD_VARS });
+
+            // celld's projection replaces only the exact placeholder; any other placeholder id would be deployed as the database's identity.
+            it("blocks a celld deploy whose D1 database_id is a placeholder the projection does not replace", async () => {
+                expect.assertions(3);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({ ...JSON.parse(CELLD_WRANGLER), d1_databases: [{ binding: "DB", database_id: "" }] }),
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/placeholder database_id/u) });
+                expect(calls).toHaveLength(0);
+                expect(result.error).toMatch(/"DB".*\(""\), which celld would use/u);
+            });
+
+            it("lets a celld deploy through when the D1 id is the exact placeholder, which the projection replaces", async () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({ ...JSON.parse(CELLD_WRANGLER), d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>" }] }),
+                    "utf8",
+                );
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result.error ?? "").not.toMatch(/placeholder database_id/u);
+            });
+
+            it('lets a celld deploy through when a real database identity merely contains "replace"', async () => {
+                expect.assertions(1);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({ ...JSON.parse(CELLD_WRANGLER), d1_databases: [{ binding: "DB", database_id: "replacement-orders" }] }),
+                    "utf8",
+                );
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result.error ?? "").not.toMatch(/placeholder database_id/u);
+            });
+
+            it("aborts a celld deploy before spawning when a required secret is not in the vars", async () => {
+                expect.assertions(3);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
                 const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/LUNORA_ADMIN_TOKEN/u) });
+                expect(result.error).toMatch(/rather than committing it/u);
+                expect(calls).toHaveLength(0);
+            });
+
+            it("aborts a celld deploy when a required secret is in the vars but empty", async () => {
+                expect.assertions(2);
+
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({ ...JSON.parse(VALID_WRANGLER), vars: { ...CELLD_VARS, LUNORA_ADMIN_TOKEN: "" } }),
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/LUNORA_ADMIN_TOKEN \(empty or a placeholder\)/u) });
+                expect(calls).toHaveLength(0);
+            });
+
+            it("aborts a celld deploy of a sharded app whose vars lack the shard registry's relay secret", async () => {
+                expect.assertions(2);
+
+                const withoutRelaySecret = Object.fromEntries(Object.entries(CELLD_VARS).filter(([key]) => key !== "LUNORA_RELAY_SECRET"));
+
+                const hosting = {
+                    ...JSON.parse(VALID_WRANGLER),
+                    durable_objects: {
+                        bindings: [
+                            { name: "SHARD", class_name: "ShardDO" },
+                            { name: "SHARD_REGISTRY", class_name: "ShardRegistryDO" },
+                        ],
+                    },
+                    migrations: [{ tag: "v1", new_sqlite_classes: ["ShardDO", "ShardRegistryDO"] }],
+                    vars: withoutRelaySecret,
+                };
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify(hosting), "utf8");
+                // The app hosts the registry: it exports the class codegen wrote. A sharded app that only has the module does not need the secret.
+                mkdirSync(join(workdir, "src"), { recursive: true });
+                writeFileSync(
+                    join(workdir, "src", "index.ts"),
+                    'export { ShardDO } from "../lunora/_generated/shard.js";\nexport { ShardRegistryDO } from "../lunora/_generated/shardRegistry.js";\n',
+                    "utf8",
+                );
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/LUNORA_RELAY_SECRET/u) });
+                expect(calls).toHaveLength(0);
+            });
+
+            // celld cannot see a secret manager the app reads at runtime, so a key only `.dev.vars` names is the app's call.
+            it("ships a celld deploy whose app-only .dev.vars secret is not in the vars, and names it", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), CELLD_WRANGLER, "utf8");
+                writeFileSync(join(workdir, ".dev.vars"), "OPENAI_API_KEY=sk-local\n", "utf8");
+
+                const { spawner } = createRecordingSpawner();
                 const { logger, warns } = silentLogger();
 
-                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
+
+                expect(result.code).toBe(0);
+                expect(warns.some((message) => message.includes("not set in the wrangler vars: OPENAI_API_KEY"))).toBe(true);
+            });
+
+            it("ships a celld-target app with `celld deploy` on the projected config", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), CELLD_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger, warns } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
 
                 expect(result.code).toBe(0);
                 expect(calls.map((call) => [call.descriptor.command, ...call.descriptor.args])).toStrictEqual([
@@ -286,13 +501,70 @@ describe("lunora deploy", () => {
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
 
-                await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
 
                 expect(calls.at(-1)?.descriptor.args.at(-1)).toBe("--dry-run");
             });
 
             // The refusal lives in the driver's argv builder, which runs before
             // the projection is written: a refused deploy changes nothing.
+            it("refuses a celld deploy when the toolchain is missing, before the pipeline writes anything", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: () => Promise.resolve({ errors: ["celld is not on PATH"], warnings: [] }),
+                });
+
+                // A missing tool is the machine, not a bad flag: EXIT_CODE.MISSING_DEPENDENCY.
+                expect(result).toMatchObject({ code: 9, error: "celld is not on PATH" });
+                expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
+                expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
+                expect(calls).toHaveLength(0);
+            });
+
+            // The real probe with `celld` and `esbuild` on PATH and no CELLD_BUCKET: only what the run is asked to do decides.
+            const probeWithoutBucket: typeof probeCelldToolchain = (probe) =>
+                probeCelldToolchain({ ...probe, env: {}, run: () => Promise.resolve({ code: 0, stdout: "99.0.0" }) });
+
+            it("prepares a celld app with CELLD_BUCKET unset, and refuses the deploy", async () => {
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), CELLD_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+                const prepared = await runPreDeployPipeline({ celldToolchain: probeWithoutBucket, cwd: workdir, logger, spawner, target: "celld" }, "prepare");
+                const deployed = await runDeployCommand({
+                    celldToolchain: probeWithoutBucket,
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                });
+
+                expect(prepared.error).toBeUndefined();
+                expect(deployed).toMatchObject({ code: EXIT_CODE.MISSING_DEPENDENCY, error: expect.stringMatching(/CELLD_BUCKET/u) });
+            });
+
             it("refuses --preview for celld before the pipeline writes anything", async () => {
                 expect.assertions(4);
 
@@ -301,9 +573,17 @@ describe("lunora deploy", () => {
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
 
-                const result = await runDeployCommand({ cwd: workdir, logger, preview: true, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    preview: true,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
 
-                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/no preview versions/u) });
+                expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/--preview is not supported/u) });
                 // Refused before provisioning, so the committed config is untouched —
                 // not merely the projection left unwritten.
                 expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
@@ -368,7 +648,15 @@ describe("lunora deploy", () => {
 
                 const { calls, spawner } = createRecordingSpawner();
                 const { logger } = silentLogger();
-                const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner, target: "celld" });
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner,
+                    target: "celld",
+                    celldToolchain: celldReady,
+                });
                 const projection = join(workdir, "services", "parser", ".celld.wrangler.json");
 
                 expect(result.code).toBe(0);
@@ -395,8 +683,8 @@ describe("lunora deploy", () => {
 
             it.each([
                 ["--skip-services", { skipServices: true }, "--skip-services"],
-                ["--preview", { preview: true }, "--preview uploads the app version only"],
                 ["--temporary", { temporary: true }, "--temporary deploys the app to a throwaway account"],
+                ["an isolated preview", { isolatedPreview: true }, "a preview never deploys services: they are production's Workers"],
             ] as const)("deploys no service on %s, and says why", async (_label, extra, reason) => {
                 expect.assertions(2);
 
@@ -409,6 +697,300 @@ describe("lunora deploy", () => {
 
                 expect(calls.some((call) => call.descriptor.args.join(" ").includes("services/parser"))).toBe(false);
                 expect(warns).toContainEqual(expect.stringContaining(`services not deployed (${reason})`));
+            });
+
+            describe("binding checks and Hyperdrive provisioning", () => {
+                const parserConfig = (): string => join(workdir, "services", "parser", "wrangler.jsonc");
+
+                afterEach(() => {
+                    vi.unstubAllEnvs();
+                    vi.unstubAllGlobals();
+                });
+
+                it("refuses a service whose D1 binding still has its placeholder, before any service or the app is deployed", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({
+                            d1_databases: [{ binding: "DB", database_id: D1_PLACEHOLDER_ID, database_name: "parser" }],
+                            main: "src/index.ts",
+                            name: "parser",
+                        }),
+                        "utf8",
+                    );
+
+                    const { calls, spawner } = createRecordingSpawner();
+                    const { logger } = silentLogger();
+                    const result = await runDeployCommand({ cwd: workdir, dryRun: true, logger, secretLister: noRemoteSecrets, spawner });
+
+                    expect(result.error).toContain('service parser (parser): deploy blocked: the "DB" D1 binding has a placeholder database_id');
+                    expect(calls).toHaveLength(0);
+                });
+
+                it("creates a service's Hyperdrive config and writes its id into the service's config before that service deploys", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], main: "src/index.ts", name: "parser" }),
+                        "utf8",
+                    );
+                    vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                    const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+                        Response.json({ errors: [], result: init?.method === "POST" ? { id: "created-id" } : [], success: true }),
+                    );
+
+                    vi.stubGlobal("fetch", fetchStub);
+
+                    // The app's own deploy fails after the service's, so the run stops there and the service's spawn is all that is read.
+                    const idAtServiceDeploy: unknown[] = [];
+                    const spawner: Spawner = async (descriptor) => {
+                        if (descriptor.args.join(" ").includes("services/parser")) {
+                            idAtServiceDeploy.push((parseJsonc(readFileSync(parserConfig(), "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id);
+
+                            return { code: 0 };
+                        }
+
+                        return { code: 1 };
+                    };
+                    const { logger } = silentLogger();
+
+                    await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+
+                    expect(idAtServiceDeploy).toStrictEqual(["created-id"]);
+                    expect(fetchStub.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+                });
+
+                it("stops before any service deploys when a service's Hyperdrive binding has no connection string", async () => {
+                    expect.assertions(3);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], main: "src/index.ts", name: "parser" }),
+                        "utf8",
+                    );
+                    vi.stubEnv("LUNORA_HYPERDRIVE_URL", "");
+                    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+                    vi.stubGlobal("fetch", vi.fn<typeof globalThis.fetch>());
+
+                    const { calls, spawner } = createRecordingSpawner();
+                    const { errors, logger } = silentLogger();
+                    const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+
+                    expect(result.error).toContain("service parser (parser): deploy blocked");
+                    expect(errors.join(" ")).toContain("LUNORA_HYPERDRIVE_URL");
+                    expect(calls).toHaveLength(0);
+                });
+
+                /** A prebuilt service: wrangler reads the copy its build left behind, through the redirect. */
+                const writePrebuiltService = (generated: unknown): string => {
+                    const redirectDir = join(workdir, "services", "parser", ".wrangler", "deploy");
+
+                    mkdirSync(redirectDir, { recursive: true });
+                    writeFileSync(join(redirectDir, "config.json"), JSON.stringify({ configPath: "../../generated.wrangler.json" }), "utf8");
+
+                    const generatedPath = join(workdir, "services", "parser", "generated.wrangler.json");
+
+                    writeFileSync(generatedPath, JSON.stringify(generated), "utf8");
+
+                    return generatedPath;
+                };
+
+                it("refuses a prebuilt service whose generated config still has a D1 placeholder the source has resolved, before any service or the app is deployed", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({
+                            d1_databases: [{ binding: "DB", database_id: "resolved-id", database_name: "parser" }],
+                            main: "src/index.ts",
+                            name: "parser",
+                        }),
+                        "utf8",
+                    );
+                    writePrebuiltService({
+                        d1_databases: [{ binding: "DB", database_id: D1_PLACEHOLDER_ID, database_name: "parser" }],
+                        main: "src/index.ts",
+                        name: "parser",
+                    });
+
+                    const { calls, spawner } = createRecordingSpawner();
+                    const { logger } = silentLogger();
+                    const result = await runDeployCommand({
+                        cwd: workdir,
+                        dryRun: true,
+                        frameworkBuild: false,
+                        logger,
+                        secretLister: noRemoteSecrets,
+                        spawner,
+                    });
+
+                    expect(result.error).toContain('service parser (parser): deploy blocked: the "DB" D1 binding has a placeholder database_id');
+                    expect(calls).toHaveLength(0);
+                });
+
+                it("writes the Hyperdrive id a prebuilt service's generated config needs into that config, before the service deploys", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: "resolved-id" }], main: "src/index.ts", name: "parser" }),
+                        "utf8",
+                    );
+
+                    const generatedPath = writePrebuiltService({
+                        hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }],
+                        main: "src/index.ts",
+                        name: "parser",
+                    });
+
+                    vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                    const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+                        Response.json({ errors: [], result: init?.method === "POST" ? { id: "created-id" } : [], success: true }),
+                    );
+
+                    vi.stubGlobal("fetch", fetchStub);
+
+                    // The app's own deploy fails after the service's, so the run stops there and the service's spawn is all that is read.
+                    const idAtServiceDeploy: unknown[] = [];
+                    const spawner: Spawner = async (descriptor) => {
+                        if (descriptor.args.join(" ").includes("services/parser")) {
+                            idAtServiceDeploy.push((parseJsonc(readFileSync(generatedPath, "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id);
+
+                            return { code: 0 };
+                        }
+
+                        return { code: 1 };
+                    };
+                    const { logger } = silentLogger();
+
+                    await runDeployCommand({ cwd: workdir, frameworkBuild: false, logger, secretLister: noRemoteSecrets, spawner });
+
+                    expect(idAtServiceDeploy).toStrictEqual(["created-id"]);
+                    expect(fetchStub.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+                });
+
+                it("refuses a prebuilt service's Hyperdrive placeholder under --env, since that build's environment is unknown", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(join(workdir, "wrangler.jsonc"), validWranglerWithEnv("production"), "utf8");
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: "resolved-id" }], main: "src/index.ts", name: "parser" }),
+                        "utf8",
+                    );
+                    writePrebuiltService({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], main: "src/index.ts", name: "parser" });
+
+                    const { calls, spawner } = createRecordingSpawner();
+                    const { logger } = silentLogger();
+                    const result = await runDeployCommand({
+                        cwd: workdir,
+                        dryRun: true,
+                        env: "production",
+                        frameworkBuild: false,
+                        logger,
+                        secretLister: noRemoteSecrets,
+                        spawner,
+                    });
+
+                    expect(result.error).toContain("was not built for --env production");
+                    expect(calls).toHaveLength(0);
+                });
+
+                it("writes the ids a prebuilt service's generated config got into its source too, so a later source deploy needs no credentials", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], main: "src/index.ts", name: "parser" }),
+                        "utf8",
+                    );
+                    writePrebuiltService({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], main: "src/index.ts", name: "parser" });
+                    vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+                    vi.stubGlobal(
+                        "fetch",
+                        vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+                            Response.json({ errors: [], result: init?.method === "POST" ? { id: "created-id" } : [], success: true }),
+                        ),
+                    );
+
+                    const { spawner } = createRecordingSpawner();
+                    const { logger } = silentLogger();
+
+                    await runDeployCommand({ cwd: workdir, frameworkBuild: false, logger, secretLister: noRemoteSecrets, spawner });
+
+                    // A later deploy reads the source, with no credentials: its placeholder is already the created id.
+                    vi.stubEnv("LUNORA_HYPERDRIVE_URL", "");
+                    vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+                    const later = createRecordingSpawner();
+                    const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner: later.spawner });
+
+                    expect(result.error ?? "").not.toContain("deploy blocked");
+                    expect(later.calls.some((call) => call.descriptor.args.join(" ").includes("services/parser"))).toBe(true);
+                });
+
+                it("creates a later service's Hyperdrive config only after the first service has deployed, so a failed first deploy leaves it none", async () => {
+                    expect.assertions(2);
+
+                    declareParser();
+                    writeFileSync(
+                        join(workdir, "lunora.config.ts"),
+                        `export default { services: { parser: { dir: "./services/parser" }, other: { dir: "./services/other" } } };\n`,
+                        "utf8",
+                    );
+                    mkdirSync(join(workdir, "services", "other"), { recursive: true });
+                    writeFileSync(
+                        join(workdir, "services", "other", "wrangler.jsonc"),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], main: "src/index.ts", name: "other" }),
+                        "utf8",
+                    );
+                    writeFileSync(
+                        parserConfig(),
+                        JSON.stringify({ hyperdrive: [{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }], main: "src/index.ts", name: "parser" }),
+                        "utf8",
+                    );
+                    vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                    vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                    const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) =>
+                        Response.json({ errors: [], result: init?.method === "POST" ? { id: "created-id" } : [], success: true }),
+                    );
+
+                    vi.stubGlobal("fetch", fetchStub);
+
+                    // Services deploy in name order, so `other` goes first and its deploy fails: `parser` must never have been created.
+                    const spawner: Spawner = async (descriptor) => {
+                        return { code: descriptor.args.join(" ").includes("services/other") ? 1 : 0 };
+                    };
+                    const { logger } = silentLogger();
+
+                    await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner });
+
+                    const created = fetchStub.mock.calls
+                        .filter(([, init]) => init?.method === "POST")
+                        .map(([, init]) => (JSON.parse(init?.body as string) as { name: string }).name);
+
+                    expect(created).toStrictEqual(["other-hyperdrive"]);
+                    expect(created.some((name) => name.includes("parser"))).toBe(false);
+                });
             });
         });
 
@@ -506,6 +1088,113 @@ describe("lunora deploy", () => {
             });
         });
 
+        describe("hyperdrive config", () => {
+            const withPlaceholder = (extra: Record<string, unknown> = {}): void => {
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({
+                        ...(JSON.parse(VALID_WRANGLER) as Record<string, unknown>),
+                        hyperdrive: [{ binding: "HYPERDRIVE", id: "<replace-with-hyperdrive-create-id>" }],
+                        ...extra,
+                    }),
+                    "utf8",
+                );
+            };
+            const hyperdriveApi = () => {
+                const posts: string[] = [];
+                const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+                    if (init?.method === "POST") {
+                        posts.push(init.body as string);
+                    }
+
+                    return Response.json({ errors: [], result: init?.method === "POST" ? { id: "created-id" } : [], success: true });
+                });
+
+                return { fetchStub, posts };
+            };
+
+            afterEach(() => {
+                vi.unstubAllEnvs();
+                vi.unstubAllGlobals();
+            });
+
+            it("creates the config only once nothing else can refuse the deploy, and before wrangler runs", async () => {
+                expect.assertions(4);
+
+                withPlaceholder();
+                vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = hyperdriveApi();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const recording = createRecordingSpawner();
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: recording.spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(posts).toHaveLength(1);
+                expect(recording.calls).toHaveLength(1);
+                expect((parseJsonc(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")) as { hyperdrive: { id: string }[] }).hyperdrive[0]?.id).toBe(
+                    "created-id",
+                );
+            });
+
+            it("stops a real deploy at the pre-deploy checks, before anything is built or shipped, when the connection string is missing", async () => {
+                expect.assertions(4);
+
+                withPlaceholder();
+                vi.stubEnv("LUNORA_HYPERDRIVE_URL", "");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub } = hyperdriveApi();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const recording = createRecordingSpawner();
+                const { errors, logger, warns } = silentLogger();
+                const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
+
+                expect(result.error).toContain("deploy blocked");
+                expect(errors.join(" ")).toContain("LUNORA_HYPERDRIVE_URL");
+                expect(recording.calls).toHaveLength(0);
+                // Stopped by the early check itself, not left to the last step after a "dry run" warning.
+                expect(warns.join(" ")).not.toContain("dry run");
+            });
+
+            it("creates nothing when a later precheck refuses the deploy", async () => {
+                expect.assertions(3);
+
+                // A D1 binding still carrying its placeholder id stops the deploy in the pre-deploy checks.
+                withPlaceholder({ d1_databases: [{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "x" }] });
+                vi.stubEnv("LUNORA_HYPERDRIVE_URL", "postgres://u:p@h/db");
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = hyperdriveApi();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(result.code).not.toBe(0);
+                expect(posts).toStrictEqual([]);
+                expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toContain("<replace-with-hyperdrive-create-id>");
+            });
+        });
+
         describe("artifacts namespace jurisdiction", () => {
             /** `VALID_WRANGLER` binding one Artifacts namespace, over the fixture schema pinned to `eu`. */
             const seedPinnedArtifacts = (): void => {
@@ -548,21 +1237,149 @@ describe("lunora deploy", () => {
                 expect(recording.calls).toHaveLength(0);
             });
 
-            it("warns and deploys when there is no API token to check with", async () => {
+            /** A fetch where the namespace is absent until a POST creates it; `posts` records the creations. */
+            const absentUntilCreated = () => {
+                const posts: string[] = [];
+                const fetchStub = vi.fn<typeof globalThis.fetch>(async (_url, init) => {
+                    if (init?.method === "POST") {
+                        posts.push(init.body as string);
+
+                        return Response.json({ result: { jurisdiction: "eu", namespace: "repos" }, success: true });
+                    }
+
+                    return posts.length > 0
+                        ? Response.json({ result: { jurisdiction: "eu", namespace: "repos" }, success: true })
+                        : Response.json({ errors: [{ code: 404, message: "not found" }], success: false }, { status: 404 });
+                });
+
+                return { fetchStub, posts };
+            };
+
+            it("creates a missing pinned namespace once, even when two bindings name it", async () => {
                 expect.assertions(3);
+
+                seedPinnedArtifacts();
+                writeFileSync(
+                    join(workdir, "wrangler.jsonc"),
+                    JSON.stringify({
+                        ...(JSON.parse(VALID_WRANGLER) as Record<string, unknown>),
+                        artifacts: [
+                            { binding: "ARTIFACTS", namespace: "repos" },
+                            { binding: "MIRROR", namespace: "repos" },
+                        ],
+                    }),
+                    "utf8",
+                );
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = absentUntilCreated();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger: silentLogger().logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(result.code).toBe(0);
+                expect(posts).toHaveLength(1);
+                expect(JSON.parse(posts[0] ?? "{}")).toStrictEqual({ jurisdiction: "eu", namespace: "repos" });
+            });
+
+            it("makes no lookup on a --temporary deploy, whose Worker goes to a throwaway account, and warns instead of stopping", async () => {
+                expect.assertions(4);
 
                 seedPinnedArtifacts();
                 vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
 
+                const { fetchStub, posts } = absentUntilCreated();
+
+                vi.stubGlobal("fetch", fetchStub);
+
                 const { logger, warns } = silentLogger();
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                    temporary: true,
+                });
+
+                expect(posts).toStrictEqual([]);
+                expect(fetchStub).not.toHaveBeenCalled();
+                expect(result.error).toBeUndefined();
+                expect(warns.some((message) => message.includes("--temporary deploys to a throwaway account") && message.includes('"repos"'))).toBe(true);
+            });
+
+            it("creates nothing on a dry run, and lets it pass since a real deploy would create the namespace", async () => {
+                expect.assertions(3);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "token");
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "acc");
+
+                const { fetchStub, posts } = absentUntilCreated();
+
+                vi.stubGlobal("fetch", fetchStub);
+
+                const { infos, logger } = silentLogger();
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(posts).toStrictEqual([]);
+                expect(result.error).toBeUndefined();
+                // Said, so the operator learns from the dry run that a real deploy will create it.
+                expect(
+                    infos.some((message) => message.includes('Artifacts namespace "repos" (binding ARTIFACTS) does not exist yet; it will be created')),
+                ).toBe(true);
+            });
+
+            it("lets a dry run through with a warning when there is no API token to check the namespace with, so a build needs none", async () => {
+                expect.assertions(4);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+
+                const { errors, logger, warns } = silentLogger();
+                const result = await runDeployCommand({
+                    cwd: workdir,
+                    dryRun: true,
+                    logger,
+                    secretLister: noRemoteSecrets,
+                    spawner: createRecordingSpawner().spawner,
+                });
+
+                expect(result.error).toBeUndefined();
+                expect(errors).toStrictEqual([]);
+                expect(warns.some((message) => message.includes("dry run:") && message.includes("A real deploy stops here"))).toBe(true);
+                // Says what to set, not only that the real deploy will stop.
+                expect(warns.some((message) => message.includes("CLOUDFLARE_API_TOKEN"))).toBe(true);
+            });
+
+            it("stops before wrangler when there is no API token to check the namespace with", async () => {
+                expect.assertions(4);
+
+                seedPinnedArtifacts();
+                vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
+
+                const { errors, logger } = silentLogger();
                 const recording = createRecordingSpawner();
                 const result = await runDeployCommand({ cwd: workdir, logger, secretLister: noRemoteSecrets, spawner: recording.spawner });
 
-                expect(result.code).toBe(0);
-                expect(recording.calls).toHaveLength(1);
-                expect(warns.some((message) => message.includes('the jurisdiction of Artifacts namespace "repos" (binding ARTIFACTS) was not checked'))).toBe(
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toContain("The deploy stops until it can be checked");
+                expect(errors.some((message) => message.includes('the jurisdiction of Artifacts namespace "repos" (binding ARTIFACTS) was not checked'))).toBe(
                     true,
                 );
+                expect(recording.calls).toHaveLength(0);
             });
         });
 
@@ -586,7 +1403,7 @@ describe("lunora deploy", () => {
             expect(args).toContain("deploy");
         });
 
-        it("--preview uploads a version (wrangler versions upload), not a live deploy", async () => {
+        it("refuses --preview on Cloudflare before anything is written: a version would share production's Durable Objects and D1", async () => {
             expect.assertions(3);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
@@ -596,12 +1413,9 @@ describe("lunora deploy", () => {
 
             const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, preview: true, spawner });
 
-            expect(result.code).toBe(0);
-
-            const args = calls[0]?.descriptor.args.join(" ") ?? "";
-
-            expect(args).toContain("wrangler versions upload");
-            expect(args).not.toContain("wrangler deploy");
+            expect(result).toMatchObject({ code: 2, error: expect.stringMatching(/--preview is not supported.*lunora preview deploy <name>/u) });
+            expect(calls).toHaveLength(0);
+            expect(readFileSync(join(workdir, "wrangler.jsonc"), "utf8")).toBe(VALID_WRANGLER);
         });
 
         it("skipCodegen (the --prebuilt path) deploys without running codegen", async () => {
@@ -849,7 +1663,8 @@ export const agentComputer = defineContainer({ schedulingPolicy: "durable_object
             const { calls, spawner } = createRecordingSpawner();
             const { infos, logger } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, spawner });
+            // The generated app defers its OpenAPI document, so the smoke check would boot a real `wrangler dev` on this stub entry.
+            const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, logger, smokeLoad: false, spawner });
 
             expect(result.code).toBe(0);
 
@@ -857,6 +1672,25 @@ export const agentComputer = defineContainer({ schedulingPolicy: "durable_object
 
             expect(args).toContain("src/worker.ts");
             expect(infos.some((line) => line.includes("class-B composition"))).toBe(true);
+        });
+
+        it("runs the default pre-deploy smoke check through the launcher before it deploys", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+            // A lazy registry is the case the check exists for: its functions load on demand, so the check runs and asks for its Worker to be launched.
+            mkdirSync(join(workdir, "src"), { recursive: true });
+            writeFileSync(join(workdir, "src", "index.ts"), "export class ShardDO {}\nexport default { fetch() {} };\n", "utf8");
+            const smokeLauncher = vi.fn<DevProcessSpawner>(() => {
+                throw new Error("no wrangler in this test");
+            });
+
+            await runDeployCommand({ cwd: workdir, lazyFunctions: true, secretLister: noRemoteSecrets, logger, smokeLauncher, spawner });
+
+            expect(smokeLauncher).toHaveBeenCalledWith(expect.any(String), expect.any(Array), expect.objectContaining({ cwd: workdir }));
         });
 
         it("does not add a positional entry when src/worker.ts is absent (class-A/C)", async () => {
@@ -1241,6 +2075,43 @@ export const agentComputer = defineContainer({ schedulingPolicy: "durable_object
             expect(errors.some((line) => line.includes("placeholder database_id") || line.includes("wrangler d1 create"))).toBe(true);
         });
 
+        // celld's D1 takes any id, so reconcile names the database after the worker and
+        // the Cloudflare-only placeholder gate does not apply.
+        it("writes a usable D1 id for a celld target and does not block on the placeholder", async () => {
+            expect.assertions(3);
+
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(join(workdir, "src", "server", "index.ts"), "export const ShardDO = class {};\nexport default { fetch() {} };", "utf8");
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "main": "src/server/index.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"]
+}`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                dryRun: true,
+                logger,
+                secretLister: noRemoteSecrets,
+                spawner,
+                target: "celld",
+                celldToolchain: celldReady,
+            });
+            const written = JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8")) as { d1_databases: unknown[] };
+
+            expect(result.code).toBe(0);
+            expect(written.d1_databases).toStrictEqual([{ binding: "DB", database_id: "x", database_name: "x" }]);
+            expect(calls.at(-1)?.descriptor.command).toBe("celld");
+        });
+
         it("proceeds when D1 binding has a real database_id (not the placeholder)", async () => {
             expect.assertions(3);
 
@@ -1548,7 +2419,7 @@ export const backfillNames = defineMigration({
 
             // Provide a fetch stub so runMigrateDataCommand succeeds without a
             // real worker. The RPC endpoint returns a 200 JSON body.
-            const fetchStub: FetchLike = () =>
+            const fetchStub: StreamingFetchLike = () =>
                 Promise.resolve({
                     ok: true,
                     text: () => Promise.resolve(JSON.stringify({ status: "ok" })),
@@ -1577,6 +2448,108 @@ export const backfillNames = defineMigration({
             expect(infos.some((line) => line.includes("backfill-names"))).toBe(true);
         });
 
+        it("--migrate applies the generated SQL files before the data migrations", async () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "lunora", "migrations.ts"),
+                `import { defineMigration } from "@lunora/server";
+
+export const backfillNames = defineMigration({
+    id: "backfill-names",
+    table: "users",
+    up: (doc) => doc,
+});
+`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora", "migrations"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "migrations", "20261101090000_create_emails.sql"),
+                'CREATE TABLE IF NOT EXISTS "emails" ("_id" TEXT);\n',
+                "utf8",
+            );
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+            const urls: string[] = [];
+            const fetchStub: StreamingFetchLike = async (url) => {
+                urls.push(url);
+
+                const body = url.endsWith("/_lunora/admin/sql-migrations")
+                    ? { files: [{ destructive: [], name: "20261101090000_create_emails.sql", skipped: [], state: "ran", statements: [] }] }
+                    : { status: "ok" };
+
+                return { ok: true, status: 200, text: () => Promise.resolve(JSON.stringify(body)) } as Response;
+            };
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                fetchImpl: fetchStub,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                spawner,
+            });
+
+            const sqlAt = urls.findIndex((url) => url.endsWith("/_lunora/admin/sql-migrations"));
+            const dataAt = urls.findIndex((url) => url.endsWith("/_lunora/migrate"));
+
+            expect(result.code).toBe(0);
+            expect(sqlAt).toBeGreaterThanOrEqual(0);
+            expect(dataAt).toBeGreaterThan(sqlAt);
+            expect(urls.filter((url) => url.endsWith("/_lunora/admin/sql-migrations"))).toHaveLength(1);
+        });
+
+        it("--migrate stops after a refused SQL file: no data migration runs, and the deploy fails", async () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(workdir, "lunora", "migrations.ts"),
+                `import { defineMigration } from "@lunora/server";
+
+export const backfillNames = defineMigration({
+    id: "backfill-names",
+    table: "users",
+    up: (doc) => doc,
+});
+`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora", "migrations"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "migrations", "20261107100000_drop_emails.sql"), 'DROP TABLE IF EXISTS "emails";\n', "utf8");
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+            const urls: string[] = [];
+            const fetchStub: StreamingFetchLike = async (url) => {
+                urls.push(url);
+
+                return { ok: false, status: 409, text: () => Promise.resolve(JSON.stringify({ code: "MIGRATION_DESTRUCTIVE" })) } as Response;
+            };
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                secretLister: noRemoteSecrets,
+                fetchImpl: fetchStub,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                spawner,
+            });
+
+            expect(result.code).not.toBe(0);
+            expect(urls.some((url) => url.endsWith("/_lunora/migrate"))).toBe(false);
+            expect(urls).toHaveLength(1);
+        });
+
         it("--migrate does not claim migrations were applied when none were", async () => {
             expect.assertions(3);
 
@@ -1585,7 +2558,8 @@ export const backfillNames = defineMigration({
 
             const { spawner } = createRecordingSpawner();
             const { infos, logger, warns } = silentLogger();
-            const fetchStub: FetchLike = () => Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify({ status: "ok" })) } as Response);
+            const fetchStub: StreamingFetchLike = () =>
+                Promise.resolve({ ok: true, text: () => Promise.resolve(JSON.stringify({ status: "ok" })) } as Response);
 
             const result = await runDeployCommand({
                 cwd: workdir,
@@ -1723,7 +2697,7 @@ export const backfillNames = defineMigration({
             });
 
             it("reports the deployed URL, so an automation never has to read it with its eyes", async () => {
-                expect.assertions(5);
+                expect.assertions(4);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
@@ -1735,24 +2709,7 @@ export const backfillNames = defineMigration({
                 expect(result.deployment?.url).toBe("https://lunora-app.acme.workers.dev");
                 expect(result.deployment?.workerName).toBe("lunora-app");
                 expect(result.deployment?.dryRun).toBe(false);
-                expect(result.deployment?.preview).toBe(false);
                 expect(Number.isNaN(Date.parse(result.deployment?.deployedAt ?? ""))).toBe(false);
-            });
-
-            it("--preview --format json reports the preview URL", async () => {
-                expect.assertions(3);
-
-                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-
-                const { spawner } = deployingSpawner("Worker Version ID: abc\n  https://preview-abc-lunora-app.acme.workers.dev\n");
-                const { logger } = silentLogger();
-
-                const result = await runDeployCommand({ cwd: workdir, secretLister: noRemoteSecrets, format: "json", logger, preview: true, spawner });
-
-                expect(result.deployment?.url).toBe("https://preview-abc-lunora-app.acme.workers.dev");
-                expect(result.deployment?.preview).toBe(true);
-                // A preview never becomes the checkout's recorded target.
-                expect(existsSync(join(workdir, ".lunora", "project.json"))).toBe(false);
             });
 
             it("--dry-run reports the discriminator and no URL — nothing was published", async () => {
@@ -1814,7 +2771,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { logger } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: true, status: 200 };
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });
@@ -1822,7 +2779,10 @@ export const backfillNames = defineMigration({
                 expect(result.code).toBe(0);
                 expect(result.healthCheck?.ok).toBe(true);
                 // Probed at the URL THIS run published to, readiness gate first.
-                expect(healthFetch).toHaveBeenCalledWith("https://lunora-app.acme.workers.dev/_lunora/health/ready");
+                expect(healthFetch).toHaveBeenCalledWith(
+                    "https://lunora-app.acme.workers.dev/_lunora/health/ready",
+                    expect.objectContaining({ redirect: "manual" }),
+                );
                 expect(result.healthCheck?.error).toBeUndefined();
             });
 
@@ -1834,7 +2794,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { errors, logger } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: false, status: 503 };
+                    return { headers: new Headers(), ok: false, status: 503 };
                 });
 
                 const result = await runDeployCommand({
@@ -1863,7 +2823,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner();
                 const { logger, warns } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: true, status: 200 };
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runDeployCommand({
@@ -1891,7 +2851,7 @@ export const backfillNames = defineMigration({
                 const { spawner } = deployingSpawner("Total Upload: 1 KiB\nDeployed lunora-app triggers\n");
                 const { errors, logger } = silentLogger();
                 const healthFetch = vi.fn<HealthFetch>(async () => {
-                    return { ok: true, status: 200 };
+                    return { headers: new Headers(), ok: true, status: 200 };
                 });
 
                 const result = await runDeployCommand({ cwd: workdir, healthCheck: true, healthFetch, secretLister: noRemoteSecrets, logger, spawner });
@@ -1918,7 +2878,7 @@ export const backfillNames = defineMigration({
                     secretConfirm: () => Promise.resolve(true),
                     // Remote has no secrets → the core LUNORA_ADMIN_TOKEN is missing + mintable,
                     // and .dev.vars has no value for it yet → a fresh value is minted.
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -1956,7 +2916,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -1980,7 +2940,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2002,7 +2962,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2031,7 +2991,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2059,7 +3019,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2093,7 +3053,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2136,7 +3096,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2167,7 +3127,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2200,7 +3160,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2228,7 +3188,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2256,7 +3216,7 @@ export const backfillNames = defineMigration({
                     logger,
                     secretConfirm: () => Promise.resolve(true),
                     // Remote has no secrets → the core LUNORA_ADMIN_TOKEN is missing + mintable.
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2282,7 +3242,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2315,7 +3275,7 @@ export const backfillNames = defineMigration({
                     interactive: true,
                     logger,
                     secretConfirm: () => Promise.resolve(true),
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2346,7 +3306,7 @@ export const backfillNames = defineMigration({
                     interactive: false,
                     logger,
                     // Worker exists (ok) but has no secrets → can't prompt → must abort.
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 
@@ -2354,6 +3314,67 @@ export const backfillNames = defineMigration({
                 // Never reached the wrangler deploy spawn.
                 expect(calls.some((call) => call.descriptor.args.join(" ").includes("wrangler deploy"))).toBe(false);
                 expect(errors.some((line) => line.includes("missing required secret"))).toBe(true);
+            });
+
+            // Every secret the app needs apart from its FCM keys, which each case decides.
+            const DEPLOYED_WITHOUT_FCM_KEYS = ["LUNORA_ADMIN_TOKEN", "LUNORA_RELAY_SECRET", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBJECT"];
+
+            const writeNotifyWithFcm = (fcmValue: string): void => {
+                writeFileSync(
+                    join(workdir, "lunora", "notify.ts"),
+                    `import { defineNotify, fcmFromEnv, webPushFromEnv } from "@lunora/notify";
+const getAccessToken = async (): Promise<string> => "token-from-the-app";
+export default defineNotify({ fcm: ${fcmValue}, webPush: (env) => webPushFromEnv(env) });
+`,
+                    "utf8",
+                );
+            };
+
+            const deployWithSecrets = (names: ReadonlyArray<string>): ReturnType<typeof runDeployCommand> => {
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                return runDeployCommand({
+                    cwd: workdir,
+                    interactive: false,
+                    logger,
+                    secretLister: () => Promise.resolve({ names: [...names], ok: true }),
+                    spawner,
+                });
+            };
+
+            it("deploys an fcm channel with its own getAccessToken without FCM_SERVICE_ACCOUNT", async () => {
+                expect.assertions(1);
+
+                writeNotifyWithFcm("(env) => ({ ...fcmFromEnv(env), getAccessToken })");
+
+                const result = await deployWithSecrets([...DEPLOYED_WITHOUT_FCM_KEYS, "FCM_PROJECT_ID"]);
+
+                expect(result.code).toBe(0);
+            });
+
+            it("asks an fcm channel with its own getAccessToken for FCM_PROJECT_ID", async () => {
+                expect.assertions(2);
+
+                writeNotifyWithFcm("(env) => ({ ...fcmFromEnv(env), getAccessToken })");
+
+                const result = await deployWithSecrets(DEPLOYED_WITHOUT_FCM_KEYS);
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: FCM_PROJECT_ID\./u);
+            });
+
+            it("still requires FCM_SERVICE_ACCOUNT when the fcm channel leaves its token to fcmFromEnv", async () => {
+                expect.assertions(2);
+
+                writeNotifyWithFcm("(env) => fcmFromEnv(env)");
+
+                const result = await deployWithSecrets([...DEPLOYED_WITHOUT_FCM_KEYS, "FCM_PROJECT_ID"]);
+
+                expect(result.code).toBe(EXIT_CODE.USAGE);
+                expect(result.error).toMatch(/missing required secret\(s\) on the deploy target: FCM_SERVICE_ACCOUNT\./u);
             });
 
             it("a staging deploy's missing-secret remediation names --env staging, not --prod", async () => {
@@ -2369,7 +3390,7 @@ export const backfillNames = defineMigration({
                     env: "staging",
                     interactive: false,
                     logger,
-                    secretLister: () => Promise.resolve({ names: [], ok: true }),
+                    secretLister: () => Promise.resolve({ names: REGISTRY_SECRET_DEPLOYED, ok: true }),
                     spawner,
                 });
 

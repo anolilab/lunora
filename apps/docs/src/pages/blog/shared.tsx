@@ -2,7 +2,7 @@ import { format } from "date-fns";
 import type { FC } from "react";
 
 import { Kicker } from "@/kit/layout";
-import { isFallbackImage } from "@/lib/seo";
+import { isFallbackImage, ogImagePath } from "@/lib/seo";
 
 /** Format an ISO/date string into a `MMM D, YYYY` (uppercased) label + ISO datetime. */
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -55,15 +55,8 @@ export const MetaLine: FC<{ category?: string; publishedAt?: string }> = ({ cate
  *
  * Drop a real path into a post's frontmatter and it wins, with no change here.
  */
-export const Cover: FC<{ category?: string; description?: string; eager?: boolean; image?: string; title?: string }> = ({
-    category,
-    description,
-    eager = false,
-    image,
-    title,
-}) => {
-    const generated = new URLSearchParams({ description: description ?? "", eyebrow: category ?? "Blog", title: title ?? "Lunora" });
-    const source = isFallbackImage(image) ? `/api/og?${generated.toString()}` : image;
+export const Cover: FC<{ eager?: boolean; image?: string; slug: string; title?: string }> = ({ eager = false, image, slug, title }) => {
+    const source = isFallbackImage(image) ? ogImagePath(`blog/${slug}`) : image;
 
     return (
         <div className="aspect-1200/630 w-full overflow-hidden bg-wash">

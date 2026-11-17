@@ -58,7 +58,7 @@ Lint ids are snake_case. The performance-relevant ones:
 | --------------------------------- | ---------------------------------------------------------------------------- |
 | `filter_without_index`            | A query filters a table with no covering index.                              |
 | `unbounded_collect`               | `.collect()` with no index or filter loads every row (and re-sends it live). |
-| `filter_on_primary_key`           | Filtering on `_id` scans; use `ctx.db.get(id)`.                              |
+| `filter_on_primary_key`           | Filtering on `_id` scans; use `ctx.db.get(table, id)`.                       |
 | `unindexed_foreign_key`           | An FK column has no index.                                                   |
 | `unindexed_relation_target`       | A `many` relation's target FK has no index, so `with:` reads scan.           |
 | `duplicate_index` / `empty_index` | Wasted or malformed index.                                                   |

@@ -216,7 +216,7 @@ describe("usersPanel", () => {
 
         // A deployment with the username plugin: a required `username` user field.
         mock.getAuthConfig.mockResolvedValue({
-            capabilities: { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false },
+            capabilities: { accounts: true, apiKey: false, admin: true, organization: false, passkey: false, twoFactor: false },
             emailAndPassword: true,
             organization: { enabled: false, roles: false, teams: false },
             plugins: ["username"],

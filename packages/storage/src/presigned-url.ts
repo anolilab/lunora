@@ -17,6 +17,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { validateTtlSeconds } from "../../../shared/hmac-url";
+import { memoizePromise } from "../../../shared/promise-memo";
 import { toHex } from "./internal";
 import type { R2S3Credentials } from "./types";
 
@@ -64,14 +65,28 @@ const hmac = async (key: ArrayBuffer | Uint8Array, message: string): Promise<Arr
     return crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(message));
 };
 
-/** Derive the SigV4 signing key: HMAC chain over date → region → service → "aws4_request". */
-const deriveSigningKey = async (secretAccessKey: string, dateStamp: string): Promise<ArrayBuffer> => {
-    const dateKey = await hmac(textEncoder.encode(`AWS4${secretAccessKey}`), dateStamp);
-    const regionKey = await hmac(dateKey, REGION);
-    const serviceKey = await hmac(regionKey, SERVICE);
+// The signing key depends only on (secret, UTC day), so every presign after the
+// first in a day would otherwise repeat four HMAC key imports and signs just to
+// arrive at the same key — 4/5 of the crypto work of a call. Bounded like the
+// signed-URL key cache: one entry per (secret, day) actually in use.
+const SIGNING_KEY_CACHE_MAX = 64;
+const signingKeyCache = new Map<string, Promise<CryptoKey>>();
 
-    return hmac(serviceKey, "aws4_request");
-};
+/** The SigV4 signing key — HMAC chain over date → region → service → "aws4_request" — imported for the final sign. */
+const signingKey = async (secretAccessKey: string, dateStamp: string): Promise<CryptoKey> =>
+    memoizePromise(
+        signingKeyCache,
+        `${dateStamp}\n${secretAccessKey}`,
+        async () => {
+            const dateKey = await hmac(textEncoder.encode(`AWS4${secretAccessKey}`), dateStamp);
+            const regionKey = await hmac(dateKey, REGION);
+            const serviceKey = await hmac(regionKey, SERVICE);
+            const key = await hmac(serviceKey, "aws4_request");
+
+            return crypto.subtle.importKey("raw", key, { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
+        },
+        SIGNING_KEY_CACHE_MAX,
+    );
 
 /** Resolve the R2 S3 endpoint host for an optional jurisdiction. */
 const endpointHost = (credentials: R2S3Credentials): string => {
@@ -151,8 +166,8 @@ export const buildPresignedUrl = async (parameters: PresignedUrlParams): Promise
     const canonicalRequest = [method, canonicalUri, canonicalQuery, `host:${host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
     const stringToSign = [ALGORITHM, amzDate, credentialScope, await sha256Hex(canonicalRequest)].join("\n");
 
-    const signingKey = await deriveSigningKey(credentials.secretAccessKey, dateStamp);
-    const signature = toHex(await hmac(signingKey, stringToSign));
+    const cryptoKey = await signingKey(credentials.secretAccessKey, dateStamp);
+    const signature = toHex(await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(stringToSign)));
 
     return `https://${host}${canonicalUri}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 };

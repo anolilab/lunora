@@ -1,6 +1,6 @@
 import type { IdentityIR } from "../ir";
 import type { ResolvedAppOptions } from "./app-helpers";
-import { hasEmailAgents, hasShardedTables } from "./app-helpers";
+import { hasEmailAgents, hasLiveStreamMounts, hasShardedTables } from "./app-helpers";
 
 /**
  * The `defineIdentity(...)` contract import — a VALUE (not `import type`) so it
@@ -37,7 +37,7 @@ const buildGlobalImports = (hasGlobal: boolean): string[] =>
     hasGlobal
         ? [
               `import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";`,
-              `import { abortStagedGlobalRows, applyCdcChanges, commitStagedGlobalRows, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, stageGlobalRows } from "@lunora/d1";`,
+              `import { abortStagedGlobalRows, applyCdcChanges, applySqlMigrationFiles, commitStagedGlobalRows, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, stageGlobalRows } from "@lunora/d1";`,
           ]
         : [];
 
@@ -52,8 +52,16 @@ const buildNotifyImports = (hasNotify: boolean): string[] => (hasNotify ? [`impo
  * opt-in add-on the umbrella never re-exports, so this is unconditionally
  * `@lunora/agent/inbound` regardless of `useUmbrella`.
  */
-const buildInboundImports = (options: ResolvedAppOptions): string[] =>
-    hasEmailAgents(options) ? [`import { dispatchAgentEmail } from "@lunora/agent/inbound";`] : [];
+const buildInboundImports = (options: ResolvedAppOptions): string[] => {
+    if (!hasEmailAgents(options)) {
+        return [];
+    }
+
+    // Lazy: the `email()` entry `import()`s both on the first message (`emit-app.ts`).
+    return options.lazyFunctions === true
+        ? [`import type { dispatchAgentEmail } from "@lunora/agent/inbound";`]
+        : [`import { dispatchAgentEmail } from "@lunora/agent/inbound";`];
+};
 
 /**
  * The agent-definitions namespace import — `import * as lunoraAgentDefinitions
@@ -62,7 +70,7 @@ const buildInboundImports = (options: ResolvedAppOptions): string[] =>
  * `onEmail` agent is declared.
  */
 const buildAgentDefinitionsImport = (options: ResolvedAppOptions): string[] =>
-    hasEmailAgents(options) ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
+    hasEmailAgents(options) && options.lazyFunctions !== true ? [`import * as lunoraAgentDefinitions from "../agents.js";`] : [];
 
 /**
  * The runtime module's own type and value import lines. Which symbols each side
@@ -79,7 +87,9 @@ const buildRuntimeImports = (options: ResolvedAppOptions): string[] => {
         "LunoraWorker",
         "Route",
         "ScheduledControllerLike",
+        "SecurityOptions",
         "ShardNamespaceLike",
+        ...(hasShardedTables(options) ? ["ShardRegistryRpc"] : []),
         "WorkerOptions",
         // The queue consumer's fourth argument — the trigger's own trace, forwarded
         // so a handler's `ctx.run` dispatches join it.
@@ -95,6 +105,9 @@ const buildRuntimeImports = (options: ResolvedAppOptions): string[] => {
         "createWorker",
         ...(options.jurisdiction ? ["declareAppJurisdiction"] : []),
         "resolveLogArchiveFromEnv",
+        ...(options.studioAssetsBinding !== undefined && (options.wantsArchitecture || options.wantsOpenApi || options.wantsOpenRpc)
+            ? ["loadStudioDocument"]
+            : []),
         ...(options.hasAuth ? ["memoizeIdentity"] : []),
         ...(hasFramework ? ["withFrameworkWorker"] : []),
     ].join(", ");
@@ -107,24 +120,13 @@ const buildRuntimeImports = (options: ResolvedAppOptions): string[] => {
 
 /** Import lines — only what the enabled capabilities need. Add-ons via `@lunora/*`; the runtime via the umbrella subpath when the app depends on `lunora`. */
 const buildImportLines = (options: ResolvedAppOptions): string[] => {
-    const {
-        hasAccess,
-        hasAuth,
-        hasGlobal,
-        hasHyperdriveGlobal,
-        hasKvIntrospector,
-        hasQueue,
-        hasScheduler,
-        hasStorage,
-        hasWorkflow,
-        wantsOpenApi,
-        wantsOpenRpc,
-    } = options;
+    const { hasAccess, hasAuth, hasGlobal, hasHyperdriveGlobal, hasKvIntrospector, hasQueue, hasScheduler, hasStorage, hasWorkflow } = options;
     return [
         ...(hasAuth
             ? [
                   `import type { AuthNamespaceLike, LunoraAuth, LunoraAuthOptions } from "@lunora/auth";`,
-                  `import { authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuth, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";`,
+                  // Types only: `authModule.ts` is loaded with `import()` on the first event (`loadDeferredModules`).
+                  `import type * as LunoraAuthModule from "./authModule.js";`,
               ]
             : []),
         ...buildAccessImports(hasAccess, hasAuth),
@@ -132,7 +134,7 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
         ...(hasHyperdriveGlobal
             ? [
                   `import type { HyperdriveEngine } from "@lunora/hyperdrive/global";`,
-                  `import { createHyperdriveGlobalCtxDb } from "@lunora/hyperdrive/global";`,
+                  `import { applyHyperdriveGlobalCdc, createHyperdriveGlobalCtxDb, createHyperdriveGlobalIntrospector, exportHyperdriveGlobalRows, importHyperdriveGlobalRows, readHyperdriveGlobalCdc } from "@lunora/hyperdrive/global";`,
                   `import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";`,
               ]
             : []),
@@ -160,13 +162,12 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
         ...(hasQueue
             ? [
                   `import { createQueueCaptureSink, dispatchQueueBatch, shouldCaptureQueue } from "@lunora/queue";`,
-                  `import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`,
+                  // Lazy: the consumer `import()`s the registry on its first batch (`app-worker-options.ts`).
+                  ...(options.lazyFunctions === true ? [] : [`import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`]),
               ]
             : []),
-        ...(options.wantsArchitecture ? [`import { architecture } from "./architecture.js";`] : []),
-        ...(wantsOpenApi ? [`import { openApiSpec } from "./openapi.js";`] : []),
-        ...(wantsOpenRpc ? [`import { openRpcSpec } from "./openrpc.js";`] : []),
         `import { createShardDO } from "./shard.js";`,
+        ...(hasLiveStreamMounts(options) ? [`import { liveStreamRouter } from "${options.useUmbrella ? "lunorash/server" : "@lunora/server"}";`] : []),
         ...(options.hasVectors ? [`import { LUNORA_VECTOR_INDEXES } from "./vectors.js";`] : []),
     ];
 };

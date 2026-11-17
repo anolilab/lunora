@@ -2,10 +2,12 @@ import { runCodegen } from "@lunora/codegen";
 import type { ContainerLogStreamHandle, DiscoveryCache } from "@lunora/config";
 import {
     AGENT_RULES_HINT,
+    checkDevEnv,
     claimAgentRulesHint,
     claimDevServerState,
     clearDevServerState,
     createDiscoveryCache,
+    describeDevEnvCheck,
     detectAgentRules,
     detectAiAgent,
     DEV_BINDINGS_FILE,
@@ -15,25 +17,30 @@ import {
     DEV_STATE_FILE,
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
+    devTriggerHints,
     ensureDevVariables,
     ensureDevVarsExample,
     fillDevSecrets,
+    formatDevBannerRow,
     inferLunoraBindings,
     isInteractive,
     readLiveDevServerState,
     readProjectRemotePreference,
+    resolveLazyFunctions,
     resolveSchemaDirectory,
     secretSourcesFromBindings,
     updateDevServerState,
+    writeCelldDevProjection,
 } from "@lunora/config";
-import { describeWithheldWorkersAi, resolveRemoteEnabled, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import type { LocalHyperdrive } from "@lunora/config/cloudflare";
+import { describeWithheld, reconcileStudioAssets, resolveRemoteEnabled, startLocalHyperdrive, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveRunnableTargetOrError } from "../../util/deploy-target";
+import { resolveRunnableTargetOrError } from "../../util/deploy-target-resolve";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
@@ -52,7 +59,7 @@ import { normalizeAllowMail, printPublicWarning, startTunnelForPlan } from "./tu
 import type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, WorkerProcess, WorkerSpawner } from "./types";
 
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
-const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined, manifestPath: string | undefined): void => {
+const printBanner = (logger: Logger, plan: DevCommandPlan, cwd: string, studioUrl: string | undefined, manifestPath: string | undefined): void => {
     logger.info("");
     logger.success("Lunora dev");
     logger.info(`  ➜  Worker:     ${plan.workerOrigin}`);
@@ -65,6 +72,12 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
 
     if (plan.runsCodegenWatch) {
         logger.info("  ➜  Codegen:    watching lunora/");
+    }
+
+    // Studio pointers only: `wrangler dev` already prints the `curl` for its
+    // `/cdn-cgi/local/scheduled` route when the config declares crons.
+    for (const { label, text } of devTriggerHints({ projectRoot: cwd, schemaDirectory: resolveSchemaDirectory(cwd), studioUrl })) {
+        logger.info(formatDevBannerRow(label, text, 12));
     }
 
     // The two files a task runner reads. The manifest is written whether or not
@@ -84,13 +97,13 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
             logger.info(`  ➜  Remote:     ${plan.remote.bindings.join(", ")} → deployed worker`);
         } else if (plan.remote.reason !== undefined) {
             // No reason means the session still runs with a temp config (only
-            // `ai` was withheld), so "running fully local" would be wrong.
+            // a remote-only binding was withheld), so "running fully local" would be wrong.
             logger.warn(`  ➜  Remote:     requested but inactive (${plan.remote.reason}) — running fully local`);
         }
     }
 
     for (const binding of plan.remote.withheld) {
-        logger.warn(`  ➜  ${describeWithheldWorkersAi(binding)}`);
+        logger.warn(`  ➜  ${describeWithheld(binding)}`);
     }
 
     logger.info("");
@@ -111,6 +124,37 @@ const printAgentRulesHint = (logger: Logger, cwd: string): void => {
 };
 
 /**
+ * Warn about keys the project's `defineEnv` contract needs and the dev env
+ * lacks, which `defineEnv` would otherwise report only as a 500 from the first
+ * request that reads one. Never fails the start. Only on the wrangler flavor:
+ * the vite and framework-worker flavors run `@lunora/vite`, whose plugin runs
+ * the same check and re-runs it on an `env.ts` edit.
+ */
+const reportDevEnv = async (logger: Logger, cwd: string, plan: DevCommandPlan): Promise<void> => {
+    if (plan.flavor !== "wrangler") {
+        return;
+    }
+
+    try {
+        const schemaDirectory = resolveSchemaDirectory(cwd);
+        // As the worker runs: `--var WORKER_ENV:development`, and without the bindings a logged-out session withholds.
+        const check = await checkDevEnv({
+            projectRoot: cwd,
+            schemaDirectory,
+            vars: { WORKER_ENV: "development" },
+            withheld: plan.remote.withheld.map((entry) => entry.binding),
+        });
+        const report = describeDevEnvCheck(check, schemaDirectory);
+
+        if (report !== undefined) {
+            logger[report.level](report.message);
+        }
+    } catch {
+        /* never fatal: the check only advises, like the scaffold offer before it */
+    }
+};
+
+/**
  * Offer to scaffold `.dev.vars` before the worker starts — otherwise it throws
  * on the first required secret (e.g. `AUTH_SECRET is required`). Non-interactive
  * runs (CI) decline silently rather than block on a prompt, but we log an
@@ -125,21 +169,31 @@ const printAgentRulesHint = (logger: Logger, cwd: string): void => {
  * now-complete `.dev.vars.example`, then log the non-interactive hint if declined.
  */
 const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string, cache: DiscoveryCache): Promise<void> => {
-    // Phase 1 — seed .dev.vars.example with any package-required secrets that
-    // are not already listed there. Best-effort: a scan failure is non-fatal.
+    // The project's secret sources, read once for both the example and the fill. Best-effort: a scan failure is non-fatal, and the fill then
+    // generates every key.
+    let secretSources: ReadonlyArray<string> | undefined;
+
     try {
-        const bindings = await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) });
-        const sources = secretSourcesFromBindings(bindings);
-        const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, sources);
-
-        if (addedKeys.length > 0) {
-            // `@lunora/notify:webPush` → `@lunora/notify (webPush)`.
-            const readable = sources.map((source) => (source.includes(":") ? `${source.replace(":", " (")})` : source));
-
-            options.logger.info(`Updated .dev.vars.example with secrets for: ${readable.join(", ")} (${addedKeys.join(", ")})`);
-        }
+        secretSources = secretSourcesFromBindings(await inferLunoraBindings({ cache, projectRoot: cwd, schemaDir: resolveSchemaDirectory(cwd) }));
     } catch {
         // Non-fatal — scanning may fail in unusual project layouts.
+    }
+
+    // Phase 1 — seed .dev.vars.example with any package-required secrets that
+    // are not already listed there. Best-effort: a write failure is non-fatal.
+    if (secretSources !== undefined) {
+        try {
+            const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, secretSources);
+
+            if (addedKeys.length > 0) {
+                // `@lunora/notify:webPush` → `@lunora/notify (webPush)`.
+                const readable = secretSources.map((source) => (source.includes(":") ? `${source.replace(":", " (")})` : source));
+
+                options.logger.info(`Updated .dev.vars.example with secrets for: ${readable.join(", ")} (${addedKeys.join(", ")})`);
+            }
+        } catch {
+            // Non-fatal — the example is left as it was.
+        }
     }
 
     // Phase 2 — offer to generate / top up .dev.vars from the example.
@@ -148,6 +202,9 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
         cwd,
         info: (message) => {
             options.logger.info(message);
+        },
+        warn: (message) => {
+            options.logger.warn(message);
         },
     });
 
@@ -163,6 +220,12 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
         );
     }
 
+    // The scaffold warned it wrote nothing because a dev-vars file is not readable;
+    // filling secrets now would write `.dev.vars` behind that warning.
+    if (result.status === "unreadable") {
+        return;
+    }
+
     // Phase 3 — fill any empty/placeholder secret already in .dev.vars (a
     // `lunora add`-scaffolded project writes secrets blank) and ensure the core
     // LUNORA_ADMIN_TOKEN is present + generated, so the worker boots with real
@@ -172,6 +235,7 @@ const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string
     try {
         (options.fillSecrets ?? fillDevSecrets)({
             cwd,
+            secretSources,
             info: (message) => {
                 options.logger.info(message);
             },
@@ -215,7 +279,7 @@ const afterWorkerSpawn = (
         /* never fatal */
     }
 
-    printBanner(logger, plan, studioUrl, manifestPath);
+    printBanner(logger, plan, cwd, studioUrl, manifestPath);
 
     return containerLogs;
 };
@@ -291,10 +355,11 @@ const emitDevBindingManifest = (options: {
             ...(plan.flavor === "wrangler" ? { origin: plan.workerOrigin } : {}),
             statusFile: DEV_STATE_FILE,
         },
+        logger,
+        projectRoot: cwd,
         // The default write must not announce itself on every `lunora dev`; the
         // requested one should say where it put the file.
-        logger: requested ? logger : { ...logger, success: () => {}, warn: () => {} },
-        projectRoot: cwd,
+        quiet: !requested,
     });
 
     if (result.error !== undefined) {
@@ -331,6 +396,7 @@ const startStudioBestEffort = async (
             // in-process, so they need the SAME apiSpec this run's own codegen uses
             // — codegen deletes the spec file its mode does not name.
             apiSpec: options.apiSpec,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
             cwd,
             logger: {
                 warnOnce: (message) => {
@@ -377,7 +443,15 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
     }
 
     try {
-        runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: "lunora", projectRoot: cwd, target, ...wranglerCodegenInputs(cwd) });
+        runCodegen({
+            apiSpec: options.apiSpec,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+            lunoraDirectory: resolveSchemaDirectory(cwd),
+            projectRoot: cwd,
+            target,
+            ...wranglerCodegenInputs(cwd, target),
+        });
+        reconcileStudioAssets(cwd, target, logger);
     } catch (error: unknown) {
         logger.warn(`codegen (pre-sidecar) failed: ${error instanceof Error ? error.message : String(error)} — the framework dev server will retry`);
     }
@@ -386,6 +460,39 @@ const ensureSidecarGenerated = (plan: DevCommandPlan, options: DevCommandOptions
 /** The startup line: Vite owns everything on its flavor; otherwise it names the worker's dev server (the child's tag). */
 const startBanner = (plan: DevCommandPlan): string =>
     plan.flavor === "vite" ? "starting vite dev (worker + studio + codegen run inside Vite via @lunora/vite)" : `starting ${plan.wrangler.tag} dev + studio`;
+
+/** Says why the worker binds IPv4 loopback: the host has no IPv6 `::1`, which `wrangler dev` needs. */
+const noteIpv4LoopbackFallback = (plan: DevCommandPlan, logger: Logger): void => {
+    if (plan.ipv4LoopbackForced) {
+        logger.info(
+            "no IPv6 loopback (::1) on this host — binding the worker to 127.0.0.1 (--ip) so wrangler dev doesn't crash. Pin `dev.ip` in wrangler.jsonc to override.",
+        );
+    }
+};
+
+/**
+ * Whether an attached `--no-worker` celld run can start. Its external runner
+ * executes `celld dev` on the projection, so the projection is written first, once
+ * the toolchain probe passes; `false`, logged, when it cannot be written. A run
+ * that starts its own session writes the projection there instead.
+ */
+const attachedCelldProjectionReady = async (plan: DevCommandPlan, options: DevCommandOptions, cwd: string, logger: Logger): Promise<boolean> => {
+    if (plan.celldSession !== true || plan.workerEnabled) {
+        return true;
+    }
+
+    try {
+        for (const warning of await (options.writeCelldProjection ?? writeCelldDevProjection)({ projectRoot: cwd })) {
+            logger.warn(warning);
+        }
+
+        return true;
+    } catch (error: unknown) {
+        logger.error(`could not write the celld projection: ${error instanceof Error ? error.message : String(error)}`);
+
+        return false;
+    }
+};
 
 /**
  * The worker the plan runs — a celld dev session, else the planned dev server
@@ -407,6 +514,29 @@ const startPlannedWorker = async (
 
         return undefined;
     }
+};
+
+/**
+ * The embedded Postgres behind a Hyperdrive binding that has no local database,
+ * for the session's lifetime. Also under `--remote`: Hyperdrive has no remote
+ * mode here, so wrangler still dials a local database for it.
+ */
+const startEmbeddedHyperdrive = async (options: DevCommandOptions, cwd: string, logger: Logger): Promise<LocalHyperdrive | undefined> => {
+    const hyperdrive = await (options.startHyperdrive ?? startLocalHyperdrive)({
+        onWarning: (message) => {
+            logger.warn(message);
+        },
+        projectRoot: cwd,
+    });
+
+    if (hyperdrive !== undefined && hyperdrive.bindings.length > 0) {
+        logger.info(
+            // eslint-disable-next-line no-secrets/no-secrets -- an environment variable name with a placeholder, not a credential
+            `Hyperdrive ${hyperdrive.bindings.join(", ")}: embedded Postgres (PGlite), data in .wrangler/state/lunora-pglite. Set CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_<BINDING> to use your own.`,
+        );
+    }
+
+    return hyperdrive;
 };
 
 /**
@@ -517,24 +647,33 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
             plan.wrangler.env = { ...plan.wrangler.env, [DEV_HANDOFF_ENV]: String(process.pid) };
         }
 
+        // After the incumbent check, so a second `lunora dev` never opens a second
+        // database on the same data directory.
+        // Not in attached mode (`--no-worker`): an external runner starts the worker, which would never see the
+        // address this process puts in its own environment. That worker starts its own database (the Vite plugin does).
+        // Only for Cloudflare: Hyperdrive is a Cloudflare binding, and the other targets rate it unsupported.
+        if (plan.workerEnabled && target === "cloudflare") {
+            handles.hyperdrive = await startEmbeddedHyperdrive(options, cwd, logger);
+        }
+
         await offerDevVariablesScaffold(options, cwd, discoveryCache);
+
+        await reportDevEnv(logger, cwd, plan);
 
         logger.info(startBanner(plan));
 
         // Before anything is spawned — see the helper.
         printCloudflareCliConfigWarning(logger, cwd);
 
-        if (plan.ipv4LoopbackForced) {
-            logger.info(
-                "no IPv6 loopback (::1) on this host — binding the worker to 127.0.0.1 (--ip) so wrangler dev doesn't crash. Pin `dev.ip` in wrangler.jsonc to override.",
-            );
-        }
+        noteIpv4LoopbackFallback(plan, logger);
 
         if (plan.runsCodegenWatch) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({
                 apiSpec: options.apiSpec,
+                lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
                 jsonLogs: options.jsonLogs,
                 logger,
+                lunoraDirectory: resolveSchemaDirectory(cwd),
                 projectRoot: cwd,
                 target,
             });
@@ -599,6 +738,10 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
                 signal: handles.readyProbe.signal,
             });
         };
+
+        if (!(await attachedCelldProjectionReady(plan, options, cwd, logger))) {
+            return { code: EXIT_CODE.FAILURE, plan };
+        }
 
         if (!plan.workerEnabled) {
             // Attached mode: whatever is left after `--no-worker` keeps running
@@ -791,6 +934,7 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(async ({ a
         cwd,
         emitBindings: options.emitBindings,
         inspectorPort: options.inspectorPort,
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         jsonLogs,
         local: options.local,
         logger,

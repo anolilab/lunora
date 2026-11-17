@@ -1,8 +1,12 @@
 import type {
+    AdminTokenSummary,
     AuthPage,
     AuthSession,
     AuthUser,
+    CreatedAdminToken,
     CronJobInfo,
+    CronRunsResult,
+    DeploymentPauseStatus,
     FunctionDescriptor,
     FunctionReference,
     GlobalFacetResult,
@@ -12,7 +16,6 @@ import type {
     KvKeyListResult,
     KvNamespaceSummary,
     KvValueResult,
-    LunoraClient,
     PipelineLogPage,
     PipelineLogQuery,
     ScheduleRecord,
@@ -21,21 +24,25 @@ import type {
     VectorIndexSummary,
     VectorQueryMatch,
 } from "@lunora/client";
+import type { LunoraAdminClient } from "@lunora/client/admin";
+import type { Mock } from "vitest";
 import { vi } from "vitest";
 
 interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
     addAuthOrgMember: ReturnType<typeof vi.fn>;
     addAuthOrgTeamMember: ReturnType<typeof vi.fn>;
-    asClient: LunoraClient;
+    asClient: LunoraAdminClient;
     banAuthUser: ReturnType<typeof vi.fn>;
     cancelAuthOrgInvitation: ReturnType<typeof vi.fn>;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
+    createAdminToken: Mock<(options: { expiresAt?: number; name: string }) => Promise<CreatedAdminToken>>;
     createAuthOrganization: ReturnType<typeof vi.fn>;
     createAuthOrgRole: ReturnType<typeof vi.fn>;
     createAuthOrgTeam: ReturnType<typeof vi.fn>;
     createAuthSignUpInvitation: ReturnType<typeof vi.fn>;
     createAuthUser: ReturnType<typeof vi.fn>;
+    deleteAuthApiKey: ReturnType<typeof vi.fn>;
     deleteAuthOrganization: ReturnType<typeof vi.fn>;
     deleteAuthOrgRole: ReturnType<typeof vi.fn>;
     deleteAuthPasskey: ReturnType<typeof vi.fn>;
@@ -55,10 +62,13 @@ interface MockClientHooks {
     getAuthCapabilities: ReturnType<typeof vi.fn>;
     getAuthConfig: ReturnType<typeof vi.fn>;
     getCronJobs: ReturnType<typeof vi.fn>;
+    getDeploymentPause: ReturnType<typeof vi.fn>;
     getKvValue: ReturnType<typeof vi.fn>;
     impersonateAuthUser: ReturnType<typeof vi.fn>;
     inviteAuthOrgMember: ReturnType<typeof vi.fn>;
+    listAdminTokens: Mock<() => Promise<AdminTokenSummary[]>>;
     listAuthAccounts: ReturnType<typeof vi.fn>;
+    listAuthApiKeys: ReturnType<typeof vi.fn>;
     listAuthOrganizations: ReturnType<typeof vi.fn>;
     listAuthOrgInvitations: ReturnType<typeof vi.fn>;
     listAuthOrgMembers: ReturnType<typeof vi.fn>;
@@ -69,6 +79,7 @@ interface MockClientHooks {
     listAuthSessions: ReturnType<typeof vi.fn>;
     listAuthSignUpInvitations: ReturnType<typeof vi.fn>;
     listAuthUsers: ReturnType<typeof vi.fn>;
+    listCronRuns: ReturnType<typeof vi.fn>;
     listFunctions: ReturnType<typeof vi.fn>;
     listGlobalTables: ReturnType<typeof vi.fn>;
     listKvKeys: ReturnType<typeof vi.fn>;
@@ -87,6 +98,7 @@ interface MockClientHooks {
     removeAuthOrgTeam: ReturnType<typeof vi.fn>;
     removeAuthOrgTeamMember: ReturnType<typeof vi.fn>;
     removeAuthUser: ReturnType<typeof vi.fn>;
+    revokeAdminToken: Mock<(name: string) => Promise<void>>;
     revokeAuthSession: ReturnType<typeof vi.fn>;
     revokeAuthSignUpInvitation: ReturnType<typeof vi.fn>;
     revokeAuthUserSessions: ReturnType<typeof vi.fn>;
@@ -94,8 +106,11 @@ interface MockClientHooks {
     setAuthOrgMemberRole: ReturnType<typeof vi.fn>;
     setAuthUserPassword: ReturnType<typeof vi.fn>; // gitleaks:allow -- mock method name, not a secret
     setAuthUserRole: ReturnType<typeof vi.fn>;
+    setDeploymentPause: ReturnType<typeof vi.fn>;
     shardTraffic: ReturnType<typeof vi.fn>;
     signedStorageUrl: ReturnType<typeof vi.fn>;
+    /** The SSE-framed dispatch (`__lunora_admin__:aiChat`). See {@link MockClientImpls.streamRpc}. */
+    streamRpc: ReturnType<typeof vi.fn>;
     subscribe: ReturnType<typeof vi.fn>;
     subscribeScheduledJobs: ReturnType<typeof vi.fn>;
     unbanAuthUser: ReturnType<typeof vi.fn>;
@@ -137,8 +152,10 @@ interface MockClientImpls {
     kvNamespaces?: KvNamespaceSummary[];
     /** Seed entries per namespace binding → key → stored entry. Mutated in place by put/delete. */
     kvSeed?: Record<string, Record<string, { expiration?: number; metadata?: unknown; value: string }>>;
+    listAuthApiKeys?: (input: { userId: string }) => Promise<Record<string, unknown>[]> | Record<string, unknown>[];
     listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
     listAuthUsers?: (options: ListAuthUsersOptions) => AuthPage<AuthUser>;
+    listCronRuns?: () => CronRunsResult;
     listFunctions?: () => FunctionDescriptor[];
     listGlobalTables?: () => GlobalTableInfo[];
     listScheduledJobs?: () => ScheduleRecord[];
@@ -146,6 +163,8 @@ interface MockClientImpls {
     listStorageObjects?: (options: { bucket?: string; cursor?: string; limit?: number; prefix?: string }) => StorageListPage;
     listVectorIndexes?: () => VectorIndexSummary[];
     mutation?: Impl;
+    /** The deployment pause flag the toggle and banner read. Defaults to running and unsupported. */
+    pause?: DeploymentPauseStatus;
     query?: Impl;
     queryLogArchive?: (query?: PipelineLogQuery) => PipelineLogPage;
     queryVectorIndex?: (options: { name: string; text: string; topK?: number }) => VectorQueryMatch[];
@@ -153,10 +172,21 @@ interface MockClientImpls {
     runCronJob?: (name: string) => { name: string; ran: boolean };
     shardTraffic?: (table: string) => ShardTrafficResult;
     signedStorageUrl?: (key: string) => string;
+
+    /**
+     * The streaming dispatch, for the ops that answer `text/event-stream`.
+     *
+     * Defaults to {@link MockClientImpls.query}: a streamed op RESOLVES with the
+     * same whole result its non-streaming call site returned, so a test that only
+     * cares what the turn answered needs no second impl. Supply this one to
+     * exercise the frames on the way — `options.onFrame` is the third argument.
+     */
+    streamRpc?: Impl;
 }
 
 export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks => {
     const query = makeMethod(impls.query);
+    const streamRpc = makeMethod(impls.streamRpc ?? impls.query);
     const mutation = makeMethod(impls.mutation);
     const action = makeMethod(impls.action);
     const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => impls.listFunctions?.() ?? []);
@@ -167,6 +197,14 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const fetchOpenRpc = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenRpc?.() ?? { methods: [], openrpc: "1.3.2" });
     const listScheduledJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => impls.listScheduledJobs?.() ?? []);
     const getCronJobs = vi.fn<() => Promise<CronJobInfo[]>>(async () => impls.getCronJobs?.() ?? []);
+    let pauseState: DeploymentPauseStatus = impls.pause ?? { paused: false, supported: false };
+    const getDeploymentPause = vi.fn<() => Promise<DeploymentPauseStatus>>(async () => pauseState);
+    const setDeploymentPause = vi.fn<(paused: boolean, reason?: string) => Promise<DeploymentPauseStatus>>(async (paused, reason) => {
+        pauseState = paused ? { paused, pausedAt: 1, supported: true, ...(reason === undefined ? {} : { reason }) } : { paused, supported: true };
+
+        return pauseState;
+    });
+    const listCronRuns = vi.fn<() => Promise<CronRunsResult>>(async () => impls.listCronRuns?.() ?? { inFlight: [], runs: [] });
     const cancelScheduledJob = vi.fn<(id: string) => Promise<{ cancelled: boolean }>>(
         async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true },
     );
@@ -192,6 +230,18 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         async (table: string) => impls.shardTraffic?.(table) ?? { failed: 0, ok: 0, shards: [] },
     );
     const listGlobalTables = vi.fn<() => Promise<GlobalTableInfo[]>>(async () => impls.listGlobalTables?.() ?? []);
+
+    // In-memory named admin-token store, so the Settings card's create → list → revoke round-trips.
+    const adminTokens = new Map<string, AdminTokenSummary>();
+    const createAdminToken = vi.fn<(options: { expiresAt?: number; name: string }) => Promise<CreatedAdminToken>>(async ({ name }) => {
+        adminTokens.set(name, { createdAt: 1, name, scopes: [] });
+
+        return { createdAt: 1, name, token: `lnat.${name}.${"s".repeat(43)}` };
+    });
+    const listAdminTokens = vi.fn<() => Promise<AdminTokenSummary[]>>(async () => [...adminTokens.values()]);
+    const revokeAdminToken = vi.fn<(name: string) => Promise<void>>(async (name: string) => {
+        adminTokens.delete(name);
+    });
 
     // In-memory KV store, seeded from `impls.kvSeed` and mutated in place by
     // put/delete so create → list → edit → delete round-trips the way the real
@@ -273,17 +323,19 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     });
     const revokeAuthSession = vi.fn<() => Promise<undefined>>(async () => undefined);
     const revokeAuthUserSessions = vi.fn<() => Promise<undefined>>(async () => undefined);
-    const getAuthCapabilities = vi.fn<() => Promise<{ accounts: boolean; admin: boolean; organization: boolean; passkey: boolean; twoFactor: boolean }>>(
-        async () => {
-            return { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false };
-        },
-    );
+    const getAuthCapabilities = vi.fn<
+        () => Promise<{ accounts: boolean; admin: boolean; apiKey: boolean; organization: boolean; passkey: boolean; twoFactor: boolean }>
+    >(async () => {
+        return { accounts: true, apiKey: false, admin: true, organization: false, passkey: false, twoFactor: false };
+    });
     const updateAuthUser = vi.fn<(input: { userId: string }) => Promise<{ id: string }>>(async (input) => {
         return { id: input.userId };
     });
     const listAuthAccounts = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [] as Record<string, unknown>[]);
     const unlinkAuthAccount = vi.fn<() => Promise<undefined>>(async () => undefined);
     const listAuthPasskeys = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [] as Record<string, unknown>[]);
+    const listAuthApiKeys = vi.fn<(input: { userId: string }) => Promise<Record<string, unknown>[]>>(async (input) => impls.listAuthApiKeys?.(input) ?? []);
+    const deleteAuthApiKey = vi.fn<() => Promise<undefined>>(async () => undefined);
     const deleteAuthPasskey = vi.fn<() => Promise<undefined>>(async () => undefined);
     const disableAuthTwoFactor = vi.fn<() => Promise<undefined>>(async () => undefined);
     const listAuthOrganizations = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
@@ -306,7 +358,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const cancelAuthOrgInvitation = vi.fn<() => Promise<undefined>>(async () => undefined);
     const getAuthConfig = vi.fn<() => Promise<Record<string, unknown>>>(async () => {
         return {
-            capabilities: { accounts: true, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
+            capabilities: { accounts: true, apiKey: false, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
             emailAndPassword: true,
             organization: { enabled: false, roles: false, teams: false },
             plugins: [] as string[],
@@ -433,6 +485,8 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         createAuthUser,
         deleteAuthOrganization,
         deleteAuthOrgRole,
+        deleteAuthApiKey,
+        listAuthApiKeys,
         deleteAuthPasskey,
         disableAuthTwoFactor,
         getAuthCapabilities,
@@ -485,13 +539,18 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         // `getAuthToken` supplies the admin bearer. Stable, non-empty values so a
         // test asserts on what the console actually forwards.
         getAuthToken: () => "mock-admin-token",
+        createAdminToken,
+        listAdminTokens,
+        revokeAdminToken,
         deleteStorageObject,
         facetGlobalColumn,
         fetchArchitecture,
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
+        getDeploymentPause,
         getKvValue,
+        listCronRuns,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
@@ -511,19 +570,24 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         queryVectorIndex,
         readGlobalTablePage,
         runCronJob,
+        setDeploymentPause,
         shardTraffic,
         signedStorageUrl,
+        streamRpc,
         subscribe,
         subscribeScheduledJobs,
         uploadStorageObject,
         /** The worker origin a REST try-it request is resolved against. */
         url: "http://127.0.0.1:8787",
         ...authAdminMethods,
-    } as unknown as LunoraClient;
+    } as unknown as LunoraAdminClient;
 
     return {
         action,
         asClient,
+        createAdminToken,
+        listAdminTokens,
+        revokeAdminToken,
         cancelScheduledJob,
         deleteKvKey,
         deleteStorageObject,
@@ -535,7 +599,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
+        getDeploymentPause,
         getKvValue,
+        listCronRuns,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
@@ -553,8 +619,10 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         queryVectorIndex,
         readGlobalTablePage,
         runCronJob,
+        setDeploymentPause,
         shardTraffic,
         signedStorageUrl,
+        streamRpc,
         subscribe,
         subscribeScheduledJobs,
         uploadStorageObject,

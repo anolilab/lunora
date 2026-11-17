@@ -9,6 +9,7 @@
  * actually consume.
  */
 
+import { NODE_CAPABILITIES } from "@lunora/platform";
 import type { ConformanceHost } from "@lunora/platform/conformance";
 
 import { createNodeShardKvStore } from "../node-kv-store";
@@ -89,6 +90,7 @@ export const createNodeConformanceHost = (): ConformanceHost => {
     };
 
     return {
+        capabilities: NODE_CAPABILITIES,
         awaitAlarmFired: async (target) => {
             // Same wait-past-target strategy the reference host uses: the alarm
             // clears itself from a real `setTimeout`, so waiting slightly past

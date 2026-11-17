@@ -62,6 +62,19 @@ const RootDocument: FC<PropsWithChildren> = ({ children }) => {
                         consentCategories: ["measurement", "necessary"],
                         legalLinks: { privacyPolicy: { href: "/privacy", target: "_self" } },
                         mode: "offline",
+                        // One opt-in policy for every visitor. Without it c15t picks a model from the
+                        // visitor's jurisdiction, and for regions with no opt-in rule it auto-grants
+                        // `measurement` and never shows the banner, so PostHog would run unasked.
+                        offlinePolicy: {
+                            policyPacks: [
+                                {
+                                    consent: { categories: ["necessary", "measurement"], model: "opt-in" },
+                                    id: "opt-in-everywhere",
+                                    match: { isDefault: true },
+                                    ui: { mode: "banner" },
+                                },
+                            ],
+                        },
                         overrides,
                     }}
                 >

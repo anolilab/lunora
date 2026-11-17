@@ -1,5 +1,5 @@
 import { ChildProcess } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { Server } from "node:net";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -7,7 +7,8 @@ import { basename, join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { startCelldDevSession } from "../src/celld/dev-session";
+import { planCelldConfig } from "../src/celld/celld-config";
+import { startCelldDevSession, writeCelldDevProjection } from "../src/celld/dev-session";
 import type { DevProcessSpawner } from "../src/dev-process";
 
 /** A free TCP port, released before it is handed back. */
@@ -23,6 +24,11 @@ const freePort = async (): Promise<number> =>
             });
         });
     });
+
+/** A toolchain probe that finds nothing wrong, so the session does not look for `celld` on this host. */
+const noProblems = async (): Promise<{ errors: string[]; warnings: string[] }> => {
+    return { errors: [], warnings: [] };
+};
 
 interface Started {
     child: ChildProcess;
@@ -89,7 +95,7 @@ describe("celld dev session", () => {
 
         const started: Started[] = [];
         const port = await freePort();
-        const session = await startCelldDevSession({ log: () => {}, port, projectRoot: root, spawn: fakeCelld(started) });
+        const session = await startCelldDevSession({ probe: noProblems, log: () => {}, port, projectRoot: root, spawn: fakeCelld(started) });
 
         expect(started.map(({ config }) => config)).toStrictEqual([".celld.service.parser.wrangler.json", ".celld.wrangler.json"]);
         // Never on the app's port, which would answer the app's traffic while it is down.
@@ -111,11 +117,44 @@ describe("celld dev session", () => {
         await session.stop();
     });
 
+    it("registers the companion advisor Worker when studio.companion is on", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "lunora.config.ts"), `export default { studio: { companion: true } };\n`);
+        mkdirSync(join(root, "lunora", "_generated", "companion", "src"), { recursive: true });
+        writeFileSync(join(root, "lunora", "_generated", "companion", "wrangler.jsonc"), `{ "name": "app-advisor", "main": "src/worker.ts" }\n`);
+        writeFileSync(join(root, "lunora", "_generated", "companion", "src", "worker.ts"), "export default { fetch: () => new Response(null) };\n");
+
+        const started: Started[] = [];
+        const session = await startCelldDevSession({ probe: noProblems, log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
+
+        // The app's wrangler config carries the `ADVISOR_COMPANION` binding, so dev has to run that Worker too.
+        expect(started.map(({ config }) => config)).toStrictEqual([".celld.service.app-advisor.wrangler.json", ".celld.wrangler.json"]);
+        expect(started[0]?.port).not.toBe(started[1]?.port);
+
+        await session.stop();
+    });
+
+    it("does not register the companion when studio.companion is off, even with a generated folder on disk", async () => {
+        expect.assertions(1);
+
+        writeFileSync(join(root, "lunora.config.ts"), `export default {};\n`);
+        mkdirSync(join(root, "lunora", "_generated", "companion", "src"), { recursive: true });
+        writeFileSync(join(root, "lunora", "_generated", "companion", "wrangler.jsonc"), `{ "name": "app-advisor", "main": "src/worker.ts" }\n`);
+
+        const started: Started[] = [];
+        const session = await startCelldDevSession({ probe: noProblems, log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
+
+        expect(started.map(({ config }) => config)).toStrictEqual([".celld.wrangler.json"]);
+
+        await session.stop();
+    });
+
     it("reports an app that exits on its own, but not one it stops", async () => {
         expect.assertions(1);
 
         const started: Started[] = [];
-        const session = await startCelldDevSession({ log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
+        const session = await startCelldDevSession({ probe: noProblems, log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld(started) });
 
         // started[0] registered the service and was stopped; started[1] is the app.
         started[1]?.child.emit("exit", 3);
@@ -129,6 +168,7 @@ describe("celld dev session", () => {
         expect.assertions(1);
 
         const session = await startCelldDevSession({
+            probe: noProblems,
             log: () => {},
             port: await freePort(),
             projectRoot: root,
@@ -149,9 +189,52 @@ describe("celld dev session", () => {
         const port = await freePort();
         const holder = createServer().listen(port, "127.0.0.1");
 
-        await expect(startCelldDevSession({ log: () => {}, port, projectRoot: root, spawn: fakeCelld([]) })).rejects.toThrow(/already in use/u);
+        await expect(startCelldDevSession({ probe: noProblems, log: () => {}, port, projectRoot: root, spawn: fakeCelld([]) })).rejects.toThrow(
+            /already in use/u,
+        );
 
         holder.close();
+    });
+
+    it("refuses to start, before spawning anything, when the celld toolchain has an error", async () => {
+        expect.assertions(2);
+
+        const started: Started[] = [];
+
+        await expect(
+            startCelldDevSession({
+                log: () => {},
+                port: await freePort(),
+                probe: async () => {
+                    return { errors: ["celld is not on PATH"], warnings: [] };
+                },
+                projectRoot: root,
+                spawn: fakeCelld(started),
+            }),
+        ).rejects.toThrow(/celld is not on PATH/u);
+        expect(started).toHaveLength(0);
+    });
+
+    it("logs a toolchain warning and still starts", async () => {
+        expect.assertions(1);
+
+        const started: Started[] = [];
+        const lines: string[] = [];
+        const session = await startCelldDevSession({
+            log: (line) => {
+                lines.push(line);
+            },
+            port: await freePort(),
+            probe: async () => {
+                return { errors: [], warnings: ["celld 0.5.0 is older than 0.6.1"] };
+            },
+            projectRoot: root,
+            spawn: fakeCelld(started),
+        });
+
+        expect(lines).toContain("celld 0.5.0 is older than 0.6.1");
+
+        await session.stop();
     });
 
     it("refuses to start without the services lunora.config declares", async () => {
@@ -159,8 +242,29 @@ describe("celld dev session", () => {
 
         writeFileSync(join(root, "lunora.config.ts"), `export default { services: { parser: { dir: "./services/missing" } } };\n`);
 
-        await expect(startCelldDevSession({ log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld([]) })).rejects.toThrow(
-            /could not read the lunora\.config services/u,
-        );
+        await expect(
+            startCelldDevSession({ probe: noProblems, log: () => {}, port: await freePort(), projectRoot: root, spawn: fakeCelld([]) }),
+        ).rejects.toThrow(/could not read the lunora\.config services/u);
+    });
+
+    it("writes the app's dev projection for a --no-worker run once the toolchain passes", async () => {
+        expect.assertions(2);
+
+        await expect(writeCelldDevProjection({ probe: noProblems, projectRoot: root })).resolves.toStrictEqual([]);
+        expect(existsSync(planCelldConfig(root, "dev").configPath)).toBe(true);
+    });
+
+    it("writes nothing for a --no-worker run whose toolchain has an error", async () => {
+        expect.assertions(2);
+
+        await expect(
+            writeCelldDevProjection({
+                probe: async () => {
+                    return { errors: ["celld is not on PATH"], warnings: [] };
+                },
+                projectRoot: root,
+            }),
+        ).rejects.toThrow(/celld is not on PATH/u);
+        expect(existsSync(planCelldConfig(root, "dev").configPath)).toBe(false);
     });
 });

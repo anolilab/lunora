@@ -362,6 +362,17 @@
                     "code": "CONFLICT"
                 },
                 {
+                    "name": "coded-409-delivery-fenced-is-transient",
+                    "status": 409,
+                    "body": {
+                        "error": {
+                            "code": "DELIVERY_FENCED",
+                            "message": "Delivery fenced; operation may have committed"
+                        }
+                    },
+                    "outcome": "requeued"
+                },
+                {
                     "name": "envelope-less-502",
                     "status": 502,
                     "rawBody": "<html><body>502 Bad Gateway</body></html>",

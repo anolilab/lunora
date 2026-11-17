@@ -17,7 +17,6 @@ import ssrHandler from "@tanstack/react-start/server-entry";
 
 import { LUNORA_CRONS } from "../lunora/_generated/crons.js";
 import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
-import { openApiSpec } from "../lunora/_generated/openapi.js";
 import schema from "../lunora/schema";
 import { currentAuth } from "./auth";
 import { withLegacyCookieClearing } from "./auth-legacy-cookies";
@@ -89,7 +88,8 @@ const buildWorker = (env: ControlPlaneEnv): LunoraWorker => {
         functions: LUNORA_FUNCTIONS,
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
         httpRouter,
-        openApiSpec,
+        // Loaded on the first `/_lunora/openapi.json` request, not at isolate startup.
+        openApiSpec: async () => import("../lunora/_generated/openapi.js").then((module) => module.openApiSpec),
         resolveIdentity: async (request) => {
             if (!auth) {
                 return null;

@@ -147,7 +147,7 @@ export const beginBackup = internalMutation
     .mutation(async ({ ctx: context, args: { organizationId, projectId } }): Promise<TenantTarget & { backupId: BackupId; key: string }> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
 
-        const project = (await context.db.get(projectId)) as null | { organizationId: OrgId };
+        const project = (await context.db.get("projects", projectId)) as null | { organizationId: OrgId };
 
         if (project?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "project not found in this organization");
@@ -191,7 +191,7 @@ export const beginRestore = internalMutation
         }): Promise<TenantTarget & { preRestoreBackupId: BackupId; preRestoreKey: string; restoreId: BackupId; sourceKey: string }> => {
             await assertMember(context, organizationId, ["owner", "admin"]);
 
-            const source = await context.db.get(backupId);
+            const source = await context.db.get("tenantBackups", backupId);
 
             if (source?.organizationId !== organizationId || source.operation !== "backup") {
                 throw new LunoraError("NOT_FOUND", "backup not found in this organization");
@@ -252,7 +252,7 @@ export const finish = internalMutation
     .mutation(async ({ ctx: context, args: { id, organizationId, ...outcome } }): Promise<null> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
 
-        const row = await context.db.get(id);
+        const row = await context.db.get("tenantBackups", id);
 
         if (row?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "backup not found in this organization");
@@ -265,7 +265,7 @@ export const finish = internalMutation
         // Only the keys actually supplied: the store refuses an explicit `undefined`.
         const patch = Object.fromEntries(Object.entries(outcome).filter(([, value]) => value != null));
 
-        await context.db.patch(id, { ...patch, completedAt: context.now });
+        await context.db.patch("tenantBackups", id, { ...patch, completedAt: context.now });
 
         return null;
     });
@@ -281,7 +281,7 @@ export const authorizeDownload = internalMutation
     .mutation(async ({ ctx: context, args: { backupId, organizationId } }): Promise<{ alias: string; createdAt: number; key: string }> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
 
-        const row = await context.db.get(backupId);
+        const row = await context.db.get("tenantBackups", backupId);
 
         if (row?.organizationId !== organizationId || row.operation !== "backup" || row.status !== "succeeded") {
             throw new LunoraError("NOT_FOUND", "backup not found in this organization");

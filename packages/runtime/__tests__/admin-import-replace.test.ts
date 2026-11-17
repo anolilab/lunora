@@ -614,8 +614,17 @@ const exportLines = async (worker: ReturnType<typeof createWorker>, body: unknow
     );
 
     const exported = await response.text();
+    const lines = exported.split("\n").filter((line) => line.length > 0);
 
-    return exported.split("\n").filter((line) => line.length > 0);
+    // The terminal frame is checked and dropped, as a restore does: a staged batch holds only a slice of the rows.
+    // Not an `expect`: the callers count their own assertions.
+    const end = JSON.parse(lines.at(-1) ?? "{}") as { end?: unknown; rows?: unknown };
+
+    if (end.end !== true || end.rows !== lines.length - 1) {
+        throw new Error(`the export did not end with a frame for its ${String(lines.length - 1)} row(s)`);
+    }
+
+    return lines.slice(0, -1);
 };
 
 /** Stage `lines` into `session` in batches under a restore's request size, as the cloud restore does; returns every batch's answer. */

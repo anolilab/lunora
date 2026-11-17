@@ -142,6 +142,31 @@ this process when the project opens (usually before `lunora dev` is running) and
 keeps it alive across every restart afterward. Start the dev server later
 and the deployment tools begin working without reconnecting.
 
+### One tool per app function
+
+`lunora mcp serve --functions` serves each query, mutation, action and stream of
+this app as its own tool, with its arguments as a typed schema. It reads the
+OpenRPC document codegen writes to `lunora/_generated/openrpc.json`, so the app
+must set `apiSpec: "openrpc"` (or `"both"`) before the command has anything to serve.
+
+```jsonc
+{
+    "mcpServers": {
+        "lunora-functions": {
+            "command": "pnpm",
+            "args": ["exec", "lunora", "mcp", "serve", "--functions", "--token", "<caller bearer>"],
+        },
+    },
+}
+```
+
+Every call runs as the bearer given by `--token`, so auth and row-level security
+apply exactly as they do to the app. The command never reads the project's admin
+token. Without `--token`, only public functions answer. Mutations and actions are
+listed only with `--allow-writes`, and each write needs a confirmation step before
+it runs. When codegen rewrites the document, for example after a function is added
+or renamed, the tool list follows it without restarting the server.
+
 ## The MCP server
 
 `@lunora/mcp` exposes a **deployed** Lunora app to an agent over MCP. Where

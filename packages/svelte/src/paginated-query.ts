@@ -1,6 +1,6 @@
 import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, headPage, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 import type { Readable } from "svelte/store";
 import { derived, get, readable, writable } from "svelte/store";
@@ -111,6 +111,9 @@ const createPaginatedEngine = <T>(
 
     const pagesStore = writable<Page[]>(initialPages(initialNumItems));
     const errorStore = writable<SubscriptionError | undefined>();
+
+    /** Set by a silent `INVALID_CURSOR` restart, cleared by the next frame for a page past the head. */
+    let restartedSinceLoad = false;
     // pageResultsStore is a writable used as the source; pageResults is the
     // public Readable that the lazy start/stop callback wires up.
     const pageResultsInternal = writable<(PaginationResult<T> | undefined)[]>([]);
@@ -129,6 +132,26 @@ const createPaginatedEngine = <T>(
     // store's first (synchronous) emission when `pageResults` gains a subscriber.
     let currentBaseArgs: "skip" | Record<string, unknown> = isReadableStore<"skip" | Record<string, unknown>>(baseArgs) ? "skip" : baseArgs;
 
+    /**
+     * Each page's key, derived once per `Page` object. Every frame on any page
+     * rebuilds `pageResults` for the whole feed, so re-serialising each page's
+     * args per frame would cost one full `stableWireKey` pass per loaded
+     * page. Base args are fixed by content within an args generation, and
+     * `teardownAll` starts a fresh map for the next one.
+     */
+    let pageKeys = new WeakMap<Page, string>();
+
+    const pageKeyOf = (page: Page, baseArgsRecord: Record<string, unknown>): string => {
+        let key = pageKeys.get(page);
+
+        if (key === undefined) {
+            key = buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgsRecord));
+            pageKeys.set(page, key);
+        }
+
+        return key;
+    };
+
     const rebuildPageResults = (): void => {
         if (currentBaseArgs === "skip") {
             pageResultsInternal.set([]);
@@ -139,7 +162,7 @@ const createPaginatedEngine = <T>(
         const baseArgsRecord = currentBaseArgs;
 
         const updated = get(pagesStore).map((page) => {
-            const key = buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgsRecord));
+            const key = pageKeyOf(page, baseArgsRecord);
 
             return resultsByKey.get(key);
         });
@@ -166,7 +189,7 @@ const createPaginatedEngine = <T>(
         }
 
         const baseArgsRecord = currentBaseArgs;
-        const keyOf = (page: Page): string => buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgsRecord));
+        const keyOf = (page: Page): string => pageKeyOf(page, baseArgsRecord);
 
         for (const newPage of newPages) {
             const newKey = keyOf(newPage);
@@ -205,7 +228,7 @@ const createPaginatedEngine = <T>(
         const wantedKeys = new Set<string>();
 
         for (const page of pages) {
-            wantedKeys.add(buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgsRecord)));
+            wantedKeys.add(pageKeyOf(page, baseArgsRecord));
         }
 
         // Close stale subscriptions and drop their cached results so a later
@@ -223,7 +246,7 @@ const createPaginatedEngine = <T>(
         // Open new subscriptions.
         for (const page of pages) {
             const pageArgs = buildPageArgs(page, baseArgsRecord);
-            const key = buildPageKey(function_["__lunoraRef"], pageArgs);
+            const key = pageKeyOf(page, baseArgsRecord);
 
             if (activeSubs.has(key)) {
                 continue;
@@ -237,6 +260,10 @@ const createPaginatedEngine = <T>(
                 pageArgs,
                 (value) => {
                     resultsByKey.set(key, value as PaginationResult<T>);
+
+                    if (restartedSinceLoad && get(pagesStore).some((candidate) => !isHeadPage(candidate) && pageKeyOf(candidate, baseArgsRecord) === key)) {
+                        restartedSinceLoad = false;
+                    }
 
                     // This page has resolved; remove from the pending set.
                     pendingPageKeys.delete(key);
@@ -267,6 +294,27 @@ const createPaginatedEngine = <T>(
                 {
                     onError: (subscriptionError) => {
                         pendingPageKeys.delete(key);
+
+                        const failure = classifyPageFailure(
+                            get(pagesStore),
+                            (candidate) => pageKeyOf(candidate, baseArgsRecord) === key,
+                            subscriptionError,
+                            restartedSinceLoad,
+                        );
+
+                        if (failure === "restart") {
+                            // A sibling feed's head page still carries the refused build's `continueCursor`:
+                            // ask for a fresh snapshot of it before this feed subscribes to it again.
+                            client.resnapshot(function_, buildPageArgs(headPage(initialNumItems), baseArgsRecord), { shardKey });
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
+                            restart();
+                            restartedSinceLoad = true;
+                        }
+
+                        if (failure !== "surface") {
+                            return;
+                        }
+
                         errorStore.set(subscriptionError);
 
                         // A tail that fails before its first frame is dropped so
@@ -276,12 +324,7 @@ const createPaginatedEngine = <T>(
                         const current = get(pagesStore);
                         const tail = current.at(-1);
 
-                        if (
-                            current.length > 1 &&
-                            tail &&
-                            !resultsByKey.has(key) &&
-                            buildPageKey(function_["__lunoraRef"], buildPageArgs(tail, baseArgsRecord)) === key
-                        ) {
+                        if (current.length > 1 && tail && !resultsByKey.has(key) && pageKeyOf(tail, baseArgsRecord) === key) {
                             pagesStore.set(current.slice(0, -1));
                             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after syncSubscriptions is defined
                             syncSubscriptions();
@@ -340,6 +383,16 @@ const createPaginatedEngine = <T>(
         activeSubs.clear();
         resultsByKey.clear();
         pendingPageKeys.clear();
+        pageKeys = new WeakMap();
+    };
+
+    /** Drop every page and subscribe to the first page again. */
+    const restart = (): void => {
+        teardownAll();
+        pagesStore.set(initialPages(initialNumItems));
+        errorStore.set(undefined);
+        syncSubscriptions();
+        rebuildPageResults();
     };
 
     // pageResults is a lazy Svelte readable: subscriptions open on the first
@@ -371,6 +424,7 @@ const createPaginatedEngine = <T>(
                 teardownAll();
                 pagesStore.set(initialPages(initialNumItems));
                 errorStore.set(undefined);
+                restartedSinceLoad = false;
             };
         });
 
@@ -420,8 +474,8 @@ const createPaginatedEngine = <T>(
         const newPinnedPage = next.at(-2); // applyLoadMore appends the new open tail last
 
         if (oldTail && newPinnedPage) {
-            const oldKey = buildPageKey(function_["__lunoraRef"], buildPageArgs(oldTail, currentBaseArgs));
-            const newKey = buildPageKey(function_["__lunoraRef"], buildPageArgs(newPinnedPage, currentBaseArgs));
+            const oldKey = pageKeyOf(oldTail, currentBaseArgs);
+            const newKey = pageKeyOf(newPinnedPage, currentBaseArgs);
 
             if (oldKey !== newKey) {
                 const carried = resultsByKey.get(oldKey);

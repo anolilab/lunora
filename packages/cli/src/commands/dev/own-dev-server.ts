@@ -76,8 +76,8 @@ const startCelldWorker = async (inputs: { logger: Logger; port: number; projectR
  * The plan for a target that runs its own dev server on the projected config
  * (celld): codegen watch and the studio as usual, and the host's dev server as
  * the worker. None of the `wrangler dev`-only machinery applies — no remote
- * bindings, no inspector, no IPv4 loopback fallback. Writes the projection, so
- * it runs after `provisionBindings` has reconciled the config it projects.
+ * bindings, no inspector, no IPv4 loopback fallback. Writes nothing; it runs
+ * after `provisionBindings` has reconciled the config the session projects.
  * @throws for `--remote`, which the host has no equivalent for.
  */
 const planOwnDevServer = (inputs: {
@@ -102,11 +102,11 @@ const planOwnDevServer = (inputs: {
         options.logger.warn(`--inspector-port is a wrangler dev flag; ${driver.name} dev has no inspector to pin`);
     }
 
-    const { command, commit, projection } = planToolchainInvocation(driver, cwd, "dev", (configPath) =>
+    // Not committed: the projection is written only after the toolchain probe passes (by the celld
+    // dev session, or by the attached run under `--no-worker`), so a missing celld or esbuild leaves the project untouched.
+    const { command, projection } = planToolchainInvocation(driver, cwd, "dev", (configPath) =>
         toolchain.dev({ configPath, extraArgs: ["--port", String(workerPort)] }),
     );
-
-    commit();
 
     if (projection !== undefined && projection.dropped.length > 0) {
         options.logger.info(`${driver.name} ignores these wrangler keys, so its dev server runs without them: ${projection.dropped.join(", ")}`);

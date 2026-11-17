@@ -29,6 +29,8 @@ interface MockClientHooks {
     onAuthTokenChange: ReturnType<typeof vi.fn>;
     onConnectionStatus: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
+    /** Records `resnapshot` calls; the mock has no server, so a test delivers the fresh value with `emit`. */
+    resnapshot: ReturnType<typeof vi.fn>;
     setAuthToken: ReturnType<typeof vi.fn>;
     setConnectionContext: ReturnType<typeof vi.fn>;
     /** Transition the aggregate connection status and notify every `onConnectionStatus` listener. */
@@ -45,7 +47,16 @@ interface SubEntry {
     ref: string;
 }
 
-const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): MockClientHooks => {
+/**
+ * `live: true` gives the client a `WebSocket` implementation, so query hooks
+ * resolve from the first `emit` instead of `queryImpl` over HTTP. The default
+ * models a client with no socket: every hook falls back to `query`.
+ * `follower: true` models a `crossTabSync` tab that is not the leader.
+ */
+const createMockClient = (
+    queryImpl?: (ref: string, args: unknown) => unknown,
+    { follower = false, live = false }: { follower?: boolean; live?: boolean } = {},
+): MockClientHooks => {
     const subs = new Set<SubEntry>();
     let authToken: string | null = null;
 
@@ -53,6 +64,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         queryImpl ? queryImpl(reference.__lunoraRef, args) : undefined,
     );
     const mutationFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
+    const resnapshotFunction = vi.fn<(reference: FunctionReference, args: unknown, options?: { shardKey?: string }) => void>();
     const actionFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
     const subscribeFunction = vi.fn<
         (reference: FunctionReference, args: unknown, callback: (value: unknown) => void, options?: { onError?: SubscriptionErrorCallback }) => Unsubscribe
@@ -161,21 +173,28 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         // The identity store declares itself on attach; this mock has no gates
         // to arm, so it only has to exist.
         expectIdentityResolution: () => undefined,
+        expectsPush: () => true,
         getAuthToken: getAuthTokenFunction,
         getCurrentUser: getCurrentUserFunction,
+        getWebSocketImpl: () => (live ? WebSocket : undefined),
         mutation: mutationFunction,
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
         identityEpoch: () => 0,
+        isCrossTabFollower: () => follower,
         onIdentityChange: (): Unsubscribe => () => undefined,
         // The PUBLIC getter the hooks read (`client.isReady`), not the private
         // `readyResolved` field behind it — this object is a plain literal cast
         // to `LunoraClient`, so naming the backing field left every consumer
         // reading `undefined` and the hydrated branch permanently untaken.
         isReady: true,
+        peekActiveQuerySnapshot: () => {
+            return { answered: false, present: false, value: undefined };
+        },
         peekHydratedQuery: () => undefined,
         peekHydratedQueryByKey: () => undefined,
         query: queryFunction,
+        resnapshot: resnapshotFunction,
         setAuthToken: setAuthTokenFunction,
         setConnectionContext: setConnectionContextFunction,
         subscribe: subscribeFunction,
@@ -197,6 +216,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         onAuthTokenChange: onAuthTokenChangeFunction,
         onConnectionStatus: onConnectionStatusFunction,
         query: queryFunction,
+        resnapshot: resnapshotFunction,
         setAuthToken: setAuthTokenFunction,
         setConnectionContext: setConnectionContextFunction,
         setConnectionStatus,

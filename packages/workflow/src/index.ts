@@ -9,6 +9,7 @@ export { convertNonRetryableError, isDuplicateInstanceError, isNonRetryableError
 export { branch, MAX_BRANCHES } from "./fan-out";
 export type {
     WorkflowInstanceAction,
+    WorkflowInstanceCreated,
     WorkflowInstanceDetail,
     WorkflowInstancePage,
     WorkflowInstanceSummary,

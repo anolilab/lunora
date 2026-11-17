@@ -30,7 +30,7 @@ export const store = mutation
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<Id<"secrets">> => {
         const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, arguments_.projectId, arguments_.organizationId, "project");
+        await assertRowInOrg(context, "projects", arguments_.projectId, arguments_.organizationId, "project");
 
         const environment = arguments_.environment ?? "all";
         const { page } = await context.db.secrets.findMany({
@@ -40,7 +40,7 @@ export const store = mutation
         const { now } = context;
 
         if (existing) {
-            await context.db.patch(existing._id, { ciphertext: arguments_.ciphertext, iv: arguments_.iv, updatedAt: now });
+            await context.db.patch("secrets", existing._id, { ciphertext: arguments_.ciphertext, iv: arguments_.iv, updatedAt: now });
 
             return existing._id;
         }
@@ -66,7 +66,7 @@ export const list = query
             args: { organizationId, projectId },
         }): Promise<{ createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number }[]> => {
             await assertMember(context, organizationId);
-            await assertRowInOrg(context, projectId, organizationId, "project");
+            await assertRowInOrg(context, "projects", projectId, organizationId, "project");
 
             const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
 
@@ -95,7 +95,7 @@ export const listEncrypted = query
     .query(
         async ({ ctx: context, args: { deployKey, environment, organizationId, projectId } }): Promise<{ ciphertext: string; iv: string; name: string }[]> => {
             await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId, ["owner", "admin"]));
-            await assertRowInOrg(context, projectId, organizationId, "project");
+            await assertRowInOrg(context, "projects", projectId, organizationId, "project");
 
             const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
 
@@ -136,7 +136,7 @@ export const remove = mutation
     .input({ id: v.id("secrets"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "secret");
+        await assertRowInOrg(context, "secrets", id, organizationId, "secret");
 
-        await context.db.delete(id);
+        await context.db.delete("secrets", id);
     });

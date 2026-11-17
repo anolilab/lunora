@@ -120,7 +120,7 @@ export const get = query
     .query(async ({ ctx: context, args: { id, organizationId } }): Promise<DashboardView | null> => {
         await assertMember(context, organizationId);
 
-        const row = await context.db.get(id);
+        const row = await context.db.get("dashboards", id);
 
         if (row?.organizationId !== organizationId) {
             return null;
@@ -172,7 +172,7 @@ export const update = mutation
     })
     .mutation(async ({ ctx: context, args }): Promise<Id<"dashboards">> => {
         await assertMember(context, args.organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, args.id, args.organizationId, "dashboard");
+        await assertRowInOrg(context, "dashboards", args.id, args.organizationId, "dashboard");
 
         const patch: { name?: string; panels?: DashboardPanel[]; updatedAt: number } = { updatedAt: context.now };
 
@@ -187,7 +187,7 @@ export const update = mutation
             patch.panels = panels;
         }
 
-        await context.db.patch(args.id, patch);
+        await context.db.patch("dashboards", args.id, patch);
 
         return args.id;
     });
@@ -198,8 +198,8 @@ export const remove = mutation
     .input({ id: v.id("dashboards"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<Id<"dashboards">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "dashboard");
-        await context.db.delete(id);
+        await assertRowInOrg(context, "dashboards", id, organizationId, "dashboard");
+        await context.db.delete("dashboards", id);
 
         return id;
     });

@@ -80,14 +80,20 @@ describe("registration-type parity (anti-drift lock for the dropped-registration
         // make this test vacuously pass.
         expect(declared).toStrictEqual([
             "RegisteredAction",
+            "RegisteredInternalAction",
+            "RegisteredInternalMutation",
+            "RegisteredInternalQuery",
+            "RegisteredInternalStream",
             "RegisteredLifecycleHook",
             "RegisteredMigration",
             "RegisteredMutation",
             "RegisteredMutator",
             "RegisteredQuery",
             "RegisteredReactor",
+            "RegisteredRoom",
             "RegisteredShape",
             "RegisteredStream",
+            "RegisteredWebSocket",
             "RegisteredWhisperAuthorizer",
         ]);
         expect(declared.filter((name) => !source.includes(`"${name}"`))).toStrictEqual([]);

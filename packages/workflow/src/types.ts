@@ -14,7 +14,17 @@ import type { ArgsOf, FunctionReference } from "../../../shared/function-referen
 // --- Structural mirror of the Cloudflare Workflows runtime ----------------
 
 /** A workflow instance's lifecycle status. Mirrors `WorkflowInstanceStatus`. */
-export type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+export type WorkflowInstanceStatus =
+    | "complete"
+    | "errored"
+    | "paused"
+    | "queued"
+    | "rollingBack"
+    | "running"
+    | "terminated"
+    | "unknown"
+    | "waiting"
+    | "waitingForPause";
 
 /** Result of `WorkflowInstance.status()`. Mirrors Cloudflare's `InstanceStatus`. */
 export interface WorkflowStatusResult {
@@ -40,7 +50,8 @@ export interface WorkflowCreateOptions<Params = Record<string, unknown>> {
  * instance it failed to create, and reported nothing for it.
  */
 export type WorkflowCreateBatchOptions<Params = Record<string, unknown>> =
-    { instances: ReadonlyArray<WorkflowCreateOptions<Params>> } | { count: number; params?: Params; retention?: WorkflowRetention };
+    | { instances: ReadonlyArray<WorkflowCreateOptions<Params>> }
+    | { count: number; params?: Params; retention?: WorkflowRetention };
 
 /** One instance a batch did not create. `index` is its position in the input (`count` form: its position among the `count`). */
 export interface WorkflowCreateBatchError {

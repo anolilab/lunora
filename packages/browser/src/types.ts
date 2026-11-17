@@ -86,18 +86,18 @@ export interface CrawlOptions {
     contentUse?: "full" | "reference";
     /** Purposes the crawl is for, checked against the site's Content Signals. Default: all three. */
     crawlPurposes?: ReadonlyArray<"ai-input" | "ai-train" | "search">;
-    /** Maximum link depth from the starting URL. */
+    /** Maximum link depth from the starting URL. Clamped to `maxCrawlDepth` (default 3), which is also the value sent when omitted. */
     depth?: number;
     /** Per-page output formats. Default `["html"]`. */
     formats?: ReadonlyArray<CrawlFormat>;
-    /** Maximum number of pages to crawl (Browser Run default 10, maximum 100,000). */
+    /** Maximum number of pages to crawl. Default 10 (Browser Run's own). Clamped to `maxCrawlPages` (default 100), omitted or not. */
     limit?: number;
     options?: {
         excludePatterns?: ReadonlyArray<string>;
-        /** Refused when `allowedHosts` is configured: the crawler would leave the allowlist. */
+        /** Refused when `allowedHosts` is configured (the crawler would leave the allowlist) and unless `allowPrivateTargets` is set. */
         includeExternalLinks?: boolean;
         includePatterns?: ReadonlyArray<string>;
-        /** Refused when `allowedHosts` is configured: subdomains are not exact allowlist matches. */
+        /** Refused when `allowedHosts` is configured (subdomains are not exact matches) and unless `allowPrivateTargets` is set. */
         includeSubdomains?: boolean;
     };
     /** `false` fetches HTML without executing JavaScript. Default `true`. */
@@ -312,12 +312,8 @@ export interface BrowserLike {
 /* eslint-disable no-secrets/no-secrets -- the entropy scanner trips on the repeated `@cloudflare/playwright` package name in these doc comments, not a credential */
 
 /**
- * Structural projection of `@cloudflare/playwright`'s `launch` export
- * (`import { launch } from "@cloudflare/playwright"`). Injected via
- * {@link LunoraBrowserOptions.launch} so the factory never imports
- * `@cloudflare/playwright` at module top — that keeps the heavy optional peer
- * dep out of the bundle for apps that never screenshot, and lets tests pass a
- * fake. Calling it with the Browser Rendering binding resolves a {@link BrowserLike}.
+ * Structural projection of `@cloudflare/playwright`'s `launch` export. Calling it
+ * with the Browser Rendering binding resolves a {@link BrowserLike}.
  */
 export type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, unknown>) => Promise<BrowserLike>;
 
@@ -336,7 +332,6 @@ export interface BrowserSession {
 /**
  * Structural projection of `@cloudflare/playwright`'s `connect` export —
  * re-attaches to an existing session rather than starting a new browser.
- * Injected like {@link BrowserLaunchLike} so the peer dep stays optional.
  */
 export type BrowserConnectLike = (binding: BrowserBindingLike, sessionId: string) => Promise<BrowserLike>;
 
@@ -345,6 +340,18 @@ export type BrowserConnectLike = (binding: BrowserBindingLike, sessionId: string
  * the account's live Browser Rendering sessions for this binding.
  */
 export type BrowserSessionsLike = (binding: BrowserBindingLike) => Promise<ReadonlyArray<BrowserSession>>;
+
+/**
+ * The part of the `@cloudflare/playwright` module `createBrowser` calls — what
+ * `import("@cloudflare/playwright")` resolves to. Every export is optional so a
+ * test double carries only what it exercises; a method whose export is missing
+ * throws naming it.
+ */
+export interface PlaywrightModuleLike {
+    readonly connect?: BrowserConnectLike;
+    readonly launch?: BrowserLaunchLike;
+    readonly sessions?: BrowserSessionsLike;
+}
 
 /**
  * Options shared by the page-driving helpers ({@link Browser.screenshot} etc.).
@@ -397,7 +404,7 @@ export interface PdfOptions extends NavigateOptions {
 }
 
 /**
- * Options for `createBrowser`: the binding, the injected `@cloudflare/playwright` exports,
+ * Options for `createBrowser`: the binding, the `@cloudflare/playwright` loader,
  * the URL guards, and the REST credentials `/crawl` needs.
  */
 export interface LunoraBrowserOptions {
@@ -451,25 +458,29 @@ export interface LunoraBrowserOptions {
     /** The Cloudflare Browser Rendering binding (`env.BROWSER`). Required. */
     binding: BrowserBindingLike;
 
-    /**
-     * The `@cloudflare/playwright` `connect` function, injected like
-     * {@link LunoraBrowserOptions.launch}. Required for {@link Browser.connect}.
-     */
-    connect?: BrowserConnectLike;
+    /** Ceiling for a crawl's `depth`. Default 3. */
+    maxCrawlDepth?: number;
+
+    /** Ceiling for a crawl's `limit` (pages). Default 100. */
+    maxCrawlPages?: number;
 
     /**
-     * The `@cloudflare/playwright` `launch` function. Injected rather than
-     * imported at module top so the optional peer dep stays out of the bundle
-     * for non-browser apps and tests can pass a double.
+     * Loads `@cloudflare/playwright`: `() => import("@cloudflare/playwright")`.
+     * Awaited on the first method that drives a browser, never at construction,
+     * so the ~3 MiB SDK stays out of the Worker's startup graph (Cloudflare
+     * rejects a Worker whose global scope takes more than 1 s of CPU). A static
+     * `import { launch } from "@cloudflare/playwright"` in the entry would put it
+     * back. A failed load rejects that call with the loader's own error and the
+     * next call retries.
      *
-     * The APP passes the real function, not codegen: the generated shard builds
-     * `ctx.browser` from a `config.browser` thunk and falls back to a throwing
-     * stub, so `createShardDO({ browser: (env) => createBrowser({ binding:
-     * env.BROWSER, launch }) })` is what wires it. Omitting `launch` makes the
-     * helper throw on first use with a clear "install `@cloudflare/playwright`"
-     * error.
+     * The APP passes it, not codegen: the generated shard builds `ctx.browser`
+     * from a `config.browser` thunk (`defineApp().browser((env) =>
+     * createBrowser({ binding: env.BROWSER, playwright: () =>
+     * import("@cloudflare/playwright") }))`). Omitted, every browser-driving
+     * method throws a "pass `playwright`" error; the REST-only crawl methods
+     * and Quick Actions still work.
      */
-    launch?: BrowserLaunchLike;
+    playwright?: () => Promise<PlaywrightModuleLike> | PlaywrightModuleLike;
 
     /**
      * Best-effort DNS-rebinding re-check. When `true` (and `allowPrivateTargets`
@@ -504,12 +515,6 @@ export interface LunoraBrowserOptions {
      * {@link Browser.cancelCrawl}, which have no binding method.
      */
     restApi?: BrowserRestApiOptions;
-
-    /**
-     * The `@cloudflare/playwright` `sessions` function, injected like
-     * {@link LunoraBrowserOptions.launch}. Required for {@link Browser.sessions}.
-     */
-    sessions?: BrowserSessionsLike;
 
     /**
      * Default navigation timeout (ms) applied when a per-call `timeoutMs` is not

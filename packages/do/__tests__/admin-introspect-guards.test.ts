@@ -20,6 +20,14 @@ describe("deleteRows predicate guard", () => {
         expect(() => parseBulkDeleteArgs({ ...args, table: "posts" })).toThrow(/a predicate .* is required/u);
     });
 
+    it("keeps an eq clause on a NULL value, so a predicate built from a NULL cell still counts as a predicate", () => {
+        expect.assertions(1);
+
+        const parsed = parseBulkDeleteArgs({ filters: [{ column: "title", operator: "eq", value: null }], table: "posts" });
+
+        expect(parsed.filters).toStrictEqual([{ column: "title", operator: "eq", value: null }]);
+    });
+
     it("keeps a real clause next to a dropped one", () => {
         expect.assertions(1);
 
@@ -68,7 +76,7 @@ describe("replica bootstrap row count", () => {
             const id = await writer.insert("notes", { n: index });
 
             // eslint-disable-next-line no-await-in-loop -- sequential fixture writes
-            await writer.patch(id, { n: -index }, "notes");
+            await writer.patch("notes", id, { n: -index });
         }
 
         // A non-schema table the shard also holds (a component's own storage, say):

@@ -57,15 +57,15 @@
  * whatever authorization the surface needs.
  */
 
-import type { Id } from "@lunora/values";
+import type { ColumnValidator, Id, StringColumnValidator } from "@lunora/values";
 import { v } from "@lunora/values";
-import { decodeWire, encodeWire } from "@lunora/wire";
+import { encodeWire, parseWire } from "@lunora/wire";
 
 import { initLunora } from "./builder/index";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
 import { defineTable } from "./schema";
-import type { RegisteredMutation, RegisteredQuery, TriggerBuilder, TriggerCtx as TriggerContext, TriggerDefinition } from "./types";
+import type { RegisteredInternalMutation, RegisteredInternalQuery, TriggerBuilder, TriggerCtx as TriggerContext, TriggerDefinition } from "./types";
 
 /** Default retention: 90 days. `vacuum` deletes entries older than this. */
 const DEFAULT_RETENTION_MS: number = 90 * 24 * 60 * 60 * 1000;
@@ -203,8 +203,12 @@ interface DocumentHistoryFunctions {
      * the last version at or before it, which is what a point-in-time
      * reconstruction needs.
      */
-    listForDocument: RegisteredQuery<
-        { before: ReturnType<typeof v.optional>; documentId: ReturnType<typeof v.string>; limit: ReturnType<typeof v.optional> },
+    listForDocument: RegisteredInternalQuery<
+        {
+            before: ColumnValidator<number | undefined, number | undefined>;
+            documentId: StringColumnValidator;
+            limit: ColumnValidator<number | undefined, number | undefined>;
+        },
         DocumentHistoryEntry[]
     >;
 
@@ -215,7 +219,7 @@ interface DocumentHistoryFunctions {
      * Compare `deleted` against `limit` to decide whether to run again rather
      * than assuming one pass drained the backlog.
      */
-    vacuum: RegisteredMutation<{ limit: ReturnType<typeof v.optional> }, { deleted: number }>;
+    vacuum: RegisteredInternalMutation<{ limit: ColumnValidator<number | undefined, number | undefined> }, { deleted: number }>;
 }
 
 /** The component shape {@link defineDocumentHistory} returns. */
@@ -371,7 +375,17 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
         const serialized = JSON.stringify(encodeWire(redact(row)));
 
         // Each side is capped on its own: a large `previous` should not discard a
-        // small `doc`, which is usually the more useful half.
+        // small `doc`, which is usually the more useful half. A UTF-16 string's UTF-8
+        // length lies in `[length, 3 * length]`, so the cap is decided from those
+        // bounds and the string is only encoded when they straddle it.
+        if (serialized.length > maxSnapshotBytes) {
+            return undefined;
+        }
+
+        if (3 * serialized.length <= maxSnapshotBytes) {
+            return serialized;
+        }
+
         return new TextEncoder().encode(serialized).length > maxSnapshotBytes ? undefined : serialized;
     };
 
@@ -458,8 +472,8 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
                     tableName: row["tableName"] as string,
                     // Decoded through the same codec that wrote it, so a `bigint`
                     // or `Date` column comes back as itself, not as a tagged form.
-                    ...(row["doc"] === undefined ? {} : { doc: decodeWire(JSON.parse(row["doc"] as string)) as Record<string, unknown> }),
-                    ...(row["previous"] === undefined ? {} : { previous: decodeWire(JSON.parse(row["previous"] as string)) as Record<string, unknown> }),
+                    ...(row["doc"] === undefined ? {} : { doc: parseWire(row["doc"] as string) as Record<string, unknown> }),
+                    ...(row["previous"] === undefined ? {} : { previous: parseWire(row["previous"] as string) as Record<string, unknown> }),
                     ...(row["truncated"] === true ? { truncated: true } : {}),
                 };
             });
@@ -484,7 +498,7 @@ const defineDocumentHistory = (options: DefineDocumentHistoryOptions = {}): Docu
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
-            await Promise.all(page.map(async (row) => context.db.delete(row["_id"] as Id<string>)));
+            await Promise.all(page.map(async (row) => context.db.delete(DOCUMENT_HISTORY_TABLE, row["_id"] as Id<typeof DOCUMENT_HISTORY_TABLE>)));
             deleted += page.length;
         }
 

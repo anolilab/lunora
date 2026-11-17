@@ -7,10 +7,10 @@ interface RowInspection {
     readonly closeExpandedCell: () => void;
     readonly closeInspect: () => void;
     /** The cell whose full value the expand dialog is showing, if any. */
-    readonly expandedCell: null | { column: string; value: unknown };
+    readonly expandedCell: null | { column: string; storedValue: unknown; value: unknown };
     /** The row whose document the detail drawer is showing, if any. */
     readonly inspecting: TableRow | null;
-    readonly onExpandCell: (column: string, value: unknown) => void;
+    readonly onExpandCell: (column: string, value: unknown, storedValue: unknown) => void;
     readonly onInspect: (row: TableRow | null) => void;
 }
 
@@ -23,8 +23,12 @@ interface RowInspection {
  * by an entirely different consumer. The two hooks' fields were used by perfectly
  * disjoint sets of code, which is the tell that they were two concerns in one
  * bucket.
+ *
+ * `scope` names the table and shard the overlays were opened over. A change closes
+ * both: the cell dialog's actions apply its column and value to whichever table is
+ * current, so one left open across a history navigation would act on the wrong table.
  */
-const useRowInspection = (): RowInspection => {
+const useRowInspection = (scope: string): RowInspection => {
     // The row whose full document the detail drawer is showing. Pure view state —
     // kept out of the data hook since it touches no fetch logic.
     const [inspecting, setInspecting] = useState<TableRow | null>(null);
@@ -34,13 +38,22 @@ const useRowInspection = (): RowInspection => {
 
     // The cell whose full value the expand dialog is showing, if any. Opened from
     // the per-cell expand affordance; pure view state like `inspecting`.
-    const [expandedCell, setExpandedCell] = useState<null | { column: string; value: unknown }>(null);
-    const onExpandCell = (column: string, value: unknown): void => {
-        setExpandedCell({ column, value });
+    const [expandedCell, setExpandedCell] = useState<null | { column: string; storedValue: unknown; value: unknown }>(null);
+    const onExpandCell = (column: string, value: unknown, storedValue: unknown): void => {
+        setExpandedCell({ column, storedValue, value });
     };
     const closeExpandedCell = (): void => {
         setExpandedCell(null);
     };
+
+    // Reset during render rather than in an effect, so the stale overlay never paints.
+    const [openedOver, setOpenedOver] = useState(scope);
+
+    if (openedOver !== scope) {
+        setOpenedOver(scope);
+        setInspecting(null);
+        setExpandedCell(null);
+    }
 
     return { closeExpandedCell, closeInspect, expandedCell, inspecting, onExpandCell, onInspect: setInspecting };
 };

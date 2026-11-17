@@ -98,7 +98,7 @@ export interface EventSourceOptions {
  * Usage:
  * ```ts
  * const source = new EventSource(initialState, myReducer);
- * await source.replayFromLog(existingLog);
+ * source.replayFromLog(existingLog);
  *
  * // Later, when a new event arrives:
  * const entry = source.applyEvent("user-created", { id: "1", name: "alice" });

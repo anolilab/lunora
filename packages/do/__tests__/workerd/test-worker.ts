@@ -12,21 +12,30 @@
  * runtime API directly the adapter is gone and `DurableObjectState` is
  * passed straight through — structurally compatible with `ShardDOState`.
  */
+import { LunoraError } from "@lunora/errors";
 import { readRequestLog } from "@lunora/observability";
 import type { DatabaseWriterLike, MutationDelta } from "@lunora/shard-engine";
 import { createShardCtxDb, runShardMigrations } from "@lunora/shard-engine";
+import { v } from "@lunora/values";
 import { DurableObject } from "cloudflare:workers";
 
+import { AdminRevocationDO } from "../../src/admin-revocation-do";
 import { mergeDurableObjects } from "../../src/merge-durable-objects";
 import { SessionDO } from "../../src/session-do";
 import type { ShardDOState } from "../../src/shard-do";
 import { ShardDO } from "../../src/shard-do";
 import { ShardRegistryDO } from "../../src/shard-registry-do";
 import messagesSchema from "../_helpers/messages-schema";
+import type { DeliveryAuthorizationTestDO } from "./delivery-authorization-worker";
+import type TestLazyShardDO from "./lazy-gate/worker";
 
 interface Env {
+    ADMIN_REVOCATIONS: DurableObjectNamespace;
+    AUTHORIZED: DurableObjectNamespace<DeliveryAuthorizationTestDO>;
     COUNTER: DurableObjectNamespace<TestCounterDO>;
     ECHO: DurableObjectNamespace<TestEchoDO>;
+    LAZY_SHARD: DurableObjectNamespace<TestLazyShardDO>;
+    LIVE_SHARD: DurableObjectNamespace<TestLiveShardDO>;
     LUNORA_ALLOWED_ORIGINS?: string;
     MERGED: DurableObjectNamespace;
     SESSION: DurableObjectNamespace<TestSessionDO>;
@@ -46,6 +55,10 @@ class ConcreteShard extends ShardDO {
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
         this.outer.lastRpcCall = { args, functionPath };
 
+        if (this.outer.rpcError !== undefined) {
+            throw this.outer.rpcError;
+        }
+
         return this.outer.rpcResult;
     }
 
@@ -55,6 +68,8 @@ class ConcreteShard extends ShardDO {
 }
 
 class TestShardDO extends DurableObject<Env> {
+    public rpcError: Error | undefined;
+
     public rpcResult: unknown = { ok: true };
 
     public lastRpcCall: { args: Record<string, unknown>; functionPath: string } | undefined;
@@ -64,6 +79,10 @@ class TestShardDO extends DurableObject<Env> {
     public constructor(context: DurableObjectState, env: Env) {
         super(context, env);
         this.shard = new ConcreteShard(context as unknown as ShardDOState, env, this);
+    }
+
+    public setRpcError(error: Error): void {
+        this.rpcError = error;
     }
 
     public override fetch(request: Request): Promise<Response> {
@@ -89,6 +108,67 @@ class TestShardDO extends DurableObject<Env> {
 
     public broadcast(delta: MutationDelta): void {
         this.shard.broadcastDelta(delta);
+    }
+}
+
+/**
+ * A declared live stream, shaped like the `defineLiveStream` value the generated shard returns from `liveStreams()`: one topic,
+ * `feed`, whose payload validator really parses, so a publish is checked by the same code path a generated shard runs.
+ */
+const feedStream = {
+    validatePublish: (topic: string, payload: unknown): unknown => {
+        if (topic !== "feed") {
+            throw new LunoraError("BAD_REQUEST", `"${topic}" is not a declared topic`, { status: 400 });
+        }
+
+        try {
+            return v.object({ text: v.string() }).parse(payload);
+        } catch (error) {
+            // As `defineLiveStream` does: a validator's own error becomes the publish refusal.
+            throw new LunoraError("BAD_REQUEST", `publish to "${topic}" was refused: ${String(error)}`, { status: 400 });
+        }
+    },
+};
+
+/**
+ * A shard that declares live streams, the way the generated subclass does: `feed` is held from the start, and `late` is
+ * imported on the first publish to it, as a lazy generated shard imports a stream's module (`loadLiveStream`).
+ */
+class ConcreteLiveShard extends ShardDO {
+    private readonly loaded = new Map<string, typeof feedStream>();
+
+    // eslint-disable-next-line class-methods-use-this -- test double: this shard serves publishes only, never an RPC
+    public override async handleRpc(): Promise<unknown> {
+        return null;
+    }
+
+    protected override loadLiveStream(stream: string): Promise<void> | undefined {
+        if (stream !== "late" || this.loaded.has(stream)) {
+            return undefined;
+        }
+
+        const load = async (): Promise<void> => {
+            this.loaded.set(stream, feedStream);
+        };
+
+        return load();
+    }
+
+    protected override liveStreams() {
+        return { feed: feedStream, ...Object.fromEntries(this.loaded) };
+    }
+}
+
+class TestLiveShardDO extends DurableObject<Env> {
+    private readonly shard: ConcreteLiveShard;
+
+    public constructor(context: DurableObjectState, env: Env) {
+        super(context, env);
+        this.shard = new ConcreteLiveShard(context as unknown as ShardDOState, env);
+    }
+
+    public override fetch(request: Request): Promise<Response> {
+        return this.shard.fetch(request);
     }
 }
 
@@ -290,6 +370,12 @@ class TestEchoDO extends DurableObject<Env> {
  * echoes the applied `lastMutationId` on the response.
  */
 class ConcreteSyncShard extends ShardDO {
+    /** Every `sockets:wake` dispatch — the wake-up test reads a route frame's arrival here. */
+    public readonly wakeCalls: string[] = [];
+
+    /** Whether `/chat-wake` requires a verified user; the route-gate test flips it to simulate a redeploy. */
+    public wakeRouteAuth = false;
+
     private migrated = false;
 
     /**
@@ -305,15 +391,25 @@ class ConcreteSyncShard extends ShardDO {
     private writer: DatabaseWriterLike | undefined;
 
     public override async handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+        if (functionPath === "sockets:wake") {
+            this.wakeCalls.push(JSON.stringify(args));
+
+            return null;
+        }
+
         if (functionPath.startsWith("race:")) {
             return this.raceControl(functionPath);
+        }
+
+        if (functionPath === "rooms:notes") {
+            return this.roomNotes(args);
         }
 
         const writer = this.getWriter();
 
         switch (functionPath) {
             case "messages:remove": {
-                await writer.delete(args["_id"] as string);
+                await writer.delete("messages", args["_id"] as string);
 
                 break;
             }
@@ -337,9 +433,19 @@ class ConcreteSyncShard extends ShardDO {
         return { id: args["_id"], ok: true };
     }
 
+    /** `/chat-wake` is a `defineWebSocket` route; the wake-up test drives its frames. */
+    protected override socketRoute(path: string): { auth: boolean; functionPath: string } | undefined {
+        return path === "/chat-wake" ? { auth: this.wakeRouteAuth, functionPath: "sockets:wake" } : super.socketRoute(path);
+    }
+
     // eslint-disable-next-line class-methods-use-this -- override classifies by `functionPath` alone, no instance state.
     protected override isCustomMutator(functionPath: string): boolean {
         return functionPath === "messages:sendMutator";
+    }
+
+    // eslint-disable-next-line class-methods-use-this -- the room is registered by topic alone, no instance state.
+    protected override roomHandlerPath(topic: string): string | undefined {
+        return topic === "room:notes" ? "rooms:notes" : undefined;
     }
 
     protected override resolveShape(
@@ -416,6 +522,36 @@ class ConcreteSyncShard extends ShardDO {
         return this.writer;
     }
 
+    /**
+     * The `notes` room. A `message` writes a row and echoes it to the room only once the
+     * write has committed (`socket.broadcast` queues until then); a `join` replays every
+     * stored note to the joining socket, straight from SQLite.
+     */
+    private async roomNotes(args: Record<string, unknown>): Promise<unknown> {
+        const writer = this.getWriter();
+        const socket = args["socket"] as { broadcast: (payload: unknown) => void };
+
+        if (args["kind"] === "message") {
+            const message = args["message"] as { _id: string; text: string };
+
+            await writer.insert("messages", { _id: message._id, authorId: "room", channelId: "notes", text: message.text }, { allowExplicitId: true });
+            this.recordChangedTable("messages");
+            socket.broadcast({ echo: message.text });
+        }
+
+        if (args["kind"] === "join") {
+            // Rows are stored as a JSON document in `__doc__`, keyed by `id`.
+            const rows = (this.sql as { exec: (query: string) => { toArray: () => { __doc__: string }[] } })
+                .exec(`SELECT "__doc__" FROM "messages" ORDER BY "id"`)
+                .toArray();
+            const notes = rows.map((row) => JSON.parse(row.__doc__) as { channelId: string; text: string }).filter((doc) => doc.channelId === "notes");
+
+            socket.broadcast({ history: notes.map((doc) => doc.text) });
+        }
+
+        return { ok: true };
+    }
+
     private raceControl(functionPath: string): { calls: number; settled: boolean } {
         if (functionPath === "race:release") {
             this.race.released = true;
@@ -447,6 +583,21 @@ class TestSyncDO extends DurableObject<Env> {
 
     public override webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean): Promise<void> {
         return this.shard.webSocketClose(ws, code, reason, wasClean);
+    }
+
+    /** Route-handler dispatches seen by this instance (see `sockets:wake`). */
+    public async wakeCalls(): Promise<string[]> {
+        return this.shard.wakeCalls;
+    }
+
+    /** Set `/chat-wake`'s auth requirement, as a redeploy that flips the route would. */
+    public setWakeRouteAuth(auth: boolean): void {
+        this.shard.wakeRouteAuth = auth;
+    }
+
+    /** Whether a socket that upgraded on `socketPath` still receives `topic` (see `socketMayReceiveRouteTopic`). */
+    public routeTopicGate(socketPath: string, userId: string | undefined, topic: string): boolean {
+        return this.shard["socketMayReceiveRouteTopic"]({ socketPath, userId }, topic);
     }
 
     /**
@@ -529,7 +680,28 @@ class MergedSchedulerRole {
     }
 }
 
-const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole, shardRegistry: ShardRegistryDO });
+/**
+ * The registry refuses any request not signed with the relay secret; this env supplies one without changing the pool's shared bindings.
+ * The merge test signs with the same literal.
+ */
+const TEST_RELAY_SECRET = "workerd-test-relay-secret";
+
+class TestShardRegistryRole extends ShardRegistryDO {
+    public constructor(state: ConstructorParameters<typeof ShardRegistryDO>[0], env: unknown) {
+        super(state, { ...(env as Record<string, unknown>), LUNORA_RELAY_SECRET: TEST_RELAY_SECRET });
+    }
+}
+
+/** The revocation store answers only the root admin token; this env supplies one without changing the pool's shared bindings. */
+const TEST_ADMIN_TOKEN = "workerd-test-admin-token";
+
+class TestAdminRevocationDO extends AdminRevocationDO {
+    public constructor(state: ConstructorParameters<typeof AdminRevocationDO>[0], env: unknown) {
+        super(state, { ...(env as Record<string, unknown>), LUNORA_ADMIN_TOKEN: TEST_ADMIN_TOKEN });
+    }
+}
+
+const TestMergedDO = mergeDurableObjects({ scheduler: MergedSchedulerRole, shard: MergedShardRole, shardRegistry: TestShardRegistryRole });
 
 const handler = {
     async fetch(_request: Request, _env: Env): Promise<Response> {
@@ -538,5 +710,7 @@ const handler = {
 };
 
 export default handler;
-export { TestCounterDO, TestEchoDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
+export { DeliveryAuthorizationTestDO } from "./delivery-authorization-worker";
+export { TestAdminRevocationDO, TestCounterDO, TestEchoDO, TestLiveShardDO, TestMergedDO, TestSessionDO, TestShardDO, TestSyncDO };
+export { default as TestLazyShardDO } from "./lazy-gate/worker";
 export type { Env };

@@ -266,7 +266,7 @@ class TestRpcManifestCases(unittest.TestCase):
 
     def test_auth_token_redacted_when_printed(self):
         covers("auth_token_redacted_when_printed")
-        token = "lunora-secret-7f3a9c"
+        token = "lunora-secret-7f3a9c"  # secret-scanner:allow -- test fixture
         client = LunoraClient("https://app.example", auth_token=token)
 
         for rendered in (repr(client), str(client), f"{client}", f"{client!r}", format(client)):
@@ -372,7 +372,7 @@ class TestFrameManifestCases(unittest.TestCase):
             client.handle_frame(frame)
 
         self.assertEqual(rows[-1], shape["contiguousExpectedRows"])
-        self.assertEqual([frame["type"] for frame in sent], ["shape_subscribe"], "no re-seed")
+        self.assertEqual([frame["type"] for frame in sent], ["connect", "shape_subscribe"], "no re-seed")
 
     def test_identity_change_evicts_previous_session(self):
         covers("identity_change_evicts_previous_session")
@@ -447,13 +447,13 @@ class TestFrameManifestCases(unittest.TestCase):
 
     def test_subscription_stream_ends_on_close(self):
         covers("subscription_stream_ends_on_close")
-        frame = FRAMES["stream"]["frames"][0]
-        expected = FRAMES["stream"]["yielded"][0]
+        frame = FRAMES["watch"]["frames"][0]
+        expected = FRAMES["watch"]["yielded"][0]
 
         async def run():
             client = LunoraClient("https://app.example")
             client.attach_socket(lambda _frame: None)
-            values = client.stream("messages:list", {"channel": "general"})
+            values = client.watch("messages:list", {"channel": "general"})
             client.handle_frame(frame)
             client.close()
 
@@ -470,7 +470,7 @@ class TestPortLocal(unittest.TestCase):
         async def run():
             client = LunoraClient("https://app.example")
             client.attach_socket(lambda _frame: None)
-            client.stream("messages:list", {})
+            client.watch("messages:list", {})
             return client._close_hooks
 
         self.assertEqual(asyncio.run(run()), [])

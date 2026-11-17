@@ -2,22 +2,31 @@ import { isLunoraError, toErrorBody } from "@lunora/errors";
 import type { HttpCacheLike, R2MultipartUploadLike } from "@lunora/platform";
 import { decodeWire, encodeArgsOrThrow, encodeWire } from "@lunora/wire";
 
+import { ADMIN_SIGNAL_HEADER, ADMIN_SIGNAL_MIN_TTL_MS, mintAdminSignal, parseAdminTokenHeader } from "../../../shared/admin-token";
+import type { AdminTokenScope } from "../../../shared/admin-token-scope";
+import { isAdminTokenScope } from "../../../shared/admin-token-scope";
+import type { AiRunBinding } from "../../../shared/ai-chat";
+import type { AiOptInLevel } from "../../../shared/ai-opt-in";
+import { asOptInLevel } from "../../../shared/ai-opt-in";
 import { asBucketStorage } from "../../../shared/as-bucket-storage";
 import type { BatchEntry } from "../../../shared/batch-wire";
 import { BRANCH_MARKER_REJECTION, hasBranchMarker } from "../../../shared/branch-marker";
+import { claimsFingerprint } from "../../../shared/claims-fingerprint";
 import { collectPages } from "../../../shared/collect-pages";
 import { isDuplicateInstanceError } from "../../../shared/duplicate-instance";
-import { decodeErrorDetail, describeError, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
+import { decodeErrorDetail, describeError, describeInternal, ERROR_DETAIL_HEADER, WANT_ERROR_DETAIL_HEADER } from "../../../shared/error-detail";
 import { evictOldestEntry } from "../../../shared/evict-oldest";
 import type { ExecutionContextLike } from "../../../shared/execution-context";
 import { NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
 import {
     decodeExpectedSubjectHeader,
-    encodeIdentityHeader,
+    decodeIdentityHeader,
+    decodeUserIdHeader,
     encodeUserIdHeader,
     EXPECT_SUBJECT_HEADER,
     isIdentityExpired,
 } from "../../../shared/identity-header";
+import { LIVE_PUBLISH_PATH } from "../../../shared/live-stream";
 import { ORIGIN_PAYWALL_APPLIED, ORIGIN_PAYWALL_HEADER } from "../../../shared/origin-paywall";
 import { buildTraceparent, otlpRandomHex } from "../../../shared/otlp";
 import { CF_RAY_HEADER, parseRayId } from "../../../shared/ray-id";
@@ -26,23 +35,39 @@ import { regionHintFromRequest } from "../../../shared/region-hint";
 import { RELAY_NAME_INFIX, relayName } from "../../../shared/relay-name";
 import { parseMinSeq, REPLICA_NAME_INFIX, replicaName } from "../../../shared/replica-name";
 import type { RestExposure } from "../../../shared/rest-surface";
+import { withRunShard } from "../../../shared/run-shard";
 import type { TraceSamplingConfig } from "../../../shared/sampling";
 import { SAMPLE_ERRORS_HEADER } from "../../../shared/sampling";
-import { checkBearerToken, isReservedRelationFunctionPath, SCHEDULER_DISPATCH_PATH, verifySchedulerDispatch } from "../../../shared/scheduler-dispatch";
+import {
+    AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE,
+    checkBearerToken,
+    isAgentRunOffDefaultShard,
+    isReservedRelationFunctionPath,
+    SCHEDULER_DISPATCH_PATH,
+    verifySchedulerDispatch,
+} from "../../../shared/scheduler-dispatch";
+import { CLAIMS_FINGERPRINT_PATH, SOCKET_REAUTH_PATH } from "../../../shared/socket-reauth";
 import { buildSystemDispatchHeaders, readForwardedDispatchIdentity } from "../../../shared/system-dispatch-headers";
 import { resolveWorkflowHandle } from "../../../shared/workflow-binding";
 import { mintWsAdminToken, verifyWsAdminToken } from "../../../shared/ws-admin-token";
+import { createAdminRevocations } from "./admin-revocations";
+import { buildAdminTokenRoutes } from "./admin-token-routes";
+import { createAdminTokenVerifier } from "./admin-token-verifier";
+import type { AiChatRpcDeps } from "./ai-chat-rpc";
+import { AI_AVAILABLE_OP, AI_CHAT_OP, buildAiAvailable, buildAiChat, buildAiOneShotGate } from "./ai-chat-rpc";
 import { assertArgsObject } from "./assert-args-object";
 import type { AuthAdmin } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import type { AuthAuditReader } from "./auth-audit-rpc";
 import { buildGetAuthAuditLog, GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 import type { AuthJurisdictionMove } from "./auth-jurisdiction-move-rpc";
-import { buildAuthJurisdictionMoveRpc, COPY_AUTH_TO_JURISDICTION_OP, PURGE_UNPINNED_AUTH_OP } from "./auth-jurisdiction-move-rpc";
+import { buildAuthJurisdictionMoveRpc } from "./auth-jurisdiction-move-rpc";
 import { buildBackupAdminRoutes } from "./backup-admin-routes";
 import { groupBatchCallsByShard } from "./batch";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit, withBodyLimit } from "./body-readers";
+import { beginCronRun, endCronRun } from "./cron-runs";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
+import { createDeploymentPause, PAUSE_PATH, PAUSED_QUEUE_RETRY_SECONDS } from "./deployment-pause";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { LunoraError, toErrorResponse } from "./errors";
 import type { AuthDataPort } from "./export-sections";
@@ -62,14 +87,16 @@ import type { KvIntrospector } from "./kv-admin-routes";
 import { buildKvAdminRoutes, KV_VALUE_MAX_BODY_BYTES, KV_VALUE_PATH } from "./kv-admin-routes";
 import type { LogArchiveConfig } from "./log-archive-admin-routes";
 import { buildLogArchiveAdminRoutes } from "./log-archive-admin-routes";
+import { memoizedIdentityHeader } from "./memoize-identity";
 import { assertMethod } from "./method-guard";
 import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 import { emitRpcEvent, flushSink } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { DispatchTraceContext } from "./otel-trace";
 import { beginDispatchTrace, injectTraceContext } from "./otel-trace";
+import type PROCEDURE_META from "./procedure-meta-key";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
-import { createDefaultShardRegistry, createQueryCoordinator } from "./query-coordinator";
+import { createDefaultShardRegistry, createQueryCoordinator, refreshedShardHeaders, refreshShardHeadersPerCall } from "./query-coordinator";
 import type { DurableObjectJurisdiction, ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { applyJurisdiction, resolveShard } from "./resolve-shard";
 import { createResourceAttributeResolver } from "./resource-detect";
@@ -79,6 +106,10 @@ import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
 import { runScheduledBackup } from "./scheduled-backup";
 import type { SecurityOptions } from "./security-headers";
 import { decorateResponse, enforceOrigin, enforceWebSocketOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
+import type { AssetsFetcherLike } from "./spa-assets";
+import { serveSpaAsset, serveSpaShell } from "./spa-assets";
+import type { SqlMigrationApplier } from "./sql-migration-admin-routes";
+import { buildSqlMigrationAdminRoutes, SQL_MIGRATION_BODY_BYTES, SQL_MIGRATIONS_PATH } from "./sql-migration-admin-routes";
 import { buildStorageAdminRoutes, STORAGE_PATH, STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
 import { buildTenantFanoutRoutes, QUEUE_DISPATCH_MAX_BODY_BYTES, QUEUE_DISPATCH_PATH } from "./tenant-fanout-routes";
 import type { TrustInboundTraceContext } from "./trace-trust";
@@ -87,6 +118,7 @@ import { trustedClientIp } from "./trusted-client-ip";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
 import type { WorkflowsRestClient } from "./workflows-admin-routes";
 import { buildWorkflowsAdminRoutes } from "./workflows-admin-routes";
+import { bearerUpgrade, identityRequestForUpgrade, selectLunoraProtocol, withoutBearerProtocol } from "./ws-bearer-protocol";
 
 /**
  * Wire-format RPC envelope. Posted to `POST /_lunora/rpc`.
@@ -116,6 +148,7 @@ type Route = (request: Request, env: unknown, context: ExecutionContextLike) => 
 const ROUTE_BODY_BUDGETS: Record<string, number> = {
     [KV_VALUE_PATH]: KV_VALUE_MAX_BODY_BYTES,
     [QUEUE_DISPATCH_PATH]: QUEUE_DISPATCH_MAX_BODY_BYTES,
+    [SQL_MIGRATIONS_PATH]: SQL_MIGRATION_BODY_BYTES,
     [STORAGE_PATH]: STORAGE_UPLOAD_MAX_BODY_BYTES,
 };
 
@@ -134,6 +167,15 @@ interface HttpActionContext {
     fetch: typeof globalThis.fetch;
 
     /**
+     * Forward a server-to-server request to a shard DO, carrying the caller's
+     * resolved identity headers. Structural mirror of `@lunora/server`'s
+     * `ShardFetch` — kept structural so the runtime stays free of a
+     * `@lunora/server` dependency. The live-stream primitive uses it to reach
+     * the shard's SSE + subscriber-registry endpoints.
+     */
+    fetchShard: (shardKey: string | undefined, path: string, init?: { body?: string; headers?: Record<string, string>; method?: string }) => Promise<Response>;
+
+    /**
      * The same `run*` trio bound to a named shard, mirroring
      * `createShardClient(...).forShard(key)`.
      *
@@ -145,6 +187,14 @@ interface HttpActionContext {
      * (usually none) with no error and no way to say otherwise.
      */
     forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
+
+    /**
+     * Publish an arbitrary event to a live topic on a stream. Structural mirror of
+     * `@lunora/server`'s `LivePublisher`. Present on every worker; built with
+     * `liveStreams: false` (a target that does not serve live streams), its `publish` rejects.
+     */
+    live?: { publish: (topic: LiveTopicRefLike, payload: unknown, options?: { shardKey?: string }) => Promise<void> };
+
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -192,6 +242,18 @@ interface HttpActionContext {
     waitUntil?: (promise: Promise<unknown>) => void;
 }
 
+/** `@lunora/server`'s `ScheduleRunOptions`, restated structurally like {@link SchedulerContext}. */
+interface SchedulerRunOptions {
+    retry?: {
+        backoff?: "exponential" | "linear";
+        baseMs?: number;
+        forever?: boolean;
+        maxAttempts?: number;
+        maxMs?: number;
+    };
+    shardKey?: string;
+}
+
 /**
  * The scheduler surface on an HTTP action context. Mirrors `@lunora/server`'s
  * `Scheduler` so `HttpActionCtx` can `Pick` it straight off `ActionContext`;
@@ -202,8 +264,8 @@ interface SchedulerContext {
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     list: () => Promise<Record<string, unknown>[]>;
-    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
 }
 
 interface HttpActionLike {
@@ -274,10 +336,22 @@ type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, 
  * `startLine` field is the line of the FIRST global row, retained only as a
  * backward-compatible fallback for importers that haven't adopted per-row lines.
  */
-type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => Promise<{
+type GlobalImportFunction = (request: {
+    /** Check the rows and return their shape errors without writing. */
+    dryRun?: boolean;
+    /** `"replace"` overwrites a row whose `_id` already exists; `"skip"` (the default) reports it as a conflict and leaves it unchanged. */
+    onConflict?: "replace" | "skip";
+    /** `op: "delete"` removes the stored row whose `_id` the doc carries; see {@link WorkerOptions.importGlobalsSupportsDelete}. */
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; op?: "delete"; table: string }>;
+    startLine?: number;
+}) => Promise<{
     conflicts: number;
+    /** Stored rows removed by `op: "delete"` rows. */
+    deleted?: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
+    /** Existing rows overwritten under `onConflict: "replace"`. */
+    replaced?: number;
 }>;
 
 /**
@@ -333,6 +407,16 @@ interface FunctionDescriptor {
     /** The function's declared argument schema, derived from its `v.*` validators. */
     args: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+
+    /**
+     * The function's `.meta(...)` declaration, wire-encoded (`decodeWire` from
+     * `@lunora/wire` restores a `Map`/`Set` inside it). Absent when it declares none.
+     */
+    meta?: unknown;
+    /** Set instead of `meta` when the declaration holds a value the wire codec cannot encode (a `RegExp`, a cycle). */
+    metaUnencodable?: true;
+    /** Set instead of `meta` for a lazily registered function whose meta is only readable once its module loads. */
+    metaUnloaded?: true;
     /** The `<file>:<function>` identifier, e.g. `messages:list`. */
     path: string;
     /** `"internal"` functions are never exposed by the discovery endpoint; absence === public. */
@@ -343,6 +427,9 @@ interface FunctionDescriptor {
 interface FunctionRegistryEntry {
     /** The function's `v.*` args validator map; read structurally for the signature view. */
     args?: unknown;
+
+    /** Codegen's lazy registry supplies these without loading validators from the handler module. */
+    argumentDescriptors?: Readonly<FunctionDescriptor["args"]>;
 
     /**
      * Opt-in public-surface tag set by the `.expose({ rest: true })` builder
@@ -364,6 +451,25 @@ interface FunctionRegistryEntry {
      * callers pass the generated `LUNORA_FUNCTIONS` map without a cast.
      */
     kind: "action" | "mutation" | "query" | "stream";
+
+    /**
+     * The lifecycle moment a registration fires on, when it is a lifecycle hook,
+     * a `defineRoom` registration, or a `defineWebSocket` route. Present on the
+     * generated `LUNORA_FUNCTIONS` values (they are the live runtime objects);
+     * the worker reads `"socket"` entries to recognise a route's path as a
+     * WebSocket-upgrade endpoint rather than an unknown app route.
+     */
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+
+    /** The function's `.meta(...)` (or `"unloaded"`), under `@lunora/server`'s `PROCEDURE_META` key. */
+    readonly [PROCEDURE_META]?: unknown;
+
+    /**
+     * Set on a `defineWebSocket` route: the URL path it serves. The worker
+     * forwards an upgrade at this path to the shard Durable Object, which
+     * resolves the registration through its generated socket map.
+     */
+    socketPath?: string;
     visibility?: "internal" | "public";
 
     /**
@@ -501,6 +607,8 @@ interface GlobalTablePage {
 /** One eq constraint a facet-value click adds to the global browser's view. Mirrors `@lunora/d1`'s `GlobalFilterClause`. */
 interface GlobalFilterClause {
     column: string;
+    operator?: string;
+    path?: string[];
     value: unknown;
 }
 
@@ -621,6 +729,9 @@ type QueueForwardHandler = (
  * is a child of the trigger span instead of an unrelated root trace.
  */
 interface TriggerTrace {
+    /** Set while the deployment is paused: the consumer holds each message back this many seconds instead of running it. */
+    holdSeconds?: number;
+
     /** W3C `traceparent` naming the trigger's SERVER span. */
     traceparent: string;
 }
@@ -631,7 +742,88 @@ interface TriggerTrace {
  * runtime decoupled from `@lunora/queue`'s structural batch type) along with the
  * invocation's own {@link TriggerTrace}.
  */
-type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace) => Promise<void>;
+type QueueConsumerHandler = (
+    batch: unknown,
+    env: unknown,
+    context: ExecutionContextLike,
+    trigger: TriggerTrace,
+    live: QueueLivePublisherLike,
+    fetchImpl: typeof fetch | undefined,
+) => Promise<void>;
+
+/**
+ * The publisher a queue consumer's `ctx.live` is. The Worker forwards it to the
+ * shard (a consumer runs in the Worker, not in a shard); codegen passes it on only
+ * for an app whose target serves live streams. Structural, so `@lunora/queue` types
+ * its own copy and this package stays decoupled from it.
+ */
+interface QueueLivePublisherLike {
+    publish: (topic: LiveTopicRefLike, payload: unknown, options?: { shardKey?: string }) => Promise<void>;
+}
+
+/** The live topic reference a publish is addressed with: `_generated/live.ts` hands it out, and the stream id rides in it. */
+interface LiveTopicRefLike {
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
+
+/**
+ * The origin a queue consumer's live publish is addressed to. A queue has no
+ * request, so there is no origin to derive one from; the shard reads only the
+ * pathname, so any fixed internal origin is correct.
+ */
+const QUEUE_LIVE_ORIGIN = "https://queue.lunora.internal";
+
+/**
+ * The publisher a worker built with `liveStreams: false` hands out where a working one would go. The shape is kept, so a handler that
+ * calls `publish` still type-checks and runs, and the call rejects with a clear error instead of forwarding to a shard this target does
+ * not serve.
+ */
+const unsupportedLivePublisher = (): { publish: () => Promise<never> } => {
+    return {
+        publish: () =>
+            Promise.reject(
+                new LunoraError("ctx.live.publish is unavailable: this worker does not serve live streams", {
+                    code: "LIVE_STREAMS_UNSUPPORTED",
+                    status: 501,
+                }),
+            ),
+    };
+};
+
+/**
+ * The error a shard's live publish route refused with. The shard answers
+ * `{ error: { code, message } }` at the status it chose (`FORBIDDEN_TOPIC` 403,
+ * `BAD_REQUEST` 400, `PAYLOAD_TOO_LARGE` 413), so the Worker rethrows that code,
+ * message and status rather than flattening them to `INTERNAL`. A body that is
+ * not the shard's error shape keeps `INTERNAL`, but at the HTTP status when that
+ * is an error (a platform 413 or 429 HTML page), else 500.
+ */
+const shardPublishRefusal = async (response: Response, topic: string): Promise<LunoraError> => {
+    const fallback = new LunoraError(`ctx.live.publish to "${topic}" failed with HTTP ${String(response.status)}`, {
+        code: "INTERNAL",
+        status: response.status >= 400 ? response.status : 500,
+    });
+
+    let body: { error?: { code?: unknown; message?: unknown } } | null;
+
+    try {
+        body = await response.json();
+    } catch {
+        return fallback;
+    }
+
+    const error = body?.error;
+
+    if (typeof error?.code !== "string" || response.status < 400) {
+        return fallback;
+    }
+
+    return new LunoraError(typeof error.message === "string" ? error.message : `ctx.live.publish to "${topic}" was refused`, {
+        code: error.code,
+        status: response.status,
+    });
+};
 
 /**
  * A single code-defined cron job, shaped like an entry of the generated
@@ -821,6 +1013,13 @@ interface NotifySubscriptionFilter {
  * unauthenticated end user.
  */
 interface ShardCaller {
+    /**
+     * The function being called, where the transport names one: the RPC envelope
+     * (single, batch, REST, `serverQuery`), the scheduler's target and a `ctx.run*`
+     * on a named shard. Unset on a path that names none (a WebSocket upgrade, a live
+     * publish, `fetchShard`), so a gate keyed on it must refuse those callers.
+     */
+    functionPath?: string;
     /** The identity `resolveIdentity` produced for this request, or `null` when the caller is unauthenticated. */
     identity: ResolvedIdentity | null;
     /** The shard the caller named (the default shard when the request named none). */
@@ -850,11 +1049,65 @@ interface WorkerOptions {
     adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
 
     /**
+     * The `AdminRevocationDO` namespace (`env.ADMIN_REVOCATIONS`). Records which named admin tokens
+     * were revoked outside the default shard's database, so a point-in-time restore of that shard
+     * cannot bring a revoked token back. Codegen binds it for every app; without it no named admin
+     * token can be created and any that exist are refused.
+     */
+    adminRevocations?: ShardNamespaceLike;
+
+    /**
      * Admin bearer token expected by the export/import endpoints. When unset,
      * the endpoints respond with `ADMIN_FORBIDDEN` — the same posture the
      * per-shard admin gate uses.
      */
     adminToken?: string;
+
+    /**
+     * The generated class names of the app's agent workflows (`SupportAgentWorkflow`).
+     * Codegen wires it. A scheduled job that starts one of them gets its run shard
+     * (`AgentRunInput.shardKey`) from the scheduler record, never from the job's args:
+     * the record's `shardKey` is stamped server-side by the scheduling shard and signed
+     * with the dispatch, while the args may carry a public mutation's client input. A
+     * plain workflow's params are passed through untouched.
+     */
+    agentWorkflows?: ReadonlyArray<string>;
+
+    /**
+     * The Workers `AI` binding backing the studio's chat assistant (the
+     * `__lunora_admin__:aiChat` admin RPC). Served HERE at the worker rather than
+     * on a shard because the DO's admin dispatch is single-threaded and a
+     * conversation would hold it open — see `ai-chat-rpc.ts`. Pass `env.AI`; left
+     * unset it falls back to the request's `env.AI`. With neither, a turn degrades
+     * with reason `no-ai-binding`, which hides the panel;
+     * a caller without a valid admin bearer always gets `ADMIN_FORBIDDEN` first
+     * (default-closed).
+     *
+     * The one-shot assistant RPCs stay on the shard, reading the binding and
+     * level from `env` there; only `aiOptInLevel: "disabled"` is applied to them
+     * at the worker, so turning the assistant off in code turns them off too.
+     */
+    aiChatBinding?: AiRunBinding;
+
+    /**
+     * How much of this deployment the studio's chat assistant may read.
+     *
+     * `"schema"` (the default) lets it read table and column NAMES; `"schema_and_log"`
+     * adds recent log lines; `"schema_and_log_and_data"` adds reading rows with
+     * `runSql`; `"disabled"` turns the assistant off entirely. Codegen passes
+     * `env.LUNORA_AI_OPT_IN` (and so does the worker, when this is left unset), so
+     * this is a wrangler var rather than a code change.
+     *
+     * Deliberately server-side: a level the browser could pick would not be a gate,
+     * so nothing about it is read off the request. `DEFAULT_AI_OPT_IN_LEVEL` in
+     * `shared/ai-chat.ts` states why the default is the conservative one.
+     *
+     * Typed as the closed union so a hand-written typo is a compile error. The
+     * runtime still validates: codegen passes `env.LUNORA_AI_OPT_IN`, which is
+     * genuinely `unknown`, and anything unrecognised falls back to the default
+     * rather than the top tier — so a typo in the var fails closed too.
+     */
+    aiOptInLevel?: AiOptInLevel;
 
     /**
      * Opt into an authorization-open posture for sharded and fan-out access.
@@ -886,13 +1139,24 @@ interface WorkerOptions {
     applyGlobals?: GlobalCdcApplyFunction;
 
     /**
-     * The generated architecture manifest (module catalog + static call graph).
-     * Codegen emits `_generated/architecture.ts` once the app declares a module
-     * (`lunora/<dir>/module.ts`) and the generated app passes it through. Served
+     * Runs the SQL migration files `lunora migrate apply` sends (`POST /_lunora/admin/sql-migrations`). Codegen sets it
+     * for a D1 global plane. Absent, the route refuses, since a file that drops a table has no binding to run against.
+     */
+    applySqlMigrations?: SqlMigrationApplier;
+
+    /**
+     * Loads the generated architecture manifest (module catalog + static call
+     * graph). Codegen emits `_generated/architecture.ts` once the app declares a
+     * module (`lunora/<dir>/module.ts`) and the generated app passes
+     * `() => import("./architecture.js").then((m) => m.architecture)`. Served
      * verbatim at the admin-gated `GET /_lunora/admin/architecture` for the
      * studio's Architecture view; omitted, the route answers an empty manifest.
+     *
+     * A loader, not the document: the manifest grows with the app, and only that
+     * route reads it. The worker calls it on the route's first authorized request
+     * and keeps the result, so no other request evaluates the module.
      */
-    architecture?: unknown;
+    architecture?: () => Promise<unknown>;
 
     /**
      * The auth user-management plane backing the studio's users dashboard:
@@ -1201,6 +1465,31 @@ interface WorkerOptions {
     importGlobalsStaging?: GlobalImportStaging;
 
     /**
+     * Set when `importGlobals` honours a row's `op: "delete"`. An import that
+     * carries global delete rows is refused unless this is set: an importer that
+     * ignores the op would read the row as an insert, report its `_id` as a
+     * conflict and keep the row the caller asked to remove.
+     */
+    importGlobalsSupportsDelete?: boolean;
+
+    /**
+     * Set when `importGlobals` honours `dryRun` and writes nothing for it. A dry
+     * run (`?dryRun=true`) that targets global rows is refused unless this is
+     * set, because an importer written before the flag existed would ignore it
+     * and insert the rows.
+     */
+    importGlobalsSupportsDryRun?: boolean;
+
+    /**
+     * Set when `importGlobals` honours `onConflict: "replace"`. A replace import
+     * (`?onConflict=replace`) that targets global rows is refused unless this is
+     * set: an importer that ignores the mode would report every existing row as
+     * a conflict and leave it unchanged, which is the rollback the caller asked
+     * to undo.
+     */
+    importGlobalsSupportsReplace?: boolean;
+
+    /**
      * Restrict every Durable Object this worker reaches — shard DOs, the
      * scheduler DO, the fan-out coordinator, subscriptions — to a Cloudflare
      * data-residency jurisdiction (`"eu"`, `"us"`, `"fedramp"`). The runtime
@@ -1251,6 +1540,20 @@ interface WorkerOptions {
     listSchemaTables?: () => ReadonlyArray<string>;
 
     /**
+     * The `"METHOD path"` keys of the declared live-stream routes served by `httpRouter`. They are dispatched ahead of
+     * {@link WorkerOptions.routes}, so an explicit route at one of those keys can not shadow a declared stream.
+     */
+    liveStreamRoutes?: ReadonlyArray<string>;
+
+    /**
+     * Whether the target serves live topic streams. Defaults to `true`. `false` keeps
+     * `ctx.live` on the HTTP action context and on a direct queue consumer, but its `publish`
+     * rejects with `LIVE_STREAMS_UNSUPPORTED`, so no publish reaches a shard with no subscriber
+     * to reach. Codegen sets it from the target's capability matrix.
+     */
+    liveStreams?: boolean;
+
+    /**
      * The durable log archive's read config — the R2 Data Catalog (Iceberg)
      * table `pipelineLogSink` writes to, so the studio Logs panel's Archive feed
      * (and the `/_lunora/admin/logs/archive` route) can read it back via R2 SQL.
@@ -1282,13 +1585,17 @@ interface WorkerOptions {
     observability?: ObservabilitySink;
 
     /**
-     * The generated OpenAPI 3.1 document. Import it from the codegen-emitted
-     * module and pass it through:
-     * `import { openApiSpec } from "./lunora/_generated/openapi"`. A Worker can't
-     * read the `_generated/openapi.json` file at runtime, so codegen also emits
-     * `openapi.ts` (the same document inlined as `export const openApiSpec`) for
-     * exactly this wiring — it regenerates on every `lunora/` change so the spec
-     * stays live.
+     * Loads the generated OpenAPI 3.1 document from the codegen-emitted module:
+     * `() => import("./lunora/_generated/openapi").then((m) => m.openApiSpec)`.
+     * A Worker can't read the `_generated/openapi.json` file at runtime, so
+     * codegen also emits `openapi.ts` (the same document inlined as
+     * `export const openApiSpec`) for exactly this wiring — it regenerates on
+     * every `lunora/` change so the spec stays live.
+     *
+     * A loader, not the document: the spec grows with the app (hundreds of KiB in
+     * a large one), and only the admin route reads it. Pass a dynamic `import()`
+     * so the bundler keeps it out of the entry chunk. The worker calls it on the
+     * route's first authorized request and keeps the result.
      *
      * When set, the worker exposes the admin-gated `GET /_lunora/admin/openapi`
      * endpoint the studio's API-reference view renders. The runtime does
@@ -1296,15 +1603,15 @@ interface WorkerOptions {
      * Omit it and the endpoint returns an empty-but-valid OpenAPI 3.1 document
      * (no paths), so the studio shows a "not configured" state rather than erroring.
      */
-    openApiSpec?: unknown;
+    openApiSpec?: () => Promise<unknown>;
 
     /**
-     * The generated OpenRPC 1.x document. Import it from the codegen-emitted
-     * module and pass it through:
-     * `import { openRpcSpec } from "./lunora/_generated/openrpc"` (only emitted
-     * when the project opts into `apiSpec: "openrpc"` or `"both"`). Like
-     * `openApiSpec`, codegen inlines the document into `openrpc.ts` because a
-     * Worker can't read the `.json` at runtime; both regenerate together.
+     * Loads the generated OpenRPC 1.x document from the codegen-emitted module:
+     * `() => import("./lunora/_generated/openrpc").then((m) => m.openRpcSpec)`
+     * (only emitted when the project opts into `apiSpec: "openrpc"` or
+     * `"both"`). Like `openApiSpec`, codegen inlines the document into
+     * `openrpc.ts` because a Worker can't read the `.json` at runtime; both
+     * regenerate together, and both are loaded only by their admin route.
      *
      * When set, the worker exposes the admin-gated `GET /_lunora/admin/openrpc`
      * endpoint the studio's API-reference view can render. OpenRPC is the
@@ -1315,7 +1622,7 @@ interface WorkerOptions {
      * returns an empty-but-valid OpenRPC 1.x document (no methods), so the studio
      * shows a "not configured" state rather than erroring.
      */
-    openRpcSpec?: unknown;
+    openRpcSpec?: () => Promise<unknown>;
 
     /**
      * When true, the runtime calls `ctx.passThroughOnException()` at the top
@@ -1340,6 +1647,14 @@ interface WorkerOptions {
      * stays decoupled from the queue package. Omitted when no push queues exist.
      */
     queue?: QueueConsumerHandler;
+
+    /**
+     * The `fetch` a queue consumer's `ctx.run` / `message.run` dispatches through.
+     * Omitted, the dispatcher uses global `fetch` against `LUNORA_ORIGIN_URL`, which
+     * is right on Cloudflare. A host with no origin to answer that URL (Node) passes
+     * its own dispatch here, e.g. `platform.dispatch` wrapped as a `fetch`.
+     */
+    queueFetchImpl?: typeof fetch;
 
     /**
      * Queue-batch handler. WfP namespaced Workers can't be
@@ -1491,6 +1806,22 @@ interface WorkerOptions {
      * hinted region rather than exactly in it.
      */
     shardRegion?: (shardKey: string) => RegionHint | undefined;
+
+    /**
+     * The Workers Static Assets binding of a single-page app
+     * (`not_found_handling: "single-page-application"`), whose `run_worker_first`
+     * sends every path to the Worker first. Codegen wires it from wrangler's
+     * `assets.binding` when the fallback is the SPA one.
+     *
+     * A `GET` / `HEAD` no route answered is passed to it unchanged: a real
+     * static file comes back as is, a page navigation gets the app shell, and
+     * anything else (a `fetch` to a path nothing serves) keeps the 404, since the
+     * binding answers a miss with the shell too. "No route answered" means no
+     * `httpRouter` at all, or its own not-found handler ran (see `httpRouter()`
+     * in `@lunora/server`), never a handler's 404 or 403. `undefined` keeps every
+     * miss a 404.
+     */
+    spaAssets?: AssetsFetcherLike;
 
     /**
      * Resolve the app-facing storage capability from the worker `env` — the same
@@ -1725,6 +2056,9 @@ const RPC_PATH = "/_lunora/rpc";
 const RPC_BATCH_PATH = "/_lunora/rpc-batch";
 const WS_PATH = "/_lunora/ws";
 
+/** The reserved paths that run app functions, and so answer `503 DEPLOYMENT_PAUSED` while the deployment is paused. */
+const FUNCTION_CALL_PATHS: ReadonlySet<string> = new Set([RPC_BATCH_PATH, RPC_PATH, WS_PATH]);
+
 /** HTTP metadata extracted safely from an inbound request for observability. */
 interface RequestTelemetryMeta {
     host?: string;
@@ -1785,7 +2119,7 @@ const traceEventFields = (trace: DispatchTraceContext): Pick<ObservabilityEvent,
 };
 
 /** Extract HTTP semantic metadata from a request without throwing on bad URLs. */
-const requestTelemetryMeta = (request: Request): RequestTelemetryMeta => {
+const requestTelemetryMeta = (request: Request, parsedUrl?: URL): RequestTelemetryMeta => {
     const { method } = request;
     const userAgent = request.headers.get("user-agent") ?? undefined;
     // Cross-navigation key into Cloudflare Traces / Workers Logs. Every request
@@ -1797,7 +2131,7 @@ const requestTelemetryMeta = (request: Request): RequestTelemetryMeta => {
     let url: URL;
 
     try {
-        url = new URL(request.url);
+        url = parsedUrl ?? new URL(request.url);
     } catch {
         return { method, ...rayField, userAgent };
     }
@@ -1827,6 +2161,9 @@ const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
  * stays out of URLs/logs.
  */
 const ADMIN_WS_TOKEN_PATH = "/_lunora/admin/ws-token";
+
+const VERIFY_ADMIN_TOKEN_OP = "__lunora_admin__:verifyAdminToken";
+const LIST_ADMIN_TOKENS_OP = "__lunora_admin__:listAdminTokens";
 /** Prefix shared by every Studio admin route (`/_lunora/admin/*`). */
 const ADMIN_PATH_PREFIX = "/_lunora/admin/";
 /** Prefix shared by the whole reserved plane the worker owns — everything else on the origin belongs to the app. */
@@ -1844,8 +2181,25 @@ const MIGRATE_PATH = "/_lunora/migrate";
  */
 const STATUS_PATH = "/_lunora/status";
 
-/** True for the admin routes the async `adminGate` may authorize — everything under `/_lunora/admin/` plus `/_lunora/migrate`. */
-const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH;
+/**
+ * Hosted Studio's advisor-procedure list. The generated companion Worker (`@lunora/codegen` `emit/companion.ts`) serves the same
+ * path, so the main Worker forwards it unchanged; a codegen test pins the two strings together.
+ */
+const ADVISOR_PROCEDURES_PATH = "/__lunora/advisor-procedures";
+
+interface ServiceBindingLike {
+    fetch: (request: Request) => Promise<Response>;
+}
+
+const isServiceBinding = (value: unknown): value is ServiceBindingLike =>
+    typeof value === "object" && value !== null && "fetch" in value && typeof value.fetch === "function";
+
+/** The reserved prefix every worker- and shard-served admin op shares. */
+const ADMIN_FUNCTION_PREFIX = "__lunora_admin__";
+
+// The advisor route is outside both prefixes but is admin-only, so it takes the same async gate: without it a named admin token or
+// Cloudflare Access caller is refused here while every other admin call works.
+const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PATH_PREFIX) || pathname === MIGRATE_PATH || pathname === ADVISOR_PROCEDURES_PATH;
 
 /**
  * Refuse a `__lunora_relation__:*` dispatch that is NOT a fan-out.
@@ -2021,10 +2375,11 @@ const buildErrorEvent = (
     const code = mappable ? error.code : "INTERNAL_SERVER_ERROR";
     const status = mappable ? error.status : 500;
     const { message, name, stack } = describeError(error);
+    const internal = describeInternal(error, { capped: false });
 
     return {
         durationMs,
-        error: { code, message, name, status, ...(stack === undefined ? {} : { stack }) },
+        error: { code, message, name, status, ...(stack === undefined ? {} : { stack }), ...(internal === undefined ? {} : { internal }) },
         functionPath,
         ok: false,
         ...(extra.fanOut ? { fanOut: { failed: 0, shards: 0, table: extra.fanOut.table } } : {}),
@@ -2140,9 +2495,9 @@ const queueNameOf = (batch: unknown): string => {
  * `Request` object — so an entry cannot outlive its request, cannot be read by a
  * different one, and needs no eviction policy.
  *
- * Unlike the per-worker `accessAdminGrants` WeakSet, this lives at **module**
+ * Unlike the per-worker `adminGrants` WeakMap, this lives at **module**
  * scope, because `resolveForwardContext` does. That is safe for the same reason
- * the WeakSet is — the key is a `Request` identity, which no two isolated
+ * the WeakMap is — the key is a `Request` identity, which no two isolated
  * requests share — but it does mean two composed workers in one isolate write to
  * the same map. The only way that matters is a re-entrant mount (an inner
  * `lunoraHandler` invoked without a context, for a request an outer worker
@@ -2166,6 +2521,8 @@ const resolveForwardContext = async (
     // Defaults to the in-flight context recorded by `handle`. Passed explicitly
     // only by callers that did not reach here through the `fetch` funnel.
     context: ExecutionContextLike | undefined = executionContextByRequest.get(request),
+    // Passed by a caller that already parsed the request URL, so it is not parsed twice.
+    requestOrigin: string = new URL(request.url).origin,
 ): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
     const authorization = request.headers.get("authorization");
@@ -2235,7 +2592,7 @@ const resolveForwardContext = async (
     // (never a client header). A `.storage()` with no `publicBaseUrl` signs
     // object URLs against it, so an action's URLs point back at the host that
     // asked for them — in dev, in a preview and in production alike.
-    headers["x-lunora-origin"] = new URL(request.url).origin;
+    headers["x-lunora-origin"] = requestOrigin;
 
     if (!resolveIdentity) {
         // eslint-disable-next-line unicorn/no-null -- `claims`/`identity`/`userId` feed the public HttpActionContext + authorize* callback contracts, whose anonymous sentinel is `null`
@@ -2278,7 +2635,7 @@ const resolveForwardContext = async (
         // the shard side by `parseIdentityHeader` (delegates to
         // `decodeIdentityHeader`, which also still accepts a legacy raw-JSON
         // value). See shared/identity-header.ts.
-        headers["x-lunora-identity"] = encodeIdentityHeader(claims);
+        headers["x-lunora-identity"] = memoizedIdentityHeader(claims);
     }
 
     return { claims, headers, identity, userId };
@@ -2333,6 +2690,9 @@ const validateFanOut = (fanOut: unknown): FanOutSpec | undefined => {
 
     return spec as FanOutSpec;
 };
+
+/** One binding or var off a request's env, which is `unknown` until a handler narrows it. */
+const envVariable = (env: unknown, name: string): unknown => (env as Record<string, unknown> | undefined)?.[name];
 
 /**
  * Dev request-loop diagnostic. With `LUNORA_DEBUG_RPC` set on the worker env
@@ -2399,7 +2759,27 @@ const resolveX402Charge = (envelope: RpcEnvelope, options: WorkerOptions): Funct
     return x402Tag;
 };
 
-const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
+/** The envelope keys whose original text may be forwarded to the shard verbatim (see {@link forwardsVerbatim}). */
+const FORWARDABLE_ENVELOPE_KEYS = new Set(["args", "functionPath", "shardKey"]);
+
+/**
+ * Whether the request text can go to the shard as it arrived. The shard reads
+ * `args` and `functionPath`, ignores `shardKey`, and parses with the same
+ * `JSON.parse`, so it sees exactly the values validated here. Skipping the
+ * re-stringify lets `-0` and an out-of-range numeral (`Infinity`) through
+ * unnormalised — as a socket frame already delivers them. Any other key, and any
+ * fan-out, takes the re-stringified body, so a key outside that set never
+ * reaches the shard.
+ */
+const forwardsVerbatim = (body: object, fanOut: FanOutSpec | undefined): boolean =>
+    fanOut === undefined && Object.keys(body).every((key) => FORWARDABLE_ENVELOPE_KEYS.has(key));
+
+interface ParsedRpcEnvelope extends RpcEnvelope {
+    /** The request body as received, when it is safe to forward unchanged; otherwise `undefined`. */
+    forwardBody: string | undefined;
+}
+
+const parseEnvelope = async (request: Request): Promise<ParsedRpcEnvelope> => {
     // Read with a byte budget so a chunked / Content-Length-stripped body can't
     // bypass the size cap the header fast-path only loosely enforces.
     const text = await readBodyTextWithLimit(request);
@@ -2464,6 +2844,7 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     return {
         args,
         fanOut,
+        forwardBody: forwardsVerbatim(body, fanOut) ? text : undefined,
         functionPath: envelope.functionPath,
         shardKey: envelope.shardKey,
     };
@@ -2514,11 +2895,10 @@ const probeRelayCount = async (namespace: ShardNamespaceLike, shardKey: string):
         const response = await resolveShard(namespace, shardKey).fetch(new Request("https://shard.internal/_lunora/route"));
 
         if (response.ok) {
-            const body: unknown = await response.json();
-            const reported = (body as { relayCount?: unknown }).relayCount;
+            const body: { relayCount?: unknown } = await response.json();
 
-            if (typeof reported === "number" && reported > 0) {
-                relayCount = Math.floor(reported);
+            if (typeof body.relayCount === "number" && body.relayCount > 0) {
+                relayCount = Math.floor(body.relayCount);
             }
         }
     } catch {
@@ -2547,9 +2927,26 @@ const resolveShardBindingName = (env: unknown, namespace: ShardNamespaceLike): s
     return Object.entries(env).find(([, value]) => value === namespace)?.[0];
 };
 
-/** Build the POST the shard's `/rpc` route expects: `{ args, functionPath }` under the caller's headers. */
-const shardRpcRequest = (functionPath: string, args: Record<string, unknown>, headers: Record<string, string>): Request =>
-    new Request("https://shard.internal/rpc", { body: JSON.stringify({ args, functionPath }), headers, method: "POST" });
+/**
+ * What a caller already holds for one inbound call, handed down so the helpers
+ * neither re-parse its URL nor re-serialize its envelope. Every field is
+ * optional: absent, each helper derives it from the request as it would anyway.
+ */
+interface InboundCall {
+    executionContext?: ExecutionContextLike;
+    /** The envelope text {@link forwardsVerbatim} cleared for the shard. */
+    forwardBody?: string;
+    url?: URL;
+}
+
+/** Build the POST the shard's `/rpc` route expects: `{ args, functionPath }` under the caller's headers, or `body` when the caller already holds that text. */
+const shardRpcRequest = (
+    functionPath: string,
+    args: Record<string, unknown>,
+    headers: Record<string, string>,
+    body: string = JSON.stringify({ args, functionPath }),
+    signal?: AbortSignal,
+): Request => new Request("https://shard.internal/rpc", { body, headers, method: "POST", ...(signal === undefined ? {} : { signal }) });
 
 /**
  * The server-minted `x-lunora-*` values the DOs trust verbatim on an upgrade: the
@@ -2585,6 +2982,19 @@ const setIdentityHeaders = (headers: Headers, forwardedHeaders: Record<string, s
 };
 
 /**
+ * `Upgrade` is a case-insensitive token (RFC 9110 §7.8), so `WebSocket` and
+ * `websocket` name the same upgrade. Every socket path checks through here.
+ */
+const isWebSocketUpgrade = (request: Request): boolean => request.headers.get("Upgrade")?.toLowerCase() === "websocket";
+
+/**
+ * Whether the request's bearer is a named admin token. A root token that happens
+ * to have the same shape is not: it is forwarded as the root bearer it is.
+ */
+const isNamedAdminBearer = (request: Request, rootToken: string | undefined): boolean =>
+    parseAdminTokenHeader(request.headers.get("authorization")) !== undefined && !checkBearerToken(request, rootToken);
+
+/**
  * Clone an upgrade request's headers with EVERY client-supplied `x-lunora-*`
  * header stripped, then the server-minted identity trio re-set.
  *
@@ -2597,7 +3007,7 @@ const setIdentityHeaders = (headers: Headers, forwardedHeaders: Record<string, s
  * headers standing. The keys are snapshotted before deleting for exactly that
  * reason. Non-`x-lunora-` headers (crucially `Upgrade: websocket`) are preserved.
  */
-const buildUpgradeHeaders = (request: Request, forwardedHeaders: Record<string, string>): Headers => {
+const buildUpgradeHeaders = (request: Request, forwardedHeaders: Record<string, string>, rootToken: string | undefined): Headers => {
     const headers = new Headers(request.headers);
 
     // NOTE: the snapshot must stay in its own binding. Spreading inline in the
@@ -2609,6 +3019,11 @@ const buildUpgradeHeaders = (request: Request, forwardedHeaders: Record<string, 
         if (name.startsWith("x-lunora-")) {
             headers.delete(name);
         }
+    }
+
+    // A named admin token's secret stays at the worker; shards learn of it only through a signed signal.
+    if (isNamedAdminBearer(request, rootToken)) {
+        headers.delete("authorization");
     }
 
     setIdentityHeaders(headers, forwardedHeaders);
@@ -2764,6 +3179,13 @@ const assertNoReservedRoutes = (routes: Readonly<Record<string, unknown>> | unde
         // key IS the pathname.
         const pathname = key.slice(key.indexOf(" ") + 1);
 
+        if (pathname === ADVISOR_PROCEDURES_PATH) {
+            throw new LunoraError(`route "${key}" is the framework's advisor endpoint, which carries its own admin gate — pick a different path.`, {
+                code: "MISCONFIGURED",
+                status: 500,
+            });
+        }
+
         if (pathname.startsWith(RESERVED_PATH_PREFIX)) {
             throw new LunoraError(
                 `route "${key}" is under the reserved ${RESERVED_PATH_PREFIX} prefix, which the framework owns. App routes registered there shadow the internal endpoint AND its admin gate — pick a path outside the prefix.`,
@@ -2807,6 +3229,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const isTrustedUpstream = resolveTraceTrust(options.trustInboundTraceContext);
     const noticeDroppedTrace = createDroppedTraceNotice(options.trustInboundTraceContext);
     const defaultShard = options.defaultShardKey ?? "__root__";
+
+    // The worker knows `defaultShardKey`; the shard DO does not (see shared/scheduler-dispatch).
+    const assertAgentRunOnDefaultShard = (functionPath: string, shardKey: string | undefined): void => {
+        if (isAgentRunOffDefaultShard(functionPath, shardKey, defaultShard)) {
+            throw new LunoraError(AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, { code: "BAD_REQUEST", status: 400 });
+        }
+    };
 
     // Every admin fan-out (export, sync, apply, migrate, backup) goes through the
     // coordinator, so a worker configured without one gets a default whose
@@ -2933,13 +3362,127 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // requests and records the granted request here; the per-route gates consult it
     // through `requestIsAdmin`, so an Access-authorized request passes the same SYNC
     // gates the static bearer does — without threading async verification through
-    // every extracted admin-route builder. A `WeakSet` keyed by the request lets the
+    // every extracted admin-route builder. A `WeakMap` keyed by the request lets the
     // entry be collected with the request, and concurrent requests never alias.
-    const accessAdminGrants = new WeakSet<Request>();
+    // A named-token grant carries the token's name; an `adminGate` grant carries none.
+    const adminGrants = new WeakMap<Request, { scopes?: ReadonlyArray<AdminTokenScope>; tokenName?: string }>();
 
     // The unified admin predicate every `/_lunora/admin/*` gate routes through: the
-    // static bearer, OR a grant `handle` recorded from `options.adminGate`.
-    const requestIsAdmin = (request: Request): boolean => checkBearerToken(request, effectiveAdminToken()) || accessAdminGrants.has(request);
+    // static bearer, OR a grant `handle` recorded from `options.adminGate` or a
+    // named admin token.
+    const requestIsAdmin = (request: Request): boolean => checkBearerToken(request, effectiveAdminToken()) || adminGrants.has(request);
+
+    // Root authority: everything `requestIsAdmin` admits except a named token. Gates
+    // token management and the long-lived admin sockets, which would otherwise
+    // outlive a named token's revocation.
+    const requestIsRootAdmin = (request: Request): boolean => {
+        const grant = adminGrants.get(request);
+
+        return checkBearerToken(request, effectiveAdminToken()) || (grant !== undefined && grant.tokenName === undefined);
+    };
+
+    // The SQL migration route's gate: the root token, or a named token minted with the `migrations` scope. The route
+    // then runs only additive statements for a scoped caller (see `isRootAdmin` on the route). Anything else is refused
+    // by name, so the caller knows which token to mint.
+    const assertMigrationsAdmin = (request: Request): void => {
+        if (requestIsRootAdmin(request) || (adminGrants.get(request)?.scopes ?? []).includes("migrations")) {
+            return;
+        }
+
+        if (!requestIsAdmin(request)) {
+            throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        throw new LunoraError(
+            "this named admin token has no `migrations` scope, so it cannot run SQL migrations. Mint one with `lunora admin-token create <name> --scope migrations`.",
+            { code: "ADMIN_SCOPE_REQUIRED", status: 403 },
+        );
+    };
+
+    // The named-token store lives on the default shard; the worker asks it under
+    // the root token, which only the worker and the shards hold.
+    const callTokenStore = async (functionPath: string, args: Record<string, unknown>): Promise<unknown> => {
+        const root = effectiveAdminToken();
+
+        if (root === undefined) {
+            throw new LunoraError("named admin tokens require a configured LUNORA_ADMIN_TOKEN, which signs them", {
+                code: "ADMIN_TOKEN_NOT_CONFIGURED",
+                status: 400,
+            });
+        }
+
+        const response = await forwardToShard(
+            shardDO,
+            defaultShard,
+            shardRpcRequest(functionPath, args, { authorization: `Bearer ${root}`, "content-type": "application/json" }),
+        );
+        const body: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
+
+        if (!response.ok || body.error !== undefined) {
+            throw new LunoraError(body.error?.message ?? "admin token store unavailable", {
+                code: body.error?.code ?? "SHARD_UNAVAILABLE",
+                status: response.status,
+            });
+        }
+
+        return body.result;
+    };
+
+    // Revocations are recorded outside the default shard's database, which a point-in-time
+    // restore rewinds along with the token rows.
+    // Pinned like every other Durable Object this worker reaches: a revocation names a token and
+    // belongs inside the residency boundary the app asked for.
+    const adminRevocations =
+        options.adminRevocations === undefined
+            ? undefined
+            : createAdminRevocations(applyJurisdiction(options.adminRevocations, options.jurisdiction), effectiveAdminToken);
+
+    const adminTokenVerifier = createAdminTokenVerifier({
+        listNames: async () => {
+            const { tokens } = (await callTokenStore(LIST_ADMIN_TOKENS_OP, {})) as { tokens: { name: string }[] };
+
+            return tokens.map((token) => token.name);
+        },
+        lookup: async (name, digest) => {
+            try {
+                const answer = (await callTokenStore(VERIFY_ADMIN_TOKEN_OP, { digest, name })) as {
+                    createdAt?: unknown;
+                    expiresAt?: unknown;
+                    known?: unknown;
+                    ok?: unknown;
+                    scopes?: unknown;
+                };
+
+                if (answer.ok !== true) {
+                    return { live: false, nameKnown: answer.known !== false };
+                }
+
+                // Either store saying "revoked" wins, so a restored row cannot revive a token.
+                // Without the outside store, or its answer, a named token fails closed.
+                if (adminRevocations === undefined || typeof answer.createdAt !== "number") {
+                    throw new LunoraError("the admin revocation store is not available", { code: "ADMIN_TOKEN_NOT_CONFIGURED", status: 400 });
+                }
+
+                if (await adminRevocations.isRevoked(name, answer.createdAt)) {
+                    return { live: false, nameKnown: true };
+                }
+
+                // Scopes are read from the store's answer and kept only if recognised, so an unknown one grants nothing.
+                const scopes = Array.isArray(answer.scopes) ? answer.scopes.filter(isAdminTokenScope) : [];
+
+                return typeof answer.expiresAt === "number" ? { expiresAt: answer.expiresAt, live: true, scopes } : { live: true, scopes };
+            } catch (error) {
+                // An unreachable store refuses rather than 500s (the root token still
+                // works), uncached so the token recovers with the store. Logged, or an
+                // outage reads exactly like a revoked token. Name and code only: the
+                // secret never reaches this function and the digest stays out of logs.
+                // eslint-disable-next-line no-console -- server-side diagnostic for a token-store outage
+                console.error(`[lunora] admin token store lookup for "${name}" failed: ${isLunoraError(error) ? error.code : String(error)}`);
+
+                return { live: false, nameKnown: true, transient: true };
+            }
+        },
+    });
 
     /**
      * Evaluate `options.adminGate` once for this request and record the grant
@@ -2954,7 +3497,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * already named one of them.
      */
     const recordAdminGrant = async (request: Request): Promise<void> => {
-        if (options.adminGate === undefined || accessAdminGrants.has(request)) {
+        if (adminGrants.has(request)) {
+            return;
+        }
+
+        const grant = isNamedAdminBearer(request, effectiveAdminToken()) ? await adminTokenVerifier.verify(request.headers.get("authorization")) : undefined;
+
+        if (grant !== undefined) {
+            adminGrants.set(request, { scopes: grant.scopes, tokenName: grant.name });
+
+            return;
+        }
+
+        if (options.adminGate === undefined) {
             return;
         }
 
@@ -2964,7 +3519,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // a `Response`, or `{ ok: false }` would unlock every `/_lunora/admin/*`
             // route. `grants` requires the exact `true`.
             if (await grants(options.adminGate(request, executionContextByRequest.get(request)))) {
-                accessAdminGrants.add(request);
+                adminGrants.set(request, {});
             }
         } catch {
             // No grant recorded; `requestIsAdmin` still honours the static admin token.
@@ -2992,12 +3547,61 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         request: Request,
         env: unknown,
         resolveIdentity: WorkerOptions["resolveIdentity"],
-        executionContext?: ExecutionContextLike,
+        call: InboundCall = {},
     ): Promise<ForwardContext> => {
-        const resolved = await resolveForwardContext(request, env, resolveIdentity, options.trustedClientIpHeader, executionContext);
+        const resolved = await resolveForwardContext(request, env, resolveIdentity, options.trustedClientIpHeader, call.executionContext, call.url?.origin);
 
         if (options.functions !== undefined) {
             resolved.headers[ORIGIN_PAYWALL_HEADER] = ORIGIN_PAYWALL_APPLIED;
+        }
+
+        // A named admin token's secret never leaves the worker. A verified one is
+        // replaced by a short-lived signal the shard checks with the root token;
+        // an unverified one is simply dropped, so the shard refuses it as it would
+        // any foreign bearer.
+        if (resolved.headers["authorization"] !== undefined && isNamedAdminBearer(request, effectiveAdminToken())) {
+            delete resolved.headers["authorization"];
+
+            const tokenName = adminGrants.get(request)?.tokenName;
+
+            if (tokenName !== undefined) {
+                // Every signal re-verifies the token first, so a revoke that landed
+                // since the grant (or between fan-out calls) stops it, and caps the
+                // signal at the token's validity. A token that no longer verifies
+                // gets no signal, and the shard refuses the call.
+                const authorization = request.headers.get("authorization");
+                const signal = async (): Promise<string | undefined> => {
+                    const key = effectiveAdminToken();
+                    const grant = key === undefined ? undefined : await adminTokenVerifier.verify(authorization);
+
+                    if (key === undefined || grant?.name !== tokenName) {
+                        return undefined;
+                    }
+
+                    // Not `grant.until` alone: that is the cache window's end, which a late hit
+                    // leaves too little of for the shard hop. The token's own expiry still caps it.
+                    const now = Date.now();
+
+                    return mintAdminSignal(
+                        key,
+                        tokenName,
+                        now,
+                        Math.min(Math.max(grant.until, now + ADMIN_SIGNAL_MIN_TTL_MS), grant.expiresAt ?? Number.POSITIVE_INFINITY),
+                    );
+                };
+                const first = await signal();
+
+                if (first !== undefined) {
+                    resolved.headers[ADMIN_SIGNAL_HEADER] = first;
+                }
+
+                // A fan-out can outlive one signal, so each shard call gets a fresh one.
+                refreshShardHeadersPerCall(resolved.headers, async ({ [ADMIN_SIGNAL_HEADER]: _stale, ...headers }) => {
+                    const fresh = await signal();
+
+                    return fresh === undefined ? headers : { ...headers, [ADMIN_SIGNAL_HEADER]: fresh };
+                });
+            }
         }
 
         return resolved;
@@ -3018,8 +3622,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         request: Request,
         env: unknown,
         resolveIdentity: WorkerOptions["resolveIdentity"],
-        executionContext?: ExecutionContextLike,
-    ): Promise<ForwardContext> => assertLiveCredential(await forwardContext(request, env, resolveIdentity, executionContext));
+        call?: InboundCall,
+    ): Promise<ForwardContext> => assertLiveCredential(await forwardContext(request, env, resolveIdentity, call));
 
     // Forward-context for the cross-shard admin orchestrators (migrate / rank /
     // pitr / export / import / …). They authorize fanned-out per-shard RPCs by
@@ -3035,7 +3639,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const resolveAdminForwardContext = async (request: Request, env: unknown): Promise<ForwardContext> => {
         const context = await forwardContext(request, env, options.resolveIdentity);
 
-        if (accessAdminGrants.has(request) && context.headers["authorization"] === undefined) {
+        const grant = adminGrants.get(request);
+
+        if (grant !== undefined && grant.tokenName === undefined && context.headers["authorization"] === undefined) {
             const token = effectiveAdminToken();
 
             if (token !== undefined) {
@@ -3115,7 +3721,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * end user and denies. The reserved-name refusal below is NOT skipped: an
      * admin credential does not make `foo::relay::0` a well-formed shard key.
      */
-    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, isAdmin = false): Promise<void> => {
+    const assertShardAuthorized = async (identity: ResolvedIdentity | null, shardKey: string, isAdmin = false, functionPath?: string): Promise<void> => {
         // `::relay::` / `::replica::` are RESERVED: only the runtime mints those
         // names, and a DO reads its own name to learn its role. A client-supplied
         // key carrying either infix therefore addresses a DO that believes it is
@@ -3132,7 +3738,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         if (options.authorizeShard) {
-            const allowed = await grants(options.authorizeShard({ identity, shardKey }));
+            const allowed = await grants(options.authorizeShard({ functionPath, identity, shardKey }));
 
             if (!allowed) {
                 throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
@@ -3157,6 +3763,59 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     });
 
     /**
+     * `ctx.live.publish` as the Worker forwards it to a shard: the HTTP action's
+     * context and a queue consumer's both call this, so the wire encoding and the
+     * refusal mapping cannot drift between them. `origin` only supplies the URL the
+     * shard reads the pathname from; a queue has no request, so it passes a fixed
+     * internal origin.
+     *
+     * `caller` decides the shard authorization. An HTTP action names its shard from
+     * the request, so it passes the resolved caller identity and is gated exactly as
+     * `fetchShard` / `forShard` gate the same shard (the default shard is exempt, as
+     * there). A queue consumer or scheduled job passes `"trusted"`: it runs as worker
+     * code with no HTTP caller, its shard comes from app code rather than a client,
+     * and the scheduler dispatch path is trusted for the same reason (see
+     * {@link dispatchToShard}). The reserved-name refusal applies to every caller.
+     *
+     * Wire-encode the payload once so bytes/bigint survive the hop; the shard embeds
+     * it verbatim into the SSE frames. A topic with no subscribers is a no-op. A
+     * refused or failed forward throws, so the caller sees the error rather than a
+     * silent drop.
+     */
+    const publishLiveToShard = async (
+        origin: string,
+        ref: LiveTopicRefLike,
+        payload: unknown,
+        publishOptions: { shardKey?: string } | undefined,
+        caller: "trusted" | { identity: ResolvedIdentity | null },
+    ): Promise<void> => {
+        const { __lunoraLive: stream, topic } = ref;
+        const shardKey = publishOptions?.shardKey ?? defaultShard;
+
+        if (caller === "trusted") {
+            // eslint-disable-next-line unicorn/no-null -- the anonymous identity sentinel is `null`, matching the identity contract
+            await assertShardAuthorized(null, shardKey, true);
+        } else if (shardKey !== defaultShard) {
+            await assertShardAuthorized(caller.identity, shardKey);
+        }
+
+        const response = await forwardToShard(
+            shardDO,
+            shardKey,
+            new Request(new URL(LIVE_PUBLISH_PATH, origin), {
+                // eslint-disable-next-line unicorn/no-null -- an omitted publish payload is delivered as an explicit JSON null
+                body: JSON.stringify({ data: encodeWire(payload ?? null), stream, topic }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+        );
+
+        if (!response.ok) {
+            throw await shardPublishRefusal(response, topic);
+        }
+    };
+
+    /**
      * Forward a server-initiated function call (a scheduler dispatch or a firing
      * cron job) to its shard: POST `{ functionPath, args }` to the shard's RPC.
      *
@@ -3178,11 +3837,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         mutationId?: string,
         forwardedIdentity?: { identity?: string; userId?: string },
         traceparent?: string,
+        scheduledFor?: number,
     ): Promise<Response> => {
         // The scheduler-dispatch endpoint takes `functionPath` off a request body and a
         // cron target is app-authored — neither can legitimately be the reserved
         // fan-out-only reader, and this path stamps the system flag below.
         assertNotReservedRelationPath(functionPath);
+        assertAgentRunOnDefaultShard(functionPath, shardKey);
 
         // `x-lunora-system` marks this as a trusted server-initiated dispatch so the
         // shard may run `internal` functions (scheduled/cron jobs are typically
@@ -3196,7 +3857,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // This path is already admin/HMAC-gated and may call any `internal`
         // function, so it is strictly more privileged than the paywall it passes.
         // The shared builder carries the trust-boundary headers; see `shared/system-dispatch-headers`.
-        const headers = buildSystemDispatchHeaders({ forwardedIdentity, mutationId, traceparent });
+        const headers = buildSystemDispatchHeaders({ forwardedIdentity, mutationId, scheduledFor, traceparent });
 
         return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, headers));
     };
@@ -3278,13 +3939,37 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
+     * A scheduled agent run's shard is the record's, which the scheduling shard stamped and
+     * the dispatch signature covers; a `shardKey` in the args may be a client's (see
+     * {@link WorkerOptions.agentWorkflows}). A declared list says which workflows are agents,
+     * and a plain workflow's params are its own. Without a list, any scheduled workflow may be
+     * an agent run, so the args' `shardKey` is never trusted: only the record's shard is kept.
+     */
+    const scheduledWorkflowParams = (workflow: string, args: Record<string, unknown>, recordShard: unknown): Record<string, unknown> => {
+        const runShard = typeof recordShard === "string" && recordShard.length > 0 ? recordShard : undefined;
+
+        if (options.agentWorkflows !== undefined && !options.agentWorkflows.includes(workflow)) {
+            return args;
+        }
+
+        return withRunShard(args, runShard);
+    };
+
+    /**
      * Run one code-defined cron job: start its durable workflow instance, or
      * dispatch its function to the shard (a non-2xx response is a failure).
      * Throws a {@link LunoraError} on failure so both the scheduled-fire loop and
      * the manual `/cron-jobs/run` trigger surface the same error shape.
      */
-    const runOneCronJob = async (job: CronJobDispatch, env: unknown, context: ExecutionContextLike | undefined, traceparent?: string): Promise<void> => {
+    const runOneCronJob = async (
+        job: CronJobDispatch,
+        env: unknown,
+        context: ExecutionContextLike | undefined,
+        traceparent?: string,
+        scheduledFor?: number,
+    ): Promise<void> => {
         if (job.workflow) {
+            // Cron args are app-authored, not client input, so a `shardKey` in them is the run's shard (see the AgentRunInput docs).
             await startWorkflowInstance(job.workflow, job.args ?? {}, { context, env }, `cron job "${job.name}"`);
 
             return;
@@ -3297,7 +3982,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             });
         }
 
-        const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard, undefined, undefined, traceparent);
+        // The tick's planned time rides along so the shard records the job's start lag, as a scheduled job's does.
+        const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard, undefined, undefined, traceparent, scheduledFor);
 
         if (!response.ok) {
             // A failed background job is operationally a 500-class "didn't run",
@@ -3328,6 +4014,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    const assertRootAdmin = (request: Request): void => {
+        assertAdminAuthorized(request);
+
+        if (!requestIsRootAdmin(request)) {
+            throw new LunoraError("this admin endpoint requires the root admin token; named admin tokens cannot use it", {
+                code: "ADMIN_ROOT_REQUIRED",
+                status: 403,
+            });
+        }
+    };
+
     /** Assert admin auth, then assert a worker option is configured; return it (narrowed non-undefined). */
     const requireAdminOption = <T>(request: Request, value: T | undefined, notConfigured: NotConfiguredError): T => {
         assertAdminAuthorized(request);
@@ -3339,10 +4036,40 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return value;
     };
 
+    /** The scheduler instance holding cron leases, run history and the pause flag, or `undefined` when the worker has none. */
+    const cronRunStub = (): ResolvedShard | undefined =>
+        schedulerDO === undefined ? undefined : resolveShard(schedulerDO, options.schedulerInstanceName ?? "default");
+
+    const deploymentPause = createDeploymentPause({
+        assertAdmin: assertAdminAuthorized,
+        // The WS ticket too: Studio's live views upgrade `/_lunora/ws` with `?token=`, since a browser socket cannot carry the bearer header.
+        // The `adminGate` grant is recorded here because `applyAdminGate` only covers `/_lunora/admin/*`: an Access-only operator's
+        // RPCs carry no bearer and would otherwise be refused.
+        isAdmin: async (request) => {
+            await recordAdminGrant(request);
+
+            // The ticket is for the upgrade it was minted for: on any other request a
+            // ticket lifted from a socket URL would lift the pause for that call.
+            const isUpgrade = request.headers.get("upgrade")?.toLowerCase() === "websocket";
+
+            return requestIsAdmin(request) || (isUpgrade && (await checkAdminWsToken(request, effectiveAdminToken())));
+        },
+        instanceStub: (name) => (schedulerDO === undefined ? undefined : resolveShard(schedulerDO, name)),
+        stub: cronRunStub,
+    });
+
+    const isPaused = async (): Promise<boolean> => {
+        const state = await deploymentPause.read();
+
+        return state.paused;
+    };
+
     /**
      * Dispatch every code-defined cron job declared under the firing expression,
      * collecting per-job failures into `errors` so one failing job neither aborts
-     * the others nor is swallowed.
+     * the others nor is swallowed. Each job runs under its own overlap lease: a
+     * tick that lands while the previous run of the same job is still going is
+     * skipped (and recorded as such) rather than run concurrently with it.
      * @returns how many jobs were declared under `cron` — 0 means the expression
      * matched nothing, which the caller reports rather than treating as success.
      */
@@ -3353,6 +4080,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         errors: Error[],
         toError: (error: unknown) => Error,
         traceparent?: string,
+        scheduledTime?: number,
     ): Promise<number> => {
         const cronJobs = options.cronJobs?.[cron];
 
@@ -3360,12 +4088,25 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return 0;
         }
 
+        const stub = cronRunStub();
+
         for (const job of cronJobs) {
+            // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
+            const gate = await beginCronRun(stub, job.name);
+
+            if (gate.skip) {
+                continue;
+            }
+
             try {
-                // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
-                await runOneCronJob(job, env, context, traceparent);
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await runOneCronJob(job, env, context, traceparent, scheduledTime);
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await endCronRun(stub, job.name, gate);
             } catch (error: unknown) {
                 errors.push(toError(error));
+                // eslint-disable-next-line no-await-in-loop -- see above
+                await endCronRun(stub, job.name, gate, error);
             }
         }
 
@@ -3403,7 +4144,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             throw new LunoraError(`no cron job named "${name}" is registered`, { code: "CRON_JOB_NOT_FOUND", status: 404 });
         }
 
-        await runOneCronJob(job, env, context);
+        const stub = cronRunStub();
+        const gate = await beginCronRun(stub, job.name);
+
+        if (gate.skip && gate.reason === "paused") {
+            throw new LunoraError(`cron job "${name}" was not run: the deployment is paused`, { code: "DEPLOYMENT_PAUSED", status: 503 });
+        }
+
+        if (gate.skip) {
+            throw new LunoraError(`cron job "${name}" is already running`, { code: "CRON_JOB_IN_FLIGHT", status: 409 });
+        }
+
+        try {
+            await runOneCronJob(job, env, context);
+        } catch (error: unknown) {
+            await endCronRun(stub, job.name, gate, error);
+
+            throw error;
+        }
+
+        await endCronRun(stub, job.name, gate);
 
         return Response.json({ name, ran: true }, { status: 200 });
     };
@@ -3448,8 +4208,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     /**
      * Receiver for the `SchedulerDO`'s scheduled-job dispatch. The scheduler DO
      * POSTs `{ functionPath, args, shardKey, scheduledFor, id }` as raw JSON,
-     * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
-     * in the `x-lunora-scheduler-signature` header (secret in
+     * authenticated by an HMAC-SHA-256 (base64url) signature in the
+     * `x-lunora-scheduler-signature` header. The signature covers the
+     * `x-lunora-scheduler-timestamp` header, the forwarded identity headers and the
+     * exact body, and it is refused outside a five-minute window (secret in
      * `env.LUNORA_SCHEDULER_SECRET`), or — when no HMAC secret is configured on
      * the scheduler — an `authorization: Bearer <admin token>` fallback. An
      * unsigned/forged request is rejected with 403; we never run a job we can't
@@ -3500,6 +4262,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             id?: unknown;
             instanceName?: unknown;
             pool?: unknown;
+            scheduledFor?: unknown;
             shardKey?: unknown;
             workflow?: unknown;
         };
@@ -3536,7 +4299,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // as a string. The wire form IS JSON-safe, so it travels intact and
             // `@lunora/workflow`'s `createWorkflowRunContext` decodes it where the
             // handler reads `params`.
-            await startWorkflowInstance(candidate.workflow, args, { context, env }, "scheduled workflow", recordId);
+            await startWorkflowInstance(
+                candidate.workflow,
+                scheduledWorkflowParams(candidate.workflow, args, candidate.shardKey),
+                { context, env },
+                "scheduled workflow",
+                recordId,
+            );
 
             await releasePoolSlot(candidate);
 
@@ -3559,7 +4328,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // The caller (a trigger's `ctx.run`, the scheduler DO) already opened a
         // trace and named it on the request; forward it so the dispatched function
         // is a CHILD of the work that asked for it rather than its own trace.
-        const response = await dispatchToShard(candidate.functionPath, args, shardKey, recordId, identity, request.headers.get("traceparent") ?? undefined);
+        // The job's due time rides along so the shard can record how late it started;
+        // a sender predating the field simply leaves the metric unrecorded.
+        const scheduledFor = typeof candidate.scheduledFor === "number" ? candidate.scheduledFor : undefined;
+        const response = await dispatchToShard(
+            candidate.functionPath,
+            args,
+            shardKey,
+            recordId,
+            identity,
+            request.headers.get("traceparent") ?? undefined,
+            scheduledFor,
+        );
 
         // Workpool jobs hold a concurrency slot until the action settles; release
         // it. Best-effort only in that a failure can't fail this dispatch — a
@@ -3581,11 +4361,79 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     });
 
     // The auth jurisdiction-move ops (copy, purge): worker-served for the same reason —
-    // the auth objects are reached through the injected move, not a shard.
+    // the auth objects are reached through the injected move, not a shard. Root-only:
+    // a forced copy overwrites pinned auth rows and a purge drops auth tables, writes
+    // the named-token auth policy refuses everywhere else.
     const authJurisdictionMove = buildAuthJurisdictionMoveRpc({
-        assertAdmin: assertAdminAuthorized,
+        assertAdmin: assertRootAdmin,
         getMove: () => options.authJurisdictionMove,
     });
+
+    // The `__lunora_admin__:aiChat` handler. Worker-served for a different reason
+    // than its auth-audit sibling: not because its data lives elsewhere, but
+    // because a multi-turn exchange must not occupy the DO's single-threaded
+    // admin dispatch. See `ai-chat-rpc.ts`.
+    const aiRpcDeps: AiChatRpcDeps = {
+        assertAdmin: assertAdminAuthorized,
+        resolveToolHeaders: refreshedShardHeaders,
+        defaultShardKey: () => defaultShard,
+
+        /*
+         * `resolveAdminForwardContext`, not the raw `authorization` header: an
+         * Access-authorized admin presents `Cf-Access-Jwt-Assertion` and never a
+         * bearer, and the DO's own gate trusts only the static bearer — so that
+         * deployment class had every tool call answered 403 by the shard.
+         */
+        forwardToShard: async (request, env) => {
+            const context = await resolveAdminForwardContext(request, env);
+            const token = effectiveAdminToken();
+
+            /*
+             * Whether tools are offered keys on a CONFIGURED admin token, not on
+             * whatever `authorization` the caller sent: the shard trusts only the
+             * static bearer, so an unrelated bearer from an Access-only admin would
+             * otherwise be forwarded, read as "tools available", and refused 403
+             * on every call. The caller already cleared the admin gate, so the
+             * configured token is the credential to present; none configured means
+             * nothing to present, and the header is dropped (fail closed).
+             */
+            if (adminGrants.get(request)?.tokenName !== undefined) {
+                // A named token's calls keep exactly what `forwardContext` gave them: no bearer, and a
+                // signal that vouches for that token alone. Presenting the root bearer here would let a
+                // named token's tool calls pass every root-only gate on the shard.
+            } else if (token === undefined) {
+                delete context.headers["authorization"];
+            } else {
+                context.headers["authorization"] = `Bearer ${token}`;
+            }
+
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- defined further down this closure and only ever read per request; the same exception this file already takes for `resolvedSecurity`
+            return { forward: forwardRpcToShard, headers: context.headers };
+        },
+        // Fall back to the request's env so a hand-wired worker (`createLunoraHandler`,
+        // a hand-written `createWorker`) matches the shard's one-shot ops, which read
+        // `env.AI` and `env.LUNORA_AI_OPT_IN` directly. Codegen sets the options
+        // from the same two vars, so it behaves identically.
+        getBinding: (env) => options.aiChatBinding ?? (envVariable(env, "AI") as AiRunBinding | undefined),
+        optInLevel: (env) => asOptInLevel(options.aiOptInLevel ?? envVariable(env, "LUNORA_AI_OPT_IN")),
+        approvalSecret: (env) => {
+            const secret = envVariable(env, "LUNORA_AI_APPROVAL_SECRET");
+
+            return typeof secret === "string" ? secret : undefined;
+        },
+    };
+
+    const aiChat = buildAiChat(aiRpcDeps);
+
+    /*
+     * `__lunora_admin__:aiAvailable`, built from the SAME deps object as the chat
+     * op above — which is the whole point of it being worker-served. It used to be
+     * a shard handler narrowing `env.LUNORA_AI_OPT_IN` for itself, so the level the
+     * Studio displayed was a second answer rather than a report of the one the
+     * chat gate enforces.
+     */
+    const aiAvailable = buildAiAvailable(aiRpcDeps);
+    const aiOneShotGate = buildAiOneShotGate(aiRpcDeps);
 
     /**
      * Serve the gated `__lunora_admin__:listPushSubscriptions` admin RPC — the
@@ -3655,37 +4503,35 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     /**
      * Handle the reserved single-shard RPCs the worker serves itself rather than
-     * forwarding to a shard: the D1-backed auth-audit read and the notify
-     * device-list read (both admin-gated, default-closed). Returns a `Response`
+     * forwarding to a shard: the D1-backed auth-audit read, the notify
+     * device-list read, and the two assistant ops (`aiChat` and the `aiAvailable`
+     * probe that reports the level `aiChat` gates on) — all admin-gated and
+     * default-closed. Returns a `Response`
      * to short-circuit `handleRpc`, or `undefined` to let normal shard dispatch
      * proceed. A fan-out envelope is never worker-served. The fan-out-only
      * relation-prefix guard lives in `assertDispatchableEnvelope`, which runs first.
      */
-    const serveReservedWorkerRpc = async (request: Request, envelope: RpcEnvelope): Promise<Response | undefined> => {
+    const serveReservedWorkerRpc = async (request: Request, envelope: RpcEnvelope, env: unknown): Promise<Response | undefined> => {
         if (envelope.fanOut) {
             return undefined;
         }
 
-        if (
-            envelope.functionPath !== GET_AUTH_AUDIT_LOG_OP &&
-            envelope.functionPath !== LIST_PUSH_SUBSCRIPTIONS_OP &&
-            envelope.functionPath !== COPY_AUTH_TO_JURISDICTION_OP &&
-            envelope.functionPath !== PURGE_UNPINNED_AUTH_OP
-        ) {
-            return undefined;
-        }
-
-        // These two are Studio endpoints served at `/_lunora/rpc`, not under
-        // `/_lunora/admin/*`, so `applyAdminGate` — which is path-scoped, to keep
-        // the async gate off the data hot path — never evaluated `adminGate` for
-        // them and never recorded a grant. `requestIsAdmin` is then the static
-        // bearer alone, so an Access-only deployment (an `adminGate` and no
-        // `LUNORA_ADMIN_TOKEN`) got 403 on the Studio's auth-audit and
-        // notification-device reads while every `/_lunora/admin/*` route worked.
-        // Evaluated HERE rather than by widening `isAdminPath`: it runs only once
-        // the envelope has been parsed and named one of these two reserved paths,
-        // so ordinary RPC traffic still never pays for it.
-        await recordAdminGrant(request);
+        /*
+         * Give an Access-authorized admin a grant for THIS request before any
+         * worker-served admin op checks for one.
+         *
+         * `applyAdminGate` deliberately skips `/_lunora/rpc` so the gate never runs
+         * on the data hot path — but every op below is admin-gated and reached over
+         * exactly that path, so no grant was ever recorded for them. An operator
+         * whose only credential is Access (no static bearer) got `ADMIN_FORBIDDEN`
+         * from all three, however well their gate was configured.
+         *
+         * Keyed on the ENVELOPE, not the path: the hot path is ordinary function
+         * calls, and they do not start with the admin prefix, so they still never
+         * pay for the gate.
+         */
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `applyAdminGate` is defined further down this closure and only ever called per request; the same exception this file already takes for `forwardRpcToShard`
+        await (envelope.functionPath.startsWith(ADMIN_FUNCTION_PREFIX) ? applyAdminGate(request, ADMIN_PATH_PREFIX) : Promise.resolve());
 
         if (envelope.functionPath === GET_AUTH_AUDIT_LOG_OP) {
             return getAuthAuditLog(request, envelope.args ?? {});
@@ -3693,6 +4539,25 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (envelope.functionPath === LIST_PUSH_SUBSCRIPTIONS_OP) {
             return listPushSubscriptions(request, envelope.args);
+        }
+
+        if (envelope.functionPath === AI_CHAT_OP) {
+            const args = envelope.args ?? {};
+
+            // `LunoraClient.streamRpc` documents `shardKey` as an option and puts it
+            // on the envelope; the tools read it from the args. The args win, so the
+            // Studio (which sends both) is unchanged.
+            return aiChat(request, args["shardKey"] === undefined && envelope.shardKey !== undefined ? { ...args, shardKey: envelope.shardKey } : args, env);
+        }
+
+        if (envelope.functionPath === AI_AVAILABLE_OP) {
+            return aiAvailable(request, envelope.args ?? {}, env);
+        }
+
+        const disabledOneShot = aiOneShotGate(request, envelope.functionPath, env);
+
+        if (disabledOneShot !== undefined) {
+            return disabledOneShot;
         }
 
         return authJurisdictionMove(request, envelope.functionPath, envelope.args ?? {});
@@ -3747,10 +4612,29 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             replace: async (request, headers, tables) => replaceImport(request, importSessionContext(headers), tables),
             stage: async (request, headers, session, tables) => stageImport(request, importSessionContext(headers), session, tables),
         },
-        streamingImport: async (request, headers) =>
-            // The effective admin token (option or env): restore staging seals its chunks under it.
-            streamingImport(request, { ...options, adminToken: effectiveAdminToken() }, queryCoordinator, headers, shardDO, recordImportAudit(headers)),
+        streamingImport: async (request, resolveHeaders, dryRun, onConflict) =>
+            // The effective admin token (option or env): restore staging seals its chunks under it. Headers resolve late, at the
+            // shard fan-out and again per audit entry, so a slow upload cannot outlive a named token's short-lived shard signal.
+            streamingImport(
+                request,
+                { ...options, adminToken: effectiveAdminToken() },
+                queryCoordinator,
+                resolveHeaders,
+                shardDO,
+                dryRun,
+                onConflict,
+                async (args) => recordImportAudit(await resolveHeaders())(args),
+            ),
         syncGlobals: options.syncGlobals,
+    });
+
+    // `lunora migrate apply`: the generated SQL files, run against the D1 global plane. A named token needs the
+    // `migrations` scope, and a scoped caller runs additive statements only; the root token runs anything.
+    const sqlMigrationAdminRoutes = buildSqlMigrationAdminRoutes({
+        applySqlMigrations: options.applySqlMigrations,
+        assertAdmin: assertMigrationsAdmin,
+        isAdmin: requestIsAdmin,
+        isRootAdmin: requestIsRootAdmin,
     });
 
     /** Read a query param, collapsing missing (`null`) and empty (`""`) to `undefined`. */
@@ -3797,7 +4681,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the admin gate, scheduler-namespace requirement, and resolved stub through
     // injected deps (mirroring the other extracted clusters below).
     const scheduledAdminRoutes = buildScheduledAdminRoutes({
-        checkWsAdmin: async (request) => requestIsAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
+        checkWsAdmin: async (request) => requestIsRootAdmin(request) || checkAdminWsToken(request, effectiveAdminToken()),
         requireSchedulerNamespace,
         resolveSchedulerStub,
         schedulerInstanceName: options.schedulerInstanceName ?? "default",
@@ -3818,6 +4702,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // option registry, and request helpers through injected deps.
     const storageAdminRoutes = buildStorageAdminRoutes({
         assertAdmin: assertAdminAuthorized,
+        assertRootAdmin,
         parsePaging,
         queryParameter,
         readBodyBytes: readBodyBytesWithLimit,
@@ -3844,6 +4729,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         readJsonBody: readJsonBodyWithLimit,
         requireAdminOption,
         vectorIntrospector: options.vectorIntrospector,
+    });
+
+    const adminTokenRoutes = buildAdminTokenRoutes({
+        assertRootAdmin,
+        callStore: callTokenStore,
+        evict: adminTokenVerifier.evict,
+        revocations: adminRevocations,
+        readJsonBody: readJsonBodyWithLimit,
     });
 
     const kvAdminRoutes = buildKvAdminRoutes({
@@ -3933,7 +4826,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
      * the dispatch — and answers `ORIGIN_NOT_CONFIGURED` when it is unset. So
      * nothing origin-shaped is sent from here.
      */
-    const buildHttpScheduler = (namespace: ShardNamespaceLike): SchedulerContext => {
+    const buildHttpScheduler = (namespace: ShardNamespaceLike, identity: ResolvedIdentity | null): SchedulerContext => {
         /** Undo `schedule`'s encode on a record read back out of the DO — the mirror of `@lunora/scheduler`'s `decodeRecordArgs`. Identity for pure-JSON args. */
         const decodeRecordArgs = (record: Record<string, unknown>): Record<string, unknown> =>
             "args" in record ? { ...record, args: decodeWire(record["args"]) } : record;
@@ -4016,8 +4909,25 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return records.map((record) => decodeRecordArgs(record));
         };
 
-        const schedule = async (scheduledFor: number, target: unknown, args: Record<string, unknown> = {}): Promise<string> => {
+        const schedule = async (
+            scheduledFor: number,
+            target: unknown,
+            args: Record<string, unknown> = {},
+            runOptions?: SchedulerRunOptions,
+        ): Promise<string> => {
             const fields = targetFields(target);
+
+            // The record names the shard its job runs on, and the dispatch that fires it trusts
+            // the record's HMAC rather than a caller, so the tenant check has to run here, while
+            // the caller's identity is still known. The gate also gets the job's function, so a
+            // policy that admits a shard only for a named function sees the function being scheduled.
+            const jobShardKey = runOptions?.shardKey;
+
+            if (jobShardKey !== undefined && jobShardKey.length > 0 && jobShardKey !== defaultShard) {
+                const jobFunctionPath = typeof fields["functionPath"] === "string" ? fields["functionPath"] : undefined;
+
+                await assertShardAuthorized(identity, jobShardKey, false, jobFunctionPath);
+            }
 
             const { id } = await post<{ id: string }>("/schedule", {
                 args: encodeArgsOrThrow("ctx.scheduler", String(fields["functionPath"] ?? fields["workflow"]), args),
@@ -4025,6 +4935,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // fractional instant (`runAfter(1500.5)`), as `@lunora/scheduler`'s
                 // `runAt` also rounds.
                 scheduledFor: Math.ceil(scheduledFor),
+                // The SchedulerDO sanitizes the policy (`normalizeRetry`), so it is forwarded as given.
+                retry: runOptions?.retry,
+                shardKey: runOptions?.shardKey,
                 ...fields,
             });
 
@@ -4044,7 +4957,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 return body.record === undefined ? null : decodeRecordArgs(body.record);
             },
             list: listAll,
-            runAfter: async (delayMs, target, args) => {
+            runAfter: async (delayMs, target, args, runOptions) => {
                 // `@lunora/scheduler`'s `assertScheduleDelay`, restated: this
                 // package does not depend on `@lunora/scheduler` (it speaks to the
                 // SchedulerDO over HTTP), and pulling it in for one guard would
@@ -4054,9 +4967,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     throw new LunoraError("ctx.scheduler.runAfter: `delayMs` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });
                 }
 
-                return await schedule(Date.now() + delayMs, target, args);
+                return await schedule(Date.now() + delayMs, target, args, runOptions);
             },
-            runAt: async (timestampMs, target, args) => {
+            runAt: async (timestampMs, target, args, runOptions) => {
                 // `@lunora/scheduler`'s `assertScheduleInstant`, restated for the
                 // same reason `runAfter` restates its guard above — and to the same
                 // CODE and MESSAGE, byte for byte. An unchecked NaN/Infinity
@@ -4067,7 +4980,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     throw new LunoraError("ctx.scheduler.runAt: `date` must be a non-negative finite number", { code: "INVALID_INPUT", status: 400 });
                 }
 
-                return await schedule(timestampMs, target, args);
+                return await schedule(timestampMs, target, args, runOptions);
             },
         };
     };
@@ -4078,7 +4991,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // sign-in page, webhooks — before any route matched, so a refusal would
         // lock a user with a stale cookie out of the very page that refreshes it.
         // A route that needs a caller answers its own 401 off `auth.userId`.
-        const { claims, headers, userId } = withoutLapsedCredential(await forwardContext(request, env, publicResolveIdentity));
+        const { claims, headers, identity, userId } = withoutLapsedCredential(await forwardContext(request, env, publicResolveIdentity));
 
         const sinkContext = buildSinkContext(env, request, (promise) => context.waitUntil?.(promise));
 
@@ -4097,6 +5010,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // `targetFields` refuses a bare `"ns:fn"` string because an HTTP action
                 // can be reached unauthenticated) — same reasoning, same surface.
                 assertNotReservedRelationPath(functionPath);
+                // The agent's run-start check reads the default shard's thread table; a `forShard` run on another
+                // shard would miss it and start a second run for the same thread.
+                assertAgentRunOnDefaultShard(functionPath, shardKey);
+
+                // Every non-default shard a run names is refused here, before the
+                // system-trusted dispatch below can read it. That covers `forShard` from
+                // a webhook or REST route as well as the live subscribe, whose verdict is
+                // built from a client-supplied `shardKey`. The default shard is the app's
+                // own and is not gated.
+                if (shardKey !== defaultShard) {
+                    await assertShardAuthorized(identity, shardKey, false, functionPath);
+                }
 
                 // Through the SAME dispatcher the `/_lunora/rpc` and `serverQuery` paths
                 // use, rather than a bare `forwardToShard`: that is what puts this call
@@ -4154,6 +5079,45 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const run = runOn(defaultShard);
 
+        // Forward a server-to-server request to a shard DO under the caller's
+        // resolved identity headers. The live-stream primitive (`defineLiveStream`)
+        // uses this to reach the shard's subscriber registry: the SSE stream is
+        // served by the DO, so the worker-side route forwards to it rather than
+        // holding a connection-scoped subscription it could not keep.
+        const fetchShard: HttpActionContext["fetchShard"] = async (shardKey, path, init = {}) => {
+            // A shard the caller names is client-addressable (`?shard=` on a live
+            // connect), so it passes the same gate the REST path applies. The
+            // default shard is the app's own and is not gated here.
+            if (shardKey !== undefined && shardKey !== defaultShard) {
+                await assertShardAuthorized(identity, shardKey);
+            }
+
+            const forwardedHeaders = new Headers();
+
+            // Only the caller's ordinary headers pass. Every `x-lunora-*` header is the
+            // runtime's to set: an anonymous caller must not be able to forge identity
+            // through a header the resolved context does not carry.
+            for (const [name, value] of Object.entries(init.headers ?? {})) {
+                if (!name.toLowerCase().startsWith("x-lunora-")) {
+                    forwardedHeaders.set(name, value);
+                }
+            }
+
+            for (const [name, value] of Object.entries(headers)) {
+                forwardedHeaders.set(name, value);
+            }
+
+            return forwardToShard(
+                shardDO,
+                shardKey ?? defaultShard,
+                new Request(new URL(path, request.url), {
+                    headers: forwardedHeaders,
+                    method: init.method ?? "GET",
+                    ...(init.body === undefined ? {} : { body: init.body }),
+                }),
+            );
+        };
+
         return {
             auth: {
                 getIdentity: () => Promise.resolve(claims),
@@ -4161,15 +5125,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             },
             cache: context.cache,
             fetch: globalThis.fetch.bind(globalThis),
+            fetchShard,
             forShard: (shardKey: string) => {
                 const scoped = runOn(shardKey);
 
                 return { runAction: scoped, runMutation: scoped, runQuery: scoped };
             },
+            live:
+                options.liveStreams === false
+                    ? unsupportedLivePublisher()
+                    : {
+                          publish: (topic: LiveTopicRefLike, payload: unknown, publishOptions?: { shardKey?: string }) =>
+                              publishLiveToShard(request.url, topic, payload, publishOptions, { identity }),
+                      },
             runAction: run,
             runMutation: run,
             runQuery: run,
-            ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO) }),
+            ...(schedulerDO === undefined ? {} : { scheduler: buildHttpScheduler(schedulerDO, identity) }),
             // Bound to the execution context so a handler — or a wrapper reading
             // it structurally, e.g. `@lunora/x402`'s `withX402` receipt sink —
             // can outlive the response. Omitted entirely when the host supplied
@@ -4183,10 +5155,78 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         };
     };
 
-    const dispatchHttpRoute = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response | undefined> => {
-        if (!options.httpRouter) {
-            return undefined;
+    /** Responses {@link answerMiss} took from the assets binding, which `fetch` decorates as static files. */
+    const servedAssets = new WeakSet<Response>();
+
+    /**
+     * The 404 for a request nothing answered, unless a single-page app's assets
+     * serve it (see {@link WorkerOptions.spaAssets}). Only when no route matched:
+     * a 404 a handler returned stays its own.
+     */
+    const answerMiss = async (request: Request, notFound: Response, unrouted: boolean): Promise<Response> => {
+        const assetResponse = options.spaAssets === undefined || !unrouted ? undefined : await serveSpaAsset(options.spaAssets, request);
+
+        if (assetResponse === undefined) {
+            return notFound;
         }
+
+        await notFound.body?.cancel();
+        servedAssets.add(assetResponse);
+
+        return assetResponse;
+    };
+
+    /**
+     * What a request the router answered with a 404 (or no router at all) gets: the auth discovery documents, else
+     * the shell read up front when no route matched, else {@link answerMiss}.
+     */
+    const answerRouterMiss = async (
+        request: Request,
+        routerResponse: Response | undefined,
+        unrouted: boolean,
+        shell: Response | undefined,
+    ): Promise<Response> => {
+        // Only a 404 — the router's own, or none at all — leaves room for the auth
+        // discovery documents, so an app route at the same path always wins.
+        const discoveryResponse = await options.authDiscoveryHandler?.(request);
+
+        if (discoveryResponse) {
+            await Promise.all([routerResponse?.body?.cancel(), shell?.body?.cancel()]);
+
+            return discoveryResponse;
+        }
+
+        if (shell !== undefined && unrouted) {
+            await routerResponse?.body?.cancel();
+            servedAssets.add(shell);
+
+            return shell;
+        }
+
+        await shell?.body?.cancel();
+
+        return answerMiss(request, routerResponse ?? new Response("Not found", { status: 404 }), unrouted);
+    };
+
+    /**
+     * The router's answer, and whether no route matched: no router at all, or its own not-found handler ran.
+     * `shellFirst` lets an `httpRouter()` skip the app's middleware for a path no route matches; pass it only when the
+     * assets binding answers the request with the app shell.
+     */
+    const dispatchHttpRoute = async (
+        request: Request,
+        env: unknown,
+        context: ExecutionContextLike,
+        shellFirst: boolean,
+    ): Promise<{ response: Response | undefined; unrouted: boolean }> => {
+        if (!options.httpRouter) {
+            return { response: undefined, unrouted: true };
+        }
+
+        let unrouted = false;
+        const markUnrouted = (): void => {
+            unrouted = true;
+        };
 
         // Build the action context up front and inject it on a private env
         // binding; the router's middleware lifts it into the handler's context.
@@ -4217,17 +5257,35 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // leaves queries / mutations / subscriptions (`/_lunora/rpc`, `/_lunora/ws`)
         // fully serviceable.
         try {
-            return await options.httpRouter.fetch(request, { ...(env as object), __lunoraCtx: httpContext }, context);
+            const response = await options.httpRouter.fetch(
+                request,
+                { ...(env as object), __lunoraCtx: httpContext, __lunoraShellFirst: shellFirst, __lunoraUnrouted: markUnrouted },
+                context,
+            );
+
+            return { response, unrouted };
         } catch (error: unknown) {
             // eslint-disable-next-line no-console -- surface the SSR render fault server-side; the client gets a generic 500, never the raw message
             console.error("[lunora] httpRouter (SSR) handler threw:", error);
 
-            return new Response("Internal Server Error", { status: 500 });
+            return { response: new Response("Internal Server Error", { status: 500 }), unrouted: false };
         }
     };
 
+    // The declared `defineWebSocket` route paths, read off the generated
+    // `LUNORA_FUNCTIONS` registry the worker already carries. An upgrade at one
+    // of these paths is the SAME forward as `/_lunora/ws`: the shard DO resolves
+    // the route from the request path. Derived here (not threaded as a new
+    // option) so a route-free worker's construction is unchanged, and resolving
+    // it once keeps the per-request check a single Set lookup.
+    const socketRoutePaths = new Set(
+        Object.values(options.functions ?? {}).flatMap((registered) =>
+            registered.lifecycle === "socket" && typeof registered.socketPath === "string" ? [registered.socketPath] : [],
+        ),
+    );
+
     const handleWebSocketUpgrade = async (request: Request, env: unknown, url: URL): Promise<Response> => {
-        if (request.headers.get("Upgrade") !== "websocket") {
+        if (!isWebSocketUpgrade(request)) {
             throw new LunoraError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
         }
 
@@ -4251,7 +5309,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // forwarded to the DO so the socket carries a verified userId (the basis
         // for trusted `onConnect`/`onDisconnect` lifecycle hooks). Mirrors the
         // RPC path's `resolveForwardContext` → `authorize*` ordering.
-        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
+        // A browser offers its bearer as a `lunora.bearer.*` subprotocol (it cannot set
+        // `Authorization` on an upgrade); only the identity lookup sees it as a header.
+        // The clone is a new `Request`, so the in-flight execution context recorded
+        // for the original is passed explicitly (`context.access`, `waitUntil`).
+        const upgrade = bearerUpgrade(request);
+        const { headers: forwardedHeaders, identity } = await forwardContext(identityRequestForUpgrade(request, upgrade), env, publicResolveIdentity, {
+            executionContext: executionContextByRequest.get(request),
+        });
 
         // The same admin exemption the RPC path applies to `__lunora_admin__:*`
         // (see `authorizeRpcEnvelope`), and the one
@@ -4265,7 +5330,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // the credential per socket at upgrade AND on every write flush, so an
         // admin subscription dies with a rotated token, and the only other
         // admin-prefixed socket surface (`stream`) is refused outright there.
-        const adminUpgrade = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
+        const adminUpgrade = requestIsRootAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
 
         await assertShardAuthorized(identity, shardKey, adminUpgrade);
 
@@ -4280,18 +5345,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // an anonymous caller could forge `x-lunora-userid` and, because the
         // resolved-anonymous path never overwrites it, spoof a verified identity on
         // the socket. Only an authenticated `resolveForwardContext` result may set them.
-        const upgradeHeaders = buildUpgradeHeaders(request, forwardedHeaders);
+        const upgradeHeaders = withoutBearerProtocol(buildUpgradeHeaders(request, forwardedHeaders, effectiveAdminToken()), upgrade);
 
         // Relay tier (plan 075 Phase 2): when the shard is promoted, route this NEW
         // connection to one of its relays so the owner sheds connection + fan-out
         // load — invisible to the client (same socket, same whispers). Tell the DO
         // its namespace binding so it can address siblings for the hub.
         const binding = resolveShardBindingName(env, options.shardDO);
+        let target = shardKey;
+        let regionHint: RegionHint | undefined;
 
         if (binding !== undefined) {
             upgradeHeaders.set("x-lunora-shard-binding", binding);
 
-            const relayCount = await probeRelayCount(shardDO, shardKey);
+            // A route socket runs its handler on the shard that accepted it, so a relay would write through its own
+            // storage. A route upgrade therefore stays on the owner; only the shared subscription socket spreads to relays.
+            const relayCount = socketRoutePaths.has(url.pathname) ? 0 : await probeRelayCount(shardDO, shardKey);
 
             if (relayCount > 0) {
                 // Spread connections across the relay set at random, and hint
@@ -4308,13 +5377,95 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 // own region, and a multi-region one spreads them across the
                 // regions actually generating load.
                 // eslint-disable-next-line sonarjs/pseudo-random -- load distribution across relays, not a security-sensitive value
-                const target = relayName(shardKey, Math.floor(Math.random() * relayCount));
-
-                return forwardToShard(shardDO, target, new Request(request, { headers: upgradeHeaders }), regionHintFromRequest(request));
+                target = relayName(shardKey, Math.floor(Math.random() * relayCount));
+                regionHint = regionHintFromRequest(request);
             }
         }
 
-        return forwardToShard(shardDO, shardKey, new Request(request, { headers: upgradeHeaders }));
+        return selectLunoraProtocol(upgrade, await forwardToShard(shardDO, target, new Request(request, { headers: upgradeHeaders }), regionHint));
+    };
+
+    /**
+     * Refresh an open socket's credential without reconnecting it. A socket's frames
+     * reach only its shard, which cannot run `resolveIdentity`, so the client posts
+     * the refreshed credential here instead; it is resolved like any HTTP call
+     * (a lapsed one is refused with `TOKEN_EXPIRED`) and like the upgrade it
+     * refreshes, then forwarded to the shard with the server-minted identity headers
+     * only. The shard checks the socket belongs to the same subject and carries the
+     * same claims before it moves the expiry.
+     */
+    const handleSocketReauth = async (request: Request, env: unknown, context: ExecutionContextLike | undefined, url: URL): Promise<Response> => {
+        assertMethod(request, "POST", "ws reauth");
+
+        const body = await readJsonBodyWithLimit(request);
+
+        if (typeof body["connectionId"] !== "string" || body["connectionId"].length === 0) {
+            throw new LunoraError("connectionId is required", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const shardKey = url.searchParams.get("shard") ?? defaultShard;
+        // The admin credential an admin socket upgraded with, checked exactly as the upgrade checks it (the master
+        // bearer, or the short-lived sub-token in `?token=`, whose verify is constant-time). A rotated one fails here.
+        const adminReauth = requestIsAdmin(request) || (await checkAdminWsToken(request, effectiveAdminToken()));
+        const resolved = await forwardContext(request, env, publicResolveIdentity, {
+            executionContext: context ?? executionContextByRequest.get(request),
+            url,
+        });
+        // A lapsed session beside a valid admin credential is ignored, as on the admin upgrade; without one it is refused.
+        const { headers: forwardedHeaders, identity } = adminReauth ? withoutLapsedCredential(resolved) : assertLiveCredential(resolved);
+
+        if (identity === null && !adminReauth) {
+            throw new LunoraError("re-authenticating a socket requires a credential", { code: "UNAUTHENTICATED", status: 401 });
+        }
+
+        await assertShardAuthorized(identity, shardKey, adminReauth);
+
+        // A fresh request carrying nothing of the caller's but the body: the shard trusts these headers verbatim.
+        const headers = new Headers({ "content-type": "application/json" });
+
+        setIdentityHeaders(headers, forwardedHeaders);
+
+        // Set here and nowhere else, so only a credential this request proved can make the shard keep an admin socket.
+        if (adminReauth) {
+            headers.set("x-lunora-admin-reauth", "1");
+        }
+
+        // An owner woken by this call learns its namespace from it, as from an upgrade: without it the relay holding the socket is unreachable.
+        const binding = resolveShardBindingName(env, options.shardDO);
+
+        if (binding !== undefined) {
+            headers.set("x-lunora-shard-binding", binding);
+        }
+
+        return forwardToShard(
+            shardDO,
+            shardKey,
+            new Request(new URL(SOCKET_REAUTH_PATH, url.origin), { body: JSON.stringify({ connectionId: body["connectionId"] }), headers, method: "POST" }),
+        );
+    };
+
+    /**
+     * Answer a caller with the fingerprint of its own verified claims, computed from the same forwarded headers and by the
+     * same function the shard uses for a socket's `identity` frame, so the two agree. It resolves the caller exactly as a
+     * re-auth does (a lapsed or missing credential is refused) and returns nothing but that one value: there is no way to
+     * ask about another credential.
+     */
+    const handleClaimsFingerprint = async (request: Request, env: unknown, context: ExecutionContextLike | undefined, url: URL): Promise<Response> => {
+        assertMethod(request, "POST", "claims fingerprint");
+
+        const { headers, identity } = await forwardCallerContext(request, env, publicResolveIdentity, {
+            executionContext: context ?? executionContextByRequest.get(request),
+            url,
+        });
+
+        if (identity === null) {
+            throw new LunoraError("a claims fingerprint requires a credential", { code: "UNAUTHENTICATED", status: 401 });
+        }
+
+        return Response.json(
+            { claims: claimsFingerprint(decodeUserIdHeader(headers["x-lunora-userid"]), decodeIdentityHeader(headers["x-lunora-identity"])) },
+            { headers: { "cache-control": "no-store" } },
+        );
     };
 
     /**
@@ -4332,7 +5483,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return new Response("Not found", { status: 404 });
         }
 
-        if (request.headers.get("Upgrade") !== "websocket") {
+        if (!isWebSocketUpgrade(request)) {
             return new Response("Expected a WebSocket upgrade", { headers: { allow: "GET" }, status: 426 });
         }
 
@@ -4368,8 +5519,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // Resolve the caller's identity once and forward it to the voice DO so the
         // session's `agents:*` thread writes are attributed to the caller (RLS /
-        // ownership). Same shape/authorization ordering as the RPC/WS paths.
-        const { headers: forwardedHeaders, identity } = await forwardContext(request, env, publicResolveIdentity);
+        // ownership). Same shape/authorization ordering as the RPC/WS paths, and the
+        // same `lunora.bearer.*` handling as `handleWebSocketUpgrade`.
+        const upgrade = bearerUpgrade(request);
+        const { headers: forwardedHeaders, identity } = await forwardContext(identityRequestForUpgrade(request, upgrade), env, publicResolveIdentity, {
+            executionContext: executionContextByRequest.get(request),
+        });
 
         // Deliberately NOT `assertShardAuthorized`, and the difference is the
         // `else`: that helper default-denies only a NON-default shard, because its
@@ -4397,9 +5552,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             guardUnauthenticatedShardAccess("shard");
         }
 
-        const upgradeHeaders = buildUpgradeHeaders(request, forwardedHeaders);
+        const upgradeHeaders = withoutBearerProtocol(buildUpgradeHeaders(request, forwardedHeaders, effectiveAdminToken()), upgrade);
 
-        return forwardToShard(namespace, threadKey, new Request(request, { headers: upgradeHeaders }));
+        return selectLunoraProtocol(upgrade, await forwardToShard(namespace, threadKey, new Request(request, { headers: upgradeHeaders })));
     };
 
     /**
@@ -4461,6 +5616,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     const authorizeRpcEnvelope = async (envelope: RpcEnvelope, identity: ResolvedIdentity | null): Promise<void> => {
+        // First, ahead of the fan-out branch below: every transport (RPC, batch, REST,
+        // `serverQuery`, auth dispatch) funnels through here, and a fan-out reaches shards
+        // a single-shard check never sees.
+        assertAgentRunOnDefaultShard(envelope.functionPath, envelope.fanOut ? undefined : (envelope.shardKey ?? defaultShard));
+
         // Reserved admin RPCs (`__lunora_admin__:*`, single-shard) are privileged
         // operator calls authorized by the shard DO's admin-bearer gate
         // (`isAdminAuthorized`), NOT by the per-tenant `authorizeShard` callback —
@@ -4488,7 +5648,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         // No per-shard gate and the caller named a non-default shard:
         // default-denied unless unauthenticated shard access is opted in.
-        await assertShardAuthorized(identity, envelope.shardKey ?? defaultShard);
+        await assertShardAuthorized(identity, envelope.shardKey ?? defaultShard, false, envelope.functionPath);
     };
 
     /**
@@ -4547,6 +5707,8 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         args: Record<string, unknown>,
         shardKey: string,
         outgoingHeaders: Record<string, string>,
+        forwardBody: string | undefined,
+        signal?: AbortSignal,
     ): Promise<Response> => {
         const replica = replicaTargetFor(request, functionPath, shardKey);
 
@@ -4567,14 +5729,19 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 replicaHeaders["x-lunora-min-seq"] = String(minSeq);
             }
 
-            const fromReplica = await forwardToShard(shardDO, replica.name, shardRpcRequest(functionPath, args, replicaHeaders), replica.region);
+            const fromReplica = await forwardToShard(
+                shardDO,
+                replica.name,
+                shardRpcRequest(functionPath, args, replicaHeaders, forwardBody, signal),
+                replica.region,
+            );
 
             if (fromReplica.status !== 421) {
                 return fromReplica;
             }
         }
 
-        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, outgoingHeaders));
+        return forwardToShard(shardDO, shardKey, shardRpcRequest(functionPath, args, outgoingHeaders, forwardBody, signal));
     };
 
     /**
@@ -4595,10 +5762,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         shardKey: string,
         forwardedHeaders: Record<string, string>,
         sinkContext?: ObservabilitySinkContext,
+        call: InboundCall = {},
     ): Promise<Response> => {
         const rpcStartedAt = Date.now();
         const { observability, sampling } = options;
-        const requestMeta = requestTelemetryMeta(request);
+        const requestMeta = requestTelemetryMeta(request, call.url);
 
         // Open this dispatch's trace. `beginDispatchTrace` applies the inbound-trust
         // policy, mints the span, and settles the sampled verdict in one place, so
@@ -4628,7 +5796,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         try {
             // Re-emit the RPC body at the shard's `/rpc` route — on a region-local
             // replica when this read is eligible for one, else on the owner.
-            const response = await forwardRpcToShard(request, functionPath, args, shardKey, outgoingHeaders);
+            const response = await forwardRpcToShard(request, functionPath, args, shardKey, outgoingHeaders, call.forwardBody);
             const detail = decodeErrorDetail(response.headers.get(ERROR_DETAIL_HEADER));
 
             // A non-2xx from the shard is reported as ok=false even though no
@@ -4721,10 +5889,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
-    const handleRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
+    const handleRpc = async (request: Request, env: unknown, context: ExecutionContextLike | undefined, url: URL): Promise<Response> => {
         assertMethod(request, "POST", "RPC");
 
         const envelope = await parseEnvelope(request);
+        const call: InboundCall = { forwardBody: envelope.forwardBody, url };
 
         // Dev diagnostic (opt-in via `LUNORA_DEBUG_RPC`): one line per RPC so a
         // client-side request loop shows up as a wall of identical entries in the
@@ -4741,15 +5910,22 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // forwarded to a shard: the D1-backed auth-audit read and the notify
         // device-list read (both admin-gated). A returned Response short-circuits
         // dispatch; `undefined` continues normal routing.
-        const reservedResponse = await serveReservedWorkerRpc(request, envelope);
+        const reservedResponse = await serveReservedWorkerRpc(request, envelope, env);
 
         if (reservedResponse !== undefined) {
             return reservedResponse;
         }
 
+        // A named admin token is verified HERE, at the worker, so the shard is
+        // handed a signal rather than the secret. Only for an admin envelope,
+        // single-shard or fan-out: ordinary RPC traffic never pays for the lookup.
+        if (envelope.functionPath.startsWith("__lunora_admin__:")) {
+            await recordAdminGrant(request);
+        }
+
         // Forward selected headers from the inbound request so the DO can
         // honour auth, sessions, and D1 read-your-writes consistency.
-        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity);
+        const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, call);
 
         assertExpectedSubject(request, identity);
 
@@ -4770,13 +5946,15 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // the user-observable RPC duration we report.
             const rpcStartedAt = Date.now();
             const { observability } = options;
-            const requestMeta = requestTelemetryMeta(request);
 
             // Hand the request's `ctx.waitUntil` to sinks so a network sink's
             // POST survives isolate teardown after the response returns.
             const sinkContext = buildSinkContext(env, request, context && ((promise) => context.waitUntil?.(promise)));
 
             if (envelope.fanOut) {
+                // Built here, not above: the single-shard path builds its own in `dispatchSingleShard`.
+                const requestMeta = requestTelemetryMeta(request, url);
+
                 try {
                     const result = await queryCoordinator.fanOut(shardDO, {
                         args: envelope.args ?? {},
@@ -4821,7 +5999,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const shardKey = envelope.shardKey ?? defaultShard;
 
             const dispatch = (): Promise<Response> =>
-                dispatchSingleShard(request, envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext);
+                dispatchSingleShard(request, envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext, call);
 
             // Paid procedure: run the injected x402 gate around the shard
             // dispatch (challenge / verify / dispatch / settle). The gate's
@@ -5089,13 +6267,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     parsed = await response.json();
                 } catch {
                     // Malformed shard response — fail every entry to its own slot
-                    // rather than dropping them silently into "no result".
+                    // rather than dropping them silently into "no result". Coded
+                    // `SHARD_UNAVAILABLE`, not `SHARD_ERROR`: a shard that could not
+                    // answer at all says nothing about any write in the batch, and
+                    // the client re-queues that code instead of settling the write.
                     const message = `shard batch returned a non-JSON response (${String(response.status)})`;
 
-                    failSubBatch(entries, response.status, "SHARD_ERROR", message, (entry) => {
+                    failSubBatch(entries, response.status, "SHARD_UNAVAILABLE", message, (entry) => {
                         return {
                             durationMs,
-                            error: { code: "SHARD_ERROR", message, status: response.status },
+                            error: { code: "SHARD_UNAVAILABLE", message, status: response.status },
                             functionPath: entry.functionPath,
                             ...requestMeta,
                             ...entryTraceFields(shardSpanId),
@@ -5116,9 +6297,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
                 // Any entry the shard omitted (short/partial response) gets an
                 // explicit slot error rather than a silent "no result" client-side.
+                // `SHARD_UNAVAILABLE` for the same reason as the non-JSON case above.
                 for (const entry of entries) {
                     if (!seenIds.has(entry.id)) {
-                        results.push(slotError(entry, response.status, "SHARD_ERROR", `shard batch omitted result for call ${String(entry.id)}`));
+                        results.push(slotError(entry, response.status, "SHARD_UNAVAILABLE", `shard batch omitted result for call ${String(entry.id)}`));
                     }
                 }
             }),
@@ -5217,7 +6399,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // byte-identical to `handleRpc`'s. The context is passed explicitly
             // because this path has no `fetch` funnel to have recorded it, and an
             // SSR host may well hand us a rebuilt `Request` object.
-            const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, callOptions.context);
+            const { headers: forwardedHeaders, identity } = await forwardCallerContext(request, env, publicResolveIdentity, {
+                executionContext: callOptions.context,
+            });
 
             // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
             // `undefined` resolves to `defaultShard` for both the gate and the
@@ -5316,6 +6500,35 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    /**
+     * Run the app's raw `crons` handler for one tick. Paused, it is skipped: it is
+     * user code with no lease of its own (`cronJobs()` skip through `beginCronRun`,
+     * which records the paused tick). The built-in backup is not routed here and
+     * keeps running — it executes no app code, and an operator mid-incident wants
+     * the snapshot more than ever.
+     */
+    const runUserCron = async (
+        handler: CronHandler,
+        controller: ScheduledControllerLike,
+        env: unknown,
+        context: ExecutionContextLike,
+        errors: Error[],
+        toError: (error: unknown) => Error,
+    ): Promise<void> => {
+        if (await isPaused()) {
+            // eslint-disable-next-line no-console -- the scheduled() entry point has no request-scoped logger; the host captures console
+            console.warn(`[lunora] scheduled("${controller.cron}") skipped its crons handler: the deployment is paused.`);
+
+            return;
+        }
+
+        try {
+            await handler(controller, env, context);
+        } catch (error: unknown) {
+            errors.push(toError(error));
+        }
+    };
+
     const handleScheduled = async (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike, traceparent?: string): Promise<void> => {
         // A cron can fire on an isolate that never served a `fetch`, so resolve
         // `env.LUNORA_ADMIN_TOKEN` here too — the built-in backup authenticates its
@@ -5328,17 +6541,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const userHandler = options.crons?.[controller.cron];
 
         if (userHandler) {
-            try {
-                await userHandler(controller, env, context);
-            } catch (error: unknown) {
-                errors.push(toError(error));
-            }
+            await runUserCron(userHandler, controller, env, context, errors, toError);
         }
 
         // Code-defined crons: run every job declared under the firing expression.
         // Failures join `errors` for the combined rethrow below. A workflow-targeting
         // job starts its instance off the Worker's `ctx.exports` (or `env`).
-        const ranJobs = await runCronJobs(controller.cron, env, context, errors, toError, traceparent);
+        const ranJobs = await runCronJobs(controller.cron, env, context, errors, toError, traceparent, controller.scheduledTime);
         const isBackupCron = Boolean(options.backupStore) && options.backupCron !== undefined && options.backupCron === controller.cron;
 
         if (isBackupCron) {
@@ -5382,6 +6591,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     const tenantFanoutRoutes = buildTenantFanoutRoutes({
         assertAdmin: assertAdminAuthorized,
         dispatchScheduled: handleScheduled,
+        isPaused,
         queueHandler: options.queueHandler,
     });
 
@@ -5526,6 +6736,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // the narrowed map (not just a boolean) lets the handler index it without a non-null
     // assertion.
     const customRoutes = options.routes !== undefined && Object.keys(options.routes).length > 0 ? options.routes : undefined;
+    const liveStreamRouteKeys = new Set(options.liveStreamRoutes);
+
+    // The explicit `routes` entry for a request, if any. A declared live-stream route has none here: it goes straight to the
+    // router. Resolved in one place so the dispatch below stays a single lookup.
+    const explicitRouteFor = (request: Request, url: URL): Route | undefined => {
+        if (!customRoutes) {
+            return undefined;
+        }
+
+        const methodAndPath = `${request.method} ${url.pathname}`;
+
+        if (liveStreamRouteKeys.has(methodAndPath)) {
+            return undefined;
+        }
+
+        return customRoutes[methodAndPath] ?? customRoutes[url.pathname];
+    };
 
     assertNoReservedRoutes(customRoutes);
 
@@ -5539,11 +6766,37 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             return Response.json({ ok: true }, { headers: { "cache-control": "no-store" } });
         },
+        // Forwarded to the companion Worker over its service binding, which holds the embedded procedure list. Method and admin
+        // auth come first so an unauthenticated caller cannot tell from the answer whether a companion is bound; an absent binding
+        // is then a 404 and the hosted Studio shows its notice. The companion gets a bare GET: it checks nothing, so the caller's
+        // credentials have no reason to reach a second Worker's logs.
+        [ADVISOR_PROCEDURES_PATH]: async (request, env) => {
+            assertMethod(request, "GET", "Advisor procedures");
+
+            assertAdminAuthorized(request);
+
+            const companion: unknown = typeof env === "object" && env !== null ? Reflect.get(env, "ADVISOR_COMPANION") : undefined;
+
+            if (!isServiceBinding(companion)) {
+                return Response.json({ error: "not found" }, { headers: { "cache-control": "no-store" }, status: 404 });
+            }
+
+            // Rebuilt rather than mutated: a service-binding response can have immutable headers.
+            const forwarded = await companion.fetch(new Request(new URL(ADVISOR_PROCEDURES_PATH, request.url), { method: "GET" }));
+            const headers = new Headers(forwarded.headers);
+
+            headers.set("cache-control", "no-store");
+
+            return new Response(forwarded.body, { headers, status: forwarded.status, statusText: forwarded.statusText });
+        },
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
-        [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
+        [SOCKET_REAUTH_PATH]: (request, env, url, context) => handleSocketReauth(request, env, context, url),
+        [CLAIMS_FINGERPRINT_PATH]: (request, env, url, context) => handleClaimsFingerprint(request, env, context, url),
+        [RPC_PATH]: (request, env, url, context) => handleRpc(request, env, context, url),
         [RPC_BATCH_PATH]: (request, env, _url, context) => handleBatchRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env, _url, context) => handleSchedulerDispatch(request, env, context),
         [CRON_JOBS_RUN_PATH]: (request, env, _url, context) => handleRunCronJob(request, env, context),
+        [PAUSE_PATH]: async (request) => deploymentPause.handleRoute(request),
         // Mint a short-lived HMAC-signed WS admin sub-token. Gated by the master
         // admin bearer (header) / `adminGate`; the studio then sends the minted
         // token — not the master credential — in the WS `?token=`
@@ -5553,7 +6806,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         [ADMIN_WS_TOKEN_PATH]: async (request) => {
             assertMethod(request, "POST", "ws-token");
 
-            assertAdminAuthorized(request);
+            assertRootAdmin(request);
 
             const signingSecret = effectiveAdminToken();
 
@@ -5575,12 +6828,14 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // (functions / cron-jobs / openapi / openrpc / global tables).
         ...orchestrationAdminRoutes,
         ...dataMovementAdminRoutes,
+        ...sqlMigrationAdminRoutes,
         ...scheduledAdminRoutes,
         ...workflowsAdminRoutes,
         ...storageAdminRoutes,
         ...backupAdminRoutes,
         ...vectorAdminRoutes,
         ...kvAdminRoutes,
+        ...adminTokenRoutes,
         ...logArchiveAdminRoutes,
         ...introspectionAdminRoutes,
         // `/_lunora/health` + `/_lunora/health/ready` — public (or admin-gated)
@@ -5595,6 +6850,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
             assertAdmin: assertAdminAuthorized,
+            assertRootAdmin,
             getAuthAdmin: () => options.authAdmin,
             parsePaging,
             queryParameter,
@@ -5608,6 +6864,26 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     // (honoring the `LUNORA_SECURITY_*` opt-out vars) happens lazily on the first
     // request — env is per-invocation, but deployment-stable, so it is memoized.
     let resolvedSecurity = resolveSecurity(options.security);
+
+    /**
+     * A file the assets binding served carries the CSP `_headers` gives the same
+     * file on a direct asset hit, the HTML policy, whatever its type: the strict
+     * `default-src 'none'` would stop a service worker script (which runs under
+     * its own response's CSP) from fetching or importing anything.
+     */
+    const asStaticAsset = (response: Response): Response => {
+        const policy = resolvedSecurity.headers.enabled ? resolvedSecurity.headers.csp?.htmlValue : undefined;
+
+        if (policy === undefined || response.headers.has("content-security-policy")) {
+            return response;
+        }
+
+        const headers = new Headers(response.headers);
+
+        headers.set("content-security-policy", policy);
+
+        return new Response(response.body, { headers, status: response.status, statusText: response.statusText });
+    };
     let securityEnvResolved = false;
 
     // Fold the deployment env into the resolved security config once, on the
@@ -5700,18 +6976,27 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             return authResponse;
         }
 
+        // A declared `defineWebSocket` route upgrades and forwards to the shard
+        // DO, exactly like `/_lunora/ws` — the DO resolves the registration from
+        // the request path. Checked ahead of the custom HTTP routes so a custom
+        // handler at the same path never intercepts the upgrade, and ahead of the
+        // app router so a declared route wins over an SSR page. Only an actual
+        // upgrade is the route's: a plain GET or POST to the same path falls
+        // through to the router rather than failing with a 426. The handshake is
+        // always a GET (RFC 6455 §4.1), so a POST carrying the header is not one.
+        if (socketRoutePaths.has(url.pathname) && request.method === "GET" && isWebSocketUpgrade(request)) {
+            return (await deploymentPause.refusal(request)) ?? handleWebSocketUpgrade(request, env, url);
+        }
+
         // Auth providers register routes as `"METHOD path"` (e.g. `"GET /auth/signin"`).
         // We also accept legacy pathname-only keys for ad-hoc handlers. Guard the
         // whole lookup behind `customRoutes` (resolved once at construction) so the
         // common composed-worker path (no custom routes) skips the `"METHOD path"`
         // string allocation and the two object reads on every request.
-        if (customRoutes) {
-            const methodAndPath = `${request.method} ${url.pathname}`;
-            const route = customRoutes[methodAndPath] ?? customRoutes[url.pathname];
+        const route = explicitRouteFor(request, url);
 
-            if (route) {
-                return route(request, env, context);
-            }
+        if (route) {
+            return route(request, env, context);
         }
 
         // The WfP fan-out entrypoints need the execution `context`, which the
@@ -5731,7 +7016,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         if (internalRoute) {
             await applyAdminGate(request, url.pathname);
 
-            return internalRoute(request, env, url, context);
+            const isFunctionCall = FUNCTION_CALL_PATHS.has(url.pathname) || Object.hasOwn(restRoutes, url.pathname);
+
+            return (isFunctionCall ? await deploymentPause.refusal(request) : undefined) ?? internalRoute(request, env, url, context);
         }
 
         // Voice sessions live under a DYNAMIC prefix (`/_lunora/voice/<agent>`), so
@@ -5739,7 +7026,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // the app wired `voiceAgents` (a voice-enabled agent) — otherwise it falls
         // through to the 404 below.
         if (options.voiceAgents !== undefined && url.pathname.startsWith(VOICE_PATH_PREFIX)) {
-            return handleVoiceUpgrade(request, env, url);
+            return (await deploymentPause.refusal(request)) ?? handleVoiceUpgrade(request, env, url);
         }
 
         // The reserved prefix is reserved even where nothing matched. The internal
@@ -5754,23 +7041,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // HTTP actions are the lowest-priority app matcher: explicit routes and the
         // internal `/_lunora/*` endpoints above always win. Once the request
         // reaches the router, hono owns routing.
-        const httpRouteResponse = await dispatchHttpRoute(request, env, context);
+        // A single-page app's shell is read first for a page load, so the router may skip the app's middleware only
+        // for a path the binding answers with the shell, never for a real file the middleware guards.
+        const shell = options.spaAssets === undefined || !options.httpRouter ? undefined : await serveSpaShell(options.spaAssets, request);
+        const { response: httpRouteResponse, unrouted } = await dispatchHttpRoute(request, env, context, shell !== undefined);
 
         if (httpRouteResponse && httpRouteResponse.status !== 404) {
+            await shell?.body?.cancel();
+
             return httpRouteResponse;
         }
 
-        // Only a 404 — the router's own, or none at all — leaves room for the auth
-        // discovery documents, so an app route at the same path always wins.
-        const discoveryResponse = await options.authDiscoveryHandler?.(request);
-
-        if (discoveryResponse) {
-            await httpRouteResponse?.body?.cancel();
-
-            return discoveryResponse;
-        }
-
-        return httpRouteResponse ?? new Response("Not found", { status: 404 });
+        return answerRouterMiss(request, httpRouteResponse, unrouted, shell);
     };
 
     return {
@@ -5809,7 +7091,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             try {
                 const response = await handle(request, env, context);
 
-                return decorateResponse(response, request, resolvedSecurity);
+                return decorateResponse(servedAssets.has(response) ? asStaticAsset(response) : response, request, resolvedSecurity);
             } catch (error: unknown) {
                 return decorateResponse(toErrorResponse(error), request, resolvedSecurity);
             } finally {
@@ -5820,6 +7102,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             }
         },
         async queue(batch, env, context) {
+            // Paused: the consumer holds each message back instead of running it
+            // (`holdSeconds`), re-enqueued with a fresh budget so no pause length can
+            // dead-letter work that never ran.
+            const pause = await deploymentPause.read();
+
             // Forward to the codegen-built push-consumer handler (which routes by
             // `batch.queue` via `@lunora/queue`). A no-op when the app declares no
             // push queues, so re-exporting `queue` unconditionally is harmless.
@@ -5827,7 +7114,23 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // Named after the queue so a collector groups consumer invocations per
             // queue rather than lumping every batch under one span name.
             await instrumentTrigger(`queue:${queueNameOf(batch)}`, context, async (traceparent) => {
-                await options.queue?.(batch, env, context, { traceparent });
+                // The consumer's publish is `"trusted"`: no caller is checked against the `shardKey` it names. A `shardKey` taken from a
+                // client-supplied message body must be checked by the consumer before it is passed, or any message can publish into any shard.
+                const live: QueueLivePublisherLike =
+                    options.liveStreams === false
+                        ? unsupportedLivePublisher()
+                        : {
+                              publish: (topic, payload, publishOptions) => publishLiveToShard(QUEUE_LIVE_ORIGIN, topic, payload, publishOptions, "trusted"),
+                          };
+
+                await options.queue?.(
+                    batch,
+                    env,
+                    context,
+                    pause.paused ? { holdSeconds: PAUSED_QUEUE_RETRY_SECONDS, traceparent } : { traceparent },
+                    live,
+                    options.queueFetchImpl,
+                );
             });
         },
         async scheduled(controller, env, context) {
@@ -5902,7 +7205,8 @@ interface FrameworkTriggers {
  * {@link withFrameworkWorker} drop them with the type checker's blessing.
  */
 type FrameworkHostHandler =
-    ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response) | (HttpRouterLike & Partial<FrameworkTriggers>);
+    | ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response)
+    | (HttpRouterLike & Partial<FrameworkTriggers>);
 
 /** Lunora worker options for {@link withFrameworkWorker} — everything except `httpRouter` (supplied from the framework host). */
 type FrameworkWorkerOptions = Omit<WorkerOptions, "httpRouter">;
@@ -5952,6 +7256,32 @@ const hostTriggers = (host: FrameworkHostHandler): Partial<FrameworkTriggers> =>
 };
 
 /**
+ * Build a worker once per `env` object and reuse it. Composing one costs more
+ * than dispatching a request through it, and a fresh worker starts with every
+ * per-isolate cache and memo empty. Workers hands the same `env` to every
+ * invocation in an isolate, so the build runs once there; a non-object `env`
+ * cannot key the cache and is built per call.
+ */
+const workerPerEnv = (make: (env: unknown) => LunoraWorker): ((env: unknown) => LunoraWorker) => {
+    const built = new WeakMap<object, LunoraWorker>();
+
+    return (env) => {
+        if (env === null || typeof env !== "object") {
+            return make(env);
+        }
+
+        let worker = built.get(env);
+
+        if (worker === undefined) {
+            worker = make(env);
+            built.set(env, worker);
+        }
+
+        return worker;
+    };
+};
+
+/**
  * Compose a meta-framework's Cloudflare Worker handler with Lunora's realtime
  * plane into one `{ fetch, scheduled }` Worker — the **single, shared** class-B
  * (own-CF-adapter, hook-injection) composer behind `@lunora/astro`'s
@@ -5964,8 +7294,8 @@ const hostTriggers = (host: FrameworkHostHandler): Partial<FrameworkTriggers> =>
  *
  * Owns the three behaviors the adapters otherwise each re-implemented (and
  * diverged on): (1) the host may be a bare `fetch` fn or a `{ fetch }` object;
- * (2) options may be a fixed object or an `(env) => options` factory, rebuilt per
- * request so per-request bindings wire in; (3) **trigger preservation** — a
+ * (2) options may be a fixed object or an `(env) => options` factory, called once
+ * per `env` object so its bindings wire in; (3) **trigger preservation** — a
  * dispatch Lunora does not own goes to the framework host rather than being
  * silently dropped. `scheduled` is Lunora's only when it configures a cron
  * surface; `queue` only when the app declares a push consumer; `email` never.
@@ -6014,14 +7344,13 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
         return build(optionsInput);
     }
 
-    // Factory form: options depend on per-request `env`, so (re)build per call.
-    const optionsFactory = optionsInput;
+    const workerFor = workerPerEnv((env) => build(optionsInput(env)));
 
     return {
-        fetch: (request, env, context) => build(optionsFactory(env)).fetch(request, env, context),
-        queue: (batch, env, context) => build(optionsFactory(env)).queue?.(batch, env, context) ?? Promise.resolve(),
-        scheduled: (controller, env, context) => build(optionsFactory(env)).scheduled(controller, env, context),
-        serverQuery: (request, env, reference, args, options) => build(optionsFactory(env)).serverQuery(request, env, reference, args, options),
+        fetch: (request, env, context) => workerFor(env).fetch(request, env, context),
+        queue: (batch, env, context) => workerFor(env).queue?.(batch, env, context) ?? Promise.resolve(),
+        scheduled: (controller, env, context) => workerFor(env).scheduled(controller, env, context),
+        serverQuery: (request, env, reference, args, options) => workerFor(env).serverQuery(request, env, reference, args, options),
         // `email` is the only trigger declared conditionally, and the asymmetry
         // with `queue` above is deliberate: Lunora always exports a `queue`
         // (`createWorker`'s consumer, a no-op when the app declares no push
@@ -6032,8 +7361,7 @@ const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: Framework
         ...(hostEmail === undefined
             ? {}
             : {
-                  email: (message: unknown, env: unknown, context: ExecutionContextLike) =>
-                      build(optionsFactory(env)).email?.(message, env, context) ?? Promise.resolve(),
+                  email: (message: unknown, env: unknown, context: ExecutionContextLike) => workerFor(env).email?.(message, env, context) ?? Promise.resolve(),
               }),
     };
 };
@@ -6098,20 +7426,24 @@ const resolveLunoraOptions = (options: LunoraHandlerOptions, env: unknown): Fram
  *
  * `shardDO` defaults to `env.SHARD`; pass `options` (or an `(env) => options`
  * factory) to add `auth`, `crons`, a `security` posture, or a custom namespace.
- * A new worker is composed per request because the options (and the `SHARD`
- * binding they default from) are only known once `env` arrives.
+ * The worker is composed on the first request for each `env` object, because the
+ * options (and the `SHARD` binding they default from) are only known once `env`
+ * arrives, and reused for every later request carrying that `env`.
  * @param options Partial worker options (default `shardDO: env.SHARD`), or an `(env) => options` factory.
  */
-const createLunoraHandler =
-    (options: LunoraHandlerOptions = {}): ((request: Request, env: unknown, context?: ExecutionContextLike) => Promise<Response>) =>
-    (request, env, context) =>
-        createWorker(resolveLunoraOptions(options, env)).fetch(request, env, context ?? NOOP_EXECUTION_CONTEXT);
+const createLunoraHandler = (options: LunoraHandlerOptions = {}): ((request: Request, env: unknown, context?: ExecutionContextLike) => Promise<Response>) => {
+    const workerFor = workerPerEnv((env) => createWorker(resolveLunoraOptions(options, env)));
+
+    return (request, env, context) => workerFor(env).fetch(request, env, context ?? NOOP_EXECUTION_CONTEXT);
+};
 
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
 export { composeWorker, createLunoraHandler, createWorker, defineRpcEnvelope, probeRelayCount, resolveLunoraOptions, withFrameworkWorker };
+export { type AiRunBinding } from "../../../shared/ai-chat";
 export { type AccessContextLike, type AccessIdentityLike, type ExecutionContextLike, NOOP_EXECUTION_CONTEXT } from "../../../shared/execution-context";
+export type { AdminTokenSummary, CreatedAdminToken } from "./admin-token-routes";
 export type {
     AuthAdmin,
     AuthCapabilities,
@@ -6123,20 +7455,14 @@ export type {
     AuthUserFieldSpec,
     ListAuthUsersOptions,
 } from "./auth-admin-routes";
+// `AiRunBinding` names `WorkerOptions.aiChatBinding`. Re-exported LOCALLY rather
+// than with `export … from`, which packem inlines into an unexported interface —
+// leaving a consumer unable to write the type of the value they must pass.
+
 export type { AuthAuditEntry, AuthAuditReader } from "./auth-audit-rpc";
 export { GET_AUTH_AUDIT_LOG_OP } from "./auth-audit-rpc";
 export type { AuthJurisdictionMove } from "./auth-jurisdiction-move-rpc";
 export { COPY_AUTH_TO_JURISDICTION_OP, PURGE_UNPINNED_AUTH_OP } from "./auth-jurisdiction-move-rpc";
-// Identity-resolver layer lives in its own module; re-export the public names
-// here so `@lunora/runtime`'s import surface is unchanged.
-export type {
-    ComposeIdentityResolversErrorMode,
-    ComposeIdentityResolversOptions,
-    IdentityContractLike,
-    IdentityResolver,
-    IdentityValidation,
-    ResolvedIdentity,
-} from "./identity-resolvers";
 export type {
     AdminTableResolver,
     BackupStore,
@@ -6189,6 +7515,16 @@ export type {
     WorkerOptions,
 };
 
+// Identity-resolver layer lives in its own module; re-export the public names
+// here so `@lunora/runtime`'s import surface is unchanged.
+export type {
+    ComposeIdentityResolversErrorMode,
+    ComposeIdentityResolversOptions,
+    IdentityContractLike,
+    IdentityResolver,
+    IdentityValidation,
+    ResolvedIdentity,
+} from "./identity-resolvers";
 export { composeIdentityResolvers, routeIdentityResolvers } from "./identity-resolvers";
 export type { KvIntrospector, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./kv-admin-routes";
 export type { BackupManifest } from "./scheduled-backup";

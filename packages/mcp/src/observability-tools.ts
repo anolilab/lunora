@@ -21,7 +21,7 @@ import type { FunctionReference, LunoraClient } from "@lunora/client";
 import { LunoraError } from "@lunora/errors";
 import { ADMIN_FUNCTIONS } from "@lunora/shard-engine";
 
-import { okStructured } from "./tool-result";
+import { okStructured, withErrorShape } from "./tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tool-types";
 
 /** Introspection reads touch no state; every call goes to the deployment. */
@@ -120,6 +120,15 @@ const MIGRATION_STATUS_INPUT_SCHEMA: ToolInputSchema = {
     type: "object",
 };
 
+const SCHEDULE_OUTBOX_INPUT_SCHEMA: ToolInputSchema = {
+    properties: {
+        cursor: { description: "`nextCursor` from a previous call, to read the page after it.", type: "string" },
+        limit: LIMIT_PROPERTY,
+        shardKey: SHARD_KEY_PROPERTY,
+    },
+    type: "object",
+};
+
 /**
  * `outputSchema`s are shallow on purpose: they tell a client what the top-level
  * envelope is (and let it validate `structuredContent`), without pinning row
@@ -153,7 +162,11 @@ const ISSUES_OUTPUT_SCHEMA: ToolInputSchema = {
 
 const ADVISORIES_OUTPUT_SCHEMA: ToolInputSchema = {
     properties: {
-        advisories: { description: "Schema/query advisories: { id, level, title, detail, … }.", type: "array" },
+        advisories: {
+            description:
+                "Schema/query advisories: { id, level, title, detail, … }. An advisory accepted by an inline `// lunora-advisor-exempt <rule> -- <reason>` directive also carries `suppressed: { reason, file, line }` (the directive's site); it stays listed and does not fail the ERROR gate.",
+            type: "array",
+        },
         total: { description: "Advisories available before `limit` narrowed them.", type: "number" },
     },
     required: ["advisories", "total"],
@@ -180,9 +193,22 @@ const MIGRATION_STATUS_OUTPUT_SCHEMA: ToolInputSchema = {
     type: "object",
 };
 
+const SCHEDULE_OUTBOX_OUTPUT_SCHEMA: ToolInputSchema = {
+    properties: {
+        entries: {
+            description:
+                "Deferred schedules the scheduler has not accepted, oldest first, live and parked alike: { id, target, attempts, parked, forever, nextAttemptAt, createdAt, when }.",
+            type: "array",
+        },
+        nextCursor: { description: "Pass back as `cursor` to read the next page. Absent on the last page.", type: "string" },
+    },
+    required: ["entries"],
+    type: "object",
+};
+
 /**
  * The observability tools. Descriptions say WHEN to call the tool, not just
- * what it returns — an agent picking between five similar reads needs the
+ * what it returns — an agent picking between several similar reads needs the
  * trigger, and it pays for these strings on every turn.
  */
 const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
@@ -192,7 +218,7 @@ const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
             "Read the deployment's recent log entries (newest first) after running a function, to see what it printed and where it failed. In-memory and per-shard: resets when the shard hibernates.",
         inputSchema: LOGS_INPUT_SCHEMA,
         name: "lunora_get_logs",
-        outputSchema: LOGS_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(LOGS_OUTPUT_SCHEMA),
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "List grouped error Issues" },
@@ -200,28 +226,36 @@ const OBSERVABILITY_TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
             "List errors grouped into Issues by fingerprint, with occurrence counts and triage status — the first call when asking what is currently broken, rather than reading raw logs.",
         inputSchema: ISSUES_INPUT_SCHEMA,
         name: "lunora_get_issues",
-        outputSchema: ISSUES_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(ISSUES_OUTPUT_SCHEMA),
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "List schema and query advisories" },
         description: "List the deployment's schema/query advisories (missing indexes, unsafe policies, and similar lints) before or after changing the schema.",
         inputSchema: ADVISORIES_INPUT_SCHEMA,
         name: "lunora_get_advisories",
-        outputSchema: ADVISORIES_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(ADVISORIES_OUTPUT_SCHEMA),
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read query insights" },
         description: "Read per-statement execution counts and latency over a recent time window, to find which query is slow or hot before optimizing one.",
         inputSchema: INSIGHTS_INPUT_SCHEMA,
         name: "lunora_get_query_insights",
-        outputSchema: INSIGHTS_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(INSIGHTS_OUTPUT_SCHEMA),
     },
     {
         annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read migration status" },
         description: "Read which migrations have been applied and which are pending, to check whether a schema change has actually landed on the deployment.",
         inputSchema: MIGRATION_STATUS_INPUT_SCHEMA,
         name: "lunora_get_migration_status",
-        outputSchema: MIGRATION_STATUS_OUTPUT_SCHEMA,
+        outputSchema: withErrorShape(MIGRATION_STATUS_OUTPUT_SCHEMA),
+    },
+    {
+        annotations: { ...READ_ONLY_ANNOTATIONS, title: "Read the schedule outbox" },
+        description:
+            "List deferred `ctx.scheduler` jobs whose mutation committed but that the scheduler has not accepted yet (retrying or parked), to find out why a scheduled job never ran.",
+        inputSchema: SCHEDULE_OUTBOX_INPUT_SCHEMA,
+        name: "lunora_get_schedule_outbox",
+        outputSchema: withErrorShape(SCHEDULE_OUTBOX_OUTPUT_SCHEMA),
     },
 ];
 
@@ -323,6 +357,13 @@ const callObservabilityTool = async (client: LunoraClient, name: string, input: 
                 total: entries.length,
                 trackedStatements: typeof trackedStatements === "number" ? trackedStatements : entries.length,
             });
+        }
+        case "lunora_get_schedule_outbox": {
+            // An absent cursor or `nextCursor` stays `undefined`, which the JSON hop drops.
+            const result = await adminRead(client, ADMIN_FUNCTIONS.getScheduleOutbox, { cursor: readText(input.cursor), limit }, shardKey);
+            const { nextCursor } = (result ?? {}) as { nextCursor?: string };
+
+            return okStructured({ entries: rowsOf(result, "entries"), nextCursor });
         }
         default: {
             throw new LunoraError("INTERNAL", `unknown observability tool: ${name}`);

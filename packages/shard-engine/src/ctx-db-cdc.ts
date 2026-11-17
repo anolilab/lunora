@@ -65,6 +65,22 @@ const CDC_LOG_TABLE_SEQ_INDEX = "__cdc_log_table_seq";
 const CDC_LOG_TABLE_ID_SEQ_INDEX = "__cdc_log_table_id_seq";
 
 /**
+ * The rows {@link minCdcReplayableSeq} looks for: a non-delete whose post-image
+ * was compacted away. Shared by the partial index and the query, because SQLite
+ * only uses a partial index when the query's WHERE carries every term of its
+ * predicate.
+ */
+const CDC_PAYLOAD_GAP_PREDICATE = dsql.raw(`op <> 'delete' AND doc IS NULL`);
+
+/**
+ * Partial index over {@link CDC_PAYLOAD_GAP_PREDICATE}, backing the `MAX(seq)` in
+ * {@link minCdcReplayableSeq}. Without it every replica pull walks the whole log
+ * looking for a row that, with payload compaction off, does not exist. It holds
+ * only compacted rows, so it is empty (and free to maintain) until compaction runs.
+ */
+const CDC_LOG_PAYLOAD_GAP_INDEX = "__cdc_log_payload_gap";
+
+/**
  * Create the `__cdc_log` table. `seq` is an `AUTOINCREMENT` primary key, giving
  * each shard a monotonic cursor that streaming-export consumers and replay-PITR
  * page through; `doc` holds the post-image JSON for insert/update and is `NULL`
@@ -110,6 +126,16 @@ const migrateCdcLog = (sql: SqlExec, options: { rowHistoryIndex?: boolean } = {}
         );
     } catch {
         /* see above: a degraded read path beats an unbootable shard, and the next cold start retries */
+    }
+
+    // Same isolation: the first build reads the whole log once.
+    try {
+        runDrizzle(
+            sql,
+            dsql`CREATE INDEX IF NOT EXISTS ${dsql.identifier(CDC_LOG_PAYLOAD_GAP_INDEX)} ON ${dsql.identifier(CDC_LOG_TABLE)} (seq) WHERE ${CDC_PAYLOAD_GAP_PREDICATE}`,
+        );
+    } catch {
+        /* degraded read path; the next cold start retries */
     }
 
     if (options.rowHistoryIndex !== true) {
@@ -662,7 +688,7 @@ const minCdcSeq = (sql: SqlExec): number | undefined => {
 const minCdcReplayableSeq = (sql: SqlExec): number | undefined => {
     const rows = runDrizzle<{ seq: null | number }>(
         sql,
-        dsql`SELECT MAX(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE op <> 'delete' AND doc IS NULL`,
+        dsql`SELECT MAX(seq) AS seq FROM ${dsql.identifier(CDC_LOG_TABLE)} WHERE ${CDC_PAYLOAD_GAP_PREDICATE}`,
     ).toArray();
 
     const compactedThrough = rows[0]?.seq ?? undefined;
@@ -739,12 +765,40 @@ const bumpCdcEpoch = (sql: SqlExec): string => {
  */
 const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Promise<void> => {
     if (change.op === "delete") {
-        await writer.delete(change.id, change.table);
+        await writer.delete(change.table, change.id);
 
         return;
     }
 
     const document = change.doc ?? {};
+
+    // Row already exists — replace its fields. Drop only `_id` (replace takes
+    // the id as its first argument). KEEP `_creationTime` and pass the
+    // trusted-replay `allowExplicitId` opt-in so `replace` preserves the row's
+    // original creation time instead of resetting it to the replay clock (the
+    // default mutation path mints a fresh `clock()`).
+    //
+    // `change.table` is passed as `expectedTable` like the delete and insert
+    // above: an unscoped `replace` probes every table on the premise that ids
+    // are unique across them, which `.source()` tables break — `liftSourceId`
+    // sets `_id` to the upstream natural primary key, so an orders update lands
+    // in the users row.
+    const replaceExisting = async (): Promise<void> => {
+        const fields = { ...document };
+
+        delete fields["_id"];
+
+        await writer.replace(change.table, change.id, fields, { allowExplicitId: true });
+    };
+
+    // A row stored under a NUL-bearing id predates the guard on explicit ids, and
+    // `insert` refuses that id before it can report a conflict. Rewrite such a row
+    // in place instead, so replaying its history does not stop the whole changelog.
+    if (change.id.includes("\0") && (await writer.get(change.table, change.id)) !== null) {
+        await replaceExisting();
+
+        return;
+    }
 
     try {
         await writer.insert(change.table, document, { allowExplicitId: true });
@@ -753,22 +807,7 @@ const applyCdcChange = async (writer: DatabaseWriterLike, change: CdcChange): Pr
             throw error;
         }
 
-        // Row already exists — replace its fields. Drop only `_id` (replace
-        // takes the id as its first argument). KEEP `_creationTime` and pass the
-        // trusted-replay `allowExplicitId` opt-in so `replace` preserves the
-        // row's original creation time instead of resetting it to the replay
-        // clock (the default mutation path mints a fresh `clock()`).
-        //
-        // `change.table` is passed as `expectedTable` like the delete and insert
-        // above: an unscoped `replace` probes every table on the premise that ids
-        // are unique across them, which `.source()` tables break — `liftSourceId`
-        // sets `_id` to the upstream natural primary key, so an orders update
-        // lands in the users row.
-        const fields = { ...document };
-
-        delete fields["_id"];
-
-        await writer.replace(change.id, fields, change.table, { allowExplicitId: true });
+        await replaceExisting();
     }
 };
 

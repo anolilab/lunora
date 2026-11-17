@@ -68,7 +68,7 @@ describe("d1 ctx-db .serverDefault()", () => {
         const writer = setup({ identity: null, userId: "u1" });
 
         const id = await writer.insert("notes", { _id: "n1", title: "hi" }, { allowExplicitId: true });
-        const doc = await writer.get(id);
+        const doc = await writer.get("notes", id);
 
         expect(doc?.["ownerId"]).toBe("u1");
     });
@@ -79,7 +79,7 @@ describe("d1 ctx-db .serverDefault()", () => {
         const writer = setup({ identity: null, userId: "u1" });
 
         const id = await writer.insert("notes", { _id: "n1", ownerId: "attacker", title: "hi" }, { allowExplicitId: true });
-        const doc = await writer.get(id);
+        const doc = await writer.get("notes", id);
 
         expect(doc?.["ownerId"]).toBe("u1");
     });
@@ -90,7 +90,7 @@ describe("d1 ctx-db .serverDefault()", () => {
         const writer = setup();
 
         const id = await writer.insert("notes", { _id: "n1", title: "hi" }, { allowExplicitId: true });
-        const doc = await writer.get(id);
+        const doc = await writer.get("notes", id);
 
         expect(doc?.["ownerId"]).toBe("anon");
     });
@@ -102,15 +102,15 @@ describe("d1 ctx-db .serverDefault()", () => {
 
         await writer.insert("notes", { _id: "n1", title: "hi" }, { allowExplicitId: true });
 
-        await writer.patch("n1", { title: "bye" });
+        await writer.patch("notes", "n1", { title: "bye" });
 
-        const afterTitlePatch = await writer.get("n1");
+        const afterTitlePatch = await writer.get("notes", "n1");
 
         expect(afterTitlePatch?.["ownerId"]).toBe("u1");
 
-        await writer.patch("n1", { ownerId: "attacker" });
+        await writer.patch("notes", "n1", { ownerId: "attacker" });
 
-        const afterOwnerPatch = await writer.get("n1");
+        const afterOwnerPatch = await writer.get("notes", "n1");
 
         expect(afterOwnerPatch?.["ownerId"]).toBe("u1");
     });
@@ -122,9 +122,9 @@ describe("d1 ctx-db .serverDefault()", () => {
 
         await writer.insert("notes", { _id: "n1", title: "hi" }, { allowExplicitId: true });
 
-        await writer.replace("n1", { ownerId: "attacker", title: "new" });
+        await writer.replace("notes", "n1", { ownerId: "attacker", title: "new" });
 
-        const replaced = await writer.get("n1");
+        const replaced = await writer.get("notes", "n1");
 
         expect(replaced?.["ownerId"]).toBe("u1");
     });

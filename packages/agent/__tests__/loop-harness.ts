@@ -3,11 +3,13 @@ import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import type { AgentDefinition, AgentFunctionReference, AgentGenerate, AgentGenerateResult, AgentRunFunction, AgentStepLike } from "../src/types";
 
 export interface StoredMessage {
+    approvalScope?: "thread";
     content: string;
+    expiresAt?: number;
     messageKey: string;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    status?: "approved" | "awaiting_approval" | "rejected";
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     stepName?: string;
     threadKey: string;
     toolCallId?: string;
@@ -27,7 +29,14 @@ export interface StoredThread {
     summaryRebuiltSeq?: number;
     summaryThroughSeq?: number;
     title?: string;
-    usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
+    usage?: {
+        cacheReadTokens?: number;
+        cacheWriteTokens?: number;
+        inputTokens?: number;
+        outputTokens?: number;
+        reasoningTokens?: number;
+        totalTokens?: number;
+    };
 }
 
 /**
@@ -98,13 +107,18 @@ export const memoryRuntime = (options?: {
     memory?: { path: string; result: Record<string, unknown> | ((args?: Record<string, unknown>) => unknown) };
 }): {
     dispatches: { args: Record<string, unknown> | undefined; path: string }[];
+    /** Thread-scoped approval grants as `"<threadKey>:<toolName>"` — a test adds/removes one to model the approve / revoke mutations. */
+    grants: Set<string>;
     messages: Map<string, StoredMessage>;
     run: AgentRunFunction;
     threads: Map<string, StoredThread>;
 } => {
     const threads = new Map<string, StoredThread>();
     const messages = new Map<string, StoredMessage>();
+    const grants = new Set<string>();
     const dispatches: { args: Record<string, unknown> | undefined; path: string }[] = [];
+
+    const approvalGranted = (args?: Record<string, unknown>): unknown => grants.has(`${args?.["key"] as string}:${args?.["toolName"] as string}`);
 
     const ensureThread = (args?: Record<string, unknown>): unknown => {
         const key = args?.["key"] as string;
@@ -261,6 +275,7 @@ export const memoryRuntime = (options?: {
 
     const handlers = new Map<string, (args?: Record<string, unknown>) => unknown>([
         [DEFAULT_AGENT_FUNCTION_PATHS.appendMessage, appendMessage],
+        [DEFAULT_AGENT_FUNCTION_PATHS.approvalGranted, approvalGranted],
         [DEFAULT_AGENT_FUNCTION_PATHS.completeRun, completeRun],
         [DEFAULT_AGENT_FUNCTION_PATHS.deleteMessage, deleteMessage],
         [DEFAULT_AGENT_FUNCTION_PATHS.ensureThread, ensureThread],
@@ -285,7 +300,7 @@ export const memoryRuntime = (options?: {
         return handler(args);
     };
 
-    return { dispatches, messages, run, threads };
+    return { dispatches, grants, messages, run, threads };
 };
 
 /** A scripted LLM: pops one decision per turn. */
@@ -360,13 +375,23 @@ export const collectConditions = (build: (q: unknown) => unknown): [string, unkn
 export const makeIndexQuery = (
     candidates: FakeRow[],
     build: (q: unknown) => unknown,
-): { collect: () => Promise<FakeRow[]>; first: () => Promise<FakeRow | null> } => {
+): {
+    collect: () => Promise<FakeRow[]>;
+    first: () => Promise<FakeRow | null>;
+    order: (direction: "asc" | "desc") => { take: (limit: number) => Promise<FakeRow[]> };
+} => {
     const conditions = collectConditions(build);
     const matches = (): FakeRow[] => candidates.filter((row) => conditions.every(([field, value]) => row[field] === value));
 
     return {
         collect: async () => matches(),
         first: async () => matches()[0] ?? null,
+        // Index order is ascending; `order("desc").take(n)` is the bounded newest-tail read.
+        order: (direction) => {
+            return {
+                take: async (limit: number) => (direction === "desc" ? matches().toReversed() : matches()).slice(0, limit),
+            };
+        },
     };
 };
 
@@ -413,13 +438,11 @@ export const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<s
     };
 
     const database = {
-        delete: async (id: string) => {
-            for (const [table, tableContent] of rows) {
-                rows.set(
-                    table,
-                    tableContent.filter((row) => row["_id"] !== id),
-                );
-            }
+        delete: async (table: string, id: string) => {
+            rows.set(
+                table,
+                tableRows(table).filter((row) => row["_id"] !== id),
+            );
         },
         insert: async (table: string, document: Record<string, unknown>) => {
             const id = `id-${String(nextId)}`;
@@ -429,15 +452,13 @@ export const fakeDatabase = (): { database: Record<string, unknown>; rows: Map<s
 
             return id;
         },
-        patch: async (id: string, patch: Record<string, unknown>) => {
+        patch: async (table: string, id: string, patch: Record<string, unknown>) => {
             assertNoExplicitUndefined(patch);
 
-            for (const tableContent of rows.values()) {
-                const row = tableContent.find((candidate) => candidate["_id"] === id);
+            const row = tableRows(table).find((candidate) => candidate["_id"] === id);
 
-                if (row) {
-                    Object.assign(row, patch);
-                }
+            if (row) {
+                Object.assign(row, patch);
             }
         },
         query: (table: string) => {

@@ -1,6 +1,6 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
-import { TARGET_OPTION } from "../../util/deploy-target";
+import TARGET_OPTION from "../../util/deploy-target";
 
 /**
  * `lunora profile` — capture an on-demand CPU or heap profile from a Node-target

@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -128,7 +128,7 @@ lunora seed --reset                      # wipe local .wrangler/state first (loc
 lunora seed --dry-run                    # print NDJSON, write nothing
 ```
 
-Also: `--batch-size` (rows per HTTP request, default 500), `--url` (worker URL, default `http://localhost:8787`), `--prod` (requires an explicit `--url`), `--token` / `LUNORA_ADMIN_TOKEN` (admin bearer; prefer the env var), `--yes` (skip the non-local confirmation prompt). `--reset` is local-only and cannot be combined with `--prod` or a remote `--url`.
+Also: `--allow-orphans` (let a required foreign key with no parent row take a dangling id instead of failing), `--batch-size` (rows per HTTP request, default 500), `--url` (worker URL, default `http://localhost:8787`), `--prod` (requires an explicit `--url`), `--token` / `LUNORA_ADMIN_TOKEN` (admin bearer; prefer the env var), `--yes` (skip the non-local confirmation prompt). `--reset` is local-only and cannot be combined with `--prod` or a remote `--url`.
 
 ## Limitations
 
@@ -165,11 +165,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora seed package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora seed package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/seed?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/seed

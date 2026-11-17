@@ -49,6 +49,17 @@ describe("renderStudioHtml", () => {
         expect(off).not.toContain("__LUNORA_SCHEMA_EDITABLE__");
     });
 
+    it("injects the advisor-procedures flag only when the host serves the route", () => {
+        expect.assertions(2);
+
+        const served = renderStudioHtml({ advisorProcedures: true, basePath: "/", scriptSrc: "/studio.js", styleHref: "/styles.css" });
+        const off = renderStudioHtml({ basePath: "/", schemaEditable: true, scriptSrc: "/studio.js", styleHref: "/styles.css" });
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
+        expect(served).toContain("window.__LUNORA_ADVISOR_PROCEDURES__=true;");
+        expect(off).not.toContain("__LUNORA_ADVISOR_PROCEDURES__");
+    });
+
     it("injects the rules flag only when rulesInstalled is explicitly false", () => {
         expect.assertions(3);
 

@@ -182,7 +182,7 @@ const toSql = (name: string, columns: ReadonlyArray<string>, rows: ReadonlyArray
  * globals are reached through `globalThis` so the module stays import-safe under
  * Node, mirroring the rest of the studio.
  */
-const downloadFile = (filename: string, content: string, mime: string): void => {
+const downloadFile = (filename: string, content: Blob | string, mime: string): void => {
     if (!("document" in globalThis)) {
         return;
     }
@@ -489,6 +489,7 @@ const CellDetailDialog = ({
     bucket,
     column,
     onClose,
+    onFilter,
     resolveUrl,
     value,
 }: {
@@ -496,6 +497,8 @@ const CellDetailDialog = ({
     readonly bucket?: string;
     readonly column: string;
     readonly onClose: () => void;
+    /** Add an equality filter on this cell's value. Absent when the value cannot be filtered on (an object, a blob). */
+    readonly onFilter?: () => void;
     /** Resolve a viewable URL for a storage key. Absent for every ordinary column. */
     readonly resolveUrl?: (key: string, bucket?: string) => Promise<string>;
     readonly value: unknown;
@@ -522,6 +525,11 @@ const CellDetailDialog = ({
             <div className="flex items-center justify-between">
                 <h2 className="truncate font-mono text-sm font-semibold text-foreground">{column}</h2>
                 <div className="flex items-center gap-1.5">
+                    {onFilter !== undefined && (
+                        <button className={CONTROL_BTN} data-testid="grid-cell-filter" onClick={onFilter} type="button">
+                            {t("Filter by this value")}
+                        </button>
+                    )}
                     <button className={CONTROL_BTN} data-testid="grid-cell-copy" onClick={onCopy} type="button">
                         {copied ? t("Copied") : t("Copy")}
                     </button>
@@ -612,5 +620,5 @@ const GridActionsBar = ({
     );
 };
 
-export { CellDetailDialog, ColumnsMenu, ExportMenu, GridActionsBar, SelectionBar, toCsv, toJson, toSql };
+export { CellDetailDialog, ColumnsMenu, downloadFile, ExportMenu, GridActionsBar, SelectionBar, toCsv, toJson, toSql };
 export type { GridRow };

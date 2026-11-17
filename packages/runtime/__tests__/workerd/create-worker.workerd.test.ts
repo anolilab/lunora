@@ -136,7 +136,7 @@ describe("createWorker (workerd)", () => {
     });
 
     it("scheduled() backup streams an NDJSON snapshot + manifest into the real R2 bucket", async () => {
-        expect.assertions(5);
+        expect.assertions(6);
 
         // 2026-06-03T12:00:00.000Z — drives the deterministic backup id/key.
         const scheduledTime = Date.UTC(2026, 5, 3, 12, 0, 0);
@@ -160,11 +160,43 @@ describe("createWorker (workerd)", () => {
         const ndjsonText = await ndjsonObject!.text();
         const lines = ndjsonText.trim().split("\n");
 
-        expect(lines).toHaveLength(2);
+        // Two rows, then the end marker that lets a reader tell a complete export from a truncated one.
+        expect(lines).toHaveLength(3);
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+        expect(JSON.parse(lines[2]!)).toEqual({ end: true, rows: 2 });
 
         const manifest: { cron: string; rows: number } = await manifestObject!.json();
 
         expect(manifest).toMatchObject({ cron: "0 3 * * *", rows: 2 });
+    });
+
+    it("authenticates a browser socket from a lunora.bearer subprotocol and selects the lunora protocol", async () => {
+        expect.assertions(4);
+
+        const token = btoa("user:alice").replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+        const response = await SELF.fetch("https://app.test/_lunora/ws", {
+            headers: { "sec-websocket-protocol": `lunora, lunora.bearer.${token}`, upgrade: "websocket" },
+        });
+
+        expect(response.status).toBe(101);
+        // A browser that offered subprotocols fails the handshake unless the response selects one.
+        expect(response.headers.get("sec-websocket-protocol")).toBe("lunora");
+
+        const socket = response.webSocket as WebSocket;
+        const first = new Promise<string>((resolve) => {
+            socket.addEventListener("message", (event) => {
+                resolve(String(event.data));
+            });
+        });
+
+        socket.accept();
+
+        const frame = JSON.parse(await first) as { protocol: string | null; userId: string | null };
+
+        expect(frame.userId).toBe("alice");
+        // The bearer itself never reaches the shard.
+        expect(frame.protocol).toBe("lunora");
+
+        socket.close();
     });
 });

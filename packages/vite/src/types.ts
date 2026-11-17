@@ -78,6 +78,7 @@ export interface LunoraPluginOptions {
      * the value set is derived from `CodegenOptions` so it can't drift.
      */
     apiSpec?: CodegenOptions["apiSpec"];
+
     /** Pass through to `@cloudflare/vite-plugin`. Pass `false` to opt out. Defaults to `true`. */
     cloudflare?: boolean | CloudflarePluginOptions;
 
@@ -134,6 +135,9 @@ export interface ResolvedLunoraPluginOptions {
      * build. Derived, so the import base cannot disagree with the emitter.
      */
     generatedDir: string;
+
+    /** `LUNORA_LAZY_FUNCTIONS`, which `lunora dev`/`build` set for this process; `codegen.lazyFunctions` in `lunora.config.*` is read by codegen itself. */
+    lazyFunctions: boolean;
     overlay: false | OverlayPluginOptions;
     projectRoot: string;
     schemaDir: string;

@@ -26,7 +26,7 @@ const { page: changed } = await ctx.db.orders.findMany({
 
 A row stamped `t=100` that commits _after_ a consumer has already advanced its
 cursor past `100` will never be returned by that query again. The consumer does
-not error, retry, or notice. It simply never sees the row.
+not error, retry, or notice. It never sees the row.
 
 `.commitOrdered()` closes that window.
 
@@ -147,7 +147,7 @@ const last = rows.at(-1);
 This is exact at any page size — a page may split a commit and nothing is lost,
 because `_id` orders the rows within one sequence. It costs a second cursor
 field and a wider predicate, so prefer group-boundary checkpointing when you
-want to process each commit as a unit, and this when you just want rows.
+want to process each commit as a unit, and this when you only want rows.
 
 `_commitSeq` lives in the stored document rather than a dedicated column, so it
 is orderable, filterable, and indexable like any other field — and adding

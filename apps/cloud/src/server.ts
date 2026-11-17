@@ -59,10 +59,11 @@ const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
                     // keeps the app decoupled from the SDK's full types. A placeholder
                     // key keeps construction from throwing when billing isn't
                     // configured — live calls then fail with a clear Creem auth error.
-                    client: new Creem({
-                        apiKey: env.CREEM_API_KEY ?? "unconfigured",
-                        ...(env.CREEM_TEST_MODE === "true" ? { server: "test" as const } : {}),
-                    }),
+                    client: () =>
+                        new Creem({
+                            apiKey: env.CREEM_API_KEY ?? "unconfigured",
+                            ...(env.CREEM_TEST_MODE === "true" ? { server: "test" as const } : {}),
+                        }),
                     webhookSecret: env.CREEM_WEBHOOK_SECRET ?? "",
                 }),
                 // Always true HERE because the check cannot be expressed here: this

@@ -107,6 +107,17 @@ const createSchedulerHost = (options: SchedulerHostOptions): SchedulerHost => {
             requeue: async (id) => scheduler.deadRetry(id),
         },
 
+        get: async (id) => {
+            const job = await scheduler.get(id);
+
+            if (job === null) {
+                // eslint-disable-next-line unicorn/no-null -- the contract answers `null` for an unknown or forgotten id
+                return null;
+            }
+
+            return { ...toStatus(job), state: job.state, ...(job.completedAt === undefined ? {} : { completedAt: job.completedAt }) };
+        },
+
         list: async () => {
             const records = await scheduler.list();
 

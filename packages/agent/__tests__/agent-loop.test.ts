@@ -1,11 +1,11 @@
 import { createDispatchRunner } from "@lunora/dispatch";
-import { hasToolCall, jsonSchema } from "ai";
+import { hasToolCall, jsonSchema, simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 
 import { runAgentLoop } from "../src/agent-loop";
 import { defineAgent, defineAgentTool } from "../src/define-agent";
-import { createAgentGenerate } from "../src/generate";
+import { createAgentGenerate, createStreamGenerate } from "../src/generate";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "../src/paths";
 import { MAX_TOOL_OUTPUT_CHARS } from "../src/tool-output";
 import type {
@@ -18,6 +18,7 @@ import type {
     AgentLiveEvent,
     AgentRunFunction,
     AgentStepFinishInfo,
+    AgentStepLike,
     AgentStreamGenerate,
     AgentTokenDelta,
     AgentTokenSink,
@@ -34,6 +35,9 @@ const TRANSIENT_WAIT_FAILURE_PATTERN = /temporarily unavailable/u;
  * progress arm (exercised by the reportProgress test) so `deltas` stays
  * token-typed.
  */
+/** One provider stream part as the mock model's `doStream` emits it. */
+type ProviderStreamPart = Awaited<ReturnType<MockLanguageModelV4["doStream"]>>["stream"] extends ReadableStream<infer Part> ? Part : never;
+
 const captureTokenDeltas =
     (deltas: AgentTokenDelta[]): AgentTokenSink =>
     (event) => {
@@ -63,6 +67,23 @@ class DurableStepJournal {
     private readonly entries = new Map<string, { output: unknown }>();
 
     private readonly resolvedWaits = new Map<string, { payload: unknown }>();
+
+    private readonly armObservers = new Set<() => void>();
+
+    /** Resolves once the run has parked on the wait `name` for the `times`th time. */
+    public armed(name: string, times = 1): Promise<void> {
+        return new Promise<void>((resolve) => {
+            const observe = (): void => {
+                if (this.waitedNames.filter((waited) => waited === name).length >= times) {
+                    this.armObservers.delete(observe);
+                    resolve();
+                }
+            };
+
+            this.armObservers.add(observe);
+            observe();
+        });
+    }
 
     /** Record a completed step as a PREVIOUS deploy would have written it, so a replay reads that shape back. */
     public seed(name: string, output: unknown): void {
@@ -112,6 +133,10 @@ class DurableStepJournal {
 
         this.waitedNames.push(name);
 
+        for (const observe of this.armObservers) {
+            observe();
+        }
+
         // Hibernate: this invocation never gets past here (see the doc above).
         return new Promise<{ payload: T; type: string }>(() => {});
     }
@@ -125,6 +150,21 @@ const flushMicrotasks = async (): Promise<void> => {
     await new Promise((resolve) => {
         setTimeout(resolve, 0);
     });
+};
+
+/**
+ * Wait until a run that is expected to park on the wait `name` (its `times`th
+ * park) has done so. A run that is meant to hibernate never settles, so it is
+ * left pending; if it settles or rejects first, that outcome is the failure and
+ * is raised here instead of leaving the caller's assertions to pass vacuously.
+ */
+const parkedOn = async (run: Promise<unknown>, journal: DurableStepJournal, name: string, times = 1): Promise<void> => {
+    await Promise.race([
+        journal.armed(name, times),
+        run.then(() => {
+            throw new Error(`run settled before parking on ${name}`);
+        }),
+    ]);
 };
 
 /**
@@ -1085,9 +1125,115 @@ describe(runAgentLoop, () => {
             stopped: "final",
             text: "final",
             turns: 2,
-            usage: { inputTokens: 30, outputTokens: 13, totalTokens: 43 },
+            usage: { inputTokens: 30, outputTokens: 13, status: "complete", totalTokens: 43 },
         });
-        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 30, outputTokens: 13, totalTokens: 43 });
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 30, outputTokens: 13, status: "complete", totalTokens: 43 });
+    });
+
+    it("sums the cache and reasoning buckets across turns, and a bucket no turn reported stays absent", async () => {
+        expect.assertions(2);
+
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                lookup: defineAgentTool({
+                    description: "Look something up.",
+                    execute: () => "value",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const generate = scriptedGenerate([
+            {
+                text: "",
+                toolCalls: [{ id: "c1", input: {}, name: "lookup" }],
+                usage: { cacheReadTokens: 4, cacheWriteTokens: 1, inputTokens: 10, outputTokens: 5, reasoningTokens: 2, totalTokens: 15 },
+            },
+            // This turn reports a cache read but no cache write and no reasoning.
+            { text: "final", toolCalls: [], usage: { cacheReadTokens: 6, inputTokens: 20, outputTokens: 8, totalTokens: 28 } },
+        ]);
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run }));
+
+        // Reasoning (2) is inside outputTokens, so the total is 15 + 28, not 15 + 28 + 2.
+        const expected = {
+            cacheReadTokens: 10,
+            cacheWriteTokens: 1,
+            inputTokens: 30,
+            outputTokens: 13,
+            reasoningTokens: 2,
+            status: "complete",
+            totalTokens: 43,
+        };
+
+        expect(result).toMatchObject({ usage: expected });
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual(expected);
+    });
+
+    it("persists a partial status when one of the run's turns reported only part of its usage", async () => {
+        expect.assertions(1);
+
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+        const generate = scriptedGenerate([
+            { text: "", toolCalls: [{ id: "c1", input: {}, name: "lookup" }], usage: { inputTokens: 10, outputTokens: 5 } },
+            // The provider reported the prompt but not the completion for this turn.
+            { text: "final", toolCalls: [], usage: { inputTokens: 20 } },
+        ]);
+
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run }));
+
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 30, outputTokens: 5, status: "partial" });
+    });
+
+    it("persists an unavailable status when the only turn reported no usage", async () => {
+        expect.assertions(1);
+
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+
+        await runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([{ text: "final", toolCalls: [], usage: { status: "unavailable" } }]),
+                run: runtime.run,
+            }),
+        );
+
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ status: "unavailable" });
+    });
+
+    it("replaces a thread row's usage written before the breakdown fields with the run's total", async () => {
+        expect.assertions(1);
+
+        const agent = defineAgent({ model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" });
+        const runtime = memoryRuntime();
+
+        // A row as the previous release wrote it: the three totals only.
+        runtime.threads.set("thread-1", {
+            agent: "support",
+            key: "thread-1",
+            messageCount: 0,
+            status: "idle",
+            usage: { inputTokens: 99, outputTokens: 9, totalTokens: 108 },
+        });
+
+        await runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([{ text: "final", toolCalls: [], usage: { cacheReadTokens: 3, inputTokens: 7, outputTokens: 1, totalTokens: 8 } }]),
+                run: runtime.run,
+            }),
+        );
+
+        // The run's own total, with no residue from the old row and no sum with it.
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({
+            cacheReadTokens: 3,
+            inputTokens: 7,
+            outputTokens: 1,
+            status: "complete",
+            totalTokens: 8,
+        });
     });
 
     it("invokes `onStepFinish` once per turn as a durable step", async () => {
@@ -1404,6 +1550,44 @@ describe(runAgentLoop, () => {
         expect(result?.content).toBe("charged");
     });
 
+    it("persists the approval marker once across replays, with a deadline, so a replay never re-opens a decided call", async () => {
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => "charged",
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", { amount: 100 }, "charging…"), finalTurn("done")]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        paused.catch(() => {
+            /* the paused invocation never settles */
+        });
+        await flushMicrotasks();
+
+        const marker = [...runtime.messages.values()].find((message) => message.status === "awaiting_approval");
+
+        expect(marker?.expiresAt).toBeTypeOf("number");
+
+        journal.events.set("approval:call_1", { decision: "approve" });
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+        await runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        // The request step is memoized: it ran for the first pause and never again, so no
+        // replay re-inserted the marker or moved its deadline.
+        expect(journal.invoked.filter((name) => name === "approval:request:call_1")).toHaveLength(1);
+        expect(runtime.messages.has("thread-1:wf-1:approval:call_1")).toBe(false);
+    });
+
     it("defaults the approval wait timeout to 3 days when the agent sets none", async () => {
         const agent = defineAgent({
             model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
@@ -1698,6 +1882,95 @@ describe(runAgentLoop, () => {
         expect(deltas).toStrictEqual([]);
         expect(stream.state.calls).toBe(1);
         expect(journal.invoked.filter((name) => name === "llm:turn:0")).toHaveLength(1);
+    });
+
+    it("persists only the retried answer when a provider finished the attempt before it with an error reason", async () => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const deltas: AgentTokenDelta[] = [];
+        const onTokenDelta = captureTokenDeltas(deltas);
+
+        // Attempt one is cut short by the provider and reports it on its finish part;
+        // attempt two, the durable step's retry, completes.
+        const usage = {
+            inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 2, total: 2 },
+            outputTokens: { reasoning: undefined, text: 1, total: 1 },
+        };
+        const attempts: ProviderStreamPart[][] = [
+            [
+                { id: "t0", type: "text-start" },
+                { delta: "Partial ", id: "t0", type: "text-delta" },
+                { id: "t0", type: "text-end" },
+                { finishReason: { raw: "stream-truncated", unified: "error" }, type: "finish", usage },
+            ],
+            [
+                { id: "t1", type: "text-start" },
+                { delta: "Whole answer.", id: "t1", type: "text-delta" },
+                { id: "t1", type: "text-end" },
+                { finishReason: { raw: "stop", unified: "stop" }, type: "finish", usage },
+            ],
+        ];
+        let call = 0;
+        const model = new MockLanguageModelV4({
+            doStream: () => {
+                const parts = attempts[call] ?? [];
+
+                call += 1;
+
+                return Promise.resolve({ stream: simulateReadableStream({ chunks: parts }) });
+            },
+        });
+        const streamGenerate = createStreamGenerate({ ...agent, model }, {});
+
+        await expect(runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }))).rejects.toThrow(
+            "provider reason: stream-truncated",
+        );
+
+        // The failed attempt persisted nothing but the user turn.
+        expect(runtime.threads.get("thread-1")?.status).toBe("error");
+        expect([...runtime.messages.values()].map((message) => message.role)).toStrictEqual(["user"]);
+
+        // The retry replays the same journal: the failed step runs again and its answer is the one kept.
+        const result = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }));
+
+        expect(result).toStrictEqual({
+            stopped: "final",
+            text: "Whole answer.",
+            turns: 1,
+            usage: { inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 },
+        });
+        expect(call).toBe(2);
+        expect(journal.invoked.filter((name) => name === "llm:turn:0")).toHaveLength(2);
+
+        const assistant = [...runtime.messages.values()].filter((message) => message.role === "assistant");
+
+        expect(assistant.map((message) => message.content)).toStrictEqual(["Whole answer."]);
+        expect(runtime.threads.get("thread-1")?.status).toBe("idle");
+        // The retry re-streams from the start, so a live consumer sees the prefix again before the whole answer.
+        expect(deltas.map((delta) => delta.text)).toStrictEqual(["Partial ", "Whole answer."]);
+    });
+
+    it("fails a non-streaming turn whose finish reason is error instead of returning its text", async () => {
+        expect.hasAssertions();
+
+        const agent = defineAgent({ model: "test-model" });
+        const model = new MockLanguageModelV4({
+            doGenerate: () =>
+                Promise.resolve({
+                    content: [{ text: "Partial", type: "text" }],
+                    finishReason: { raw: "error", unified: "error" },
+                    usage: {
+                        inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 2, total: 2 },
+                        outputTokens: { reasoning: undefined, text: 1, total: 1 },
+                    },
+                    warnings: [],
+                }),
+        });
+
+        await expect(createAgentGenerate({ ...agent, model }, {})({ messages: [{ content: "hi", role: "user" }] })).rejects.toThrow("provider reason: error");
     });
 
     it("takes the byte-identical non-streaming path when no token sink is present", async () => {
@@ -1999,5 +2272,309 @@ describe("a failing run-completion dispatch", () => {
         await expect(runAgentLoop(loopDefaults(agent, { generate: scriptedGenerate([]) }))).rejects.toThrow("scripted generate exhausted");
 
         expect(flush).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe("thread-scoped approval grants", () => {
+    /** A `charge` tool gated on approval; `runs.count` counts real executions. */
+    const chargeAgent = () => {
+        const runs = { count: 0 };
+        const agent = defineAgent({
+            model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            tools: {
+                charge: defineAgentTool({
+                    description: "Charge the card.",
+                    execute: () => {
+                        runs.count += 1;
+
+                        return "charged";
+                    },
+                    inputSchema: { jsonSchema: { type: "object" } } as never,
+                    needsApproval: true,
+                }),
+            },
+        });
+
+        return { agent, runs };
+    };
+
+    it("a grant made for the thread skips the gate for a later call to the same tool", async () => {
+        const { agent, runs } = chargeAgent();
+        const runtime = memoryRuntime();
+
+        // Call 1 pauses; the client approves for the thread. `agentResolveApproval`
+        // writes the grant and wakes the run — modelled here by the same two steps.
+        const first = new DurableStepJournal();
+        const pausedGenerate = scriptedGenerate([toolTurn("call_1", "charge", {}, "charging…"), finalTurn("done")]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate: pausedGenerate, run: runtime.run, step: first }));
+
+        await parkedOn(paused, first, "approval:call_1");
+
+        runtime.grants.add("thread-1:charge");
+        first.events.set("approval:call_1", { decision: "approve", scope: "thread" });
+
+        await runAgentLoop(loopDefaults(agent, { generate: pausedGenerate, run: runtime.run, step: first }));
+
+        expect(runs.count).toBe(1);
+        expect([...runtime.messages.values()].find((message) => message.toolCallId === "call_1" && message.role === "tool")).toMatchObject({
+            approvalScope: "thread",
+            status: "approved",
+        });
+
+        // Call 2 — a new instance on the same thread — never reaches the gate.
+        const second = new DurableStepJournal();
+        const secondGenerate = scriptedGenerate([toolTurn("call_2", "charge", {}, "again…"), finalTurn("done again")]);
+
+        const result = await runAgentLoop(loopDefaults(agent, { generate: secondGenerate, instanceId: "wf-2", run: runtime.run, step: second }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "done again", turns: 2 });
+        expect(runs.count).toBe(2);
+        expect(second.waitedNames).toStrictEqual([]);
+        expect(runtime.messages.has("thread-1:wf-2:approval:call_2")).toBe(false);
+
+        const secondResult = [...runtime.messages.values()].find((message) => message.toolCallId === "call_2" && message.role === "tool");
+
+        expect(secondResult?.status).toBeUndefined();
+        expect(secondResult?.approvalScope).toBeUndefined();
+    });
+
+    it("a replay after a crash keeps the memoized gate decision when the grant is revoked in between", async () => {
+        const { agent, runs } = chargeAgent();
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        // The grant is in place, the tool runs, then the process dies before the
+        // next model turn.
+        runtime.grants.add("thread-1:charge");
+        const crashing = scriptedGenerate([toolTurn("call_9", "charge", {})]);
+
+        await expect(runAgentLoop(loopDefaults(agent, { generate: crashing, run: runtime.run, step: journal }))).rejects.toThrow("scripted generate exhausted");
+        expect(runs.count).toBe(1);
+
+        // The grant is revoked before the replay. The replay must NOT re-decide the
+        // gate: its memoized `false` stands, so the completed tool is not re-gated.
+        runtime.grants.delete("thread-1:charge");
+
+        const resumed = scriptedGenerate([finalTurn("done")]);
+        const result = await runAgentLoop(loopDefaults(agent, { generate: resumed, run: runtime.run, step: journal }));
+
+        expect(result).toStrictEqual({ stopped: "final", text: "done", turns: 2 });
+        expect(runs.count).toBe(1);
+        expect(journal.invoked.filter((name) => name === "tool:approval-gate:call_9")).toHaveLength(1);
+        expect(journal.waitedNames).toStrictEqual([]);
+    });
+
+    it("a grant made while a call is already paused does not release that call", async () => {
+        const { agent, runs } = chargeAgent();
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const generate = scriptedGenerate([toolTurn("call_1", "charge", {}, "charging…"), finalTurn("done")]);
+
+        const paused = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        await parkedOn(paused, journal, "approval:call_1");
+
+        expect(journal.waitedNames).toStrictEqual(["approval:call_1"]);
+
+        // Another call's approve-for-thread lands while this one waits.
+        runtime.grants.add("thread-1:charge");
+
+        // Replaying the paused instance still hibernates on its own approval.
+        const replay = runAgentLoop(loopDefaults(agent, { generate, run: runtime.run, step: journal }));
+
+        await parkedOn(replay, journal, "approval:call_1", 2);
+
+        expect(runs.count).toBe(0);
+        expect(journal.waitedNames).toStrictEqual(["approval:call_1", "approval:call_1"]);
+    });
+
+    it("revoking a grant restores the gate for the next call", async () => {
+        const { agent, runs } = chargeAgent();
+        const runtime = memoryRuntime();
+
+        runtime.grants.add("thread-1:charge");
+        const granted = new DurableStepJournal();
+
+        await runAgentLoop(
+            loopDefaults(agent, { generate: scriptedGenerate([toolTurn("call_1", "charge", {}), finalTurn("done")]), run: runtime.run, step: granted }),
+        );
+
+        expect(runs.count).toBe(1);
+
+        runtime.grants.delete("thread-1:charge");
+
+        // The next call is gated again: it pauses rather than running.
+        const gated = new DurableStepJournal();
+
+        const gatedRun = runAgentLoop(
+            loopDefaults(agent, {
+                generate: scriptedGenerate([toolTurn("call_2", "charge", {}), finalTurn("done")]),
+                instanceId: "wf-2",
+                run: runtime.run,
+                step: gated,
+            }),
+        );
+
+        await parkedOn(gatedRun, gated, "approval:call_2");
+
+        expect(gated.waitedNames).toStrictEqual(["approval:call_2"]);
+        expect(runs.count).toBe(1);
+    });
+});
+
+/** One provider stream part as a model's `doStream` emits it. */
+type ModelStreamPart = Awaited<ReturnType<InstanceType<typeof MockLanguageModelV4>["doStream"]>>["stream"] extends ReadableStream<infer Part> ? Part : never;
+
+/** The provider's closing `finish` part, with a fixed usage. */
+const stopPart = (): ModelStreamPart => {
+    return {
+        finishReason: { raw: "stop", unified: "stop" },
+        type: "finish",
+        usage: {
+            inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 1, total: 1 },
+            outputTokens: { reasoning: undefined, text: 1, total: 1 },
+        },
+    };
+};
+
+/** A mock model whose successive `doStream` calls each play one array of provider parts. */
+const streamingModel = (turns: ReadonlyArray<ReadonlyArray<ModelStreamPart>>): MockLanguageModelV4 => {
+    const remaining = [...turns];
+
+    return new MockLanguageModelV4({
+        doStream: () => {
+            const parts = remaining.shift() ?? [];
+
+            return Promise.resolve({
+                stream: new ReadableStream<ModelStreamPart>({
+                    start: (controller) => {
+                        for (const part of parts) {
+                            controller.enqueue(part);
+                        }
+
+                        controller.close();
+                    },
+                }),
+            });
+        },
+    });
+};
+
+/** Retry each durable step up to `attempts` times, as the workflow host does for a thrown step. */
+const retryingStep = (journal: DurableStepJournal, attempts: number): AgentStepLike => {
+    const attempt = async <T>(name: string, callback: () => Promise<T>, left: number): Promise<T> => {
+        try {
+            return await journal.do(name, callback);
+        } catch (error) {
+            if (left <= 1) {
+                throw error;
+            }
+
+            return attempt(name, callback, left - 1);
+        }
+    };
+
+    return {
+        do: <T>(name: string, callback: () => Promise<T>): Promise<T> => attempt(name, callback, attempts),
+        waitForEvent: (name, options) => journal.waitForEvent(name, options),
+    };
+};
+
+describe("a turn whose stream fails in-band and is retried", () => {
+    it("persists only the retried answer and never the failed attempt's prefix", async () => {
+        expect.hasAssertions();
+
+        const model = streamingModel([
+            [
+                { id: "t0", type: "text-start" },
+                { delta: "Partial ", id: "t0", type: "text-delta" },
+                { error: new Error("upstream reset"), type: "error" },
+                stopPart(),
+            ],
+            [{ id: "t1", type: "text-start" }, { delta: "Retried answer.", id: "t1", type: "text-delta" }, { id: "t1", type: "text-end" }, stopPart()],
+        ]);
+        const agent = defineAgent({ model: "test-model" });
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+
+        const deltas: AgentTokenDelta[] = [];
+        const result = await runAgentLoop(
+            loopDefaults(agent, {
+                onTokenDelta: captureTokenDeltas(deltas),
+                run: runtime.run,
+                step: retryingStep(journal, 2),
+                streamGenerate: createStreamGenerate({ ...agent, model }, {}),
+            }),
+        );
+
+        expect(result).toStrictEqual({
+            stopped: "final",
+            text: "Retried answer.",
+            turns: 1,
+            usage: { inputTokens: 1, outputTokens: 1, status: "complete", totalTokens: 2 },
+        });
+
+        // The failed attempt was not memoised: the turn's body ran twice.
+        expect(journal.invoked.filter((name) => name === "llm:turn:0")).toHaveLength(2);
+        expect(model.doStreamCalls).toHaveLength(2);
+
+        const assistant = [...runtime.messages.values()].filter((message) => message.role === "assistant");
+
+        expect(assistant.map((message) => message.content)).toStrictEqual(["Retried answer."]);
+    });
+});
+
+describe("usage of a failed streamed turn", () => {
+    it("counts the tokens the failed attempt was billed on the run that failed, and once more when the retry completes", async () => {
+        expect.assertions(4);
+
+        const agent = defineAgent({ model: "test-model" });
+        const runtime = memoryRuntime();
+        const journal = new DurableStepJournal();
+        const deltas: AgentTokenDelta[] = [];
+        const onTokenDelta = captureTokenDeltas(deltas);
+        const billed = {
+            inputTokens: { cacheRead: undefined, cacheWrite: undefined, noCache: 2, total: 2 },
+            outputTokens: { reasoning: undefined, text: 1, total: 1 },
+        };
+        const attempts: ProviderStreamPart[][] = [
+            [
+                { id: "t0", type: "text-start" },
+                { delta: "Partial ", id: "t0", type: "text-delta" },
+                { id: "t0", type: "text-end" },
+                { finishReason: { raw: "stream-truncated", unified: "error" }, type: "finish", usage: billed },
+            ],
+            [
+                { id: "t1", type: "text-start" },
+                { delta: "Whole answer.", id: "t1", type: "text-delta" },
+                { id: "t1", type: "text-end" },
+                { finishReason: { raw: "stop", unified: "stop" }, type: "finish", usage: billed },
+            ],
+        ];
+        let call = 0;
+        const model = new MockLanguageModelV4({
+            doStream: () => {
+                const parts = attempts[call] ?? [];
+
+                call += 1;
+
+                return Promise.resolve({ stream: simulateReadableStream({ chunks: parts }) });
+            },
+        });
+        const streamGenerate = createStreamGenerate({ ...agent, model }, {});
+
+        await expect(runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }))).rejects.toThrow(
+            "provider reason: stream-truncated",
+        );
+
+        // The provider billed the failed attempt, so the run that failed reports those tokens.
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 });
+
+        const result = await runAgentLoop(loopDefaults(agent, { onTokenDelta, run: runtime.run, step: journal, streamGenerate }));
+
+        // The retry is the same turn: its tokens count once, so the total is not the failed attempt added on top of it.
+        expect(result).toMatchObject({ stopped: "final", usage: { inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 } });
+        expect(runtime.threads.get("thread-1")?.usage).toStrictEqual({ inputTokens: 2, outputTokens: 1, status: "complete", totalTokens: 3 });
     });
 });

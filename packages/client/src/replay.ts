@@ -14,7 +14,7 @@ import { decodeWire } from "@lunora/wire";
 import { isSlotEnvelope } from "./call-wire";
 import { AUTH_REPLAY_ERROR_CODES, getRetryAfterMs, TransportError } from "./errors";
 import type { LunoraClientError, RpcEnvelopeBody } from "./wire-errors";
-import { retryAfterHeaderMs, slotError } from "./wire-errors";
+import { retryAfterHeaderMs, slotError, undecodableResultError, withResponseHeaders } from "./wire-errors";
 
 /**
  * Coded errors that a durable-write replay **re-queues** for the next attempt
@@ -25,7 +25,13 @@ import { retryAfterHeaderMs, slotError } from "./wire-errors";
  * or its response was unusable/partial — for a single-shard outbox flush these
  * fail every entry uniformly. `RATE_LIMITED` / `TOO_MANY_REQUESTS` mean a limiter
  * refused to look at the write at all (both are 429 in the catalog; the runtime's
- * REST limiter mints the first). "Not now" is not "no": dropping a durable write
+ * REST limiter mints the first). `DELIVERY_FENCED` means the response lost its
+ * authority after the operation may have committed. Retry under the original
+ * idempotency key: the server can return its cached result or refuse the caller's
+ * now-stale authorization. A receipt from a different authority epoch returns
+ * terminal `DELIVERY_RECEIPT_FENCED`; only an application with its own durable
+ * operation key can safely recover that committed result through a fresh call.
+ * "Not now" is not "no": dropping a durable write
  * because the client reconnected into a rate-limit window is exactly what the
  * outbox exists to prevent, and the retry hint rides back through
  * `replayRetryDelayMs`.
@@ -33,7 +39,7 @@ import { retryAfterHeaderMs, slotError } from "./wire-errors";
  * Every other coded error is a server verdict (terminal) — replaying it would
  * re-trigger the same failure (a poison-message loop).
  */
-const TRANSIENT_REPLAY_ERROR_CODES = new Set(["RATE_LIMITED", "SHARD_ERROR", "SHARD_UNAVAILABLE", "TOO_MANY_REQUESTS"]);
+const TRANSIENT_REPLAY_ERROR_CODES = new Set(["DELIVERY_FENCED", "RATE_LIMITED", "SHARD_ERROR", "SHARD_UNAVAILABLE", "TOO_MANY_REQUESTS"]);
 
 /**
  * Whether a single-call replay failure leaves the durable write eligible for
@@ -57,11 +63,11 @@ const isTransientReplayFailure = (error: unknown): boolean => {
     return code === undefined || TRANSIENT_REPLAY_ERROR_CODES.has(code) || AUTH_REPLAY_ERROR_CODES.has(code);
 };
 
-/** Longest delay a `Retry-After` hint can push the next outbox flush out by — a server (or a proxy) asking for an hour must not strand the queue for one. */
-const MAX_REPLAY_RETRY_DELAY_MS = 60_000;
+/** Shortest wait of a hintless retryable failure, doubled per consecutive failure up to {@link REPLAY_MAX_DELAY_MS}. */
+const REPLAY_BASE_DELAY_MS = 1000;
 
-/** Shortest wait a hintless retryable failure backs off by, doubled per consecutive failure up to {@link MAX_REPLAY_RETRY_DELAY_MS}. */
-const BASE_REPLAY_RETRY_DELAY_MS = 1000;
+/** Longest delay of any retry — a server (or a proxy) asking for an hour must not strand the queue for one. */
+const REPLAY_MAX_DELAY_MS = 60_000;
 
 /**
  * Coded error a response the client could NOT read a `{ error }` envelope out of
@@ -98,22 +104,23 @@ const UNPARSEABLE_STATUS_CODES: Record<number, LunoraErrorCode> = {
  * that is the one channel the hint travels on and these errors are built, not
  * reconstructed from an envelope a server sent.
  */
-const unparseableResponseError = (status: number, statusText: string, retryAfterHeader: null | string): LunoraError => {
-    const hint = retryAfterHeaderMs(retryAfterHeader);
+const unparseableResponseError = (status: number, statusText: string, responseHeaders: Headers): LunoraError => {
+    const hint = retryAfterHeaderMs(responseHeaders.get("retry-after"));
     const data = hint === undefined ? undefined : { retryAfterMs: hint };
     const message = `LunoraClient: response carried no error envelope (status ${status.toString()}${statusText ? ` ${statusText}` : ""})`;
+    // Headers are attached after construction: the published `@lunora/errors` ignores a `headers` option.
+    const error =
+        status < 400 || status >= 500 || status === 408
+            ? new TransportError(message, data)
+            : new LunoraError(UNPARSEABLE_STATUS_CODES[status] ?? "BAD_REQUEST", message, { data });
 
-    if (status < 400 || status >= 500 || status === 408) {
-        return new TransportError(message, data);
-    }
-
-    return new LunoraError(UNPARSEABLE_STATUS_CODES[status] ?? "BAD_REQUEST", message, { data });
+    return withResponseHeaders(error, responseHeaders);
 };
 
 /**
  * Backoff for a retryable failure that named no time to come back: exponential
- * in `attempt` from {@link BASE_REPLAY_RETRY_DELAY_MS}, capped at
- * {@link MAX_REPLAY_RETRY_DELAY_MS}, then jittered across the top half of that
+ * in `attempt` from {@link REPLAY_BASE_DELAY_MS}, capped at
+ * {@link REPLAY_MAX_DELAY_MS}, then jittered across the top half of that
  * ceiling so a fleet of clients refused by ONE limiter does not re-converge on
  * the same instant and refuse itself again.
  *
@@ -122,23 +129,26 @@ const unparseableResponseError = (status: number, statusText: string, retryAfter
  * global to pin a delay pins it for everything else in the file too.
  */
 const defaultReplayRetryDelayMs = (attempt: number, random: () => number = Math.random): number => {
-    const ceiling = Math.min(BASE_REPLAY_RETRY_DELAY_MS * 2 ** Math.max(attempt - 1, 0), MAX_REPLAY_RETRY_DELAY_MS);
+    const ceiling = Math.min(REPLAY_BASE_DELAY_MS * 2 ** Math.max(attempt - 1, 0), REPLAY_MAX_DELAY_MS);
 
     return Math.round(ceiling * (0.5 + random() * 0.5));
 };
 
 /**
- * Whether a transient failure came back FROM a server or an edge — a retryable
- * code, or a status `unparseableResponseError` had to classify itself —
- * rather than from a `fetch` that never landed.
+ * Whether a transient failure needs a retry of its own scheduled: a retryable
+ * code, a status `unparseableResponseError` had to classify itself, or a
+ * codeless failure — a `fetch` that rejected before any reply.
  *
- * The two need different treatment: the socket stays open through a 429 or a
- * 503, so nothing else will ever schedule the flush again, whereas a `fetch`
- * that never landed means the device is offline and the reconnect that follows
- * flushes the queue anyway.
+ * The socket is independent of the HTTP path: it stays open through a 429, a 503,
+ * and equally through a `fetch` that never landed (an unreachable HTTP origin, a
+ * dropped request), so nothing else will ever flush the queue again. A device
+ * that is truly offline costs only a bounded, backed-off probe per interval.
  */
-const isAnsweredReplayFailure = (error: unknown): boolean =>
-    error instanceof TransportError || TRANSIENT_REPLAY_ERROR_CODES.has((error as { code?: string } | null | undefined)?.code ?? "");
+const needsReplayRetry = (error: unknown): boolean => {
+    const code = (error as { code?: string } | null | undefined)?.code;
+
+    return error instanceof TransportError || code === undefined || TRANSIENT_REPLAY_ERROR_CODES.has(code);
+};
 
 /**
  * How long a transient replay should wait before trying again, given how many
@@ -146,22 +156,22 @@ const isAnsweredReplayFailure = (error: unknown): boolean =>
  *
  * A hint the server sent wins: the `data.retryAfterMs` the error carries — its
  * own, or a `Retry-After` header folded on via `retryAfterData` — clamped
- * to {@link MAX_REPLAY_RETRY_DELAY_MS}. Without one, a failure that was still
- * ANSWERED gets {@link defaultReplayRetryDelayMs}, because a hintless 429 or 503
- * arrives over a socket that stays open: with nothing scheduled the queued write
- * waits for a reconnect that a healthy connection never makes.
+ * to {@link REPLAY_MAX_DELAY_MS}. Without one, a transient failure gets
+ * {@link defaultReplayRetryDelayMs}, because it arrives over a socket that stays
+ * open: with nothing scheduled the queued write waits for a reconnect that a
+ * healthy connection never makes.
  *
- * `undefined` for a failure that never reached a server, which is the one case
- * the reconnect already covers.
+ * `undefined` for a coded verdict that is not transient, which settles the write
+ * instead of retrying it.
  */
 const replayRetryDelayMs = (error: unknown, attempt: number, random?: () => number): number | undefined => {
     const hint = getRetryAfterMs(error);
 
     if (hint !== undefined && hint > 0) {
-        return Math.min(hint, MAX_REPLAY_RETRY_DELAY_MS);
+        return Math.min(hint, REPLAY_MAX_DELAY_MS);
     }
 
-    return isAnsweredReplayFailure(error) ? defaultReplayRetryDelayMs(attempt, random) : undefined;
+    return needsReplayRetry(error) ? defaultReplayRetryDelayMs(attempt, random) : undefined;
 };
 
 /**
@@ -182,31 +192,6 @@ const MAX_BATCH_BODY_BYTES = 1_048_576 - 65_536;
  * the authoritative bound either way.
  */
 const utf8ByteLength = (text: string): number => (typeof TextEncoder === "undefined" ? text.length : new TextEncoder().encode(text).length);
-
-/** Errors {@link undecodableResultError} minted — recognised by identity, never by a code a peer could also send. */
-const undecodableResults = new WeakSet<Error>();
-
-/**
- * The error a SUCCESSFUL reply is reported as when its `result` does not
- * decode. The write it answers has committed — the server said so — so a
- * replay must settle it rather than classify it: left codeless it read as a
- * transport failure and replayed forever (the same reply every time), and
- * thrown out of a batch demux it abandoned every later slot for the session.
- */
-const undecodableResultError = (cause: unknown): LunoraError => {
-    const error = new LunoraError(
-        "WIRE_DECODE_FAILED",
-        `LunoraClient: the call succeeded but its result could not be decoded (a mutation has still committed) — ${cause instanceof Error ? cause.message : String(cause)}`,
-        { cause },
-    );
-
-    undecodableResults.add(error);
-
-    return error;
-};
-
-/** Whether `error` reports a committed reply whose result did not decode (see {@link undecodableResultError}). */
-const isUndecodableResult = (error: unknown): error is LunoraError => error instanceof Error && undecodableResults.has(error);
 
 /** A batch's answered slots keyed by slot index. A body that is not a readable envelope is left out, because the server never answered that slot (§4.3). */
 export const indexReplaySlots = (results: { body?: unknown; id?: number }[]): Map<number, RpcEnvelopeBody> => {
@@ -235,31 +220,43 @@ export type ReplaySlotVerdict =
     | { commitCursor: number | undefined; kind: "committed"; value: unknown }
     | { kind: "unanswered" };
 
-export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined): ReplaySlotVerdict => {
+/**
+ * `responseHeaders` are the headers of the reply the slot came in. Every verdict that
+ * is an error carries them, as a single call's error would (see `withResponseHeaders`).
+ */
+export const replaySlotVerdict = (inner: RpcEnvelopeBody | undefined, responseHeaders: Headers): ReplaySlotVerdict => {
     if (inner === undefined) {
         return { kind: "unanswered" };
     }
 
     if ("error" in inner) {
-        return { error: slotError(inner), kind: "errored" };
+        return { error: withResponseHeaders(slotError(inner), responseHeaders), kind: "errored" };
     }
 
     try {
         return { commitCursor: inner.commitCursor, kind: "committed", value: decodeWire(inner.result) };
     } catch (error: unknown) {
-        return { commitCursor: inner.commitCursor, error: undecodableResultError(error), kind: "undecodable" };
+        return { commitCursor: inner.commitCursor, error: withResponseHeaders(undecodableResultError(error), responseHeaders), kind: "undecodable" };
     }
 };
 
 export {
     defaultReplayRetryDelayMs,
     isTransientReplayFailure,
-    isUndecodableResult,
     MAX_BATCH_BODY_BYTES,
+    REPLAY_BASE_DELAY_MS,
+    REPLAY_MAX_DELAY_MS,
     replayRetryDelayMs,
-    undecodableResultError,
     unparseableResponseError,
     utf8ByteLength,
 };
 
-export { errorEnvelopeOf, retryAfterData, retryAfterHeaderMs, type RpcEnvelopeBody, unreadableSlotError } from "./wire-errors";
+export {
+    errorEnvelopeOf,
+    isUndecodableResult,
+    retryAfterData,
+    retryAfterHeaderMs,
+    type RpcEnvelopeBody,
+    undecodableResultError,
+    unreadableSlotError,
+} from "./wire-errors";

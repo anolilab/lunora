@@ -9,21 +9,23 @@
  */
 export type { ErrorLocation, LunoraErrorCodeInput, LunoraErrorOptions } from "./base";
 export { LunoraError } from "./base";
-export type { CloudflarePlatformError, ErrorCatalogEntry, ErrorHint, LunoraErrorCode, Solution, SolutionRule } from "./catalog";
+export type { ErrorCatalogEntry, LunoraErrorCode } from "./catalog";
+export { ERROR_CATALOG, getCatalogEntry, isInternalCode } from "./catalog";
+export { HTTP_STREAM_NO_BODY_HINT, OFFLINE_NOT_QUEUED_HINT } from "./client-hints";
+export type { LunoraErrorLike } from "./guards";
+export { isLunoraError } from "./guards";
+export type { CloudflarePlatformError, ErrorHint, Solution, SolutionRule } from "./hints";
 export {
     CLOUDFLARE_PLATFORM_ERRORS,
-    ERROR_CATALOG,
+    ERROR_HINTS,
     findCloudflarePlatformSolution,
     findIssueSolution,
     findSolutionByMessage,
     flattenHint,
-    getCatalogEntry,
-    isInternalCode,
+    getCatalogHint,
     MESSAGE_SOLUTIONS,
     resolveHint,
-} from "./catalog";
-export type { LunoraErrorLike } from "./guards";
-export { isLunoraError } from "./guards";
+} from "./hints";
 export { invariant, raise, unreachable } from "./invariant";
 export type { ErrorBody, ToErrorBodyOptions, ToErrorBodyResult } from "./to-error-body";
 export { toErrorBody } from "./to-error-body";

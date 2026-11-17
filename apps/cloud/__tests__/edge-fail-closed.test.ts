@@ -144,7 +144,7 @@ const tables = (row: EdgeRuleRow) => {
 const store = (data: Record<string, unknown[]>, spies: Partial<ControlPlaneDatabase>, edgeRuleRead?: () => unknown) => {
     return {
         ...fakeControlPlaneDb(data, spies),
-        get: (id: string, table?: string) =>
+        get: (table: string, id: string) =>
             Promise.resolve(
                 table === "edgeRules" && edgeRuleRead ? edgeRuleRead() : ((data[table ?? ""] ?? []).find((row) => (row as { _id: string })._id === id) ?? null),
             ),
@@ -167,8 +167,8 @@ describe("reconciler fails closed", () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
 
         await expect(runEdgeRuleSweep(store(tables(edgeRow()), { patch }), sweepOptions(zone.fetch))).resolves.toStrictEqual({ failed: 1 });
-        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ attempts: 1, status: "failed" }), "edgeRules");
-        expect(patch).not.toHaveBeenCalledWith("edge1", expect.objectContaining({ applied: expect.anything() }), "edgeRules");
+        expect(patch).toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ attempts: 1, status: "failed" }));
+        expect(patch).not.toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ applied: expect.anything() }));
     });
 
     it("keeps an applied rule recorded as applied when its removal could not be confirmed", async () => {
@@ -181,8 +181,8 @@ describe("reconciler fails closed", () => {
             sweepOptions(zone.fetch),
         );
 
-        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ status: "failed" }), "edgeRules");
-        expect(patch).not.toHaveBeenCalledWith("edge1", expect.objectContaining({ applied: false }), "edgeRules");
+        expect(patch).toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ status: "failed" }));
+        expect(patch).not.toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ applied: false }));
     });
 
     it("does not let an in-flight apply overwrite an intent recorded while it ran", async () => {
@@ -209,7 +209,7 @@ describe("reconciler fails closed", () => {
             sweepOptions(zone.fetch),
         );
 
-        expect(patch).toHaveBeenCalledWith("edge1", { applied: true, appliedAt: NOW, cloudflareRuleId: "r1", targets: [SHOP] }, "edgeRules");
-        expect(patch).not.toHaveBeenCalledWith("edge1", expect.objectContaining({ status: expect.anything() }), "edgeRules");
+        expect(patch).toHaveBeenCalledWith("edgeRules", "edge1", { applied: true, appliedAt: NOW, cloudflareRuleId: "r1", targets: [SHOP] });
+        expect(patch).not.toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ status: expect.anything() }));
     });
 });

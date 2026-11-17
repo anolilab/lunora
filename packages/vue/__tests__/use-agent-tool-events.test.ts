@@ -70,6 +70,27 @@ describe(useAgentToolEvents, () => {
         scope.stop();
     });
 
+    it("lists a pending secret request (awaiting-secret) until the server retires its marker", () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const tool = scope.run(() => fake.provide((): UseAgentToolEventsResult => useAgentToolEvents({ api: buildApi(), threadKey: "t1" })))!;
+
+        fake.push(MESSAGES_REF, { key: "t1" }, [
+            { content: 'Awaiting a secret for tool "requestKey".', role: "tool", seq: 4, status: "awaiting_secret", toolCallId: "c3", toolName: "requestKey" },
+        ]);
+
+        expect(tool.events.value).toStrictEqual([{ seq: 4, toolCallId: "c3", toolName: "requestKey", type: "awaiting-secret" }]);
+
+        // Supply and decline both delete the marker, so the next history push drops it.
+        fake.push(MESSAGES_REF, { key: "t1" }, []);
+
+        expect(tool.events.value).toStrictEqual([]);
+
+        scope.stop();
+    });
+
     it("forwards the history limit to agents:agentMessages", () => {
         expect.hasAssertions();
 

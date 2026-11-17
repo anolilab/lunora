@@ -6,21 +6,56 @@
  * behind the same interface for production without touching call sites.
  */
 import type { Customer, PaymentSession, ProviderId, Subscription, UsageEvent } from "./types";
+import { usageFirstDueAt } from "./usage-due";
 
 const customerKey = (provider: ProviderId, referenceId: string): string => `${provider}:${referenceId}`;
 
 const recordKey = (provider: ProviderId, id: string): string => `${provider}:${id}`;
 
+/** Applies a write to a revisioned row, returning whether it applied. An unguarded write always applies. */
+const applyRevisioned = <T extends { readonly revision?: number }>(rows: Map<string, T>, key: string, record: T, guard: RevisionGuard | undefined): boolean => {
+    const current = rows.get(key)?.revision;
+
+    if (guard !== undefined && current !== guard.ifRevision) {
+        return false;
+    }
+
+    rows.set(key, { ...record, revision: (current ?? 0) + 1 });
+
+    return true;
+};
+
 export interface PaymentStore {
+    /**
+     * Moves `referenceId`'s counter from `ifRevision` to the next value, in one atomic step, and says whether it did.
+     * `false` means another writer moved it first, and nothing changed. A reference with no counter yet is at `0`.
+     */
+    bumpReferenceRevision: (referenceId: string, ifRevision: number) => Promise<boolean>;
+
+    /**
+     * Push a usage event's next forward retry out to `retryAt` (epoch ms), after a retry failed.
+     * See `UsageEvent.reportRetryAt`.
+     */
+    deferUsageReport: (provider: ProviderId, idempotencyKey: string, retryAt: number) => Promise<void>;
     getCustomerByReference: (provider: ProviderId, referenceId: string) => Promise<Customer | undefined>;
     getPaymentSession: (provider: ProviderId, id: string) => Promise<PaymentSession | undefined>;
+
     /** A payment session for `subscriptionId` that names an owner (non-blank `referenceId`), if any. */
     getPaymentSessionBySubscription: (provider: ProviderId, subscriptionId: string) => Promise<PaymentSession | undefined>;
+
+    /**
+     * The counter that orders access-granting writes for `referenceId`, `0` before the first. It exists because the store
+     * has no write that spans two subscription rows: `singleSubscriptionPerReference` has to read a reference's other
+     * rows and then write one, and two writers can both pass that read. See {@link PaymentStore.bumpReferenceRevision}.
+     */
+    getReferenceRevision: (referenceId: string) => Promise<number>;
+
     getSubscription: (provider: ProviderId, id: string) => Promise<Subscription | undefined>;
+
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
 
     /**
-     * Usage events that still owe an upstream forward, oldest first, at most `limit`.
+     * Usage events that still owe an upstream forward and are due at `now`, earliest-due first (then oldest), at most `limit`.
      *
      * "Owes a forward" is narrower than `reportedToProvider === false`: only an
      * ADDITIVE event with a positive `quantity` qualifies. A `"set"` event's
@@ -28,12 +63,16 @@ export interface PaymentStore {
      * recorded and is not recoverable afterwards, and a non-positive quantity was
      * never sent, so neither is a retry candidate — returning them would make the
      * sweep re-send the same rows forever (or double-count on an additive meter).
+     * An event whose `reportRetryAt` is later than `now` is skipped, so failing rows
+     * cannot fill every batch, and a store with an index on that column should not
+     * read them at all: the backlog of deferred rows grows while a reference has no
+     * provider customer, and the sweep runs on every reconcile tick.
      *
      * Read by `reconcile` to retry a forward the provider rejected transiently;
      * without it a single 5xx loses that metered unit upstream for good, which for
      * a provider that owns entitlements under-bills and over-entitles the customer.
      */
-    listUnreportedUsage: (provider: ProviderId, limit: number) => Promise<UsageEvent[]>;
+    listUnreportedUsage: (provider: ProviderId, limit: number, now: number) => Promise<UsageEvent[]>;
 
     /**
      * Claims a provider event id for processing. Resolves `true` the first time an event is seen
@@ -85,8 +124,18 @@ export interface PaymentStore {
     /** Period usage totals for many features in one read — the batch form of {@link PaymentStore.sumUsage}. */
     sumUsageByFeature: (referenceId: string, featureIds: ReadonlyArray<string>, since: number) => Promise<ReadonlyMap<string, number>>;
     upsertCustomer: (customer: Customer) => Promise<void>;
-    upsertPaymentSession: (session: PaymentSession) => Promise<void>;
-    upsertSubscription: (subscription: Subscription) => Promise<void>;
+
+    /**
+     * Writes a session. With a `guard` the write applies only while the stored revision still equals
+     * `guard.ifRevision`; the result says whether it did. Without one it always applies.
+     */
+    upsertPaymentSession: (session: PaymentSession, guard?: RevisionGuard) => Promise<boolean>;
+    upsertSubscription: (subscription: Subscription, guard?: RevisionGuard) => Promise<boolean>;
+}
+
+/** The revision a guarded write expects to find. `undefined` matches a row with no revision yet, which includes a row that does not exist. */
+export interface RevisionGuard {
+    readonly ifRevision: number | undefined;
 }
 
 /**
@@ -141,6 +190,8 @@ export class MemoryPaymentStore implements PaymentStore {
 
     private readonly processedEvents = new Set<string>();
 
+    private readonly referenceRevisions = new Map<string, number>();
+
     private readonly sessions = new Map<string, PaymentSession>();
 
     private readonly subscriptions = new Map<string, Subscription>();
@@ -171,12 +222,29 @@ export class MemoryPaymentStore implements PaymentStore {
         return Promise.resolve([...this.subscriptions.values()].filter((subscription) => subscription.referenceId === referenceId));
     }
 
-    public listUnreportedUsage(provider: ProviderId, limit: number): Promise<UsageEvent[]> {
+    public listUnreportedUsage(provider: ProviderId, limit: number, now: number): Promise<UsageEvent[]> {
+        const dueAt = (event: UsageEvent): number => event.reportRetryAt ?? usageFirstDueAt(event);
         const pending = [...this.usageEvents.values()]
-            .filter((event) => event.provider === provider && !event.reportedToProvider && event.mode !== "set" && event.quantity > 0)
-            .toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
+            .filter((event) => event.provider === provider && !event.reportedToProvider && event.mode !== "set" && event.quantity > 0 && dueAt(event) <= now)
+            .toSorted((a, b) => dueAt(a) - dueAt(b) || a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
 
         return Promise.resolve(pending.slice(0, Math.max(0, limit)));
+    }
+
+    public getReferenceRevision(referenceId: string): Promise<number> {
+        return Promise.resolve(this.referenceRevisions.get(referenceId) ?? 0);
+    }
+
+    public bumpReferenceRevision(referenceId: string, ifRevision: number): Promise<boolean> {
+        const current = this.referenceRevisions.get(referenceId) ?? 0;
+
+        if (current !== ifRevision) {
+            return Promise.resolve(false);
+        }
+
+        this.referenceRevisions.set(referenceId, current + 1);
+
+        return Promise.resolve(true);
     }
 
     public markEventProcessed(provider: ProviderId, eventId: string, _type: string): Promise<boolean> {
@@ -193,6 +261,17 @@ export class MemoryPaymentStore implements PaymentStore {
 
     public releaseEvent(provider: ProviderId, eventId: string): Promise<void> {
         this.processedEvents.delete(recordKey(provider, eventId));
+
+        return Promise.resolve();
+    }
+
+    public deferUsageReport(provider: ProviderId, idempotencyKey: string, retryAt: number): Promise<void> {
+        const key = recordKey(provider, idempotencyKey);
+        const existing = this.usageEvents.get(key);
+
+        if (existing) {
+            this.usageEvents.set(key, { ...existing, reportRetryAt: retryAt });
+        }
 
         return Promise.resolve();
     }
@@ -250,15 +329,11 @@ export class MemoryPaymentStore implements PaymentStore {
         return Promise.resolve();
     }
 
-    public upsertPaymentSession(session: PaymentSession): Promise<void> {
-        this.sessions.set(recordKey(session.provider, session.id), session);
-
-        return Promise.resolve();
+    public upsertPaymentSession(session: PaymentSession, guard?: RevisionGuard): Promise<boolean> {
+        return Promise.resolve(applyRevisioned(this.sessions, recordKey(session.provider, session.id), session, guard));
     }
 
-    public upsertSubscription(subscription: Subscription): Promise<void> {
-        this.subscriptions.set(recordKey(subscription.provider, subscription.id), subscription);
-
-        return Promise.resolve();
+    public upsertSubscription(subscription: Subscription, guard?: RevisionGuard): Promise<boolean> {
+        return Promise.resolve(applyRevisioned(this.subscriptions, recordKey(subscription.provider, subscription.id), subscription, guard));
     }
 }

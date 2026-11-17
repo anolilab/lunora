@@ -437,14 +437,14 @@ export class BoxSessionDO extends DurableObject<BoxSessionEnvironment> implement
 
             // What this push withheld, so the suspension sweep can tell when a
             // suspension or recovery has not reached the box yet.
-            await database.patch(boxId, { routesStale: null, routesWithheld: withheld }, "boxes");
+            await database.patch("boxes", boxId, { routesStale: null, routesWithheld: withheld });
 
             return true;
         } catch (error) {
             // Not done: mark the box so the suspension sweep pushes it again,
             // whatever its last record says. Best-effort — if even this write
             // fails, the record is unchanged and the sweep still compares it.
-            await database.patch(boxId, { routesStale: true }, "boxes").catch(() => undefined);
+            await database.patch("boxes", boxId, { routesStale: true }).catch(() => undefined);
 
             throw error;
         }

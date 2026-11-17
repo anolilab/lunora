@@ -58,6 +58,7 @@ api_surface:
     # not this one, so the job that would have caught it was skipped and the
     # required check stayed green.
     - "scripts/check-dist-production.js"
+    - "packages/studio/scripts/known-bundled-jsx-dev.mjs"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
     - "pnpm-lock.yaml"
@@ -74,6 +75,8 @@ frontend_lintable:
     - "**/*.{css,html}"
     - "**/*.{md,mdx}"
     - "**/tsconfig*.json"
+    # The oxlint job reads this config, so its rules changing must run that job.
+    - ".oxlintrc.json"
     - "**/package.json"
     # A project.json decides whether eslint runs a project at all — an nx-shaped
     # target silently turns that gate into a no-op — so an edit to one must reach the
@@ -107,6 +110,8 @@ dependency_manifests:
     - "pnpm-workspace.yaml"
     - "scripts/check-catalog-drift.js"
     - "scripts/check-peer-catalog-refs.js"
+    # Both scripts above read the workspace globs and catalogs through this parser.
+    - "scripts/workspace-config.js"
     # The same job also holds the PR-title/commitlint type-list comparison, so its
     # three inputs gate it. Without them a PR that edits only the workflow's `types:`
     # block matches `yaml_lintable` (yamllint still runs) and nothing that would
@@ -221,6 +226,9 @@ e2e:
     - "tests/e2e/**"
     - "packages/**"
     - "shared/**"
+    # The saas suite materializes this template with this script.
+    - "templates/saas/**"
+    - "scripts/materialize-template.mjs"
     - "pnpm-lock.yaml"
     - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
@@ -261,20 +269,45 @@ registry_items:
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
-# The auth-ui → registry/auth-ui-* copy-sync check.
+# The auth-ui → registry/auth-ui-* copy-sync check, and the ratelimit copies (including the one the CLI overlay embeds).
 registry_sync:
     - "packages/auth-ui/**"
     - "registry/**"
     - "scripts/sync-auth-ui-registry.mjs"
+    - "scripts/sync-ratelimit-copies.mjs"
+    - "templates/*/lunora/ratelimit/**"
+    - "examples/*/lunora/ratelimit/**"
+    - "packages/cli/src/commands/init/overlay/apply.ts"
+    # Root manifest: `lint:registry:sync` is defined there, so editing the gate runs it.
+    - "package.json"
     - ".github/workflows/lint.yml"
     - ".github/file-filters.yml"
 
 # Worker size budget. Separate from `packages` per the self-listing rule at the top.
 worker_size:
     - "scripts/check-worker-size.js"
+    - "scripts/materialize-template.mjs"
     - "worker-size.json"
     - ".github/workflows/test.yml"
     # This file too, or the hole reopens one level up.
+    - ".github/file-filters.yml"
+
+# Browser bundle budget (`@lunora/client` + one adapter). Self-lists like `worker_size`.
+client_size:
+    - "scripts/check-client-size.js"
+    - "client-size.json"
+    # The gate bundles third-party code (TanStack Query, the adapters' framework
+    # runtimes) whose bump touches nothing under `packages/**`.
+    - "pnpm-lock.yaml"
+    - "pnpm-workspace.yaml"
+    - ".github/workflows/test.yml"
+    - ".github/file-filters.yml"
+
+# Studio first-load budget. Self-lists like `worker_size`.
+studio_size:
+    - "scripts/check-studio-size.js"
+    - "studio-size.json"
+    - ".github/workflows/test.yml"
     - ".github/file-filters.yml"
 
 # Worker startup budget (Cloudflare's 1 s startup-CPU limit). Self-lists like `worker_size`.

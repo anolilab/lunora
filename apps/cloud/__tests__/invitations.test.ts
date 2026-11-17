@@ -19,7 +19,7 @@ const makeCtx = (
 
             return Promise.resolve(`${table}_new`);
         },
-        patch: (id: string, patch: Row) => {
+        patch: (_table: string, id: string, patch: Row) => {
             patched.push({ id, patch });
 
             return Promise.resolve();

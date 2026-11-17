@@ -1,10 +1,10 @@
-import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
+import useStudioClient from "../../hooks/use-studio-client";
 import useStudioFeatures from "../../hooks/use-studio-features";
 import { useT } from "../../i18n/i18n-context";
 import { fireAndForget } from "../../lib/internal";
@@ -76,7 +76,7 @@ const upsertCard = (current: BindingGroup[], card: BindingGroup): BindingGroup[]
  * best-effort — a failing list just omits its card rather than blanking the page.
  */
 const BindingsOverview = (): null | ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const features = useStudioFeatures();
     const t = useT();
 

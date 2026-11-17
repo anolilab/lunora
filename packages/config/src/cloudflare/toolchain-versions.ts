@@ -14,9 +14,9 @@
  * Bump it together with the `cloudflare` / `vite` catalogs in `pnpm-workspace.yaml`.
  */
 const CLOUDFLARE_TOOLCHAIN_VERSIONS: Readonly<Record<"@cloudflare/vite-plugin" | "@cloudflare/workers-types" | "wrangler", string>> = {
-    "@cloudflare/vite-plugin": "^1.62.5",
+    "@cloudflare/vite-plugin": "^1.63.1",
     "@cloudflare/workers-types": "^5.20261004.1",
-    wrangler: "^4.147.0",
+    wrangler: "^4.156.1",
 };
 
 export default CLOUDFLARE_TOOLCHAIN_VERSIONS;

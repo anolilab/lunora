@@ -9,7 +9,7 @@ a mutation that broadcasts deltas, a React UI that reacts to them, and the
 messages table sharded by `channelId` so it scales past one Durable Object.
 
 You'll need the prerequisites from [Getting started](/docs/getting-started):
-Node 22+, pnpm 10+, and a Cloudflare account if you want to deploy.
+Node `^22.15.0` or `>=24.11.0`, pnpm 10.32.1 or later, and a Cloudflare account if you want to deploy.
 
 <Steps>
 
@@ -32,7 +32,7 @@ and a `src/server.ts` that builds the worker from the generated `defineApp()`
 ## 2. Model the data
 
 Replace `lunora/schema.ts` with two tables: `channels` (global, so every shard
-sees them) and `messages` (sharded by channel, so each room gets its own DO):
+sees them) and `messages` (sharded by channel, so each room gets its own Durable Object (DO)):
 
 ```ts
 import { defineSchema, defineTable, v } from "lunorash/server";

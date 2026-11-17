@@ -23,6 +23,14 @@ const TEST_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2
 const PAID_URL = "https://x402-smoke.test/paid/report";
 
 /**
+ * A real secp256k1 signature inside workerd. Under load on a shared machine it
+ * can outrun vitest's 5 s default, and the timed-out test's request then keeps
+ * running into the next test, which counts its facilitator calls. The bound is
+ * generous so each signing test finishes inside its own body.
+ */
+const SIGNING_TIMEOUT_MS = 30_000;
+
+/**
  * The facilitator calls past initialisation. The test worker memoises its
  * `withX402` middleware for the isolate's life, so `/supported` is fetched only
  * by whichever test reaches it first.
@@ -48,47 +56,55 @@ describe("@lunora/x402 pay ↔ charge round trip (workerd)", () => {
         vi.unstubAllGlobals();
     });
 
-    it("pays a 402 with a real viem signature and receives the settled resource", async () => {
-        expect.hasAssertions();
+    it(
+        "pays a 402 with a real viem signature and receives the settled resource",
+        async () => {
+            expect.hasAssertions();
 
-        const facilitator = stubFacilitator({ settles: true });
-        const seen: Request[] = [];
-        const pay = await createX402Pay(payConfig({ maxPerCall: "$0.10" }), { fetch: toWorker(seen), getSecret: () => TEST_KEY });
+            const facilitator = stubFacilitator({ settles: true });
+            const seen: Request[] = [];
+            const pay = await createX402Pay(payConfig({ maxPerCall: "$0.10" }), { fetch: toWorker(seen), getSecret: () => TEST_KEY });
 
-        const response = await pay.fetch(PAID_URL);
+            const response = await pay.fetch(PAID_URL);
 
-        expect(response.status).toBe(200);
-        await expect(response.text()).resolves.toBe("paid-secret");
-        expect(response.headers.get("payment-response")).not.toBeNull();
-        expect(response.headers.get("cache-control")).toBe("private");
+            expect(response.status).toBe(200);
+            await expect(response.text()).resolves.toBe("paid-secret");
+            expect(response.headers.get("payment-response")).not.toBeNull();
+            expect(response.headers.get("cache-control")).toBe("private");
 
-        // Challenge, then one signed retry.
-        expect(seen).toHaveLength(2);
-        expect(seen[0]!.headers.get("payment-signature")).toBeNull();
-        expect(seen[1]!.headers.get("payment-signature")).not.toBeNull();
+            // Challenge, then one signed retry.
+            expect(seen).toHaveLength(2);
+            expect(seen[0]!.headers.get("payment-signature")).toBeNull();
+            expect(seen[1]!.headers.get("payment-signature")).not.toBeNull();
 
-        // Settle-first: the facilitator settled before the handler produced the body.
-        expect(paymentCalls(facilitator)).toStrictEqual(["verify", "settle"]);
+            // Settle-first: the facilitator settled before the handler produced the body.
+            expect(paymentCalls(facilitator)).toStrictEqual(["verify", "settle"]);
 
-        // The facilitator got a genuine 65-byte secp256k1 signature from the test account.
-        const verifyBody = facilitator.verifyBodies[0] ?? "";
+            // The facilitator got a genuine 65-byte secp256k1 signature from the test account.
+            const verifyBody = facilitator.verifyBodies[0] ?? "";
 
-        expect(verifyBody).toMatch(/"signature":"0x[\da-f]{130}"/iu);
-        expect(verifyBody.toLowerCase()).toContain(PAYER.toLowerCase());
-    });
+            expect(verifyBody).toMatch(/"signature":"0x[\da-f]{130}"/iu);
+            expect(verifyBody.toLowerCase()).toContain(PAYER.toLowerCase());
+        },
+        SIGNING_TIMEOUT_MS,
+    );
 
-    it("withholds the resource when settlement fails after a valid signature", async () => {
-        expect.hasAssertions();
+    it(
+        "withholds the resource when settlement fails after a valid signature",
+        async () => {
+            expect.hasAssertions();
 
-        const facilitator = stubFacilitator({ settles: false });
-        const pay = await createX402Pay(payConfig({ maxPerCall: "$0.10" }), { fetch: toWorker([]), getSecret: () => TEST_KEY });
+            const facilitator = stubFacilitator({ settles: false });
+            const pay = await createX402Pay(payConfig({ maxPerCall: "$0.10" }), { fetch: toWorker([]), getSecret: () => TEST_KEY });
 
-        const response = await pay.fetch(PAID_URL);
+            const response = await pay.fetch(PAID_URL);
 
-        expect(response.status).toBe(402);
-        await expect(response.text()).resolves.not.toContain("paid-secret");
-        expect(paymentCalls(facilitator)).toStrictEqual(["verify", "settle"]);
-    });
+            expect(response.status).toBe(402);
+            await expect(response.text()).resolves.not.toContain("paid-secret");
+            expect(paymentCalls(facilitator)).toStrictEqual(["verify", "settle"]);
+        },
+        SIGNING_TIMEOUT_MS,
+    );
 
     it("refuses to sign a price above maxPerCall: no signed retry reaches the worker", async () => {
         expect.hasAssertions();
@@ -105,44 +121,52 @@ describe("@lunora/x402 pay ↔ charge round trip (workerd)", () => {
         expect(facilitator.calls).not.toContain("settle");
     });
 
-    it("lazyX402Pay builds the rail once and keeps a per-run cap across calls", async () => {
-        expect.hasAssertions();
+    it(
+        "lazyX402Pay builds the rail once and keeps a per-run cap across calls",
+        async () => {
+            expect.hasAssertions();
 
-        stubFacilitator({ settles: true });
+            stubFacilitator({ settles: true });
 
-        const seen: Request[] = [];
-        const getSecret = vi.fn<(name: string) => string>(() => TEST_KEY);
-        // $0.015 per run admits one $0.01 payment, not two.
-        const rail = lazyX402Pay(payConfig({ maxPerRun: "$0.015" }), { fetch: toWorker(seen), getSecret });
+            const seen: Request[] = [];
+            const getSecret = vi.fn<(name: string) => string>(() => TEST_KEY);
+            // $0.015 per run admits one $0.01 payment, not two.
+            const rail = lazyX402Pay(payConfig({ maxPerRun: "$0.015" }), { fetch: toWorker(seen), getSecret });
 
-        const first = await rail.fetch(PAID_URL);
+            const first = await rail.fetch(PAID_URL);
 
-        expect(first.status).toBe(200);
+            expect(first.status).toBe(200);
 
-        await expect(rail.fetch(PAID_URL)).rejects.toThrow(/per-run cap/u);
-        expect(getSecret).toHaveBeenCalledTimes(1);
-        // Two challenges, one signed retry: the second payment was never signed.
-        expect(seen.filter((request) => request.headers.get("payment-signature") !== null)).toHaveLength(1);
-    });
+            await expect(rail.fetch(PAID_URL)).rejects.toThrow(/per-run cap/u);
+            expect(getSecret).toHaveBeenCalledTimes(1);
+            // Two challenges, one signed retry: the second payment was never signed.
+            expect(seen.filter((request) => request.headers.get("payment-signature") !== null)).toHaveLength(1);
+        },
+        SIGNING_TIMEOUT_MS,
+    );
 
-    it("sends a request that already carries a payment as-is, reserving nothing", async () => {
-        expect.hasAssertions();
+    it(
+        "sends a request that already carries a payment as-is, reserving nothing",
+        async () => {
+            expect.hasAssertions();
 
-        stubFacilitator({ settles: true });
+            stubFacilitator({ settles: true });
 
-        const seen: Request[] = [];
-        // The cap admits exactly one $0.01 payment.
-        const rail = lazyX402Pay(payConfig({ maxPerRun: "$0.01" }), { fetch: toWorker(seen), getSecret: () => TEST_KEY });
+            const seen: Request[] = [];
+            // The cap admits exactly one $0.01 payment.
+            const rail = lazyX402Pay(payConfig({ maxPerRun: "$0.01" }), { fetch: toWorker(seen), getSecret: () => TEST_KEY });
 
-        // A stale, caller-made payment: the worker answers 402 and the rail hands it back.
-        const stale = await rail.fetch(PAID_URL, { headers: { "PAYMENT-SIGNATURE": "stale" } });
+            // A stale, caller-made payment: the worker answers 402 and the rail hands it back.
+            const stale = await rail.fetch(PAID_URL, { headers: { "PAYMENT-SIGNATURE": "stale" } });
 
-        expect(stale.status).toBe(402);
+            expect(stale.status).toBe(402);
 
-        // Nothing was reserved for it, so the one payment the cap allows still goes through.
-        const paid = await rail.fetch(PAID_URL);
+            // Nothing was reserved for it, so the one payment the cap allows still goes through.
+            const paid = await rail.fetch(PAID_URL);
 
-        expect(paid.status).toBe(200);
-        expect(seen.map((request) => request.headers.get("payment-signature") === "stale")).toStrictEqual([true, false, false]);
-    });
+            expect(paid.status).toBe(200);
+            expect(seen.map((request) => request.headers.get("payment-signature") === "stale")).toStrictEqual([true, false, false]);
+        },
+        SIGNING_TIMEOUT_MS,
+    );
 });

@@ -7,6 +7,7 @@
 import type { SearchLanguage, SearchStrategy } from "@lunora/search-core";
 import type { Id, Infer, InferValidatorMap, Validator, ValidatorMap } from "@lunora/values";
 
+import type { LiveTopicRef } from "../../../shared/live-stream";
 import type { RestCachePolicy } from "../../../shared/rest-surface";
 import type { MutationStorage, ReadOnlyStorage, Storage, StorageMetadata } from "./storage/context";
 
@@ -562,19 +563,26 @@ interface X402ProcedureConfig {
  * turns this into `Cache-Control` / `Cache-Tag` / `Vary` response headers, and a
  * `cache.tag` is purgeable through `ctx.cache.purge({ tags: [...] })`.
  *
- * This is NOT equivalent to `httpRoute(...).cacheControl()`, which writes whatever
- * value the author passes with no credential downgrade. That is the unguarded
- * escape hatch; this is the guarded surface.
+ * `httpRoute(...).cacheControl()` applies the same credential downgrade to a
+ * free-form value, but is NOT equivalent: it does not fold credential headers
+ * into `Vary`, refuse a non-`GET` exchange, or keep a credentialed response out
+ * of the edge store. This is the guarded surface.
  *
  * Caching a procedure whose result depends on the caller is how a REST cache
  * turns into a data leak, so `scope` is enforced at runtime rather than trusted:
- * a request that carries credentials (an `Authorization` header or any `Cookie`)
- * is ALWAYS answered `private`, even under `scope: "public"` — see
+ * a request that carries credentials (`Authorization`, any `Cookie`,
+ * `Cf-Access-Jwt-Assertion`, an x402 payment header, a Cloudflare Access
+ * identity, or a declared `credentialHeaders` name) is ALWAYS answered
+ * `private`, even under `scope: "public"` — see
  * {@link https://developer.mozilla.org/docs/Web/HTTP/Headers/Cache-Control MDN}
- * for what `private` forbids. So a per-user response can never be stored in a
- * shared/edge cache, and the worst a mis-declared `scope` can cost is a missed
- * cache hit. `scope: "public"` additionally emits `Vary: authorization, cookie`
- * so an intermediary can't hand a stored anonymous variant to a signed-in caller.
+ * for what `private` forbids. So a per-user response is never stored by a
+ * shared cache that honours `Cache-Control` (the runtime's own edge cache skips
+ * credentialed requests outright), and the worst a mis-declared `scope` costs
+ * there is a missed hit; a browser's private cache may still keep it, which is
+ * what `private` allows. `scope: "public"` additionally lists those credential
+ * headers in `Vary`, so an intermediary that honours `Vary` won't hand a stored
+ * anonymous variant to a signed-in caller. A cache that ignores `Vary` or
+ * `Cache-Control` is outside what response headers can govern.
  *
  * Only ever applied to a cacheable exchange: a `GET` (so `query` procedures — a
  * `mutation` / `action` is `POST`-only) that produced a 2xx.
@@ -597,8 +605,17 @@ interface ExposeConfig {
     readonly rest?: boolean;
 }
 
-interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
+interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind, Visibility extends FunctionVisibility = FunctionVisibility> {
     readonly args: A;
+
+    /**
+     * Set on a channel registration, which a socket reaches by its name rather
+     * than a lifecycle moment: a `defineRoom` (`kind: "room"`, with the room's name,
+     * WITHOUT the topic prefix). Codegen collects it into the generated
+     * `LUNORA_ROOMS` map (topic → function path) the DO resolves a room whisper
+     * topic through. Absent on every other registration.
+     */
+    readonly channel?: { readonly kind: "room"; readonly name: string };
 
     /**
      * Set by the `.expose({ rest: true })` builder modifier. Marks the procedure
@@ -606,19 +623,27 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
      * are reachable only via typed RPC (the default).
      */
     readonly expose?: ExposeConfig;
+
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
 
     readonly kind: Kind;
 
     /**
-     * Set on connection-lifecycle hooks (`onConnect` / `onDisconnect`).
-     * Marks the function for the generated `LUNORA_LIFECYCLE_HOOKS` manifest so the
-     * DO dispatches it on socket connect/disconnect rather than via a client RPC.
-     * Absent on ordinary registrations.
+     * Set on connection-lifecycle hooks (`onConnect` / `onDisconnect`), and on the
+     * other four moments. Marks the function for the generated
+     * `LUNORA_LIFECYCLE_HOOKS` manifest so the DO dispatches it from the socket
+     * lifecycle rather than via a client RPC. Absent on ordinary registrations
+     * and on channel registrations (`channel`).
      */
     readonly lifecycle?: LifecycleEventKind;
 
-    readonly visibility?: FunctionVisibility;
+    /**
+     * `"internal"` on a function an `internal*` builder registered: callable
+     * through `ctx.run*` and the scheduler, never from a client. A literal in the
+     * type as well as the value, because a package's declaration file is all
+     * codegen sees of a function it ships, and the client `api` is built from it.
+     */
+    readonly visibility?: Visibility;
 
     /**
      * Set by the `.x402({ price })` builder modifier. Marks the procedure as paid
@@ -628,9 +653,19 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly x402?: X402ProcedureConfig;
 }
 
-type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
-type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
-type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
+type RegisteredQuery<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "query", Visibility>;
+type RegisteredMutation<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "mutation", Visibility>;
+type RegisteredAction<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "action", Visibility>;
+
+/**
+ * An internal registration. `visibility` is REQUIRED here, not optional: dispatch
+ * refuses a client call by the value's own marker, while codegen (for a published
+ * package) can only read the type, so the type may claim "internal" only for a
+ * value that carries it.
+ */
+type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R, "internal"> & { readonly visibility: "internal" };
+type RegisteredInternalMutation<A extends ArgsValidator, R> = RegisteredMutation<A, R, "internal"> & { readonly visibility: "internal" };
+type RegisteredInternalAction<A extends ArgsValidator, R> = RegisteredAction<A, R, "internal"> & { readonly visibility: "internal" };
 
 /**
  * Structural mirror of `@lunora/client`'s `FunctionReference` — the handle the
@@ -721,19 +756,19 @@ interface RunQueryOptions {
 }
 
 interface RunQuery {
-    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R, FunctionVisibility>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
     <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args, options?: RunQueryOptions): Promise<R>;
 }
 
 /** `ctx.runMutation` — overloaded for the same reason as {@link RunQuery}. */
 interface RunMutation {
-    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
 }
 
 /** `ctx.runAction` — overloaded for the same reason as {@link RunQuery}. */
 interface RunAction {
-    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
 }
 
@@ -748,9 +783,11 @@ interface RunAction {
  * a watched read's result changed — see `onQueryChange`. `whisper` is per-TOPIC
  * and decides whether a socket may join or broadcast to one — see `onWhisper`
  * and {@link WhisperEvent}; unlike the other four it is a query, and its return
- * value is the verdict.
+ * value is the verdict. `socket` is per-ROUTE-FRAME and is
+ * a mutation: a `defineWebSocket` registration dispatched when a socket opens,
+ * sends a typed frame, or closes on the route's path.
  */
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 
 /**
  * The event a whisper authorizer (`onWhisper`) receives as its second argument.
@@ -802,7 +839,14 @@ interface LifecycleEvent {
  * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect` /
  * `onShardInit`.
  */
-type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
+type RegisteredLifecycleHook<Moment extends LifecycleEventKind = LifecycleEventKind> = RegisteredFunction<
+    Record<string, never>,
+    void,
+    "mutation",
+    "internal"
+> & {
+    readonly lifecycle: Moment;
+};
 
 /**
  * The event an `onShardInit` hook receives.
@@ -828,7 +872,7 @@ interface ShardInitEvent {
  * can stop early — break out of the loop or check `signal.aborted` between
  * yields.
  */
-interface RegisteredStream<A extends ArgsValidator, R> {
+interface RegisteredStream<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> {
     readonly args: A;
 
     /**
@@ -840,8 +884,12 @@ interface RegisteredStream<A extends ArgsValidator, R> {
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-    readonly visibility?: FunctionVisibility;
+    /** See {@link RegisteredFunction.visibility}. */
+    readonly visibility?: Visibility;
 }
+
+/** An internal stream; `visibility` is required for the reason given on {@link RegisteredInternalQuery}. */
+type RegisteredInternalStream<A extends ArgsValidator, R> = RegisteredStream<A, R, "internal"> & { readonly visibility: "internal" };
 
 /**
  * Durability settings for a `.stream()` procedure.
@@ -889,8 +937,12 @@ interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     /** Number of dispatch attempts already made (absent until the first retry). */
     attempts?: number;
+    /** When the job reached a terminal state (epoch ms). Set only on a `get()` of a finished job. */
+    completedAt?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
+    /** Why a `failed` job was dead-lettered. */
+    error?: string;
 
     /**
      * Fully-qualified `ns:fn` path of the function to invoke. Absent when the job
@@ -906,6 +958,14 @@ interface ScheduledFunctionDoc {
     scheduledFor: number;
     /** Routing hint forwarded so dispatch lands on the right shard. */
     shardKey?: string;
+
+    /**
+     * Lifecycle state (`pending`, `running`, `succeeded`, `failed`, `canceled`).
+     * `get()` reports it, including a finished job's outcome for a bounded
+     * retention window; `query().collect()` lists pending jobs only, which carry
+     * no state field.
+     */
+    state?: "canceled" | "failed" | "pending" | "running" | "succeeded";
 
     /**
      * The workflow/agent export key (its generated class name) a fresh durable instance is started from
@@ -983,7 +1043,7 @@ interface DatabaseReader {
      *
      * ```ts
      * for (const patch of plan.patches) {
-     *     await ctx.db.patch(ctx.db.asId("nodes", patch.id), patch.fields);
+     *     await ctx.db.patch("nodes", ctx.db.asId("nodes", patch.id), patch.fields);
      * }
      * ```
      *
@@ -1000,7 +1060,13 @@ interface DatabaseReader {
      * backend, where `query(table).withIndex(...)` is not available.
      */
     findFirst: (tableName: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
-    get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
+
+    /**
+     * Read one row of `table` by id, or `null` when absent. The table is required
+     * because row ids are opaque: naming it lets a `.global()` table be read in a
+     * single lookup instead of probing every table.
+     */
+    get: <T extends string>(table: T, id: Id<T>) => Promise<Record<string, unknown> | null>;
 
     /**
      * Validate an untrusted `id` string against the structural shape of an id
@@ -1077,6 +1143,12 @@ interface PaginationResult<T = Record<string, unknown>> {
      * into two adjacent ranges. Absent on legacy (open-ended) pages.
      */
     splitCursor?: null | string;
+
+    /**
+     * Reactive-pagination only: a bounded page its read's `limit` cut short. The client splits it
+     * at `splitCursor` whatever its size, since the rows past the cut are reachable no other way.
+     */
+    splitRequired?: boolean;
 }
 
 /** Which way foreign-key edges are followed by {@link DatabaseReader.related}. */
@@ -1339,7 +1411,7 @@ interface PatchIfResult {
 }
 
 interface DatabaseWriter extends DatabaseReader {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
 
     /**
      * Delete EVERY row in `tableName`, chunking internally until the table is
@@ -1366,7 +1438,7 @@ interface DatabaseWriter extends DatabaseReader {
      * error) rolls back the whole mutation. (In an action there is no transaction
      * span, so the prior deletes persist; the in-memory test harness mirrors the span.)
      */
-    deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
+    deleteMany: <T extends string>(table: T, ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{ deleted: number }>;
 
     /**
      * Delete every row matching `where` in one call. Matching rows are resolved
@@ -1431,7 +1503,7 @@ interface DatabaseWriter extends DatabaseReader {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: BatchWriteOptions & { allowExplicitId?: boolean },
     ) => Promise<Id<T>[]>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    patch: <T extends string>(table: T, id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
 
     /**
      * Conditional patch: apply `args.patch` to row `id` of `tableName` only while
@@ -1473,6 +1545,7 @@ interface DatabaseWriter extends DatabaseReader {
      * the in-memory test harness mirrors the span.)
      */
     patchMany: <T extends string>(
+        table: T,
         patches: ReadonlyArray<{ id: Id<T>; patch: Record<string, unknown> }>,
         options?: BatchWriteOptions,
     ) => Promise<{ patched: number }>;
@@ -1491,7 +1564,7 @@ interface DatabaseWriter extends DatabaseReader {
         args: { patch: Record<string, unknown>; where: Record<string, unknown> },
         options?: BatchWriteOptions,
     ) => Promise<{ patched: number }>;
-    replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
+    replace: <T extends string>(table: T, id: Id<T>, document: Record<string, unknown>) => Promise<void>;
 
     /**
      * Erase every shard-local table — the account-deletion / tenant-teardown
@@ -1533,6 +1606,14 @@ interface RetryPolicy {
     backoff?: "exponential" | "linear";
     /** Base delay in milliseconds for the first retry. Default `30_000`. */
     baseMs?: number;
+
+    /**
+     * Keep retrying instead of dead-lettering, overriding `maxAttempts`. Delays are clamped to between
+     * 1 second and 30 minutes, so a `maxMs` below the ceiling sets how often a failing job retries.
+     * `cancel` applies once the scheduler has accepted the job; while it is still in a shard's outbox
+     * custody, drop it from Studio's Outbox view. Honoured by SchedulerDO.
+     */
+    forever?: boolean;
     /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
     maxAttempts?: number;
     /** Optional ceiling clamping the computed backoff delay. */
@@ -1545,6 +1626,8 @@ interface ScheduledJob {
     attempts?: number;
     /** When the job was enqueued (epoch ms). */
     enqueuedAt: number;
+    /** Why the job was dead-lettered. Set only on a `failed` job. */
+    error?: string;
 
     /**
      * The `ns:fn` path of the function to dispatch on fire. Absent when the job
@@ -1570,6 +1653,25 @@ interface ScheduledJob {
      * instead of {@link ScheduledJob.functionPath}.
      */
     workflow?: string;
+}
+
+/**
+ * Where a job is in its life, as {@link Scheduler.get} reports it. `succeeded`
+ * means the dispatch answered 2xx — for a function, that it returned; for a
+ * workflow/agent target, that its instance was started. `failed` is a job that
+ * exhausted its retry budget; `canceled` one removed by {@link Scheduler.cancel}.
+ */
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+
+/**
+ * A job with its lifecycle state. Terminal states are kept for a bounded
+ * retention window after `completedAt`, after which {@link Scheduler.get}
+ * answers `null`.
+ */
+interface ScheduledJobView extends ScheduledJob {
+    /** When the job reached its terminal state (epoch ms). Absent while `pending`/`running`. */
+    completedAt?: number;
+    state: ScheduledJobState;
 }
 
 /**
@@ -1602,11 +1704,23 @@ interface SchedulableWorkflowReference {
  */
 type SchedulableTarget = FunctionHandle<"action" | "mutation", unknown, unknown> | SchedulableWorkflowReference | string;
 
+/** Per-call options for {@link Scheduler.runAfter} / {@link Scheduler.runAt}. */
+interface ScheduleRunOptions {
+    /** Retry policy for this job; the scheduler's defaults apply when omitted. */
+    retry?: RetryPolicy;
+
+    /**
+     * The shard the job runs on when it fires. Omitted, the job runs on the default
+     * shard, which holds none of a tenant's `.shardBy()` rows.
+     */
+    shardKey?: string;
+}
+
 interface Scheduler {
     /** Cancel a pending job by id. `cancelled` is `false` when no such job exists. */
     cancel: (id: string) => Promise<{ cancelled: boolean }>;
-    /** Resolve a single pending job by id, or `null` when absent. */
-    get: (id: string) => Promise<ScheduledJob | null>;
+    /** Resolve a job by id with its lifecycle state, or `null` when never scheduled or past retention. */
+    get: (id: string) => Promise<ScheduledJobView | null>;
     /** List all pending scheduled jobs. */
     list: () => Promise<ScheduledJob[]>;
 
@@ -1615,9 +1729,9 @@ interface Scheduler {
      * for the accepted targets. A workflow/agent reference starts a fresh
      * durable instance on fire (the args become its `params`).
      */
-    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
     /** Like {@link Scheduler.runAfter} but fires at an absolute epoch-ms timestamp. */
-    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
 }
 
 // --- Durable workflows -------------------------------------------------------
@@ -1629,7 +1743,17 @@ interface Scheduler {
  * dependency on the workflow package, exactly as {@link Scheduler} avoids a
  * dependency on `@lunora/scheduler`.
  */
-type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+type WorkflowInstanceStatus =
+    | "complete"
+    | "errored"
+    | "paused"
+    | "queued"
+    | "rollingBack"
+    | "running"
+    | "terminated"
+    | "unknown"
+    | "waiting"
+    | "waitingForPause";
 
 /** Result of {@link WorkflowInstance.status}. Mirrors `@lunora/workflow`'s `WorkflowStatusResult`. */
 interface WorkflowStatusResult {
@@ -1912,16 +2036,16 @@ interface TriggerRankPageOptions {
 interface TriggerDatabase {
     aggregate: (tableName: string, options: TriggerAggregateOptions) => Promise<null | number>;
     count: (tableName: string, where?: Record<string, unknown>) => Promise<number>;
-    delete: (id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findFirst: (tableName: string, args?: TriggerQueryArgs) => Promise<Record<string, unknown> | null>;
     findMany: (tableName: string, args?: TriggerQueryArgs) => Promise<TriggerQueryPage>;
-    get: (id: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: TriggerGroupByOptions) => Promise<ReadonlyArray<TriggerGroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
     rank: (tableName: string, indexName: string, options: TriggerRankOptions) => Promise<null | TriggerRankResult>;
     rankPage: (tableName: string, indexName: string, options?: TriggerRankPageOptions) => Promise<TriggerQueryPage>;
-    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
 }
 
 /**
@@ -2478,6 +2602,9 @@ interface QueryCtx {
      */
     readonly now: number;
 
+    /** `ctx.random()`: a number in `[0, 1)`. Reproduced only by a replay of a keyed mutation; elsewhere it is `Math.random()`. Not for secrets. */
+    readonly random: () => number;
+
     /**
      * Compose a read-only subquery in-process, reusing this query's read
      * context (same transaction, same `db`). Executes the referenced query's
@@ -2489,6 +2616,16 @@ interface QueryCtx {
     readonly runQuery: RunQuery;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
+
+    /**
+     * The shard this function is running on: the key the caller routed to, or
+     * `"__root__"` when it named none. Routing is the caller's choice, and
+     * `authorizeShard` decides only whether the caller may enter a shard, not
+     * which functions run there, so a function whose rows belong on one shard
+     * checks this against what it derives from the identity.
+     */
+    readonly shardKey: string;
+
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
     readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
@@ -2561,6 +2698,9 @@ interface MutationCtx {
      */
     readonly origin?: string;
 
+    /** `ctx.random()`: a number in `[0, 1)`. Reproduced only by a replay of a keyed mutation; elsewhere it is `Math.random()`. Not for secrets. */
+    readonly random: () => number;
+
     /**
      * Compose a submutation in-process, reusing this mutation's `db` writer.
      * Executes the referenced mutation's handler directly — no fresh DO RPC —
@@ -2582,6 +2722,16 @@ interface MutationCtx {
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
+
+    /**
+     * The shard this function is running on: the key the caller routed to, or
+     * `"__root__"` when it named none. Routing is the caller's choice, and
+     * `authorizeShard` decides only whether the caller may enter a shard, not
+     * which functions run there, so a function whose rows belong on one shard
+     * checks this against what it derives from the identity.
+     */
+    readonly shardKey: string;
+
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
     readonly span: LunoraWideEvent;
     readonly storage: MutationStorage;
@@ -2629,6 +2779,25 @@ interface ActionCtx {
      */
     readonly ip?: string;
 
+    /**
+     * `ctx.live.publish(ref, payload)` — push an event to the SSE subscribers of the
+     * `defineLiveStream` that declares `ref`'s topic, on THIS shard. Get a ref from
+     * `_generated/live.ts`: `live.posts.post({ postId })`. The payload is checked
+     * against the validator the topic declares. Present on the shard
+     * (Cloudflare) target only when the app declares a live stream; absent on a
+     * target that rates `liveStreams` `unsupported`, where codegen reports why.
+     * A scheduled job's action publishes this way too. Absent for a query or
+     * mutation: a publish is a side effect, so only an action may make one.
+     *
+     * Delivery is local to the shard: an omitted `shardKey` means the shard the
+     * action runs on, and a `shardKey` naming another shard rejects rather than
+     * reaching zero subscribers silently. The docblock on `defineLiveStream` has the
+     * full routing rules.
+     */
+    readonly live?: {
+        publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: { shardKey?: string }) => Promise<void>;
+    };
+
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
@@ -2660,12 +2829,25 @@ interface ActionCtx {
      * {@link MutationCtx.origin}.
      */
     readonly origin?: string;
+
+    /** `ctx.random()`: a number in `[0, 1)`. Reproduced only by a replay of a keyed mutation; elsewhere it is `Math.random()`. Not for secrets. */
+    readonly random: () => number;
     readonly runAction: RunAction;
     readonly runMutation: RunMutation;
     readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     /** Read account-level secrets from Cloudflare Secrets Store; see {@link Secrets}. */
     readonly secrets: Secrets;
+
+    /**
+     * The shard this function is running on: the key the caller routed to, or
+     * `"__root__"` when it named none. Routing is the caller's choice, and
+     * `authorizeShard` decides only whether the caller may enter a shard, not
+     * which functions run there, so a function whose rows belong on one shard
+     * checks this against what it derives from the identity.
+     */
+    readonly shardKey: string;
+
     /** Attach facts to THIS request's span — the wide event; see {@link LunoraWideEvent}. */
     readonly span: LunoraWideEvent;
     readonly storage: Storage;
@@ -2722,6 +2904,10 @@ export type {
     RankSortKey,
     RegisteredAction,
     RegisteredFunction,
+    RegisteredInternalAction,
+    RegisteredInternalMutation,
+    RegisteredInternalQuery,
+    RegisteredInternalStream,
     RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,
@@ -2739,7 +2925,10 @@ export type {
     RunQueryOptions,
     ScheduledFunctionDoc,
     ScheduledJob,
+    ScheduledJobState,
+    ScheduledJobView,
     Scheduler,
+    ScheduleRunOptions,
     Schema,
     SearchFilterBuilder,
     SearchIndexDefinition,

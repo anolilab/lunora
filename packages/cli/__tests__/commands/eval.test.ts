@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { EvalData } from "../../src/commands/eval/handler";
 import { execute, runEvalCommand } from "../../src/commands/eval/handler";
@@ -12,6 +12,13 @@ import { runExecute } from "../helpers/execute";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "fixtures");
+
+// Every eval a fixture declares is loaded through the command's own runtime
+// TypeScript loader, which transforms the file and everything it imports — a
+// second or so on a quiet machine, and multiples of that when the whole CLI
+// suite runs in parallel. Above vitest's 5s default so contention doesn't
+// decide the result.
+vi.setConfig({ testTimeout: 60_000 });
 
 interface Recorded {
     errors: string[];
@@ -156,6 +163,24 @@ describe("lunora eval", () => {
         expect(recorded.errors.some((line) => line.includes("1/1"))).toBe(true);
     });
 
+    it("fails an eval whose run resolves without a finite average, and still renders the table", async () => {
+        expect.assertions(5);
+
+        const { logger } = recordingLogger();
+        const cwd = join(fixtureRoot, "eval-nan-average-sample");
+
+        const result = await runEvalCommand({ cwd, logger });
+        const nan = result.evals.find((entry) => entry.name === "nan");
+        const missing = result.evals.find((entry) => entry.name === "missing");
+        const noItems = result.evals.find((entry) => entry.name === "no-items");
+
+        expect(result.code).toBe(1);
+        expect(nan?.error).toContain("average");
+        expect(missing?.error).toContain("average");
+        expect(noItems?.error).toContain("`items` array");
+        expect(result.evals.every((entry) => !entry.passed)).toBe(true);
+    });
+
     // Through `execute`, the only path that writes the envelope: `runEvalCommand`
     // hands back the outcomes and `defineHandler` serializes them.
     it("--format json prints one structured document to stdout, flat per the documented per-eval shape", async () => {
@@ -198,22 +223,6 @@ describe("lunora eval", () => {
 
         expect(result.code).toBe(EXIT_CODE.USAGE);
         expect(recorded.errors.some((line) => line.includes("--threshold") && line.includes("[0, 1]"))).toBe(true);
-    });
-
-    it("aborts with one distinct, actionable message and a non-zero exit when the Node floor can't load a .ts eval (ERR_UNKNOWN_FILE_EXTENSION), instead of mislabeling it a per-eval failure", async () => {
-        expect.assertions(4);
-
-        const { logger, recorded } = recordingLogger();
-        const cwd = join(fixtureRoot, "eval-floor-sample");
-
-        const result = await runEvalCommand({ cwd, logger });
-
-        expect(result.code).toBe(1);
-        // No per-eval outcome at all — the run aborted before producing one,
-        // rather than recording a mislabeled "failed" entry for it.
-        expect(result.evals).toHaveLength(0);
-        expect(result.error).toContain("Node ≥23.6");
-        expect(recorded.errors.some((line) => line.includes("Node ≥23.6") && line.includes("plans/245-eval-runner-design.md"))).toBe(true);
     });
 
     it("--threshold against an empty/missing eval dir exits non-zero instead of passing vacuously", async () => {

@@ -68,7 +68,7 @@ server-side via `ctx.runQuery` / `ctx.runMutation` / `ctx.runAction`, passing an
 `server.ts` re-exports the procedure builders and `v` validators **bound to your
 schema**, so `ctx.db` knows your tables. Author functions by importing from the
 generated `server` (not the base package); then `ctx.db.query("messages")`,
-`ctx.db.insert("messages", …)`, and `ctx.db.get(id)` are all typed against your
+`ctx.db.insert("messages", …)`, and `ctx.db.get("messages", id)` are all typed against your
 real schema with no casts.
 
 ## `dataModel.ts`: `Id` and `Doc`
@@ -76,8 +76,8 @@ real schema with no casts.
 Two types you reach for constantly:
 
 - **`Id<"table">`**: a branded string id. It carries its table name in the type,
-  so `ctx.db.get(id)` resolves to the right document type and you can't pass a
-  `users` id where a `messages` id is expected.
+  so `ctx.db.get("messages", id)` resolves to the right document type, and you
+  can't pass a `users` id where a `messages` id is expected.
 - **`Doc<"table">`**: the full stored document shape for a table, including the
   built-in `_id` and `_creationTime`.
 
@@ -101,12 +101,26 @@ for the `exports` mapping that goes with it.
 
 The CLI scaffolds your functions under `lunora/`, with `_generated/` alongside.
 Import `api` from `_generated/api`, `internal` from `_generated/internal`, data-model types from
-`_generated/dataModel`, and the typed builders from `_generated/server`. Most
-projects alias the directory (e.g. `@/lunora/_generated/*`).
+`_generated/dataModel`, and the typed builders from `_generated/server`.
+
+The code samples in these docs import through an `@/lunora/...` path alias. The
+starter templates do not define it; they import with relative paths
+(`../lunora/_generated/api`). Use relative paths, or add the alias to
+`tsconfig.json` and to your bundler's resolver:
+
+```jsonc title="tsconfig.json"
+{
+    "compilerOptions": {
+        "paths": {
+            "@/lunora/*": ["./lunora/*"],
+        },
+    },
+}
+```
 
 ## `lunora/*` vs `@lunora/*` imports
 
-Codegen detects whether your project depends on the unscoped **`lunora`**
+Codegen detects whether your project depends on the unscoped **`lunorash`**
 umbrella package or on the granular **`@lunora/*`** packages, by inspecting the
 project's declared dependencies, and emits matching imports in `_generated/*`:
 

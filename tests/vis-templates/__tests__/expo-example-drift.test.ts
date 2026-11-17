@@ -40,11 +40,9 @@ const SHARED_APP_FILES = ["src/Chat.tsx", "src/Login.tsx", "lunora/messages.ts"]
  * docblock and branding differ between the two copies — but the one security
  * decision inside it must hold in both.
  *
- * Both copies fold the WebSocket handshake's `?token=` into an `Authorization`
- * header, because a browser cannot set headers on a WS upgrade. That fold has to
- * be gated on `Upgrade: websocket`: ungated, every URL becomes a bearer token, so
- * session tokens land in access logs, `Referer` headers and shared links, and a
- * cross-origin link can authenticate a plain HTTP request.
+ * Both copies take the session from the request headers. The native client sends
+ * its bearer as the upgrade's `Authorization` header, so no token is ever read from
+ * the URL: a URL token lands in access logs, `Referer` headers and shared links.
  */
 const SERVER_ENTRY = "src/server/index.ts";
 
@@ -52,17 +50,15 @@ describe.each([
     ["templates/expo", TEMPLATE_DIR],
     ["examples/expo", EXAMPLE_DIR],
 ])("%s/src/server/index.ts", (label, directory) => {
-    test("folds the WebSocket `?token=` into a header only on an upgrade request", () => {
+    test("reads the session from the request headers, never from a ?token= URL parameter", () => {
         const source = readFileSync(join(directory, SERVER_ENTRY), "utf8");
-        const tokenReads = source.split("\n").filter((line) => line.includes(`searchParams.get("token")`));
 
-        expect(tokenReads, `${label}/${SERVER_ENTRY} no longer reads the ?token= query parameter`).not.toStrictEqual([]);
-
-        for (const line of tokenReads) {
-            expect(line, `${label}/${SERVER_ENTRY} reads ?token= without gating on Upgrade: websocket`).toMatch(/\bisUpgrade\b/);
-        }
-
-        expect(source, `${label}/${SERVER_ENTRY} never derives isUpgrade from the Upgrade header`).toMatch(/const isUpgrade = .*\bupgrade\b.*websocket/);
+        // A bearer in the URL lands in access logs and Referer headers. The native client
+        // sends it as the upgrade's Authorization header, and the session comes from there.
+        expect(source, `${label}/${SERVER_ENTRY} reads a session token from the URL`).not.toMatch(/searchParams\.get\("token"\)/);
+        expect(source, `${label}/${SERVER_ENTRY} no longer resolves the session from the request headers`).toMatch(
+            /getSession\(\{ headers: identityRequest\.headers \}\)/,
+        );
     });
 });
 

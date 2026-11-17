@@ -49,7 +49,7 @@ const createEngineHost: EngineHostFactory = () => {
         throw new Error("no DurableObjectState in scope — the conformance body ran outside runInDurableObject");
     }
 
-    const platform = createShardPlatform(state);
+    const platform = createShardPlatform(state, env);
     const { sockets } = platform;
 
     return {

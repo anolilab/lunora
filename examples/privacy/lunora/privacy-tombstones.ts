@@ -13,6 +13,7 @@ import { LunoraError } from "lunorash/errors";
 /** The RPC surface of one tombstone store instance. */
 interface TombstoneStub {
     readonly add: (subjectKey: string, erasedAt: number) => Promise<void>;
+    readonly has: (subjectKey: string) => Promise<boolean>;
     readonly keys: () => Promise<string[]>;
 }
 
@@ -22,7 +23,7 @@ interface TombstoneNamespace {
     readonly idFromName: (name: string) => unknown;
 }
 
-/** Every tombstone is in one instance, so `keys` reads one table. */
+/** Every tombstone is in one instance, so `has` and `keys` read one table. */
 const STORE_NAME = "tombstones";
 
 /** The tombstone port for a workflow step, bound from the Worker's environment. */
@@ -37,6 +38,7 @@ export const tombstonesFrom = (env: Record<string, unknown>): TombstonePort => {
 
     return {
         add: async (key, erasedAt) => store().add(key, erasedAt.getTime()),
+        has: async (key) => store().has(key),
         keys: async () => new Set(await store().keys()),
     };
 };
@@ -44,5 +46,6 @@ export const tombstonesFrom = (env: Record<string, unknown>): TombstonePort => {
 /** A mutation's tombstone port: it cannot reach the store, so an erasure from a mutation fails loudly. */
 export const tombstonesUnreachable: TombstonePort = {
     add: () => Promise.reject(new LunoraError("UNPROCESSABLE", "Erasures run in the privacy-erasure workflow, which writes the tombstone.")),
+    has: () => Promise.reject(new LunoraError("UNPROCESSABLE", "Tombstones are read from a workflow, not from a mutation.")),
     keys: () => Promise.reject(new LunoraError("UNPROCESSABLE", "Tombstones are read from a workflow, not from a mutation.")),
 };

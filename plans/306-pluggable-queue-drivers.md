@@ -95,7 +95,7 @@ Twelve were checked; all deliver one job to one handler. Three are worth naming:
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`bullmq`](https://docs.bullmq.io/) (31M)                     | the category exemplar — one job per worker, lock rather than visibility window, DLQ is the failed set                                                                                        |
 | [`@openqueue/sdk`](https://github.com/quickbits-io/openqueue) | **the right idea** — a "world" abstraction with `world-bullmq` / `world-postgres` drivers, read at source in §2.2. Still no batch delivery, no documented DLQ or visibility timeout, pre-1.0 |
-| [`sidequest`](https://github.com/sidequestjs/sidequest)       | **LGPL-3.0-or-later** against this repo's FSL-1.1-Apache-2.0 — a licensing blocker, not a technical one                                                                                      |
+| [`sidequest`](https://github.com/sidequestjs/sidequest)       | **LGPL-3.0-or-later**. The repo is now Apache-2.0 (PR #1506), so this is no longer an FSL conflict. It is a dependency-policy question, and technically it remains viable                    |
 
 The rest fail on the same line plus a second problem each:
 [`@platformatic/job-queue`](https://github.com/platformatic/job-queue) (no delay,

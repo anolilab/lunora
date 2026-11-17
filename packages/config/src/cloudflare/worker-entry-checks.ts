@@ -572,10 +572,15 @@ const readSourceDirectory = (directory: string): { files: string[]; subdirectori
  * The local names `defineApp` is bound to in this file — plural because
  * `import { defineApp as createApp }` is an ordinary import style.
  */
-const localNamesFor = (sourceFile: SourceFile, imported: string): Set<string> => {
+const localNamesFor = (sourceFile: SourceFile, imported: string, fromModule?: (specifier: string) => boolean): Set<string> => {
     const names = new Set<string>();
 
     for (const declaration of sourceFile.getImportDeclarations()) {
+        // `import type { defineApp }` marks the declaration, not each specifier, and binds nothing callable either.
+        if (declaration.isTypeOnly() || (fromModule !== undefined && !fromModule(declaration.getModuleSpecifierValue()))) {
+            continue;
+        }
+
         for (const specifier of declaration.getNamedImports()) {
             if (!specifier.isTypeOnly() && specifier.getName() === imported) {
                 names.add(specifier.getAliasNode()?.getText() ?? specifier.getName());
@@ -827,5 +832,88 @@ const scanAppChains = (projectRoot: string, methods: ReadonlySet<CapabilityMetho
     return site === undefined ? undefined : { chained, site };
 };
 
+/** A specifier naming the generated app module, the only `defineApp` that composes a Lunora Worker. */
+const GENERATED_APP_SPECIFIER = /(?:^|\/)_generated\/app(?:\.[cm]?[jt]sx?)?$/u;
+
+const PATH_SEPARATOR = /[\\/]/u;
+
+/**
+ * Whether the Worker wrangler bundles from `entryPath` composes the app: the entry, or a module it reaches through
+ * relative imports and re-exports, calls `defineApp` imported from the generated app module.
+ *
+ * Unlike {@link scanAppChains} this asks what the BUNDLE contains, so a `defineApp` call in a test or an unrelated
+ * module does not count. Every give-up route (an unreadable or unparseable file, the module ceiling) answers `false`;
+ * the caller keeps the documents in the bundle then, which works whatever the entry turns out to be.
+ */
+const entryComposesApp = (entryPath: string): boolean => {
+    const seen = new Set([entryPath]);
+    const pending = [entryPath];
+
+    while (pending.length > 0) {
+        if (seen.size - 1 > MAX_FOLLOWED_MODULES) {
+            return false;
+        }
+
+        const path = pending.pop() as string;
+        let source: string;
+
+        try {
+            source = readFileSync(path, "utf8");
+        } catch {
+            return false;
+        }
+
+        const sourceFile = parseSource(basename(path), source);
+
+        if (sourceFile === undefined) {
+            return false;
+        }
+
+        if (
+            callsAnyOf(
+                sourceFile,
+                localNamesFor(sourceFile, APP_FACTORY, (specifier) => GENERATED_APP_SPECIFIER.test(specifier)),
+            )
+        ) {
+            return true;
+        }
+
+        // A declaration whose every named binding is `type` is elided from the bundle like an `import type`, so the
+        // module behind it adds nothing the Worker runs. A bare `import "./x"` has no bindings and is followed.
+        const specifiers = [
+            ...sourceFile
+                .getImportDeclarations()
+                .filter(
+                    (declaration) =>
+                        !declaration.isTypeOnly() &&
+                        (declaration.getImportClause() === undefined ||
+                            declaration.getDefaultImport() !== undefined ||
+                            declaration.getNamespaceImport() !== undefined ||
+                            declaration.getNamedImports().length === 0 ||
+                            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly())),
+                ),
+            ...sourceFile
+                .getExportDeclarations()
+                .filter(
+                    (declaration) =>
+                        !declaration.isTypeOnly() &&
+                        (declaration.getNamedExports().length === 0 || declaration.getNamedExports().some((specifier) => !specifier.isTypeOnly())),
+                ),
+        ].flatMap((declaration) => declaration.getModuleSpecifierValue() ?? []);
+
+        for (const specifier of specifiers) {
+            const resolved = resolveRelativeModule(path, specifier);
+
+            // The generated modules declare the factory rather than call it, and import most of the project.
+            if (resolved !== undefined && !seen.has(resolved) && !resolved.split(PATH_SEPARATOR).includes(GENERATED_DIRECTORY)) {
+                seen.add(resolved);
+                pending.push(resolved);
+            }
+        }
+    }
+
+    return false;
+};
+
 export type { CapabilityMethod, WorkerEntry, WorkerEntryLocation };
-export { locateWorkerEntry, readWorkerEntry, scanAppChains };
+export { entryComposesApp, locateWorkerEntry, readWorkerEntry, scanAppChains };

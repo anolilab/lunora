@@ -1,3 +1,1775 @@
+## @lunora/platform-node [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.217...@lunora/platform-node@1.0.0-alpha.218) (2026-11-14)
+
+- security(scheduler): sign the timestamp and forwarded identity on dispatch (#1541)
+
+## @lunora/platform-node [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.216...@lunora/platform-node@1.0.0-alpha.217) (2026-11-03)
+
+- fix(ci): mark test fixtures so the secrets scan passes (#1470)
+
+## @lunora/platform-node 1.0.0-alpha.217 (2026-11-03)
+
+- Updated dependency @lunora/sql-store@1.0.0-alpha.234
+- Updated dependency @lunora/workflow@1.0.0-alpha.111
+- Updated dependency @lunora/d1@1.0.0-alpha.233
+- Updated dependency @lunora/runtime@1.0.0-alpha.276
+
+## @lunora/platform-node [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.215...@lunora/platform-node@1.0.0-alpha.216) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.232
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.275
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.233
+* **@lunora/do:** upgraded to 1.0.0-alpha.280
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+
+## @lunora/platform-node [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.214...@lunora/platform-node@1.0.0-alpha.215) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.231
+* **@lunora/platform:** upgraded to 1.0.0-alpha.80
+* **@lunora/queue:** upgraded to 1.0.0-alpha.143
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.274
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.232
+* **@lunora/do:** upgraded to 1.0.0-alpha.279
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.123
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.185
+* **@lunora/storage:** upgraded to 1.0.0-alpha.171
+
+## @lunora/platform-node [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.213...@lunora/platform-node@1.0.0-alpha.214) (2026-11-02)
+
+### Bug Fixes
+
+* **agent:** run agent tools on the shard the run started from ([#1416](https://github.com/anolilab/lunora/issues/1416)) ([2a2d233](https://github.com/anolilab/lunora/commit/2a2d233dc53973fffb5d4df2ccbf0755d52a7923))
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.273
+
+## @lunora/platform-node [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.212...@lunora/platform-node@1.0.0-alpha.213) (2026-11-02)
+
+### Features
+
+* **runtime:** named, revocable admin tokens ([#1402](https://github.com/anolilab/lunora/issues/1402)) ([6efd702](https://github.com/anolilab/lunora/commit/6efd70285fcfe0dd5525b298494bca771c3f6a8c))
+
+
+### Dependencies
+
+* **@lunora/do:** upgraded to 1.0.0-alpha.278
+
+## @lunora/platform-node [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.211...@lunora/platform-node@1.0.0-alpha.212) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.230
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/queue:** upgraded to 1.0.0-alpha.141
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.271
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.231
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.109
+* **@lunora/do:** upgraded to 1.0.0-alpha.276
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.121
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.183
+* **@lunora/storage:** upgraded to 1.0.0-alpha.169
+
+## @lunora/platform-node [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.210...@lunora/platform-node@1.0.0-alpha.211) (2026-11-02)
+
+### Features
+
+* **scheduler:** add retry.forever and an outbox admin surface ([#1378](https://github.com/anolilab/lunora/issues/1378)) ([b83a9ea](https://github.com/anolilab/lunora/commit/b83a9eacccb29b90981f4b55c30066ef4636e2a2))
+* **shard-engine,do:** read-byte cap, near-limit and unawaited-work warnings, scheduler lag ([#1398](https://github.com/anolilab/lunora/issues/1398)) ([19a42b8](https://github.com/anolilab/lunora/commit/19a42b8c9adf9ecf99b85eab27ceb954a2310687))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.229
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/platform:** upgraded to 1.0.0-alpha.78
+* **@lunora/queue:** upgraded to 1.0.0-alpha.140
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.270
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.230
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.108
+* **@lunora/do:** upgraded to 1.0.0-alpha.275
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.120
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.182
+* **@lunora/storage:** upgraded to 1.0.0-alpha.168
+
+## @lunora/platform-node [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.209...@lunora/platform-node@1.0.0-alpha.210) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.228
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/queue:** upgraded to 1.0.0-alpha.139
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.269
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.229
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.107
+* **@lunora/do:** upgraded to 1.0.0-alpha.274
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.119
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.181
+* **@lunora/storage:** upgraded to 1.0.0-alpha.167
+
+## @lunora/platform-node [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.208...@lunora/platform-node@1.0.0-alpha.209) (2026-11-01)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.268
+
+## @lunora/platform-node [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.207...@lunora/platform-node@1.0.0-alpha.208) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.227
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/queue:** upgraded to 1.0.0-alpha.138
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.267
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.228
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.106
+* **@lunora/do:** upgraded to 1.0.0-alpha.273
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.118
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.180
+* **@lunora/storage:** upgraded to 1.0.0-alpha.166
+
+## @lunora/platform-node [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.206...@lunora/platform-node@1.0.0-alpha.207) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.226
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.266
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.227
+* **@lunora/do:** upgraded to 1.0.0-alpha.272
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.179
+
+## @lunora/platform-node [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.205...@lunora/platform-node@1.0.0-alpha.206) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.265
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.105
+
+## @lunora/platform-node [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.204...@lunora/platform-node@1.0.0-alpha.205) (2026-10-31)
+
+### ⚠ BREAKING CHANGES
+
+* **scheduler,runtime:** Scheduler.get (and @lunora/server's ctx.scheduler.get)
+returns a ScheduledJobView with a required state and answers for finished
+jobs instead of null. The Node scheduler host keeps succeeded and canceled
+rows instead of deleting them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(scheduler): record cron runs and skip overlapping ticks
+
+Cron fires recorded nothing, and a run that outlasted its interval ran
+concurrently with the next tick.
+
+Each cronJobs() job now runs under a per-job lease held in the SchedulerDO
+(POST /cron/begin, /cron/end): Cloudflare delivers cron triggers to any
+isolate, so module state cannot see a run elsewhere, and the DO's input
+gate makes the check-and-set atomic. A tick that finds the lease held is
+skipped and recorded; the holding run counts it. A lease older than the
+fifteen-minute scheduled() wall clock is treated as lost and recorded as a
+failed run. Every fire is kept (start, end, duration, status, error,
+skipped count), the newest 50 per job. Studio's "Run now" answers
+409 CRON_JOB_IN_FLIGHT while a run is going.
+
+The worker fails open: with no schedulerDO, or one that cannot be reached,
+the run goes ahead unguarded and a warning is logged, rather than a
+scheduler outage stopping every cron.
+
+Surfaces: GET /cron/runs on the DO, /_lunora/admin/scheduled/cron-runs,
+the admin client's listCronRuns, and Studio's Cron triggers view (last run
+per job, recent-run history). Cloudflare and celld capability notes state
+the lease; Node rates cronTriggers unsupported, so there is no runtime
+path to guard there.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(runtime): pause and resume a deployment
+
+There was no way to stop functions, scheduled jobs, crons and queue
+consumers during an incident short of a redeploy.
+
+The pause flag is durable in the SchedulerDO (meta:paused, GET/POST
+/pause). While it is set the alarm holds every job in place (header,
+index and attempts untouched) and deletes its clock rather than spin on
+past-due rows; resume re-derives the clock and the held jobs run.
+/cron/begin skips and records the tick (reason "paused").
+
+The worker reads the flag per isolate with a 5 s cache (fail open) and:
+answers app function calls (rpc, batch, ws, REST, socket and voice routes)
+with 503 DEPLOYMENT_PAUSED and Retry-After; lets admin-bearer calls,
+the admin plane, health, auth and the scheduler's dispatch callback
+through so the operator can inspect and resume; hands queue batches back
+with a 300 s retry (each spends a delivery attempt, stated in the docs);
+answers Studio's Run now with 503.
+
+Entry points: GET/POST /_lunora/admin/pause (PAUSE_NOT_CONFIGURED without
+a schedulerDO, and GET reports supported: false), the admin client's
+getDeploymentPause / setDeploymentPause, `lunora pause [status]
+[--reason]` and `lunora resume`, and Studio's banner on every page while
+paused (with Resume) plus a toggle on the Schedule tab. New error codes
+DEPLOYMENT_PAUSED, PAUSE_NOT_CONFIGURED, CRON_JOB_IN_FLIGHT.
+
+Platform: new advisory deploymentPause capability, emulated on Cloudflare
+and celld (SchedulerDO-held), unsupported on Node (no SchedulerDO).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record job lifecycle, cron runs and deployment pause
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(scheduler): expect the cancel outcome row after a mid-dispatch cancel
+
+The job now keeps a done: record when cancelled; the test still fails if the
+failed attempt re-arms the job.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(runtime): tidy pause and cron-run edits
+
+Scope the cron loop's no-await-in-loop disables to their lines, move the queue
+pause check above the comment it had split from its code, drop a redundant
+completedAt guard in the Studio job history (formatTimestamp already falls
+back), and undo stray blank-line churn in PlatformCapabilities.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(playground): read job-status from the scheduler's lifecycle state
+
+get() now keeps succeeded, failed and canceled jobs for the retention window, so a non-null
+record no longer means the job is still pending. Branch on state instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): let adminGate operators through a deployment pause
+
+The pause refused a function call before any adminGate grant was recorded, so an Access-only
+operator (no bearer) was locked out of RPC while paused. Read the flag first and evaluate the
+gate only when paused, so ordinary traffic still never pays for it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): hold raw crons and tenant queue batches while paused
+
+The pause only gated cronJobs() and the native queue() entry. A raw crons handler still ran on
+every tick, and a Workers-for-Platforms tenant's forwarded batches (POST /_lunora/queue) were
+consumed. Skip the raw handler and answer a forwarded batch with every id in retry. The built-in
+backup keeps running: it executes no app code.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): stop a running drain from dispatching after a pause
+
+alarm() read the pause flag once, so records queued behind in-flight dispatches still started
+after a pause landed. Re-check the flag before each claim and leave the due-time index in place,
+and keep rescheduleAlarm() from arming a past alarm while paused.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep a job that ran from reading as canceled
+
+A cancel landing mid-dispatch wrote canceled even when the kick then went through, and a cancel
+on a header left behind by a failed post-dispatch cleanup overwrote the succeeded row. Rewrite
+the outcome to succeeded when the raced kick succeeds (only while the row is still this record's
+and the id is not reused), and treat a header beside an outcome row as residue to clean up.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): clear a stale failed outcome when a dead job is retried
+
+A dead-letter purge writes its failed outcome before dropping the dead row. If that drop failed
+and the job was then retried, /get read the leftover failed row ahead of the new pending header.
+/dead/retry now deletes the outcome row first.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep real cron runs in history through skipped ticks
+
+Cron history was keyed by start time, so a run that held its lease through 50 skipped ticks
+was trimmed the moment it was recorded, and a long pause evicted every earlier run. Key rows by
+end time and fold consecutive same-reason skips into one row whose skipped count is the streak.
+/cron/runs also reconciles a lapsed lease into a failed run instead of showing it in flight
+until another tick arrives.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): let the outcome sweep keep up with load and cancels
+
+One 64-row batch per alarm that found due jobs could fall behind a 100-job drain, and a
+cancel-only workload never swept at all. Sweep up to four batches, on every alarm and after
+each cancel and dead-letter purge.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(client): page scheduled-job history by cursor
+
+listScheduledHistory dropped the scheduler's continuation cursor, so outcomes past the first 100
+within the retention window were unreachable. It now takes { cursor } and returns
+{ records, cursor? }, and Studio's History view loads older pages on demand.
+* **scheduler,runtime:** LunoraAdminClient.listScheduledHistory returns a ScheduledHistoryPage instead
+of an array.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(studio): keep the pause banner through a failed status poll
+
+Every rejected pause read fell back to not-paused, so one network blip or 5xx during a pause
+hid the banner until the next good poll. Only an older worker's 404 means unsupported now;
+other errors rethrow and the query keeps its last state.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record the paged scheduled-history client surface
+
+listScheduledHistory now takes a cursor and returns ScheduledHistoryPage.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(cli): note what else a pause holds and lets through
+
+Raw crons handlers and forwarded tenant queue batches are now held; the scheduled backup and
+adminGate-authorized operators are not.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(scheduler): await the dispatch-entered milestone, not a timer turn
+
+The cron-overlap and lifecycle tests waited a zero-delay timer before asserting on an in-flight
+dispatch. They now await a promise the blocking double resolves when that dispatch begins. Also
+separate a run's end from the last skipped tick in the cron-history test, whose shared end
+time made the row order depend on the random run id.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep the pause flag until resume has re-armed the clock
+
+Resume deleted the flag before re-arming the alarm, so a failed arm returned an error with
+the deployment unpaused and held jobs left without a clock. Arm first, then clear the flag.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(runtime): share one in-flight pause read per isolate
+
+Calls that found the pause cache stale each started their own SchedulerDO read. Concurrent
+callers now await the read already in flight.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(studio): drop the finally from the history pager
+
+React Compiler cannot memoize a component holding a try/finally, so the Load more handler
+catches inline instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(platform-node): record a job cancelled mid-dispatch as succeeded when it ran
+
+Match SchedulerDO: a cancel landing while the handler runs keeps the claim, so a successful
+attempt still settles the row as succeeded. Retry re-arm and dead-letter parking now require a
+pending row, so a failed attempt leaves the job canceled rather than parking or re-arming it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(platform): say a parked job reads failed until requeued or purged
+
+Both hosts keep a dead-lettered job until an operator requeues or purges it, so the get()
+contract no longer implies it ages out. Scheduler get() fixtures now carry a lifecycle state.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): refuse stray arguments to pause and resume
+
+lunora resume ignored its positional arguments and lunora pause checked only the first, so a
+typo could still flip a deployment. Both now exit with a usage error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): never lose a cron run or a skip decision to a write error
+
+/cron/end released the lease before recording the run, so a failed write lost the run with
+nothing left to reconcile. Record first, then release. A failed skip-history write in
+/cron/begin no longer errors the request, which the worker read as an outage and ran the job
+unguarded.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): keep the operator's pause reason out of the public 503
+
+The DEPLOYMENT_PAUSED body echoed the free-text --reason to every caller, which leaks internal
+incident notes. Callers now get a fixed message; the reason stays on the admin pause route.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): list dead-lettered jobs in history when they are parked
+
+A parked job had no completion time and no dt: entry, so it was missing from /history and
+Studio until purged, and get() gave no failure time. Parking now records completedAt and
+indexes it; a purge keeps that time, and a requeue drops it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(studio): clear the history pager's loading flag on both paths
+
+The reset sat after the await, which reads as success-only. The try and the catch now each
+clear it, still without a finally.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): record a lapsed cron lease before releasing it
+
+/cron/runs deleted an expired lease before writing its failed-run row, so a failed write lost
+the run. Record first, as /cron/end does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* style(studio): mark the deliberate react-doctor findings in the scheduler views
+
+The table scaffolding repeats by design and the pager's loading flag is cleared on both paths;
+line-scoped disables with reasons stop the PR scan from re-posting them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): reject cron names the overlap lease cannot hold
+
+cronJobs() accepted names of any length while /cron/begin refuses names over 256 characters,
+which the worker reads as an outage and runs the job unguarded. Reject them at definition.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): report a cancel as done once the job is removed
+
+A failed outcome write after the rows were removed errored the request, so a retry answered
+cancelled: false for a job that was gone. The outcome row is now best-effort.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(runtime): note what a pause leaves serving and what a skip means
+
+Custom routes handlers are not gated by a pause, like httpRouter. CronRunStatus skipped also
+covers a paused deployment.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(scheduler): keep cron history whole across partial write failures
+
+A lease left by a failed release after /cron/end was later recorded again as a lost run, and
+folding a skip deleted the old row before writing its replacement. Skip a lost run already on
+record, and write the folded row before dropping the old one. Also fix a misplaced doc comment.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(platform-node): index scheduler rows by state and completion
+
+Finished rows now stay for seven days, and the sweep after each delivery plus the pending scans
+read the whole table. A (state, completed_at) index keeps them bounded.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(studio): keep the job history contiguous after Load more
+
+Polling refreshed only the first page, so new outcomes pushed rows into the gap before the
+loaded older pages, where they were never shown. Polling stops once older pages are loaded.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(errors): regenerate error reference after rebase
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): keep a fresh pause toggle over an older read
+
+A read of the pause flag that started before an admin POST could resolve
+after it and overwrite the cache the POST had just filled, so the isolate
+that set the flag kept serving (or refusing) calls for another cache window.
+Writes now bump a generation; a read only fills the cache when no write
+began or finished since it started.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): drop the history entry of a requeued dead job
+
+Requeueing a dead-lettered job removed its dead row but left the dt: index
+entry parkDead wrote, which took a /history page slot until the retention
+sweep reclaimed it. The entry is now deleted with the dead row.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(testing): report the dead-letter reason on a failed fake job
+
+The fake scheduler exposed the handler's thrown message as a failed job's
+error, while SchedulerDO records why the job was dead-lettered. Tests reading
+get(id).error now see the same value production callers do.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(testing): match the stored dead-letter error text
+
+SchedulerDO stores the reason as "dead-lettered after N attempts"; the fake
+reported only "after N attempts".
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* style(studio): sort the cron panel imports after the rebase
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(queue): hold paused messages with a fresh retry budget
+
+A paused deployment handed each queue batch back with a delayed retry, which
+spends one delivery attempt per hold. A pause longer than max_retries times
+the delay dead-lettered work that never ran.
+
+The runtime now tells the consumer to hold instead (holdSeconds on the
+trigger, forwarded by the generated queue entry). The consumer re-enqueues
+each message as a fresh, authenticated copy that keeps the original id and
+body, and acks the original only once the copy was sent. A message that cannot
+be copied falls back to the delayed retry and logs why. A job that genuinely
+throws after the pause lifts still fails on its normal budget.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): restore the outcome of a job whose history write failed
+
+When a dispatched job's terminal row could not be written, its pending rows
+were still cleared, so neither get() nor /history had any record that it ran.
+
+The failed write now leaves a repair marker holding the row and marks the
+instance dirty, so its successor runs the orphan walk. The walk writes the row
+back with its original completion time and drops the marker and any header
+the job left behind, so the job is neither lost from history nor run again.
+Scheduling a caller-chosen id again clears a stale marker.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): renew a running cron job's lease
+
+A cron lease was declared lost fifteen minutes after it began, on the premise
+that every holder is a scheduled() invocation torn down at that age. A manual
+run from a fetch handler, or a host that does not enforce the bound, can run
+longer: the next tick then started a second copy beside it, and the first
+run's real outcome was dropped.
+
+The worker now renews the lease every five minutes while the run is alive
+(POST /cron/renew), and the lease lapses fifteen minutes after its last sign
+of life instead of after its start. A renewal only extends a lease the caller
+still owns and that has not lapsed, so a stale worker cannot revive a lease
+another run took over. A renewal that fails is logged and the run goes on.
+* **scheduler,runtime:** CronRunInFlight gains an optional renewedAt field, in
+@lunora/scheduler and in its mirror in @lunora/client; the scheduler gains the
+internal /cron/renew route.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): snapshot the queue hold field on TriggerTrace
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(studio): show a failed cron history read and the pause banner in a bare studio
+
+A failed cron history request was mapped to an empty result, so an auth, server
+or network error read as no runs and replaced the last runs shown. Only a
+worker without a scheduler now maps to empty; any other failure is shown and
+the last runs are kept.
+
+The pause banner was gated on the app chrome's token, so a studio composed
+around an injected client never showed it. It now shows when there is no chrome
+or the chrome holds a token.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): stop waiting on a pause read that never settles
+
+The flag read is shared by every caller in an isolate but belongs to the
+request that started it. If that request is cancelled the read may never
+settle and every caller hangs. Callers now stop waiting after three seconds,
+fail open on the last state the isolate trusted, and the next caller reads
+afresh.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): reclaim expired cancelled jobs on cancel
+
+Finished rows were swept only on a completion or a restart, so a host that
+only cancels kept expired cancelled rows indefinitely.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): commit paired history writes together and skip stale entries
+
+Four pairs of writes were awaited one after the other, so a failure between
+them left a half state: a reused id lost its old outcome without the new job
+persisting, a requeued job kept a dead row that /get answered failed for, a
+corrected outcome lost its history entry, and a folded skip streak counted
+twice toward the history limit and evicted a real run. Each pair is now issued
+in one synchronous run, which Durable Object storage commits as one.
+
+/history also counted stale index entries toward its page, so a page of them
+answered no records with a cursor. It now reads on until a record shows or the
+index ends, within a bound.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): correct how a pause holds queue messages
+
+Held messages are re-sent as delayed copies with their attempt budgets intact;
+only a message that cannot be copied falls back to a delayed retry.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): snapshot the queue hold option on DispatchOptions
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(scheduler): pause and resume reach every named scheduler instance
+
+A pause held jobs only on the scheduler instance the admin route addresses, so
+jobs on a tenant scheduler or a workpool with its own instanceName kept running
+while Studio and the CLI reported the deployment as paused.
+
+A named instance now registers durably with the main one (its SchedulerDO
+storage) the first time it is addressed, and is brought to the current pause
+state by the registration itself, so one created during a pause starts paused.
+The admin route applies each pause or resume to the main instance first and
+then to every registered instance. An instance that cannot be reached is
+reported (PAUSE_INSTANCES_FAILED, naming it) and repeating the command
+converges. The registry lives in the same storage as the flag, so it needs no
+new host contract; the capability notes say so for both hosts.
+
+A custom schedulerInstanceName must also be passed to createScheduler and
+createWorkpool as the new optional primaryInstanceName.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): regenerate the studio snapshot for the pause banner text
+
+Generated by api:update from the built package; the banner string changed with
+the fan-out wording.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): keep a ticket to its upgrade and a newer pause read
+
+A Studio socket ticket lifted the pause on any request that carried it in the
+query. It is now accepted only on a WebSocket upgrade.
+
+A flag read abandoned at its deadline could still answer later and overwrite the
+newer read that replaced it. Abandoning a read now invalidates it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(scheduler): batch cron history deletes, move a streak atomically, guard repair
+
+A cron history far past its limit passed more than 128 keys to one delete, which
+the host rejects and which failed /cron/begin. Stale rows are now deleted in
+batches of 128.
+
+A folded skip streak is written and its old key deleted in one synchronous run,
+which storage commits together, so a failed delete cannot leave two copies.
+
+Restoring a lost outcome now leaves a header that belongs to a later job of the
+same id alone and drops only the stale marker.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(platform,testing): report when a parked job failed and age out fake outcomes
+
+The reference host's get() omitted completedAt for a dead-lettered job, which the
+contract requires for every terminal state; the suite now asserts it.
+
+The fake scheduler kept finished outcomes for the harness lifetime; get() now
+forgets them after the seven-day retention window the scheduler applies.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **scheduler,runtime:** job outcomes, cron run history, deployment pause ([#1397](https://github.com/anolilab/lunora/issues/1397)) ([4d648d3](https://github.com/anolilab/lunora/commit/4d648d35b7aa5861415d59930c4223e2645223c8))
+* **sql-store:** atomic .global() writes, statement deadlines, fewer round trips ([#1395](https://github.com/anolilab/lunora/issues/1395)) ([1d7524c](https://github.com/anolilab/lunora/commit/1d7524c8bc1a2b3b5bec345cfab861c4bd310f68))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.225
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/platform:** upgraded to 1.0.0-alpha.77
+* **@lunora/queue:** upgraded to 1.0.0-alpha.137
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.264
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.226
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.104
+* **@lunora/do:** upgraded to 1.0.0-alpha.271
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.117
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/storage:** upgraded to 1.0.0-alpha.165
+
+## @lunora/platform-node [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.203...@lunora/platform-node@1.0.0-alpha.204) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.263
+* **@lunora/do:** upgraded to 1.0.0-alpha.270
+
+## @lunora/platform-node [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.202...@lunora/platform-node@1.0.0-alpha.203) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.262
+
+## @lunora/platform-node [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.201...@lunora/platform-node@1.0.0-alpha.202) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.224
+
+## @lunora/platform-node [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.200...@lunora/platform-node@1.0.0-alpha.201) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.223
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.259
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.224
+* **@lunora/do:** upgraded to 1.0.0-alpha.267
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.175
+
+## @lunora/platform-node [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.199...@lunora/platform-node@1.0.0-alpha.200) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.258
+* **@lunora/do:** upgraded to 1.0.0-alpha.266
+
+## @lunora/platform-node [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.198...@lunora/platform-node@1.0.0-alpha.199) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.222
+* **@lunora/queue:** upgraded to 1.0.0-alpha.134
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.257
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.223
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.101
+* **@lunora/do:** upgraded to 1.0.0-alpha.265
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+
+## @lunora/platform-node [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.196...@lunora/platform-node@1.0.0-alpha.197) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.220
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.255
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.221
+* **@lunora/do:** upgraded to 1.0.0-alpha.263
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+
+## @lunora/platform-node [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.195...@lunora/platform-node@1.0.0-alpha.196) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.219
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.254
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.220
+* **@lunora/do:** upgraded to 1.0.0-alpha.262
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+
+## @lunora/platform-node [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.194...@lunora/platform-node@1.0.0-alpha.195) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.218
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+* **@lunora/queue:** upgraded to 1.0.0-alpha.132
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.253
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.219
+* **@lunora/do:** upgraded to 1.0.0-alpha.261
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.113
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+* **@lunora/storage:** upgraded to 1.0.0-alpha.161
+
+## @lunora/platform-node [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.193...@lunora/platform-node@1.0.0-alpha.194) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.217
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.252
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.218
+* **@lunora/do:** upgraded to 1.0.0-alpha.260
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+
+## @lunora/platform-node [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.192...@lunora/platform-node@1.0.0-alpha.193) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.216
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.251
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.217
+* **@lunora/do:** upgraded to 1.0.0-alpha.259
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+
+## @lunora/platform-node [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.191...@lunora/platform-node@1.0.0-alpha.192) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.215
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.216
+
+## @lunora/platform-node [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.190...@lunora/platform-node@1.0.0-alpha.191) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.250
+* **@lunora/do:** upgraded to 1.0.0-alpha.258
+
+## @lunora/platform-node [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.189...@lunora/platform-node@1.0.0-alpha.190) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.249
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.99
+* **@lunora/do:** upgraded to 1.0.0-alpha.257
+
+## @lunora/platform-node [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.188...@lunora/platform-node@1.0.0-alpha.189) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.214
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.248
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.215
+* **@lunora/do:** upgraded to 1.0.0-alpha.256
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+* **@lunora/storage:** upgraded to 1.0.0-alpha.160
+
+## @lunora/platform-node [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.187...@lunora/platform-node@1.0.0-alpha.188) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.213
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.246
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.214
+* **@lunora/do:** upgraded to 1.0.0-alpha.254
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+* **@lunora/storage:** upgraded to 1.0.0-alpha.158
+
+## @lunora/platform-node [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.186...@lunora/platform-node@1.0.0-alpha.187) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.212
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/queue:** upgraded to 1.0.0-alpha.130
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.245
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.213
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.97
+* **@lunora/do:** upgraded to 1.0.0-alpha.253
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.111
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.164
+* **@lunora/storage:** upgraded to 1.0.0-alpha.157
+
+## @lunora/platform-node [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.185...@lunora/platform-node@1.0.0-alpha.186) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.244
+* **@lunora/do:** upgraded to 1.0.0-alpha.252
+
+## @lunora/platform-node [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.184...@lunora/platform-node@1.0.0-alpha.185) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.211
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.243
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.212
+* **@lunora/do:** upgraded to 1.0.0-alpha.251
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
+## @lunora/platform-node [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.183...@lunora/platform-node@1.0.0-alpha.184) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/storage:** upgraded to 1.0.0-alpha.156
+* **@visulima/workflow:** 3.0.0 → 4.0.0
+
+## @lunora/platform-node [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.182...@lunora/platform-node@1.0.0-alpha.183) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.210
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/queue:** upgraded to 1.0.0-alpha.129
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.242
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.211
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.96
+* **@lunora/do:** upgraded to 1.0.0-alpha.250
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.110
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+* **@lunora/storage:** upgraded to 1.0.0-alpha.155
+
+## @lunora/platform-node [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.181...@lunora/platform-node@1.0.0-alpha.182) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.209
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.241
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.210
+* **@lunora/do:** upgraded to 1.0.0-alpha.249
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
+## @lunora/platform-node [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.180...@lunora/platform-node@1.0.0-alpha.181) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.208
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.240
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.209
+* **@lunora/do:** upgraded to 1.0.0-alpha.248
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
+## @lunora/platform-node [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.179...@lunora/platform-node@1.0.0-alpha.180) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.207
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/queue:** upgraded to 1.0.0-alpha.128
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.239
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.208
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.95
+* **@lunora/do:** upgraded to 1.0.0-alpha.247
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.109
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+* **@lunora/storage:** upgraded to 1.0.0-alpha.154
+
+## @lunora/platform-node [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.178...@lunora/platform-node@1.0.0-alpha.179) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.206
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+* **@lunora/queue:** upgraded to 1.0.0-alpha.127
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.238
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.207
+* **@lunora/do:** upgraded to 1.0.0-alpha.246
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.108
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+* **@lunora/storage:** upgraded to 1.0.0-alpha.153
+
+## @lunora/platform-node [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.177...@lunora/platform-node@1.0.0-alpha.178) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.237
+* **@lunora/do:** upgraded to 1.0.0-alpha.245
+
+## @lunora/platform-node [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.176...@lunora/platform-node@1.0.0-alpha.177) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.205
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/queue:** upgraded to 1.0.0-alpha.126
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.236
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.206
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.94
+* **@lunora/do:** upgraded to 1.0.0-alpha.244
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.107
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/storage:** upgraded to 1.0.0-alpha.152
+
+## @lunora/platform-node [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.175...@lunora/platform-node@1.0.0-alpha.176) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.204
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/queue:** upgraded to 1.0.0-alpha.125
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.235
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.205
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.93
+* **@lunora/do:** upgraded to 1.0.0-alpha.243
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.106
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/storage:** upgraded to 1.0.0-alpha.151
+
+## @lunora/platform-node [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.174...@lunora/platform-node@1.0.0-alpha.175) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.203
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.234
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.204
+* **@lunora/do:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/platform-node [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.173...@lunora/platform-node@1.0.0-alpha.174) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.233
+
+## @lunora/platform-node [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.172...@lunora/platform-node@1.0.0-alpha.173) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.202
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.232
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.203
+* **@lunora/do:** upgraded to 1.0.0-alpha.241
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
+## @lunora/platform-node [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.171...@lunora/platform-node@1.0.0-alpha.172) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.201
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.231
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.202
+* **@lunora/do:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
+## @lunora/platform-node [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.170...@lunora/platform-node@1.0.0-alpha.171) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.200
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+* **@lunora/queue:** upgraded to 1.0.0-alpha.124
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.230
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.201
+* **@lunora/do:** upgraded to 1.0.0-alpha.239
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.105
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+* **@lunora/storage:** upgraded to 1.0.0-alpha.150
+
+## @lunora/platform-node [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.169...@lunora/platform-node@1.0.0-alpha.170) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.199
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.229
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.200
+* **@lunora/do:** upgraded to 1.0.0-alpha.238
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+
+## @lunora/platform-node [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.168...@lunora/platform-node@1.0.0-alpha.169) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine,studio:** relay frame validation, bounded SQL console, safer run-as and export ([#1277](https://github.com/anolilab/lunora/issues/1277)) ([0805d3a](https://github.com/anolilab/lunora/commit/0805d3a06b5cce0c8e1221a2ed9c3f1c14196756))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.198
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/queue:** upgraded to 1.0.0-alpha.123
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.228
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.199
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.92
+* **@lunora/do:** upgraded to 1.0.0-alpha.237
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.104
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+* **@lunora/storage:** upgraded to 1.0.0-alpha.149
+
+## @lunora/platform-node [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.167...@lunora/platform-node@1.0.0-alpha.168) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.197
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+* **@lunora/queue:** upgraded to 1.0.0-alpha.122
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.227
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.198
+* **@lunora/do:** upgraded to 1.0.0-alpha.236
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.103
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+* **@lunora/storage:** upgraded to 1.0.0-alpha.148
+
+## @lunora/platform-node [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.166...@lunora/platform-node@1.0.0-alpha.167) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.196
+* **@lunora/queue:** upgraded to 1.0.0-alpha.121
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.226
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.197
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.91
+* **@lunora/do:** upgraded to 1.0.0-alpha.235
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+
+## @lunora/platform-node [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.165...@lunora/platform-node@1.0.0-alpha.166) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.195
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+* **@lunora/queue:** upgraded to 1.0.0-alpha.120
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.225
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.196
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.90
+* **@lunora/do:** upgraded to 1.0.0-alpha.234
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.102
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+* **@lunora/storage:** upgraded to 1.0.0-alpha.147
+
+## @lunora/platform-node [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.164...@lunora/platform-node@1.0.0-alpha.165) (2026-10-20)
+
+### Features
+
+* **platform:** enforce socket tag budget on every host ([#1254](https://github.com/anolilab/lunora/issues/1254)) ([867cead](https://github.com/anolilab/lunora/commit/867ceadbe10778d8acbdd9389f51cbfbcd4e8216))
+
+### Bug Fixes
+
+* **client:** bound transport waits and keep offline writes durable ([#1263](https://github.com/anolilab/lunora/issues/1263)) ([5d96e85](https://github.com/anolilab/lunora/commit/5d96e85219342f400a6c11b3d3195f418588278d))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.194
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+* **@lunora/queue:** upgraded to 1.0.0-alpha.119
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.224
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.195
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.89
+* **@lunora/do:** upgraded to 1.0.0-alpha.233
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.101
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+* **@lunora/storage:** upgraded to 1.0.0-alpha.146
+
+## @lunora/platform-node [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.163...@lunora/platform-node@1.0.0-alpha.164) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.223
+
+## @lunora/platform-node [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.162...@lunora/platform-node@1.0.0-alpha.163) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.193
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/queue:** upgraded to 1.0.0-alpha.118
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.222
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.194
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.88
+* **@lunora/do:** upgraded to 1.0.0-alpha.232
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.100
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+* **@lunora/storage:** upgraded to 1.0.0-alpha.145
+
+## @lunora/platform-node [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.161...@lunora/platform-node@1.0.0-alpha.162) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.192
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/queue:** upgraded to 1.0.0-alpha.117
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.221
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.193
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.87
+* **@lunora/do:** upgraded to 1.0.0-alpha.231
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.99
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+* **@lunora/storage:** upgraded to 1.0.0-alpha.144
+
+## @lunora/platform-node [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.160...@lunora/platform-node@1.0.0-alpha.161) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.191
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+* **@lunora/queue:** upgraded to 1.0.0-alpha.116
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.220
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.192
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.86
+* **@lunora/do:** upgraded to 1.0.0-alpha.230
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.98
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+* **@lunora/storage:** upgraded to 1.0.0-alpha.143
+
+## @lunora/platform-node [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.159...@lunora/platform-node@1.0.0-alpha.160) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.219
+
+## @lunora/platform-node [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.158...@lunora/platform-node@1.0.0-alpha.159) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.190
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.218
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.191
+* **@lunora/do:** upgraded to 1.0.0-alpha.228
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.141
+
+## @lunora/platform-node [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.157...@lunora/platform-node@1.0.0-alpha.158) (2026-10-18)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** SocketHost requires newPair and upgradeResponse.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): keep a route's queued frames when it fails after commit
+
+A route handler whose writes committed and then failed in a deferred step lost
+every frame it had queued, though the writes stayed durable. The route path now
+absorbs a committed failure the way a room event does: it is logged and the
+queued send and broadcast frames still go out. A failure before the commit still
+drops them.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): find the upgrade marker by a header token
+
+The worker rebuilds every response that is not a 101, so a marker looked up by
+object identity was never found, and every Node upgrade through createWorker was
+answered with a 200 and closed. The marker now carries a one-time token header,
+which the rebuild keeps. An unclaimed marker expires after 30 s and abandons its
+pair, so the shard hears the close.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): log a synchronous webSocketMessage throw
+
+A message hook that threw synchronously escaped the socket listener before the
+rejection handler existed, so the failure was never logged. The hook now runs
+inside an async function, so a synchronous throw and a rejection take the same
+log path.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(do): drop a route frame that arrives after its close
+
+A frame delivered after a socket's close had been delivered was still dispatched to
+the route handler, which then ran after teardown had cleared the socket's identity,
+so it saw an empty connection id and anonymous identity. Such a frame is now
+refused. The identity a queued event runs under is read when the event is queued,
+so a later attachment change cannot reach a handler already in the chain.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(do): refuse route sockets under delivery authorization
+
+A defineWebSocket route upgrade was accepted under delivery authorization, and its
+mutations ran per frame, while the broadcasts those mutations produce were
+dropped. The upgrade is now refused with 501 NOT_IMPLEMENTED, as the other unsupported
+delivery modes are, and the frame dispatch refuses any route socket that predates
+the mode, close included.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(codegen): emit defineWebSocket routes statically in lazy mode
+
+With lazyFunctions on, LUNORA_FUNCTIONS holds only stubs, so the LUNORA_SOCKETS map built
+by walking it was empty and every defineWebSocket route was ignored. Discovery now records
+each route's literal path and auth on its FunctionIR, and lazy mode emits the map
+from those values, as the room registry does. A path that is not a string literal, an
+auth that is not a literal boolean, or two routes on one path is a codegen error.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(codegen): refuse defineWebSocket routes with delivery authorization
+
+The shard refuses a route upgrade under delivery authorization, so an app that declares
+both could never serve the route. Codegen now reports that combination as a build-time
+error on every target, as it already does for defineLiveStream.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* docs(errors): regenerate the error code reference
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(platform-node): match the typed websockets capability note
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): refuse anonymous frames on auth routes
+
+The upgrade checks a route's auth requirement once, when the socket is
+accepted. A socket opened on a public route keeps an anonymous attachment
+after the route is changed to require a session, and its inbound frames
+still reached the route's mutation. Check the requirement again per frame,
+so such a socket is refused every frame, as its broadcasts already are.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): forward a live control call to relays once
+
+A merge left the relay forwarding block in handleLiveSocketControl twice.
+When no relay held the connection, the first fan-out found nothing and the
+identical second one asked every relay again, so a subscribe could run on a
+second round trip the caller never made. Keep one forwarding attempt.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): bind route sockets to their accepting handler
+
+A route socket recorded only its URL path, and both its frames and its
+close resolved that path against the current registrations. After a
+deployment reassigned the path, an open socket dispatched its messages and
+its onClose to a handler that never accepted it. Record the accepting
+function on the attachment, resolve a route socket only through that
+function, and fail closed for a socket that predates the record.
+
+The same change fixes the expired-credential drop, which closes a socket
+without delivering the close back to webSocketClose. A route's onClose now
+runs when the drop starts, and a close the host later delivers does not run
+it again.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(runtime): keep route upgrades on the owner shard
+
+With a promoted shard, the worker spread every new WebSocket upgrade across
+the shard's relays. A defineWebSocket route's handler runs on the Durable
+Object that accepted the socket, so a relay ran the route's mutation
+against its own storage instead of the owner's. Route upgrades now stay on
+the owner. The shared subscription socket still spreads to relays, and a
+route upgrade still carries the shard binding the owner's relay hub uses.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(codegen): carry socket paths into lazy builds
+
+Three gaps made defineWebSocket routes unreachable or unbuildable in lazy
+mode. The worker's route set is read off the function stubs, and the lazy
+stubs carried a route's lifecycle but not its path, so no upgrade was
+forwarded to the shard. Stubs now carry socketPath and auth.
+
+Discovery accepted any string-literal path, including ones the worker could
+never match or that sit under the framework prefix. It now applies the
+defineWebSocket path rule and refuses others with SOCKET_PATH_INVALID.
+
+The lazy LUNORA_SOCKETS emitter treated two export names of one
+defineWebSocket call as two routes and refused the build. Each route now
+records the call it came from, so aliases of one call collapse to one entry
+while distinct calls on one path still fail.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(client): keep route sockets on relative urls and bounced sockets quiet
+
+Three socket URL and credential fixes in the client.
+
+A relative socket url (a same-origin wsUrl) threw on connect, because the
+URL builders parsed it as absolute. They now parse against a placeholder
+base and serialise back in the form given.
+
+Credential rotation closed the old socket but left it as the connection's
+current socket, so its late frames still reached the route's handler. The
+bounce now detaches the socket first and arms the reconnect itself, so a
+bounced socket delivers nothing under the old credential.
+
+The scheduled-jobs admin socket goes back to the shard origin, as before,
+instead of following a custom wsUrl's path and query.
+
+The connectWebSocket docs no longer describe wsToken as a user credential
+for route sockets; a private route needs the session cookie.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): survive a reset and a shutdown during an upgrade
+
+An upgrade waits on the worker's fetch, which can run a route's onOpen. In
+that window the raw socket had no 'error' listener, so a client reset (or a
+write to a socket it had already reset) was an unhandled error that ended
+the process. The socket now has an error listener that destroys it; the
+close that follows aborts the fetch and abandons the pair.
+
+close() terminated only upgraded clients. A raw socket still awaiting its
+fetch was in neither set, so a fetch that never settled held the server
+open. Pending upgrade sockets are now tracked and destroyed on close.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(api): record the route socket fields in the api snapshots
+
+The route-binding and path-validation fixes add an internal socket function
+field to the shard attachment, an origin to the codegen function IR, and the
+SOCKET_PATH_INVALID error code. Snapshot regenerated with api:update.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): correct the socket test fixture and discovered route type
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(client): keep the host of a protocol-relative socket url
+
+A `wsUrl` such as `//edge.example/_lunora/ws` was serialised as a bare path, so custom route
+sockets opened against the page's origin instead of the configured host.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(client): guard a route's onMessage like its other callbacks
+
+A throwing `onMessage`, or a frame `decodeWire` rejects, now goes through the same guard as
+`onOpen`/`onClose` and is logged as a route handler failure. Before, it surfaced only as a
+generic frame handler error one layer down.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): let socket close handlers finish before disposal
+
+`NodeHttpServer.close()` resolved once the HTTP server closed, without waiting for the terminated
+WebSockets to fire their close events, so a registry closed right after it could dispose a shard's
+database while a route's close handler was still writing. `close()` now waits for those events. The
+socket host tracks close handlers still running (`drain()`), and the registry disposes a shard only
+once they settle.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(client): clear the connect timer of a bounced socket
+
+A credential rotation that bounced a socket still connecting left that attempt's connect timeout
+armed. When it fired, it cleared the replacement attempt's timer handle, so the replacement's own
+timeout later force-closed a socket that had already opened.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): cancel a refusal body once its client has gone
+
+A refused upgrade's response body was read to the end with `arrayBuffer()`, so a streaming refusal
+kept being consumed after the client disconnected. The body is now read through a reader that the
+socket's close cancels.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): match a mixed-case Upgrade under delivery authorization
+
+The delivery-authorization branch of `fetch()` compared `Upgrade` to `websocket` exactly, so an
+upgrade sending `WebSocket` fell through to a 501. A route socket that sends a frame that is not
+valid JSON is now logged before the frame is dropped.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): contain a synchronous throw from a socket handler
+
+A close or message handler registered on `inbound` directly could throw inside a `ws` event or the
+upgrade marker timer, where nothing caught it. A close throw is now treated as a rejection, so the
+socket is still released, and a message throw is logged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(server): drop the re-export step from the defineWebSocket example
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* perf(do): decide the route topic check once per whisper fan-out
+
+The local whisper fan-out called the route-topic check for every member, though only a route topic
+needs it. The prefix test now runs once per fan-out, so an ordinary whisper adds no call per socket.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(do): encode a route frame when socket.send is called
+
+Queued route frames held a structured clone of the payload, which turned a class instance into a
+plain object, so the wire encoder never refused it and the client got a lossy copy. The frame is
+now encoded at the call: it carries the payload as it was then, and an unencodable value throws
+inside the handler, as a room broadcast would.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(platform-node): cap the body relayed for a refused upgrade
+
+A refused upgrade read the response body whole before writing it, so a large or endless body was
+buffered per pending connection. At most 64 KiB is relayed now; past that the body is cancelled.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(client): reset a route socket backoff only once it is stable
+
+An accepted route upgrade reset the reconnect backoff at once, but the shard can drop the socket
+right after (an expired identity), so such a socket reconnected at the initial delay forever. The
+backoff now resets after the socket stays open for the stability window, as the main connection
+does. Closing a route socket that throws no longer stops the other teardowns or the reconnect.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** typed custom WebSocket routes (defineWebSocket) ([#1219](https://github.com/anolilab/lunora/issues/1219)) ([47705c1](https://github.com/anolilab/lunora/commit/47705c19e8bd9600d133ad6b9874e9ef61fcd685))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.189
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/platform:** upgraded to 1.0.0-alpha.69
+* **@lunora/queue:** upgraded to 1.0.0-alpha.115
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.217
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.190
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.84
+* **@lunora/do:** upgraded to 1.0.0-alpha.227
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.97
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.140
+* **@lunora/storage:** upgraded to 1.0.0-alpha.142
+
+## @lunora/platform-node [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.156...@lunora/platform-node@1.0.0-alpha.157) (2026-10-18)
+
+### Bug Fixes
+
+* harden live stream delivery on the server and node host ([#1247](https://github.com/anolilab/lunora/issues/1247)) ([0074c55](https://github.com/anolilab/lunora/commit/0074c55e1a7910f89b6d4b2b4275b4dbe8113edf))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.188
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/queue:** upgraded to 1.0.0-alpha.114
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.216
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.189
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.83
+* **@lunora/do:** upgraded to 1.0.0-alpha.226
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.96
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+* **@lunora/storage:** upgraded to 1.0.0-alpha.141
+
+## @lunora/platform-node [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.155...@lunora/platform-node@1.0.0-alpha.156) (2026-10-18)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** createNodeHttpServer rejects a non-loopback host without an
+origin option, and no longer caps request bodies at 1 MiB.
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **server:** live topic streams over one SSE connection ([#1218](https://github.com/anolilab/lunora/issues/1218)) ([59056ea](https://github.com/anolilab/lunora/commit/59056ea6c5d23de1bd5633a7da3ac680eb622344))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.187
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.68
+* **@lunora/queue:** upgraded to 1.0.0-alpha.113
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.215
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.188
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.82
+* **@lunora/do:** upgraded to 1.0.0-alpha.225
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.95
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+* **@lunora/storage:** upgraded to 1.0.0-alpha.140
+
+## @lunora/platform-node [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.154...@lunora/platform-node@1.0.0-alpha.155) (2026-10-18)
+
+### Bug Fixes
+
+* **do:** address review of delivery authorization ([#1235](https://github.com/anolilab/lunora/issues/1235)) ([#1238](https://github.com/anolilab/lunora/issues/1238)) ([d73863b](https://github.com/anolilab/lunora/commit/d73863bd1e442675a751453284d5498ec4383a87))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.186
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+* **@lunora/queue:** upgraded to 1.0.0-alpha.112
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.214
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.187
+* **@lunora/do:** upgraded to 1.0.0-alpha.224
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.94
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+* **@lunora/storage:** upgraded to 1.0.0-alpha.139
+
+## @lunora/platform-node [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.153...@lunora/platform-node@1.0.0-alpha.154) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.212
+* **@lunora/do:** upgraded to 1.0.0-alpha.222
+
+## @lunora/platform-node [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.152...@lunora/platform-node@1.0.0-alpha.153) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.185
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/queue:** upgraded to 1.0.0-alpha.111
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.211
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.186
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.81
+* **@lunora/do:** upgraded to 1.0.0-alpha.221
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.93
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.135
+* **@lunora/storage:** upgraded to 1.0.0-alpha.138
+
+## @lunora/platform-node [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.151...@lunora/platform-node@1.0.0-alpha.152) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.184
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/queue:** upgraded to 1.0.0-alpha.110
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.210
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.185
+* **@lunora/workflow:** upgraded to 1.0.0-alpha.80
+* **@lunora/do:** upgraded to 1.0.0-alpha.220
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.92
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.134
+* **@lunora/storage:** upgraded to 1.0.0-alpha.137
+
+## @lunora/platform-node [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.150...@lunora/platform-node@1.0.0-alpha.151) (2026-10-17)
+
+### Features
+
+* **server:** typed rooms (defineRoom) over the whisper transport ([#1217](https://github.com/anolilab/lunora/issues/1217)) ([51f66b8](https://github.com/anolilab/lunora/commit/51f66b8d940ea4f876ff2380225d172a95265922))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.183
+* **@lunora/platform:** upgraded to 1.0.0-alpha.66
+* **@lunora/queue:** upgraded to 1.0.0-alpha.109
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.209
+* **@lunora/sql-store:** upgraded to 1.0.0-alpha.184
+* **@lunora/do:** upgraded to 1.0.0-alpha.219
+* **@lunora/platform-cloudflare:** upgraded to 1.0.0-alpha.91
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.133
+* **@lunora/storage:** upgraded to 1.0.0-alpha.136
+
+## @lunora/platform-node [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.149...@lunora/platform-node@1.0.0-alpha.150) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.208
+
+## @lunora/platform-node [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.148...@lunora/platform-node@1.0.0-alpha.149) (2026-10-16)
+
+### Features
+
+* **ai:** toMarkdown and image generation ([#1215](https://github.com/anolilab/lunora/issues/1215)) ([d75e414](https://github.com/anolilab/lunora/commit/d75e4147c1b4bf5ce605f367bda8b4c31576fbd8))
+
+## @lunora/platform-node [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.147...@lunora/platform-node@1.0.0-alpha.148) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/runtime:** upgraded to 1.0.0-alpha.206
+
 ## @lunora/platform-node [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/platform-node@1.0.0-alpha.146...@lunora/platform-node@1.0.0-alpha.147) (2026-10-15)
 
 

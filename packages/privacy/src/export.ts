@@ -5,14 +5,13 @@
 import { encodeWire } from "@lunora/wire";
 
 import type { ManifestDataset } from "./archive";
-import { buildArchive, buildManifest, buildSummaryPdf } from "./archive";
 import { articlesFor } from "./articles";
 import type { Dataset } from "./dataset";
-import { retainedTables } from "./dataset";
+import { requireTables, retainedTables } from "./dataset";
 import type { PrivacyPorts } from "./ports";
 import type { RequestRecord } from "./requests";
 
-const partName = (dataset: Dataset): string => `parts/${dataset.id}.json`;
+const partName = (runId: string, dataset: Dataset): string => `${runId}/parts/${dataset.id}.json`;
 
 /** A dataset is restricted (Art. 18) when a retention rule may keep any of its tables after erasure. */
 const isRestricted = (dataset: Dataset): boolean => retainedTables(dataset).length > 0;
@@ -36,28 +35,37 @@ const withoutColumns = (
 };
 
 /**
- * Collect one dataset's rows and write them to storage. A retry overwrites the part, so it is idempotent.
+ * Collect one dataset's rows and write them to storage under the run's id. A retry overwrites the part, so it
+ * is idempotent.
  * The rows go through the Lunora wire codec, which plain JSON cannot replace: a `bigint` column would
  * throw and a bytes column would be written as `{}`. The codec writes them as tagged leaves, a bigint
  * as its decimal string and bytes as base64, and the archive keeps that form.
  */
-const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord): Promise<void> => {
+const collectPart = async (ports: PrivacyPorts, dataset: Dataset, request: RequestRecord, runId: string): Promise<void> => {
     const rows = await ports.data.collect(dataset, request.subjectId);
+
+    requireTables(rows, dataset, "collect");
     // `omit` is applied here, not by the app: a credential column named in the dataset never reaches the archive.
     const tables = Object.fromEntries(dataset.tableNames.map((table) => [table, withoutColumns(rows[table] ?? [], dataset.tables[table]?.omit ?? [])]));
 
-    await ports.files.put(request.id, { data: JSON.stringify(encodeWire({ tables })), name: partName(dataset) });
+    await ports.files.put(request.id, { data: JSON.stringify(encodeWire({ tables })), name: partName(runId, dataset) });
 };
 
-/** Assemble the archive and the summary from the stored parts, then store both. */
-const assembleExport = async (ports: PrivacyPorts, datasets: ReadonlyArray<Dataset>, request: RequestRecord, subjectKey: string): Promise<string> => {
+/** Assemble the archive and the summary from the run's stored parts, then store both under the run's id. */
+const assembleExport = async (
+    ports: PrivacyPorts,
+    datasets: ReadonlyArray<Dataset>,
+    request: RequestRecord,
+    subjectKey: string,
+    runId: string,
+): Promise<string> => {
     const files: { data: string; path: string }[] = [];
     const manifestDatasets: ManifestDataset[] = [];
 
     for (const dataset of datasets) {
         // Parts are read in order, so the archive lists datasets in the order they were declared.
         // eslint-disable-next-line no-await-in-loop -- sequential by design, see the comment above
-        const text = await ports.files.read(request.id, partName(dataset));
+        const text = await ports.files.read(request.id, partName(runId, dataset));
 
         if (text === undefined) {
             throw new Error(`Export part for "${dataset.id}" is missing; collect it again.`);
@@ -83,6 +91,10 @@ const assembleExport = async (ports: PrivacyPorts, datasets: ReadonlyArray<Datas
         });
     }
 
+    // Loaded here, not at module scope: the PDF and ZIP writers (pdf-lib and its fonts, fflate,
+    // culori, an HTML parser) are about 1.3 MB that only an export run needs, and every Worker
+    // that declares a privacy policy would otherwise evaluate them at startup.
+    const { buildArchive, buildManifest, buildSummaryPdf } = await import("./archive");
     const generatedAt = ports.now();
     const manifest = buildManifest({ datasets: manifestDatasets, generatedAt, subjectKey });
     const zip = buildArchive([...files, { data: JSON.stringify(manifest, undefined, 2), path: "manifest.json" }], generatedAt);
@@ -94,9 +106,9 @@ const assembleExport = async (ports: PrivacyPorts, datasets: ReadonlyArray<Datas
         subjectKey,
         title: "Your data",
     });
-    const archiveKey = await ports.files.put(request.id, { data: zip, name: "export.zip" });
+    const archiveKey = await ports.files.put(request.id, { data: zip, name: `${runId}/export.zip` });
 
-    await ports.files.put(request.id, { data: pdf, name: "summary.pdf" });
+    await ports.files.put(request.id, { data: pdf, name: `${runId}/summary.pdf` });
 
     return archiveKey;
 };

@@ -153,8 +153,8 @@ describe("d1 ctx-db lazy companion migration", () => {
 
         const id = await writer.insert("docs", { body: "first", channel: "x", title: "a" });
 
-        await expect(writer.patch(id, { body: "second" })).resolves.toBeUndefined();
-        await expect(writer.delete(id)).resolves.toBeUndefined();
+        await expect(writer.patch("docs", id, { body: "second" })).resolves.toBeUndefined();
+        await expect(writer.delete("docs", id)).resolves.toBeUndefined();
     });
 
     it("aggregate reads the maintained counter without an explicit aggregate migration", async () => {
@@ -204,7 +204,7 @@ describe("d1 ctx-db groupBy emptied-group pruning", () => {
 
         await seedTwoGroups(writer);
 
-        await writer.delete("t3"); // empties p2
+        await writer.delete("todos", "t3"); // empties p2
 
         const groups = await writer.groupBy("todos", { by: ["projectId"] });
         const keys = groups.map((g) => g.key["projectId"]).toSorted((a, b) => String(a).localeCompare(String(b)));
@@ -223,7 +223,7 @@ describe("d1 ctx-db groupBy emptied-group pruning", () => {
 
         await seedTwoGroups(writer);
 
-        await writer.delete("t3"); // empties p2
+        await writer.delete("todos", "t3"); // empties p2
 
         const groups = await writer.groupBy("todos", { agg: { field: "seq", op: "sum" }, by: ["projectId"] });
         const keys = groups.map((g) => g.key["projectId"]).toSorted((a, b) => String(a).localeCompare(String(b)));
@@ -241,7 +241,7 @@ describe("d1 ctx-db groupBy emptied-group pruning", () => {
 
         await seedTwoGroups(writer);
 
-        await writer.patch("t3", { projectId: "p1" }); // p2's only row moves to p1 → p2 empties
+        await writer.patch("todos", "t3", { projectId: "p1" }); // p2's only row moves to p1 → p2 empties
 
         const groups = await writer.groupBy("todos", { by: ["projectId"] });
 

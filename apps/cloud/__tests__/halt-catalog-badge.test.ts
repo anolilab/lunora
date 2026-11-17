@@ -61,7 +61,7 @@ const haltThenResume = async (
     await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
     await runHaltConverges(database, ports(deps));
     await requestOrganizationResume(database, { actor: "usr_1", now: NOW, organizationId: "org_1" });
-    await database.patch(haltOf(database, "acme")?._id as string, { resumeDeploymentId: target, state: "resuming" });
+    await database.patch("halts", haltOf(database, "acme")?._id as string, { resumeDeploymentId: target, state: "resuming" });
     await runHaltConverges(database, ports(deps, NOW + 60_000));
 };
 

@@ -209,7 +209,7 @@ the plugin array.) For the server side, run `lunora add auth-magic-link` or
 `lunora add auth-otp`, and see
 [`@lunora/auth/plugins`](/docs/packages/auth/plugins) for the rest.
 
-### The server can just tell it
+### Let the server declare its flows
 
 The list above declares your **client** plugins. It does not have to be the only
 place a flow is declared, because the server already knows what it runs. Add
@@ -271,9 +271,9 @@ composition rules.
 
 ## Username availability
 
-With the `username` plugin on, `<SignUpCard>` and `<SetUsernameCard>` check
-availability as the user types, so a taken name surfaces before the submit
-rather than as a failed sign-up with the whole form to re-check.
+With the `username` plugin on, `<SetUsernameCard>` checks availability as the user
+types, so a taken name surfaces before the submit rather than as a failed save.
+The React `<SignUpCard>` does not run this check.
 
 It is debounced, and a slow answer for an earlier value is discarded rather than
 applied, because that out-of-order race is how these end up confidently reporting

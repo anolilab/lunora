@@ -124,8 +124,8 @@ class ProbeCountingShard extends ShardDO {
     }
 
     /** Hard-delete through the ctx-db writer, so the changelog records a `delete` (post-image NULL by design). */
-    public async wipe(id: string): Promise<void> {
-        await this.getWriter().delete(id, undefined, { hard: true });
+    public async wipe(table: string, id: string): Promise<void> {
+        await this.getWriter().delete(table, id, { hard: true });
     }
 
     // eslint-disable-next-line class-methods-use-this -- test stub override: resolves by `name`/`args` alone, no instance state.
@@ -275,10 +275,10 @@ describe("delta-sync read path", () => {
             });
 
             await writer.insert("messages", { _id: "m1", authorId: "u1", channelId: "c1", text: "a" }, { allowExplicitId: true });
-            await writer.patch("m1", { text: "b" });
+            await writer.patch("messages", "m1", { text: "b" });
             const midpoint = readCdcCursor(harness.sql);
 
-            await writer.patch("m1", { text: "c" });
+            await writer.patch("messages", "m1", { text: "c" });
 
             // Three ops on one row collapse to one key…
             const keys = readCdcChangeKeys(harness.sql, "messages", 0, readCdcCursor(harness.sql));
@@ -367,7 +367,7 @@ describe("delta-sync read path", () => {
             const shard = buildShard();
 
             await shard.seed("m0", "c1");
-            await shard.wipe("m0");
+            await shard.wipe("messages", "m0");
 
             // Trim the insert, exactly as the retention sweep would: the log now
             // starts with a `delete`, whose NULL post-image is correct rather than
@@ -427,15 +427,15 @@ describe("delta-sync read path", () => {
             return shard;
         };
 
-        it("leaves the log untouched when neither knob is configured", async () => {
+        it("keeps the log intact inside the default window when neither knob is configured", async () => {
             expect.assertions(2);
 
             await sweepWith({}, 20);
 
-            // The pre-existing behaviour, preserved deliberately: the log's
-            // out-of-shard consumers (a warehouse connector's opaque cursor) are
-            // invisible from here, so retention is something a deployment opts
-            // into rather than something inferred.
+            // Row retention defaults to a window far larger than this log, so a
+            // shard that configures nothing still keeps everything it has written
+            // so far. What the default changes is the long run: the log is bounded
+            // (see `cdc-retention-default.test.ts`) rather than growing for ever.
             expect(minCdcSeq(harness.sql)).toBe(1);
             expect(minCdcReplayableSeq(harness.sql)).toBe(1);
         });
@@ -725,7 +725,8 @@ describe("delta-sync read path", () => {
 
             const bucket = createFakeR2Bucket();
 
-            await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_PAYLOAD_RETENTION: "5" }, 20);
+            // Row retention switched off: on by default now, and a trim is what makes the archive worth uploading.
+            await sweepWithArchive({ LUNORA_CDC_ARCHIVE: bucket, LUNORA_CDC_LOG_RETENTION: "off", LUNORA_CDC_PAYLOAD_RETENTION: "5" }, 20);
 
             // Compaction keeps every key, so nothing is lost and there is nothing
             // to soften. Uploading anyway would also never terminate: with no

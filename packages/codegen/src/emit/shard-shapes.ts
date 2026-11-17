@@ -8,10 +8,13 @@ import type { RlsPoliciesResult } from "@lunora/shard-engine";
  */
 const emitShapeFragments = ({
     hasMutators,
+    hasSensitiveShapes,
     hasShapes,
     rlsData,
 }: {
     hasMutators: boolean;
+    /** Some shape declares a `v.sensitive` argument: its resolve runs under a scope from its raw args. */
+    hasSensitiveShapes: boolean;
     hasShapes: boolean;
     rlsData: RlsPoliciesResult;
 }): {
@@ -26,28 +29,47 @@ const emitShapeFragments = ({
     // through the generated registries. Both are empty for a shape/mutator-free
     // project, so its `shard.ts` is byte-identical.
     /* eslint-disable no-secrets/no-secrets -- the emitted resolveShape body + registry builder are dense generated TS (`composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY, …)`), not credentials */
+    // Only a project with a marked shape argument scopes its resolve: the scope is opened from the RAW
+    // args, so the predicate's transformed value and any error it throws are masked at the throw site.
+    // The wrapper clears the scope on every exit. Unmarked projects keep the body they always had.
+    const shapeResultType = "{ columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined";
+    const shapeResolveEntry = hasSensitiveShapes
+        ? `        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): ${shapeResultType} {
+            const sensitive = this.openSensitiveScope(\`__shape__:\${name}\`, args);
+
+            try {
+                return this.resolveShapeWithScope(name, args, identity, sensitive);
+            } catch (error) {
+                throw this.maskSensitiveError(error, sensitive);
+            } finally {
+                sensitive.clear();
+            }
+        }
+
+        private resolveShapeWithScope(name: string, args: Record<string, unknown>, identity: SubscriptionIdentity | undefined, sensitive: SensitiveScope): ${shapeResultType} {`
+        : `        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): ${shapeResultType} {`;
+    const shapeSensitiveField = hasSensitiveShapes ? ", sensitive" : "";
     const shapeResolveOverride = hasShapes
         ? `
-        protected override resolveShape(name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string } | undefined {
+${shapeResolveEntry}
             const shape = LUNORA_SHAPES[name];
 
             if (!shape) {
                 return undefined;
             }
 
-            this.ensureMigrated();
+            this.ensureServable();
 
             // Trusted ctx from the socket's OWN verified identity — the client
             // supplies only the shape name + args; \`compileWhere\` validates the
             // args then runs the shape's \`where(ctx, args)\` under that identity,
             // so which rows replicate is a server decision (reads-as-permissions).
-            const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity });
+            const ctx = this.buildCtx({ functionPath: \`__shape__:\${name}\`, identity${shapeSensitiveField} });
             // \`ownerField\` resolves an \`owner: true\` shape: only here is the table's
             // \`.ownedBy(field)\` column in scope, so the DO hands it to the shape
             // rather than every shape restating the ownership check in its \`where\`.
-            const shapeWhere = shape.compileWhere(ctx, args, {
-                ownerField: (schema as unknown as { tables: Record<string, { ownerField?: string }> }).tables[shape.table]?.ownerField,
-            }) as unknown as WhereInput;
+            const ownerField = (schema as unknown as { tables: Record<string, { ownerField?: string }> }).tables[shape.table]?.ownerField;
+            const shapeWhere = shape.compileWhere(ctx, args, ownerField === undefined ? {} : { ownerField }) as unknown as WhereInput;
 
             // AND-compose with the read policies this SHAPE declares
             // (\`defineShape({ use: [guard] })\`, pre-indexed into
@@ -89,7 +111,7 @@ const emitShapeFragments = ({
             // instead of the CDC poke path.
             const isGlobal = (schema as unknown as SchemaLike).tables[shape.table]?.shardMode?.kind === "global";
 
-            return { columns: shape.columns, effectiveWhere, global: isGlobal, table: shape.table };
+            return { ...(shape.columns === undefined ? {} : { columns: shape.columns }), effectiveWhere, global: isGlobal, table: shape.table };
         }
 `
         : "";
@@ -158,7 +180,13 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
             // cache in front of this read — keys on identity + userId only. Equal
             // keys must mean equal rows, so a field the writer can scope by has to
             // be either in the key or out of the request; it is out.
-            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark(), identity: identity?.identity, userId: identity?.userId };
+            const bookmark = this.getInboundBookmark();
+            const globalRequest = {
+                ...this.globalCdcOptions(config.cdc ?? false),
+                ...(bookmark === undefined ? {} : { bookmark }),
+                ...(identity?.identity === undefined ? {} : { identity: identity.identity }),
+                ...(identity?.userId === undefined ? {} : { userId: identity.userId }),
+            };
             const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
             const rows: Array<{ doc: Record<string, unknown>; id: string }> = [];
 
@@ -171,7 +199,7 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
             // so bail early and let the caller fail it closed.
             do {
                 // eslint-disable-next-line no-await-in-loop -- sequential page drain to assemble the full membership
-                const page = await globalDb.findMany(resolved.table, { cursor, where: resolved.effectiveWhere });
+                const page = await globalDb.findMany(resolved.table, { cursor, ...(resolved.effectiveWhere === undefined ? {} : { where: resolved.effectiveWhere }) });
 
                 for (const doc of page.page) {
                     rows.push({ doc, id: String((doc as { _id?: unknown })._id) });
@@ -199,10 +227,11 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
             // literal trips an excess-property error (TS2353) that makes the
             // emitted \`shard.ts\` uncompilable for every Hyperdrive-global app with
             // a \`defineShape\`. The Hyperdrive factory simply never reads it.
-            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), bookmark: this.getInboundBookmark() };
+            const bookmark = this.getInboundBookmark();
+            const globalRequest = { ...this.globalCdcOptions(config.cdc ?? false), ...(bookmark === undefined ? {} : { bookmark }) };
             const globalDb: DatabaseWriterLike = ${globalDatabaseThunk}?.(env, globalRequest) ?? globalDbStub;
 
-            return globalDb.cdcChangedTables?.(sinceSeq, { cursorOnly });
+            return globalDb.cdcChangedTables?.(sinceSeq, cursorOnly === undefined ? {} : { cursorOnly });
         }
 `
         : "";

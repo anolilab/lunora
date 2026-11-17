@@ -115,7 +115,7 @@ const reapStale = async (database: ControlPlaneDatabase, rows: StoredBackupRow[]
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- a handful of rows at most; sequential keeps the writer simple
-        await database.patch(row._id, { completedAt: now, error: "interrupted before it finished", status: "failed" }, "tenantBackups");
+        await database.patch("tenantBackups", row._id, { completedAt: now, error: "interrupted before it finished", status: "failed" });
         row.status = "failed";
     }
 
@@ -153,14 +153,14 @@ const snapshotOne = async (deps: TenantBackupSweepDeps, deployment: BackupTarget
             deps.log?.(`[tenant-backup] ${deployment.alias} off-site copy failed: ${offsite.error ?? "unknown error"}`);
         }
 
-        await database.patch(id, { bytes, completedAt: Date.now(), status: "succeeded", ...offsiteFields(offsite) }, "tenantBackups");
+        await database.patch("tenantBackups", id, { bytes, completedAt: Date.now(), status: "succeeded", ...offsiteFields(offsite) });
 
         return true;
     } catch (error) {
         const reason = describe(error);
 
         deps.log?.(`[tenant-backup] ${deployment.alias} failed: ${reason}`);
-        await database.patch(id, { completedAt: Date.now(), error: reason, status: "failed" }, "tenantBackups").catch(() => undefined);
+        await database.patch("tenantBackups", id, { completedAt: Date.now(), error: reason, status: "failed" }).catch(() => undefined);
 
         return false;
     }
@@ -212,7 +212,7 @@ const prune = async (
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
-            await database.delete(row._id, "tenantBackups");
+            await database.delete("tenantBackups", row._id);
             pruned += 1;
         } catch (error) {
             deps.log?.(`[tenant-backup] prune of ${row._id} failed: ${describe(error)}`);

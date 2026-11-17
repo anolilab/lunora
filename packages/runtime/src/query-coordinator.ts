@@ -566,8 +566,14 @@ interface ImportFanOutRequest {
      * `rows` arg of `__lunora_admin__:importShard`. The shard's
      * starting-line-number for error attribution is carried in `startLine`.
      */
-    batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
+    batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; op?: "delete"; table: string }>; shardKey: string; startLine?: number }>;
+    /** Let rows tagged `op: "delete"` remove stored rows. Off unless set: the shard refuses those rows. */
+    deletes?: boolean;
+    /** Check the rows and return their shape errors without writing. Off unless set: a write is the default. */
+    dryRun?: boolean;
     headers?: Record<string, string>;
+    /** `"replace"` overwrites a row whose `_id` already exists; the default `"skip"` reports it as a conflict and leaves it unchanged. */
+    onConflict?: "replace" | "skip";
 }
 
 /**
@@ -591,8 +597,10 @@ interface ShardImportOutcome {
     error?: { message: string; timedOut: boolean };
     result?: {
         conflicts: number;
+        deleted: number;
         errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
         inserted: Record<string, number>;
+        replaced: number;
     };
     shardKey: string;
 }
@@ -600,12 +608,16 @@ interface ShardImportOutcome {
 interface ImportFanOutResult {
     /** Total conflicts (skipped `_id`s) across shards. */
     conflicts: number;
+    /** Total stored rows removed by `op: "delete"` rows across shards. */
+    deleted: number;
     /** Errors merged across all per-shard outcomes. */
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     failed: number;
     /** Per-table summed insert counts. */
     inserted: Record<string, number>;
     ok: number;
+    /** Total existing rows overwritten under `onConflict: "replace"`. */
+    replaced: number;
     shards: ReadonlyArray<ShardImportOutcome>;
 }
 
@@ -1167,6 +1179,8 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
     const inserted: Record<string, number> = {};
     const errors: { code: string; line: number; message: string; table: string }[] = [];
     let conflicts = 0;
+    let deleted = 0;
+    let replaced = 0;
     let ok = 0;
     let failed = 0;
 
@@ -1183,8 +1197,10 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
             | undefined
             | {
                   conflicts?: number;
+                  deleted?: number;
                   errors?: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
                   inserted?: Record<string, number>;
+                  replaced?: number;
               };
         const shardInserted = payload?.inserted ?? {};
 
@@ -1199,18 +1215,22 @@ const rollUpImport = (results: ReadonlyArray<ShardRpcOutcome>): ImportFanOutResu
         }
 
         conflicts += payload?.conflicts ?? 0;
+        deleted += payload?.deleted ?? 0;
+        replaced += payload?.replaced ?? 0;
 
         shards.push({
             result: {
                 conflicts: payload?.conflicts ?? 0,
+                deleted: payload?.deleted ?? 0,
                 errors: payload?.errors ?? [],
                 inserted: shardInserted,
+                replaced: payload?.replaced ?? 0,
             },
             shardKey: result.shardKey,
         });
     }
 
-    return { conflicts, errors, failed, inserted, ok, shards };
+    return { conflicts, deleted, errors, failed, inserted, ok, replaced, shards };
 };
 
 interface ShardRpcOk {
@@ -1241,12 +1261,42 @@ type ShardRpcOutcome = ShardRpcError | ShardRpcOk;
 interface PreparedShardRpc {
     readonly body: string;
     readonly headers: Record<string, string>;
+    readonly refresh?: ShardHeaderRefresh;
 }
+
+/** Rewrites one shard call's headers just before it is sent. */
+type ShardHeaderRefresh = (headers: Record<string, string>) => Promise<Record<string, string>>;
+
+/**
+ * Per-call header refreshers, keyed by the forwarded-headers record a request's
+ * fan-out was given. A named admin token's shard signal is short-lived and a
+ * fan-out can outlast it, so the worker registers a refresher that re-verifies
+ * the token and signs each shard call afresh. Keyed by identity rather than
+ * carried on the record because the record becomes a `Headers` init, and
+ * because a coordinator the app built itself must pick it up too.
+ */
+const shardHeaderRefreshers = new WeakMap<Readonly<Record<string, string>>, ShardHeaderRefresh>();
+
+const refreshShardHeadersPerCall = (headers: Readonly<Record<string, string>>, refresh: ShardHeaderRefresh): void => {
+    shardHeaderRefreshers.set(headers, refresh);
+};
+
+/**
+ * `headers` as they should go out on the next shard call: re-signed when a refresher was registered for
+ * this record (a named admin token), unchanged otherwise. For callers outside a fan-out that make several
+ * shard calls from one record, such as the AI chat's tool reads.
+ */
+const refreshedShardHeaders = async (headers: Record<string, string>): Promise<Record<string, string>> => {
+    const refresh = shardHeaderRefreshers.get(headers);
+
+    return refresh === undefined ? headers : refresh(headers);
+};
 
 const prepareShardRpc = (request: ShardRpcRequest): PreparedShardRpc => {
     return {
         body: JSON.stringify({ args: request.args ?? {}, functionPath: request.functionPath }),
         headers: { "content-type": "application/json", ...request.headers },
+        refresh: request.headers === undefined ? undefined : shardHeaderRefreshers.get(request.headers),
     };
 };
 
@@ -1283,13 +1333,6 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
     // its socket open after we've already resolved with a timeout error.
     const controller = new AbortController();
 
-    const forwarded = new Request("https://shard.internal/rpc", {
-        body: prepared.body,
-        headers: prepared.headers,
-        method: "POST",
-        signal: controller.signal,
-    });
-
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
     const timeoutPromise = new Promise<ShardRpcError>((resolve) => {
@@ -1308,6 +1351,13 @@ const callOneShard = async (namespace: ShardNamespaceInput, shardKey: string, pr
 
     const fetchPromise = (async (): Promise<ShardRpcOutcome> => {
         try {
+            // Inside the timed section: a refresh that re-verifies a named admin token can wait on the token store.
+            const forwarded = new Request("https://shard.internal/rpc", {
+                body: prepared.body,
+                headers: prepared.refresh === undefined ? prepared.headers : await prepared.refresh(prepared.headers),
+                method: "POST",
+                signal: controller.signal,
+            });
             const response = await stub.fetch(forwarded);
 
             if (!response.ok) {
@@ -1627,8 +1677,56 @@ const mergeRank = (values: ReadonlyArray<unknown>): RankMergeResult => {
     return { position: before + 1, total };
 };
 
+interface ScoredRow {
+    row: Record<string, unknown>;
+    score: number;
+}
+
+/** Index of the first row in `sorted` that `entry` must rank strictly before. Binary search, O(log k). */
+const insertionPoint = (sorted: ReadonlyArray<ScoredRow>, entry: ScoredRow, compare: (a: ScoredRow, b: ScoredRow) => number): number => {
+    let lo = 0;
+    let hi = sorted.length;
+
+    while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        const current = sorted[mid];
+
+        if (current !== undefined && compare(entry, current) < 0) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+
+    return lo;
+};
+
+/**
+ * Keep the k best rows without sorting all of them. `best` stays sorted and
+ * never grows past k. A row lands after every row that already ranks equal to
+ * it, the same tie order the stable full sort produced. Cost: O(N log k)
+ * comparisons, plus an O(k) splice for each row that enters the buffer.
+ */
+const selectTopK = (collected: ReadonlyArray<ScoredRow>, k: number, compare: (a: ScoredRow, b: ScoredRow) => number): ScoredRow[] => {
+    const best: ScoredRow[] = [];
+
+    for (const entry of collected) {
+        const at = insertionPoint(best, entry, compare);
+
+        if (at < k) {
+            best.splice(at, 0, entry);
+
+            if (best.length > k) {
+                best.pop();
+            }
+        }
+    }
+
+    return best;
+};
+
 const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direction?: "asc" | "desc"; k: number }): ReadonlyArray<Record<string, unknown>> => {
-    const collected: { row: Record<string, unknown>; score: number }[] = [];
+    const collected: ScoredRow[] = [];
 
     for (const v of values) {
         if (!Array.isArray(v)) {
@@ -1648,10 +1746,21 @@ const mergeTopK = (values: ReadonlyArray<unknown>, strategy: { by: string; direc
     }
 
     const direction = strategy.direction ?? "desc";
+    // Negative when `a` belongs before `b` in the output.
+    const compare = (a: ScoredRow, b: ScoredRow): number => (direction === "asc" ? compareAsc(a.score, b.score) : compareAsc(b.score, a.score));
+    const { k } = strategy;
 
-    collected.sort((a, b) => (direction === "asc" ? compareAsc(a.score, b.score) : compareAsc(b.score, a.score)));
+    // A full sort is cheaper when most rows are kept: selectTopK pays an O(k)
+    // splice per row that enters the buffer, so for k near N it is O(N*k). The
+    // non-integer and negative cases are unreachable from the wire (validated in
+    // create-worker); they take this path so `slice` keeps its exact historical result.
+    if (!Number.isInteger(k) || k < 0 || 2 * k >= collected.length) {
+        collected.sort(compare);
 
-    return collected.slice(0, strategy.k).map((entry) => entry.row);
+        return collected.slice(0, k).map((entry) => entry.row);
+    }
+
+    return selectTopK(collected, k, compare).map((entry) => entry.row);
 };
 
 const mergeShardResults = (values: ReadonlyArray<unknown>, strategy: MergeStrategy): unknown => {
@@ -1893,18 +2002,44 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // workers pulling jobs off a shared cursor.
             const { batches } = request;
 
-            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) =>
+            const importOnShard = async (shardKey: string, args: Record<string, unknown>): Promise<ShardRpcOutcome> =>
                 callOneShard(
                     namespace,
-                    batch.shardKey,
-                    prepareShardRpc({
-                        args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
-                        functionPath: "__lunora_admin__:importShard",
-                        headers: request.headers,
-                    }),
+                    shardKey,
+                    prepareShardRpc({ args, functionPath: "__lunora_admin__:importShard", headers: request.headers }),
                     perShardTimeoutMs,
-                ),
-            );
+                );
+
+            const outcomes = await runBoundedJobs(batches, maxConcurrency, async (batch) => {
+                if (request.dryRun === true) {
+                    // A shard built before the flag existed ignores it and inserts the rows, and its answer is the same body a check
+                    // returns. An empty batch is the only call that is safe to learn that from: the echo of `dryRun` is the proof, and a
+                    // shard that does not give it is never sent a row.
+                    const probe = await importOnShard(batch.shardKey, { dryRun: true, rows: [], startLine: 1 });
+
+                    if (probe.kind === "err") {
+                        return probe;
+                    }
+
+                    if ((unwrapResult(probe.value) as undefined | { dryRun?: unknown })?.dryRun !== true) {
+                        return {
+                            code: "SHARD_DRY_RUN_UNSUPPORTED",
+                            kind: "err",
+                            message: `shard "${batch.shardKey}" cannot check rows without writing them`,
+                            shardKey: batch.shardKey,
+                            timedOut: false,
+                        } satisfies ShardRpcError;
+                    }
+                }
+
+                return importOnShard(batch.shardKey, {
+                    deletes: request.deletes === true,
+                    dryRun: request.dryRun === true,
+                    onConflict: request.onConflict ?? "skip",
+                    rows: [...batch.rows],
+                    startLine: batch.startLine ?? 1,
+                });
+            });
 
             return rollUpImport(outcomes);
         },
@@ -2094,7 +2229,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     };
 };
 
-export { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry, pruneShardRegistry };
+export { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry, pruneShardRegistry, refreshedShardHeaders, refreshShardHeadersPerCall };
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,

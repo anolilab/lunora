@@ -169,7 +169,7 @@ describe("the classes a halt keeps", () => {
         await releases.store.put("d_acme2", release(WITH_PRESENCE));
         await halt(database);
         await runHaltConverges(database, ports(deps));
-        await database.patch("d_acme2", { status: "destroyed" });
+        await database.patch("deployments", "d_acme2", { status: "destroyed" });
         await requestOrganizationResume(database, { actor: "usr_1", now: NOW, organizationId: "org_1" });
         await runHaltConverges(database, ports(deps, NOW + 60_000));
 
@@ -196,7 +196,7 @@ describe("the classes a halt keeps", () => {
 
         const row = haltOf(database, "acme");
 
-        await database.patch(row?._id as string, { resumeDeploymentId: "d_acme2", state: "resuming" });
+        await database.patch("halts", row?._id as string, { resumeDeploymentId: "d_acme2", state: "resuming" });
         await runHaltConverges(database, ports(deps, NOW + 60_000));
 
         expect(classNames(acmeSpec(converged))).toStrictEqual(["Counter", "Presence"]);
@@ -214,7 +214,7 @@ describe("the classes a halt keeps", () => {
         await releases.store.put("d_acme0", release({ bindings: [] }));
         await halt(database);
         await runHaltConverges(database, ports(deps));
-        await database.patch(haltOf(database, "acme")?._id as string, { resumeDeploymentId: "d_acme0", state: "resuming" });
+        await database.patch("halts", haltOf(database, "acme")?._id as string, { resumeDeploymentId: "d_acme0", state: "resuming" });
         await runHaltConverges(database, ports(deps, NOW + 60_000));
 
         expect(haltOf(database, "acme")?.lastError).toMatch(/release d_acme0 would delete the data of class\(es\) Counter, Presence/u);

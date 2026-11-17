@@ -1,6 +1,6 @@
-// The /component subpath avoids the package barrel (which pulls the agent
-// runtime + AI SDK into the codegen process just to enumerate function names).
-import { agentComponent } from "@lunora/agent/component";
+// The dependency-free /naming subpath, not /component: building the component
+// pulls `@lunora/server` and its engine into every codegen process just to list names.
+import { AGENT_RUNTIME_FUNCTIONS } from "@lunora/agent/naming";
 import { LunoraError } from "@lunora/errors";
 
 import type { AgentIR, FunctionIR, HttpRouteIR, MutatorIR, ShapeIR, WorkflowIR } from "../ir";
@@ -10,6 +10,7 @@ import {
     assertIdentifier,
     baseSpecifiers,
     GENERATED_HEADER,
+    isSensitiveFunction,
     pascalCase,
     renderArgsType,
     renderNamespaceTree,
@@ -35,7 +36,11 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string =>
             const argsType = rebaseRelativeQualifiers(renderArgsType(definition.args), definition.filePath);
             const returnType = rebaseRelativeQualifiers(referenceReturnType(definition), definition.filePath);
 
-            return `${definition.exportName}: FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>;`;
+            // A sensitive reference is typed as such so `client.mutation` can refuse
+            // `onlineOnly: false` for it, see `SensitiveFunctionReference`.
+            const reference = `FunctionReference<"${definition.kind}", ${argsType}, ${returnType}>`;
+
+            return `${definition.exportName}: ${isSensitiveFunction(definition) ? `${reference} & { readonly sensitive: true }` : reference};`;
         },
         // A namespace derived from a leading-digit filename (e.g. `2fa.ts`) is a
         // valid `__lunoraRef` string but not a bare TS key, so quote it when
@@ -142,7 +147,7 @@ export const agents: AgentsRef = {
 ${objectMembers}
 };
 `;
-        importLines.push(`import type { AgentRunInput } from "@lunora/agent";\n`);
+        importLines.push(`import type { AgentRunInput } from "@lunora/agent/core";\n`);
     }
 
     return { block, importLine: importLines.join("") };
@@ -155,12 +160,13 @@ ${objectMembers}
  * values come from `agentComponent()` imported directly inside the generated
  * dispatch table, so apps never re-export them by hand — and function
  * discovery (which cannot resolve a destructured re-export through a
- * published package's `.d.ts`) is never involved. The name list is DERIVED
- * from codegen's own `@lunora/agent` dependency at emit time, so a function
- * added to (or renamed in) the component is auto-registered without touching
- * this file — only the typed api surface below is pinned by hand.
+ * published package's `.d.ts`) is never involved. The name list comes from
+ * `@lunora/agent`'s `AGENT_RUNTIME_FUNCTIONS`, which a drift test there keeps
+ * equal to the component, so a function added to (or renamed in) the component
+ * is auto-registered without touching this file — only the typed api surface
+ * below is pinned by hand.
  */
-const agentRuntimeFunctionNames = (): ReadonlyArray<string> => Object.keys(agentComponent().functions).toSorted((a, b) => a.localeCompare(b));
+const agentRuntimeFunctionNames = (): ReadonlyArray<string> => Object.keys(AGENT_RUNTIME_FUNCTIONS).toSorted((a, b) => a.localeCompare(b));
 
 /** Names the app registered itself under the `agents` namespace — they win over auto-registration. */
 const takenAgentFunctionNames = (functions: ReadonlyArray<FunctionIR>): ReadonlySet<string> =>
@@ -172,15 +178,14 @@ const takenAgentFunctionNames = (functions: ReadonlyArray<FunctionIR>): Readonly
  * to the public thread queries + the two client-facing mutations
  * (`agentMessages`/`agentState`/`agentThread`/`agentRun`/`agentResolveApproval`),
  * which an app is allowed to shadow (the app's own definition silently wins).
- * Derived from the runtime component's own `visibility: "internal"` marker
- * (mirroring the drift test in `discover/agents.test.ts`) rather than a
- * hand-maintained list, so a newly added internal function is protected
- * automatically.
+ * Read from `AGENT_RUNTIME_FUNCTIONS`, which `@lunora/agent`'s drift test
+ * keeps equal to the component's own `visibility: "internal"` markers, so a
+ * newly added internal function is protected automatically.
  */
 const internalAgentRuntimeFunctionNames = (): ReadonlySet<string> =>
     new Set(
-        Object.entries(agentComponent().functions)
-            .filter(([, definition]) => definition.visibility === "internal")
+        Object.entries(AGENT_RUNTIME_FUNCTIONS)
+            .filter(([, visibility]) => visibility === "internal")
             .map(([name]) => name),
     );
 
@@ -267,8 +272,8 @@ const renderSandboxFunctionRegistry = (usesSandbox: boolean, functions: Readonly
 /**
  * Synthetic `FunctionIR` entries for the auto-registered PUBLIC agent
  * functions, so `api.agents.agentMessages` / `api.agents.agentState` /
- * `api.agents.agentThread` / `api.agents.agentResolveApproval` /
- * `api.agents.agentRun` exist as typed references
+ * `api.agents.agentThread` / `api.agents.agentPendingApprovals` /
+ * `api.agents.agentResolveApproval` / `api.agents.agentRun` exist as typed references
  * (`useSubscription(api.agents.agentMessages, { key })`,
  * `useAgentState({ api, threadKey })` over `api.agents.agentState`,
  * `useMutation(api.agents.agentResolveApproval)`). The thread-write mutations
@@ -305,11 +310,19 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             returnType: "Record<string, unknown>[]",
         },
         {
+            args: { limit: { inner: { kind: "number" }, kind: "optional" } },
+            exportName: "agentPendingApprovals",
+            filePath: "agents",
+            kind: "query",
+            returnType: "Record<string, unknown>[]",
+        },
+        {
             args: {
                 decision: {
                     kind: "union",
                     members: [
                         { kind: "literal", literalValue: '"approve"' },
+                        { kind: "literal", literalValue: '"approve_for_thread"' },
                         { kind: "literal", literalValue: '"reject"' },
                     ],
                 },
@@ -322,6 +335,46 @@ const syntheticAgentApiFunctions = (agents: ReadonlyArray<AgentIR>, functions: R
             filePath: "agents",
             kind: "mutation",
             returnType: "{ resolved: boolean }",
+        },
+        {
+            args: {
+                secret: { kind: "string", sensitive: true },
+                threadKey: { kind: "string" },
+                toolCallId: { kind: "string" },
+            },
+            exportName: "agentSupplySecret",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ resolved: boolean }",
+        },
+        {
+            args: { threadKey: { kind: "string" }, toolCallId: { kind: "string" } },
+            exportName: "agentDeclineSecret",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ resolved: boolean }",
+        },
+        {
+            args: { threadKey: { kind: "string" } },
+            exportName: "agentSecretRequests",
+            filePath: "agents",
+            kind: "query",
+            returnType:
+                '{ createdAt: number; expiresAt: number; label?: string; status: "consumed" | "declined" | "expired" | "pending" | "supplied"; toolCallId: string; toolName: string }[]',
+        },
+        {
+            args: { key: { kind: "string" } },
+            exportName: "agentApprovalGrants",
+            filePath: "agents",
+            kind: "query",
+            returnType: "{ createdAt: number; toolName: string }[]",
+        },
+        {
+            args: { threadKey: { kind: "string" }, toolName: { kind: "string" } },
+            exportName: "agentRevokeApprovalGrant",
+            filePath: "agents",
+            kind: "mutation",
+            returnType: "{ revoked: boolean }",
         },
         {
             args: {
@@ -420,6 +473,39 @@ const syntheticMutatorApiFunctions = (mutators: ReadonlyArray<MutatorIR>, functi
  * declares no streaming routes; `body` is the rendered type members (fed into
  * the `Doc`/`Id` import detection alongside the api bodies).
  */
+
+/**
+ * The typed room references for a project's `defineRoom` rooms, in the generated
+ * `api` module: a `rooms` object keyed by room name, each entry a `RoomRef` typed
+ * from the room's own message (`LunoraRoomMessages`, emitted beside the registry).
+ * `client.connectRoom(rooms.chat, …)` then types `onMessage` and `send`. Empty when
+ * the project declares no room, so a room-free project's `api` is unchanged.
+ */
+const renderRoomsRef = (functions: ReadonlyArray<FunctionIR>): { block: string; importLine: string } => {
+    const names = functions.flatMap((definition) => (definition.channel?.kind === "room" ? [definition.channel.name] : []));
+
+    if (names.length === 0) {
+        return { block: "", importLine: "" };
+    }
+
+    const typeLines = names.map((name) => `    ${renderObjectKey(name)}: RoomRef<LunoraRoomMessages[${JSON.stringify(name)}]>;`).join("\n");
+    const valueLines = names.map((name) => `    ${renderObjectKey(name)}: { name: ${JSON.stringify(name)} },`).join("\n");
+
+    return {
+        block: `
+/** This project's \`defineRoom\` rooms, addressable as typed references for \`client.connectRoom\`. */
+export interface RoomsRef {
+${typeLines}
+}
+
+export const rooms: RoomsRef = {
+${valueLines}
+};
+`,
+        importLine: `import type { LunoraRoomMessages } from "./functions.js";\n`,
+    };
+};
+
 const renderHttpStreamsRef = (httpRoutes: ReadonlyArray<HttpRouteIR>): { block: string; body: string } => {
     const streams = httpRoutes.filter((route) => route.stream);
 
@@ -466,7 +552,7 @@ const renderApiValue = (functions: ReadonlyArray<FunctionIR>): string =>
     renderNamespaceTree(
         functions,
         (definition) =>
-            `${renderObjectKey(definition.exportName)}: { __lunoraRef: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)} },`,
+            `${renderObjectKey(definition.exportName)}: { __lunoraRef: ${JSON.stringify(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`)}${isSensitiveFunction(definition) ? ", sensitive: true" : ""} },`,
         "value",
     );
 
@@ -534,18 +620,19 @@ interface EmitApiOptions {
 const emitApi = (options: EmitApiOptions): string => {
     const { agents = [], functions, httpRoutes = [], mutators = [], useUmbrella = false, workflows = [] } = options;
     const httpStreamsRef = renderHttpStreamsRef(httpRoutes);
+    const roomsRef = renderRoomsRef(functions);
     const schedulerReferences = renderSchedulerReferences(workflows, agents);
 
     return renderReferenceModule({
-        block: `${schedulerReferences.block}${httpStreamsRef.block}`,
-        clientImports: httpStreamsRef.block === "" ? [] : ["HttpStreamRef"],
+        block: `${schedulerReferences.block}${httpStreamsRef.block}${roomsRef.block}`,
+        clientImports: [...(httpStreamsRef.block === "" ? [] : ["HttpStreamRef"]), ...(roomsRef.block === "" ? [] : ["RoomRef"])],
         constName: "api",
         functions: [
             ...functions.filter((definition) => definition.visibility !== "internal"),
             ...syntheticAgentApiFunctions(agents, functions),
             ...syntheticMutatorApiFunctions(mutators, functions),
         ],
-        importLine: schedulerReferences.importLine,
+        importLine: `${schedulerReferences.importLine}${roomsRef.importLine}`,
         typeName: "ApiTypes",
         typesBody: httpStreamsRef.body,
         useUmbrella,

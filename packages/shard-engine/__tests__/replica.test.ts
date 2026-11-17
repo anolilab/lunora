@@ -5,6 +5,7 @@ import type { SqlExec } from "../src/ctx-db";
 import type { CdcChange } from "../src/ctx-db-cdc";
 import type { ReplicaFollowerHost, ReplicaOwnerHost } from "../src/replica";
 import { createReplicaLink, gateReplicaDispatch, handleReplicaControl } from "../src/replica";
+import type { TransactionLimits } from "../src/transaction-headroom";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -60,7 +61,8 @@ const createOwner = (): Owner => {
                 readChanges: (sinceSeq: number, limit: number) => {
                     owner.pulls += 1;
 
-                    if (owner.readThrows) {
+                    // Refuses only a cursor below the retained floor, like the real reader; with no floor it refuses outright.
+                    if (owner.readThrows && (owner.floor === undefined || owner.floor > sinceSeq + 1)) {
                         throw new Error("cdc payloads compacted");
                     }
 
@@ -99,6 +101,7 @@ describe("read replicas", () => {
     let applied: CdcChange[];
     let imported: ExportRow[];
     let importErrors: unknown[];
+    let localRows: ExportRow[];
     let env: Record<string, unknown>;
     let host: ReplicaFollowerHost;
 
@@ -109,6 +112,7 @@ describe("read replicas", () => {
         applied = [];
         imported = [];
         importErrors = [];
+        localRows = [];
 
         // The follow loop addresses its owner through `env[binding]`, which is
         // exactly the seam a test can stand in for: this namespace routes every
@@ -125,6 +129,7 @@ describe("read replicas", () => {
             },
             doName: () => "tenant-7::replica::weur",
             env: () => env,
+            exportRows: async () => localRows,
             importRows: async (rows: ReadonlyArray<ExportRow>) => {
                 imported.push(...rows);
 
@@ -133,6 +138,9 @@ describe("read replicas", () => {
             shardBinding: () => "SHARD",
             shardJurisdiction: () => undefined,
             sql: () => sql,
+            transactionLimits: () => {
+                return {};
+            },
         };
     });
 
@@ -233,6 +241,95 @@ describe("read replicas", () => {
         await expect(replica?.ensureFresh(2)).resolves.toBe("fresh");
         expect(applied.map((entry) => entry.seq)).toStrictEqual([1, 2]);
         expect(replica?.appliedSeq()).toBe(2);
+    });
+
+    it("latches divergence instead of rejecting when a page cannot be applied", async () => {
+        expect.assertions(6);
+
+        const reported: unknown[] = [];
+        const replica = createReplicaLink({
+            ...host,
+            applyChanges: async () => {
+                throw new Error("poison change");
+            },
+            reportError: (_scope: string, error: unknown) => {
+                reported.push(error);
+            },
+        });
+
+        await replica?.ensureFresh();
+
+        owner.changes = [change(1, "a")];
+
+        // A page that throws on apply must not reject the read: the owner can answer it.
+        await expect(replica?.ensureFresh(1)).resolves.toBe("unavailable");
+
+        const pullsAfterFailure = owner.pulls;
+
+        // Sticky: the same doomed page is not re-pulled and re-applied on every read.
+        await expect(replica?.ensureFresh(1)).resolves.toBe("unavailable");
+        expect(owner.pulls).toBe(pullsAfterFailure);
+        expect(replica?.isDivergent()).toBe(true);
+        expect(reported).toHaveLength(1);
+        // The cursor never moved past the page that did not apply.
+        expect(replica?.appliedSeq()).toBe(0);
+    });
+
+    it("retries on the next sync instead of latching when the failure is flagged transient", async () => {
+        expect.assertions(6);
+
+        let failures = 1;
+        const reported: unknown[] = [];
+        const replica = createReplicaLink({
+            ...host,
+            applyChanges: async (changes: ReadonlyArray<CdcChange>) => {
+                if (failures > 0) {
+                    failures -= 1;
+
+                    throw Object.assign(new Error("storage hiccup"), { retryable: true });
+                }
+
+                applied.push(...changes);
+
+                return changes.length;
+            },
+            reportError: (_scope: string, error: unknown) => {
+                reported.push(error);
+            },
+        });
+
+        await replica?.ensureFresh();
+
+        owner.changes = [change(1, "a")];
+
+        await expect(replica?.ensureFresh(1)).resolves.toBe("unavailable");
+        expect(replica?.isDivergent()).toBe(false);
+        expect(replica?.appliedSeq()).toBe(0);
+        expect(reported).toHaveLength(1);
+
+        // The same page is pulled and applied on the next read.
+        await expect(replica?.ensureFresh(1)).resolves.toBe("fresh");
+        expect(replica?.appliedSeq()).toBe(1);
+    });
+
+    it("answers 421 rather than throwing from the dispatch gate when a page cannot be applied", async () => {
+        expect.assertions(2);
+
+        const replica = createReplicaLink({
+            ...host,
+            applyChanges: async () => {
+                throw new Error("poison change");
+            },
+        });
+
+        await replica?.ensureFresh();
+
+        owner.changes = [change(1, "a")];
+
+        const response = await gateReplicaDispatch(replica!, replicaRead({ "x-lunora-min-seq": "1" }), "posts:list");
+
+        expect(response?.status).toBe(421);
+        expect(response?.headers.get("x-lunora-replica-fallback")).toBe("unavailable");
     });
 
     it("carries wire-typed leaves across the control channel intact", async () => {
@@ -410,8 +507,8 @@ describe("read replicas", () => {
         expect(owner.pulls).toBe(pullsBefore);
     });
 
-    it("reports unavailable when the log was compacted past its position", async () => {
-        expect.assertions(2);
+    it("re-snapshots instead of falling back to the owner when the log was compacted past its position", async () => {
+        expect.assertions(4);
 
         const replica = createReplicaLink(host);
 
@@ -420,12 +517,118 @@ describe("read replicas", () => {
         owner.changes = [change(9, "i")];
         owner.floor = 9;
 
-        await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
-        expect(applied).toStrictEqual([]);
+        await expect(replica?.ensureFresh(9)).resolves.toBe("fresh");
+        expect(replica?.isDivergent()).toBe(false);
+        expect(replica?.appliedSeq()).toBe(9);
+        expect(owner.snapshots).toBe(2);
     });
 
-    it("bootstraps instead of retrying when the owner's payloads were compacted past it", async () => {
-        expect.assertions(3);
+    it("converges on the snapshot: upserts what changed, deletes what the owner no longer has", async () => {
+        expect.assertions(5);
+
+        const replica = createReplicaLink(host);
+
+        await replica?.ensureFresh();
+
+        // The replica holds `a` (old version) and `b`; in the gap the owner updated `a`, deleted `b` and added `c`.
+        localRows = [
+            { doc: { _id: "a", title: "v1" }, table: "posts" },
+            { doc: { _id: "b", title: "gone" }, table: "posts" },
+        ];
+        owner.snapshot = [
+            { doc: { _id: "a", title: "v2" }, table: "posts" },
+            { doc: { _id: "c", title: "new" }, table: "posts" },
+        ];
+        owner.changes = [change(9, "c")];
+        owner.floor = 9;
+
+        await expect(replica?.ensureFresh(9)).resolves.toBe("fresh");
+        expect(
+            applied.map(({ doc, id, op, table }) => {
+                return { doc, id, op, table };
+            }),
+        ).toStrictEqual([
+            { doc: { _id: "a", title: "v2" }, id: "a", op: "insert", table: "posts" },
+            { doc: { _id: "c", title: "new" }, id: "c", op: "insert", table: "posts" },
+            { doc: undefined, id: "b", op: "delete", table: "posts" },
+        ]);
+        expect(replica?.appliedSeq()).toBe(9);
+        expect(replica?.isDivergent()).toBe(false);
+        // The snapshot goes through the writer, never the append-only import that would keep `a`'s old version.
+        expect(imported).toStrictEqual([]);
+    });
+
+    describe("a re-snapshot against the transaction write ceilings", () => {
+        /** A replica that already follows its owner, then finds the owner's log compacted past it with `snapshot` to take. */
+        const compactedPast = async (limits: Partial<TransactionLimits>, snapshot: ExportRow[]) => {
+            const reported: unknown[] = [];
+            const exported = { count: 0 };
+            const replica = createReplicaLink({
+                ...host,
+                exportRows: async () => {
+                    exported.count += 1;
+
+                    return localRows;
+                },
+                reportError: (_scope, error) => reported.push(error),
+                transactionLimits: () => limits,
+            });
+
+            await replica?.ensureFresh();
+
+            applied.length = 0;
+            localRows = [{ doc: { _id: "stale", title: "gone" }, table: "posts" }];
+            owner.snapshot = snapshot;
+            owner.changes = [change(9, "a")];
+            owner.floor = 9;
+
+            return { exported, replica, reported };
+        };
+
+        const rows = (count: number): ExportRow[] =>
+            Array.from({ length: count }, (_, index) => {
+                return { doc: { _id: `r${String(index)}`, title: "t" }, table: "posts" };
+            });
+
+        it("refuses a snapshot whose rows plus stale deletions exceed the row ceiling, without latching", async () => {
+            expect.assertions(6);
+
+            // 3 snapshot rows + 1 stale deletion = 4 writes against a ceiling of 3.
+            const { replica, reported } = await compactedPast({ maxWrittenRows: 3 }, rows(3));
+
+            await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
+            expect(applied).toStrictEqual([]);
+            expect(reported).toHaveLength(1);
+            expect((reported[0] as { code?: string }).code).toBe("TRANSACTION_LIMIT_EXCEEDED");
+            expect(replica?.isDivergent()).toBe(false);
+            expect(replica?.appliedSeq()).toBe(0);
+        });
+
+        it("refuses a snapshot over the byte ceiling before loading the local rows", async () => {
+            expect.assertions(4);
+
+            const { exported, replica } = await compactedPast({ maxWrittenBytes: 50 }, rows(3));
+
+            await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
+            expect(applied).toStrictEqual([]);
+            expect(exported.count).toBe(0);
+            expect(replica?.isDivergent()).toBe(false);
+        });
+
+        it("converges when the writes land exactly on the ceiling", async () => {
+            expect.assertions(3);
+
+            // 2 snapshot rows + 1 stale deletion = 3 writes against a ceiling of 3.
+            const { replica, reported } = await compactedPast({ maxWrittenRows: 3 }, rows(2));
+
+            await expect(replica?.ensureFresh(9)).resolves.toBe("fresh");
+            expect(applied.map(({ id, op }) => `${op}:${id}`)).toStrictEqual(["insert:r0", "insert:r1", "delete:stale"]);
+            expect(reported).toStrictEqual([]);
+        });
+    });
+
+    it("re-snapshots when the owner's payloads were compacted past it, without reading the doomed page", async () => {
+        expect.assertions(4);
 
         const replica = createReplicaLink(host);
 
@@ -434,24 +637,67 @@ describe("read replicas", () => {
         // Payload compaction keeps the KEYS, so the owner's `readChanges` would
         // refuse the page outright rather than return one. A refusal reaching the
         // follower as a bare non-2xx is indistinguishable from an unreachable
-        // owner, so it would retry the identical doomed round trip forever and
-        // never bootstrap. The floor is checked before the page is read, so the
-        // follower is told where it stands.
+        // owner, so it would retry the identical doomed round trip forever. The
+        // floor is checked before the page is read, so the follower is told where
+        // it stands and takes a snapshot instead.
         owner.changes = [change(9, "i")];
         owner.floor = 9;
         owner.readThrows = true;
 
-        await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
+        const pullsBefore = owner.pulls;
 
-        // Latched divergent — which is what routes the next read to a bootstrap
-        // rather than to another pull.
-        expect(replica?.isDivergent()).toBe(true);
-        // And the doomed page was never read.
-        expect(owner.pulls).toBe(1);
+        await expect(replica?.ensureFresh(9)).resolves.toBe("fresh");
+        expect(replica?.isDivergent()).toBe(false);
+        expect(replica?.appliedSeq()).toBe(9);
+        // The page below the floor was never read: one pull from the new position, nothing before it.
+        expect(owner.pulls - pullsBefore).toBe(1);
     });
 
-    it("reports unavailable when the log was compacted away entirely", async () => {
-        expect.assertions(1);
+    it("re-snapshots once per catch-up and reports unavailable, without latching, when the owner keeps trimming past it", async () => {
+        expect.assertions(4);
+
+        const replica = createReplicaLink(host);
+
+        await replica?.ensureFresh();
+
+        // A floor far beyond the cursor the snapshot lands on: the position it reaches is already compacted away.
+        owner.changes = [change(9, "i")];
+        owner.floor = 50;
+
+        await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
+        expect(owner.snapshots).toBe(2);
+        expect(replica?.isDivergent()).toBe(false);
+
+        // Not latched: a later read tries again once the owner's log reaches back.
+        owner.floor = 9;
+
+        await expect(replica?.ensureFresh(9)).resolves.toBe("fresh");
+    });
+
+    it("latches when the re-snapshot cannot be applied", async () => {
+        expect.assertions(3);
+
+        const replica = createReplicaLink({
+            ...host,
+            applyChanges: async () => {
+                throw new Error("poison snapshot row");
+            },
+        });
+
+        await replica?.ensureFresh();
+
+        owner.snapshot = [{ doc: { _id: "a", title: "v2" }, table: "posts" }];
+        owner.changes = [change(9, "a")];
+        owner.floor = 9;
+
+        await expect(replica?.ensureFresh(9)).resolves.toBe("unavailable");
+        expect(replica?.isDivergent()).toBe(true);
+        // The position never moved onto a snapshot that did not land.
+        expect(replica?.appliedSeq()).toBe(0);
+    });
+
+    it("re-snapshots when the log was compacted away entirely", async () => {
+        expect.assertions(3);
 
         const replica = createReplicaLink(host);
 
@@ -461,9 +707,15 @@ describe("read replicas", () => {
         // ahead of us — writes happened and were compacted before we saw them.
         owner.changes = [];
         owner.floor = undefined;
-        (owner as { serve: Owner["serve"] }).serve = async () => Response.json({ changes: [], cursor: 100, epoch: "epoch-1" });
+        (owner as { serve: Owner["serve"] }).serve = async (body: string) => {
+            const isBootstrap = (JSON.parse(body) as { type: string }).type === "replica_bootstrap";
 
-        await expect(replica?.ensureFresh(100)).resolves.toBe("unavailable");
+            return Response.json(isBootstrap ? { cursor: 100, epoch: "epoch-1", rows: [] } : { changes: [], cursor: 100, epoch: "epoch-1" });
+        };
+
+        await expect(replica?.ensureFresh(100)).resolves.toBe("fresh");
+        expect(replica?.isDivergent()).toBe(false);
+        expect(replica?.appliedSeq()).toBe(100);
     });
 
     it("refuses a snapshot whose rows did not all land", async () => {
@@ -640,12 +892,16 @@ describe("replica dispatch gate", () => {
             env: () => {
                 return {};
             },
+            exportRows: async () => [],
             importRows: async () => {
                 return { errors: [] };
             },
             shardBinding: () => undefined,
             shardJurisdiction: () => undefined,
             sql: () => harness.sql,
+            transactionLimits: () => {
+                return {};
+            },
         };
     };
 

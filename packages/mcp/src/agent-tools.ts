@@ -1,5 +1,6 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
 
+import { errorFromThrown, errorResult } from "./tool-result";
 import type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools";
 
 /**
@@ -38,9 +39,9 @@ const AGENT_STATUS_TOOL_NAME = "lunora_agent_status";
  * Thread statuses that mean the run has stopped — every member of
  * `AgentThreadStatus` except `"running"`.
  *
- * `"awaiting_input"` belongs here: a run paused on a human-in-the-loop tool
- * approval is STOPPED, and nothing this server can do resumes it (MCP offers no
- * way to supply the approval). Treating it as still-running burned the whole
+ * `"awaiting_input"` belongs here: a run paused on a human-in-the-loop decision (a
+ * tool approval or a secret request) is STOPPED, and nothing this server can do
+ * resumes it (MCP offers no way to answer either one). Treating it as still-running burned the whole
  * `maxWaitMs` budget on ~100 admin queries per call and then reported
  * `status: "running"` with a hint to poll a tool that would answer
  * `awaiting_input` forever.
@@ -136,7 +137,7 @@ const agentToolDefinitions = (exposures: ReadonlyArray<McpAgentExposure>, allowA
         return [];
     }
 
-    const perAgent: ToolDefinition[] = exposures.map((exposure) => {
+    const perAgent: ToolDefinition[] = exposures.map((exposure): ToolDefinition => {
         return {
             annotations: {
                 destructiveHint: true,
@@ -199,10 +200,6 @@ const ok = (value: unknown): ToolResult => {
     return { content: [{ text: JSON.stringify(value, undefined, 2), type: "text" }] };
 };
 
-const fail = (text: string): ToolResult => {
-    return { content: [{ text, type: "text" }], isError: true };
-};
-
 /** Read a non-empty string field off an MCP `arguments` bag (else `undefined`). */
 const readString = (input: Record<string, unknown>, key: string): string | undefined => {
     const value = input[key];
@@ -250,11 +247,11 @@ const readTerminal = async (client: LunoraClient, threadKey: string, status: str
 
     if (status === "awaiting_input") {
         // Not an error — the run is healthy and paused on a human-in-the-loop
-        // tool approval. Say so plainly, including that MCP is not the surface
+        // decision (a tool approval or a secret request). Say so plainly, including that MCP is not the surface
         // that can unblock it, so the caller stops polling instead of waiting
         // out a budget that can never expire into an answer.
         return ok({
-            hint: "This run is paused on a human-in-the-loop tool approval. Approve or reject it in the app that owns the agent; MCP cannot supply the input. Poll lunora_agent_status with this threadKey afterwards.",
+            hint: "This run is paused on a human-in-the-loop decision: a tool approval, or a secret the owner has to supply. Answer it in the app that owns the agent; MCP cannot answer it. Poll lunora_agent_status with this threadKey afterwards.",
             status,
             text: finalAnswer(messages),
             threadKey,
@@ -273,7 +270,7 @@ const callAgentStatus = async (client: LunoraClient, input: Record<string, unkno
     const threadKey = readString(input, "threadKey");
 
     if (threadKey === undefined) {
-        return fail('"threadKey" is required and must be a non-empty string');
+        return errorResult("BAD_REQUEST", '"threadKey" is required and must be a non-empty string');
     }
 
     const thread = await client.query(reference(AGENT_THREAD_PATH), { key: threadKey });
@@ -300,7 +297,7 @@ const callAgentTool = async (client: LunoraClient, name: string, input: Record<s
     try {
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-boolean-literal-compare -- intentional runtime guard at an exported API boundary against non-boolean callers
         if (options.allowAgents !== true) {
-            return fail(`tool "${name}" is disabled: agent tools are off. Enable them with the LUNORA_MCP_ALLOW_AGENTS env var.`);
+            return errorResult("FORBIDDEN", `tool "${name}" is disabled: agent tools are off. Enable them with the LUNORA_MCP_ALLOW_AGENTS env var.`);
         }
 
         if (name === AGENT_STATUS_TOOL_NAME) {
@@ -310,13 +307,13 @@ const callAgentTool = async (client: LunoraClient, name: string, input: Record<s
         const exposure = options.exposures.find((candidate) => agentToolName(candidate) === name);
 
         if (exposure === undefined) {
-            return fail(`agent tool "${name}" is not exposed by this MCP server`);
+            return errorResult("NOT_FOUND", `agent tool "${name}" is not exposed by this MCP server`);
         }
 
         const prompt = readString(input, "prompt");
 
         if (prompt === undefined) {
-            return fail('"prompt" is required and must be a non-empty string');
+            return errorResult("BAD_REQUEST", '"prompt" is required and must be a non-empty string');
         }
 
         const threadKey = readString(input, "threadKey") ?? freshThreadKey();
@@ -354,9 +351,7 @@ const callAgentTool = async (client: LunoraClient, name: string, input: Record<s
         // error — the caller resumes by polling with the threadKey.
         return ok({ hint: "call lunora_agent_status with this threadKey to poll for the answer", runId: id, status: "running", threadKey });
     } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-
-        return fail(message);
+        return errorFromThrown(error);
     }
 };
 

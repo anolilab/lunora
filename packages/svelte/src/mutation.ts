@@ -1,4 +1,4 @@
-import type { ArgsOf, FunctionReference, LunoraClient, MutationCallOptions, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, MutationCallOptions, OnlineOnlyOption, ReturnOf } from "@lunora/client";
 import { createCallRunner } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { writable } from "svelte/store";
@@ -23,7 +23,7 @@ export interface MutationHandle<F extends FunctionReference> {
      * `options` are applied and rolled back by the client against the live query
      * subscriptions, exactly as in the React adapter.
      */
-    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>) => Promise<ReturnOf<F>>;
 
     /**
      * `true` while any invocation from this handle is in flight. Ref-counted, so
@@ -63,7 +63,7 @@ export function mutation<F extends FunctionReference>(clientOrFunction: LunoraCl
     const pending = writable(false);
 
     const mutate = createCallRunner(
-        (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => client.mutation(functionRef, args, options),
+        (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>) => client.mutation(functionRef, args, options),
         {
             setError: (next) => {
                 error.set(next);

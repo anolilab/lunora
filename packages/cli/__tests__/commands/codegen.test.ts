@@ -1,10 +1,11 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { inferLunoraBindings } from "@lunora/config";
 import { CLOUDFLARE_CLI_CONFIG_WARNING_ENV } from "@lunora/config/cloudflare";
+import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CodegenCommandData } from "../../src/commands/codegen/handler";
@@ -53,6 +54,7 @@ describe("lunora codegen", () => {
     });
 
     afterEach(() => {
+        vi.unstubAllEnvs();
         rmSync(workdir, { force: true, recursive: true });
     });
 
@@ -113,6 +115,57 @@ describe("lunora codegen", () => {
     });
 
     describe("lunora codegen", () => {
+        it("keeps the eager registry by default and emits lazy modules only when requested", async () => {
+            expect.assertions(7);
+
+            const generated = join(workdir, "lunora", "_generated");
+            const functionModule = join(generated, "fn", "lunora_messages_0.ts");
+
+            const eager = await runExecute<CodegenOptions, CodegenCommandData>(execute, { commandName: "codegen", cwd: workdir, options: { format: "json" } });
+            const eagerFunctions = readFileSync(join(generated, "functions.ts"), "utf8");
+
+            expect(eager.code).toBe(0);
+            expect(eagerFunctions).toContain('import * as lunora_messages_0 from "../messages.js"');
+            expect(existsSync(functionModule)).toBe(false);
+
+            const lazy = await runExecute<CodegenOptions, CodegenCommandData>(execute, {
+                commandName: "codegen",
+                cwd: workdir,
+                options: { format: "json", lazyFunctions: true },
+            });
+            const lazyFunctions = readFileSync(join(generated, "functions.ts"), "utf8");
+
+            expect(lazy.code).toBe(0);
+            expect(lazyFunctions).not.toContain('import * as lunora_messages_0 from "../messages.js"');
+            expect(lazyFunctions).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(existsSync(functionModule)).toBe(true);
+        });
+
+        it("honors the lazy environment opt-in without a flag", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "true");
+            const result = await runExecute<CodegenOptions, CodegenCommandData>(execute, { commandName: "codegen", cwd: workdir, options: { format: "json" } });
+            const generated = join(workdir, "lunora", "_generated");
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(generated, "functions.ts"), "utf8")).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(existsSync(join(generated, "fn", "lunora_messages_0.ts"))).toBe(true);
+        });
+
+        it("honors codegen.lazyFunctions in lunora.config without a flag", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "");
+            writeFileSync(join(workdir, "lunora.config.ts"), "export default { codegen: { lazyFunctions: true } };\n", "utf8");
+            const result = await runExecute<CodegenOptions, CodegenCommandData>(execute, { commandName: "codegen", cwd: workdir, options: { format: "json" } });
+            const generated = join(workdir, "lunora", "_generated");
+
+            expect(result.code).toBe(0);
+            expect(readFileSync(join(generated, "functions.ts"), "utf8")).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(existsSync(join(generated, "fn", "lunora_messages_0.ts"))).toBe(true);
+        });
+
         it("writes the three generated files", () => {
             expect.assertions(3);
 
@@ -204,6 +257,34 @@ describe("lunora codegen", () => {
             expect(advisoryWarnings[0]).toContain("advisory");
         });
 
+        it("lists a suppressed advisory with its reason, outside the warning", () => {
+            expect.assertions(4);
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const schema = readFileSync(schemaPath, "utf8");
+            const table = "    attachments: defineTable({";
+
+            expect(schema.split(table)).toHaveLength(2);
+
+            writeFileSync(
+                schemaPath,
+                schema.replace(table, `    // lunora-advisor-exempt unindexed_foreign_key -- fixture accepts the scan\n${table}`),
+                "utf8",
+            );
+
+            const warnings: string[] = [];
+            const infos: string[] = [];
+
+            runCodegenCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), info: (message) => infos.push(message), warn: (message) => warnings.push(message) },
+            });
+
+            expect(warnings.filter((message) => message.includes("unindexed_foreign_key"))).toHaveLength(0);
+            expect(infos).toContainEqual(expect.stringContaining("1 suppressed:"));
+            expect(infos).toContainEqual(expect.stringContaining("[INFO] unindexed_foreign_key (suppressed: fixture accepts the scan) — "));
+        });
+
         describe("--format json", () => {
             // Through `execute`, because the envelope is written by `defineHandler`:
             // `runCodegenCommand` is the library entry point and writes nothing.
@@ -244,6 +325,88 @@ describe("lunora codegen", () => {
                 expect(document?.error).toContain("unknown deploy target");
                 expect(document?.data?.outputDirectory).toBe("");
             });
+        });
+    });
+
+    describe("studio documents as static assets", () => {
+        const wranglerPath = (): string => join(workdir, "wrangler.jsonc");
+
+        const writeWorkerProject = (
+            assets?: Record<string, unknown>,
+            entry = `import { defineApp } from "../lunora/_generated/app";\n\nexport default defineApp().build();\n`,
+        ): void => {
+            mkdirSync(join(workdir, "src"), { recursive: true });
+            writeFileSync(join(workdir, "src", "server.ts"), entry, "utf8");
+            writeFileSync(
+                join(workdir, "package.json"),
+                `${JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "app" })}\n`,
+                "utf8",
+            );
+            writeFileSync(
+                wranglerPath(),
+                `// kept\n{\n    "name": "app",\n    "main": "src/server.ts",\n    "compatibility_date": "2026-04-07"${
+                    assets === undefined ? "" : `,\n    "assets": ${JSON.stringify(assets)}`
+                }\n}\n`,
+                "utf8",
+            );
+        };
+
+        it("binds ASSETS in wrangler.jsonc for the loaders it emits, so a plain wrangler deploy serves the documents", () => {
+            expect.assertions(4);
+
+            writeWorkerProject();
+
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            const wrangler = readFileSync(wranglerPath(), "utf8");
+
+            expect(readFileSync(join(workdir, "lunora", "_generated", "app.ts"), "utf8")).toContain(
+                'loadStudioDocument((env as Record<string, unknown>)["ASSETS"]',
+            );
+            expect(wrangler.startsWith("// kept\n")).toBe(true);
+            expect(parseJsonc(wrangler)).toMatchObject({ assets: { binding: "ASSETS", directory: ".lunora/studio-assets", run_worker_first: true } });
+
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(readFileSync(wranglerPath(), "utf8")).toBe(wrangler);
+        });
+
+        it("fails when it cannot write the binding its loaders need, instead of reporting success", () => {
+            expect.assertions(1);
+
+            writeWorkerProject();
+            chmodSync(wranglerPath(), 0o444);
+
+            expect(() => runCodegenCommand({ cwd: workdir, logger: silentLogger() })).toThrow(/EACCES|EPERM/);
+        });
+
+        // The Expo example's shape: its entry imports the spec itself, so the block only pointed a fresh clone at a missing directory.
+        it("removes the block it wrote for a hand-written entry, which never reads ASSETS", () => {
+            expect.assertions(3);
+
+            writeWorkerProject(
+                { binding: "ASSETS", directory: ".lunora/studio-assets", run_worker_first: true },
+                `import { createWorker } from "lunorash/runtime";\n\nexport default { fetch: (request: Request, env: never, ctx: never) => createWorker({}).fetch(request, env, ctx) };\n`,
+            );
+
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(parseJsonc(readFileSync(wranglerPath(), "utf8"))).not.toHaveProperty("assets");
+            expect(existsSync(join(workdir, ".lunora", "studio-assets"))).toBe(false);
+            expect(readFileSync(join(workdir, "lunora", "_generated", "app.ts"), "utf8")).not.toContain("loadStudioDocument(");
+        });
+
+        it("leaves a project's own assets block alone and keeps the documents in the bundle", () => {
+            expect.assertions(2);
+
+            writeWorkerProject({ binding: "STATIC", directory: "./public" });
+
+            const before = readFileSync(wranglerPath(), "utf8");
+
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(readFileSync(wranglerPath(), "utf8")).toBe(before);
+            expect(readFileSync(join(workdir, "lunora", "_generated", "app.ts"), "utf8")).not.toContain("loadStudioDocument(");
         });
     });
 

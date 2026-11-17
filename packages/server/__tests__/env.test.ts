@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
+import { envContractOf } from "../../../shared/env-contract";
 import { defineEnv, LunoraEnvError, redactSecrets, v } from "../src/index";
 
 // Fake credentials are assembled at runtime from harmless fragments so the
@@ -236,6 +237,39 @@ describe("defineEnv", () => {
     });
 });
 
+describe("defineEnv contract brand", () => {
+    it("answers every failing key, redacted, without throwing", () => {
+        expect.assertions(3);
+
+        const check = envContractOf(defineEnv({ API_TOKEN: v.number(), PORT: v.number(), REGION: v.string() }));
+
+        expect(check).toBeTypeOf("function");
+        expect(check?.({ API_TOKEN: "p@ss w0rd!", REGION: "eu" }).map(({ key }) => key)).toStrictEqual(["API_TOKEN", "PORT"]);
+        expect(JSON.stringify(check?.({ API_TOKEN: "p@ss w0rd!" }))).not.toContain("p@ss w0rd!");
+    });
+
+    it("answers an env that is not an object as a failure", () => {
+        expect.assertions(1);
+
+        expect(envContractOf(defineEnv({ PORT: v.number() }))?.(undefined)).toStrictEqual([
+            { key: "<env>", message: "expected an object, received undefined" },
+        ]);
+    });
+
+    it("is absent on anything but an accessor", () => {
+        expect.assertions(2);
+
+        expect(envContractOf(() => {})).toBeUndefined();
+        expect(
+            envContractOf({
+                parse: () => {
+                    return {};
+                },
+            }),
+        ).toBeUndefined();
+    });
+});
+
 describe("redactSecrets", () => {
     it("masks Stripe/GitHub/AWS/Slack prefixed tokens", () => {
         expect.assertions(4);
@@ -267,10 +301,13 @@ describe("redactSecrets", () => {
     });
 
     it("masks the value following a secret-named key", () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         expect(redactSecrets(`AUTH_SECRET=${secretValue} was rejected`)).toBe("AUTH_SECRET=[redacted] was rejected");
         expect(redactSecrets("DB_PASSWORD: short")).toContain("DB_PASSWORD=[redacted]");
+        // A quoted value is masked whole, not only up to its first space.
+        expect(redactSecrets(`AUTH_SECRET="p@ss w0rd!" was rejected`)).toBe("AUTH_SECRET=[redacted] was rejected");
+        expect(redactSecrets(`password: 'two words'`)).toBe("password=[redacted]");
     });
 
     it("masks secret-named keys in every convention keys arrive in", () => {
@@ -337,6 +374,21 @@ describe("redactSecrets", () => {
 
         expect(out).not.toContain("s3cr3t");
         expect(out).toContain("postgres://appuser");
+    });
+
+    it("redacts a URL password that carries RFC 3986 sub-delims or a tilde", () => {
+        expect.assertions(2);
+
+        const redacted = redactSecrets("could not reach postgres://app:pa$$!w&o'r(d)*,;=~x@db.local/app");
+
+        expect(redacted).toBe("could not reach postgres://app:[redacted]@db.local/app");
+        expect(redacted).not.toContain("~x");
+    });
+
+    it("masks a secret-named quoted value past an escaped quote", () => {
+        expect.assertions(1);
+
+        expect(redactSecrets(String.raw`PASSWORD="abc\" def" then`)).toBe("PASSWORD=[redacted] then");
     });
 
     it("stays linear on a boundary-rich payload — redaction runs on request bodies and thrown errors", () => {

@@ -362,12 +362,12 @@ describe("lunora dev", () => {
                 cwd: workdir,
                 logger: silentLogger(),
                 materializeDev: () => {
-                    return { cleanup: () => {}, configPath: localConfig, remoteBindings: [], withheld: ["AI"] };
+                    return { cleanup: () => {}, configPath: localConfig, remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
                 },
             });
 
             expect(plan.remote.enabled).toBe(false);
-            expect(plan.remote.withheld).toStrictEqual(["AI"]);
+            expect(plan.remote.withheld).toStrictEqual([{ binding: "AI", kind: "ai" }]);
             expect(plan.wrangler.args).toContain("--config");
             expect(plan.wrangler.args).toContain(localConfig);
         });
@@ -383,7 +383,7 @@ describe("lunora dev", () => {
                 materializeDev: () => {
                     materialized = true;
 
-                    return { cleanup: () => {}, remoteBindings: [], withheld: ["AI"] };
+                    return { cleanup: () => {}, remoteBindings: [], withheld: [{ binding: "AI", kind: "ai" }] };
                 },
             });
 
@@ -516,6 +516,21 @@ describe("lunora dev", () => {
             expect(enabled.wrangler.env).toBeUndefined();
         });
 
+        it("forwards lazy function mode to the vite child without overriding --no-codegen", () => {
+            expect.assertions(4);
+
+            const enabled = planDevCommand({ cwd: workdir, flavor: "vite", lazyFunctions: true, logger: silentLogger() });
+            const eager = planDevCommand({ cwd: workdir, flavor: "vite", logger: silentLogger() });
+
+            expect(enabled.wrangler.env).toStrictEqual({ LUNORA_LAZY_FUNCTIONS: "1" });
+            expect(eager.wrangler.env).toBeUndefined();
+
+            const disabled = planDevCommand({ codegen: false, cwd: workdir, flavor: "vite", lazyFunctions: true, logger: silentLogger() });
+
+            expect(disabled.wrangler.env).toStrictEqual({ LUNORA_CODEGEN: "0", LUNORA_LAZY_FUNCTIONS: "1" });
+            expect(disabled.runsCodegenWatch).toBe(false);
+        });
+
         it.each([
             ["sveltekit", { "@sveltejs/kit": "^2.0.0" }],
             ["nuxt", { nuxt: "^4.0.0" }],
@@ -576,6 +591,32 @@ describe("lunora dev", () => {
             expect(args).toContain(service);
             // The sidecar's own config stays first, so wrangler keeps it as the primary Worker.
             expect(args.indexOf(service)).toBeGreaterThan(args.indexOf("--config wrangler.dev.jsonc"));
+        });
+
+        it("carries the Artifacts binding a service's sidecar session left out onto the plan, so the banner can say so", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { "@sveltejs/kit": "^2.0.0" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    scripts: { dev: "vite" },
+                }),
+                "utf8",
+            );
+
+            const plan = planDevCommand({
+                cwd: workdir,
+                hasIpv6Loopback: () => true,
+                logger: silentLogger(),
+                materializeServiceConfigs: () => {
+                    return { cleanup: () => {}, configPaths: [], withheld: [{ binding: "ARTIFACTS", kind: "artifacts" }] };
+                },
+            });
+
+            expect(plan.remote.withheld).toStrictEqual([{ binding: "ARTIFACTS", kind: "artifacts" }]);
         });
 
         it("respects the sidecar's OWN `dev.ip` (wrangler.dev.jsonc), not the deploy wrangler.jsonc, on a no-::1 host", () => {
@@ -739,7 +780,7 @@ describe("lunora dev", () => {
 
     describe("runDevCommand", () => {
         it("spawns the wrangler worker, starts studio + codegen, and tears them down on exit", async () => {
-            expect.assertions(6);
+            expect.assertions(7);
 
             let codegenClosed = false;
             let studioClosed = false;
@@ -753,11 +794,14 @@ describe("lunora dev", () => {
 
             const result = await runDevCommand({
                 cwd: workdir,
+                lazyFunctions: true,
                 // Deterministic port so the origin assertion below doesn't depend
                 // on whether 8787 is free on the test host.
                 findFreePort: async () => 8787,
                 logger: silentLogger(),
-                startCodegen: () => {
+                startCodegen: (options) => {
+                    expect(options.lazyFunctions).toBe(true);
+
                     return {
                         close: async () => {
                             codegenClosed = true;
@@ -782,6 +826,75 @@ describe("lunora dev", () => {
             expect(codegenClosed).toBe(true);
             expect(studioClosed).toBe(true);
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
+        });
+
+        it("passes the environment-selected lazy mode to the watcher and studio", async () => {
+            expect.assertions(3);
+
+            vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "1");
+            const result = await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: silentLogger(),
+                startCodegen: (options) => {
+                    expect(options.lazyFunctions).toBe(true);
+
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async (options) => {
+                    expect(options.lazyFunctions).toBe(true);
+
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(result.code).toBe(0);
+        });
+
+        it.each(["@sveltejs/kit", "nuxt"])("keeps %s sidecar generation and framework child lazy with only the environment opt-in", async (framework) => {
+            expect.assertions(3);
+
+            vi.stubEnv("LUNORA_LAZY_FUNCTIONS", "1");
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({
+                    dependencies: { [framework]: "*" },
+                    devDependencies: { "@lunora/vite": "workspace:*" },
+                    name: "app",
+                    packageManager: "pnpm@11.0.0",
+                    scripts: { dev: "vite" },
+                }),
+            );
+            mkdirSync(join(workdir, "lunora"));
+            writeFileSync(join(workdir, "lunora", "schema.ts"), 'import { defineSchema } from "@lunora/server"; export default defineSchema({});');
+            writeFileSync(join(workdir, "lunora", "messages.ts"), 'import { query } from "@lunora/server"; export const list = query({ handler: () => [] });');
+            const spawned: { lazy: boolean; tag: string }[] = [];
+            let frameworkEnvironment: string | undefined;
+            const result = await runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                studio: false,
+                startWorker: (descriptor) => {
+                    if (descriptor.tag === "vite") {
+                        frameworkEnvironment = descriptor.env?.LUNORA_LAZY_FUNCTIONS;
+                    }
+                    const registry = readFileSync(join(workdir, "lunora", "_generated", "functions.ts"), "utf8");
+                    spawned.push({ tag: descriptor.tag, lazy: registry.includes("export const LUNORA_FUNCTION_MANIFEST") });
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(result.code).toBe(0);
+            expect(frameworkEnvironment).toBe("1");
+            expect(spawned).toEqual(
+                expect.arrayContaining([
+                    { tag: "vite", lazy: true },
+                    { tag: "worker", lazy: true },
+                ]),
+            );
         });
 
         it("warns about a cloudflare.config.ts once, claiming the guard before any child is spawned", async () => {
@@ -867,14 +980,96 @@ describe("lunora dev", () => {
 
             expect(result.code).toBe(1);
             expect(started).toStrictEqual([{ port: 8790, projectRoot: workdir }]);
-            // Marked as development, as `wrangler dev --var WORKER_ENV:development` does.
-            expect(JSON.parse(readFileSync(join(workdir, ".celld.wrangler.json"), "utf8"))).toStrictEqual({
-                main: "src/server.ts",
-                name: "app",
-                vars: { WORKER_ENV: "development" },
-            });
+            // The session writes the projection once its toolchain probe has passed;
+            // planning must leave the project untouched until then.
+            expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
             // A crashed app is already gone; only a stop the user asks for stops the session.
             expect(stopped).toBe(0);
+        });
+
+        // `--no-worker` runs no session, but the external runner executes `celld dev` on the projection, so it has to be written first.
+        it("writes the celld projection before an attached --no-worker run names it", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const written: string[] = [];
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startCelldSession: async () => {
+                    throw new Error("an attached run starts no session");
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+                waitForInterrupt: async () => EXIT_CODE.SUCCESS,
+                worker: false,
+                writeCelldProjection: async (options) => {
+                    written.push(options.projectRoot);
+
+                    return [];
+                },
+            });
+
+            expect(result.code).toBe(EXIT_CODE.SUCCESS);
+            expect(written).toStrictEqual([workdir]);
+        });
+
+        it("stops an attached --no-worker run when the celld projection cannot be written", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+                waitForInterrupt: async () => {
+                    throw new Error("an attached run must not park after a failed projection write");
+                },
+                worker: false,
+                writeCelldProjection: async () => {
+                    throw new Error("celld is not on PATH");
+                },
+            });
+
+            expect(result.code).toBe(EXIT_CODE.FAILURE);
+        });
+
+        it("starts no embedded Hyperdrive Postgres for a celld-target session, which has no Hyperdrive binding", async () => {
+            expect.assertions(1);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
+
+            const start = vi.fn<NonNullable<Parameters<typeof runDevCommand>[0]["startHyperdrive"]>>(async () => undefined);
+
+            await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8790,
+                logger: silentLogger(),
+                startCelldSession: async () => {
+                    return { exited: Promise.resolve(0), stop: async () => {} };
+                },
+                startHyperdrive: start,
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                target: "celld",
+                waitForInterrupt: async () => EXIT_CODE.SUCCESS,
+            });
+
+            expect(start).not.toHaveBeenCalled();
         });
 
         it("stops the celld session when the worker is killed", async () => {
@@ -895,7 +1090,7 @@ describe("lunora dev", () => {
         });
 
         it("stops before anything is served when the celld session cannot start", async () => {
-            expect.assertions(1);
+            expect.assertions(3);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ main: "src/server.ts", name: "app" }), "utf8");
 
@@ -914,6 +1109,9 @@ describe("lunora dev", () => {
             });
 
             expect(result.code).toBe(EXIT_CODE.FAILURE);
+            // A session that cannot start has written no projection and touched no `.gitignore`.
+            expect(existsSync(join(workdir, ".celld.wrangler.json"))).toBe(false);
+            expect(existsSync(join(workdir, ".gitignore"))).toBe(false);
         });
 
         it("carries `dev.inspector_port` from the wrangler config into the spawned wrangler argv", async () => {
@@ -1150,6 +1348,35 @@ describe("lunora dev", () => {
             expect(sidecarKilled).toBe(true); // primary exit tore the sidecar down
         });
 
+        it("fills no secrets when the scaffold found a dev-vars file unreadable", async () => {
+            expect.assertions(2);
+
+            let filled = false;
+
+            const result = await runDevCommand({
+                cwd: workdir,
+                ensureEnv: async () => {
+                    return { addedKeys: [], generatedKeys: [], status: "unreadable" };
+                },
+                fillSecrets: () => {
+                    filled = true;
+
+                    return { addedKeys: [], filledKeys: [], status: "filled" };
+                },
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(filled).toBe(false);
+            expect(result.code).toBe(0);
+        });
+
         it("fills empty .dev.vars secrets + the admin token before the worker boots", async () => {
             expect.assertions(2);
 
@@ -1216,6 +1443,72 @@ describe("lunora dev", () => {
 
             // The remote disposer ran on the (clean) exit path.
             expect(cleaned).toBe(true);
+        });
+
+        it("starts the embedded Hyperdrive Postgres for the session and stops it when the worker exits", async () => {
+            expect.assertions(3);
+
+            const events: string[] = [];
+
+            await runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startHyperdrive: async ({ projectRoot }) => {
+                    events.push(`start ${projectRoot}`);
+
+                    return {
+                        bindings: ["HYPERDRIVE"],
+                        stop: async () => {
+                            events.push("stop");
+                        },
+                    };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    events.push("worker");
+
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(events[0]).toBe(`start ${workdir}`);
+            expect(events).toContain("worker");
+            // Stopped after the worker that dials it.
+            expect(events.at(-1)).toBe("stop");
+        });
+
+        it("still starts the embedded Hyperdrive Postgres under --remote, which never proxies Hyperdrive", async () => {
+            expect.assertions(1);
+
+            const start = vi.fn<NonNullable<Parameters<typeof runDevCommand>[0]["startHyperdrive"]>>(async () => undefined);
+
+            await runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                materializeDev: () => {
+                    return { cleanup: () => {}, configPath: join(workdir, "wrangler.remote.jsonc"), remoteBindings: [], withheld: [] };
+                },
+                remote: true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startHyperdrive: start,
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(start).toHaveBeenCalledTimes(1);
         });
 
         it("still unlinks the remote temp config when startup throws", async () => {
@@ -1444,6 +1737,34 @@ describe("lunora dev", () => {
             }
         });
 
+        it("skips the scaffold offer with one warning when .dev.vars is a directory", async () => {
+            expect.assertions(3);
+
+            // The real scaffolder only reads `.dev.vars` once an example exists,
+            // so both are needed to reach the read that used to abort the start.
+            writeFileSync(join(workdir, ".dev.vars.example"), "AUTH_SECRET=\n", "utf8");
+            mkdirSync(join(workdir, ".dev.vars"));
+
+            const warnings: string[] = [];
+            const result = await runDevCommand({
+                cwd: workdir,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            const scaffoldWarnings = warnings.filter((line) => line.includes("scaffold"));
+
+            expect(result.code).toBe(0);
+            expect(scaffoldWarnings).toHaveLength(1);
+            expect(scaffoldWarnings[0]).toContain("EISDIR");
+        });
+
         it("logs an actionable .dev.vars hint when the scaffolder is declined non-interactively", async () => {
             expect.assertions(2);
 
@@ -1614,6 +1935,48 @@ describe("lunora dev", () => {
             expect(manifest.dev?.origin).toBe("http://localhost:8787");
         });
 
+        it("keeps starting past a binding section of the wrong shape, and names it once", async () => {
+            expect.assertions(4);
+
+            // `kv_namespaces` as an object used to throw out of the manifest
+            // builder and abort `lunora dev` before wrangler could name the key.
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    d1_databases: [{ binding: "DB", database_name: "app" }],
+                    kv_namespaces: {},
+                    main: "src/index.ts",
+                    name: "app",
+                    queues: { producers: [null] },
+                }),
+                "utf8",
+            );
+
+            const warnings: string[] = [];
+            const result = await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            const manifest = JSON.parse(readFileSync(join(workdir, ".lunora", "dev-bindings.json"), "utf8")) as { bindings: { binding: string }[] };
+            const shapeWarnings = warnings.filter((line) => line.includes("not the shape wrangler expects"));
+
+            expect(result.code).toBe(0);
+            expect(manifest.bindings.map((binding) => binding.binding)).toStrictEqual(["DB"]);
+            expect(shapeWarnings).toHaveLength(1);
+            expect(shapeWarnings[0]).toContain("kv_namespaces, queues.producers");
+        });
+
         it("advertises the manifest in the banner only when one was written", async () => {
             expect.assertions(2);
 
@@ -1660,6 +2023,110 @@ describe("lunora dev", () => {
             });
 
             expect(withoutConfig.join("\n")).not.toContain("dev-bindings.json");
+        });
+
+        it("points the banner at the studio's cron and queue triggers", async () => {
+            expect.assertions(2);
+
+            const infos: string[] = [];
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                JSON.stringify({
+                    compatibility_date: "2026-01-01",
+                    main: "src/index.ts",
+                    name: "app",
+                    queues: { producers: [{ binding: "QUEUE_EMAILS", queue: "emails" }] },
+                    triggers: { crons: ["0 * * * *"] },
+                }),
+                "utf8",
+            );
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "queues.ts"),
+                `import { defineQueue } from "@lunora/queue";\n\nexport const emails = defineQueue({ handler: async () => {} });\n`,
+                "utf8",
+            );
+            await runDevCommand({
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), info: (message: string) => infos.push(message) },
+                probeReady: async () => true,
+                startCodegen: () => {
+                    return { close: async () => {}, ready: Promise.resolve(), watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            expect(infos).toContain("  ➜  Crons:      1 scheduled → run one now in http://127.0.0.1:6173/schedule");
+            expect(infos).toContain("  ➜  Queues:     emails → send a test message in http://127.0.0.1:6173/queues");
+        });
+
+        it("warns at startup about a key the lunora/env.ts contract needs and the dev env lacks", async () => {
+            expect.assertions(1);
+
+            const warnings: string[] = [];
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            // Self-contained: a temp dir cannot resolve `@lunora/server`, so the fixture carries the brand `defineEnv` sets.
+            writeFileSync(
+                join(workdir, "lunora", "env.ts"),
+                `const check = (value: Record<string, unknown>) => (value["STRIPE_KEY"] === undefined ? [{ key: "STRIPE_KEY", message: "Expected string" }] : []);
+
+export const env = Object.defineProperty((value: unknown) => value, Symbol.for("lunora.env"), { value: check });
+`,
+                "utf8",
+            );
+            await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                probeReady: async () => true,
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(warnings.join("\n")).toContain("lunora/env.ts: 1 key(s) missing or invalid in the dev env (wrangler vars + .dev.vars)");
+        });
+
+        it("still starts when the env check meets a .env it cannot read, which wrangler skips too", async () => {
+            expect.assertions(2);
+
+            const warnings: string[] = [];
+
+            // An unreadable `.env` (read when there is no `.dev.vars`) used to throw out of the check and abort the start.
+            writeFileSync(join(workdir, "wrangler.jsonc"), JSON.stringify({ compatibility_date: "2026-01-01", main: "src/index.ts", name: "app" }), "utf8");
+            mkdirSync(join(workdir, ".env"));
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(
+                join(workdir, "lunora", "env.ts"),
+                `export const env = Object.defineProperty((value: unknown) => value, Symbol.for("lunora.env"), { value: () => [{ key: "API_URL", message: "missing" }] });\n`,
+                "utf8",
+            );
+
+            const result = await runDevCommand({
+                codegen: false,
+                cwd: workdir,
+                findFreePort: async () => 8787,
+                logger: { ...silentLogger(), warn: (message: string) => warnings.push(message) },
+                probeReady: async () => true,
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            expect(result.code).toBe(0);
+            expect(warnings.join("\n")).toContain("lunora/env.ts: 1 key(s) missing or invalid in the dev env");
         });
 
         it("does not fail a project that has no wrangler config when nobody asked", async () => {

@@ -1,3 +1,995 @@
+## @lunora/ratelimit [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.195...@lunora/ratelimit@1.0.0-alpha.196) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.232
+* **@lunora/server:** upgraded to 1.0.0-alpha.267
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+
+## @lunora/ratelimit [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.194...@lunora/ratelimit@1.0.0-alpha.195) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.231
+* **@lunora/server:** upgraded to 1.0.0-alpha.266
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.185
+
+## @lunora/ratelimit [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.193...@lunora/ratelimit@1.0.0-alpha.194) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/d1:** upgraded to 1.0.0-alpha.230
+* **@lunora/server:** upgraded to 1.0.0-alpha.264
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.183
+* **@lunora/values:** upgraded to 1.0.0-alpha.93
+
+## @lunora/ratelimit [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.192...@lunora/ratelimit@1.0.0-alpha.193) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/d1:** upgraded to 1.0.0-alpha.229
+* **@lunora/server:** upgraded to 1.0.0-alpha.263
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.182
+* **@lunora/values:** upgraded to 1.0.0-alpha.92
+
+## @lunora/ratelimit [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.191...@lunora/ratelimit@1.0.0-alpha.192) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/d1:** upgraded to 1.0.0-alpha.228
+* **@lunora/server:** upgraded to 1.0.0-alpha.262
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.181
+* **@lunora/values:** upgraded to 1.0.0-alpha.91
+
+## @lunora/ratelimit [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.190...@lunora/ratelimit@1.0.0-alpha.191) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/d1:** upgraded to 1.0.0-alpha.227
+* **@lunora/server:** upgraded to 1.0.0-alpha.261
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.180
+* **@lunora/values:** upgraded to 1.0.0-alpha.90
+
+## @lunora/ratelimit [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.189...@lunora/ratelimit@1.0.0-alpha.190) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.226
+* **@lunora/server:** upgraded to 1.0.0-alpha.260
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.179
+
+## @lunora/ratelimit [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.188...@lunora/ratelimit@1.0.0-alpha.189) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/d1:** upgraded to 1.0.0-alpha.225
+* **@lunora/server:** upgraded to 1.0.0-alpha.259
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/values:** upgraded to 1.0.0-alpha.89
+
+## @lunora/ratelimit [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.187...@lunora/ratelimit@1.0.0-alpha.188) (2026-10-31)
+
+### Bug Fixes
+
+* **ratelimit:** admit retries on token buckets with very long periods ([#1434](https://github.com/anolilab/lunora/issues/1434)) ([84f874e](https://github.com/anolilab/lunora/commit/84f874ee13b3d406a07d79491df550bad5f10473))
+
+## @lunora/ratelimit [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.186...@lunora/ratelimit@1.0.0-alpha.187) (2026-10-30)
+
+### Bug Fixes
+
+* **ratelimit:** give a token-bucket retry-after that actually admits ([#1433](https://github.com/anolilab/lunora/issues/1433)) ([fbb3215](https://github.com/anolilab/lunora/commit/fbb32154a5d43c64d695b0bb24d3a7048cb1e6ce))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.224
+
+## @lunora/ratelimit [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.185...@lunora/ratelimit@1.0.0-alpha.186) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.223
+* **@lunora/server:** upgraded to 1.0.0-alpha.256
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.175
+
+## @lunora/ratelimit [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.184...@lunora/ratelimit@1.0.0-alpha.185) (2026-10-30)
+
+### Bug Fixes
+
+* **ratelimit:** keep ill-formed keys on their own budget, never fail open ([#1430](https://github.com/anolilab/lunora/issues/1430)) ([ddd681e](https://github.com/anolilab/lunora/commit/ddd681eeeef0c3b8c55cba3ff756b3fdfcd7d873))
+
+## @lunora/ratelimit [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.183...@lunora/ratelimit@1.0.0-alpha.184) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** a custom transport's error now reaches the caller as
+MailSendError with the generic message "@lunora/mail: send failed", and
+the original error is on `cause`. Code that matched the raw error text
+must read `cause` instead. Consumers that keep the old queue recipe still
+work, but they retry every failure, refusals included.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* feat(mail): tell retryable send failures from refusals
+
+A failed send now throws MailSendError with `retryable` set. The
+provider's own classification decides it: 408, 429 and 5xx are retryable,
+other statuses are refusals, a validation refusal with no status or cause
+is a refusal, and a network or timeout failure is retryable. A transport
+that throws something unclassified is treated as retryable. The queue
+recipe acks and logs refusals and retries the rest, so a refused message
+no longer fills the dead-letter queue.
+* **cli:** a custom transport's error now reaches the caller as
+MailSendError with the generic message "@lunora/mail: send failed", and
+the original error is on `cause`. Code that matched the raw error text
+must read `cause` instead. Consumers that keep the old queue recipe still
+work, but they retry every failure, refusals included.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* docs(cli): describe what doctor --fix changes
+
+doctor was documented as read-only, with no mention of --fix. --fix creates
+placeholder D1 databases and mints missing .dev.vars secrets, so say that
+and show --dry-run.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(studio): fall back to the catalog hint when an error has none
+
+Studio read only the hint an error carried itself, so a client-side error
+with a known code showed no fix. Resolve the catalog hint by code and
+message, as the CLI renderer does. An explicit hint still wins.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(studio): fall back to the catalog hint when an error has none
+
+Studio read only the hint an error carried itself, so a client-side error
+with a known code showed no fix. Resolve the catalog hint by code and
+message, as the CLI renderer does. An explicit hint still wins.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): report duplicate-row unique index refusals under their own code
+
+The refusal was thrown as INTERNAL, which the wire redacts, so the message
+naming the duplicate rows and the remedy never reached the caller. It now has
+its own code, UNIQUE_INDEX_DUPLICATES, whose hint points at defineMigration.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(cli): fill env-scoped D1 placeholders in doctor --fix
+
+deploy --env reads each env block's d1_databases, but doctor --fix only read
+the top level, so a placeholder in an env block was reported and never filled.
+The placeholder path now covers every env block.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* test(cli): pin the doctor --fix pointer in the placeholder refusal
+
+The refusal now names lunora doctor --fix. Assert it, so the pointer
+cannot be dropped without a failing test.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(vite): show the catalog hint for coded errors in the overlay
+
+The overlay matched errors on their message alone, so a coded error whose
+message matched no solution table entry showed nothing, even when the
+catalog has a hint for its code. Fall back to that hint.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(cli): check user-owned Cloudflare tokens at the user endpoint
+
+Most tokens are created on a user profile, and the account endpoint does not
+verify them. Check the user endpoint first and fall back to the account
+endpoint on 401. Report a token as rejected only when both refuse it.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(codegen): refuse user dispatch under the duplicate-rows code
+
+The shard refused user dispatch with an INTERNAL error, which the wire
+redacts, so the cause and its remedy never reached the caller. Refuse under
+UNIQUE_INDEX_DUPLICATES instead. The hint now says to deploy the migration,
+then run migrate up, since the shard retries the build on its own.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* Revert "fix(vite): show the catalog hint for coded errors in the overlay"
+
+This reverts commit eb36e66d885306e810e8c0af72c0487d26829501.
+
+* fix(cli): report env-scoped D1 placeholders in doctor
+
+doctor --fix fills placeholders in env blocks, but doctor only read the top
+level, so the finding that sends users to --fix never showed for those
+blocks. Report each env block's placeholders, naming the block. A user-endpoint
+403 now falls back to the account endpoint, as a 401 does.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(cli): run wrangler for env-scoped D1 placeholders with their environment
+
+`doctor --fix` looked up and created a placeholder's database without its
+env block, so wrangler used the top-level account. An env that overrides
+account_id could then receive an id from the wrong account. Pass the
+environment through CLOUDFLARE_ENV for every wrangler call on that
+placeholder.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(cli): verify the token from its reported status, and warn on traces
+
+The redaction warning checked only request logs, but traces keep the request
+URL too, so an explicit block with traces on and no redact_query_string is
+now flagged as well.
+
+The token check rejects on a status the token reports, not on the HTTP code
+alone. A 200 without a readable status is inconclusive and stays unchecked.
+An account is also refused on 403 as well as 401, and an account configured
+only in an env block is checked when the top level names none.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(mail): classify a numeric HTTP status code as a refusal or a retry
+
+The retry classifier read a status only when the provider wrote it as a
+three-digit string. A numeric 422 fell through to the retry default, so a
+permanent refusal was redelivered until it reached the dead-letter queue.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(studio): match a thrown string against the catalog hints
+
+errorHint returned nothing for a string before it reached the catalog, so a
+thrown message that matches a solution showed no hint in the error alert.
+A string is now matched by its text.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(errors): give the duplicate-rows hint the migration id it needs
+
+`lunora migrate up` requires an id and refuses to run without one, so the
+hint for a blocked unique index named a command that could not succeed. It
+now names the id.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* fix(codegen): list UNIQUE_INDEX_DUPLICATES among the RPC error codes
+
+Generated shards now throw UNIQUE_INDEX_DUPLICATES on user calls, but the
+OpenAPI and OpenRPC error lists did not name it, so typed clients and
+validators built from them got a code outside their contract. The goldens
+and the committed example outputs are regenerated. The OpenRPC numeric error
+codes after it shift by one.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+* style: clear the cognitive-complexity and mock-type lint failures
+
+Extract the celld/standard placeholder test in the doctor D1 check into
+a local predicate, and type the throwing transport mock in the mail
+send-error test.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+# Conflicts:
+#	packages/cli/src/commands/doctor/handler.ts
+
+* chore(examples): regenerate clerk-auth and workos-auth lunora output
+
+Bring the committed _generated files in line with the current codegen.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(mail): do not retry a send the provider already accepted
+
+A success result with no message id was classified retryable, so a queue
+redelivery would email the recipient twice. Throw a non-retryable error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix: keep openrpc error numbers stable and tighten error hints
+
+- codegen: append UNIQUE_INDEX_DUPLICATES to the error list so the OpenRPC numbers
+  already published for UNPROCESSABLE and VALIDATION_ERROR do not shift; regenerate
+  fixtures and example specs
+- doctor: name the signal (request logs, traces) that keeps query strings and
+  tolerate a null observability block
+- mail: read the HTTP status through the error cause chain so a wrapped 403 refusal
+  is not retried
+- studio: an empty or non-string hint array falls back to the catalog hint
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(cli): export the doctor token check by name
+
+The module exported its options type by name and the check as a default; a
+file with more than one export uses named exports only.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): scope celld doctor D1 checks to top-level bindings
+
+celld rejects --env and projects only the top-level wrangler config, so
+doctor and doctor --fix no longer flag or rewrite D1 placeholders in env
+blocks for a celld project. Other targets still traverse env blocks.
+
+Also document that observability-query-unredacted covers traces as well
+as request logs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): check the doctor token against every configured account
+
+An account-owned token answers only at its own account, but doctor verified
+it against the top-level account (or the first env block's) alone, so a token
+for another account the config deploys to was reported as rejected. It is now
+checked against each configured account: one active answer passes, and only a
+refusal from every account is a rejection. CLOUDFLARE_ACCOUNT_ID still
+overrides them all.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(errors): regenerate the error reference after rebasing onto alpha
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): move the duplicate-rows hint into the hints table
+
+Hints left the catalog, which now carries status and title only. The
+`UNIQUE_INDEX_DUPLICATES` fix text sat on its catalog entry, where nothing reads
+it any more, so the error reference lost it. It now lives in `ERROR_HINTS` with
+the other server-side hints, and the reference is regenerated.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(errors): update the api snapshot for the moved hint
+
+`ERROR_CATALOG` no longer types a `hint` on `UNIQUE_INDEX_DUPLICATES`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(mail): retry sends on a mailer with no transport
+
+A queue consumer whose env lacks its send binding builds a producer-only
+mailer, and its `send()` rejected as a refusal. The documented consumer recipe
+acks a refusal, so every queued mail was dropped until the binding was fixed.
+That failure is a deploy fault, not the message's, so it is now retryable and
+the messages dead-letter instead.
+
+`lunora doctor` also stops warning about query strings for a signal that
+samples no requests, and the two-endpoint token comment sits on the function it
+describes.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): honour a failed verify envelope and celld d1 ids in doctor
+
+A token verify answer carrying `result.status: "active"` inside a
+`success: false` envelope was read as an active token. A failed envelope now
+reports no status, so the check stays inconclusive.
+
+On a celld project the D1 placeholder finding told the user to create a
+Cloudflare database. celld takes `database_id` as the database's identity, so
+the fix now says to set the id celld should use, as the deploy refusal does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(mail): ack malformed queue messages in the consumer example
+
+The example read `message.body.idempotencyKey` before its per-message error
+handling, so a null body, or one without a key, threw out of the loop and
+retried the whole batch. It now acks and logs such a message first.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): answer a blocked unique index with 503
+
+`UNIQUE_INDEX_DUPLICATES` answered 409. The live-stream client reconnects and
+re-subscribes only on a 5xx and treats any other 4xx as a final refusal, so a
+subscription opened while duplicate rows block a UNIQUE index was dropped for
+good, though the shard rebuilds the index on its own once the rows are repaired.
+
+The refusal lifts by itself, which is what 503 means, so the code now answers
+503 and the existing reconnect path picks the subscription back up. The message
+is still sent unredacted: redaction follows the catalog's `internal` flag, not
+the status.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(sql-store): name duplicate rows that block a unique index
+
+The shard engine refuses a `.unique()` index over duplicate rows with
+`UNIQUE_INDEX_DUPLICATES`, but the global store's twin still threw a redacted
+`INTERNAL` 500 with no hint, so the same condition read differently by
+backend. It now throws the same code, and the hint no longer says "shard".
+
+`lunora doctor` also trims configured account ids before probing an
+account-owned token, as the credential resolver does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): keep doctor fixes off real d1 ids and past bad env blocks
+
+`isD1PlaceholderId` matched any id containing "replace", so `doctor --fix`
+could overwrite a real database id such as `replacement-orders`. It now uses
+the same stand-in test as the celld check. Doctor also reads an env block's
+`d1_databases` only when it is an array, so a malformed value no longer throws
+out of the whole run.
+
+The mail queue-consumer examples log a malformed message without its body,
+which can still carry recipients and content.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): read a null env block safely in doctor observability checks
+
+A wrangler `env` entry set to null threw a TypeError out of `lunora doctor`
+before the token, D1 and artifact checks ran. Both observability checks now
+read the block optionally, as the D1 and token checks already do.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(mail): retry every send failure not proven permanent
+
+A failed send is now dropped only when it carries an explicit permanent HTTP status (any status
+except 408, 429 and 5xx). A plain Error with no code or cause, a non-Error provider result and a
+custom-transport throw are retried until the dead-letter queue, instead of being treated as a
+validation refusal.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): verify promote --from is live before splitting traffic
+
+A partial promote now reads `wrangler deployments status --json` first and refuses when --from is
+not one of the live versions, or when the live deployment cannot be read. A full promote is
+unchanged.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(codegen): log a blocked unique index once per retry window
+
+The generated shard recorded indexes blocked by duplicate rows silently, so an operator saw nothing
+in the server log while every request was refused. A migration attempt that leaves indexes blocked
+now logs them with console.error, at most once per retry window. The wire message is unchanged.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(deps): require the newest @lunora/errors in server and shard-engine
+
+Both packages throw the UNIQUE_INDEX_DUPLICATES code, so the minimum moves to the newest published
+@lunora/errors instead of a release that predates it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): keep checking accounts after one token probe fails
+
+A network failure verifying the token against one configured account threw out
+of the account loop, so doctor reported the token unchecked even when a later
+account would have verified it. A failed probe now counts as that account being
+inconclusive, and the remaining accounts are still asked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* test(d1): expect the duplicate-rows code from the global store
+
+The global store now refuses a `.unique()` index over duplicate rows with
+`UNIQUE_INDEX_DUPLICATES`, so its workerd test expects that code.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(errors): make the duplicate-rows hint cover global tables
+
+The UNIQUE_INDEX_DUPLICATES hint only described the shard path
+(defineMigration + migrate up), but the SQL store raises the same code
+for `.global()` tables, which a shard migration never reaches. The hint
+now says to fix those rows directly in the database.
+
+Also raise the @lunora/errors floor in sql-store to alpha.75, the first
+release whose catalog knows the code, and add a workerd test that the
+global store refuses a unique index over duplicate rows on D1.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* ci: retrigger the lint and test workflows
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(errors): regenerate the error reference after rebasing onto alpha
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(sql-store): log a unique index blocked by duplicate rows
+
+The global store refuses a `.unique()` index over duplicate rows with
+`UNIQUE_INDEX_DUPLICATES`, which is not redacted, so no transport edge logs it,
+and every request re-runs the check until the rows are repaired. Operators had
+no server-side signal that the store was refusing traffic. It now logs each
+blocked index once per isolate, like the shard's blocked-index log.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(templates): redact request query strings in the remaining auth configs
+
+The saas template and the clerk-auth and workos-auth examples declare their own
+`observability` block, which the new `redact_query_string` default does not
+touch, so they kept logging full request URLs, auth-link tokens and OAuth
+callback codes included. Each now sets `redact_query_string: true`.
+
+The CLI docs also list `status` alongside `list` for `deployments --format json`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* perf(cli): verify an account-owned token against all accounts at once
+
+`lunora doctor` asked each configured account in turn, each with its own
+five-second timeout, so unreachable accounts held up every later check by
+about five seconds each. The accounts are now asked concurrently, so they cost
+one timeout in total; any active answer still passes, an inconclusive one still
+makes the check unchecked, and only refusals from every account reject the token.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **cli:** make doctor and shard refusals point at the fix ([#1373](https://github.com/anolilab/lunora/issues/1373)) ([58946a2](https://github.com/anolilab/lunora/commit/58946a2bc283ceecfcec67b19396810bc5b71a3f))
+
+## @lunora/ratelimit [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.182...@lunora/ratelimit@1.0.0-alpha.183) (2026-10-30)
+
+### Performance Improvements
+
+* one-statement ratelimit sql sweep, skip untagged row decode ([#1381](https://github.com/anolilab/lunora/issues/1381)) ([2ab980c](https://github.com/anolilab/lunora/commit/2ab980c714e04381ad75db134db44a22d0de518c))
+* ratelimit sweep, replica log reads and appends, span lookup ([#1377](https://github.com/anolilab/lunora/issues/1377)) ([f5078b5](https://github.com/anolilab/lunora/commit/f5078b52200981ad49eb1a8bfb226bef81367ad3))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.220
+* **@lunora/server:** upgraded to 1.0.0-alpha.253
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+
+## @lunora/ratelimit [1.0.0-alpha.182](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.181...@lunora/ratelimit@1.0.0-alpha.182) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.219
+* **@lunora/server:** upgraded to 1.0.0-alpha.252
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+
+## @lunora/ratelimit [1.0.0-alpha.181](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.180...@lunora/ratelimit@1.0.0-alpha.181) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.218
+* **@lunora/server:** upgraded to 1.0.0-alpha.251
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+
+## @lunora/ratelimit [1.0.0-alpha.180](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.179...@lunora/ratelimit@1.0.0-alpha.180) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.217
+* **@lunora/server:** upgraded to 1.0.0-alpha.250
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+
+## @lunora/ratelimit [1.0.0-alpha.179](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.178...@lunora/ratelimit@1.0.0-alpha.179) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.216
+* **@lunora/server:** upgraded to 1.0.0-alpha.249
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+
+## @lunora/ratelimit [1.0.0-alpha.178](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.177...@lunora/ratelimit@1.0.0-alpha.178) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.248
+
+## @lunora/ratelimit [1.0.0-alpha.177](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.176...@lunora/ratelimit@1.0.0-alpha.177) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.247
+* **@lunora/values:** upgraded to 1.0.0-alpha.85
+
+## @lunora/ratelimit [1.0.0-alpha.176](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.175...@lunora/ratelimit@1.0.0-alpha.176) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.214
+* **@lunora/server:** upgraded to 1.0.0-alpha.246
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+
+## @lunora/ratelimit [1.0.0-alpha.175](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.174...@lunora/ratelimit@1.0.0-alpha.175) (2026-10-27)
+
+### Performance Improvements
+
+* cut per-request CPU on the DO dispatch and fan-out path ([#1351](https://github.com/anolilab/lunora/issues/1351)) ([2f94aa9](https://github.com/anolilab/lunora/commit/2f94aa9bafb63d15288730a8dea7f408db97a760)), closes [#1370](https://github.com/anolilab/lunora/issues/1370) [Array#some](https://github.com/anolilab/Array/issues/some)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.213
+* **@lunora/server:** upgraded to 1.0.0-alpha.244
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+
+## @lunora/ratelimit [1.0.0-alpha.174](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.173...@lunora/ratelimit@1.0.0-alpha.174) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/d1:** upgraded to 1.0.0-alpha.212
+* **@lunora/server:** upgraded to 1.0.0-alpha.243
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.164
+* **@lunora/values:** upgraded to 1.0.0-alpha.83
+
+## @lunora/ratelimit [1.0.0-alpha.173](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.172...@lunora/ratelimit@1.0.0-alpha.173) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.211
+* **@lunora/server:** upgraded to 1.0.0-alpha.242
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+
+## @lunora/ratelimit [1.0.0-alpha.172](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.171...@lunora/ratelimit@1.0.0-alpha.172) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/d1:** upgraded to 1.0.0-alpha.210
+* **@lunora/server:** upgraded to 1.0.0-alpha.241
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+* **@lunora/values:** upgraded to 1.0.0-alpha.82
+
+## @lunora/ratelimit [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.170...@lunora/ratelimit@1.0.0-alpha.171) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.209
+* **@lunora/server:** upgraded to 1.0.0-alpha.240
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+
+## @lunora/ratelimit [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.169...@lunora/ratelimit@1.0.0-alpha.170) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.208
+* **@lunora/server:** upgraded to 1.0.0-alpha.239
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+
+## @lunora/ratelimit [1.0.0-alpha.169](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.168...@lunora/ratelimit@1.0.0-alpha.169) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/d1:** upgraded to 1.0.0-alpha.207
+* **@lunora/server:** upgraded to 1.0.0-alpha.238
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+* **@lunora/values:** upgraded to 1.0.0-alpha.81
+
+## @lunora/ratelimit [1.0.0-alpha.168](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.167...@lunora/ratelimit@1.0.0-alpha.168) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.206
+* **@lunora/server:** upgraded to 1.0.0-alpha.237
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+
+## @lunora/ratelimit [1.0.0-alpha.167](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.166...@lunora/ratelimit@1.0.0-alpha.167) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/d1:** upgraded to 1.0.0-alpha.205
+* **@lunora/server:** upgraded to 1.0.0-alpha.236
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+
+## @lunora/ratelimit [1.0.0-alpha.166](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.165...@lunora/ratelimit@1.0.0-alpha.166) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/d1:** upgraded to 1.0.0-alpha.204
+* **@lunora/server:** upgraded to 1.0.0-alpha.235
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+
+## @lunora/ratelimit [1.0.0-alpha.165](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.164...@lunora/ratelimit@1.0.0-alpha.165) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.203
+* **@lunora/server:** upgraded to 1.0.0-alpha.234
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+
+## @lunora/ratelimit [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.163...@lunora/ratelimit@1.0.0-alpha.164) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.233
+
+## @lunora/ratelimit [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.162...@lunora/ratelimit@1.0.0-alpha.163) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.202
+* **@lunora/server:** upgraded to 1.0.0-alpha.232
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+
+## @lunora/ratelimit [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.161...@lunora/ratelimit@1.0.0-alpha.162) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.201
+* **@lunora/server:** upgraded to 1.0.0-alpha.231
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+
+## @lunora/ratelimit [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.160...@lunora/ratelimit@1.0.0-alpha.161) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.200
+* **@lunora/server:** upgraded to 1.0.0-alpha.230
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+
+## @lunora/ratelimit [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.159...@lunora/ratelimit@1.0.0-alpha.160) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.199
+* **@lunora/server:** upgraded to 1.0.0-alpha.229
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+
+## @lunora/ratelimit [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.158...@lunora/ratelimit@1.0.0-alpha.159) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/d1:** upgraded to 1.0.0-alpha.198
+* **@lunora/server:** upgraded to 1.0.0-alpha.228
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+
+## @lunora/ratelimit [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.157...@lunora/ratelimit@1.0.0-alpha.158) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.197
+* **@lunora/server:** upgraded to 1.0.0-alpha.227
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+
+## @lunora/ratelimit [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.156...@lunora/ratelimit@1.0.0-alpha.157) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.196
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+
+## @lunora/ratelimit [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.155...@lunora/ratelimit@1.0.0-alpha.156) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/d1:** upgraded to 1.0.0-alpha.195
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+* **@lunora/values:** upgraded to 1.0.0-alpha.77
+
+## @lunora/ratelimit [1.0.0-alpha.155](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.154...@lunora/ratelimit@1.0.0-alpha.155) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/d1:** upgraded to 1.0.0-alpha.194
+* **@lunora/server:** upgraded to 1.0.0-alpha.224
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+* **@lunora/values:** upgraded to 1.0.0-alpha.76
+
+## @lunora/ratelimit [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.153...@lunora/ratelimit@1.0.0-alpha.154) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/d1:** upgraded to 1.0.0-alpha.193
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+
+## @lunora/ratelimit [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.152...@lunora/ratelimit@1.0.0-alpha.153) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/d1:** upgraded to 1.0.0-alpha.192
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+* **@lunora/values:** upgraded to 1.0.0-alpha.74
+
+## @lunora/ratelimit [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.151...@lunora/ratelimit@1.0.0-alpha.152) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/d1:** upgraded to 1.0.0-alpha.191
+* **@lunora/server:** upgraded to 1.0.0-alpha.221
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+* **@lunora/values:** upgraded to 1.0.0-alpha.73
+
+## @lunora/ratelimit [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.150...@lunora/ratelimit@1.0.0-alpha.151) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.220
+
+## @lunora/ratelimit [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.149...@lunora/ratelimit@1.0.0-alpha.150) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.190
+* **@lunora/server:** upgraded to 1.0.0-alpha.218
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.141
+
+## @lunora/ratelimit [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.148...@lunora/ratelimit@1.0.0-alpha.149) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/d1:** upgraded to 1.0.0-alpha.189
+* **@lunora/server:** upgraded to 1.0.0-alpha.217
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.140
+* **@lunora/values:** upgraded to 1.0.0-alpha.72
+
+## @lunora/ratelimit [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.147...@lunora/ratelimit@1.0.0-alpha.148) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/d1:** upgraded to 1.0.0-alpha.188
+* **@lunora/server:** upgraded to 1.0.0-alpha.216
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+* **@lunora/values:** upgraded to 1.0.0-alpha.71
+
+## @lunora/ratelimit [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.146...@lunora/ratelimit@1.0.0-alpha.147) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/d1:** upgraded to 1.0.0-alpha.187
+* **@lunora/server:** upgraded to 1.0.0-alpha.215
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+* **@lunora/values:** upgraded to 1.0.0-alpha.70
+
+## @lunora/ratelimit [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.145...@lunora/ratelimit@1.0.0-alpha.146) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.186
+* **@lunora/server:** upgraded to 1.0.0-alpha.214
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+
+## @lunora/ratelimit [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.144...@lunora/ratelimit@1.0.0-alpha.145) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/d1:** upgraded to 1.0.0-alpha.185
+* **@lunora/server:** upgraded to 1.0.0-alpha.212
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.135
+* **@lunora/values:** upgraded to 1.0.0-alpha.69
+
+## @lunora/ratelimit [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.143...@lunora/ratelimit@1.0.0-alpha.144) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/d1:** upgraded to 1.0.0-alpha.184
+* **@lunora/server:** upgraded to 1.0.0-alpha.211
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.134
+* **@lunora/values:** upgraded to 1.0.0-alpha.68
+
+## @lunora/ratelimit [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.142...@lunora/ratelimit@1.0.0-alpha.143) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/d1:** upgraded to 1.0.0-alpha.183
+* **@lunora/server:** upgraded to 1.0.0-alpha.210
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.133
+
+## @lunora/ratelimit [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.141...@lunora/ratelimit@1.0.0-alpha.142) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.209
+
+## @lunora/ratelimit [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.140...@lunora/ratelimit@1.0.0-alpha.141) (2026-10-16)
+
+### Bug Fixes
+
+* **ratelimit:** expire durable rate-limit rows past their retention ([#1225](https://github.com/anolilab/lunora/issues/1225)) ([eedbf40](https://github.com/anolilab/lunora/commit/eedbf4059d6a3842f7a246a0e7337c919fa2c209)), closes [#1227](https://github.com/anolilab/lunora/issues/1227)
+
+## @lunora/ratelimit [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.139...@lunora/ratelimit@1.0.0-alpha.140) (2026-10-16)
+
+### Bug Fixes
+
+* **ratelimit:** evict memory-store entries past their retention horizon ([#1223](https://github.com/anolilab/lunora/issues/1223)) ([75b0289](https://github.com/anolilab/lunora/commit/75b0289fd4acbe3dfa02824db9146281ccfc934e))
+
+## @lunora/ratelimit [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.138...@lunora/ratelimit@1.0.0-alpha.139) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.207
+
 ## @lunora/ratelimit [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/ratelimit@1.0.0-alpha.137...@lunora/ratelimit@1.0.0-alpha.138) (2026-10-15)
 
 

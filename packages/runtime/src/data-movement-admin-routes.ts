@@ -16,6 +16,7 @@
  * values from `create-worker`, only the shared `./body-readers` + `./connector-cdc`
  * and the coordinator / connector-format types.
  */
+import { exportEndLine } from "../../../shared/export-end";
 import { readJsonBodyWithLimit, readLooseJsonBody } from "./body-readers";
 import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage, shardCdcPageSize } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
@@ -153,8 +154,24 @@ interface DataMovementAdminRouteDeps {
     resolveForwardContext: (request: Request, env: unknown) => Promise<{ headers: Record<string, string> }>;
     /** The shard DO namespace fanned across. */
     shardDO: ShardNamespaceLike;
-    /** Stream-parse + fan-out an NDJSON append import body (bound to the worker options). */
-    streamingImport: (request: Request, headers: Record<string, string>) => Promise<ImportResponse>;
+    /** Stream-parse + fan-out an NDJSON import body (bound to the worker options). */
+    streamingImport: (
+        request: Request,
+        resolveHeaders: () => Promise<Record<string, string>>,
+        dryRun: boolean,
+        onConflict: "replace" | "skip",
+    ) => Promise<{
+        conflicts: number;
+        /** Stored rows removed by `op: "delete"` rows. */
+        deleted: number;
+        errors: ReadonlyArray<ImportRowError>;
+        /** Shards the fan-out could not write to at all — a non-empty array means the import was PARTIAL. */
+        failed: ReadonlyArray<ImportShardFailure>;
+        inserted: Record<string, number>;
+        received: number;
+        replaced: number;
+        warnings?: ReadonlyArray<string>;
+    }>;
     /** Read a page of `.global()` (D1) CDC changes; absent when no global plane is configured. */
     syncGlobals?: (request: { limit?: number; sinceSeq: number }) => Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }>;
 }
@@ -217,6 +234,8 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         // storage object is read off its body only as fast as the client takes the
         // lines, instead of the whole export queueing up in the isolate.
         const iterator = rows[Symbol.asyncIterator]();
+        // Every line counts toward the end marker, the section header and section rows included: a reader counts lines.
+        let written = 0;
         const stream = new ReadableStream<Uint8Array>({
             async cancel() {
                 await iterator.return(undefined);
@@ -226,8 +245,11 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
                     const next = await iterator.next();
 
                     if (next.done) {
+                        // Only a stream that read every row reaches here; an errored one never gets its end marker.
+                        controller.enqueue(NDJSON_ENCODER.encode(exportEndLine(written)));
                         controller.close();
                     } else {
+                        written += 1;
                         controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(next.value)}\n`));
                     }
                 } catch (error: unknown) {
@@ -471,6 +493,26 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         return tables;
     };
 
+    /** A `mode=replace` import: staged into `session` when one is named, else staged and committed in this one request. */
+    const handleReplaceImport = async (
+        request: Request,
+        env: unknown,
+        replaceTables: ReadonlyArray<string>,
+        session: string | undefined,
+    ): Promise<Response> => {
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
+
+        if (session !== undefined) {
+            const staged = await importSession.stage(request, forwardedHeaders, session, replaceTables);
+
+            return Response.json(staged, { status: staged.failed.length > 0 ? 207 : 200 });
+        }
+
+        const replaced = await importSession.replace(request, forwardedHeaders, replaceTables);
+
+        return Response.json(replaced, { headers: { "content-type": "application/json" }, status: replaced.failed.length > 0 ? 207 : 200 });
+    };
+
     const handleImport = async (request: Request, env: unknown): Promise<Response> => {
         const wrongMethod = methodGuard(request, ["POST"]);
 
@@ -480,32 +522,56 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
         assertAdmin(request);
 
+        const { searchParams } = new URL(request.url);
+        // `?dryRun=true` checks the body and reports what it would reject, writing nothing.
+        const dryRun = searchParams.get("dryRun") === "true";
+        // `?onConflict=replace` overwrites rows whose `_id` already exists; absent, they are conflicts left unchanged.
+        // `?deletes=true` (read by the import stream) is what lets an `op: "delete"` row remove a stored row.
+        const onConflictParameter = searchParams.get("onConflict") ?? "skip";
+
+        if (onConflictParameter !== "replace" && onConflictParameter !== "skip") {
+            throw new LunoraError(`onConflict must be "skip" or "replace", got ${JSON.stringify(onConflictParameter)}`, { code: "BAD_REQUEST", status: 400 });
+        }
+
         const replaceTables = parseReplaceTables(request);
-        const session = new URL(request.url).searchParams.get("stage") ?? undefined;
+        const session = searchParams.get("stage") ?? undefined;
 
         if (session !== undefined && replaceTables === undefined) {
             throw new LunoraError("Import `stage` needs `mode=replace`: only a replace is staged", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
+        if (replaceTables !== undefined) {
+            // A snapshot replace overwrites by construction and has no check-only form, so neither knob means anything for it.
+            if (dryRun || searchParams.has("onConflict")) {
+                throw new LunoraError("`mode=replace` takes neither `dryRun` nor `onConflict`", { code: "BAD_REQUEST", status: 400 });
+            }
 
-        if (session !== undefined && replaceTables !== undefined) {
-            const staged = await importSession.stage(request, forwardedHeaders, session, replaceTables);
-
-            return Response.json(staged, { status: staged.failed.length > 0 ? 207 : 200 });
+            return handleReplaceImport(request, env, replaceTables, session);
         }
 
-        const result =
-            replaceTables === undefined
-                ? await streamingImport(request, forwardedHeaders)
-                : await importSession.replace(request, forwardedHeaders, replaceTables);
+        const result = await streamingImport(
+            request,
+            async () => {
+                const { headers } = await resolveForwardContext(request, env);
+
+                return headers;
+            },
+            dryRun,
+            onConflictParameter,
+        );
+
+        // A client sends a dry run only to a worker that honours the flag, and an
+        // older worker answers with the same body and writes. The echo is how it
+        // tells them apart before any row is sent. `onConflict` is echoed for the
+        // same reason: an older worker ignores it and reports conflicts instead.
+        const body = { ...result, ...(dryRun ? { dryRun: true } : {}), ...(onConflictParameter === "replace" ? { onConflict: "replace" } : {}) };
 
         // A shard the fan-out never reached leaves an unknown slice of the batch
         // unwritten, and its rows contribute to neither `inserted` nor `errors`.
         // Answering 200 there makes a partial write indistinguishable from a clean
         // one to every client that checks the status code and nothing else — 207
         // Multi-Status says "read the body", which is exactly the situation.
-        return Response.json(result, {
+        return Response.json(body, {
             headers: { "content-type": "application/json" },
             status: result.failed.length > 0 ? 207 : 200,
         });

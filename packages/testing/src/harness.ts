@@ -10,6 +10,7 @@ import type {
     MutationCtx,
     QueryCtx,
     RegisteredAction,
+    RegisteredFunction,
     RegisteredMutation,
     RegisteredQuery,
     Schema,
@@ -17,6 +18,8 @@ import type {
 } from "@lunora/server";
 import { withDeferredSchedules } from "@lunora/server";
 import { createInProcessRuntime, registeredFunctionKind, resolveInProcessIdentity, runRegisteredFunction } from "@lunora/server/in-process";
+import type { TransactionHeadroomTracker } from "@lunora/shard-engine";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 import type { RecordedWideEvent } from "./context-fakes";
 import { createRecordingSpan, noopLog, noopMetrics, passthroughTrace, servicesContext, stubProxy } from "./context-fakes";
@@ -71,7 +74,7 @@ type InlineActionFunction<R> = (context: ActionCtx) => Promise<R> | R;
  * `handler` and ignores the return value).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- structural erasure at registry boundary; see comment above
-type FunctionRegistry = Record<string, RegisteredAction<any, any> | RegisteredMutation<any, any> | RegisteredQuery<any, any>>;
+type FunctionRegistry = Record<string, RegisteredFunction<any, any, "action" | "mutation" | "query">>;
 
 /**
  * Options accepted by {@link lunoraTest}.
@@ -221,6 +224,18 @@ interface LunoraTestOptions {
      * ```
      */
     services?: Record<string, object>;
+
+    /**
+     * The shard every context reports as `ctx.shardKey`. The harness runs one
+     * in-process database, so this only sets what a handler that checks its
+     * shard sees; it does not partition rows.
+     * @default "__root__"
+     * @example
+     * ```ts
+     * const t = lunoraTest(schema, { shardKey: "org_1" });
+     * ```
+     */
+    shardKey?: string;
 
     /**
      * The export names of the topics in `lunora/queues.ts` (the keys of
@@ -383,6 +398,29 @@ type HarnessMutationContext = MutationCtx & NotifySurfaces & QueueSurface & Topi
  */
 /** The clock the current top-level harness call reads through `ctx.now`. */
 const runClock = new AsyncLocalStorage<number>();
+
+/**
+ * Production encodes every registered dispatch result on the shard, sends it as JSON and decodes it
+ * in the client, so a value the codec cannot carry fails there, `undefined` fields and functions
+ * disappear, `-0` arrives as `0` and an array hole as `null`. A test must see
+ * what a client sees, so registered results take the same round trip. Composed `ctx.runQuery` /
+ * `ctx.runMutation` results are not encoded in production, so they are not encoded here either.
+ */
+const wireRoundTrip = (value: unknown): unknown => {
+    try {
+        // Wrapped as the response body is, so a top-level `undefined` survives `JSON.stringify` as an absent field.
+        // Not `structuredClone`: the point is JSON's losses (`-0`, holes, functions), which it would keep.
+        const json = JSON.stringify({ result: encodeWire(value) });
+        const body = JSON.parse(json) as { result?: unknown };
+
+        return decodeWire(body.result);
+    } catch (error) {
+        throw new LunoraError("WIRE_ENCODE_FAILED", error instanceof Error ? error.message : String(error), { cause: error });
+    }
+};
+
+/** Each top-level dispatch's resource budget, so overlapping queries and actions never share one. */
+const dispatchBudget = new AsyncLocalStorage<TransactionHeadroomTracker>();
 
 const buildSubscribe = (
     runRegistered: RunRegisteredFunction,
@@ -676,7 +714,7 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     // The fake scheduler is created once per harness (not per makeHarness view).
     // The top-level dispatch and mutationContext are not available yet at
     // construction time, so we use thunks to resolve them lazily.
-    type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown) => Promise<unknown>;
+    type ScheduledDispatch = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown, nowMs: number) => Promise<unknown>;
 
     let scheduledDispatchRef: ScheduledDispatch | undefined;
     let mutationContextRef: unknown;
@@ -738,8 +776,9 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
     // mid-handler throw rolls back every write it made and the jobs it scheduled,
     // matching production; a mutation's own `ctx.run*` composition rides the
     // already-open span through `runInternal` instead.
-    const { createWriters, resetHeadroom, runInTransaction } = createInProcessRuntime(schema, {
+    const { createWriters, runInTransaction, runWithBudget } = createInProcessRuntime(schema, {
         enforceRls: options?.enforceRls,
+        headroomScope: dispatchBudget,
         scheduler,
         sql,
     });
@@ -763,6 +802,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
+            // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
+            // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
+            random: () => Math.random(),
+            shardKey: options?.shardKey ?? "__root__",
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -787,6 +830,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
+            // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
+            // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
+            random: () => Math.random(),
+            shardKey: options?.shardKey ?? "__root__",
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -843,6 +890,10 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
                 return runClock.getStore() ?? currentNow();
             },
             newId: () => crypto.randomUUID(),
+            // Math.random, as production's unkeyed draw does, so a test that stubs it controls the value.
+            // eslint-disable-next-line sonarjs/pseudo-random -- the unkeyed draw is Math.random by design; secrets use crypto.getRandomValues
+            random: () => Math.random(),
+            shardKey: options?.shardKey ?? "__root__",
             span: dispatchSpan.handle,
             trace: passthroughTrace,
 
@@ -893,52 +944,47 @@ const lunoraTest = (schema: TestSchema, options?: LunoraTestOptions): TestHarnes
         // call. A scheduled action runs unwrapped (no rollback semantics), exactly
         // as `runInternal` would. `internal*` targets are reachable here because the
         // scheduler is the trusted server-dispatch surface (allowInternal = true).
-        scheduledDispatchRef ??= (kind, reference, context, args) => {
+        const runScheduledJob = (kind: "action" | "mutation", reference: unknown, context: unknown, args: unknown): Promise<unknown> => {
             if (kind === "mutation") {
-                return runInTransaction(() => runRegisteredFunction("mutation", reference as never, context, args, true)).then(notifyAfter);
+                // Encoded inside the transaction, as production does, so an unencodable return rolls the job back.
+                return runInTransaction(() => runRegisteredFunction("mutation", reference as never, context, args, true).then(wireRoundTrip)).then(notifyAfter);
             }
 
-            resetHeadroom();
-
-            return runInternal("action", reference, context, args);
+            return runWithBudget(() => runInternal("action", reference, context, args));
         };
 
-        const query = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
-            resetHeadroom();
+        // The whole job runs under the fire time's clock, so `ctx.now` and every composed
+        // `ctx.runQuery` / `ctx.runMutation` read the same virtual instant.
+        scheduledDispatchRef ??= (kind, reference, context, args, nowMs) => runClock.run(nowMs, () => runScheduledJob(kind, reference, context, args));
 
+        const query = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             if (registeredFunctionKind(referenceOrInline)) {
-                return runRegisteredFunction("query", referenceOrInline as never, queryContext, args, false);
+                return runWithBudget(() => runRegisteredFunction("query", referenceOrInline as never, queryContext, args, false).then(wireRoundTrip));
             }
 
-            return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
+            return runWithBudget(() => Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext)));
         }) as TestHarness["query"];
 
         const mutation = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             const body = registeredFunctionKind(referenceOrInline)
-                ? (): Promise<unknown> => runRegisteredFunction("mutation", referenceOrInline as never, mutationContext, args, false)
+                ? (): Promise<unknown> => runRegisteredFunction("mutation", referenceOrInline as never, mutationContext, args, false).then(wireRoundTrip)
                 : (): unknown => (referenceOrInline as InlineMutationFunction<unknown>)(mutationContext);
 
             return runInTransaction(body).then(notifyAfter);
         }) as TestHarness["mutation"];
 
         const action = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
-            resetHeadroom();
-
             if (registeredFunctionKind(referenceOrInline)) {
-                return runRegisteredFunction("action", referenceOrInline as never, actionContext, args, false);
+                return runWithBudget(() => runRegisteredFunction("action", referenceOrInline as never, actionContext, args, false).then(wireRoundTrip));
             }
 
-            return Promise.resolve((referenceOrInline as InlineActionFunction<unknown>)(actionContext));
+            return runWithBudget(() => Promise.resolve((referenceOrInline as InlineActionFunction<unknown>)(actionContext)));
         }) as TestHarness["action"];
 
         // A subscription re-run is its own top-level dispatch (production re-dispatches
         // the query), so it gets a fresh budget rather than accumulating onto the last one.
         const subscribe = buildSubscribe(
-            (...parameters) => {
-                resetHeadroom();
-
-                return runRegisteredFunction(...parameters);
-            },
+            (...parameters) => runWithBudget(() => runRegisteredFunction(...parameters).then(wireRoundTrip)),
             queryContext,
             mutationListeners,
             () => options?.now ?? Date.now(),

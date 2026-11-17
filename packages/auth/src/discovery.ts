@@ -12,6 +12,7 @@
  */
 import { LunoraError } from "@lunora/errors";
 
+import { AUTHORIZATION_SERVER_PREFIX, PROTECTED_RESOURCE_PREFIX } from "../../../shared/auth-base-path";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { DEFAULT_AUTH_BASE_PATH } from "./handler";
 
@@ -24,10 +25,6 @@ import { DEFAULT_AUTH_BASE_PATH } from "./handler";
 const MCP_RESOURCE_KEY: unique symbol = Symbol.for("lunora.auth.mcpResource");
 
 const TRAILING_SLASH = /\/$/u;
-
-const PROTECTED_RESOURCE_PREFIX = "/.well-known/oauth-protected-resource";
-
-const AUTHORIZATION_SERVER_PREFIX = "/.well-known/oauth-authorization-server";
 
 /**
  * The RFC 9728 path-inserted protected-resource metadata path for `resource`.
@@ -157,8 +154,8 @@ const pathsByDeclaration = new WeakMap<object, ReadonlyArray<string>>();
 
 /**
  * Derive {@link authDiscoveryPaths} for an `.auth()` declaration, memoised on the
- * declaration object. A framework-hosted worker rebuilds its options on every
- * request, and calling `options(env)` each time would rebuild every plugin.
+ * declaration object. A generated worker builds its options again for every new
+ * `env` object, and calling `options(env)` each time would rebuild every plugin.
  */
 const authDiscoveryPathsFor = <Env>(declaration: { options: (env: Env) => LunoraAuthOptions }, env: Env): ReadonlyArray<string> => {
     let paths = pathsByDeclaration.get(declaration);

@@ -6,6 +6,9 @@
  * second implementation: it was one, and the copies had drifted so that prepare
  * checked LESS than the deploy it precedes.
  */
+import type { DevProcessSpawner } from "@lunora/config";
+import { resolveDeployDriver, resolveLazyFunctions } from "@lunora/config";
+
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
@@ -13,7 +16,7 @@ import { defineHandler } from "../../util/command";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { Spawner } from "../../util/spawn";
-import { runPreDeployPipeline } from "../deploy/handler";
+import { runPreDeployPipeline, smokeLoadDeferredModules } from "../deploy/handler";
 import type { PrepareOptions } from "./index";
 
 interface PrepareCommandOptions {
@@ -22,7 +25,15 @@ interface PrepareCommandOptions {
     /** Which API spec(s) to emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
+    /** Opt into per-module lazy function imports. */
+    lazyFunctions?: boolean;
     logger: Logger;
+
+    /** Starts the smoke check's `wrangler dev`. Unset, the check launches a real server; a caller that must not launch one passes its own. */
+    smokeLauncher?: DevProcessSpawner;
+
+    /** `false` (`--no-smoke-load`) skips the smoke check of deferred modules. Default on. */
+    smokeLoad?: boolean;
 
     /** Injected process runner for the `postcodegen` hook (tests). Defaults to the real spawner. */
     spawner?: Spawner;
@@ -41,8 +52,6 @@ interface PrepareCommandOptions {
      * have to be found here separately.
      */
     target?: string;
-    /** Re-bless the committed schema baseline with the current shape. */
-    updateSchemaBaseline?: boolean;
 }
 
 interface PrepareCommandResult {
@@ -67,7 +76,8 @@ interface PrepareCommandResult {
  * it exists to pre-check. They also provisioned by different routes.
  *
  * What `prepare` still does NOT do, which is the line between the two commands:
- * no container image build or push, and no wrangler invocation. It answers
+ * no container image build or push, and no bundle or deploy. Its smoke check
+ * does start a local `wrangler dev`, the same one `deploy` runs, so it answers
  * "would this deploy?" without producing a bundle.
  */
 const runPrepareCommand = async (options: PrepareCommandOptions): Promise<PrepareCommandResult> => {
@@ -76,12 +86,12 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
         {
             allowSchemaDrift: options.allowSchemaDrift,
             apiSpec: options.apiSpec,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
             cwd,
             logger: options.logger,
             spawner: options.spawner,
             strictAdvisories: options.strictAdvisories,
             target: options.target,
-            updateSchemaBaseline: options.updateSchemaBaseline,
         },
         "prepare",
     );
@@ -96,6 +106,19 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
             ...(pipeline.schemaDrift === undefined ? {} : { schemaDrift: pipeline.schemaDrift }),
             validation: pipeline.validation,
         };
+    }
+
+    // The smoke check runs here too, so a module that throws at load fails the CI gate rather than the
+    // deploy that follows it. Deploy runs the same check in its own preflight.
+    const smokeError = await smokeLoadDeferredModules(
+        cwd,
+        { env: undefined, logger: options.logger, smokeLauncher: options.smokeLauncher, smokeLoad: options.smokeLoad },
+        resolveDeployDriver(pipeline.target),
+        pipeline.validation.wranglerPath,
+    );
+
+    if (smokeError !== undefined) {
+        return { code: EXIT_CODE.FAILURE, error: smokeError, validation: pipeline.validation };
     }
 
     // Prepare fully succeeded — safe to advance the committed schema baseline.
@@ -114,11 +137,12 @@ const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({
     runPrepareCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         cwd,
         logger,
+        smokeLoad: options.smokeLoad,
         strictAdvisories: options.strictAdvisories,
         target: options.target,
-        updateSchemaBaseline: options.updateSchemaBaseline === true,
     }),
 );
 

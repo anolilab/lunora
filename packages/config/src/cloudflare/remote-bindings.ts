@@ -28,7 +28,8 @@
  */
 import { applyModify } from "../jsonc-edit";
 import { hasCloudflareCredentials } from "./credentials";
-import { noopCleanup, withheldWorkersAi, writeDevConfig } from "./dev-config";
+import type { WithheldBinding } from "./dev-config";
+import { noopCleanup, withheldBindings, writeDevConfig } from "./dev-config";
 import { readManifest } from "./lunora-manifest";
 import { ownedServiceBindings } from "./reconcile-services";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
@@ -85,6 +86,7 @@ const REMOTE_ELIGIBLE_KEY_LIST = Object.keys(REMOTE_ELIGIBLE_KEYS) as RemoteElig
 /** One binding object as it appears in any eligible section. */
 interface BindingEntry {
     binding?: string;
+    id?: unknown;
     remote?: boolean;
 }
 
@@ -112,6 +114,7 @@ interface RemoteWranglerShape {
     ai_search?: ReadonlyArray<BindingEntry | null | undefined>;
     ai_search_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     analytics?: BindingEntry | null;
+    artifacts?: ReadonlyArray<BindingEntry | null | undefined>;
     d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
     kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
     queues?: { producers?: ReadonlyArray<BindingEntry | null | undefined> } | null;
@@ -138,6 +141,11 @@ const planArrayEntries = (
 
     for (const [index, entry] of entries.entries()) {
         if (entry === null || entry === undefined) {
+            continue;
+        }
+
+        // An id-less KV namespace is one wrangler has not created yet: there is no deployed one to proxy to.
+        if (section === "kv_namespaces" && (typeof entry.id !== "string" || entry.id === "")) {
             continue;
         }
 
@@ -214,8 +222,40 @@ interface MaterializeDevResult {
     /** The bindings flipped to remote, for the dev banner. */
     remoteBindings: RemoteBindingPlan[];
     /** The `ai` binding name left out for lack of Cloudflare credentials, for the dev warning. */
-    withheld: string[];
+    withheld: WithheldBinding[];
 }
+
+/** A dev session's remote-binding decision, as `lunora dev` and `vite dev` both act on it. */
+interface RemotePlan {
+    /** The bindings flipped to remote, as `NAME (kind)` labels for the banner. */
+    bindings: string[];
+    /** Removes the temp config. Idempotent, and a no-op when nothing was written; every shutdown path calls it. */
+    cleanup: () => void;
+    /** The temp config the worker runs with, or `undefined` to run the user's file unchanged. */
+    configPath?: string;
+    /** Whether remote mode was requested. */
+    enabled: boolean;
+    /** Why remote mode didn't take effect despite being requested, for logging. */
+    reason?: string;
+    /** Remote-only bindings (`ai`, `artifacts`) left out for lack of Cloudflare credentials, for the dev warning. */
+    withheld: WithheldBinding[];
+}
+
+/**
+ * The {@link RemotePlan} a materialization amounts to, with `enabled` saying
+ * whether remote mode was asked for. The one place the `NAME (kind)` banner
+ * labels are spelled, so `lunora dev` and `vite dev` print the same list.
+ */
+const toRemotePlan = (result: MaterializeDevResult, enabled: boolean): RemotePlan => {
+    return {
+        bindings: result.remoteBindings.map((binding) => `${binding.binding} (${binding.kind})`),
+        cleanup: result.cleanup,
+        configPath: result.configPath,
+        enabled,
+        reason: result.reason,
+        withheld: result.withheld,
+    };
+};
 
 /**
  * Write the temp wrangler config a dev session runs with: the user's file with any
@@ -248,16 +288,20 @@ const materializeDevWranglerConfig = (options: MaterializeDevOptions): Materiali
     // same dev session, so remoting it would call the deployed Worker instead.
     const localServices = ownedServiceBindings(readManifest(options.projectRoot));
     const plans = options.remote ? planRemoteBindings(parsed).filter((plan) => plan.section !== "services" || !localServices.has(plan.binding)) : [];
-    const withheldBinding = withheldWorkersAi(parsed.ai, options.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: options.projectRoot })));
-    const withheld = withheldBinding === undefined ? [] : [withheldBinding];
-    const remoteBindings = withheldBinding === undefined ? plans : plans.filter((plan) => plan.section !== "ai");
+    const withheld = withheldBindings(parsed, options.hasCredentials ?? (() => hasCloudflareCredentials({ projectRoot: options.projectRoot })));
+    const remoteBindings = withheld.some(({ kind }) => kind === "ai") ? plans.filter((plan) => plan.section !== "ai") : plans;
 
     if (remoteBindings.length === 0 && withheld.length === 0) {
         return unchanged(options.remote ? "no remote-eligible bindings to proxy" : undefined);
     }
 
-    const withoutAi = withheld.length > 0 ? applyModify(text, ["ai"], undefined) : text;
-    const contents = remoteBindings.length > 0 ? injectRemoteFlags(withoutAi, remoteBindings) : withoutAi;
+    let withoutWithheld = text;
+
+    for (const { kind } of withheld) {
+        withoutWithheld = applyModify(withoutWithheld, [kind], undefined);
+    }
+
+    const contents = remoteBindings.length > 0 ? injectRemoteFlags(withoutWithheld, remoteBindings) : withoutWithheld;
     const written = writeDevConfig(options.projectRoot, "dev", contents);
 
     return { cleanup: written.cleanup, configPath: written.configPath, remoteBindings, withheld };
@@ -316,5 +360,5 @@ const resolveRemoteEnabled = (inputs: RemoteEnableInputs): boolean => {
     return inputs.configPreference ?? false;
 };
 
-export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape };
-export { injectRemoteFlags, isRemoteEnvEnabled, materializeDevWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled };
+export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemotePlan, RemoteWranglerShape };
+export { injectRemoteFlags, isRemoteEnvEnabled, materializeDevWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled, toRemotePlan };

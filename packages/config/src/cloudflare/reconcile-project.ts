@@ -7,15 +7,27 @@
  * second copy of a routine that WRITES `wrangler.jsonc` is a bug that has to be
  * fixed twice.
  */
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+
+import type { DiscoveryCache } from "../discovery-cache";
 import { inferLunoraBindings } from "../infer-bindings";
-import { LUNORA_TAG } from "../log-badge";
-import type { ExportGap } from "./reconcile-bindings";
-import { reconcileWranglerBindings } from "./reconcile-bindings";
+import { LUNORA_TAG } from "../log-line";
+import { applyWranglerBindings } from "./apply-bindings";
+import { reconcileStudioAssetsBlock } from "./reconcile-assets";
+import type { ExportGap, WranglerBindingsPlan } from "./reconcile-bindings";
+import { planWranglerBindings } from "./reconcile-bindings";
 import { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 import { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
+import { STUDIO_ASSETS_DIRECTORY, studioAssetsPlan } from "./studio-assets";
+import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
+import type { WranglerShape } from "./wrangler-shape";
 
 /** The project coordinates every reconciler here needs. */
 interface ReconcileProject {
+    /** Memoises the source scans, so a caller that also validates or reconciles again parses the project once. */
+    cache?: DiscoveryCache;
+
     /** Absolute path to the project root holding `wrangler.jsonc`. */
     projectRoot: string;
 
@@ -32,12 +44,23 @@ interface ReconcileLogger {
     warn: (message: string) => void;
 }
 
+/** Infer the project's bindings and plan their reconcile, writing nothing. */
+const planProjectBindings = async (options: ReconcileProject): Promise<WranglerBindingsPlan> =>
+    planWranglerBindings(
+        options.projectRoot,
+        await inferLunoraBindings({ cache: options.cache, projectRoot: options.projectRoot, schemaDir: options.schemaDir }),
+        {
+            target: options.target,
+        },
+    );
+
 /**
  * Infer the Cloudflare bindings the project's code implies and reconcile them
  * into `wrangler.jsonc` (Durable Objects, their migration classes, and the
- * `DB` D1 binding for `.global()` schemas). Best-effort and idempotent — runs
- * once at startup so the user never hand-writes binding boilerplate. A failure
- * here must never abort codegen; the wrangler validator reports real problems.
+ * `DB` D1 binding for `.global()` schemas). Best-effort and idempotent — runs at
+ * dev startup (and on every `@lunora/rspack` pass) so the user never hand-writes
+ * binding boilerplate. A failure here must never abort codegen; the wrangler
+ * validator reports real problems.
  *
  * `onExportGaps` (dev only) is invoked when a declared container/workflow isn't
  * re-exported by the worker entry, so the caller can raise it in the browser
@@ -49,9 +72,7 @@ const reconcileBindingsSafely = async (
     onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void,
 ): Promise<void> => {
     try {
-        const inferred = await inferLunoraBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
-        const reconciled = reconcileWranglerBindings(options.projectRoot, inferred, { target: options.target });
-
+        const reconciled = applyWranglerBindings(options.projectRoot, await planProjectBindings(options));
         const target = reconciled.wranglerPath ?? "wrangler.jsonc";
 
         if (reconciled.added.length > 0) {
@@ -79,6 +100,30 @@ const reconcileBindingsSafely = async (
         const message = error instanceof Error ? error.message : String(error);
 
         logger.warn(`${LUNORA_TAG} binding inference skipped: ${message}`);
+    }
+};
+
+/**
+ * The bindings a {@link reconcileBindingsSafely} pass would add or retune right
+ * now, as its log labels (a dev sidecar's prefixed with its file) — from the same plan, written
+ * nowhere. For a dev server that provisions only at startup: a save that
+ * declares a queue, reads `ctx.kv` or exports a workflow leaves the running
+ * worker without that binding until the server restarts, and this is how the
+ * watcher finds out. Empty when the config is in sync or the scan fails (a
+ * half-typed source must not read as a change).
+ *
+ * `cache` is required: a watcher calls this on every save, and clears it when
+ * the sources move.
+ */
+const pendingBindingChanges = async (options: ReconcileProject & { cache: DiscoveryCache }): Promise<string[]> => {
+    try {
+        const { added, devConfig, updated } = await planProjectBindings(options);
+        // A sidecar label names its file: the binding goes there, not into wrangler.jsonc.
+        const sidecar = devConfig === undefined ? [] : [...devConfig.added, ...devConfig.updated].map((label) => `${basename(devConfig.path)} ${label}`);
+
+        return [...new Set([...added, ...updated, ...sidecar])];
+    } catch {
+        return [];
     }
 };
 
@@ -138,5 +183,56 @@ const reconcileWranglerExtras = (projectRoot: string, cronTriggers: ReadonlyArra
     }
 };
 
+/** The files codegen writes into the Lunora-owned assets directory (see `writeStudioAssets` in `@lunora/codegen`). */
+const STUDIO_DOCUMENTS: ReadonlyArray<string> = ["architecture.json", "openapi.json", "openrpc.json"];
+
+/**
+ * Bring the Studio documents' `assets` block in line with what codegen just
+ * emitted, with the same plan and edit `lunora deploy`'s reconcile uses: add the
+ * Lunora-owned block when codegen emitted loaders that read `ASSETS`, and remove
+ * it when it no longer does. Codegen calls this because a plain `wrangler
+ * deploy` after `lunora codegen` never runs reconcile, and without the binding
+ * Studio's routes serve empty documents.
+ *
+ * A block the user wrote is never touched: `studioAssetsPlan` sees it and keeps
+ * the documents in the bundle. Once that happens the documents an earlier run
+ * wrote into the owned directory are deleted, because a block the user edited
+ * (or their own `directory` pointing there) may serve that directory ahead of
+ * the Worker's admin check.
+ *
+ * A failed write throws: the loaders codegen just emitted need the binding, so
+ * the run must fail rather than report success with documents that never load.
+ */
+const reconcileStudioAssets = (projectRoot: string, target: string | undefined, logger: ReconcileLogger): void => {
+    const wranglerPath = findWranglerFile(projectRoot);
+    const read = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerShape>(wranglerPath);
+
+    if (wranglerPath === undefined || read?.parsed === undefined) {
+        return;
+    }
+
+    const plan = studioAssetsPlan(projectRoot, read.parsed, target);
+    const step = reconcileStudioAssetsBlock(read.text, read.parsed, plan);
+
+    // Wrangler refuses an `assets` block whose directory is missing, and a caller whose codegen planned without this
+    // `target` wrote no documents into it.
+    if (plan !== undefined) {
+        mkdirSync(join(dirname(wranglerPath), plan.directory), { recursive: true });
+    }
+
+    if (step.text !== read.text) {
+        writeFileSync(wranglerPath, step.text, "utf8");
+        logger.info?.(`${LUNORA_TAG} ${[...step.added, ...step.updated].join(", ")} → ${wranglerPath}`);
+    }
+
+    if (plan === undefined) {
+        const documents = join(dirname(wranglerPath), STUDIO_ASSETS_DIRECTORY, "_lunora", "studio");
+
+        for (const name of STUDIO_DOCUMENTS) {
+            rmSync(join(documents, name), { force: true });
+        }
+    }
+};
+
 export type { ReconcileProject };
-export { reconcileBindingsSafely, reconcileWranglerExtras };
+export { pendingBindingChanges, reconcileBindingsSafely, reconcileStudioAssets, reconcileWranglerExtras };

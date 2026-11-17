@@ -27,6 +27,15 @@ const val WS_PATH: String = "/_lunora/ws"
  */
 const val MAX_PENDING_POKES: Int = 64
 
+/** The close code the server sends when the session credential has expired (protocol §5.2). */
+private const val CLOSE_TOKEN_EXPIRED: Int = 4001
+
+/** The close code for a refused credential (protocol §6). */
+private const val CLOSE_REFUSED: Int = 4003
+
+/** The 4003 reason that marks a socket which never sent `connect`: it refused no credential. */
+private const val CONNECT_DEADLINE_REASON: String = "connect deadline"
+
 /**
  * Which RPC method a call dispatches to. Generated code emits these entries
  * rather than raw strings, so a typo in a target template is a compile error
@@ -130,6 +139,30 @@ class Client(
         }
 
     /**
+     * Supplies the session credential, read on every socket open and sent as
+     * `connect.token`. It never enters the socket URL. Null sends none.
+     *
+     * Assigning it starts a new credential generation, which re-arms the one 4003
+     * refusal report [onTokenExpired] makes per generation. A provider that reads a
+     * mutable token needs a fresh assignment to re-arm it.
+     */
+    @Volatile
+    var wsToken: (() -> String?)? = null
+        set(value) {
+            synchronized(lock) {
+                field = value
+                credentialGeneration++
+            }
+        }
+
+    /**
+     * Supplies the ephemeral admin ticket, read on every [wsUrl] call and sent as
+     * the `?token=` query parameter. Null sends none.
+     */
+    @Volatile
+    var wsTicket: (() -> String?)? = null
+
+    /**
      * The bearer token every RPC carries; the next call picks up a new one.
      *
      * With [identity] unset the token's digest IS the identity, so a different
@@ -189,12 +222,21 @@ class Client(
     internal val lock = Any()
 
     internal var send: ((Map<String, Any?>) -> Unit)? = null
+
+    /** Bumped by every attach and detach, so an attach whose connect is still going out can tell it was superseded. */
+    private var attachGeneration = 0L
     internal val subscriptions = LinkedHashMap<String, Subscription>()
+
+    /**
+     * The `System.nanoTime()` deadline of the one re-subscribe a retry hint asked for, per query
+     * subscription id. Guarded by [lock].
+     */
+    private val pendingRetries = HashMap<String, Long>()
     private val shapes = LinkedHashMap<String, Shape>()
     private val pokes = LinkedHashMap<String, PokeBuffer>()
 
-    /** The open [Stream]s, so [close] can end them. */
-    private val streams = mutableSetOf<Stream>()
+    /** The open [Watch]s, so [close] can end them. */
+    private val streams = mutableSetOf<Watch>()
     private var nextId = 0
     private var nextShapeId = 0
 
@@ -207,6 +249,20 @@ class Client(
     ) {
         var cursor: Any? = null
         var epoch: Any? = null
+
+        /**
+         * Set when a row change could not be merged into the held base. Later deltas are then
+         * ignored, cursor included, so the resume position stays before the dropped change.
+         * Cleared by a `data` frame (a snapshot) or by a resubscribe, whose replay re-applies it.
+         */
+        var poisoned: Boolean = false
+
+        /**
+         * The payload of a run of `more: true` deltas, merged but not yet committed. Frames of a run
+         * merge onto this rather than onto the base, and cursor, epoch and the layers move only when
+         * the run's last frame commits it, so a reconnect mid-run resumes from before the whole run.
+         */
+        var heldRun: WireValue? = null
 
         /**
          * The stable wire key of [args], computed once at subscribe time so a
@@ -362,13 +418,27 @@ class Client(
             throw ApiException(WIRE_DECODE_FAILED, "the call succeeded but its result could not be decoded: ${error.message}")
         }
 
-        fun buildConnectFrame(clientId: String? = null, context: Map<String, Any?>? = null): Map<String, Any?> {
+        /**
+         * The capability tokens this client announces. Only `pageDelta`: the server sends row-change
+         * deltas to a client that announces it, and [RowDelta] merges them. `refreshBatch` is not
+         * announced because batchStart/batchEnd frames are not handled.
+         */
+        val CAPABILITIES: List<String> = listOf("pageDelta")
+
+        fun buildConnectFrame(
+            clientId: String? = null,
+            context: Map<String, Any?>? = null,
+            token: String? = null,
+            caps: List<String>? = null,
+        ): Map<String, Any?> {
             val frame = LinkedHashMap<String, Any?>()
 
             frame["id"] = "connect"
             frame["type"] = "connect"
             clientId?.let { frame["clientId"] = it }
             context?.let { frame["context"] = it }
+            token?.let { frame["token"] = it }
+            caps?.let { frame["caps"] = it }
 
             return frame
         }
@@ -393,6 +463,13 @@ class Client(
         }
 
         fun buildUnsubscribeFrame(id: String): Map<String, Any?> = linkedMapOf("id" to id, "type" to "unsubscribe")
+
+        fun buildWhisperSubscribeFrame(topic: String): Map<String, Any?> = linkedMapOf("topic" to topic, "type" to "whisper_subscribe")
+
+        fun buildWhisperUnsubscribeFrame(topic: String): Map<String, Any?> = linkedMapOf("topic" to topic, "type" to "whisper_unsubscribe")
+
+        fun buildWhisperFrame(topic: String, data: WireValue): Map<String, Any?> =
+            linkedMapOf("data" to Wire.encode(data), "topic" to topic, "type" to "whisper")
 
         fun buildShapeSubscribeFrame(
             id: String,
@@ -473,25 +550,228 @@ class Client(
     internal var flushNotBefore = 0L
     internal val settledListeners = mutableListOf<(MutationSettled) -> Unit>()
 
+    /** Bumped by every assignment to [wsToken]; see [detachSocket]. */
+    private var credentialGeneration = 0L
+
+    /** The generation the open socket's `connect` was sent under. */
+    private var socketGeneration = 0L
+
+    /** The generation of the last 4003 refusal reported to [onTokenExpired]; null before any. */
+    private var refusedGeneration: Long? = null
+
+    private val tokenExpiredListeners = mutableListOf<TokenExpiredListener>()
+
+    /** Joined topics and their listeners. A topic is present while it has at least one. */
+    private val whisperTopics = LinkedHashMap<String, MutableList<WhisperListener>>()
+
+    /** Topics whose join write failed; the next listener on one of them sends the join again. Guarded by [lock]. */
+    private val unjoinedTopics = mutableSetOf<String>()
+
+    private class WhisperListener(val onValue: (WireValue) -> Unit)
+
+    /** One token-expiry registration: its own object, so its handle removes only it. */
+    private class TokenExpiredListener(val run: () -> Unit)
+
     /**
-     * Registers the sender used for subscription frames. Call once the socket is
-     * open.
+     * Registers the sender for this socket and writes its `connect` frame first. Call
+     * it once per socket open, before [resendSubscriptions].
      *
      * It also latches "has connected at least once", which is what the write queue
      * gates on: a write made before the FIRST connect fails fast by default, so a
      * misconfigured endpoint surfaces on the first write instead of silently
      * filling a queue that will never flush.
+     *
+     * It sends the `connect` frame first, carrying [wsToken] resolved now, so every
+     * open and every reconnect presents the session credential before any
+     * subscription. The app must not send `connect` itself. [context], when given,
+     * rides that frame: the server records it for the `onConnect` hooks, so it applies
+     * to every open and reconnect. Pass nothing, or `null`, when there is none.
+     *
+     * After `connect`, every registered whisper topic is joined again. Subscriptions
+     * are not: [resendSubscriptions] sends those, and the app calls it after attaching.
      */
-    fun attachSocket(sender: (Map<String, Any?>) -> Unit) {
+    fun attachSocket(context: Map<String, Any?>? = null, sender: (Map<String, Any?>) -> Unit) {
+        // Writes queue while the connect frame goes out, so none can reach the socket this one replaces.
+        // The credential generation is read with the attach generation: a rotation racing this attach
+        // must not tag the socket with a generation newer than the credential it presents.
+        // The provider is read with the generation, so a rotation racing this attach cannot tag the
+        // socket with a generation newer than the credential it presents.
+        val (generation, credential, provider) = synchronized(lock) {
+            send = null
+            pendingRetries.clear()
+            discardHeldRuns()
+            Triple(++attachGeneration, credentialGeneration, wsToken)
+        }
+        sender(buildConnectFrame(clientId = clientId, context = context, token = provider?.invoke(), caps = CAPABILITIES))
+        // A detach or a newer attach during the send supersedes this one: installing this sender would undo it,
+        // so it is not installed and its whisper joins are not sent. The joins are written under the lock, so a
+        // last-listener leave cannot unsubscribe between this snapshot and its join. A join that throws leaves
+        // the client offline, and the error propagates.
         synchronized(lock) {
+            if (generation != attachGeneration) return
             send = sender
+            socketGeneration = credential
             wasEverConnected = true
+            try {
+                for (topic in whisperTopics.keys.toList()) {
+                    // A sender that detaches or re-attaches during a write supersedes this attach.
+                    if (generation != attachGeneration) return
+                    sender(buildWhisperSubscribeFrame(topic))
+                }
+                unjoinedTopics.clear()
+            } catch (failure: Throwable) {
+                if (send === sender) send = null
+                throw failure
+            }
         }
     }
 
-    /** Forgets the sender, so subsequent writes queue rather than fail. */
-    fun detachSocket() {
-        synchronized(lock) { send = null }
+    /**
+     * Forgets the sender, so subsequent writes queue rather than fail. Every detach
+     * leaves the client offline.
+     *
+     * [closeCode] and [reason] are the close frame the socket ended with, when the
+     * socket library reports one; null means none. They decide whether
+     * [onTokenExpired] listeners hear of it:
+     *  - 4001 (token expired): always.
+     *  - 4003 (refused credential): once per credential generation, and only for a
+     *    socket that opened under the current one: a socket opened under a superseded
+     *    credential refused a credential no longer in force. A reason of exactly
+     *    "connect deadline" refuses no credential, so it notifies nothing.
+     *  - anything else: nothing.
+     */
+    fun detachSocket(closeCode: Int? = null, reason: String? = null) {
+        val expired = synchronized(lock) {
+            send = null
+            attachGeneration++
+            pendingRetries.clear()
+            discardHeldRuns()
+
+            when {
+                closeCode == CLOSE_TOKEN_EXPIRED -> true
+                closeCode == CLOSE_REFUSED && reason != CONNECT_DEADLINE_REASON &&
+                    socketGeneration == credentialGeneration && refusedGeneration != socketGeneration -> {
+                    refusedGeneration = socketGeneration
+
+                    true
+                }
+
+                else -> false
+            }
+        }
+
+        if (expired) notifyTokenExpired()
+    }
+
+    /**
+     * Observes token expiry: a 4001 close, a `TOKEN_EXPIRED` error frame, or a 4003
+     * refusal (see [detachSocket]). Returns an unregister.
+     */
+    fun onTokenExpired(listener: () -> Unit): () -> Unit {
+        // Each registration is its own entry, so two registrations of one function keep separate handles.
+        val entry = TokenExpiredListener(listener)
+
+        synchronized(lock) { tokenExpiredListeners.add(entry) }
+
+        return { synchronized(lock) { tokenExpiredListeners.remove(entry) } }
+    }
+
+    private fun notifyTokenExpired() {
+        val listeners = synchronized(lock) { tokenExpiredListeners.toList() }
+
+        for (listener in listeners) {
+            try {
+                listener.run()
+            } catch (error: Exception) {
+                // One bad observer must not stop the rest, nor the socket teardown or
+                // frame handling that reported the expiry.
+            }
+        }
+    }
+
+    /**
+     * Joins [topic] and hands each relayed `whisper` value to [listener]. The join is
+     * sent now when a socket is attached and again after every reconnect. Returns the
+     * leave: removing the topic's last listener sends `whisper_unsubscribe`.
+     */
+    fun whisperSubscribe(topic: String, listener: (WireValue) -> Unit): () -> Unit {
+        val entry = WhisperListener(listener)
+
+        // The join goes out under the lock, in the order the listener state changes, so a leave cannot overtake
+        // it. A join that fails is retried by the next listener on the topic.
+        synchronized(lock) {
+            val listeners = whisperTopics.getOrPut(topic) { mutableListOf() }
+            val join = listeners.isEmpty() || topic in unjoinedTopics
+
+            listeners.add(entry)
+
+            val socket = send
+
+            if (join && socket != null) {
+                try {
+                    socket(buildWhisperSubscribeFrame(topic))
+                    unjoinedTopics.remove(topic)
+                } catch (failure: Throwable) {
+                    unjoinedTopics.add(topic)
+                    throw failure
+                }
+            }
+        }
+
+        return {
+            synchronized(lock) {
+                val listeners = whisperTopics[topic]
+
+                if (listeners != null && entry in listeners) {
+                    if (listeners.size == 1) {
+                        // The unsubscribe goes out before the topic is forgotten, so a write that throws leaves the
+                        // leave retryable: the membership is not stranded on the server.
+                        send?.invoke(buildWhisperUnsubscribeFrame(topic))
+                        whisperTopics.remove(topic)
+                        unjoinedTopics.remove(topic)
+                    } else {
+                        listeners.remove(entry)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Relays [data] to [topic] over the attached socket. Returns false, and queues
+     * nothing, when no socket is attached.
+     */
+    fun whisper(topic: String, data: WireValue): Boolean {
+        val socket = synchronized(lock) { send } ?: return false
+
+        socket(buildWhisperFrame(topic, data))
+
+        return true
+    }
+
+    /** A joined room: [send] relays a message to it, [close] leaves it. */
+    class Room internal constructor(private val relay: (WireValue) -> Boolean, private val leave: () -> Unit) {
+        @Volatile
+        private var closed = false
+
+        /** Relays [message]; false when no socket is attached, or the room is closed. */
+        fun send(message: WireValue): Boolean = !closed && relay(message)
+
+        fun close() {
+            closed = true
+            leave()
+        }
+    }
+
+    /**
+     * Joins the room `room:<name>` and hands its messages to [listener]. Does not wait
+     * for an ack: a room topic is never acknowledged.
+     */
+    fun connectRoom(name: String, listener: (WireValue) -> Unit): Room {
+        val topic = "room:$name"
+        val leave = whisperSubscribe(topic, listener)
+
+        return Room({ message -> whisper(topic, message) }, leave)
     }
 
     /** Whether a socket is currently attached. */
@@ -514,7 +794,7 @@ class Client(
 
     /**
      * Rejects every queued write so no caller waits on a dead client, and ends
-     * every open [Stream], so a loop blocked on one returns instead of waiting
+     * every open [Watch], so a loop blocked on one returns instead of waiting
      * forever on a client nothing will deliver to again. Durable storage is
      * untouched: the next session restores those writes.
      */
@@ -522,6 +802,7 @@ class Client(
         val (discarded, open) = synchronized(lock) {
             closed = true
             send = null
+            pendingRetries.clear()
             offlineQueue.clear() to streams.toList()
         }
 
@@ -688,6 +969,7 @@ class Client(
         return {
             val current = synchronized(lock) {
                 subscriptions.remove(id)
+                pendingRetries.remove(id)
                 send
             }
 
@@ -703,7 +985,7 @@ class Client(
      * consumer polling two of them can read them out of order, and the whole
      * point of a stream is that what arrived first is delivered first.
      */
-    data class StreamEvent(val value: WireValue?, val error: SubscriptionError?)
+    data class WatchEvent(val value: WireValue?, val error: SubscriptionError?)
 
     /**
      * A live query as a closeable [Sequence], for `for (event in stream)`.
@@ -717,21 +999,21 @@ class Client(
      * `Flow` lives in kotlinx-coroutines, and this transport takes no
      * dependencies beyond the JDK.
      */
-    class Stream internal constructor() :
-        Sequence<StreamEvent>,
+    class Watch internal constructor() :
+        Sequence<WatchEvent>,
         AutoCloseable {
         // Unbounded, so the frame dispatcher never blocks on a slow consumer; the
         // trade is that one which stops reading without closing grows the buffer.
-        internal val events = LinkedBlockingQueue<StreamEvent>()
+        internal val events = LinkedBlockingQueue<WatchEvent>()
 
         // The sentinel the iterator stops on. A distinct instance rather than a
         // null, because LinkedBlockingQueue rejects nulls outright.
-        private val end = StreamEvent(null, null)
+        private val end = WatchEvent(null, null)
         private val closed = AtomicBoolean()
         internal var unsubscribe: () -> Unit = {}
 
-        override fun iterator(): Iterator<StreamEvent> = object : Iterator<StreamEvent> {
-            private var next: StreamEvent? = null
+        override fun iterator(): Iterator<WatchEvent> = object : Iterator<WatchEvent> {
+            private var next: WatchEvent? = null
 
             override fun hasNext(): Boolean {
                 if (next != null) return true
@@ -741,7 +1023,7 @@ class Client(
                 return next !== end
             }
 
-            override fun next(): StreamEvent {
+            override fun next(): WatchEvent {
                 if (!hasNext()) throw NoSuchElementException("the stream is closed")
 
                 return checkNotNull(next).also { next = null }
@@ -759,19 +1041,19 @@ class Client(
     }
 
     /**
-     * Opens a live query as a [Stream].
+     * Opens a live query as a [Watch].
      *
      * Each call opens its OWN subscription — at CALL time, so a frame arriving
-     * before the loop starts is not lost — and [Stream.close] tears it down. Use
+     * before the loop starts is not lost — and [Watch.close] tears it down. Use
      * [subscribe] directly when the value outlives one loop.
      */
-    fun stream(functionPath: String, args: WireValue? = null, shardKey: String? = null): Stream {
-        val stream = Stream()
+    fun watch(functionPath: String, args: WireValue? = null, shardKey: String? = null): Watch {
+        val stream = Watch()
         val unsubscribe = subscribe(
             functionPath,
             args,
-            { value -> stream.events.add(StreamEvent(value, null)) },
-            { error -> stream.events.add(StreamEvent(null, error)) },
+            { value -> stream.events.add(WatchEvent(value, null)) },
+            { error -> stream.events.add(WatchEvent(null, error)) },
             shardKey,
         )
 
@@ -821,6 +1103,7 @@ class Client(
         // The frames are BUILT under the lock, not just the iteration: each one
         // reads `cursor`/`epoch`, which the frame handler writes. Snapshotting the
         // entries and reading their cursors afterwards resends a torn one.
+        val frozen = LinkedHashMap<String, Subscription>()
         val (sender, frames) = synchronized(lock) {
             val sender = send
             val frames =
@@ -831,6 +1114,10 @@ class Client(
                     // every shape view subscribed to a socket that no longer
                     // exists — silently, and for the rest of the process's life.
                     subscriptions.map { (id, entry) ->
+                        // A send that fails below puts the freeze back.
+                        if (entry.poisoned) frozen[id] = entry
+                        entry.poisoned = false
+                        entry.heldRun = null
                         buildSubscribeFrame(id, entry.functionPath, entry.args, null, entry.cursor, entry.epoch)
                     } +
                         shapes.map { (id, shape) ->
@@ -843,7 +1130,111 @@ class Client(
 
         if (sender == null) return
 
-        for (frame in frames) sender(frame)
+        for (frame in frames) {
+            try {
+                sender(frame)
+            } catch (error: Exception) {
+                // Nothing replayed the dropped change for the frames that never went out, so a
+                // later delta would move the cursor past it. The failed one and every unsent
+                // frame stay frozen; the ones already sent are replaying.
+                synchronized(lock) { frozen.values.forEach { it.poisoned = true } }
+
+                throw error
+            }
+
+            frozen.remove(frame["id"])
+        }
+    }
+
+    /**
+     * Re-subscribes every query whose retry hint has come due at [nowNanos], a `System.nanoTime()`
+     * reading, and returns how many frames it sent. Nothing is sent, and nothing is dropped, while
+     * no socket is attached. The caller arms its own timer for [nextSubscriptionRetryAtNanos].
+     * A sender that throws stops the batch and the retries not yet written stay due; an attach,
+     * detach or close while the batch is sent stops it too.
+     */
+    fun retryDueSubscriptions(nowNanos: Long = System.nanoTime()): Int {
+        // Built under the lock for the same reason as resendSubscriptions: each cold frame
+        // reads the entry the frame handler writes.
+        val (sender, generation, frames) = synchronized(lock) {
+            val sender = send ?: return 0
+            val frames = mutableListOf<Pair<String, Map<String, Any?>>>()
+            val pending = pendingRetries.entries.iterator()
+
+            while (pending.hasNext()) {
+                val retry = pending.next()
+
+                if (retry.value - nowNanos > 0) continue
+
+                pending.remove()
+
+                val subscription = subscriptions[retry.key] ?: continue
+
+                subscription.cursor = null
+                subscription.epoch = null
+                frames.add(retry.key to buildSubscribeFrame(retry.key, subscription.functionPath, subscription.args))
+            }
+
+            Triple(sender, attachGeneration, frames)
+        }
+
+        var sent = 0
+
+        for ((index, retry) in frames.withIndex()) {
+            val (current, registered) = synchronized(lock) { (attachGeneration == generation && !closed) to subscriptions.containsKey(retry.first) }
+
+            if (!current) break
+            if (!registered) continue
+
+            try {
+                sender(retry.second)
+            } catch (failure: Exception) {
+                // Kotlin has no checked exceptions, so a socket write can throw an IOException here.
+                // Unless the socket has changed since, which cancels every retry, the frames not
+                // written stay due; a newer hint or an unsubscribe has already decided the rest.
+                synchronized(lock) {
+                    if (attachGeneration == generation && !closed) {
+                        for ((id, _) in frames.subList(index, frames.size)) {
+                            if (subscriptions.containsKey(id)) pendingRetries.putIfAbsent(id, nowNanos)
+                        }
+                    }
+                }
+
+                throw failure
+            }
+
+            sent++
+        }
+
+        return sent
+    }
+
+    /** The earliest pending retry deadline in `System.nanoTime()` terms, or null when none is pending. */
+    fun nextSubscriptionRetryAtNanos(): Long? {
+        synchronized(lock) {
+            var earliest: Long? = null
+
+            for (deadline in pendingRetries.values) {
+                val current = earliest
+
+                if (current == null || deadline - current < 0) earliest = deadline
+            }
+
+            return earliest
+        }
+    }
+
+    /**
+     * The server's retry hint on a subscription error in nanoseconds, or null when it names no delay
+     * this client can honour. [Json] parses numbers to Double and booleans to Boolean, so a boolean
+     * is not a Number and falls through.
+     */
+    private fun retryAfterNanos(envelope: Map<*, *>): Long? {
+        val delay = (envelope["retryAfterMs"] as? Number)?.toDouble() ?: return null
+
+        if (delay.isNaN() || delay.isInfinite() || delay < 0) return null
+
+        return (minOf(delay, MAX_RETRY_AFTER_MS.toDouble()) * 1_000_000).toLong()
     }
 
     /**
@@ -863,12 +1254,21 @@ class Client(
         val kind = frame["type"] as? String ?: ""
         val id = frame["id"] as? String ?: ""
 
+        // The server answered this subscription, so a retry it was waiting on is moot. A `data`,
+        // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
+        // applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
+        if (kind == "ack") {
+            synchronized(lock) { pendingRetries.remove(id) }
+        }
+
         // Each branch resolves the subscription UNDER the lock and hands the
         // callback back out, rather than looking `entry` up once up here: the app
         // thread can unsubscribe in between, and `advance` writes the very state
         // the lock exists to protect.
         when (kind) {
             "data", "delta" -> {
+                // The frame type decides, as in every port: a delta whose payload is null is still a delta.
+                val isDelta = kind == "delta"
                 val payload = frame["data"] ?: frame["delta"]
                 val value = try {
                     Wire.decode(payload)
@@ -878,9 +1278,26 @@ class Client(
                     // EVERY other subscription on this client, so it is delivered
                     // to the addressed subscription's error callbacks instead and
                     // the frame is reported as the error it is.
-                    val handler = synchronized(lock) { subscriptions[id]?.onError }
+                    val (handler, alreadyFrozen) = synchronized(lock) {
+                        // A frame that cannot be read leaves the run incomplete, so it is not committed.
+                        val entry = subscriptions[id]
+                        val frozen = entry?.poisoned == true
 
-                    handler?.invoke(SubscriptionError("INVALID_FRAME", error.message ?: "subscription payload could not be decoded"))
+                        entry?.heldRun = null
+
+                        // A refused delta never reached the base, so a later delta would commit past it:
+                        // the subscription freezes until a data frame or a resubscribe.
+                        if (isDelta && entry != null) entry.poisoned = true
+
+                        entry?.onError to frozen
+                    }
+
+                    // A frozen subscription ignores delta frames, so the refusal is not reported twice.
+                    if (isDelta && alreadyFrozen) return "error"
+
+                    val code = if (isDelta) WIRE_DECODE_FAILED else "INVALID_FRAME"
+
+                    handler?.invoke(SubscriptionError(code, error.message ?: "subscription payload could not be decoded"))
 
                     return "error"
                 }
@@ -888,8 +1305,58 @@ class Client(
 
                 synchronized(lock) {
                     subscriptions[id]?.let { entry ->
+                        // A snapshot is authoritative; a delta after an unmergeable one is dropped whole.
+                        if (isDelta) {
+                            if (entry.poisoned) return@let
+                        } else {
+                            entry.poisoned = false
+                        }
+
+                        // The merge applies to the server base (or the run held on top of it), never to
+                        // the value the caller sees: the overlays are re-folded onto the result below.
+                        val resolved = if (isDelta) {
+                            RowDelta.resolve(value, entry.heldRun ?: if (entry.state.hasBase) entry.state.serverBase else null)
+                        } else {
+                            RowDelta.Resolution.Publish(value)
+                        }
+
+                        // An unmergeable row change keeps the previous value; see RowDelta.resolve.
+                        // It also poisons the subscription so a later frame's cursor cannot skip it.
+                        if (resolved !is RowDelta.Resolution.Publish) {
+                            entry.poisoned = true
+                            entry.heldRun = null
+                            // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                            val onError = entry.onError
+
+                            if (onError != null) {
+                                val notice =
+                                    SubscriptionError(
+                                        "delta_unmergeable",
+                                        "row change could not be merged; subscription frozen until a snapshot or resubscribe",
+                                    )
+                                deferred.add { onError(notice) }
+                            }
+
+                            return@let
+                        }
+
+                        // Nothing of a run is visible until its last frame: publishing mid-run would show a
+                        // half-applied change, and advancing the cursor would skip the rest on a reconnect.
+                        if (isDelta && frame["more"] == true) {
+                            entry.heldRun = resolved.value
+
+                            return@let
+                        }
+
+                        // A data frame commits too, which is what discards a run it interrupts.
+                        entry.heldRun = null
+                        entry.state.serverBase = resolved.value
+                        entry.state.hasBase = true
+                        // Advanced only once the frame is applied: an unmergeable row change returned above
+                        // must leave the resume cursor where it was, and `poisoned` keeps later frames
+                        // from moving it, so a reconnect replays the dropped change.
+                        pendingRetries.remove(id)
                         advance(entry, frame)
-                        entry.state.serverBase = value
                         // `cursor` is OPTIONAL on data/delta frames, and a frame
                         // that omits it — or sends an explicit null — must LEAVE
                         // the tracked cursor where it is: nulling it strands every
@@ -917,6 +1384,23 @@ class Client(
 
                 synchronized(lock) {
                     subscriptions[id]?.let { entry ->
+                        // A poisoned subscription ignores these frames too: their cursor would
+                        // move the resume position past the dropped row change.
+                        if (entry.poisoned) return@let
+
+                        // A run still held when `settled` arrives was cut short: its rest is
+                        // not coming, so the held frames are void and the cursor stays at the
+                        // last published state, or a reconnect would resume past the lost rows.
+                        // It freezes the subscription, as an unmergeable row change does, silently.
+                        if (kind == "settled" && entry.heldRun != null) {
+                            entry.heldRun = null
+                            entry.poisoned = true
+                            return@let
+                        }
+
+                        entry.heldRun = null
+                        pendingRetries.remove(id)
+
                         advance(entry, frame)
                         // A resume/settled frame advances the cursor without a
                         // value change — but a write whose result was
@@ -942,11 +1426,36 @@ class Client(
             }
             "error" -> {
                 val envelope = frame["error"] as? Map<*, *> ?: emptyMap<String, Any?>()
+
+                // Token expiry is the socket's signal, not a subscription's failure: the
+                // server sends it just before closing 4001, and routing it would hand the
+                // subscription an error the credential refresh is about to cure. Checked
+                // before the id lookup, so an id-less frame still notifies.
+                if (envelope["code"] == "TOKEN_EXPIRED") {
+                    notifyTokenExpired()
+
+                    return kind
+                }
+
                 val error = SubscriptionError(
                     envelope["code"] as? String,
                     frame["message"] as? String ?: envelope["message"] as? String ?: "subscription error",
                 )
-                val handlers = synchronized(lock) { listOfNotNull(subscriptions[id]?.onError, shapes[id]?.onError) }
+                val delay = retryAfterNanos(envelope)
+                val handlers = synchronized(lock) {
+                    // Only a query subscription is re-run at the hint. A hint-less error ends
+                    // it, so an earlier hint's retry for it is dropped too.
+                    if (subscriptions.containsKey(id)) {
+                        // A late frame from a detached or closed socket must not arm a retry no sender can fire.
+                        if (delay == null) {
+                            pendingRetries.remove(id)
+                        } else if (send != null) {
+                            pendingRetries[id] = System.nanoTime() + delay
+                        }
+                    }
+
+                    listOfNotNull(subscriptions[id]?.onError, shapes[id]?.onError)
+                }
 
                 for (handler in handlers) handler(error)
             }
@@ -981,6 +1490,28 @@ class Client(
             }
             "pokePart" -> bufferPokePart(frame)
             "pokeEnd" -> applyPoke(frame)
+            "whisper" -> {
+                // A frame with no topic names no listeners, and a payload the codec refuses
+                // is one bad frame, not a reason to end the read loop. Both are ignored.
+                val topic = frame["topic"] as? String
+
+                if (!topic.isNullOrEmpty()) {
+                    val value = try {
+                        Wire.decode(frame["data"])
+                    } catch (error: WireFormatException) {
+                        return kind
+                    }
+                    val listeners = synchronized(lock) { whisperTopics[topic]?.toList().orEmpty() }
+
+                    for (listener in listeners) {
+                        try {
+                            listener.onValue(value)
+                        } catch (error: Exception) {
+                            // An app listener must not end the read loop, nor skip the listeners after it.
+                        }
+                    }
+                }
+            }
         }
 
         return kind
@@ -1007,6 +1538,11 @@ class Client(
         return hydrated.shardKeys
     }
 
+    /** Call with [lock] held: a dropped socket never delivers the rest of a run, so its held frames are void. */
+    private fun discardHeldRuns() {
+        for (entry in subscriptions.values) entry.heldRun = null
+    }
+
     /**
      * Drops the resume state the previous identity left, under the lock; returns
      * the shape callbacks to tell (outside it) that their view is now empty.
@@ -1015,6 +1551,10 @@ class Client(
         for (entry in subscriptions.values) {
             entry.cursor = null
             entry.epoch = null
+            entry.poisoned = false
+            entry.heldRun = null
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            entry.state.hasBase = false
         }
 
         return shapes.values.mapNotNull { shape ->
@@ -1159,10 +1699,11 @@ class Client(
     }
 
     /**
-     * The socket URL: the origin with its scheme swapped, plus the shard and
-     * credential query parameters when present.
+     * The socket URL: the origin with its scheme swapped, plus the shard and the
+     * admin ticket as `?token=` when present. The session credential is never in
+     * the URL; it travels in the `connect` frame.
      */
-    fun wsUrl(shardKey: String? = null, token: String? = null): String {
+    fun wsUrl(shardKey: String? = null): String {
         var endpoint = join(WS_PATH)
 
         endpoint = when {
@@ -1176,7 +1717,7 @@ class Client(
             // runtime would open a socket against a shard named "" rather than the
             // default one this client resolves an empty key to.
             namedShard(shardKey)?.let { add("shard=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
-            token?.let { add("token=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
+            wsTicket?.invoke()?.let { add("token=" + URLEncoder.encode(it, StandardCharsets.UTF_8)) }
         }
 
         if (params.isEmpty()) return endpoint

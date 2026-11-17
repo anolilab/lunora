@@ -3,7 +3,7 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { referencesArgs } from "../argument-taint";
 import type { AiToolSideEffectIR } from "../ir";
-import { bindingKeyName, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
+import { bindingKeyName, descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, propertyKeyName } from "./ast";
 import { callSiteScopeOf } from "./attribution";
 import { calleeName } from "./callee";
 import { contextSurfaceText } from "./context-root";
@@ -144,7 +144,7 @@ const hasUserDerivedInput = (optionsObject: ObjectLiteralExpression): boolean =>
 const generationsInSourceFile = (sourceFile: SourceFile, relativePath: string): AiToolSideEffectIR[] => {
     const rows: AiToolSideEffectIR[] = [];
 
-    for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
         const callee = calleeName(call.getExpression());
 
         if (callee === undefined || !GENERATION_CALLEES.has(callee)) {

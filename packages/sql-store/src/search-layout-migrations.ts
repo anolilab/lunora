@@ -13,7 +13,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- `SqlCtxExec` is this package's established exec type name. */
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
-import { analyzedSearchText, countSearchTokens, createSearchAnalyzer, FTS_ID_COLUMN, FTS_TOKEN_COLUMN } from "@lunora/search-core";
+import { analyzedSearchText, countSearchTokens, FTS_ID_COLUMN, FTS_TOKEN_COLUMN } from "@lunora/search-core";
 import type { SearchIndexDefinitionLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { ftsPurgeDocument, ftsUnmappedPage, ftsWriteDocument, groupUnmappedRows } from "@lunora/shard-engine";
 import type { SQL } from "drizzle-orm";
@@ -309,7 +309,7 @@ const repairDuplicates = async (exec: SqlCtxExec, dialect: SqlDialect, target: M
         const document = row === undefined ? undefined : decodeRow(definition, row);
 
         if (row !== undefined && document) {
-            const counts = [...countSearchTokens(analyzedSearchText(document, index), createSearchAnalyzer(index.language))];
+            const counts = [...countSearchTokens(document, index)];
 
             // eslint-disable-next-line no-await-in-loop -- sequential companion writes on the shared connection.
             await runInOrder(exec, dialect, invertedWriteStatements(dialect, companion, id, counts, { row, table: tableName }));

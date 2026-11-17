@@ -1,0 +1,146 @@
+/**
+ * Where Studio's generated documents (the OpenAPI and OpenRPC specs and the
+ * architecture manifest) live in a Worker that wrangler bundles.
+ *
+ * Only the admin routes read them, and they grow with the app (hundreds of KiB in
+ * a large one), so they ship as Workers Static Assets rather than in the Worker
+ * script. A file in the assets directory is public unless the Worker runs first
+ * for its path, so the documents go into a directory and an `assets` block Lunora
+ * owns, with `run_worker_first: true`: every request still reaches the Worker
+ * first, exactly as with no `assets` block, and the files are reachable only
+ * through the binding. The Worker's reserved-path guard answers a direct request
+ * for `/_lunora/studio/*` with a 404, and the asset router answers an encoded
+ * spelling of it with a redirect to that path.
+ *
+ * Everywhere else the documents stay modules the admin routes `import()`: a Vite
+ * or Rsbuild build, which already splits them into their own chunks and builds the
+ * assets directory from the client build, not from `wrangler.jsonc`; a project
+ * with its own `assets` block, whose directory is the app's static output, rebuilt
+ * by its client build; and the Node and celld targets, which have no Workers
+ * Static Assets.
+ *
+ * Reconcile (which writes the block) and codegen (which writes the files and the
+ * loaders) both decide through {@link studioAssetsPlan}, so they cannot disagree.
+ */
+import { resolveCodegenTarget } from "@lunora/codegen";
+
+import { detectFramework } from "../detect-framework";
+import join from "../path";
+import { readProjectDependencyNames, readProjectManifest } from "../project-manifest";
+import bindingNameOwner from "./binding-name-owner";
+import { isPlainObject } from "./guards";
+import { entryComposesApp, locateWorkerEntry } from "./worker-entry-checks";
+import { findWranglerFile } from "./wrangler-path";
+import type { WranglerShape } from "./wrangler-shape";
+
+/** The directory of the Lunora-owned `assets` block, relative to `wrangler.jsonc`. `.lunora/` is Lunora's gitignored state directory. */
+const STUDIO_ASSETS_DIRECTORY = ".lunora/studio-assets";
+
+/** The binding of the Lunora-owned `assets` block. */
+const STUDIO_ASSETS_BINDING = "ASSETS";
+
+/** The `main` the Vite plugin generates; such a Worker is built by Vite whatever else the project configures. */
+const COMPOSED_MAIN = "virtual:lunora/worker";
+
+/** Packages that run the Worker build themselves (and so build the assets directory from a client build). */
+const WORKER_BUILDING_PLUGINS: ReadonlyArray<string> = ["@lunora/vite", "@lunora/rspack", "@cloudflare/vite-plugin"];
+
+interface StudioAssetsPlan {
+    /** The `assets.binding` the Worker reads the documents through. */
+    binding: string;
+    /** The `assets.directory` the documents are written under, relative to `wrangler.jsonc`. */
+    directory: string;
+}
+
+/** The slice of `wrangler.jsonc` read here; parsed from untrusted JSONC, so any level may be the wrong type. */
+interface StudioAssetsShape {
+    assets?: unknown;
+    env?: unknown;
+    main?: unknown;
+    site?: unknown;
+}
+
+/** The block reconcile writes. */
+const ownedStudioAssetsBlock = (): { binding: string; directory: string; run_worker_first: true } => {
+    return { binding: STUDIO_ASSETS_BINDING, directory: STUDIO_ASSETS_DIRECTORY, run_worker_first: true };
+};
+
+/** Whether `assets` is exactly the block reconcile writes. Its directory, under `.lunora/`, is what marks it as Lunora's. */
+const isOwnedStudioAssets = (assets: unknown): boolean =>
+    isPlainObject(assets) &&
+    Object.keys(assets).length === 3 &&
+    assets["binding"] === STUDIO_ASSETS_BINDING &&
+    assets["directory"] === STUDIO_ASSETS_DIRECTORY &&
+    assets["run_worker_first"] === true;
+
+/**
+ * Whether wrangler bundles the Worker from its sources, rather than a bundler plugin or a framework build. A root
+ * without a readable `package.json` is not a project this can tell, so it keeps the bundle.
+ */
+const bundledByWrangler = (projectRoot: string, parsed: StudioAssetsShape): boolean => {
+    if (readProjectManifest(projectRoot) === undefined || parsed.main === COMPOSED_MAIN || detectFramework(projectRoot).class !== "C") {
+        return false;
+    }
+
+    const dependencies = readProjectDependencyNames(projectRoot);
+
+    return !WORKER_BUILDING_PLUGINS.some((name) => dependencies.has(name));
+};
+
+/**
+ * Whether the Worker wrangler bundles composes the generated app, whose `defineApp` emits the loaders that read the
+ * binding. A hand-written `createWorker` entry imports the documents itself and never reads `ASSETS`, so a block for
+ * it would only point wrangler at a gitignored directory a fresh clone does not have, which wrangler refuses. A
+ * `defineApp` call elsewhere in the project (a test, an unrelated module) is not in that bundle and does not count.
+ */
+const bundlesComposedApp = (projectRoot: string, parsed: StudioAssetsShape): boolean => {
+    const main = typeof parsed.main === "string" ? parsed.main : undefined;
+    const location = locateWorkerEntry(main, projectRoot, findWranglerFile(projectRoot) ?? join(projectRoot, "wrangler.jsonc"));
+
+    if (location?.origin === "composed") {
+        return true;
+    }
+
+    return location !== undefined && location.origin !== "absent" && entryComposesApp(location.path);
+};
+
+/**
+ * Where the Studio documents go as assets, or `undefined` to keep them in the
+ * Worker bundle. Assets only for a Cloudflare Worker wrangler bundles, with no
+ * `assets` block of its own anywhere (an `env.<name>` block replaces the
+ * top-level one whole), or only the one Lunora wrote, no legacy Workers Sites
+ * `site` block (wrangler refuses one beside `assets`), and no other binding
+ * named `ASSETS` in any environment. And only for a project that composes its
+ * Worker with the generated `defineApp`, the one entry that reads the binding.
+ *
+ * An omitted `target` resolves the way codegen does (`lunora.config.*`, then
+ * Cloudflare), so a caller that has no `--target` cannot write a block for a
+ * Node or celld project whose directory codegen never fills.
+ */
+const studioAssetsPlan = (projectRoot: string, parsed: StudioAssetsShape | undefined, target?: string): StudioAssetsPlan | undefined => {
+    if (parsed === undefined || resolveCodegenTarget(projectRoot, target) !== "cloudflare") {
+        return undefined;
+    }
+
+    const environments = isPlainObject(parsed.env) ? Object.values(parsed.env) : [];
+    const ownAssets =
+        (parsed.assets !== undefined && !isOwnedStudioAssets(parsed.assets)) ||
+        parsed.site !== undefined ||
+        environments.some((block) => isPlainObject(block) && (block["assets"] !== undefined || block["site"] !== undefined));
+
+    // Another binding already named `ASSETS` (a KV namespace, a service, …) would make the block a duplicate wrangler rejects.
+    // The top-level block is inherited by every environment, so an environment's own bindings count too.
+    const nameTaken = [{ ...(parsed as WranglerShape), assets: undefined }, ...environments].some(
+        (block) => isPlainObject(block) && bindingNameOwner(block, STUDIO_ASSETS_BINDING) !== undefined,
+    );
+
+    // Checked last: it reads the entry's module graph.
+    if (ownAssets || nameTaken || !bundledByWrangler(projectRoot, parsed) || !bundlesComposedApp(projectRoot, parsed)) {
+        return undefined;
+    }
+
+    return { binding: STUDIO_ASSETS_BINDING, directory: STUDIO_ASSETS_DIRECTORY };
+};
+
+export type { StudioAssetsPlan };
+export { isOwnedStudioAssets, ownedStudioAssetsBlock, STUDIO_ASSETS_DIRECTORY, studioAssetsPlan };

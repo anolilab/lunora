@@ -61,7 +61,7 @@ describe("emitApp — schema jurisdiction", () => {
         const output = emitApp({ ...baseOptions, hasAuth: true });
         const wiring = /createDoAuthWiring\(\{[\s\S]*?\}\);/u.exec(output)?.[0] ?? "";
 
-        expect(wiring).toContain("namespace: authNamespace(env),");
+        expect(wiring).toContain("namespace,");
         expect(wiring).not.toContain("jurisdiction");
     });
 

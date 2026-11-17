@@ -31,6 +31,8 @@ interface InboundAttachment {
     filename: string | null;
     /** Declared MIME type (e.g. `image/png`). */
     mimeType: string;
+    /** Binary content dropped because the forwarded envelope exceeded the attachment byte budget. */
+    truncated?: boolean;
 }
 
 /** One reported `method=result [ptype.property=value]` clause of an `Authentication-Results` header. */
@@ -139,6 +141,16 @@ const safe = (label: string, value: string | undefined): string | undefined => {
     assertSafeHeaderValue(`inbound ${label}`, value);
 
     return value;
+};
+
+// postal-mime passes any disposition token through; RFC 2183 §2.8 treats an
+// unrecognised type as `attachment`.
+const normalizeDisposition = (disposition: string | null): InboundAttachment["disposition"] => {
+    if (disposition === null) {
+        return disposition;
+    }
+
+    return disposition === "inline" ? "inline" : "attachment";
 };
 
 /** Render a parser `Address` (mailbox or group) as a single `name <addr>` string. */
@@ -298,7 +310,7 @@ const parseInboundEmail = async (raw: RawInboundEmail): Promise<InboundEmail> =>
     const attachments: InboundAttachment[] = parsed.attachments.map((attachment) => {
         return {
             content: attachment.content,
-            disposition: attachment.disposition,
+            disposition: normalizeDisposition(attachment.disposition),
             ...(attachment.encoding === undefined ? {} : { encoding: attachment.encoding }),
             filename: attachment.filename,
             mimeType: attachment.mimeType,

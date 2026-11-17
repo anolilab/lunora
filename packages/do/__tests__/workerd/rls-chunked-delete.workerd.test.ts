@@ -43,13 +43,13 @@ const schema = {
             triggerMap: {
                 lockNext: {
                     handler: async (
-                        context: { db: { patch: (id: string, patch: Record<string, unknown>) => Promise<void> } },
+                        context: { db: { patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void> } },
                         event: { previous?: Record<string, unknown> },
                     ) => {
                         const next = event.previous?.["nextId"];
 
                         if (typeof next === "string") {
-                            await context.db.patch(next, { state: "locked" });
+                            await context.db.patch("items", next, { state: "locked" });
                         }
                     },
                     op: "delete",
@@ -110,14 +110,15 @@ describe("rls chunked deletes on workerd", () => {
         expect.assertions(3);
 
         await withWriter("nodes", async (writer) => {
-            await writer.insert("nodes", { _id: "P", parentId: "root" }, { allowExplicitId: true });
-            await writer.insert("nodes", { _id: "C", parentId: "P" }, { allowExplicitId: true });
+            // Parent id sorts first: a same-millisecond insert ties on `_creationTime`, and the erase then pages by id.
+            await writer.insert("nodes", { _id: "a", parentId: "root" }, { allowExplicitId: true });
+            await writer.insert("nodes", { _id: "b", parentId: "a" }, { allowExplicitId: true });
 
             await expect(eraseWith(writer, (db) => db.deleteAll("nodes"))).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-            await expect(writer.get("P")).resolves.toBeNull();
+            await expect(writer.get("nodes", "a")).resolves.toBeNull();
 
-            const orphan = await writer.get("C");
+            const orphan = await writer.get("nodes", "b");
 
             expect(orphan?.["parentId"]).toBeNull();
         });
@@ -134,9 +135,9 @@ describe("rls chunked deletes on workerd", () => {
             // re-location's filtered read misses it and it is skipped (not deleted, not an abort).
             await expect(eraseWith(writer, (db) => db.deleteWhere("items", { state: "open" }))).resolves.toStrictEqual({ deleted: 1 });
 
-            await expect(writer.get("i1")).resolves.toBeNull();
+            await expect(writer.get("items", "i1")).resolves.toBeNull();
 
-            const locked = await writer.get("i2");
+            const locked = await writer.get("items", "i2");
 
             expect(locked?.["state"]).toBe("locked");
         });

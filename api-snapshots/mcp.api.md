@@ -47,6 +47,22 @@ interface CallAgentToolOptions {
 const DEFAULT_MAX_REQUEST_BYTES: number;
 ```
 
+### `FunctionMcpServerOptions` (interface)
+
+```ts
+interface FunctionMcpServerOptions {
+    allowWrites?: boolean;
+    fetch?: typeof fetch;
+    name?: string;
+    onReloadError?: (error: unknown) => void;
+    openRpcSpec: unknown;
+    token?: string;
+    url: string | (() => string | undefined);
+    version?: string;
+    WebSocket?: typeof WebSocket;
+}
+```
+
 ### `LOCAL_SERVER_NAME` (const)
 
 Re-exported from `@lunora/mcp/node` — signature tracked in that section.
@@ -74,7 +90,7 @@ interface LunoraMcpServerOptions {
     allowDataReads?: boolean;
     allowObservability?: boolean;
     allowWrites?: boolean;
-    client?: LunoraClient;
+    client?: LunoraAdminClient;
     fetch?: typeof fetch;
     token?: string;
     url?: string;
@@ -180,11 +196,11 @@ interface ServeStatelessOptions extends HandleRequestOptions {
 
 ```ts
 interface ToolDefinition {
-    annotations?: ToolAnnotations;
+    annotations: ToolAnnotations;
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
-    outputSchema?: ToolInputSchema;
+    outputSchema?: ToolOutputSchema;
 }
 ```
 
@@ -202,17 +218,31 @@ interface ToolInputSchema {
 }
 ```
 
-### `ToolResult` (interface)
+### `ToolOutputSchema` (interface)
 
 ```ts
-interface ToolResult {
+interface ToolOutputSchema {
+    $defs?: Record<string, unknown>;
+    additionalProperties?: boolean;
+    anyOf?: ReadonlyArray<object>;
+    definitions?: Record<string, unknown>;
+    properties?: Record<string, unknown>;
+    required?: ReadonlyArray<string>;
+    type: "object";
+}
+```
+
+### `ToolResult` (type)
+
+```ts
+type ToolResult = {
     content: {
         text: string;
         type: "text";
     }[];
     isError?: boolean;
     structuredContent?: Record<string, unknown>;
-}
+};
 ```
 
 ### `WRITE_TOOL_DEFINITIONS` (const)
@@ -235,6 +265,10 @@ const callAgentTool: (client: LunoraClient, name: string, input: Record<string, 
 
 Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
+### `connectFunctionStdio` (const)
+
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
+
 ### `connectLocalStdio` (const)
 
 Re-exported from `@lunora/mcp/node` — signature tracked in that section.
@@ -247,15 +281,19 @@ Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 
+### `createFunctionMcpServer` (const)
+
+```ts
+const createFunctionMcpServer: (options: FunctionMcpServerOptions) => Promise<Server>;
+```
+
 ### `createLocalMcpServer` (const)
 
 Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `createLunoraMcpServer` (const)
 
-```ts
-const createLunoraMcpServer: (options: LunoraMcpServerOptions) => Server;
-```
+Re-exported from `@lunora/mcp/node` — signature tracked in that section.
 
 ### `createMcpFetchHandler` (const)
 
@@ -268,7 +306,7 @@ Re-exported from `@lunora/mcp/worker` — signature tracked in that section.
 ### `createToolServer` (const)
 
 ```ts
-const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider) => Server;
+const createToolServer: (info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider) => Promise<Server>;
 ```
 
 ### `localTools` (const)
@@ -446,7 +484,7 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
-### `ToolResult` (interface)
+### `ToolResult` (type)
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
@@ -459,7 +497,7 @@ const createDocsMcpFetchHandler: (options: DocsMcpServerOptions) => McpFetchHand
 ### `createDocsMcpServer` (const)
 
 ```ts
-const createDocsMcpServer: (options: DocsMcpServerOptions) => Server;
+const createDocsMcpServer: (options: DocsMcpServerOptions) => Promise<Server>;
 ```
 
 ### `createRemoteDocsIndex` (const)
@@ -552,6 +590,12 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 const NO_DEPLOYMENT_MESSAGE = "no Lunora dev server is running for this project — start one with `lunora dev`, then call this tool again (call lunora_dev_status to check).";
 ```
 
+### `connectFunctionStdio` (const)
+
+```ts
+const connectFunctionStdio: (options: FunctionMcpServerOptions) => Promise<Server>;
+```
+
 ### `connectLocalStdio` (const)
 
 ```ts
@@ -567,17 +611,19 @@ const connectStdio: (options: LunoraMcpServerOptions) => Promise<Server>;
 ### `createLocalMcpServer` (const)
 
 ```ts
-const createLocalMcpServer: (options?: LocalMcpServerOptions) => Server;
+const createLocalMcpServer: (options?: LocalMcpServerOptions) => Promise<Server>;
 ```
 
 ### `createLunoraMcpServer` (const)
 
-Re-exported from `@lunora/mcp` — signature tracked in that section.
+```ts
+const createLunoraMcpServer: (options: LunoraMcpServerOptions) => Server;
+```
 
 ### `localTools` (const)
 
 ```ts
-const localTools: (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraClient) => ReadonlyArray<McpTool>;
+const localTools: (options: LocalMcpServerOptions, clientFor?: (deployment: LocalDeployment) => LunoraAdminClient) => ReadonlyArray<McpTool>;
 ```
 
 ## `@lunora/mcp/worker`
@@ -615,6 +661,10 @@ type AuthedMcpServerOptions = ((claims: McpAccessTokenClaims) => LunoraMcpServer
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `DEFAULT_MAX_REQUEST_BYTES` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
+
+### `FunctionMcpServerOptions` (interface)
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
@@ -725,7 +775,7 @@ interface RegisterPaidToolOptions extends RegisterToolOptions {
 
 ```ts
 interface RegisterToolOptions {
-    annotations?: Tool["annotations"];
+    annotations: ToolAnnotations;
     description: string;
     inputSchema: ToolInputSchema;
     name: string;
@@ -750,7 +800,7 @@ type ToolHandler = (arguments_: Record<string, unknown>) => Promise<ToolResult> 
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
-### `ToolResult` (interface)
+### `ToolResult` (type)
 
 Re-exported from `@lunora/mcp` — signature tracked in that section.
 
@@ -771,7 +821,7 @@ Re-exported from `@lunora/mcp` — signature tracked in that section.
 ### `callTool` (const)
 
 ```ts
-const callTool: (client: LunoraClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean, allowDataReads?: boolean) => Promise<ToolResult>;
+const callTool: (client: LunoraAdminClient, name: string, input: Record<string, unknown>, allowWrites?: boolean, allowObservability?: boolean, allowDataReads?: boolean) => Promise<ToolResult>;
 ```
 
 ### `createAuthedMcpFetchHandler` (const)
@@ -779,6 +829,10 @@ const callTool: (client: LunoraClient, name: string, input: Record<string, unkno
 ```ts
 const createAuthedMcpFetchHandler: (options: AuthedMcpFetchHandlerOptions) => McpFetchHandler;
 ```
+
+### `createFunctionMcpServer` (const)
+
+Re-exported from `@lunora/mcp` — signature tracked in that section.
 
 ### `createMcpFetchHandler` (const)
 
@@ -822,15 +876,38 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
-### `ToolAnnotations` (interface)
+### `ReadOnlyToolAnnotations` (interface)
 
 ```ts
-interface ToolAnnotations {
-    destructiveHint?: boolean;
+interface ReadOnlyToolAnnotations extends ToolAnnotationsBase {
+    destructiveHint?: false;
     idempotentHint?: boolean;
+    readOnlyHint: true;
+}
+```
+
+### `ToolAnnotations` (type)
+
+```ts
+type ToolAnnotations = ReadOnlyToolAnnotations | WriteToolAnnotations;
+```
+
+### `ToolAnnotationsBase` (interface)
+
+```ts
+interface ToolAnnotationsBase {
     openWorldHint?: boolean;
-    readOnlyHint?: boolean;
     title?: string;
+}
+```
+
+### `WriteToolAnnotations` (interface)
+
+```ts
+interface WriteToolAnnotations extends ToolAnnotationsBase {
+    destructiveHint: boolean;
+    idempotentHint: boolean;
+    readOnlyHint: false;
 }
 ```
 
@@ -838,6 +915,10 @@ interface ToolAnnotations {
 
 ```ts
 interface X402ChargeSettings {
+    readonly facilitator: {
+        readonly headers?: Record<string, string>;
+        readonly url: string;
+    };
     readonly network: string;
     readonly [key: string]: unknown;
     readonly recipient: {

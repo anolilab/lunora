@@ -10,11 +10,24 @@
  * are excluded from the scan so the sweep doesn't re-process tombstones.
  */
 
+import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";
 import { runDrizzle } from "./do-exec";
 import { jsonPathSql } from "./do-sql";
+
+/** The sweep's "expired at `now`" predicate, shared by the page scan and the per-row recheck so the two cannot drift. */
+const expiredConditions = (spec: TtlSweepSpec, now: number): SQL[] => {
+    const cutoff = now - (spec.after ?? 0);
+    const conditions = [dsql`${jsonPathSql(spec.field)} IS NOT NULL`, dsql`${jsonPathSql(spec.field)} < ${cutoff}`];
+
+    if (spec.softDeleteField !== undefined) {
+        conditions.push(dsql`${jsonPathSql(spec.softDeleteField)} IS NULL`);
+    }
+
+    return conditions;
+};
 
 /** One table's resolved TTL policy, as surfaced to the DO alarm by the generated shard subclass. */
 export interface TtlSweepSpec {
@@ -36,17 +49,45 @@ export interface TtlSweepSpec {
  * never re-touches a tombstone.
  */
 export const selectExpiredIds = (sql: SqlExec, spec: TtlSweepSpec, now: number, limit: number): { hasMore: boolean; ids: string[] } => {
-    const cutoff = now - (spec.after ?? 0);
-    const conditions = [dsql`${jsonPathSql(spec.field)} IS NOT NULL`, dsql`${jsonPathSql(spec.field)} < ${cutoff}`];
-
-    if (spec.softDeleteField !== undefined) {
-        conditions.push(dsql`${jsonPathSql(spec.softDeleteField)} IS NULL`);
-    }
-
-    const query = dsql`SELECT id FROM ${dsql.identifier(spec.table)} WHERE ${dsql.join(conditions, dsql` AND `)} LIMIT ${dsql.raw(String(Math.max(0, Math.floor(limit)) + 1))}`;
+    const query = dsql`SELECT id FROM ${dsql.identifier(spec.table)} WHERE ${dsql.join(expiredConditions(spec, now), dsql` AND `)} LIMIT ${dsql.raw(String(Math.max(0, Math.floor(limit)) + 1))}`;
     const rows = runDrizzle<{ id: string }>(sql, query).toArray();
     const hasMore = rows.length > limit;
     const ids = rows.slice(0, limit).map((row) => row.id);
 
     return { hasMore, ids };
+};
+
+/**
+ * Whether the row `id` in `spec.table` is STILL expired at `now`, by the same
+ * predicate {@link selectExpiredIds} paged it with. The sweep awaits each
+ * row's delete, and a delete that does real I/O (a trigger, a `.global()`
+ * cascade) lets other requests run — a write that refreshed the TTL field of a
+ * row selected earlier in the page must keep that row alive.
+ */
+export const isTtlExpired = (sql: SqlExec, spec: TtlSweepSpec, id: string, now: number): boolean => {
+    const query = dsql`SELECT 1 AS hit FROM ${dsql.identifier(spec.table)} WHERE id = ${id} AND ${dsql.join(expiredConditions(spec, now), dsql` AND `)}`;
+
+    return runDrizzle<{ hit: number }>(sql, query).toArray().length > 0;
+};
+
+/**
+ * The column list of a TTL table's expression index, built from the same
+ * {@link jsonPathSql} the sweep's WHERE uses so SQLite matches the two. A
+ * soft-delete table leads with its marker: `marker IS NULL` is then an equality
+ * prefix, and neither the sweep nor {@link nextTtlExpiry} walks tombstones.
+ */
+export const ttlIndexColumns = (field: string, softDeleteField: string | undefined): SQL =>
+    softDeleteField === undefined ? jsonPathSql(field) : dsql`${jsonPathSql(softDeleteField)}, ${jsonPathSql(field)}`;
+
+/**
+ * The earliest expiry instant (`field + after`) among `spec.table`'s live rows,
+ * or `undefined` when no row carries a numeric TTL. A non-numeric value never
+ * satisfies the sweep's `< cutoff`, so it never expires and is not reported.
+ */
+export const nextTtlExpiry = (sql: SqlExec, spec: TtlSweepSpec): number | undefined => {
+    const live = spec.softDeleteField === undefined ? dsql`` : dsql` WHERE ${jsonPathSql(spec.softDeleteField)} IS NULL`;
+    const query = dsql`SELECT MIN(${jsonPathSql(spec.field)}) AS expiry FROM ${dsql.identifier(spec.table)}${live}`;
+    const expiry = runDrizzle<{ expiry: unknown }>(sql, query).toArray()[0]?.expiry;
+
+    return typeof expiry === "number" ? expiry + (spec.after ?? 0) : undefined;
 };

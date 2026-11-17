@@ -17,7 +17,8 @@ const externalSpecifiers = (file: string, seen = new Set<string>()): Set<string>
 
     seen.add(file);
 
-    const source = readFileSync(file, "utf8");
+    // A type-only import is erased, so it puts nothing in the Worker's startup graph.
+    const source = readFileSync(file, "utf8").replaceAll(/^(?:import|export) type [^;]*;/gmu, "");
 
     for (const match of source.matchAll(STATIC_SPECIFIER)) {
         const specifier = match[1] as string;
@@ -39,6 +40,17 @@ const externalSpecifiers = (file: string, seen = new Set<string>()): Set<string>
     return found;
 };
 
+describe("@lunora/mcp/worker exports", () => {
+    it("exposes the per-function server, and not the stdio helper", async () => {
+        expect.assertions(2);
+
+        const worker = await import("../src/worker/index");
+
+        expect(worker.createFunctionMcpServer).toBeTypeOf("function");
+        expect(worker).not.toHaveProperty("connectFunctionStdio");
+    });
+});
+
 describe("@lunora/mcp/worker module graph", () => {
     it("statically imports no node:* module and no stdio transport", () => {
         expect.assertions(2);
@@ -47,5 +59,11 @@ describe("@lunora/mcp/worker module graph", () => {
 
         expect(specifiers.filter((specifier) => specifier.startsWith("node:"))).toStrictEqual([]);
         expect(specifiers.filter((specifier) => specifier.includes("stdio"))).toStrictEqual([]);
+    });
+
+    it("statically imports no MCP SDK module, so a Worker that mounts MCP loads it on the first request", () => {
+        expect.assertions(1);
+
+        expect([...externalSpecifiers(entry)].filter((specifier) => specifier.startsWith("@modelcontextprotocol/"))).toStrictEqual([]);
     });
 });

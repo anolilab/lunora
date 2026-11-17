@@ -11,11 +11,14 @@ import baseOptions from "./emit-app-options";
 // emits them the same way it already emits `runShardExport`/`runShardImport`.
 describe("emitApp — admin bulk-import wiring (.global())", () => {
     it("wires options.importGlobals when the app has a .global() table", () => {
-        expect.assertions(2);
+        expect.assertions(5);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain("options.importGlobals = buildGlobalImporter(database, this.cdcEnabled);");
+        expect(output).toContain("options.importGlobalsSupportsDryRun = true;");
+        expect(output).toContain("options.importGlobalsSupportsReplace = true;");
+        expect(output).toContain('onConflict: request.onConflict ?? "skip",');
         expect(output).toContain("const buildGlobalImporter =");
     });
 
@@ -49,11 +52,13 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
 
         const output = emitApp({ ...baseOptions, tables: [{ name: "messages", shardMode: { field: "channelId", kind: "shardBy" } }] });
 
-        expect(output).toContain("public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {");
+        expect(output).toContain("public shardRegistry(selector: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>): this {");
         expect(output).toContain(
             "...(this.shardRegistrySelector ? { shardRegistry: (rawEnv: Record<string, unknown>) => this.shardRegistrySelector?.(rawEnv as Env) } : {}),",
         );
-        expect(output).toContain("options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry }) });");
+        expect(output).toContain(
+            "options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ env, namespace: shardRegistry }) });",
+        );
         expect(output).toContain("import { createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv }");
     });
 
@@ -67,16 +72,27 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
     });
 
     it("importGlobals routes rows through @lunora/d1's importGlobalRows over the same D1 writer", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const output = emitApp({ ...baseOptions, hasGlobal: true });
 
         expect(output).toContain(
-            'import { abortStagedGlobalRows, applyCdcChanges, commitStagedGlobalRows, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, stageGlobalRows } from "@lunora/d1";',
+            'import { abortStagedGlobalRows, applyCdcChanges, applySqlMigrationFiles, commitStagedGlobalRows, createD1CtxDb, emitD1QueryCost, exportGlobalRows, facetGlobalColumn, importGlobalRows, listGlobalTables, readD1CdcChanges, readGlobalTablePage, retryingExec, stageGlobalRows } from "@lunora/d1";',
         );
         expect(output).toContain("return importGlobalRows(writer, schema as unknown as");
+        // A dry run must reach the D1 importer, or a global table would be written by a check.
+        expect(output).toContain("dryRun: request.dryRun === true,");
         // A replace import stages its `.global()` rows in D1 and swaps them in at commit.
         expect(output).toContain("options.importGlobalsStaging = buildGlobalImportStaging(database, this.cdcEnabled);");
+    });
+
+    it("wires lunora migrate apply to the D1 binding, so the generated SQL files have something to run against", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasGlobal: true });
+
+        expect(output).toContain("options.applySqlMigrations = (request) =>");
+        expect(output).toContain('applySqlMigrationFiles(database, request.files, { ...request, schema: schema as unknown as D1CtxDbOptions["schema"] });');
     });
 
     it("wraps the D1 exec so .global() reads retry D1's transient failures", () => {
@@ -88,9 +104,20 @@ describe("emitApp — admin bulk-import wiring (.global())", () => {
         // `D1Client` — so an unwrapped exec means the app eats D1's documented
         // baseline error rate on every read no matter what the client offers.
         expect(output).toContain(
-            "const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {",
+            "const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {",
         );
         expect(output).toContain("return retryingExec({");
+    });
+
+    it("opens a first-primary session beside the replica exec for consistency: primary reads", () => {
+        expect.assertions(2);
+
+        const output = emitApp({ ...baseOptions, hasGlobal: true });
+
+        // A primary read must not reuse the replica session: the replica pins to the
+        // caller's bookmark or first-unconstrained, which can miss a just-committed write.
+        expect(output).toContain('const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);');
+        expect(output).toContain("primary: buildPrimaryExec(database) };");
     });
 
     it("omits the admin-import wiring entirely for an app with no .global() table", () => {
@@ -158,7 +185,7 @@ describe("emitApp — admin export/sync/apply wiring (.global())", () => {
 
         expect(output).toContain("const present = await exec.all(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, [\"__cdc_log\"]);");
         expect(output).toContain("return { changes: [], cursor: request.sinceSeq };");
-        expect(output).toContain("const page = await readD1CdcChanges(exec, { limit: request.limit, sinceSeq: request.sinceSeq });");
+        expect(output).toContain("const page = await readD1CdcChanges(exec, request);");
     });
 
     it("applyGlobals replays through the same D1 writer and reports the count", () => {
@@ -170,14 +197,15 @@ describe("emitApp — admin export/sync/apply wiring (.global())", () => {
         expect(output).toContain("return request.changes.length;");
     });
 
-    it("omits the export/sync/apply wiring for a Hyperdrive-backed global app (D1-only wiring)", () => {
-        expect.assertions(3);
+    it("wires a Hyperdrive-backed global app through the Hyperdrive helpers, not the D1 builders", () => {
+        expect.assertions(4);
 
         const output = emitApp({ ...baseOptions, hasHyperdriveGlobal: true });
 
-        expect(output).not.toContain("exportGlobals");
-        expect(output).not.toContain("syncGlobals");
-        expect(output).not.toContain("applyGlobals");
+        expect(output).toContain("exportHyperdriveGlobalRows(");
+        expect(output).not.toContain("buildGlobalExporter");
+        expect(output).not.toContain("buildGlobalCdcSync");
+        expect(output).not.toContain("buildGlobalCdcApplier");
     });
 });
 

@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 import { API_SPEC_HELP } from "../../util/api-spec";
-import { TARGET_OPTION } from "../../util/deploy-target";
+import TARGET_OPTION from "../../util/deploy-target";
 import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 /**
@@ -32,13 +32,41 @@ const buildCommand: Command = {
             type: Boolean,
         },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Use per-module lazy function imports (opt-in; default eager)", name: "lazy-functions", type: Boolean },
         {
             description: "Write a JSON manifest of the bindings + crons the bundle needs to this path, for an IaC program to consume",
             name: "emit-bindings",
             type: String,
         },
         OUTPUT_FORMAT_OPTION,
+        // Both halves declared explicitly, like `typecheck` on `verify`: the handler reads `!== false`.
+        {
+            description: "Evaluate the modules the Worker loads on demand (lazy functions, auth, API specs) in workerd before shipping (default)",
+            name: "smoke-load",
+            type: Boolean,
+        },
+        { description: "Skip evaluating on-demand modules before shipping", name: "no-smoke-load", type: Boolean },
+        // Declared as both halves, like `smoke-load`: the handler reads `!== false`.
+        {
+            description: "Profile the built Worker's startup CPU and warn when it nears Cloudflare's 1 s limit (default)",
+            name: "startup-check",
+            type: Boolean,
+        },
+        { description: "Skip profiling the built Worker's startup CPU", name: "no-startup-check", type: Boolean },
+        // Declared as `framework-build` + `no-framework-build`, like `smoke-load`: the handler reads `!== false`.
+        {
+            description: "Run the project's vite/rsbuild client build before bundling the Worker (default when wrangler reads its output)",
+            name: "framework-build",
+            type: Boolean,
+        },
+        { description: "Skip the vite/rsbuild client build; bundle whatever is already on disk", name: "no-framework-build", type: Boolean },
         { description: "Directory to write the bundled Worker to (default .lunora/build)", name: "out-dir", type: String },
+        {
+            description:
+                "Project directory to build (default the working directory). A Vite or Rspack plugin with an explicit root must name the same directory.",
+            name: "root",
+            type: String,
+        },
         // `build` runs the same advisory gate `deploy` does (it IS `deploy
         // --dry-run` underneath), and that gate's blocked message names this flag
         // — which `build` rejected as an unknown option, so half its own advice
@@ -71,7 +99,12 @@ export type BuildOptions = CreateOptions<{
     "api-spec": string | undefined;
     "emit-bindings": string | undefined;
     format: string | undefined;
+    "framework-build": boolean | undefined;
+    "lazy-functions": boolean | undefined;
     "out-dir": string | undefined;
+    root: string | undefined;
+    "smoke-load": boolean | undefined;
+    "startup-check": boolean | undefined;
     // Declared as `strict-advisories` + `no-strict-advisories`; cerebro exposes
     // both under this one positive camelCase key, `undefined` until a side is
     // picked (which is what lets the CI-vs-local default apply).

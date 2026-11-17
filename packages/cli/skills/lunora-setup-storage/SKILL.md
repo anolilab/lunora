@@ -60,8 +60,10 @@ is checked, so a route that skips `verifySignedUrl` lets anyone read any key.
 
 `@lunora/server`'s `serveStorageObject(ctx, key, request, authorize)` covers the
 download half. It handles `Range`/206, `ETag`, `nosniff` and the inline-safe
-`content-disposition` list. It verifies nothing on its own, so call
-`verifySignedUrl` inside its `authorize` gate. It also doesn't handle uploads.
+`content-disposition` list. It verifies nothing on its own, so pass
+`authorizeSignedGet(secret, { bucketName })` from `@lunora/storage` as its
+`authorize` gate. A bare `verifySignedUrl(...).valid` check also admits upload
+URLs and URLs for other buckets or keys. It also doesn't handle uploads.
 Use it from an `httpAction`, where `ctx.storage` is in scope, when you need
 `Range` seeking.
 

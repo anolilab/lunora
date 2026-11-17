@@ -1,0 +1,10 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "moduleResolution": "bundler",
+        "types": ["node"],
+        "noEmit": true
+    },
+    "include": ["**/*.ts", "../../shared/ai-chat.ts", "../../shared/ai-prompt.ts"],
+    "exclude": ["node_modules", "dist"]
+}

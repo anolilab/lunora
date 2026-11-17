@@ -1,16 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { signCanonical } from "../../../shared/hmac-url";
+import { SCHEDULER_SIGNATURE_TOLERANCE_MS, signSchedulerDispatch } from "../../../shared/scheduler-dispatch";
 import type { NodeDispatchInvocation } from "../src/node-dispatch-route";
 import { createNodeDispatchRoute, createShardInvoke, NODE_SCHEDULER_DISPATCH_PATH } from "../src/node-dispatch-route";
 
 const TOKEN = "admin-token-for-tests";
 const SECRET = "scheduler-secret-for-tests";
+const NOW = 1_700_000_000_000;
 
 const build = (invoke = vi.fn<(call: NodeDispatchInvocation) => Promise<Response>>(async () => Response.json({ ok: true }))) => {
     return {
         invoke,
-        route: createNodeDispatchRoute({ adminToken: TOKEN, defaultShardKey: "__root__", invoke, schedulerSecret: SECRET }),
+        route: createNodeDispatchRoute({ adminToken: TOKEN, defaultShardKey: "__root__", invoke, now: () => NOW, schedulerSecret: SECRET }),
     };
 };
 
@@ -35,6 +36,32 @@ describe("createNodeDispatchRoute", () => {
         expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ args: { n: 1 }, functionPath: "notes:add", id: "job-1", shardKey: "tenant-a" }));
     });
 
+    it("carries the job's due time from the body through to the shard headers", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const body = JSON.stringify({ args: {}, functionPath: "notes:add", id: "job-2", scheduledFor: 1_700_000_000_000 });
+
+        await route(post(body, { authorization: `Bearer ${TOKEN}` }));
+
+        const [call] = invoke.mock.calls[0] as [NodeDispatchInvocation];
+        const fetch = vi.fn<(request: Request) => Promise<Response>>(async () => Response.json({ result: null }));
+
+        await createShardInvoke(
+            {
+                getByName: () => {
+                    return { fetch };
+                },
+            },
+            true,
+        )(call);
+
+        const [request] = fetch.mock.calls[0] as unknown as [Request];
+
+        expect(call.scheduledFor).toBe(1_700_000_000_000);
+        expect(request.headers.get("x-lunora-scheduled-for")).toBe("1700000000000");
+    });
+
     it("refuses a wrong bearer with DISPATCH_UNAUTHENTICATED and never invokes", async () => {
         expect.assertions(3);
 
@@ -47,12 +74,12 @@ describe("createNodeDispatchRoute", () => {
         expect(invoke).not.toHaveBeenCalled();
     });
 
-    it("accepts an HMAC over the exact body when the scheduler secret is set", async () => {
+    it("accepts an HMAC over the exact body and a fresh timestamp when the scheduler secret is set", async () => {
         expect.assertions(2);
 
         const { invoke, route } = build();
-        const signature = await signCanonical(SECRET, payload);
-        const response = await route(post(payload, { "x-lunora-scheduler-signature": signature }));
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: NOW });
+        const response = await route(post(payload, { "x-lunora-scheduler-signature": signature, "x-lunora-scheduler-timestamp": String(NOW) }));
 
         expect(response.status).toBe(200);
         expect(invoke).toHaveBeenCalledTimes(1);
@@ -62,11 +89,68 @@ describe("createNodeDispatchRoute", () => {
         expect.assertions(2);
 
         const { invoke, route } = build();
-        const signature = await signCanonical(SECRET, '{"functionPath":"other:fn"}');
+        const signature = await signSchedulerDispatch(SECRET, { body: '{"functionPath":"other:fn"}', timestamp: NOW });
+        const response = await route(post(payload, { "x-lunora-scheduler-signature": signature, "x-lunora-scheduler-timestamp": String(NOW) }));
+
+        expect(response.status).toBe(403);
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("refuses a signature older than the tolerance", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const stamp = NOW - SCHEDULER_SIGNATURE_TOLERANCE_MS - 1;
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: stamp });
+        const response = await route(post(payload, { "x-lunora-scheduler-signature": signature, "x-lunora-scheduler-timestamp": String(stamp) }));
+
+        expect(response.status).toBe(403);
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("refuses a signed request with an identity header the signature did not cover", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: NOW });
+        const response = await route(
+            post(payload, {
+                "x-lunora-scheduler-signature": signature,
+                "x-lunora-scheduler-timestamp": String(NOW),
+                "x-lunora-userid": "u2",
+            }),
+        );
+
+        expect(response.status).toBe(403);
+        expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("refuses a signature without a timestamp header", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: NOW });
         const response = await route(post(payload, { "x-lunora-scheduler-signature": signature }));
 
         expect(response.status).toBe(403);
         expect(invoke).not.toHaveBeenCalled();
+    });
+
+    it("accepts a signature that covers the forwarded identity and forwards it", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const signature = await signSchedulerDispatch(SECRET, { body: payload, timestamp: NOW, userId: "u1" });
+        const response = await route(
+            post(payload, {
+                "x-lunora-scheduler-signature": signature,
+                "x-lunora-scheduler-timestamp": String(NOW),
+                "x-lunora-userid": "u1",
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ identity: { userId: "u1" } }));
     });
 
     it("answers 400 BAD_REQUEST when functionPath is missing", async () => {
@@ -125,6 +209,24 @@ describe("the dispatch route's refusals and shard headers", () => {
         expect(invoke).not.toHaveBeenCalled();
     });
 
+    it("refuses agents:agentRun bound to a non-default shard, and forwards it on the default one", async () => {
+        expect.assertions(2);
+
+        const { invoke, route } = build();
+        const agentRun = (shardKey?: string): Request =>
+            post(JSON.stringify({ args: { agent: "support", input: "hi", threadKey: "t" }, functionPath: "agents:agentRun", shardKey }), {
+                authorization: `Bearer ${TOKEN}`,
+            });
+
+        // Its in-flight check reads the agent thread table, which only the default shard holds.
+        const refused = await route(agentRun("tenant-a"));
+
+        await route(agentRun());
+
+        expect(refused.status).toBe(400);
+        expect(invoke.mock.calls.map(([call]) => call.shardKey)).toStrictEqual(["__root__"]);
+    });
+
     it("answers a workflow target with a retryable 503, not a deterministic 400", async () => {
         expect.assertions(2);
 
@@ -168,7 +270,14 @@ describe("the dispatch route's refusals and shard headers", () => {
             true,
         );
 
-        await invoke({ args: { n: 1 }, functionPath: "notes:add", id: "job-9", identity: undefined, shardKey: "tenant-a", traceparent: undefined });
+        await invoke({
+            args: { n: 1 },
+            functionPath: "notes:add",
+            id: "job-9",
+            identity: undefined,
+            shardKey: "tenant-a",
+            traceparent: undefined,
+        });
 
         const [request] = fetch.mock.calls[0] as unknown as [Request];
 

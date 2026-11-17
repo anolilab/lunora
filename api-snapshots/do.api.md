@@ -9,6 +9,21 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/do`
 
+### `ADMIN_REVOCATION_DO_NAME` (const)
+
+```ts
+const ADMIN_REVOCATION_DO_NAME = "__lunora_admin_revocations__";
+```
+
+### `AdminRevocationDO` (class)
+
+```ts
+class AdminRevocationDO {
+    constructor(state: AdminRevocationDOState, env: unknown);
+    fetch(request: Request): Promise<Response>;
+}
+```
+
 ### `AdvisorProcedure` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -28,6 +43,35 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `DatabaseWriterLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `DeliveryAuthorization` (type)
+
+```ts
+type DeliveryAuthorization = (request: DeliveryAuthorizationRequest) => Promise<DeliveryPermit | undefined>;
+```
+
+### `DeliveryAuthorizationRequest` (interface)
+
+```ts
+interface DeliveryAuthorizationRequest {
+    readonly admin: boolean;
+    readonly args: Record<string, unknown>;
+    readonly functionPath: string;
+    readonly identity: SubscriptionIdentity;
+    readonly shardKey: string | undefined;
+    readonly system: boolean;
+    readonly transport: "subscription" | "rpc";
+}
+```
+
+### `DeliveryPermit` (interface)
+
+```ts
+interface DeliveryPermit {
+    readonly epoch: number;
+    readonly scope: string;
+}
+```
 
 ### `DispatchBookmark` (interface)
 
@@ -82,6 +126,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 const MERGED_ROLES: readonly [
+    "adminRevocations",
     "scheduler",
     "shardRegistry"
 ];
@@ -239,9 +284,12 @@ interface RunShardFindRelatedArgs {
 
 ```ts
 interface RunShardImportArgs {
+    deletes?: boolean;
+    dryRun?: boolean;
     keepIds?: ReadonlySet<string>;
+    onConflict?: ImportConflictMode;
     replaceTables?: ReadonlyArray<string>;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -333,6 +381,20 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `SensitiveScope` (interface)
+
+```ts
+interface SensitiveScope {
+    add: (values: ReadonlyArray<string>, names?: ReadonlyArray<string>) => void;
+    clear: () => void;
+    fields: <T extends Record<string, unknown> | undefined>(bag: T) => T;
+    hold: () => () => void;
+    name: (name: string) => string;
+    text: (text: string) => string;
+    value: <T>(value: T) => T;
+}
+```
+
 ### `SessionDO` (class)
 
 ```ts
@@ -369,6 +431,15 @@ abstract class ShardDO {
     protected static readonly MAX_WHISPER_TOPICS_PER_SOCKET = 64;
     protected static readonly MAX_WHISPER_VERDICTS_PER_SOCKET = 256;
     protected static readonly MAX_WHISPER_BYTES = 4096;
+    protected static readonly MAX_QUEUED_ROOM_EVENTS = 64;
+    protected static readonly MAX_QUEUED_SOCKET_EVENTS = 64;
+    protected static readonly MAX_LIVE_TOPICS_PER_CONNECTION = 64;
+    protected static readonly MAX_LIVE_TOPICS_PER_SOCKET = 8;
+    protected static readonly MAX_LIVE_CONNECTIONS = 1024;
+    protected static readonly LIVE_KEEPALIVE_MS = 25e3;
+    protected static readonly MAX_LIVE_CONNECTIONS_PER_CALLER = 32;
+    protected static readonly MAX_LIVE_CONNECTIONS_ANONYMOUS_SHARED = 256;
+    protected static readonly MAX_LIVE_QUEUED_BYTES: number;
     protected static readonly WHISPER_RATE_BURST = 50;
     protected static readonly WHISPER_RATE_PER_SEC = 25;
     static resetRootSizeWarning(): void;
@@ -378,14 +449,23 @@ abstract class ShardDO {
     protected readonly ipKeyedFunctionPaths: Set<string>;
     protected shapeProbe: ShapeProbeCounters;
     protected globalPoll: GlobalPollCounters;
+    protected readonly secretValues: SecretValueHost;
     constructor(state: ShardDOState, env: unknown, options?: ShardDOOptions);
     fetch(request: Request): Promise<Response>;
     webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void>;
     webSocketClose(rawSocket: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void>;
     webSocketError(rawSocket: WebSocket, error: unknown): Promise<void>;
     alarm(): Promise<void>;
-    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark): Promise<unknown>;
+    abstract handleRpc(functionPath: string, args: Record<string, unknown>, headroom?: TransactionHeadroomTracker, scope?: QueryReadScope, bookmarks?: DispatchBookmark, sensitive?: SensitiveScope): Promise<unknown>;
+    protected admitPendingSocket(now: number, authenticated: boolean): boolean;
+    protected refusePendingSocket(ws: ShardSocketLike): void;
+    protected dropLiveSocket(connectionId: string | undefined): void;
     protected lifecycleHookPaths(_event: "connect" | "disconnect" | "init" | "reactor" | "whisper"): ReadonlyArray<string>;
+    protected roomHandlerPath(_topic: string): string | undefined;
+    protected socketRoute(_path: string): {
+        auth: boolean;
+        functionPath: string;
+    } | undefined;
     protected dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void>;
     protected dispatchReactors(changed: Set<string>, runs: Map<string, number>): Promise<void>;
     protected runReactor(_path: string, _previousDigest?: string): Promise<ReactorRunOutcome | undefined>;
@@ -393,14 +473,17 @@ abstract class ShardDO {
     protected dispatchShardInit(): Promise<void>;
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown>;
     protected get sql(): unknown;
-    protected get db(): DrizzleSqliteDODatabase<Record<string, unknown>>;
+    protected get db(): DrizzleSqliteDODatabase;
     protected isInTransaction(): boolean;
     protected deferPastResponse(work: Promise<unknown>): Promise<void>;
     protected deferAfterCommit(work: () => Promise<void> | void): Promise<void>;
-    protected runInTransaction<T>(handler: () => Promise<T> | T): Promise<T>;
+    protected runInTransaction<T>(handler: () => Promise<T> | T, options?: {
+        independent: true;
+    }): Promise<T>;
     protected getInboundBookmark(): string | undefined;
     protected getCurrentUserId(): string | undefined;
     protected getCurrentIp(): string | undefined;
+    protected noteIdentityRead(functionPath: string): void;
     protected getCurrentOrigin(): string | undefined;
     protected getCurrentBaselineSeq(): number | undefined;
     protected recordStalePatchDropped(event: {
@@ -429,7 +512,6 @@ abstract class ShardDO {
     protected tableColumns(_table: string): ColumnMeta[];
     protected storageColumns(): Record<string, string[]>;
     protected advisories(): AdvisoryFinding[];
-    protected advisorProcedures(): AdvisorProcedure[];
     protected rlsMetadata(): RlsPoliciesResult;
     protected maskMetadata(): MaskPoliciesResult;
     protected storageRulesMetadata(): StorageRulesResult;
@@ -438,6 +520,11 @@ abstract class ShardDO {
     protected runFlagSubscriptionRead(_functionPath: string, _arguments: Record<string, unknown>, _identity?: SubscriptionIdentity): Promise<unknown>;
     protected queuesMetadata(): QueuesResult;
     protected workflowsMetadata(): WorkflowsResult;
+    protected workflowEvent(_type: string): Promise<{
+        payload: {
+            parse: (value: unknown) => unknown;
+        };
+    } | undefined>;
     protected runtimeAdvisories(): AdvisoryFinding[];
     protected runShardExport(_args: RunShardExportArgs): Promise<ExportRow[]>;
     protected runShardImport(_args: RunShardImportArgs): Promise<ImportShardResult>;
@@ -473,6 +560,8 @@ abstract class ShardDO {
     } | undefined;
     protected persistIdempotentResult(encodedResult: unknown): void;
     protected isCustomMutator(_functionPath: string): boolean;
+    protected prepareFunction(_functionPath: string, _reason: "rpc" | "subscription" | "stream" | "reactor"): void | Promise<void>;
+    protected holdShardWhileLoading(load: () => Promise<unknown>): Promise<void>;
     protected isMutationFunction(_functionPath: string): boolean;
     protected classifyClientMutation(): ClientMutationClass | undefined;
     protected rejectNonNextMutation(functionPath: string, mutatorClass: ClientMutationClass | undefined, dispatchStartedAt: number): Response | undefined;
@@ -486,6 +575,12 @@ abstract class ShardDO {
     }): void;
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult>;
     protected isPaidFunction(_functionPath: string): boolean;
+    protected sensitiveArgNames(_functionPath: string): ReadonlySet<string>;
+    protected openSensitiveScope(functionPath: string, args: Record<string, unknown>): SensitiveScope;
+    protected withSensitiveScope<T>(functionPath: string, args: Record<string, unknown>, run: (sensitive: SensitiveScope) => Promise<T>): Promise<T>;
+    protected maskSensitiveError(error: unknown, scope: SensitiveScope): unknown;
+    protected admitSensitiveArgs(scope: SensitiveScope | undefined, functionPath: string, args: Record<string, unknown>): void;
+    protected admitSensitiveValues(scope: SensitiveScope | undefined, args: Record<string, unknown>, names: ReadonlySet<string>): void;
     protected subscribe(ws: ShardSocketLike, subId: string, query: SubscriptionQuery): "ok" | "paid" | "serialize_failed" | "too_many";
     protected unsubscribe(ws: ShardSocketLike, subId: string): void;
     protected shapeSubscribe(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery): "ok" | "serialize_failed" | "too_many";
@@ -505,6 +600,14 @@ abstract class ShardDO {
     protected scheduleOutboxScheduler(): SchedulerLike | undefined;
     protected pollScheduleOutbox(trace?: TraceRefLike): Promise<number | undefined>;
     protected currentShardKey(): string;
+    protected publishLiveEvent(stream: string, topic: string, wireData: unknown): number;
+    protected loadLiveStream(_stream: string): Promise<void> | undefined;
+    protected liveStreams(): Readonly<Record<string, LiveStreamDeclaration>> | undefined;
+    protected declaredLivePayload(stream: string, topic: string, wireData: unknown): unknown;
+    protected publishLiveFromAction(topic: string, payload: unknown, options: {
+        shardKey?: string;
+        stream: string;
+    }): Promise<number>;
     protected shardRegistry(): undefined | {
         namespace: unknown;
         shardedTables: ReadonlySet<string>;
@@ -521,34 +624,44 @@ abstract class ShardDO {
         iterator: (signal: AbortSignal) => AsyncIterable<unknown>;
     };
     protected runCachedQuery<R>(functionPath: string, args: Record<string, unknown>, run: (scope?: QueryReadScope) => Promise<R>, attribution?: QueryAttribution, outer?: QueryReadScope): Promise<R>;
-    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string) => void;
+    protected getCtxDbReadHook(scope?: QueryReadScope): (table: string, idOrScan?: string, exact?: boolean) => void;
     protected getCtxDbReadRangeHook(scope?: QueryReadScope): (range: KeyRange) => void;
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void;
     protected ctxDbTuning(): {
         cache?: ReactiveCache;
+        companionMemo: CompanionMemo;
         maxRelationKeys?: number;
         relationExistsPushDown?: "always" | "auto" | "never";
     };
+    protected invalidateCompanionMemo(): void;
     protected isCacheableQuery(_functionPath: string): boolean;
     protected transactionLimits(): Partial<TransactionLimits>;
-    protected transactionHeadroom(): TransactionHeadroomTracker;
-    protected subscriptionHeadroom(): TransactionHeadroomTracker;
+    protected transactionHeadroom(functionPath?: string): TransactionHeadroomTracker;
+    protected subscriptionHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
+    protected streamHeadroom(functionPath: string, identity?: SubscriptionIdentity): TransactionHeadroomTracker;
+    protected windowStreamReads(headroom: TransactionHeadroomTracker, frames: AsyncIterable<unknown>): AsyncIterable<unknown>;
     protected alarmHeadroom(): TransactionHeadroomTracker;
     protected recordChangedTable(table: string, indexKeys?: ReadonlyArray<IndexKeyEntry>): void;
     protected flushMigrationProgress(): Promise<void>;
-    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined): void;
-    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>): ContextLogger;
-    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor): ContextTracer;
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], message: string, fields: Record<string, unknown> | undefined, sink?: TelemetrySink, eventName?: string, anchor?: TraceAnchor, error?: ErrorDetail | undefined, pinned?: {
+        trace: TraceAnchor | undefined;
+        userId: string | undefined;
+    }): void;
+    protected makeLogger(functionPath: string, sink?: TelemetrySink, boundFields?: Record<string, unknown>, scope?: SensitiveScope): ContextLogger;
+    protected makeTracer(functionPath: string, sink?: TelemetrySink, anchor?: TraceAnchor, scope?: SensitiveScope): ContextTracer;
     protected resolveDispatchAnchor(identityScoped: boolean): TraceAnchor;
-    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T;
-    protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): T;
-    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink): ContextFetch;
-    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink): SpanHandle;
-    protected makeMetrics(functionPath: string, sink?: TelemetrySink): ContextMetrics;
+    protected instrumentDb<T extends object>(database: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
+    protected instrumentSql<T extends SqlClientLike>(client: T, functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): T;
+    protected watchActionWork(functionPath: string, context: unknown): () => void;
+    protected makeFetch(functionPath: string, anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): ContextFetch;
+    protected makeDispatchSpan(anchor: TraceAnchor, sink?: TelemetrySink, scope?: SensitiveScope): SpanHandle;
+    protected makeMetrics(functionPath: string, sink?: TelemetrySink, scope?: SensitiveScope): ContextMetrics;
     protected recordMetric(event: MetricEvent, sink?: TelemetrySink): void;
-    protected handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer): Promise<void>;
+    protected handleWebSocketMessage(ws: ShardSocketLike, message: string | ArrayBuffer, deliveredAfterClose?: boolean): Promise<void>;
     protected handleFetchCloudflare(request: Request): Promise<Response>;
     protected handleAlarmCloudflare(): Promise<void>;
+    protected captureRequestScope(): RequestScope;
+    protected restoreRequestScope(scope: RequestScope): void;
     protected recordSpan(span: SpanEvent, sink?: TelemetrySink, sampledSnapshot?: boolean): void;
     protected isIdentityIndependent(functionPath: string): boolean;
     protected readShapeCdcKeys(sql: SqlExec, table: string, sinceSeq: number, upTo: number): CdcChangeKey[];
@@ -569,6 +682,7 @@ abstract class ShardDO {
 ```ts
 interface ShardDOOptions {
     ctxDbCacheWired?: boolean;
+    deliveryAuthorization?: DeliveryAuthorization;
     maxRelationKeys?: number;
     reactiveCache?: ReactiveCacheOptions;
     relationExistsPushDown?: "always" | "auto" | "never";
@@ -624,6 +738,17 @@ class ShardRegistryDO {
 }
 ```
 
+### `ShardRegistryRpc` (interface)
+
+```ts
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
+```
+
 ### `SourceClientLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -648,6 +773,7 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ```ts
 interface SubscriptionOutcome {
+    identityTracked?: boolean;
     ranges?: Map<string, KeyRange[]>;
     result: unknown;
     tables: Set<string>;
@@ -785,6 +911,12 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 const createStableIdFactory: (mutationId: string | undefined, scope: string) => (() => string);
 ```
 
+### `createStableRandomFactory` (const)
+
+```ts
+const createStableRandomFactory: (mutationId: string | undefined, scope: string) => (() => number);
+```
+
 ### `createWorkerPlatform` (const)
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
@@ -793,9 +925,27 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `hostedShardRegistry` (const)
+
+```ts
+const hostedShardRegistry: (env: unknown, jurisdiction?: string) => ShardRegistryRpc;
+```
+
 ### `importShardRows` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `installDeliveryFence` (const)
+
+```ts
+const installDeliveryFence: (target: {
+    fetch: (url: string, init?: RequestInit) => Promise<Response>;
+}, options: {
+    env: unknown;
+    fence: DeliveryPermit;
+    shardKey: string | undefined;
+}) => Promise<void>;
+```
 
 ### `isSourceDue` (const)
 
@@ -859,6 +1009,17 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `AdminRevocationDOState` (interface)
+
+```ts
+interface AdminRevocationDOState {
+    storage: {
+        get: <T = unknown>(key: string) => Promise<T | undefined>;
+        put: (entries: Record<string, unknown>) => Promise<void>;
+    };
+}
+```
+
 ### `ClientMutationClass` (type)
 
 ```ts
@@ -889,6 +1050,7 @@ interface ContextLogger {
 ```ts
 interface ErrorDetail {
     code?: string;
+    internal?: Record<string, unknown>;
     message: string;
     name: string;
     stack?: string;
@@ -902,6 +1064,14 @@ interface EvaluationInput {
     label?: string;
     name: string;
     score: number;
+}
+```
+
+### `LiveStreamDeclaration` (interface)
+
+```ts
+interface LiveStreamDeclaration {
+    validatePublish: (topic: string, payload: unknown) => unknown;
 }
 ```
 
@@ -963,6 +1133,28 @@ interface ReactorRunOutcome {
     digest: string;
     ran: boolean;
     tables: ReadonlyArray<string>;
+}
+```
+
+### `RequestScope` (interface)
+
+```ts
+interface RequestScope {
+    baselineSeq: number | undefined;
+    bookmark: string | undefined;
+    clientId: string | undefined;
+    clientSeq: number | undefined;
+    deliveryPermit: DeliveryPermit | undefined;
+    identity: Record<string, unknown> | undefined;
+    ip: string | undefined;
+    mutationId: string | undefined;
+    mutatorClass: ClientMutationClass | undefined;
+    origin: string | undefined;
+    sampleErrors: boolean | undefined;
+    system: boolean;
+    trace: TraceAnchor | undefined;
+    traceparent: string | undefined;
+    userId: string | undefined;
 }
 ```
 

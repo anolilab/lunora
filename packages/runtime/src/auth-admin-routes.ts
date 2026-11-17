@@ -55,6 +55,7 @@ interface AuthImpersonation {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    apiKey: boolean;
     inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
@@ -129,6 +130,7 @@ interface AuthAdmin {
     createSignUpInvitation?: (input: { email: string; expiresInSeconds?: number; invitedBy?: string }) => Promise<Record<string, unknown>>;
     createTeam?: (input: { name: string; organizationId: string }) => Promise<Record<string, unknown>>;
     createUser?: (input: { data?: Record<string, unknown>; email: string; name: string; password?: string; role?: string | string[] }) => Promise<AuthUser>;
+    deleteApiKey?: (input: { apiKeyId: string }) => Promise<void>;
     deleteOrganization?: (input: { organizationId: string }) => Promise<void>;
     deleteOrgRole?: (input: { roleId: string }) => Promise<void>;
     deletePasskey?: (input: { passkeyId: string }) => Promise<void>;
@@ -136,6 +138,7 @@ interface AuthAdmin {
     impersonateUser?: (input: { userId: string }) => Promise<AuthImpersonation>;
     inviteMember?: (input: { email: string; inviterId?: string; organizationId: string; role?: string }) => Promise<Record<string, unknown>>;
     listAccounts?: (input: { userId: string }) => Promise<Record<string, unknown>[]>;
+    listApiKeys?: (input: { userId: string }) => Promise<Record<string, unknown>[]>;
     listInvitations?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listMembers?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listOrganizations?: (options: { limit?: number; offset?: number }) => Promise<AuthPage<Record<string, unknown>>>;
@@ -177,6 +180,8 @@ interface AuthAdmin {
 interface AuthAdminRouteDeps {
     /** Throw 403 unless the request carries a valid admin bearer. */
     assertAdmin: (request: Request) => void;
+    /** Throw 403 unless the caller holds root admin authority (not a named admin token). */
+    assertRootAdmin: (request: Request) => void;
     /** The configured auth plane (`authAdmin`), or undefined. */
     getAuthAdmin: () => AuthAdmin | undefined;
     /** Parse the shared `limit`/`offset` paging params off a GET request. */
@@ -206,9 +211,40 @@ interface AuthRouteDescriptor {
 
 const AUTH_BASE = "/_lunora/admin/auth";
 
+/**
+ * The auth ops a named admin token may call: reads, and writes that only take
+ * authority away. Everything else — and any op added later — needs root, because
+ * a grant (a role, a membership, a password, a session for another user) would
+ * outlive the named token's revocation.
+ */
+const NAMED_TOKEN_AUTH_METHODS: ReadonlySet<keyof AuthAdmin> = new Set<keyof AuthAdmin>([
+    "banUser",
+    "cancelInvitation",
+    "capabilities",
+    "config",
+    "deleteApiKey",
+    "listAccounts",
+    "listApiKeys",
+    "listInvitations",
+    "listMembers",
+    "listOrganizations",
+    "listOrgRoles",
+    "listPasskeys",
+    "listSessions",
+    "listSignUpInvitations",
+    "listTeamMembers",
+    "listTeams",
+    "listUsers",
+    "revokeSignUpInvitation",
+    "revokeUserSession",
+    "revokeUserSessions",
+]);
+
 /** HTTP status for a known client-input `authAdmin` error code; an unmapped code is a backend failure and reads 500. */
 const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
     INVITER_REQUIRED: 400,
+    LAST_ORGANIZATION_OWNER: 409,
+    MEMBERSHIP_CHANGED: 409,
     ORG_SLUG_INVALID: 400,
     ORG_SLUG_TAKEN: 409,
     PASSWORD_TOO_LONG: 400,
@@ -350,6 +386,21 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         },
         http: "GET",
         method: "listPasskeys",
+    },
+    [`${AUTH_BASE}/api-keys`]: {
+        build: ({ query }) => {
+            return { userId: requireQuery(query, "userId") };
+        },
+        http: "GET",
+        method: "listApiKeys",
+    },
+    [`${AUTH_BASE}/api-keys/delete`]: {
+        build: ({ body }) => {
+            return { apiKeyId: requireBodyString(body, "apiKeyId") };
+        },
+        http: "POST",
+        method: "deleteApiKey",
+        returns: "void",
     },
     [`${AUTH_BASE}/organizations`]: {
         build: ({ paging }) => {
@@ -727,6 +778,10 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
         // non-existent paths — every admin path answers 403 without a token,
         // leaking no route topology.
         deps.assertAdmin(request);
+
+        if (!NAMED_TOKEN_AUTH_METHODS.has(descriptor.method)) {
+            deps.assertRootAdmin(request);
+        }
 
         if (request.method !== descriptor.http) {
             throw new LunoraError(`Auth admin endpoint requires ${descriptor.http}`, { code: "METHOD_NOT_ALLOWED", status: 405 });

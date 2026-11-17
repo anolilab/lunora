@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { createDependencyTracker, depKey, SCAN_DEP } from "../src/dependency-tracker";
+import { createDependencyTracker, depKey, PRIMARY_READ, SCAN_DEP } from "../src/dependency-tracker";
 import { ReactiveCache, reactiveCacheKey, stableStringify } from "../src/reactive-cache";
+import { idIndexKey, idRange } from "../src/read-write-set";
 
 /**
  * Standalone tests for the reactive-cache primitive — kept framework-agnostic
@@ -187,6 +188,34 @@ describe("reactiveCache", () => {
 
         expect(spy.calls).toBe(2);
         expect(fresh).toBe(2);
+    });
+
+    it("keeps a range on a declared index named like the implicit id index", async () => {
+        expect.assertions(1);
+
+        const cache = new ReactiveCache();
+        const spy = spyCounter();
+        const declared = { hi: "b", index: "!id", lo: "a", table: "users" };
+
+        await cache.run("users:range", new Set<string>(), spy.run, () => [declared]);
+        cache.invalidate("users", "u9", [{ index: "!id", key: "a1" }]);
+        await cache.run("users:range", new Set<string>(), spy.run, () => [declared]);
+
+        expect(spy.calls).toBe(2);
+    });
+
+    it("keeps a point-read range whose row dep was not recorded", async () => {
+        expect.assertions(1);
+
+        const cache = new ReactiveCache();
+        const spy = spyCounter();
+        const point = idRange("users", "u1");
+
+        await cache.run("users:get:u1", new Set<string>(), spy.run, () => [point]);
+        cache.invalidate("users", "u1", [idIndexKey("u1")]);
+        await cache.run("users:get:u1", new Set<string>(), spy.run, () => [point]);
+
+        expect(spy.calls).toBe(2);
     });
 
     it("scan invalidation: any write to a table blows *scan entries on it", async () => {
@@ -669,5 +698,40 @@ describe("reactiveCache", () => {
         await inFlight;
 
         expect(cache.size().entries).toBe(0);
+    });
+});
+
+describe("a query that read a .global() row at primary consistency", () => {
+    it("does not treat a row whose id is spelled *primary as the marker", async () => {
+        expect.assertions(2);
+
+        const cache = new ReactiveCache();
+        const run = vi.fn<() => Promise<{ found: boolean }>>(async () => {
+            return { found: true };
+        });
+        const deps = new Set([depKey("items", "*primary")]);
+
+        await cache.run("items:get:{}", deps, run);
+        await cache.run("items:get:{}", deps, run);
+
+        expect(run).toHaveBeenCalledTimes(1);
+        expect(cache.stats().hits).toBe(1);
+    });
+
+    it("is re-run on every call instead of memoized, since another shard can change the row", async () => {
+        expect.assertions(3);
+
+        const cache = new ReactiveCache();
+        const run = vi.fn<() => Promise<{ found: boolean }>>(async () => {
+            return { found: true };
+        });
+        const deps = new Set([depKey("orgSettings", PRIMARY_READ), depKey("orgSettings", SCAN_DEP)]);
+
+        await cache.run("orgSettings:lock:{}", deps, run);
+        await cache.run("orgSettings:lock:{}", deps, run);
+
+        expect(run).toHaveBeenCalledTimes(2);
+        expect(cache.stats().hits).toBe(0);
+        expect(cache.stats().entries).toBe(0);
     });
 });

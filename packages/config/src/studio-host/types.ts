@@ -2,6 +2,15 @@
 export interface StudioHtmlConfig {
     /** Admin token sent with admin requests; omitted (and not injected) when unset. */
     readonly adminToken?: string;
+
+    /**
+     * The host mounts `/__lunora/advisor-procedures`, so the Advisors Health tab can
+     * score. Injected as `window.__LUNORA_ADVISOR_PROCEDURES__`. A separate flag from
+     * {@link StudioHtmlConfig.schemaEditable}: a host can serve the schema editor
+     * without this route, and the tab would then fetch a page that is not there.
+     */
+    readonly advisorProcedures?: boolean;
+
     /** Router basepath the studio mounts under (e.g. `/__lunora`, or `/` for a root server). */
     readonly basePath: string;
 

@@ -51,6 +51,12 @@ const isPlainObject: (value: unknown) => value is Record<string, unknown>;
 const needsWireEncoding: (value: unknown, depth?: number) => boolean;
 ```
 
+### `parseWire` (const)
+
+```ts
+const parseWire: (text: string) => unknown;
+```
+
 ### `stableStringify` (const)
 
 ```ts

@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 
+import useStudioClient from "../../hooks/use-studio-client";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions } from "../../lib/internal";
 
@@ -46,7 +46,10 @@ const errorCode = (error: unknown): string | undefined => {
  * the same argument applied to everything the dispatch itself can throw.
  */
 type ProbeOutcome =
-    { kind: "allowed"; value: unknown } | { kind: "denied"; message: string } | { kind: "errored"; message: string } | { kind: "invalid"; message: string };
+    | { kind: "allowed"; value: unknown }
+    | { kind: "denied"; message: string }
+    | { kind: "errored"; message: string }
+    | { kind: "invalid"; message: string };
 
 interface RunAsProbeArgs {
     /** Parsed JSON args passed to the probed function. */
@@ -75,7 +78,7 @@ interface RunAsProbeArgs {
  * sites the same way; this is the shared one.
  */
 const useRunAsProbe = (): ((probe: RunAsProbeArgs) => Promise<ProbeOutcome>) => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     return async ({ args, functionPath, shardKey = "", userId }: RunAsProbeArgs): Promise<ProbeOutcome> => {
         if (userId.trim() === "") {

@@ -68,8 +68,14 @@ const exportFrom = async (worker: ReturnType<typeof workerFor>, body: unknown = 
     expect(response.status).toBe(200);
 
     const text = await response.text();
+    const lines = text.trim().split("\n");
+    const end = JSON.parse(lines.at(-1) ?? "{}") as { end?: boolean; rows?: number };
 
-    return text.trim().split("\n");
+    // Every export ends with its terminal frame. A restore checks it and never sends it on: a batch holds a slice of the
+    // rows, so the frame's total would read as a count mismatch.
+    expect(end).toStrictEqual({ end: true, rows: lines.length - 1 });
+
+    return lines.slice(0, -1);
 };
 
 type ImportSummary = { conflicts: number; errors: { code: string }[]; inserted: Record<string, number>; received: number };

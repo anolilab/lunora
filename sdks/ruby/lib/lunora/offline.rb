@@ -9,6 +9,8 @@ module Lunora
   OFFLINE_QUEUE_OVERFLOW = "OFFLINE_QUEUE_OVERFLOW"
   # The write's precondition no longer held when the flush reached it.
   OFFLINE_PRECONDITION_FAILED = "OFFLINE_PRECONDITION_FAILED"
+  # An online-only write was refused because the connection is not live. Nothing was queued.
+  OFFLINE_NOT_QUEUED = "OFFLINE_NOT_QUEUED"
   # The write was queued under a different identity than the one now in effect.
   OFFLINE_IDENTITY_CHANGED = "OFFLINE_IDENTITY_CHANGED"
   # The client was closed while the write was still queued.
@@ -25,7 +27,7 @@ module Lunora
   # idempotency key is expected to succeed later, and dropping the write would
   # lose it to a transient condition. Every other coded error IS a verdict:
   # replaying it would only re-trigger the same failure, a poison-message loop.
-  TRANSIENT_ERROR_CODES = %w[SHARD_ERROR SHARD_UNAVAILABLE].freeze
+  TRANSIENT_ERROR_CODES = %w[DELIVERY_FENCED SHARD_ERROR SHARD_UNAVAILABLE].freeze
 
   # Codes that say "not now" rather than "no". A rate-limited replay is the one
   # verdict a durable queue must never honour: the write is perfectly valid and

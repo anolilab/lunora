@@ -93,7 +93,7 @@ export const expireUnverifiedDomains = async (database: ControlPlaneDatabase, op
 
     for (const domain of expired) {
         // eslint-disable-next-line no-await-in-loop -- expiries are rare; sequential keeps the writes simple
-        await database.delete(domain._id, "domains");
+        await database.delete("domains", domain._id);
     }
 
     return { expired: expired.length };
@@ -126,7 +126,7 @@ export const runDomainSweep = async (database: ControlPlaneDatabase, options: Do
         const outcome = reconcileDomain(domain, verified, options.now);
 
         // eslint-disable-next-line no-await-in-loop -- one write per checked domain; the batch is small
-        await database.patch(domain._id, { ...outcome.patch, lastCheckedAt: options.now, updatedAt: options.now }, "domains");
+        await database.patch("domains", domain._id, { ...outcome.patch, lastCheckedAt: options.now, updatedAt: options.now });
 
         if (outcome.transition !== null) {
             // eslint-disable-next-line no-await-in-loop -- transitions are rare; sequential keeps the writes simple

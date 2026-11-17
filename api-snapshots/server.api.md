@@ -74,9 +74,9 @@ interface ActionCacheContext {
 
 ```ts
 interface ActionCacheDatabase {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
     insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    patch: <T extends string>(table: T, id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
     query: (table: string) => ActionCacheQuery;
 }
 ```
@@ -85,8 +85,8 @@ interface ActionCacheDatabase {
 
 ```ts
 interface ActionCacheFunctions {
-    purgeExpired: RegisteredMutation<{
-        limit: ReturnType<typeof v.optional>;
+    purgeExpired: RegisteredInternalMutation<{
+        limit: ColumnValidator<number | undefined, number | undefined>;
     }, {
         deleted: number;
     }>;
@@ -103,17 +103,24 @@ interface ActionCtx {
     readonly env?: Record<string, unknown>;
     readonly fetch: typeof globalThis.fetch;
     readonly ip?: string;
+    readonly live?: {
+        publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: {
+            shardKey?: string;
+        }) => Promise<void>;
+    };
     readonly log: LunoraLogger;
     readonly meta?: Readonly<Record<string, unknown>>;
     readonly metrics: LunoraMetrics;
     readonly newId: () => string;
     readonly now: number;
     readonly origin?: string;
+    readonly random: () => number;
     readonly runAction: RunAction;
     readonly runMutation: RunMutation;
     readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly shardKey: string;
     readonly span: LunoraWideEvent;
     readonly storage: Storage;
     readonly trace: LunoraTracer;
@@ -260,7 +267,7 @@ interface DatabaseReader {
     findFirst: (tableName: string, args?: {
         where?: Record<string, unknown>;
     }) => Promise<Record<string, unknown> | null>;
-    get: <T extends string>(id: Id<T>) => Promise<Record<string, unknown> | null>;
+    get: <T extends string>(table: T, id: Id<T>) => Promise<Record<string, unknown> | null>;
     normalizeId: <T extends string>(tableName: T, id: string) => Id<T> | null;
     query: (tableName: string) => TableReader;
     related: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
@@ -272,14 +279,14 @@ interface DatabaseReader {
 
 ```ts
 interface DatabaseWriter extends DatabaseReader {
-    delete: <T extends string>(id: Id<T>) => Promise<void>;
+    delete: <T extends string>(table: T, id: Id<T>) => Promise<void>;
     deleteAll: (tableName: string, options?: {
         chunkSize?: number;
         hard?: boolean;
     }) => Promise<{
         deleted: number;
     }>;
-    deleteMany: <T extends string>(ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{
+    deleteMany: <T extends string>(table: T, ids: ReadonlyArray<Id<T>>, options?: BatchWriteOptions) => Promise<{
         deleted: number;
     }>;
     deleteWhere: (tableName: string, where: Record<string, unknown>, options?: BatchWriteOptions) => Promise<{
@@ -297,12 +304,12 @@ interface DatabaseWriter extends DatabaseReader {
     insertManyUnsafe: <T extends string>(tableName: T, documents: ReadonlyArray<Record<string, unknown>>, options?: BatchWriteOptions & {
         allowExplicitId?: boolean;
     }) => Promise<Id<T>[]>;
-    patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
+    patch: <T extends string>(table: T, id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
     patchIf: <T extends string>(tableName: T, id: Id<T>, args: {
         patch: Record<string, unknown>;
         where: Record<string, unknown>;
     }) => Promise<PatchIfResult>;
-    patchMany: <T extends string>(patches: ReadonlyArray<{
+    patchMany: <T extends string>(table: T, patches: ReadonlyArray<{
         id: Id<T>;
         patch: Record<string, unknown>;
     }>, options?: BatchWriteOptions) => Promise<{
@@ -314,7 +321,7 @@ interface DatabaseWriter extends DatabaseReader {
     }, options?: BatchWriteOptions) => Promise<{
         patched: number;
     }>;
-    replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
+    replace: <T extends string>(table: T, id: Id<T>, document: Record<string, unknown>) => Promise<void>;
     wipeShard: (options?: {
         chunkSize?: number;
         exclude?: ReadonlyArray<string>;
@@ -411,7 +418,20 @@ interface DefinePolicyInput<Context = unknown> {
 interface DefinePresenceOptions {
     disconnectGraceMs?: number;
     maxSessions?: number;
+    tenant?: (identity: Record<string, unknown> | null) => string;
     ttlMs?: number;
+}
+```
+
+### `DefineRoomOptions` (interface)
+
+```ts
+interface DefineRoomOptions<Message extends Validator> {
+    message: Message;
+    name: string;
+    onJoin?: RoomJoinHandler<Infer<Message>>;
+    onLeave?: RoomLeaveHandler<Infer<Message>>;
+    onMessage: RoomMessageHandler<Infer<Message>>;
 }
 ```
 
@@ -423,6 +443,19 @@ interface DefineStorageRuleInput<Context = unknown> {
     on: StorageOperation;
     prefix?: string;
     when: (context: StorageRuleContext<Context>) => StorageRuleDecision;
+}
+```
+
+### `DefineWebSocketOptions` (interface)
+
+```ts
+interface DefineWebSocketOptions<Message extends Validator> {
+    auth?: boolean;
+    message: Message;
+    onClose?: WebSocketCloseHandler;
+    onMessage: WebSocketMessageHandler<Infer<Message>>;
+    onOpen?: WebSocketOpenHandler;
+    path: string;
 }
 ```
 
@@ -455,13 +488,13 @@ interface DocumentHistoryEntry {
 
 ```ts
 interface DocumentHistoryFunctions {
-    listForDocument: RegisteredQuery<{
-        before: ReturnType<typeof v.optional>;
-        documentId: ReturnType<typeof v.string>;
-        limit: ReturnType<typeof v.optional>;
+    listForDocument: RegisteredInternalQuery<{
+        before: ColumnValidator<number | undefined, number | undefined>;
+        documentId: StringColumnValidator;
+        limit: ColumnValidator<number | undefined, number | undefined>;
     }, DocumentHistoryEntry[]>;
-    vacuum: RegisteredMutation<{
-        limit: ReturnType<typeof v.optional>;
+    vacuum: RegisteredInternalMutation<{
+        limit: ColumnValidator<number | undefined, number | undefined>;
     }, {
         deleted: number;
     }>;
@@ -604,12 +637,12 @@ interface FacadeEntry {
 interface FacadeWriterLike {
     aggregate(tableName: string, options: unknown): Promise<unknown>;
     count(tableName: string, where?: unknown): Promise<number>;
-    delete(id: string, expectedTable?: string, options?: {
+    delete(table: string, id: string, options?: {
         hard?: boolean;
     }): Promise<void>;
-    deleteMany?(ids: ReadonlyArray<string>, options?: {
+    deleteMany?(table: string, ids: ReadonlyArray<string>, options?: {
         limit?: number;
-    }, expectedTable?: string): Promise<{
+    }): Promise<{
         deleted: number;
     }>;
     deleteWhere?(tableName: string, where: Record<string, unknown>, options?: {
@@ -621,20 +654,20 @@ interface FacadeWriterLike {
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
     findMany(tableName: string, args?: unknown): Promise<unknown>;
-    get(id: string, expectedTable?: string): Promise<unknown>;
+    get(table: string, id: string): Promise<unknown>;
     groupBy(tableName: string, options: unknown): Promise<unknown>;
     insert(tableName: string, document: Record<string, unknown>): Promise<string>;
     insertMany?(tableName: string, documents: ReadonlyArray<Record<string, unknown>>, options?: {
         limit?: number;
         skipDuplicates?: boolean;
     }): Promise<(string | null)[]>;
-    patch(id: string, patch: Record<string, unknown>, expectedTable?: string): Promise<void>;
-    patchMany?(patches: ReadonlyArray<{
+    patch(table: string, id: string, patch: Record<string, unknown>): Promise<void>;
+    patchMany?(table: string, patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
     }>, options?: {
         limit?: number;
-    }, expectedTable?: string): Promise<{
+    }): Promise<{
         patched: number;
     }>;
     patchWhere?(tableName: string, args: {
@@ -652,8 +685,8 @@ interface FacadeWriterLike {
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
     readonly relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
-    replace(id: string, document: Record<string, unknown>, expectedTable?: string): Promise<void>;
-    restore?(id: string, expectedTable?: string): Promise<void>;
+    replace(table: string, id: string, document: Record<string, unknown>): Promise<void>;
+    restore?(table: string, id: string): Promise<void>;
 }
 ```
 
@@ -714,7 +747,9 @@ interface GeoPointInput {
 
 ```ts
 type HttpActionCtx = {
+    readonly fetchShard: ShardFetch;
     readonly forShard: (shardKey: string) => HttpRunners;
+    readonly live: LivePublisher;
     readonly scheduler?: ActionCtx["scheduler"];
     readonly storage?: ActionCtx["storage"];
     readonly waitUntil?: (promise: Promise<unknown>) => void;
@@ -752,7 +787,7 @@ interface HttpRoute {
 ```ts
 interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator, Output = undefined> {
     body: <B extends ArgsValidator>(validators: B) => HttpRouteBuilder<SearchParams, B & Body, Params, Output>;
-    cacheControl: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
+    cacheControl: (value: string, options?: HttpRouteCacheOptions) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
     cacheTag: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
     handler: [
         Output
@@ -766,8 +801,16 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
         Output
     ] extends [
         undefined
-    ] ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler : (handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output, void, void> | AsyncIterable<Output>) => LunoraRouteHandler;
+    ] ? <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R | SseEvent<R>, void, void> | AsyncIterable<R | SseEvent<R>>) => LunoraRouteHandler : (handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<Output | SseEvent<Output>, void, void> | AsyncIterable<Output | SseEvent<Output>>) => LunoraRouteHandler;
     vary: (value: string) => HttpRouteBuilder<SearchParams, Body, Params, Output>;
+}
+```
+
+### `HttpRouteCacheOptions` (interface)
+
+```ts
+interface HttpRouteCacheOptions {
+    readonly credentialHeaders?: ReadonlyArray<string>;
 }
 ```
 
@@ -938,10 +981,10 @@ interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = un
     ] ? <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>> : (handler: (options: {
+    }) => Promise<R> | R) => RegisteredInternalAction<Args, Awaited<R>> : (handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
+    }) => Output | Promise<Output>) => RegisteredInternalAction<Args, Output>;
     input: <A extends ArgsValidator>(validators: A) => InternalActionBuilder<Context, A & Args, Output>;
     meta: (value: Record<string, unknown>) => InternalActionBuilder<Context, Args, Output>;
     output: <V extends Validator>(validator: V) => InternalActionBuilder<Context, Args, Infer<V>>;
@@ -964,10 +1007,10 @@ interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = 
     ] ? <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>> : (handler: (options: {
+    }) => Promise<R> | R) => RegisteredInternalMutation<Args, Awaited<R>> : (handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Output | Promise<Output>) => RegisteredMutation<Args, Output>;
+    }) => Output | Promise<Output>) => RegisteredInternalMutation<Args, Output>;
     output: <V extends Validator>(validator: V) => InternalMutationBuilder<Context, Args, Infer<V>>;
     use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalMutationBuilder<ContextOut, Args, Output>;
 }
@@ -989,15 +1032,15 @@ interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = und
     ] ? <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Promise<R> | R) => RegisteredQuery<Args, Awaited<R>> : (handler: (options: {
+    }) => Promise<R> | R) => RegisteredInternalQuery<Args, Awaited<R>> : (handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
-    }) => Output | Promise<Output>) => RegisteredQuery<Args, Output>;
+    }) => Output | Promise<Output>) => RegisteredInternalQuery<Args, Output>;
     stream: <R>(handler: (options: {
         args: InferArgs<Args>;
         ctx: Context;
         signal: AbortSignal;
-    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredStream<Args, R>;
+    }) => AsyncGenerator<R, void, void> | AsyncIterable<R>, options?: StreamOptions) => RegisteredInternalStream<Args, R>;
     use: <ContextOut>(middleware: Middleware<MiddlewareContext<Context, Args>, ContextOut>) => InternalQueryBuilder<ContextOut, Args, Output>;
 }
 ```
@@ -1020,7 +1063,7 @@ interface LifecycleEvent {
 ### `LifecycleEventKind` (type)
 
 ```ts
-type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "whisper";
+type LifecycleEventKind = "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
 ```
 
 ### `LifecycleHandler` (type)
@@ -1083,6 +1126,128 @@ type ListWhere<F> = {
 };
 ```
 
+### `LivePublishOptions` (interface)
+
+```ts
+interface LivePublishOptions {
+    shardKey?: string;
+}
+```
+
+### `LivePublisher` (interface)
+
+```ts
+interface LivePublisher {
+    publish: <Payload>(topic: LiveTopicRef<Payload>, payload: NoInfer<Payload>, options?: LivePublishOptions) => Promise<void>;
+}
+```
+
+### `LiveRouterApp` (interface)
+
+```ts
+interface LiveRouterApp {
+    fetch(request: Request, env?: Record<string, unknown>, context?: ExecutionContext): Promise<Response> | Response;
+}
+```
+
+### `LiveRouterFallback` (type)
+
+```ts
+type LiveRouterFallback = (LiveHostTriggers & LiveRouterApp) | ((request: Request, env?: Record<string, unknown>, context?: ExecutionContext) => Promise<Response> | Response);
+```
+
+### `LiveStream` (interface)
+
+```ts
+interface LiveStream<Topics extends LiveTopics = LiveTopics> {
+    connect: LunoraRouteHandler;
+    connectPath: string;
+    control: LunoraRouteHandler;
+    controlPath: string;
+    id: string;
+    readonly topics: Topics;
+    validatePublish: (topic: string, payload: unknown) => unknown;
+}
+```
+
+### `LiveStreamConfig` (interface)
+
+```ts
+interface LiveStreamConfig<Topics extends LiveTopics = LiveTopics> {
+    allowAnonymousControl?: boolean;
+    id: string;
+    onSubscribe?: LiveSubscribeHandler<Topics>;
+    topics: Topics;
+}
+```
+
+### `LiveStreamMount` (interface)
+
+```ts
+interface LiveStreamMount {
+    id: string;
+    load: () => Promise<Pick<LiveStream, "connect" | "control">>;
+}
+```
+
+### `LiveSubscribeHandler` (type)
+
+```ts
+type LiveSubscribeHandler<Topics extends LiveTopics = LiveTopics> = (options: LiveSubscribeOptions<Topics>) => boolean | Promise<boolean>;
+```
+
+### `LiveSubscribeOptions` (type)
+
+```ts
+type LiveSubscribeOptions<Topics extends LiveTopics> = {
+    [Name in keyof Topics & string]: {
+        ctx: HttpActionCtx;
+        key: LiveTopicKey<Topics[Name]>;
+        raw: string;
+        topic: Name;
+    };
+}[keyof Topics & string];
+```
+
+### `LiveTopicDeclaration` (interface)
+
+```ts
+interface LiveTopicDeclaration {
+    key?: Readonly<Record<string, Validator<string>>>;
+    payload: Validator;
+}
+```
+
+### `LiveTopicKey` (type)
+
+```ts
+type LiveTopicKey<Topic extends LiveTopicDeclaration> = Topic["key"] extends Readonly<Record<string, Validator>> ? {
+    readonly [Field in keyof Topic["key"]]: Infer<Topic["key"][Field]>;
+} : Readonly<Record<string, never>>;
+```
+
+### `LiveTopicPayload` (type)
+
+```ts
+type LiveTopicPayload<Topic extends LiveTopicDeclaration> = Infer<Topic["payload"]>;
+```
+
+### `LiveTopicRef` (interface)
+
+```ts
+interface LiveTopicRef<Payload = unknown> {
+    readonly __payload?: Payload;
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
+```
+
+### `LiveTopics` (type)
+
+```ts
+type LiveTopics = Readonly<Record<string, LiveTopicDeclaration>>;
+```
+
 ### `LogFields` (type)
 
 ```ts
@@ -1131,6 +1296,8 @@ type LunoraHttpApp = Hono<LunoraHttpEnv>;
 interface LunoraHttpEnv {
     Bindings: Record<string, unknown> & {
         __lunoraCtx?: HttpActionCtx;
+        __lunoraShellFirst?: boolean;
+        __lunoraUnrouted?: () => void;
     };
     Variables: {
         lunora: HttpActionCtx;
@@ -1284,6 +1451,21 @@ interface MiddlewareNext<ContextIn> {
 }
 ```
 
+### `MigrationCovers` (interface)
+
+```ts
+interface MigrationCovers {
+    readonly jurisdiction?: "eu" | "fedramp" | "none" | "us";
+    readonly memory?: true;
+    readonly shardMode?: "global" | "global:d1" | "global:hyperdrive" | "root" | `shardBy:${string}`;
+    readonly table?: string;
+    readonly ttl?: {
+        readonly after?: number;
+        readonly field: string;
+    };
+}
+```
+
 ### `MigrationCtx` (interface)
 
 ```ts
@@ -1297,6 +1479,7 @@ interface MigrationCtx {
 ```ts
 interface MigrationDefinition {
     readonly batchSize?: number;
+    readonly covers?: MigrationCovers;
     readonly down?: MigrationTransform;
     readonly id: string;
     readonly table: string;
@@ -1320,7 +1503,7 @@ interface MigrationReader {
         isDone: boolean;
         page: MigrationDocument[];
     }>;
-    get: (id: string, expectedTable?: string) => Promise<MigrationDocument | null>;
+    get: (table: string, id: string) => Promise<MigrationDocument | null>;
 }
 ```
 
@@ -1390,10 +1573,12 @@ interface MutationCtx {
     readonly newId: () => string;
     readonly now: number;
     readonly origin?: string;
+    readonly random: () => number;
     readonly runMutation: RunMutation;
     readonly runQuery: RunQuery;
     readonly scheduler: Scheduler;
     readonly secrets: Secrets;
+    readonly shardKey: string;
     readonly span: LunoraWideEvent;
     readonly storage: MutationStorage;
     readonly trace: LunoraTracer;
@@ -1467,6 +1652,12 @@ const DEFAULT_TTL_MS = 3e4;
 const PRESENCE_TABLE: "presence_present";
 ```
 
+### `PROCEDURE_META` (const)
+
+```ts
+const PROCEDURE_META: unique symbol;
+```
+
 ### `PaginationOptions` (interface)
 
 ```ts
@@ -1485,6 +1676,7 @@ interface PaginationResult<T = Record<string, unknown>> {
     isDone: boolean;
     page: T[];
     splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 
@@ -1559,6 +1751,17 @@ type PolicyDecision = WhereInput | boolean | undefined;
 type PolicyDecisionOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = WhereOf<DM, REL, T> | boolean | undefined;
 ```
 
+### `PolicyMiddleware` (type)
+
+```ts
+type PolicyMiddleware<Required = unknown> = <Context extends Required & {
+    db: object;
+}>(options: {
+    ctx: Context;
+    next: MiddlewareNext<Context>;
+}) => Promise<Context>;
+```
+
 ### `PolicyOperation` (type)
 
 ```ts
@@ -1579,6 +1782,9 @@ type PrefixedTables<X extends Record<string, TableDefinition>, Key extends strin
 type PresenceComponent = Component<{
     [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable>;
 }> & {
+    readonly extension: SchemaExtension<{
+        [PRESENCE_BARE_TABLE]: ReturnType<typeof defineTable>;
+    }, typeof PRESENCE_KEY>;
     functions: PresenceFunctions;
 };
 ```
@@ -1587,19 +1793,20 @@ type PresenceComponent = Component<{
 
 ```ts
 interface PresenceFunctions {
-    disconnect: RegisteredLifecycleHook;
+    disconnect: RegisteredLifecycleHook<"disconnect">;
     heartbeat: RegisteredMutation<{
-        data: ReturnType<typeof v.optional>;
-        roomId: ReturnType<typeof v.string>;
-        sessionId: ReturnType<typeof v.string>;
+        data: ColumnValidator<Record<string, unknown> | undefined, Record<string, unknown> | undefined>;
+        roomId: StringColumnValidator;
+        sessionId: StringColumnValidator;
     }, {
         lastSeen: number;
     }>;
     listPresent: RegisteredQuery<{
-        roomId: ReturnType<typeof v.string>;
+        roomId: StringColumnValidator;
     }, PresenceMember[]>;
-    sweep: RegisteredMutation<{
-        roomId: ReturnType<typeof v.string>;
+    sweep: RegisteredInternalMutation<{
+        roomId: StringColumnValidator;
+        tenantId: StringColumnValidator;
     }, {
         deleted: number;
     }>;
@@ -1674,8 +1881,10 @@ interface QueryCtx {
     readonly metrics: LunoraMetrics;
     readonly newId: () => string;
     readonly now: number;
+    readonly random: () => number;
     readonly runQuery: RunQuery;
     readonly secrets: Secrets;
+    readonly shardKey: string;
     readonly span: LunoraWideEvent;
     readonly storage: ReadOnlyStorage;
     readonly trace: LunoraTracer;
@@ -1760,28 +1969,64 @@ interface ReadOnlyStorage<Buckets extends string = string> {
 ### `RegisteredAction` (type)
 
 ```ts
-type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
+type RegisteredAction<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "action", Visibility>;
 ```
 
 ### `RegisteredFunction` (interface)
 
 ```ts
-interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind> {
+interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKind, Visibility extends FunctionVisibility = FunctionVisibility> {
     readonly args: A;
+    readonly channel?: {
+        readonly kind: "room";
+        readonly name: string;
+    };
     readonly expose?: ExposeConfig;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
     readonly lifecycle?: LifecycleEventKind;
-    readonly visibility?: FunctionVisibility;
+    readonly visibility?: Visibility;
     readonly x402?: X402ProcedureConfig;
 }
+```
+
+### `RegisteredInternalAction` (type)
+
+```ts
+type RegisteredInternalAction<A extends ArgsValidator, R> = RegisteredAction<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
+```
+
+### `RegisteredInternalMutation` (type)
+
+```ts
+type RegisteredInternalMutation<A extends ArgsValidator, R> = RegisteredMutation<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
+```
+
+### `RegisteredInternalQuery` (type)
+
+```ts
+type RegisteredInternalQuery<A extends ArgsValidator, R> = RegisteredQuery<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
+```
+
+### `RegisteredInternalStream` (type)
+
+```ts
+type RegisteredInternalStream<A extends ArgsValidator, R> = RegisteredStream<A, R, "internal"> & {
+    readonly visibility: "internal";
+};
 ```
 
 ### `RegisteredLifecycleHook` (type)
 
 ```ts
-type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & {
-    readonly lifecycle: LifecycleEventKind;
+type RegisteredLifecycleHook<Moment extends LifecycleEventKind = LifecycleEventKind> = RegisteredFunction<Record<string, never>, void, "mutation", "internal"> & {
+    readonly lifecycle: Moment;
 };
 ```
 
@@ -1796,7 +2041,7 @@ interface RegisteredMigration extends MigrationDefinition {
 ### `RegisteredMutation` (type)
 
 ```ts
-type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
+type RegisteredMutation<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "mutation", Visibility>;
 ```
 
 ### `RegisteredMutator` (interface)
@@ -1812,7 +2057,7 @@ interface RegisteredMutator<Args extends ValidatorMap = ValidatorMap, ServerCont
 ### `RegisteredQuery` (type)
 
 ```ts
-type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
+type RegisteredQuery<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> = RegisteredFunction<A, R, "query", Visibility>;
 ```
 
 ### `RegisteredReactor` (type)
@@ -1820,6 +2065,18 @@ type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "que
 ```ts
 type RegisteredReactor = RegisteredFunction<Record<string, never>, ReactorOutcome, "mutation"> & {
     readonly lifecycle: "reactor";
+};
+```
+
+### `RegisteredRoom` (type)
+
+```ts
+type RegisteredRoom<Message = unknown> = RegisteredFunction<Record<string, never>, void, "mutation"> & {
+    readonly __roomMessage?: Message;
+    readonly channel: {
+        readonly kind: "room";
+        readonly name: string;
+    };
 };
 ```
 
@@ -1838,13 +2095,23 @@ interface RegisteredShape<Args extends ValidatorMap = ValidatorMap, Context = Qu
 ### `RegisteredStream` (interface)
 
 ```ts
-interface RegisteredStream<A extends ArgsValidator, R> {
+interface RegisteredStream<A extends ArgsValidator, R, Visibility extends FunctionVisibility = "public"> {
     readonly args: A;
     readonly durable?: DurableStreamOptions;
     readonly handler: (context: unknown, args: InferArgs<A>, signal: AbortSignal) => AsyncIterable<R>;
     readonly kind: "stream";
-    readonly visibility?: FunctionVisibility;
+    readonly visibility?: Visibility;
 }
+```
+
+### `RegisteredWebSocket` (type)
+
+```ts
+type RegisteredWebSocket = RegisteredFunction<Record<string, never>, void, "mutation"> & {
+    readonly auth: boolean;
+    readonly lifecycle: "socket";
+    readonly socketPath: string;
+};
 ```
 
 ### `RegisteredWhisperAuthorizer` (type)
@@ -1962,8 +2229,18 @@ type RestCacheConfig = RestCachePolicy;
 interface RetryPolicy {
     backoff?: "exponential" | "linear";
     baseMs?: number;
+    forever?: boolean;
     maxAttempts?: number;
     maxMs?: number;
+}
+```
+
+### `RlsContextIn` (interface)
+
+```ts
+interface RlsContextIn {
+    auth?: AuthLike;
+    db: RlsDatabase;
 }
 ```
 
@@ -1993,11 +2270,56 @@ interface Role {
 }
 ```
 
+### `RoomJoinHandler` (type)
+
+```ts
+type RoomJoinHandler<Message = unknown> = (context: MutationCtx, socket: RoomSocket<Message>) => Promise<void> | void;
+```
+
+### `RoomLeaveHandler` (type)
+
+```ts
+type RoomLeaveHandler<Message = unknown> = (context: MutationCtx, socket: RoomSocket<Message>) => Promise<void> | void;
+```
+
+### `RoomMessageHandler` (type)
+
+```ts
+type RoomMessageHandler<Message> = (context: MutationCtx, message: Message, socket: RoomSocket<Message>) => Promise<void> | void;
+```
+
+### `RoomMessageOf` (type)
+
+```ts
+type RoomMessageOf<Room> = Room extends RegisteredRoom<infer Message> ? Message : never;
+```
+
+### `RoomSocket` (interface)
+
+```ts
+interface RoomSocket<Message = unknown> {
+    broadcast: (message: Message) => void;
+    readonly connectionId: string;
+    readonly context?: Record<string, unknown>;
+    readonly shardKey: string;
+    readonly userId: null | string;
+}
+```
+
 ### `RunQueryOptions` (interface)
 
 ```ts
 interface RunQueryOptions {
     untracked?: boolean;
+}
+```
+
+### `ScheduleRunOptions` (interface)
+
+```ts
+interface ScheduleRunOptions {
+    retry?: RetryPolicy;
+    shardKey?: string;
 }
 ```
 
@@ -2007,12 +2329,15 @@ interface RunQueryOptions {
 interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     attempts?: number;
+    completedAt?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     pool?: string;
     scheduledFor: number;
     shardKey?: string;
+    state?: "canceled" | "failed" | "pending" | "running" | "succeeded";
     workflow?: string;
 }
 ```
@@ -2024,6 +2349,7 @@ interface ScheduledJob {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     instanceName?: string;
@@ -2035,6 +2361,21 @@ interface ScheduledJob {
 }
 ```
 
+### `ScheduledJobState` (type)
+
+```ts
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+```
+
+### `ScheduledJobView` (interface)
+
+```ts
+interface ScheduledJobView extends ScheduledJob {
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+```
+
 ### `Scheduler` (interface)
 
 ```ts
@@ -2042,10 +2383,10 @@ interface Scheduler {
     cancel: (id: string) => Promise<{
         cancelled: boolean;
     }>;
-    get: (id: string) => Promise<ScheduledJob | null>;
+    get: (id: string) => Promise<ScheduledJobView | null>;
     list: () => Promise<ScheduledJob[]>;
-    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: SchedulableTarget, args?: Record<string, unknown>, options?: ScheduleRunOptions) => Promise<string>;
 }
 ```
 
@@ -2154,6 +2495,22 @@ interface ShapeReadWhereRequest {
 }
 ```
 
+### `ShardFetch` (type)
+
+```ts
+type ShardFetch = (shardKey: string | undefined, path: string, init?: ShardFetchInit) => Promise<Response>;
+```
+
+### `ShardFetchInit` (interface)
+
+```ts
+interface ShardFetchInit {
+    body?: string;
+    headers?: Record<string, string>;
+    method?: string;
+}
+```
+
 ### `ShardInitEvent` (interface)
 
 ```ts
@@ -2248,6 +2605,16 @@ interface SpanOptions {
     attributes?: LogFields;
     kind?: SpanKind;
     links?: SpanLink[];
+}
+```
+
+### `SseEvent` (interface)
+
+```ts
+interface SseEvent<R> {
+    readonly data: R;
+    readonly id: string;
+    readonly [SSE_EVENT_BRAND]: true;
 }
 ```
 
@@ -2647,16 +3014,16 @@ interface TriggerCtx {
 interface TriggerDatabase {
     aggregate: (tableName: string, options: TriggerAggregateOptions) => Promise<null | number>;
     count: (tableName: string, where?: Record<string, unknown>) => Promise<number>;
-    delete: (id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findFirst: (tableName: string, args?: TriggerQueryArgs) => Promise<Record<string, unknown> | null>;
     findMany: (tableName: string, args?: TriggerQueryArgs) => Promise<TriggerQueryPage>;
-    get: (id: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: TriggerGroupByOptions) => Promise<ReadonlyArray<TriggerGroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
     rank: (tableName: string, indexName: string, options: TriggerRankOptions) => Promise<null | TriggerRankResult>;
     rankPage: (tableName: string, indexName: string, options?: TriggerRankPageOptions) => Promise<TriggerQueryPage>;
-    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
 }
 ```
 
@@ -2837,6 +3204,12 @@ interface TypedDefinePolicyInput<DM, REL extends Record<keyof DM, object>, T ext
 }
 ```
 
+### `UNLOADED_META` (const)
+
+```ts
+const UNLOADED_META: "unloaded";
+```
+
 ### `VERSION` (const)
 
 ```ts
@@ -2986,6 +3359,37 @@ interface VectorizeOptions<Shape extends Record<string, Validator> = Record<stri
 }
 ```
 
+### `WebSocketCloseHandler` (type)
+
+```ts
+type WebSocketCloseHandler = (context: MutationCtx, socket: WebSocketHandle) => Promise<void> | void;
+```
+
+### `WebSocketHandle` (interface)
+
+```ts
+interface WebSocketHandle {
+    broadcast: (message: unknown) => void;
+    readonly connectionId: string;
+    readonly path: string;
+    send: (message: unknown) => void;
+    readonly shardKey: string;
+    readonly userId: null | string;
+}
+```
+
+### `WebSocketMessageHandler` (type)
+
+```ts
+type WebSocketMessageHandler<Message> = (context: MutationCtx, message: Message, socket: WebSocketHandle) => Promise<void> | void;
+```
+
+### `WebSocketOpenHandler` (type)
+
+```ts
+type WebSocketOpenHandler = (context: MutationCtx, socket: WebSocketHandle) => Promise<void> | void;
+```
+
 ### `WeeklySchedule` (interface)
 
 Re-exported from `@lunora/scheduler` — signature tracked at its source.
@@ -3103,7 +3507,7 @@ interface WorkflowInstanceEvent {
 ### `WorkflowInstanceStatus` (type)
 
 ```ts
-type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 ```
 
 ### `WorkflowStatusResult` (interface)
@@ -3281,10 +3685,22 @@ const defineIdentity: <A extends ValidatorMap>(claims: InferValidatorMap<A> exte
 const defineIdentityGuard: <Guard extends (...args: never[]) => void>(guard: Guard) => Guard;
 ```
 
+### `defineLazyFacade` (const)
+
+```ts
+const defineLazyFacade: (target: FacadeWriterLike, tableName: string) => void;
+```
+
 ### `defineListArgs` (const)
 
 ```ts
 const defineListArgs: <TDocument>() => <F extends ListFilterShape<TDocument>, O extends keyof TDocument & string>(config: DefineListArgsConfig<F, O>) => ListArgsSpec<TDocument, F, O>;
+```
+
+### `defineLiveStream` (const)
+
+```ts
+const defineLiveStream: <const Topics extends LiveTopics>(config: LiveStreamConfig<Topics>) => LiveStream<Topics>;
 ```
 
 ### `defineMigration` (const)
@@ -3347,6 +3763,12 @@ const defineRankIndex: (name: string, options: RankIndexOptions) => RankIndexDef
 const defineRole: (name: string, options?: Omit<Role, "name">) => Role;
 ```
 
+### `defineRoom` (const)
+
+```ts
+const defineRoom: <Message extends Validator>(options: DefineRoomOptions<Message>) => RegisteredRoom<Infer<Message>>;
+```
+
 ### `defineSchema` (const)
 
 ```ts
@@ -3390,6 +3812,12 @@ const defineTable: <Shape extends Record<string, Validator>>(inputShape: Shape) 
 
 ```ts
 const defineVectorIndex: (options: VectorIndexOptions) => VectorIndexDefinition;
+```
+
+### `defineWebSocket` (const)
+
+```ts
+const defineWebSocket: <Message extends Validator>(options: DefineWebSocketOptions<Message>) => RegisteredWebSocket;
 ```
 
 ### `deny` (const)
@@ -3468,10 +3896,22 @@ const isPerDispatchMiddleware: (middleware: unknown) => boolean;
 const isSafeHeaderValue: (value: string) => boolean;
 ```
 
+### `lastEventId` (const)
+
+```ts
+const lastEventId: (request: Request) => string | undefined;
+```
+
+### `liveStreamRouter` (const)
+
+```ts
+const liveStreamRouter: (mounts: ReadonlyArray<LiveStreamMount>, fallback?: LiveRouterFallback) => LiveRouterApp;
+```
+
 ### `mask` (const)
 
 ```ts
-const mask: <Context extends MaskContextIn = MaskContextIn>(policies: MaskPolicies<Context>, options?: MaskOptions<Context>) => Middleware<Context, Context>;
+const mask: <Context extends MaskContextIn = MaskContextIn>(policies: MaskPolicies<Context>, options?: MaskOptions<Context>) => PolicyMiddleware<Omit<Context, "db">>;
 ```
 
 ### `mergeSchemaExtension` (const)
@@ -3485,13 +3925,13 @@ const mergeSchemaExtension: <T extends Record<string, TableDefinition>, X extend
 ### `onConnect` (const)
 
 ```ts
-const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
+const onConnect: (handler: LifecycleHandler) => RegisteredLifecycleHook<"connect">;
 ```
 
 ### `onDisconnect` (const)
 
 ```ts
-const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook;
+const onDisconnect: (handler: LifecycleHandler) => RegisteredLifecycleHook<"disconnect">;
 ```
 
 ### `onQueryChange` (const)
@@ -3503,7 +3943,7 @@ const onQueryChange: <T>(select: ReactorSelect<T>, handler: ReactorHandler<T>) =
 ### `onShardInit` (const)
 
 ```ts
-const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook;
+const onShardInit: (handler: ShardInitHandler) => RegisteredLifecycleHook<"init">;
 ```
 
 ### `onWhisper` (const)
@@ -3526,6 +3966,12 @@ const presenceExtension: SchemaExtension<{
 }, typeof PRESENCE_KEY>;
 ```
 
+### `procedureMeta` (const)
+
+```ts
+const procedureMeta: (registered: unknown) => Readonly<Record<string, unknown>> | undefined;
+```
+
 ### `protectPublic` (const)
 
 ```ts
@@ -3541,13 +3987,22 @@ const redactSecrets: (message: string) => string;
 ### `rls` (const)
 
 ```ts
-const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options?: RlsOptions) => Middleware<Context, Context>;
+const rls: <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArray<Policy<Context>>, options?: RlsOptions) => PolicyMiddleware<Omit<Context, "db">>;
 ```
 
 ### `serveStorageObject` (const)
 
 ```ts
 const serveStorageObject: (context: ContextWithStorage, key: string, request: Request, authorize: StorageServeAuthorizer, cacheControl?: string) => Promise<Response>;
+```
+
+### `sseEvent` (const)
+
+```ts
+const sseEvent: <R>(frame: {
+    data: R;
+    id: string;
+}) => SseEvent<R>;
 ```
 
 ### `storageRules` (const)
@@ -3731,7 +4186,9 @@ interface QueryArgs<TDocument> {
 
 ```ts
 interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
+    consistency?: "primary";
     cursor?: null | string;
+    endCursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
     orderBy?: OrderBy<DM[T]>[];
@@ -3746,6 +4203,8 @@ interface QueryPage<TDocument> {
     continueCursor: null | string;
     isDone: boolean;
     page: TDocument[];
+    splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 
@@ -3919,7 +4378,7 @@ interface TableReaderFacade<DM, REL extends Record<keyof DM, object>, RANK exten
         select?: S;
         with?: W;
     }) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
-    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "limit"> & {
+    findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "endCursor" | "limit"> & {
         select?: S;
         with?: W;
     }) => Promise<LoadWith<DM, REL, T, W, S> | null>;
@@ -4108,6 +4567,26 @@ type WithArg<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = {
 
 ## `@lunora/server/drizzle`
 
+### `AnySQLiteAsyncDelete` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncInsert` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncRelationalQuery` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncSelect` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncUpdate` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `AnySQLiteColumn` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4140,7 +4619,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `BaseSQLiteDatabase` (class)
+### `AnySQLiteView` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4172,11 +4651,15 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `CustomTypeValues` (type)
+### `CustomTypeValues` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `DBResult` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `DrizzleSQLiteConfig` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4228,6 +4711,14 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `NoDuplicateColumns` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `NoUnknownKeysInInsertSelection` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `OnConflict` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4264,7 +4755,143 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteAsyncDialect` (class)
+### `SQLiteAliasType` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncCountBuilder` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncCountBuilderKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDatabase` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDelete` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeleteBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeleteExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeleteHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeletePrepare` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsert` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertBuilder` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertPrepare` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncPreparedQuery` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncPreparedQueryConfig` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRaw` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRelationalQuery` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRelationalQueryHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRelationalQueryKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelect` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectBuilder` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectPrepare` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSession` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncTransaction` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdate` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateBuilder` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdatePrepare` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4284,19 +4911,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteBigIntBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteBlobBuffer` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteBlobBufferBuilder` (class)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteBlobBufferBuilderInitial` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4308,10 +4927,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteBlobJsonBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteBoolean` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4320,7 +4935,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteBooleanBuilderInitial` (type)
+### `SQLiteBuildRelationalQueryConfig` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteCodecs` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4332,7 +4951,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteColumnBuilderBase` (interface)
+### `SQLiteColumnType` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteColumns` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4368,11 +4991,15 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteDeleteExecute` (type)
+### `SQLiteDeleteHKTBase` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteDeletePrepare` (type)
+### `SQLiteDeleteKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteDeleteQueryBuilderHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4416,6 +5043,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `SQLiteInsertBuilderConstructor` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `SQLiteInsertConfig` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4424,7 +5055,15 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteInsertExecute` (type)
+### `SQLiteInsertHKTBase` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteInsertKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteInsertOnConflict` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4432,7 +5071,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteInsertPrepare` (type)
+### `SQLiteInsertQueryBuilderHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4444,7 +5083,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteInsertSelectQueryBuilder` (type)
+### `SQLiteInsertSelection` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4464,10 +5103,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteIntegerBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteNumeric` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4480,15 +5115,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteNumericBigIntBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteNumericBuilder` (class)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteNumericBuilderInitial` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4504,11 +5131,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteNumericNumberBuilderInitial` (type)
+### `SQLitePreparedQuery` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLitePreparedQuery` (class)
+### `SQLiteQueryExecutors` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4520,19 +5147,19 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteRealBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteSelect` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteSelectBase` (class+interface)
+### `SQLiteSelectBase` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteSelectBuilder` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteSelectBuilderConstructor` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4549,10 +5176,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteSelectExecute` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteSelectHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4576,15 +5199,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteSelectPrepare` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteSelectQueryBuilder` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteSelectQueryBuilderBase` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4616,7 +5231,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteSyncDialect` (class)
+### `SQLiteSyncCountBuilder` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteSyncRelationalQuery` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4648,10 +5267,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteTextBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteTextConfig` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4664,10 +5279,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteTextJsonBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteTimestamp` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4676,15 +5287,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteTimestampBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteTransaction` (class)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteTransactionConfig` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteType` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4700,6 +5307,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `SQLiteUpdateBuilderConstructor` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `SQLiteUpdateConfig` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4708,7 +5319,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteUpdateExecute` (type)
+### `SQLiteUpdateHKTBase` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4716,7 +5327,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteUpdatePrepare` (type)
+### `SQLiteUpdateKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteUpdateQueryBuilderHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4741,6 +5356,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteView` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteViewFn` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4796,6 +5415,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `ValidateInsertSelectionKey` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `ViewBuilder` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4824,6 +5447,46 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `booleanFromInteger` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBinary` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBinaryIfAvailable` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBytes` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBytesIfAvailable` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromHex` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bytesFromUtf8` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `camelCase` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `castToHex` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `castToText` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `check` (function)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4832,15 +5495,31 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `dateFromMilliseconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `dateFromSeconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `dateFromStoredMilliseconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `dateFromStoredSeconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `except` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `extractUsedTable` (function)
+### `foreignKey` (function)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `foreignKey` (function)
+### `genericSQLiteCodecs` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4868,6 +5547,14 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `migrateAsync` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `migrateSync` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `numeric` (function)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4880,6 +5567,22 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `refineSqliteCodecs` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `resolveSQLiteTypeAlias` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `resolveUnionType` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `snakeCase` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `sqliteTable` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -4888,7 +5591,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `sqliteView` (function)
+### `sqliteView` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4901,6 +5604,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `unionAll` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `unionsTypeTable` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -4948,8 +5655,8 @@ interface InProcessRuntime {
         database: DatabaseWriter;
         rawDatabase: DatabaseWriter;
     };
-    resetHeadroom: () => void;
     runInTransaction: <R>(body: () => Promise<R> | R) => Promise<R>;
+    runWithBudget: <R>(body: () => R) => R;
 }
 ```
 
@@ -4958,6 +5665,7 @@ interface InProcessRuntime {
 ```ts
 interface InProcessRuntimeOptions {
     enforceRls?: boolean;
+    headroomScope?: HeadroomScope;
     scheduler?: unknown;
     sql: SqlExec;
 }
@@ -5288,6 +5996,22 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `RegisteredInternalStream` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `RegisteredLifecycleHook` (type)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
@@ -5348,11 +6072,23 @@ Re-exported from `@lunora/server` — signature tracked in that section.
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
+### `ScheduleRunOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked in that section.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked in that section.
 
@@ -5854,9 +6590,9 @@ const DOCUMENT_HISTORY_KEY = "documentHistory";
 ```ts
 interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateArgs$1) => Promise<null | number>;
-    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string, options?: {
+    delete: (table: string, id: string, options?: {
         hard?: boolean;
     }) => Promise<void>;
     deleteAll?: (tableName: string, options?: {
@@ -5865,9 +6601,9 @@ interface DatabaseWriterLike {
     }) => Promise<{
         deleted: number;
     }>;
-    deleteMany: (ids: ReadonlyArray<string>, options?: {
+    deleteMany: (table: string, ids: ReadonlyArray<string>, options?: {
         limit?: number;
-    }, expectedTable?: string) => Promise<{
+    }) => Promise<{
         deleted: number;
     }>;
     deleteRereadTables?: ReadonlySet<string>;
@@ -5880,7 +6616,7 @@ interface DatabaseWriterLike {
     findFirst: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs$1) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs$1) => Promise<QueryPage$1>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByArgs$1) => Promise<ReadonlyArray<{
         key: Record<string, unknown>;
         value: null | number;
@@ -5901,7 +6637,7 @@ interface DatabaseWriterLike {
         row: Record<string, unknown>;
         tableName: string;
     }>;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>, options?: PatchWriteOptions) => Promise<void>;
     patchIf?: (tableName: string, id: string, args: {
         patch: Record<string, unknown>;
         verify?: PatchVerifier;
@@ -5910,12 +6646,12 @@ interface DatabaseWriterLike {
         applied: boolean;
         doc: Record<string, unknown> | null;
     }>;
-    patchMany: (patches: ReadonlyArray<{
+    patchMany: (table: string, patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
     }>, options?: {
         limit?: number;
-    }, expectedTable?: string) => Promise<{
+    }) => Promise<{
         patched: number;
     }>;
     patchWhere?: (tableName: string, args: {
@@ -5939,8 +6675,8 @@ interface DatabaseWriterLike {
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<ShardRankPageResultLike>;
     related?: (start: RelatedStartLike, options?: RelatedArgs) => Promise<RelatedPageLike>;
     relationEdges?: ReadonlyArray<RelationEdgeLike>;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
-    restore?: (id: string, expectedTable?: string) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
+    restore?: (table: string, id: string) => Promise<void>;
     softDeleteFields?: ReadonlyMap<string, string>;
     wipeShard?: (options?: {
         chunkSize?: number;
@@ -6089,6 +6825,15 @@ interface GroupByArgs$1 {
 }
 ```
 
+### `HeadroomScope` (interface)
+
+```ts
+interface HeadroomScope {
+    getStore: () => TransactionHeadroomTracker | undefined;
+    run: <R>(store: TransactionHeadroomTracker, body: () => R) => R;
+}
+```
+
 ### `HrTime` (type)
 
 ```ts
@@ -6152,6 +6897,16 @@ type ListFilterShape<TDocument> = {
 };
 ```
 
+### `LiveHostTriggers` (interface)
+
+```ts
+interface LiveHostTriggers {
+    email?: unknown;
+    queue?: unknown;
+    scheduled?: unknown;
+}
+```
+
 ### `LoadRelation` (type)
 
 ```ts
@@ -6199,8 +6954,8 @@ interface MaskContextIn {
 interface MaskDatabase {
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
-    delete: (id: string, expectedTable?: string) => Promise<void>;
-    deleteMany: (ids: ReadonlyArray<string>, options?: {
+    delete: (table: string, id: string) => Promise<void>;
+    deleteMany: (table: string, ids: ReadonlyArray<string>, options?: {
         limit?: number;
     }) => Promise<{
         deleted: number;
@@ -6214,7 +6969,7 @@ interface MaskDatabase {
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{
         key: Record<string, unknown>;
         value: null | number;
@@ -6228,7 +6983,7 @@ interface MaskDatabase {
         row: Record<string, unknown>;
         tableName: string;
     }>;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
     patchIf?: (tableName: string, id: string, args: {
         patch: Record<string, unknown>;
         where: Record<string, unknown>;
@@ -6236,7 +6991,7 @@ interface MaskDatabase {
         applied: boolean;
         doc: Record<string, unknown> | null;
     }>;
-    patchMany: (patches: ReadonlyArray<{
+    patchMany: (table: string, patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
     }>, options?: {
@@ -6273,7 +7028,7 @@ interface MaskDatabase {
         }[];
     }>;
     relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>) => Promise<void>;
 }
 ```
 
@@ -6427,6 +7182,7 @@ interface QueryArgs {
 ```ts
 interface QueryArgs$1 {
     baseWhere?: WhereInput;
+    consistency?: "primary";
     cursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
@@ -6614,15 +7370,6 @@ interface RestCachePolicy {
 }
 ```
 
-### `RlsContextIn` (interface)
-
-```ts
-interface RlsContextIn {
-    auth?: AuthLike;
-    db: RlsDatabase;
-}
-```
-
 ### `RlsDatabase` (type)
 
 ```ts
@@ -6633,7 +7380,7 @@ type RlsDatabase = DatabaseWriterLike;
 
 ```ts
 interface RunAction {
-    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredAction<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"action", Args, R>, args: Args): Promise<R>;
 }
 ```
@@ -6642,7 +7389,7 @@ interface RunAction {
 
 ```ts
 interface RunMutation {
-    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R, FunctionVisibility>, args: InferArgs<A>): Promise<R>;
     <Args, R>(reference: FunctionHandle<"mutation", Args, R>, args: Args): Promise<R>;
 }
 ```
@@ -6651,7 +7398,7 @@ interface RunMutation {
 
 ```ts
 interface RunQuery {
-    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
+    <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R, FunctionVisibility>, args: InferArgs<A>, options?: RunQueryOptions): Promise<R>;
     <Args, R>(reference: FunctionHandle<"query", Args, R>, args: Args, options?: RunQueryOptions): Promise<R>;
 }
 ```
@@ -6730,12 +7477,13 @@ interface SchedulableWorkflowReference {
 interface ScheduleOutbox {
     admit: (target: string) => number | undefined;
     forget: (id: string) => void;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
     record: (id: string, envelope: {
         args: unknown;
         options: Record<string, unknown> | undefined;
         target: unknown;
         when: number;
-    }) => void;
+    }) => string | undefined;
     wake: () => void;
 }
 ```

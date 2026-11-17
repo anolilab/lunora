@@ -54,4 +54,19 @@ describe("defineMigration", () => {
 
         expect(() => defineMigration({ id: "   ", table: "t", up: () => undefined })).toThrow("`id` must be a non-empty string");
     });
+
+    it("carries a typed `covers` declaration through to the registered migration", () => {
+        expect.assertions(2);
+
+        const migration = defineMigration({
+            covers: { shardMode: "shardBy:tenantId", table: "users" },
+            id: "rehome",
+            table: "users",
+            up: (document) => document,
+        });
+
+        expect(migration.covers).toStrictEqual({ shardMode: "shardBy:tenantId", table: "users" });
+        // @ts-expect-error -- a jurisdiction outside the supported set is not a valid `covers`
+        expect(defineMigration({ covers: { jurisdiction: "mars" }, id: "x", table: "t", up: (document) => document }).id).toBe("x");
+    });
 });

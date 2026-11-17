@@ -75,7 +75,7 @@ describe(runAlertSweep, () => {
         expect(result.cleared).toBe(1);
         expect(result.deliveries).toStrictEqual([]);
         // Latch reset via patch on the existing state row; no alert row written.
-        expect(patch).toHaveBeenCalledWith("state1", expect.objectContaining({ firing: false }), "alertRuleState");
+        expect(patch).toHaveBeenCalledWith("alertRuleState", "state1", expect.objectContaining({ firing: false }));
         expect(insert).not.toHaveBeenCalledWith("alerts", expect.anything());
     });
 

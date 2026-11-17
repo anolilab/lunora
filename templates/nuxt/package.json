@@ -11,7 +11,7 @@
         "build": "nuxt build",
         "preview": "nuxt preview",
         "codegen": "lunora codegen",
-        "deploy": "nuxt build && wrangler deploy"
+        "deploy": "nuxt build && lunora deploy"
     },
     "dependencies": {
         "@lunora/nuxt": "^0.0.0",
@@ -26,6 +26,6 @@
         "@lunora/studio": "^0.0.0",
         "@lunora/vite": "^0.0.0",
         "typescript": "^6.0.3",
-        "wrangler": "^4.147.0"
+        "wrangler": "^4.156.1"
     }
 }

@@ -1,9 +1,9 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { copyToClipboard, workerBaseUrl } from "../../lib/internal";
 
@@ -77,7 +77,7 @@ const ConnectAgentCard = (): ReactElement => {
     // The WORKER the studio talks to, not the page's own origin: a studio served
     // on its own host (apps/studio pointed at a deployed worker) would otherwise
     // hand the agent a URL with no Lunora API behind it.
-    const { url } = useLunora();
+    const { url } = useStudioClient();
     const origin = workerBaseUrl(url);
     const [copied, setCopied] = useState<CopyTarget | null>(null);
 

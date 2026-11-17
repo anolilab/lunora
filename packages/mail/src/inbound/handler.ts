@@ -37,7 +37,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { toBase64 } from "../../../../shared/base64";
-import type { InboundEmail, RawInboundEmail } from "./parse";
+import type { InboundAttachment, InboundEmail, RawInboundEmail } from "./parse";
 import type { DurableObjectJurisdiction, ShardNamespaceLike } from "./shard";
 import { applyJurisdiction, DEFAULT_ROOT_SHARD, postShardRpc } from "./shard";
 
@@ -56,6 +56,12 @@ interface ForwardableEmailMessageLike {
     readonly headers: Headers;
     /** Stream of the raw RFC 822 message content. */
     readonly raw: ReadableStream<Uint8Array>;
+
+    /**
+     * Size of `raw` in bytes. Cloudflare always sets it; a message without a finite
+     * size is refused by the handler's size guard rather than read unbounded.
+     */
+    readonly rawSize: number;
     /** Reply to the sender with a new message. */
     reply: (message: { from: string; raw: string; to: string }) => Promise<unknown>;
 
@@ -120,10 +126,20 @@ interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
     dispatch: InboundDispatch<TEnv>;
 
     /**
-     * Called when `parse`, `verify`, or `dispatch` fails — but with two DIFFERENT
-     * contracts, because only the first two decide the message's fate here:
+     * Largest message, in bytes (`message.rawSize`), the handler parses; anything
+     * bigger is refused through `onError` before a byte of it is read. Default
+     * 10 MiB. Parsing holds the raw bytes, the decoded parts and every attachment
+     * at once, so a message near Email Routing's 25 MiB ceiling can outgrow the
+     * isolate's 128 MB. Must be a positive, finite number.
+     */
+    maxRawBytes?: number;
+
+    /**
+     * Called when the size guard (`maxRawBytes`), `parse`, `verify`, or `dispatch`
+     * fails — but with two DIFFERENT contracts, because only the first three decide
+     * the message's fate here:
      *
-     * - `parse` / `verify` — this hook DECIDES the outcome. The default
+     * - size / `parse` / `verify` — this hook DECIDES the outcome. The default
      * ({@link rejectOnError}) rejects via `message.setReject`; supplying your own
      * replaces that, so the message is accepted unless you reject it yourself.
      * - `dispatch` — this hook is OBSERVABILITY ONLY. It is called for the side
@@ -168,6 +184,8 @@ type InboundEmailHandler<TEnv = Record<string, unknown>> = (message: Forwardable
  */
 const GENERIC_REJECT_REASON = "message could not be processed";
 
+const DEFAULT_MAX_RAW_BYTES = 10 * 1024 * 1024;
+
 /**
  * Default `onError`: reject the message so Cloudflare reports a permanent
  * failure, but with a fixed generic reason — the detailed error is logged
@@ -182,13 +200,13 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
 };
 
 /**
- * Build the `email(message, env, ctx)` handler. It (a) reads `message.raw`,
- * (b) parses it via `parse`, (c) runs the optional `verify` gate, then
- * (d) calls `dispatch(parsed, { message, env, ctx })`.
+ * Build the `email(message, env, ctx)` handler. It (a) refuses a message over
+ * `maxRawBytes`, (b) parses `message.raw` via `parse`, (c) runs the optional
+ * `verify` gate, then (d) calls `dispatch(parsed, { message, env, ctx })`.
  *
  * The two failure classes are routed differently:
  *
- * - `parse` / `verify` (including a falsy `verify`) → `onError` (default: a
+ * - size / `parse` / `verify` (including a falsy `verify`) → `onError` (default: a
  * generic `message.setReject`). A malformed or unauthenticated message fails
  * the same way on every redelivery, so bouncing it is the honest answer.
  * - `dispatch` (or its transport) → a custom `onError` is called for
@@ -246,14 +264,40 @@ const rejectOnError = <TEnv = Record<string, unknown>>(error: unknown, context: 
 // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- mirrors InboundVerify's public return type, which admits `void` for a no-return hook
 const verifyPassed = (verified: boolean | void): boolean => verified === true || verified === undefined;
 
+/**
+ * Refuse a message too big to parse safely, before its stream is read. A size the
+ * handler cannot read is refused too: `message` is often cast from `unknown`, and
+ * the guard must not open because a field is missing.
+ */
+const assertWithinSizeLimit = (message: ForwardableEmailMessageLike, maxRawBytes: number): void => {
+    if (typeof message.rawSize !== "number" || !Number.isFinite(message.rawSize)) {
+        throw new LunoraError("INTERNAL", "@lunora/mail/inbound: message has no rawSize, so its size cannot be checked against maxRawBytes");
+    }
+
+    if (message.rawSize > maxRawBytes) {
+        throw new LunoraError(
+            "INTERNAL",
+            `@lunora/mail/inbound: message is ${String(message.rawSize)} bytes, over the ${String(maxRawBytes)}-byte limit (maxRawBytes)`,
+        );
+    }
+};
+
 const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: InboundEmailHandlerOptions<TEnv>): InboundEmailHandler<TEnv> => {
     const onError = options.onError ?? rejectOnError;
+    const maxRawBytes = options.maxRawBytes ?? DEFAULT_MAX_RAW_BYTES;
+
+    // NaN would open the size guard and zero or less would bounce every message.
+    if (!Number.isFinite(maxRawBytes) || maxRawBytes <= 0) {
+        throw new LunoraError("INTERNAL", "@lunora/mail/inbound: `maxRawBytes` must be a positive, finite number of bytes");
+    }
 
     return async (message, env, context_) => {
         const context: InboundDispatchContext<TEnv> = { ctx: context_, env, message };
         let parsed: InboundEmail;
 
         try {
+            assertWithinSizeLimit(message, maxRawBytes);
+
             parsed = await options.parse(message.raw);
 
             if (options.verify) {
@@ -356,22 +400,57 @@ interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
 }
 
 /**
+ * Total binary attachment bytes forwarded in the default envelope. Raw +
+ * decoded + base64 + JSON copies of one large attachment outgrow the isolate's
+ * memory limit; apps that need more supply `resolveArgs` and store to R2.
+ */
+const MAX_FORWARDED_ATTACHMENT_BYTES = 4 * 1024 * 1024;
+
+const TRAILING_BASE64_PADDING = /={1,2}$/;
+
+/**
+ * Bytes a string attachment occupies once forwarded: its decoded length when it
+ * is base64, its UTF-8 length otherwise. Charged against the same budget as
+ * binary content so a large string part cannot bypass the cap.
+ */
+const stringContentBytes = (content: string, encoding: InboundAttachment["encoding"]): number => {
+    if (encoding !== "base64") {
+        return new TextEncoder().encode(content).byteLength;
+    }
+
+    const padding = TRAILING_BASE64_PADDING.exec(content)?.[0].length ?? 0;
+
+    return Math.floor((content.length * 3) / 4) - padding;
+};
+
+/**
  * Normalise an {@link InboundEmail} into a JSON-safe envelope for the RPC body.
  * Binary attachment `content` (postal-mime hands binary parts back as an
  * `ArrayBuffer`/`Uint8Array`) would be corrupted by `JSON.stringify` — an
  * `ArrayBuffer` serialises to `{}` and a `Uint8Array` to a bloated index-keyed
  * object. We base64-encode binary content and mark `encoding: "base64"` so it
- * survives the wire intact; string content is passed through untouched.
+ * survives the wire intact; string content is passed through untouched. Content
+ * past {@link MAX_FORWARDED_ATTACHMENT_BYTES} is dropped and the attachment
+ * marked `truncated`.
  */
 const toJsonSafeEmail = (email: InboundEmail): InboundEmail => {
     if (email.attachments.length === 0) {
         return email;
     }
 
+    let forwarded = 0;
+
     return {
         ...email,
         attachments: email.attachments.map((attachment) => {
             const { content } = attachment;
+            const size = typeof content === "string" ? stringContentBytes(content, attachment.encoding) : content.byteLength;
+
+            if (forwarded + size > MAX_FORWARDED_ATTACHMENT_BYTES) {
+                return { ...attachment, content: "", encoding: "base64" as const, truncated: true };
+            }
+
+            forwarded += size;
 
             if (typeof content === "string") {
                 return attachment;

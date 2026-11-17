@@ -57,4 +57,4 @@ exactly as written — the CLA check (.github/workflows/cla.yml) looks for it.
 Members of the @anolilab organization can omit it (the check is skipped).
 -->
 
-> By submitting this pull request, I confirm that my contribution is made under the terms of the project's license and that you can use, modify, copy, and redistribute this contribution under those terms.
+> By submitting this pull request, I confirm that my contribution is made under the terms of the project's license, and I grant the Lunora maintainers and contributors a perpetual, worldwide, non-exclusive, royalty-free license to use, copy, modify, distribute, sublicense and relicense my contribution, including under the Apache License 2.0 and FSL-1.1-Apache-2.0.

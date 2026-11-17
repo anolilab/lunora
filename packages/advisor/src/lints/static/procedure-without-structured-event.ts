@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a public `mutation`/`action` whose handler emits no structured
@@ -24,7 +25,8 @@ const procedureWithoutStructuredEvent: Lint = {
     facing: "INTERNAL",
     level: "INFO",
     name: "procedure_without_structured_event",
-    remediation: 'Emit one event on the primary path: `ctx.log.info("<verb>", { … })`, or wrap the handler in `ctx.span("<name>", …)` to attach timing too.',
+    remediation:
+        'Emit one event on the primary path: `ctx.log.info("<verb>", { … })`, or attach the facts to the request\'s span with `ctx.span.setAttributes({ … })`, and time a step with `ctx.trace("<name>", …)`.',
     run: (context) => {
         if (context.procedureProtections === undefined) {
             return [];
@@ -37,7 +39,7 @@ const procedureWithoutStructuredEvent: Lint = {
                 emit(procedureWithoutStructuredEvent, {
                     cacheKey: `procedure_without_structured_event:${procedure.file}:${procedure.exportName}`,
                     detail: `Public ${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) emits no structured event. Add a \`ctx.log\` line or a \`ctx.span\` so a failure carries its request context.`,
-                    metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
+                    metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), kind: procedure.kind },
                 }),
             );
     },

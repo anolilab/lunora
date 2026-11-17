@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { IndexKeyEntry, KeyRange, StagedCondition } from "../src/read-write-set";
-import { buildIndexRange, indexKeysForRow, keysTouchRanges, rangeContains } from "../src/read-write-set";
+import { buildIndexRange, idIndexKey, idRange, indexKeysForRow, keysTouchRanges, rangeContains } from "../src/read-write-set";
 import { serializeSqlValue } from "../src/serialize-sql";
 
 const INDEX = "by_channel_ts";
@@ -259,5 +259,34 @@ describe("keysTouchRanges", () => {
 
         // The row's key for a DIFFERENT index proves nothing about this slice.
         expect(keysTouchRanges([inChannelA], [{ index: "by_author", key: "2ff" }])).toBe(true);
+    });
+
+    it("matches keys against many overlapping, nested and disjoint slices of one index", () => {
+        expect.assertions(6);
+
+        const slice = (lo: string, hi: string): KeyRange => {
+            return { hi, index: INDEX, lo, table: "messages" };
+        };
+        // Out of order, with an overlap ([b,d) + [c,f)), a nested one ([g,k) ⊃ [h,i)) and a gap at [f,g).
+        const ranges = [slice("h", "i"), slice("c", "f"), slice("g", "k"), slice("b", "d"), slice("m", "n")];
+        const at = (key: string): IndexKeyEntry[] => [{ index: INDEX, key }];
+
+        expect(keysTouchRanges(ranges, at("e"))).toBe(true);
+        expect(keysTouchRanges(ranges, at("j"))).toBe(true);
+        expect(keysTouchRanges(ranges, at("f"))).toBe(false);
+        expect(keysTouchRanges(ranges, at("k"))).toBe(false);
+        expect(keysTouchRanges(ranges, at("a"))).toBe(false);
+        expect(keysTouchRanges(ranges, [...at("a"), ...at("mm")])).toBe(true);
+    });
+
+    it("an id slice holds exactly its own id", () => {
+        expect.assertions(4);
+
+        const slices = [idRange("notes", "abc"), idRange("notes", "abd")];
+
+        expect(keysTouchRanges(slices, [idIndexKey("abc")])).toBe(true);
+        expect(keysTouchRanges(slices, [idIndexKey("abd")])).toBe(true);
+        expect(keysTouchRanges(slices, [idIndexKey("abcd")])).toBe(false);
+        expect(keysTouchRanges(slices, [idIndexKey("ab")])).toBe(false);
     });
 });

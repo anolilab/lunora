@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ErrorCatalogEntry } from "../src";
-import { ERROR_CATALOG, flattenHint, isInternalCode, MESSAGE_SOLUTIONS } from "../src";
+import { ERROR_CATALOG, ERROR_HINTS, flattenHint, HTTP_STREAM_NO_BODY_HINT, isInternalCode, MESSAGE_SOLUTIONS, OFFLINE_NOT_QUEUED_HINT } from "../src";
 
 const codes = Object.keys(ERROR_CATALOG) as (keyof typeof ERROR_CATALOG)[];
 
@@ -76,15 +76,28 @@ describe("error catalog integrity", () => {
     it("every authored hint flattens to non-empty terminal text", () => {
         expect.hasAssertions();
 
-        const hintedCodes = codes.filter((code) => (ERROR_CATALOG[code] as ErrorCatalogEntry).hint !== undefined);
+        const hinted = Object.entries(ERROR_HINTS);
 
-        expect(hintedCodes.length).toBeGreaterThan(0);
+        expect(hinted.length).toBeGreaterThan(0);
 
-        for (const code of hintedCodes) {
-            const entry: ErrorCatalogEntry = ERROR_CATALOG[code];
-
-            expect(flattenHint(entry.hint as string | string[]).trim().length, `${code} has an empty hint`).toBeGreaterThan(0);
+        for (const [code, hint] of hinted) {
+            // A hint keyed by a code the catalog does not register would never be resolved.
+            expect(Object.hasOwn(ERROR_CATALOG, code), `${code} is not a catalog code`).toBe(true);
+            expect(flattenHint(hint).trim().length, `${code} has an empty hint`).toBeGreaterThan(0);
         }
+    });
+
+    it("keeps hint text out of the catalog, so browser bundles do not ship it", () => {
+        // A hint left on a catalog entry is also invisible to resolveHint and the docs generator, which read ERROR_HINTS.
+        expect.assertions(1);
+        expect(codes.filter((code) => Object.hasOwn(ERROR_CATALOG[code], "hint"))).toStrictEqual([]);
+    });
+
+    it("keeps the client-raised hints identical to their ERROR_HINTS entries", () => {
+        // The client attaches these itself; a copy that drifted would show the browser a different fix than the docs.
+        expect.assertions(2);
+        expect(ERROR_HINTS.OFFLINE_NOT_QUEUED).toStrictEqual(OFFLINE_NOT_QUEUED_HINT);
+        expect(ERROR_HINTS.HTTP_STREAM_NO_BODY).toStrictEqual(HTTP_STREAM_NO_BODY_HINT);
     });
 
     it("isInternalCode treats unknown codes as client-safe (author's vouch)", () => {

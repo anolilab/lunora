@@ -299,10 +299,25 @@ const createSearchAnalyzer = (language: string | undefined): SearchAnalyzer => {
         profile: `${resolved}-v${String(ANALYZER_VERSION)}`,
         query: (query) => {
             const raw = split(query);
+            const seen = new Set<string>();
+            const kept: string[] = [];
 
-            // Keep each token's last occurrence, in order (queries are ≤ a few
-            // dozen tokens, so the quadratic lastIndexOf never matters).
-            return raw.filter((token, index) => raw.lastIndexOf(token) === index);
+            // Keep each token's last occurrence, in order: walk from the end so
+            // the first sighting is the last occurrence. Linear rather than a
+            // `lastIndexOf` filter, because nothing bounds a query's length
+            // before it gets here — the term cap counts this function's output —
+            // and the quadratic form spent ~67 ms on a 50 KiB query of distinct
+            // words, seconds on a request-sized one.
+            for (let index = raw.length - 1; index >= 0; index -= 1) {
+                const token = raw[index] as string;
+
+                if (!seen.has(token)) {
+                    seen.add(token);
+                    kept.push(token);
+                }
+            }
+
+            return kept.toReversed();
         },
     };
 

@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/errors";
 
 import { ipRateLimitKey } from "../../../shared/ip-rate-limit-key";
-import { availableAt, evaluate } from "./algorithms";
+import { availableAt, evaluate, retentionMs } from "./algorithms";
 import RateLimitError from "./error";
 import { createMemoryStore } from "./store";
 import type { RateLimitArgs, RateLimitConfig, RateLimitConfigMap, RateLimitStatus, RateLimitStore } from "./types";
@@ -30,15 +30,47 @@ interface RateLimiterOptions<Names extends string> {
     store?: RateLimitStore;
 }
 
+const LONE_SURROGATE = /(\p{Cs})/u;
+
+// `encodeURIComponent` throws on a lone surrogate, and a key is often caller input (a JSON string can carry one),
+// so a throw here would reach a fail-open middleware as an outage and admit the request. A lone surrogate is
+// written as `%u` plus its hex code unit instead: `encodeURIComponent` only ever emits `%` before two hex digits,
+// so the escape can not meet the encoding of any other string, and `a\uD800` keeps a budget apart from `a\uFFFD`.
+const encodeKeyPart = (part: string): string =>
+    part.isWellFormed()
+        ? encodeURIComponent(part)
+        : part
+              .split(LONE_SURROGATE)
+              .map((piece, index) => (index % 2 === 1 ? `%u${(piece.codePointAt(0) ?? 0).toString(16).toUpperCase()}` : encodeURIComponent(piece)))
+              .join("");
+
 // Both halves are percent-encoded so the separator stays unambiguous: a limit
 // named `a:b` (global) can't collide with limit `a` keyed by `b`.
 const storageKeyFor = (name: string, key: string | undefined): string =>
-    key === undefined ? encodeURIComponent(name) : `${encodeURIComponent(name)}:${encodeURIComponent(key)}`;
+    key === undefined ? encodeKeyPart(name) : `${encodeKeyPart(name)}:${encodeKeyPart(key)}`;
 
 /** Read-decide-write rounds one consume makes before failing closed; see `RateLimiter.decide`. */
 const MAX_DECIDE_ATTEMPTS = 16;
 
+/** Entries one successful write may examine for eviction; bounds the per-call sweep cost. */
+const SWEEP_LIMIT = 32;
+
 const isThenable = <T>(value: PromiseLike<T> | T): value is PromiseLike<T> => typeof (value as PromiseLike<T> | undefined)?.then === "function";
+
+/**
+ * A clock that never reads earlier than a previous reading. Decisions and
+ * eviction both use it: a rollback could otherwise make a request look older than
+ * an entry the sweep already dropped, reviving a spent bucket.
+ */
+const monotonic = (clock: () => number): (() => number) => {
+    let last = Number.NEGATIVE_INFINITY;
+
+    return () => {
+        last = Math.max(last, clock());
+
+        return last;
+    };
+};
 
 // The caller's normalizer (if any), then the IPv6 /64 collapse — see `normalize`.
 const withIpCollapse = (normalize: ((key: string) => string) | undefined): ((key: string) => string) =>
@@ -75,10 +107,21 @@ class RateLimiter<Names extends string = string> {
 
     private readonly now: () => number;
 
+    private readonly retention: number;
+
     private readonly store: RateLimitStore;
 
+    /** Whether a stored key is one of this limiter's names; a sweep only evicts those. */
+    private readonly owns: (storageKey: string) => boolean;
+
     public constructor(options: RateLimiterOptions<Names>) {
-        this.config = options.config;
+        // Snapshot the config: decisions and the eviction horizon must read the same
+        // values, and a caller mutating its object after construction must not move
+        // the horizon out from under entries the sweep has not yet reached.
+        this.config = structuredClone(options.config);
+        // Keys are the encoded name plus an optional `:key`, so the part before the first `:` is the name.
+        const names = new Set(Object.keys(this.config).map((name) => encodeKeyPart(name)));
+        this.owns = (storageKey) => names.has(storageKey.split(":")[0] ?? "");
         this.normalize = withIpCollapse(options.normalize);
         // Store every entry in BOTH forms so an entry can be written either way.
         // Storing it verbatim only, and matching the raw request key against
@@ -88,7 +131,7 @@ class RateLimiter<Names extends string = string> {
         // SAME bucket the stored form routes to — so a banned caller sheds the
         // ban by lower-casing their own email.
         this.denyList = new Set([...(options.denyList ?? [])].flatMap((entry) => [entry, this.normalize(entry)]));
-        this.now = options.now ?? Date.now;
+        this.now = monotonic(options.now ?? Date.now);
 
         if (options.store === undefined) {
             // eslint-disable-next-line no-console -- intentional: no injected logger, mirrors @lunora/auth's construction-time warning
@@ -96,6 +139,7 @@ class RateLimiter<Names extends string = string> {
         }
 
         this.store = options.store ?? createMemoryStore();
+        this.retention = retentionMs(Object.values<RateLimitConfig>(this.config));
 
         for (const [name, config] of Object.entries<RateLimitConfig>(this.config)) {
             // `shards` is gone. Ignoring a leftover one would silently enforce a
@@ -181,7 +225,8 @@ class RateLimiter<Names extends string = string> {
             const read = this.store.get(storageKey);
             // eslint-disable-next-line no-await-in-loop -- a retry must re-read what the lost write replaced
             const prior = isThenable(read) ? await read : read;
-            const { status, value } = evaluate(config, prior, { ...options, now: this.now() });
+            const now = this.now();
+            const { status, value } = evaluate(config, prior, { ...options, now });
 
             if (value === undefined) {
                 return status;
@@ -190,12 +235,17 @@ class RateLimiter<Names extends string = string> {
             if (this.store.setIf === undefined) {
                 // eslint-disable-next-line no-await-in-loop -- returns on the first pass; only `setIf` loops
                 await this.store.set(storageKey, value);
+                // eslint-disable-next-line no-await-in-loop -- returns on the first pass
+                await this.sweep(now);
 
                 return status;
             }
 
             // eslint-disable-next-line no-await-in-loop -- see above
             if (await this.store.setIf(storageKey, value, prior)) {
+                // eslint-disable-next-line no-await-in-loop -- returns on the first pass
+                await this.sweep(now);
+
                 return status;
             }
         }
@@ -203,6 +253,26 @@ class RateLimiter<Names extends string = string> {
         // Refused, not thrown: an error would reach the middleware's failure policy,
         // and `failOpen` would then admit exactly the call contention kept out.
         return { ok: false, reason: "rate", retryAfter: 0 };
+    }
+
+    /**
+     * Evict what this limiter's horizon has expired, after a write has landed. The
+     * write is already done, so awaiting here does not reopen the read-decide-write
+     * window. Only a promise-returning sweep (`createDbStore`) is awaited for I/O.
+     */
+    private async sweep(now: number): Promise<void> {
+        try {
+            const swept = this.store.sweep?.(now - this.retention, SWEEP_LIMIT, this.owns);
+
+            if (isThenable(swept)) {
+                await swept;
+            }
+        } catch (error) {
+            // The write has already landed, so a failed cleanup must not fail the consume:
+            // the caller would then roll back a charge that was made, or fail open.
+            // eslint-disable-next-line no-console -- intentional: no injected logger; a skipped sweep only delays eviction
+            console.warn("@lunora/ratelimit: the retention sweep failed; the consume still stands", error);
+        }
     }
 
     private normalizeKey(key: string | undefined): string | undefined {

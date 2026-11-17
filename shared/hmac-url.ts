@@ -2,9 +2,9 @@
  * Canonical HMAC-SHA256 signed-URL primitives shared by `@lunora/storage`
  * (`buildSignedUrl`/`verifySignedUrl`) and `@lunora/bindings` images
  * (`buildSignedImageUrl`/`verifySignedImageUrl`). Both mint Worker-resolved
- * signed URLs with the same crypto envelope — base64url codec, a bounded
- * per-secret `CryptoKey` cache, host extraction, and sign/verify over a
- * canonical string — differing only in what each binds into that canonical
+ * signed URLs with the same crypto envelope — base64url codec, the bounded
+ * per-secret `CryptoKey` cache (`shared/hmac-key.ts`), host extraction, and
+ * sign/verify over a canonical string — differing only in what each binds into that canonical
  * (storage: method + content-type; images: transform) and how it assembles the
  * URL.
  *
@@ -26,7 +26,7 @@
  * for this out-of-package file under `tsc --noEmit`).
  */
 import { fromBase64Url, toBase64Url } from "./base64";
-import { memoizePromise } from "./promise-memo";
+import { importHmacKey } from "./hmac-key";
 
 const textEncoder = new TextEncoder();
 
@@ -43,28 +43,6 @@ const SCHEME_PREFIX_RE = /^[a-z][a-z0-9+\-.]*:\/\//i;
 // sitting inside this source file.
 const CONTROL_CHAR_CODES: number[] = Array.from({ length: 32 }, (_, index) => index);
 const CONTROL_CHAR_RE = new RegExp(`[${CONTROL_CHAR_CODES.map((code) => String.fromCodePoint(code)).join("")}]`, "u");
-
-// The signing secret is effectively constant per process, so the imported
-// (non-extractable) CryptoKey is memoized by secret value: this removes one
-// `crypto.subtle.importKey` from the verify hot path on every request. Caching
-// the Promise (not the resolved key) also coalesces concurrent imports. The
-// cache is bounded (FIFO eviction) so a multi-tenant app cycling through many
-// per-tenant secrets can't accumulate unbounded memory. 64 distinct
-// secrets/isolate is well above any realistic use, and isolates recycle anyway.
-const KEY_CACHE_MAX = 64;
-const keyCache = new Map<string, Promise<CryptoKey>>();
-
-// `memoizePromise` rather than a bare `set`: a rejected import used to stay in
-// the map, so one failed `importKey` poisoned that secret for the isolate's
-// whole life and every later verify against it failed with the original error.
-// It carries the FIFO bound too, evicting on the insert path.
-const importHmacKey = async (secret: string): Promise<CryptoKey> =>
-    memoizePromise(
-        keyCache,
-        secret,
-        async () => crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]),
-        KEY_CACHE_MAX,
-    );
 
 /**
  * Extract `host[:port]` from a full URL or a bare host/base form. Tolerates a

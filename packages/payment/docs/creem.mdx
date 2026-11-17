@@ -5,8 +5,8 @@ description: Accept payments and subscriptions through Creem — an EU-friendly,
 
 [Creem](https://creem.io) is a **Merchant-of-Record (MoR)** for software. Like
 Polar and Dodo Payments, Creem is the _legal seller_ of your product: it prices,
-collects, and remits sales tax / EU VAT across 190+ jurisdictions, issues the
-invoice under its own entity, and owns chargebacks and disputes. You never touch
+collects, and remits sales tax / EU VAT across 190+ countries, issues the
+invoices, and owns chargebacks and disputes. You never touch
 a tax table. This page covers wiring Creem into a Lunora app through
 `@lunora/payment`; for the provider itself, see Creem's
 [official docs](https://docs.creem.io).
@@ -16,13 +16,14 @@ a tax table. This page covers wiring Creem into a Lunora app through
 Creem is **product-based**: you create real products (with prices) in the Creem
 dashboard and reference them by product id at checkout, which is exactly the
 shape `@lunora/payment`'s `priceId` interface expects, so Creem slots in like
-Polar and Dodo rather than like a raw PSP. Checkout is a hosted, Creem-branded page;
+Polar and Dodo rather than like a raw payment service provider (PSP). Checkout is a hosted, Creem-branded page;
 subscriptions are first-class objects (cancel, pause/resume, upgrade with
 proration); and there is a genuine hosted **billing portal** customers can open
 to manage their own payment methods and subscriptions.
 
 <TypeTable
     type={{
+        checkoutExpiry: { type: "false", description: "createCheckout refuses an expiresAt with PROVIDER_ERROR." },
         merchantOfRecord: {
             type: "true",
             description:
@@ -92,7 +93,7 @@ names `@lunora/payment` expects:
 ## Install
 
 Install the payment package alongside the official `creem` SDK. `@lunora/payment`
-never imports `creem` itself (you inject the client), so the SDK stays an
+never imports `creem` itself (you pass a loader for the client), so the SDK stays an
 ordinary dependency of _your_ app, not a hard dependency of the package.
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
@@ -117,9 +118,12 @@ bun add @lunora/payment creem
 
 ## Configure
 
-The adapter takes the `creem` client by injection, typed as the structural
+The adapter takes a loader for the `creem` client, typed as the structural
 **`CreemClientLike`** (its `checkouts`, `customers`, and `subscriptions`
-resources). A real `Creem` instance satisfies it without a cast — the shape
+resources). It calls the loader on its first provider call and reuses the
+client, so the SDK stays out of the Worker's startup graph; a static
+`import { Creem } from "creem"` in the entry is evaluated at startup and defeats
+this. A real `Creem` instance satisfies the type without a cast — the shape
 exists only to keep `@lunora/payment` free of a hard `creem` dependency and the
 SDK's full types out of the published declarations; internally the adapter calls
 the real SDK methods.
@@ -127,17 +131,19 @@ the real SDK methods.
 <Steps>
 <Step>
 
-**Construct the real Creem SDK client.** The current `creem` SDK takes the API key
-at construction (not per call) and selects test mode via `server: "test"` (or an
-explicit `serverURL`):
+**Write a loader for the real Creem SDK client.** The current `creem` SDK takes the
+API key at construction (not per call) and selects test mode via `server: "test"`
+(or an explicit `serverURL`):
 
 ```ts
-import { Creem } from "creem";
+const loadCreem = async () => {
+    const { Creem } = await import("creem");
 
-const creem = new Creem({
-    apiKey: env.CREEM_API_KEY,
-    // server: "test", // → https://test-api.creem.io while developing
-});
+    return new Creem({
+        apiKey: env.CREEM_API_KEY,
+        // server: "test", // → https://test-api.creem.io while developing
+    });
+};
 ```
 
 </Step>
@@ -150,12 +156,15 @@ request from `ctx.db`, and the default authorizer ties `referenceId` to
 
 ```ts
 import { createCreemAdapter } from "@lunora/payment/creem";
-import { Creem } from "creem";
 import { createShardDO } from "./_generated/shard";
 
 export const ShardDO = createShardDO({
     payment: (env) => {
-        const client = new Creem({ apiKey: env.CREEM_API_KEY });
+        const client = async () => {
+            const { Creem } = await import("creem");
+
+            return new Creem({ apiKey: env.CREEM_API_KEY });
+        };
 
         return {
             adapter: createCreemAdapter({ client, webhookSecret: env.CREEM_WEBHOOK_SECRET }),
@@ -201,7 +210,7 @@ export const subscribe = action.input({ productId: v.string() }).action(async ({
 
 <Callout type="info">
     Creem checkout only has a **success URL** (there is no separate cancel URL in Creem's checkout model), so the adapter forwards `successUrl` and drops
-    `cancelUrl`. `cancelUrl` is optional; pass it for cross-provider portability, it's simply unused here. The framework-controlled `referenceId` is pinned into
+    `cancelUrl`. `cancelUrl` is optional; pass it for cross-provider portability, it is unused here. The framework-controlled `referenceId` is pinned into
     checkout metadata and can never be overridden by caller-supplied metadata.
 </Callout>
 
@@ -211,6 +220,8 @@ All subscription methods return the provider's reported truth, which the facade
 persists to the store.
 
 ### Cancel: immediate vs. at period end
+
+Cancellation is immediate by default. Pass `atPeriodEnd: true` to keep access until the current period ends:
 
 ```ts
 // Cancel immediately (default): access ends now.
@@ -233,7 +244,7 @@ to the new product, prorated and charged immediately:
 
 ```ts
 // Adapter calls subscriptions.upgrade(id, { productId, updateBehavior: "proration-charge-immediately" })
-const updated = await ctx.payments.adapter.updateSubscription(subscriptionId, { priceId: "prod_enterprise" });
+const updated = await ctx.payments.updateSubscription(subscriptionId, { priceId: "prod_enterprise" });
 ```
 
 `proration-charge-immediately` means the plan takes effect at once and the prorated
@@ -247,7 +258,7 @@ A `quantity` patch sets the units on the subscription item for its current produ
 so a per-seat subscription's seat count changes in Creem rather than being ignored:
 
 ```ts
-const updated = await ctx.payments.adapter.updateSubscription(subscriptionId, { quantity: 5 });
+const updated = await ctx.payments.updateSubscription(subscriptionId, { quantity: 5 });
 ```
 
 A patch that sets both `priceId` and `quantity` is refused: Creem has no single call
@@ -255,15 +266,17 @@ for both, so apply them as two updates.
 
 ### Resume
 
+Resume a paused subscription through the facade:
+
 ```ts
-await ctx.payments.adapter.resumeSubscription(subscriptionId); // → subscriptions.resume(id)
+await ctx.payments.resumeSubscription(subscriptionId); // → subscriptions.resume(id)
 ```
 
 ## Billing portal
 
 Give a customer a self-service portal to manage payment methods and subscriptions.
 The facade derives the customer from the store (never a caller-supplied id, so no
-IDOR) and calls Creem's `generateBillingLinks`:
+insecure direct object reference (IDOR)) and calls Creem's `generateBillingLinks`:
 
 ```ts
 export const portal = action.action(async ({ ctx }): Promise<{ url: string }> => {
@@ -324,6 +337,8 @@ app.post(
 );
 ```
 
+The following internal action runs in the shard and passes the raw body and signature to `handleWebhook`:
+
 ```ts title="lunora/billing.ts"
 import { internalAction, v } from "./_generated/server";
 
@@ -348,7 +363,7 @@ export const processWebhook = internalAction
 Once verified, `handleWebhook` normalizes the event through Lunora's state machine
 and returns `200` once applied or deduplicated, so Creem stops retrying; a
 duplicate is safe by construction (the event `id` keys an append-only log). The
-one exception is an **orphaned** event — one whose subscription or customer row
+one exception is an **orphaned** event — one whose subscription or payment row
 has not been created yet, i.e. an out-of-order delivery — which returns `500` so
 Creem redelivers it after the parent row lands.
 
@@ -396,8 +411,8 @@ operations therefore throw a `PROVIDER_ERROR` rather than silently no-op:
     **Customer creation errors.** `customers.create` returns `400` when a customer with that email already exists, so it is not idempotent by email. The adapter
     recovers by retrieving the existing customer by email and adopting it only when its `referenceId` metadata matches. On a mismatch (one person paying under a
     personal and an org reference) it binds no customer: the checkout starts unbound and is not prefilled, and that reference has no portal of its own. Creem
-    groups customers by email, so a buyer who enters the same address at checkout lands on the existing Creem customer; that customer's portal is then refused
-    (see Billing portal). If you see the create rejected for another reason, check the API key's store and mode (test vs. live).
+    rejects a second customer with an existing email, so the existing Creem customer is the one tied to that address; its portal is refused for a reference that
+    does not own it (see Billing portal). If you see the create rejected for another reason, check the API key's store and mode (test vs. live).
 </Callout>
 
 <Callout type="warn">

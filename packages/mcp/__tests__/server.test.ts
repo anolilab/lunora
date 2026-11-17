@@ -1,4 +1,4 @@
-import { LunoraClient } from "@lunora/client";
+import { LunoraAdminClient } from "@lunora/client/admin";
 import type { CallToolResult, ListToolsResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,7 +7,7 @@ import { createLunoraMcpServer } from "../src/server";
 
 /** Minimal mock exposing only the methods the tools touch. */
 const mockClient = (): {
-    asClient: LunoraClient;
+    asClient: LunoraAdminClient;
     listFunctions: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
 } => {
@@ -16,7 +16,7 @@ const mockClient = (): {
         return { count: 7 };
     });
 
-    const client = { listFunctions, query } as unknown as LunoraClient;
+    const client = { listFunctions, query } as unknown as LunoraAdminClient;
 
     return { asClient: client, listFunctions, query };
 };
@@ -51,10 +51,18 @@ describe("resolveClient", () => {
         expect(() => createLunoraMcpServer({})).toThrow(/requires either a `client` or a `url`/);
     });
 
+    it("rejects an injected client that lacks the admin surface", () => {
+        expect.assertions(1);
+
+        const plain = { query: vi.fn<() => Promise<unknown>>() } as unknown as LunoraAdminClient;
+
+        expect(() => createLunoraMcpServer({ client: plain })).toThrow(/needs a LunoraAdminClient/);
+    });
+
     it("wires the token through setAuthToken when constructed from a url", () => {
         expect.assertions(2);
 
-        const setAuthToken = vi.spyOn(LunoraClient.prototype, "setAuthToken").mockImplementation(() => undefined);
+        const setAuthToken = vi.spyOn(LunoraAdminClient.prototype, "setAuthToken").mockImplementation(() => undefined);
 
         createLunoraMcpServer({ token: "admin-token", url: "https://example.workers.dev" });
 
@@ -70,7 +78,7 @@ describe("resolveClient", () => {
     it("refuses a url with no token instead of advertising tools that can only 403", () => {
         expect.assertions(2);
 
-        const setAuthToken = vi.spyOn(LunoraClient.prototype, "setAuthToken").mockImplementation(() => undefined);
+        const setAuthToken = vi.spyOn(LunoraAdminClient.prototype, "setAuthToken").mockImplementation(() => undefined);
 
         expect(() => createLunoraMcpServer({ url: "https://example.workers.dev" })).toThrow(/requires a `token`/);
         expect(setAuthToken).not.toHaveBeenCalled();
@@ -226,7 +234,7 @@ describe("createLunoraMcpServer request handlers", () => {
 });
 
 /** A client double exposing the mutation/query the agent tools dispatch. */
-const agentClient = (): { asClient: LunoraClient; mutation: ReturnType<typeof vi.fn> } => {
+const agentClient = (): { asClient: LunoraAdminClient; mutation: ReturnType<typeof vi.fn> } => {
     const mutation = vi.fn<(reference: unknown, arguments_: Record<string, unknown>) => Promise<{ id: string; threadKey: string }>>(async () => {
         return { id: "wf-1", threadKey: "t-agent" };
     });
@@ -234,7 +242,7 @@ const agentClient = (): { asClient: LunoraClient; mutation: ReturnType<typeof vi
         (reference as { __lunoraRef: string }).__lunoraRef === "agents:agentMessages" ? [{ content: "answer", role: "assistant" }] : { status: "idle" },
     );
 
-    return { asClient: { mutation, query } as unknown as LunoraClient, mutation };
+    return { asClient: { listFunctions: vi.fn<() => Promise<[]>>(), mutation, query } as unknown as LunoraAdminClient, mutation };
 };
 
 const supportExposure = [{ description: "Support", name: "support" }];

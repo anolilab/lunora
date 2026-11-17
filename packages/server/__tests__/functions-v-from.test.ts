@@ -25,6 +25,8 @@ const makeMutationContext = (): MutationContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
         newId: () => "test-id",
+        random: () => 0.5,
+        shardKey: "__root__",
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
         metrics: { count: () => undefined, gauge: () => undefined, record: () => undefined },

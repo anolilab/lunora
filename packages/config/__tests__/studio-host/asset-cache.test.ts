@@ -4,10 +4,11 @@
  * uncached or the token-bearing document into a disk cache.
  */
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { applyStudioAssetCache, sendStudioDocument } from "../../src/studio-host/asset-cache";
+import { applyStudioAssetCache, sendStudioAsset, sendStudioDocument } from "../../src/studio-host/asset-cache";
 
 const makeResponse = (): { end: ReturnType<typeof vi.fn>; headers: () => Record<string, string>; response: ServerResponse } => {
     const setHeader = vi.fn<(name: string, value: string) => void>();
@@ -85,5 +86,162 @@ describe("sendStudioDocument", () => {
         // token-bearing document would be its own bug.
         expect(headers()).toStrictEqual({ "Cache-Control": "no-store", "Content-Type": "text/html; charset=utf-8" });
         expect(end).toHaveBeenCalledWith("<!doctype html>");
+    });
+});
+
+describe("sendStudioAsset", () => {
+    // Above the raw-send threshold, and repetitive enough to compress well.
+    const body = Buffer.from("export const studio = 'lunora';\n".repeat(200));
+
+    const send = (acceptEncoding: string | undefined, payload: Buffer = body, stamp: number | undefined = 1): ReturnType<typeof makeResponse> => {
+        const made = makeResponse();
+        const request = { headers: acceptEncoding === undefined ? {} : { "accept-encoding": acceptEncoding } } as unknown as IncomingMessage;
+
+        sendStudioAsset(request, made.response, payload, "text/javascript; charset=utf-8", "studio.js", stamp);
+
+        return made;
+    };
+
+    const sentBody = (made: ReturnType<typeof makeResponse>): Buffer => made.end.mock.calls[0]?.[0] as Buffer;
+
+    it("prefers brotli, with Content-Encoding, Vary and the compressed Content-Length", () => {
+        expect.assertions(4);
+
+        const made = send("gzip, deflate, br");
+        const sent = sentBody(made);
+
+        expect(made.headers()).toMatchObject({ "Content-Encoding": "br", "Content-Length": sent.length, Vary: "Accept-Encoding" });
+        expect(sent.length).toBeLessThan(body.length / 10);
+        expect(brotliDecompressSync(sent).equals(body)).toBe(true);
+        expect(made.headers().ETag).toBe('W/"studio.js-1"');
+    });
+
+    it("falls back to gzip, and honours q=0 as a refusal", () => {
+        expect.assertions(2);
+
+        const made = send("br;q=0, gzip");
+
+        expect(made.headers()["Content-Encoding"]).toBe("gzip");
+        expect(gunzipSync(sentBody(made)).equals(body)).toBe(true);
+    });
+
+    it("sends raw bytes when the client accepts no supported encoding, or the body is tiny", () => {
+        expect.assertions(4);
+
+        const identity = send(undefined);
+
+        expect(identity.headers()["Content-Encoding"]).toBeUndefined();
+        expect(identity.end).toHaveBeenCalledWith(body);
+
+        const tiny = Buffer.from("body {}\n");
+        const small = send("br, gzip", tiny);
+
+        expect(small.headers()["Content-Encoding"]).toBeUndefined();
+        expect(small.end).toHaveBeenCalledWith(tiny);
+    });
+
+    it("answers the coding the client weights highest, not the one we prefer", () => {
+        expect.assertions(2);
+
+        const made = send("br;q=0.1, gzip;q=1");
+
+        expect(made.headers()["Content-Encoding"]).toBe("gzip");
+        expect(gunzipSync(sentBody(made)).equals(body)).toBe(true);
+    });
+
+    it("answers 406 when the client refuses identity and every coding we produce", () => {
+        expect.assertions(3);
+
+        const made = send("br;q=0, gzip;q=0, identity;q=0");
+
+        expect(made.response.statusCode).toBe(406);
+        expect(made.headers().Vary).toBe("Accept-Encoding");
+        expect(made.end).toHaveBeenCalledWith();
+    });
+
+    it("gives an out-of-range q its full weight, so a malformed weight cannot drop a coding", () => {
+        expect.assertions(1);
+
+        const made = send("br;q=-1");
+
+        expect(made.headers()["Content-Encoding"]).toBe("br");
+    });
+
+    it("treats an empty q= as malformed, so it gets full weight rather than zero", () => {
+        expect.assertions(1);
+
+        const made = send("br;q=");
+
+        expect(made.headers()["Content-Encoding"]).toBe("br");
+    });
+
+    it("sends the raw body when the client ranks identity above every coding we produce", () => {
+        expect.assertions(2);
+
+        const made = send("identity;q=1, gzip;q=0.1");
+
+        expect(made.headers()["Content-Encoding"]).toBeUndefined();
+        expect(sentBody(made)).toStrictEqual(body);
+    });
+
+    it("answers 406, not 304, to a conditional request for a version the client cannot encode", () => {
+        expect.assertions(2);
+
+        const made = makeResponse();
+        const request = {
+            headers: { "accept-encoding": "br;q=0, gzip;q=0, identity;q=0", "if-none-match": 'W/"studio.js-1"' },
+        } as unknown as IncomingMessage;
+
+        sendStudioAsset(request, made.response, body, "text/javascript; charset=utf-8", "studio.js", 1);
+
+        expect(made.response.statusCode).toBe(406);
+        expect(made.end).toHaveBeenCalledWith();
+    });
+
+    it("compresses a tiny body for a client that refuses identity", () => {
+        expect.assertions(2);
+
+        const made = send("gzip, identity;q=0", Buffer.from("body {}\n"));
+
+        expect(made.response.statusCode).toBe(200);
+        expect(made.headers()["Content-Encoding"]).toBe("gzip");
+    });
+
+    it("does not serve one install's compressed bytes for another's body under the same stamp", () => {
+        expect.assertions(1);
+
+        sentBody(send("gzip", body, 77));
+
+        const other = Buffer.from("export const studio = 'other install';\n".repeat(200));
+
+        expect(gunzipSync(sentBody(send("gzip", other, 77))).equals(other)).toBe(true);
+    });
+
+    it("compresses once per file and stamp, and recompresses after a rebuild", () => {
+        expect.assertions(3);
+
+        const first = sentBody(send("gzip", body, 42));
+
+        // Same Buffer instance: served from the cache, not recompressed.
+        expect(sentBody(send("gzip", body, 42))).toBe(first);
+
+        const rebuilt = Buffer.from("export const studio = 'rebuilt';\n".repeat(200));
+        const fresh = sentBody(send("gzip", rebuilt, 43));
+
+        expect(fresh).not.toBe(first);
+        expect(gunzipSync(fresh).equals(rebuilt)).toBe(true);
+    });
+
+    it("sets Vary on a 304 too, with no body", () => {
+        expect.assertions(3);
+
+        const made = makeResponse();
+        const request = { headers: { "accept-encoding": "br", "if-none-match": 'W/"studio.js-1"' } } as unknown as IncomingMessage;
+
+        sendStudioAsset(request, made.response, body, "text/javascript; charset=utf-8", "studio.js", 1);
+
+        expect(made.response.statusCode).toBe(304);
+        expect(made.headers().Vary).toBe("Accept-Encoding");
+        expect(made.end).toHaveBeenCalledWith();
     });
 });

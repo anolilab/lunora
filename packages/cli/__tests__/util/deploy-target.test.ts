@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resolveRunnableTargetOrError, resolveTargetOrError } from "../../src/util/deploy-target";
+import { resolveRunnableTargetOrError, resolveTargetOrError } from "../../src/util/deploy-target-resolve";
 
 /**
  * `target: "node"` is a registered deploy target with NO `DriverToolchain`:

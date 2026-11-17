@@ -9,6 +9,157 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 
 ## `@lunora/sql-store`
 
+### `DEFAULT_QUERY_TIMEOUT_MS` (const)
+
+```ts
+const DEFAULT_QUERY_TIMEOUT_MS = 3e4;
+```
+
+### `ExportGlobalArgs` (interface)
+
+```ts
+interface ExportGlobalArgs {
+    batchSize?: number;
+    tables?: ReadonlyArray<string>;
+}
+```
+
+### `ExportRow` (interface)
+
+```ts
+interface ExportRow {
+    doc: Record<string, unknown>;
+    line?: number;
+    op?: "delete";
+    table: string;
+}
+```
+
+### `FacetGlobalColumnOptions` (interface)
+
+```ts
+interface FacetGlobalColumnOptions {
+    column: string;
+    filters?: GlobalFilterClause[];
+    limit?: number;
+    table: string;
+}
+```
+
+### `GlobalFacetResult` (interface)
+
+```ts
+interface GlobalFacetResult {
+    truncated: boolean;
+    values: GlobalFacetValue[];
+}
+```
+
+### `GlobalFacetValue` (interface)
+
+```ts
+interface GlobalFacetValue {
+    count: number;
+    value: unknown;
+}
+```
+
+### `GlobalFilterClause` (interface)
+
+```ts
+interface GlobalFilterClause {
+    column: string;
+    operator?: string;
+    path?: string[];
+    value: unknown;
+}
+```
+
+### `GlobalTableInfo` (interface)
+
+```ts
+interface GlobalTableInfo {
+    name: string;
+    rowCount: number;
+}
+```
+
+### `GlobalTablePage` (interface)
+
+```ts
+interface GlobalTablePage {
+    columns: string[];
+    refs?: Record<string, string>;
+    rows: Record<string, unknown>[];
+    total: number;
+}
+```
+
+### `ImportError` (interface)
+
+```ts
+interface ImportError {
+    code: string;
+    line: number;
+    message: string;
+    table: string;
+}
+```
+
+### `ImportGlobalArgs` (interface)
+
+```ts
+interface ImportGlobalArgs {
+    dryRun?: boolean;
+    exec?: SqlCtxExec;
+    onConflict?: ImportConflictMode;
+    rows: ReadonlyArray<ExportRow>;
+    startLine?: number;
+}
+```
+
+### `ImportResult` (interface)
+
+```ts
+interface ImportResult {
+    conflicts: number;
+    deleted: number;
+    errors: ImportError[];
+    inserted: Record<string, number>;
+    replaced: number;
+}
+```
+
+### `PreparedGlobalImportRow` (type)
+
+```ts
+type PreparedRow = ReadyRow | {
+    kind: "delete";
+    line: number;
+    row: ExportRow;
+} | {
+    kind: "settled";
+    outcome: RowOutcome;
+};
+```
+
+### `QueryTimer` (type)
+
+```ts
+type QueryTimer = (fire: () => void, ms: number) => () => void;
+```
+
+### `ReadGlobalTablePageOptions` (interface)
+
+```ts
+interface ReadGlobalTablePageOptions {
+    filters?: GlobalFilterClause[];
+    limit?: number;
+    offset?: number;
+    table: string;
+}
+```
+
 ### `SEARCH_STATE_TABLE` (const)
 
 ```ts
@@ -30,6 +181,8 @@ interface SqlCtxDbOptions {
     idGenerator?: () => string;
     maxRelationKeys?: number;
     provisionScope?: object;
+    queryTimeoutMs?: number;
+    queryTimer?: QueryTimer;
     scheduler?: SchedulerLike;
     schema: SchemaLike;
 }
@@ -44,7 +197,9 @@ interface SqlCtxExec {
         params: ReadonlyArray<unknown>;
         sql: string;
     }>) => Promise<void>;
+    primary?: SqlCtxExec;
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
+    transaction?: <T>(work: (tx: SqlCtxExec) => Promise<T>) => Promise<T>;
 }
 ```
 
@@ -97,6 +252,16 @@ interface SqlExec {
         sql: string;
     }>) => Promise<void>;
     run: (sql: string, params: ReadonlyArray<unknown>) => Promise<SqlRunResult>;
+    transaction?: <T>(work: (tx: SqlExec) => Promise<T>) => Promise<T>;
+}
+```
+
+### `SqlQueryTimeoutError` (class)
+
+```ts
+class SqlQueryTimeoutError extends LunoraError {
+    readonly timeoutMs: number;
+    constructor(timeoutMs: number);
 }
 ```
 
@@ -147,10 +312,46 @@ const decodeGlobalRow: (definition: TableDefinitionLike, row: Record<string, unk
 const effectiveColumnKind: (validator: ValidatorLike) => string | undefined;
 ```
 
+### `exportSqlGlobalRows` (const)
+
+```ts
+const exportSqlGlobalRows: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect, args: ExportGlobalArgs) => AsyncGenerator<ExportRow, void, undefined>;
+```
+
+### `facetSqlGlobalColumn` (const)
+
+```ts
+const facetSqlGlobalColumn: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect, options: FacetGlobalColumnOptions) => Promise<GlobalFacetResult>;
+```
+
+### `globalColumnBackfill` (const)
+
+```ts
+const globalColumnBackfill: (schema: SchemaLike, tableName: string, column: string) => SQL | undefined;
+```
+
+### `importSqlGlobalRows` (const)
+
+```ts
+const importSqlGlobalRows: (writer: DatabaseWriterLike, schema: SchemaLike, dialect: SqlDialect, args: ImportGlobalArgs) => Promise<ImportResult>;
+```
+
+### `listSqlGlobalTables` (const)
+
+```ts
+const listSqlGlobalTables: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect) => Promise<GlobalTableInfo[]>;
+```
+
 ### `migrateSearchState` (const)
 
 ```ts
 const migrateSearchState: (exec: SqlCtxExec, dialect: SqlDialect) => Promise<void>;
+```
+
+### `prepareGlobalImportRow` (const)
+
+```ts
+const prepareGlobalImportRow: (schema: SchemaLike, row: ExportRow, line: number) => PreparedRow;
 ```
 
 ### `readSqlCdcChangedTables` (const)
@@ -172,6 +373,7 @@ const readSqlCdcChangedTables: (exec: SqlCtxExec, sinceSeq: number, dialect: Sql
 ```ts
 const readSqlCdcChanges: (exec: SqlCtxExec, options: {
     limit?: number;
+    now?: number;
     sinceSeq?: number;
 }, dialect: SqlDialect) => Promise<{
     changes: CdcChange[];
@@ -183,6 +385,12 @@ const readSqlCdcChanges: (exec: SqlCtxExec, options: {
 
 ```ts
 const readSqlCdcFloor: (exec: SqlCtxExec, dialect: SqlDialect) => Promise<number | undefined>;
+```
+
+### `readSqlGlobalTablePage` (const)
+
+```ts
+const readSqlGlobalTablePage: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect, options: ReadGlobalTablePageOptions) => Promise<GlobalTablePage>;
 ```
 
 ### `runSqlAggregateMigrations` (const)
@@ -213,6 +421,12 @@ const runSqlRankMigrations: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlD
 
 ```ts
 const runSqlSearchMigrations: (exec: SqlCtxExec, schema: SchemaLike, dialect: SqlDialect) => Promise<void>;
+```
+
+### `selectGlobalTables` (const)
+
+```ts
+const selectGlobalTables: (schema: SchemaLike, requested?: ReadonlyArray<string>) => string[];
 ```
 
 ### `sqliteDecode` (const)
@@ -252,3 +466,46 @@ Re-exported from `@lunora/sql-store` — signature tracked in that section.
 ### `SqlRunResult` (interface)
 
 Re-exported from `@lunora/sql-store` — signature tracked in that section.
+
+## Referenced internal declarations
+
+Not exported, and reachable only through a signature above. Their members
+are part of that signature's meaning, so a change here is a change to the
+public API and is gated as one. Listed once per package, sorted by name.
+
+### `ReadyRow` (type)
+
+```ts
+type ReadyRow = {
+    decoded: Record<string, unknown>;
+    explicitId: string | undefined;
+    kind: "ready";
+    line: number;
+    table: string;
+};
+```
+
+### `RowOutcome` (type)
+
+```ts
+type RowOutcome = {
+    committed: boolean;
+    error: ImportError;
+    kind: "error";
+} | {
+    inserted: string;
+    kind: "inserted";
+} | {
+    kind: "absent";
+} | {
+    kind: "checked";
+} | {
+    kind: "conflict";
+} | {
+    kind: "deleted";
+} | {
+    kind: "replaced";
+} | {
+    kind: "skip";
+};
+```

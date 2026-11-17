@@ -15,8 +15,8 @@ import { callSiteFields, callSiteWhere } from "../helpers";
  * built one hop earlier from `args`), any caller can hand in another tenant's
  * key and reach that tenant's container instance. The fix is to derive the
  * key from a server-trusted identity (`` `${ctx.auth.userId}` ``) or a record
- * the caller owns — a key that references `ctx` is treated as scoped and is
- * not flagged. `.any()`/`.pool()` are not sinks (they take no key).
+ * the caller owns. Only that identity, or a db read bound to it, scopes a key:
+ * `ctx.env.PREFIX` is the same for every caller and does not. `.any()`/`.pool()` are not sinks (they take no key).
  *
  * Runs only when the codegen feeder supplies container key-access evidence
  * (`context.containerKeyAccesses`); a runtime caller flags nothing. One

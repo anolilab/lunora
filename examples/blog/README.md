@@ -35,7 +35,7 @@ pnpm install
 pnpm --filter @lunora-example/blog dev
 ```
 
-The dev server listens on <http://localhost:5175>.
+The dev server listens on the port it prints (<http://localhost:5175> in the main checkout).
 
 ## Key snippets
 
@@ -114,7 +114,7 @@ export const purgeStaleDrafts = internalMutation.mutation(async ({ ctx }) => {
         .withIndex("by_updated", (range) => range.lt("updatedAt", cutoff))
         .collect();
 
-    for (const draft of stale) await ctx.db.delete(draft._id);
+    for (const draft of stale) await ctx.db.delete("drafts", draft._id);
 
     return { deleted: stale.length };
 });

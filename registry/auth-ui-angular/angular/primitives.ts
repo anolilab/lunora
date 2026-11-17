@@ -5,8 +5,9 @@
  * internal link. Every card composes these; they emit the same `lunora-auth-*`
  * class names as the shared stylesheet.
  */
-import { ChangeDetectionStrategy, Component, computed, input, output } from "@angular/core";
+import { ChangeDetectionStrategy, Component, computed, effect, input, output, signal } from "@angular/core";
 
+import { cooldownLabel, watchCooldown } from "../core/cooldown";
 import { providerLabel } from "../core/labels";
 import { passwordRequirements, passwordScore } from "../core/password-policy";
 import type { FieldState } from "../core/types";
@@ -134,22 +135,40 @@ class AuthFieldComponent {
     protected readonly showError = computed(() => this.field().touched && this.field().error !== undefined);
 }
 
-/** Primary submit button with a pending state. */
+/** Primary submit button with a pending state and an optional resend cooldown. */
 @Component({
     changeDetection: ChangeDetectionStrategy.OnPush,
     selector: "lunora-auth-submit-button",
     standalone: true,
     template: `
-        <button class="lunora-auth-button" type="submit" [disabled]="pending()">
+        <button class="lunora-auth-button" type="submit" [disabled]="pending() || wait() > 0">
             @if (pending()) {
                 <span class="lunora-auth-button__spinner" aria-hidden="true"></span>
             }
             <ng-content />
+            @if (wait() > 0) {
+                <span class="lunora-auth-button__cooldown">{{ label() }}</span>
+            }
         </button>
     `,
 })
 class SubmitButtonComponent {
+    /** A send/resend flow's `resendAvailableAt`: disabled, with a countdown, until then. */
+    readonly availableAt = input<number>();
     readonly pending = input.required<boolean>();
+    protected readonly wait = signal(0);
+    private readonly t = injectAuthUI().localization;
+    protected readonly label = computed(() => cooldownLabel(this.t, this.wait()));
+
+    constructor() {
+        effect((onCleanup) => {
+            onCleanup(
+                watchCooldown(this.availableAt(), (seconds) => {
+                    this.wait.set(seconds);
+                }),
+            );
+        });
+    }
 }
 
 /** Top-level error / success banner (error is announced via `role="alert"`). */

@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a procedure that throws a bare `new Error(...)`.
@@ -33,7 +34,7 @@ const errorWithoutCatalog: Lint = {
                 emit(errorWithoutCatalog, {
                     cacheKey: `error_without_catalog:${procedure.file}:${procedure.exportName}`,
                     detail: `${procedure.kind} \`${procedure.exportName}\` (${procedure.file}) throws a bare \`new Error(...)\`. Use \`LunoraError\` with a catalog code so the client can branch on it and Studio can group it.`,
-                    metadata: { exportName: procedure.exportName, file: procedure.file, kind: procedure.kind },
+                    metadata: { exportName: procedure.exportName, ...declarationSiteFields(procedure), kind: procedure.kind },
                 }),
             );
     },

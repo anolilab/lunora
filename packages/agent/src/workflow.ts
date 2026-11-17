@@ -3,12 +3,9 @@
 import type { WorkflowDefinition } from "@lunora/workflow";
 import { defineWorkflow } from "@lunora/workflow";
 
-import { runAgentLoop } from "./agent-loop";
-import { createAgentGenerate, createCompact, createEpisodeExtract, createGraphExtract, createStreamGenerate } from "./generate";
 import { agentDefaultName } from "./naming";
 import { DEFAULT_AGENT_FUNCTION_PATHS } from "./paths";
-import resolveAgentRun from "./resolve-run";
-import { otlpTelemetry } from "./telemetry/otlp";
+import type { otlpTelemetry as createOtlpTelemetry } from "./telemetry/otlp";
 import type { AgentDefinition, AgentFunctionPaths, AgentRunInput, AgentRunResult } from "./types";
 
 /**
@@ -23,7 +20,12 @@ import type { AgentDefinition, AgentFunctionPaths, AgentRunInput, AgentRunResult
  * no-op when no endpoint is set (local / self-hosted) or when the app explicitly
  * set `telemetry.isEnabled: false`.
  */
-const withAutoOtlpTelemetry = (agent: AgentDefinition, env: Record<string, unknown>, conversationId?: string): AgentDefinition => {
+const withAutoOtlpTelemetry = (
+    agent: AgentDefinition,
+    env: Record<string, unknown>,
+    otlpTelemetry: typeof createOtlpTelemetry,
+    conversationId?: string,
+): AgentDefinition => {
     const endpoint = env.LUNORA_OTLP_ENDPOINT;
 
     if (typeof endpoint !== "string" || endpoint === "" || agent.telemetry?.isEnabled === false) {
@@ -76,11 +78,20 @@ const compileAgentWorkflow = (
 ): WorkflowDefinition<AgentRunInput, AgentRunResult> =>
     defineWorkflow<AgentRunInput, AgentRunResult>({
         handler: async (context) => {
+            // The loop, the model adapters and the AI SDK (zod included) load here, on the
+            // first run, not when the Worker evaluates the generated class that wraps this.
+            const [
+                { runAgentLoop },
+                { createAgentGenerate, createCompact, createEpisodeExtract, createGraphExtract, createStreamGenerate },
+                { default: resolveAgentRun },
+                { otlpTelemetry },
+            ] = await Promise.all([import("./agent-loop"), import("./generate"), import("./resolve-run"), import("./telemetry/otlp")]);
+
             // On the platform, auto-append OTLP generation telemetry from the
             // injected endpoint; local/self-hosted agents are unaffected. The run's
             // `threadKey` rides along as the conversation/session id so multi-turn
             // spans group in the cloud.
-            const runtimeAgent = withAutoOtlpTelemetry(agent, context.env, context.params.threadKey);
+            const runtimeAgent = withAutoOtlpTelemetry(agent, context.env, otlpTelemetry, context.params.threadKey);
 
             return runAgentLoop({
                 agent: runtimeAgent,

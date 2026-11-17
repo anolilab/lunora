@@ -3,13 +3,19 @@ import { ensureMigrated } from "@lunora/auth/migrate";
 import type { ExecutionContextLike, ShardNamespaceLike } from "lunorash/runtime";
 import { createWorker } from "lunorash/runtime";
 
-import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
 import { buildAuth, buildMigrationAuth } from "../../lunora/auth.js";
+
+// A loader, not the document: only Studio's API route reads it, so no ordinary request evaluates it.
+const openApiSpec = (): Promise<unknown> => import("../../lunora/_generated/openapi.js").then((module) => module.openApiSpec);
+
+// Records revoked named admin tokens where a restore of the shard cannot rewind them.
+export { AdminRevocationDO } from "../../lunora/_generated/adminRevocations.js";
 
 export const ShardDO = createShardDO();
 
 interface Env {
+    ADMIN_REVOCATIONS: ShardNamespaceLike;
     AUTH_SECRET: string;
     /** Base URL better-auth resolves callback/cookie origins against (the deployed worker URL). */
     AUTH_URL?: string;
@@ -53,13 +59,13 @@ const ensureAuthReady = (env: Env): Promise<ReturnType<typeof buildAuth>> => {
  *    Expo plugin's routes and the app-scheme trusted origin live here too.
  * 2. Everything else → Lunora's RPC + WebSocket surface.
  *
- * `resolveIdentity` reads the session as a **bearer** token: the client sends the
- * session in the `Authorization` header
- * on HTTP RPC and as `?token=` on the WebSocket upgrade (a browser can't set
- * headers on a WS handshake). We fold that `?token=` into an `Authorization`
- * header — only on a request carrying `Upgrade: websocket`, so a URL-borne
- * credential never authenticates a plain HTTP call — so better-auth's `bearer`
- * plugin resolves both via `getSession`. A cookie credential cannot work here:
+ * `resolveIdentity` reads the session as a **bearer** token: the native client
+ * sends it in the `Authorization` header on HTTP RPC and on the WebSocket
+ * upgrade alike, so better-auth's `bearer` plugin resolves both via
+ * `getSession`. Nothing is read from the URL — a query-string credential lands
+ * in access logs. Under `react-native-web` the browser socket cannot carry a
+ * header; the cookie session authenticates it there. A cookie credential cannot
+ * work on native:
  * the CSRF guard rejects a cookie-bearing state-changing request with no trusted
  * `Origin`, and a native request sends none.
  *
@@ -81,26 +87,11 @@ export default {
             worker = createWorker({
                 openApiSpec,
                 resolveIdentity: async (identityRequest) => {
-                    // HTTP RPC carries `Authorization: Bearer <token>`; the WS
-                    // upgrade can't set headers, so the client sends the same token
-                    // as `?token=`. Fold it into the header the `bearer` plugin reads
-                    // — but ONLY on the upgrade. Accepting a query-string credential
-                    // on ordinary HTTP requests too would make every URL a bearer
-                    // token: session tokens would land in access logs, `Referer`
-                    // headers and shared links, and the request would be
-                    // authenticated by a value a cross-origin link can set.
-                    const headers = new Headers(identityRequest.headers);
-                    const isUpgrade = headers.get("upgrade")?.toLowerCase() === "websocket";
-                    const wsToken = isUpgrade ? new URL(identityRequest.url).searchParams.get("token") : null;
-
-                    if (wsToken !== null && !headers.has("authorization")) {
-                        headers.set("authorization", `Bearer ${wsToken}`);
-                    }
-
-                    const session = await auth.api.getSession({ headers });
+                    const session = await auth.api.getSession({ headers: identityRequest.headers });
 
                     return session?.user?.id ? { userId: session.user.id } : null;
                 },
+                adminRevocations: env.ADMIN_REVOCATIONS,
                 shardDO: env.SHARD,
             });
         }

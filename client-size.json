@@ -1,0 +1,30 @@
+{
+    "allowanceBytes": 1024,
+    "apps": {
+        "angular": {
+            "brotliBytes": 39130,
+            "gzipBytes": 45598,
+            "rawBytes": 156042
+        },
+        "react": {
+            "brotliBytes": 50352,
+            "gzipBytes": 58309,
+            "rawBytes": 199203
+        },
+        "solid": {
+            "brotliBytes": 39429,
+            "gzipBytes": 45866,
+            "rawBytes": 156759
+        },
+        "svelte": {
+            "brotliBytes": 39178,
+            "gzipBytes": 45565,
+            "rawBytes": 155988
+        },
+        "vue": {
+            "brotliBytes": 39001,
+            "gzipBytes": 45390,
+            "rawBytes": 155681
+        }
+    }
+}

@@ -1,6 +1,6 @@
-import { useLunora } from "@lunora/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import useStudioClient from "../../hooks/use-studio-client";
 import type { TableInfo, TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../lib/internal";
@@ -35,7 +35,7 @@ const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
  * names that mistake precisely.
  */
 const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schema: SqlSchema } => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     const [tables, setTables] = useState<string[]>([]);
     const [columns, setColumns] = useState<Record<string, string[]>>({});

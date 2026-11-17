@@ -107,12 +107,17 @@ describe("serveJsonHandler CSRF defense", () => {
         expect(result.status).toBe(200);
     });
 
-    it("forwards projectRoot and the host's schemaDirectory + apiSpec to the handler", async () => {
-        expect.assertions(3);
+    it("forwards the project root and host codegen options to the handler", async () => {
+        expect.assertions(4);
 
-        let seen: { apiSpec?: string; projectRoot: string; schemaDirectory?: string } | undefined;
+        let seen: { apiSpec?: string; lazyFunctions?: boolean; projectRoot: string; schemaDirectory?: string } | undefined;
         const capturingHandler: LocalEndpointHandler = (request) => {
-            seen = { apiSpec: request.apiSpec, projectRoot: request.projectRoot, schemaDirectory: request.schemaDirectory };
+            seen = {
+                apiSpec: request.apiSpec,
+                lazyFunctions: request.lazyFunctions,
+                projectRoot: request.projectRoot,
+                schemaDirectory: request.schemaDirectory,
+            };
 
             return { body: { ok: true }, status: 200 };
         };
@@ -121,6 +126,7 @@ describe("serveJsonHandler CSRF defense", () => {
 
         serveJsonHandler(makeRequest("GET", { "sec-fetch-site": "same-origin" }), response, capturingHandler, "/project", {
             apiSpec: "openrpc",
+            lazyFunctions: true,
             schemaDirectory: "custom-schema-dir",
         });
 
@@ -129,5 +135,6 @@ describe("serveJsonHandler CSRF defense", () => {
         expect(seen?.projectRoot).toBe("/project");
         expect(seen?.schemaDirectory).toBe("custom-schema-dir");
         expect(seen?.apiSpec).toBe("openrpc");
+        expect(seen?.lazyFunctions).toBe(true);
     });
 });

@@ -1,10 +1,10 @@
-import { estimateModelCost } from "@lunora/ai/create";
+import { estimateModelCost, USAGE_ATTRIBUTE, usageStatus } from "@lunora/ai/create";
 import type { Telemetry } from "ai";
 
 import type { OtlpAttribute, OtlpAttributeValue } from "../../../../shared/otlp";
 import { encodeAttribute, mergeHeaders, otlpRandomHex, otlpUnixNano, wrapResourceSpans } from "../../../../shared/otlp";
 import type { CommonOptions } from "./common";
-import { contentText, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
+import { contentText, failedTurnEvent, readField, summarizeGatewayTelemetry, summarizeUsage, toolInputOf, toolNameOf } from "./common";
 import { createInFlightCalls } from "./in-flight-calls";
 
 /** Spans per OTLP export before an early flush. */
@@ -14,6 +14,15 @@ const MAX_BATCH_BYTES = 256 * 1024;
 
 /** UTF-8 encoder for the encoded-size counter; `Buffer` does not exist on Workers. */
 const UTF8_ENCODER = new TextEncoder();
+
+/** Host of an endpoint for the rejection report; the path can carry a secret, so it is never logged. */
+const hostOf = (url: string): string => {
+    try {
+        return new URL(url).host;
+    } catch {
+        return "the collector";
+    }
+};
 
 /** A {@link Telemetry} that buffers and exports on `flush()`; the agent loop calls it once per run. */
 type FlushableTelemetry = Telemetry & { flush: () => void };
@@ -179,11 +188,33 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
     }
 
     const tracesUrl = `${base}/v1/traces`;
+    const collectorHost = hostOf(tracesUrl);
     // `token` last so it wins over any authorization in `headers`.
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers, token);
 
     let buffer: unknown[] = [];
     let bufferBytes = 0;
+    // Set while exports are being rejected, so a rejecting collector logs once per streak, not per flush.
+    let rejecting = false;
+
+    /** Clear the streak on a success; report the first rejection of each streak, never the endpoint path. */
+    const observeResponse = (response: Response): void => {
+        if (response.ok) {
+            rejecting = false;
+
+            return;
+        }
+
+        if (rejecting) {
+            return;
+        }
+
+        rejecting = true;
+        // eslint-disable-next-line no-console -- a rejected export is otherwise invisible; reported once per streak so a bad token does not flood logs
+        console.error(
+            `[lunora] OTLP export to ${collectorHost} was rejected with HTTP ${String(response.status)}; not reported again until an export succeeds.`,
+        );
+    };
 
     /** POST every buffered span as ONE export, fire-and-forget, kept alive past the turn when a `waitUntil` is present. */
     const flush = (): void => {
@@ -201,9 +232,11 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
                 body: JSON.stringify(wrapResourceSpans(spans, "@lunora/agent", serviceName)),
                 headers: mergedHeaders,
                 method: "POST",
-            }).catch(() => {
-                // Network error / non-OK — intentionally ignored.
-            });
+            })
+                .then(observeResponse)
+                .catch(() => {
+                    // Network error stays silent — the collector being unreachable is not a configuration fault to report per flush.
+                });
 
             waitUntil?.(sent);
         } catch {
@@ -269,12 +302,19 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
         // `execute()` resolves with carries no usage at all, because it resolves the
         // moment `doStream` hands the stream back.
         const usage = summarizeUsage(readField(event, "usage") ?? readField(result, "usage"));
+        const status = usageStatus(usage);
 
-        if (usage) {
-            pushAttribute(attributes, "gen_ai.usage.input_tokens", usage.inputTokens);
-            pushAttribute(attributes, "gen_ai.usage.output_tokens", usage.outputTokens);
-            pushAttribute(attributes, "gen_ai.usage.total_tokens", usage.totalTokens);
-        }
+        // Stamped on every chat span, even with no usage, so `unavailable` is visible
+        // rather than an absent attribute. Same names and semantics as `@lunora/ai`.
+        pushAttribute(attributes, "lunora.usage.status", status);
+        // Cache and reasoning counts are subsets of the input and output totals; each is
+        // emitted only when reported, so an absent bucket is never a counted zero.
+        pushAttribute(attributes, USAGE_ATTRIBUTE.inputTokens, usage?.inputTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.outputTokens, usage?.outputTokens);
+        pushAttribute(attributes, "gen_ai.usage.total_tokens", usage?.totalTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.cacheReadTokens, usage?.cacheReadTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.cacheWriteTokens, usage?.cacheWriteTokens);
+        pushAttribute(attributes, USAGE_ATTRIBUTE.reasoningTokens, usage?.reasoningTokens);
 
         // Cloudflare AI Gateway telemetry — additive, only present when the
         // call was routed through a gateway (LUNORA_AI_GATEWAY_*). `pushAttribute`
@@ -290,12 +330,20 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
 
         // A provider-reported cost always wins; without a gateway the cost
         // is derived from token usage and the price table, so spend stays
-        // visible off Cloudflare too. The two are never conflated — the
-        // source is stamped alongside, exactly as the RAG embed span does.
+        // visible off Cloudflare too. An estimate is priced only from a complete
+        // report: a partial one would understate the call. The two are never
+        // conflated — the source is stamped alongside, exactly as the RAG embed span does.
         const reportedCost = gateway?.cost;
         const cost =
             reportedCost ??
-            (typeof modelId === "string" ? estimateModelCost(modelId, { inputTokens: usage?.inputTokens, outputTokens: usage?.outputTokens }) : undefined);
+            (typeof modelId === "string" && status === "complete"
+                ? estimateModelCost(modelId, {
+                      cacheReadTokens: usage?.cacheReadTokens,
+                      cacheWriteTokens: usage?.cacheWriteTokens,
+                      inputTokens: usage?.inputTokens,
+                      outputTokens: usage?.outputTokens,
+                  })
+                : undefined);
 
         if (cost !== undefined) {
             pushAttribute(attributes, "gen_ai.usage.cost", cost);
@@ -337,7 +385,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
             message = raw;
         }
 
-        calls.close(callId, false, message, undefined);
+        calls.close(callId, false, message, failedTurnEvent(raw));
     };
 
     /** The entry one model call opens with — its start time and request metadata. */
@@ -374,7 +422,7 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
             } catch (error) {
                 // The provider call itself failed, so this IS the end of the span and
                 // no end event will follow.
-                calls.close(callId, false, error instanceof Error ? error.message : String(error), undefined);
+                calls.close(callId, false, error instanceof Error ? error.message : String(error), failedTurnEvent(error));
 
                 throw error;
             }
@@ -407,7 +455,9 @@ export const otlpTelemetry = (options: OtlpTelemetryOptions): FlushableTelemetry
             // Fired after the response has been normalized and parsed — for a stream
             // that is after its `finish` part, so this is the first moment the call's
             // real duration AND its token usage are both known.
-            calls.close(callId, true, undefined, event);
+            // The registry grades the end event by its `finishReason`, so an error finish that
+            // reaches the end event (the turn guard forwards it) closes as a failure, not a success.
+            calls.fromLifecycle(event);
         },
         onLanguageModelCallStart: (event: unknown) => {
             const callId = readField(event, "callId");

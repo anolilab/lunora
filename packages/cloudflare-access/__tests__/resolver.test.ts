@@ -166,6 +166,23 @@ describe("createAccessResolver", () => {
         expect(identity?.userId).toBe("user-7");
     });
 
+    it("never lets mapClaims set the identity's expiry", async () => {
+        expect.assertions(2);
+
+        const resolve = createAccessResolver({
+            aud: AUD,
+            keySet: publicKey,
+            mapClaims: () => {
+                return { exp: 9_999_999_999, expiresAtMs: Date.now() + 86_400_000 };
+            },
+            teamDomain: TEAM,
+        });
+        const identity = await resolve(requestWithHeader(await sign({ sub: "user-7" })));
+
+        expect(identity?.exp).toBeLessThan(9_999_999_999);
+        expect(identity).not.toHaveProperty("expiresAtMs");
+    });
+
     it("mints the mapped roles as an identity claim, where both RLS paths read them", async () => {
         expect.assertions(2);
 

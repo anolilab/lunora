@@ -32,6 +32,7 @@ const baseOptions = (overrides: Partial<ResolvedLunoraPluginOptions> = {}): Reso
     return {
         allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
+        lazyFunctions: false,
         cloudflare: {},
         generatedDir: "lunora/_generated",
         overlay: false,
@@ -351,6 +352,30 @@ describe("framework-compose-plugin", () => {
 
             expect(code).toContain(".shardRegistry((env) => env.SHARD_REGISTRY)");
             expect(code).toContain(`export * from "./lunora/_generated/shardRegistry";`);
+        });
+
+        it("wires the admin revocation store into the composed entry", async () => {
+            expect.assertions(2);
+
+            // Codegen writes the `adminRevocations` module for every app, so a class-A app
+            // names no setup: without the call no named admin token can be created.
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", { classModules: ["adminRevocations"] });
+
+            expect(code).toContain(".adminRevocations((env) => env.ADMIN_REVOCATIONS)");
+            expect(code).toContain(`export * from "./lunora/_generated/adminRevocations";`);
+        });
+
+        it("hosts the admin revocation store in the merged LunoraDO, not as a class of its own", async () => {
+            expect.assertions(3);
+
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", {
+                classModules: ["adminRevocations", "scheduler"],
+                mergeDurableObjects: true,
+            });
+
+            expect(code).toContain('.adminRevocations((env) => roleNamespace(env.SHARD, "adminRevocations"))');
+            expect(code).toContain("mergeDurableObjects({ shard: app.ShardDO, adminRevocations: AdminRevocationDO, scheduler: SchedulerDO })");
+            expect(code).not.toContain(`export * from "./lunora/_generated/adminRevocations";`);
         });
 
         it("exports one merged LunoraDO hosting the shard, scheduler and registry when the app merges", async () => {

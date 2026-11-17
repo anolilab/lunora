@@ -16,15 +16,47 @@
 import { encodeWire, isPlainObject, needsWireEncoding, stableStringify } from "@lunora/wire";
 
 import { ID_FIELD, insertionIndexFor, PAGE_DELTA_CAPABILITY, PAGE_FIELD } from "../../../shared/page-result";
+import { ADMIN_WILDCARD, UNVOUCHABLE_DEP } from "./read-footprint";
 import type { MutationDelta } from "./types";
 
 /**
- * Fallback table name stamped on a delta when the subscription's read-table
- * set is empty. The client only uses `table` for its structural guard
- * ({@link MutationDelta} recognition) — `key`/`row`/`op` drive the actual
- * merge — so any non-empty string is safe.
+ * The `table` stamped on a row delta when the subscription's read set does not
+ * name exactly one table (several, none, or the admin wildcard). A result row carries no record of
+ * the table it came from, so the server cannot name the source of each changed
+ * row. The leading `__` is reserved by `isInternalTableName`, so no user table
+ * can collide with it. Clients merge by `key` and must not route by `table`
+ * (protocol README §5.1.1).
  */
-const DELTA_FALLBACK_TABLE = "__lunora__";
+const DELTA_PLACEHOLDER_TABLE = "__lunora__";
+
+/**
+ * The `table` a subscription's row deltas carry: the one table it read, or
+ * {@link DELTA_PLACEHOLDER_TABLE} when it read several, none, or the admin
+ * wildcard (its result may depend on any table, so no single table is faithful).
+ * Naming the first of several would claim every changed row came from that table.
+ * @returns the single read table, or the placeholder
+ */
+const deltaTableFor = (tables: Iterable<string>): string => {
+    let only: string | undefined;
+
+    for (const table of tables) {
+        if (table === ADMIN_WILDCARD) {
+            return DELTA_PLACEHOLDER_TABLE;
+        }
+
+        if (table === UNVOUCHABLE_DEP) {
+            continue;
+        }
+
+        if (only !== undefined) {
+            return DELTA_PLACEHOLDER_TABLE;
+        }
+
+        only = table;
+    }
+
+    return only ?? DELTA_PLACEHOLDER_TABLE;
+};
 
 /**
  * Read a row's `_id` as a string; `undefined` when the row isn't a plain object with a string `_id`.
@@ -301,7 +333,7 @@ const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: s
         return undefined;
     }
 
-    const deltaTable = table === "" ? DELTA_FALLBACK_TABLE : table;
+    const deltaTable = table === "" ? DELTA_PLACEHOLDER_TABLE : table;
     const tableJson = JSON.stringify(deltaTable);
     // Deletes precede upserts so the client never sees a transient over-length page.
     const framed = [...collectDeleteDeltas(previous, next, deltaTable, tableJson), ...collectUpsertDeltas(previous, next, deltaTable, tableJson)];
@@ -311,6 +343,46 @@ const collectFramedDeltas = (previousJson: string, nextResult: unknown, table: s
     // snapshot, which is the only encoding that can carry an order the delta
     // protocol cannot express.
     return clientOrderMatches(previous, next, framed) ? framed : undefined;
+};
+
+/**
+ * {@link collectFramedDeltas} results per run outcome (the caller's `diffKey`),
+ * then per table, then per baseline string: sockets that shared one run diff the
+ * same result against the same last-sent text, so the diff is computed once per
+ * distinct triple instead of once per socket. Keyed by the outcome, which is new
+ * on every run, not by the result a handler may return again after editing it in
+ * place — and weakly, so an entry lives exactly as long as that outcome.
+ */
+const framedDeltaMemo = new WeakMap<object, Map<string, Map<string, FramedDelta[] | undefined>>>();
+
+const sharedFramedDeltas = (previousJson: string, nextResult: unknown, table: string, diffKey: object | undefined): FramedDelta[] | undefined => {
+    if (diffKey === undefined) {
+        return collectFramedDeltas(previousJson, nextResult, table);
+    }
+
+    let byTable = framedDeltaMemo.get(diffKey);
+
+    if (byTable === undefined) {
+        byTable = new Map();
+        framedDeltaMemo.set(diffKey, byTable);
+    }
+
+    let byBaseline = byTable.get(table);
+
+    if (byBaseline === undefined) {
+        byBaseline = new Map();
+        byTable.set(table, byBaseline);
+    }
+
+    if (byBaseline.has(previousJson)) {
+        return byBaseline.get(previousJson);
+    }
+
+    const framed = collectFramedDeltas(previousJson, nextResult, table);
+
+    byBaseline.set(previousJson, framed);
+
+    return framed;
 };
 
 /**
@@ -385,6 +457,8 @@ const trySendFrame = (ws: FrameSink, frame: string): boolean => {
 interface SubscriptionFrameInput {
     /** The trailing `,"cursor":<n>,"epoch":"<e>"` fragment, or `""` on a non-CDC shard. */
     cursorSuffix: string;
+    /** One run's outcome: sockets passing the same key share its diff (see {@link framedDeltaMemo}); absent, it is computed per call. */
+    diffKey?: object;
     /** This socket's custom-mutator watermark, stamped on every frame; omitted when the socket has none. */
     lastMutationId?: number;
     /** The fresh query result, unencoded — diffed row-wise against `previousJson`. */
@@ -402,7 +476,7 @@ interface SubscriptionFrameInput {
     snapshotJson: string;
     /** The subscription id the frames are addressed to. */
     subId: string;
-    /** The table stamped on each delta; `""` falls back to {@link DELTA_FALLBACK_TABLE}. */
+    /** The table stamped on each delta; `""` falls back to {@link DELTA_PLACEHOLDER_TABLE}. */
     table: string;
 }
 
@@ -458,7 +532,7 @@ const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
     // result is additionally gated on the socket having announced that it can
     // merge into `page`; without that the diff is never even attempted.
     const diffable = previousJson !== undefined && (pageDeltas === true || Array.isArray(nextResult));
-    const framed = diffable ? collectFramedDeltas(previousJson, nextResult, table) : undefined;
+    const framed = diffable ? sharedFramedDeltas(previousJson, nextResult, table, input.diffKey) : undefined;
 
     // An EMPTY diff must still put a frame on the wire, so the two are handled
     // together. The caller only suppresses a push when the new snapshot is
@@ -487,7 +561,11 @@ const subscriptionFrames = (input: SubscriptionFrameInput): string[] => {
         // watermark stays on every frame — it is idempotent and monotonic on the
         // read side, and a checkpoint gate reads whichever frame it observes.
         const isLast = index === framed.length - 1;
-        const delta = `{"type":"delta","id":${idJson},"delta":${frame}${isLast ? suffix : watermarkSuffix}}`;
+        // A non-final frame says so, so the client holds it until the run's last frame arrives.
+        // The last frame carries no flag, which is why a shard that stops stamping cursors still
+        // commits its runs.
+        const runTail = isLast ? suffix : `${watermarkSuffix},"more":true`;
+        const delta = `{"type":"delta","id":${idJson},"delta":${frame}${runTail}}`;
 
         total += delta.length;
 
@@ -534,4 +612,4 @@ const awaitWsDrain = async (ws: DrainableSink): Promise<void> => {
 };
 
 export type { DrainableSink, FrameSink, SubscriptionFrameInput };
-export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame };
+export { awaitWsDrain, DELTA_PLACEHOLDER_TABLE, deltaTableFor, subscriptionFrames, subscriptionListDeltas, trySendFrame };

@@ -18,11 +18,13 @@ import (
 // TransientErrorCodes are the coded errors a replay must NOT treat as the
 // server's final word.
 //
-// The shard was momentarily unreachable, so the identical call under the same
-// idempotency key is expected to succeed later, and dropping the write would lose
+// The shard was momentarily unreachable, or its delivery authorization changed
+// before the reply could be released (DELIVERY_FENCED: the write may have
+// committed), so the identical call under the same idempotency key is expected
+// to succeed or replay its stored result later, and dropping the write would lose
 // it to a transient condition. Every other coded error IS a verdict: replaying it
 // would only re-trigger the same failure, which is a poison-message loop.
-var TransientErrorCodes = map[string]bool{"SHARD_ERROR": true, "SHARD_UNAVAILABLE": true}
+var TransientErrorCodes = map[string]bool{"DELIVERY_FENCED": true, "SHARD_ERROR": true, "SHARD_UNAVAILABLE": true}
 
 // RateLimitErrorCodes are the codes that say "not now" rather than "no".
 //
@@ -137,8 +139,23 @@ type SubmitOptions struct {
 	// Precondition is re-evaluated just before a QUEUED write replays; false
 	// drops it rather than replaying a write that can only fail.
 	Precondition func() bool
+	// OnlineOnly is never queued, persisted or replayed. Where a normal write
+	// would be queued, Submit returns an OfflineError coded CodeOfflineNotQueued
+	// and the arguments never reach the queue or the persistence adapter. A send
+	// that gets no reply while the socket is down is refused the same way, with
+	// the transport error as its cause. It does not wait for a queue flush or
+	// queue behind pending writes, so it may overtake them. For a credential or a
+	// one-time token.
+	OnlineOnly bool
 	// OnSettled reports the eventual verdict on a queued write.
 	OnSettled func(MutationSettled)
+}
+
+// onlineOnlyNotQueued is the refusal of an OnlineOnly write that would be queued.
+// cause is the transport error when the write was sent and got no reply, nil when
+// it was refused before anything was sent.
+func onlineOnlyNotQueued(functionPath string, cause error) OfflineError {
+	return OfflineError{Code: CodeOfflineNotQueued, Message: "'" + functionPath + "' is online-only and the connection is not live, so it was not queued", Err: cause}
 }
 
 // ErrClientClosed is returned by Submit after Close.
@@ -202,10 +219,18 @@ func (c *Client) OnMutationSettled(listener func(MutationSettled)) func() {
 func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	c.mu.Lock()
 	closed := c.closed
+	// Read before any overlay is applied, so a refused online-only write leaves
+	// nothing to roll back. A socket that detaches after this read is caught by the
+	// check under the lock below.
+	queuesNow := c.send == nil && (c.wasEverConnected || c.offline.QueueBeforeFirstConnect())
 	c.mu.Unlock()
 
 	if closed {
 		return MutationOutcome{}, ErrClientClosed
+	}
+
+	if options.OnlineOnly && queuesNow {
+		return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath, nil)
 	}
 
 	writeID := options.MutationID
@@ -236,6 +261,15 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	queue := c.offline
 	queueIt := c.send == nil && (c.wasEverConnected || queue.QueueBeforeFirstConnect())
 
+	// Refused with the layers rolled back, which is what a closed client does
+	// above. The layers were installed before the lock, so they cannot be skipped.
+	if queueIt && options.OnlineOnly {
+		c.mu.Unlock()
+		c.settleLayers(nil, rollbacks, nil)
+
+		return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath, nil)
+	}
+
 	var evicted []Discarded
 
 	if queueIt {
@@ -257,6 +291,13 @@ func (c *Client) Submit(options SubmitOptions) (MutationOutcome, error) {
 	value, commitCursor, err := c.rpcFull(options.FunctionPath, options.Args, options.ShardKey, writeID, "", c.AuthToken())
 	if err != nil && !isUndecodableResult(err) {
 		c.settleLayers(nil, rollbacks, nil)
+
+		// An online-only write that got no reply while the socket is down is refused
+		// as a queued write would have been, the transport failure as its cause. A
+		// coded reply, and any failure while connected, surface as they are.
+		if options.OnlineOnly && !c.Online() && c.isTransportFailure(err, options.Args) {
+			return MutationOutcome{}, onlineOnlyNotQueued(options.FunctionPath, err)
+		}
 
 		return MutationOutcome{}, err
 	}
@@ -877,6 +918,22 @@ func isUndecodableResult(err error) bool {
 	var apiError APIError
 
 	return errors.As(err, &apiError) && apiError.resultUndecodable
+}
+
+// isTransportFailure reports a direct send that got no HTTP reply: the injected
+// poster itself failed. A coded reply is an APIError, and an unconfigured poster
+// and arguments the codec refuses fail before anything is sent, so none of those
+// count.
+func (c *Client) isTransportFailure(err error, args any) bool {
+	var apiError APIError
+
+	if errors.As(err, &apiError) || c.Post == nil {
+		return false
+	}
+
+	_, encodeErr := EncodeWire(argsOrEmpty(args))
+
+	return encodeErr == nil
 }
 
 // isTransient reports whether a failed replay may be retried rather than dropped.

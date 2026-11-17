@@ -230,7 +230,7 @@ const deleteStaleHalt = async (database: ControlPlaneStore, alias: string, proje
     for (const stale of page as HaltRow[]) {
         if (stale.projectId !== projectId) {
             // eslint-disable-next-line no-await-in-loop -- `by_alias` is unique: at most one
-            await database.delete(stale._id, "halts");
+            await database.delete("halts", stale._id);
         }
     }
 };
@@ -286,7 +286,7 @@ export const requestOrganizationHalt = async (
 
         if (patch !== undefined) {
             // eslint-disable-next-line no-await-in-loop -- see above
-            await database.patch(row._id, { ...patch, updatedAt: now }, "halts");
+            await database.patch("halts", row._id, { ...patch, updatedAt: now });
 
             if (patch.state === "halting") {
                 result.halted.push(alias);
@@ -317,7 +317,7 @@ export const requestOrganizationResume = async (
 
     for (const row of rows) {
         // eslint-disable-next-line no-await-in-loop -- a handful of aliases per organization; sequential keeps the writer simple
-        await database.patch(row._id, { attempts: 0, lastError: null, nextAttemptAt: null, state: "resuming", updatedAt: now }, "halts");
+        await database.patch("halts", row._id, { attempts: 0, lastError: null, nextAttemptAt: null, state: "resuming", updatedAt: now });
     }
 
     const resumed = rows.map((row) => row.alias);
@@ -539,7 +539,7 @@ const planConverges = async (
  * so every write of a converge lands only on a row it still owns.
  */
 const heldRow = async (database: ControlPlaneStore, id: string, token: string): Promise<HaltRow | null> => {
-    const current = (await database.get(id, "halts")) as HaltRow | null;
+    const current = (await database.get("halts", id)) as HaltRow | null;
 
     return current?.convergingBy === token ? current : null;
 };
@@ -553,18 +553,19 @@ const heldRow = async (database: ControlPlaneStore, id: string, token: string): 
  * the same stub converged twice.
  */
 const claim = async (database: ControlPlaneStore, planned: HaltRow, input: { mode: "halt" | "resume"; now: number; token: string }): Promise<boolean> => {
-    const current = (await database.get(planned._id, "halts")) as HaltRow | null;
+    const current = (await database.get("halts", planned._id)) as HaltRow | null;
     const leaseFree = current?.convergingAt == null || input.now - current.convergingAt >= HALT_LEASE_MS;
 
     if (current?.updatedAt !== planned.updatedAt || current.state !== planned.state || !leaseFree) {
         return false;
     }
 
-    await database.patch(
-        planned._id,
-        { convergingAt: input.now, convergingBy: input.token, ...(input.mode === "halt" ? { stubStartedAt: input.now } : {}), updatedAt: input.now },
-        "halts",
-    );
+    await database.patch("halts", planned._id, {
+        convergingAt: input.now,
+        convergingBy: input.token,
+        ...(input.mode === "halt" ? { stubStartedAt: input.now } : {}),
+        updatedAt: input.now,
+    });
 
     return (await heldRow(database, planned._id, input.token)) !== null;
 };
@@ -589,7 +590,7 @@ const recordFailure = async (
         // Another job runs on the alias's box: no attempt, no error, no alert — this converge's lease released, a minute's wait.
         ports.log(`[halt] ${mode} of ${row.alias} waits: the provision box is busy with another job for it`);
         await database
-            .patch(row._id, { convergingAt: null, convergingBy: null, nextAttemptAt: ports.now + 60_000, updatedAt: ports.now }, "halts")
+            .patch("halts", row._id, { convergingAt: null, convergingBy: null, nextAttemptAt: ports.now + 60_000, updatedAt: ports.now })
             .catch(() => undefined);
 
         return;
@@ -600,11 +601,14 @@ const recordFailure = async (
 
     ports.log(`[halt] ${mode} of ${row.alias} failed (attempt ${String(attempts)}): ${message}`);
     await database
-        .patch(
-            row._id,
-            { attempts, convergingAt: null, convergingBy: null, lastError: message, nextAttemptAt: ports.now + haltBackoff(attempts), updatedAt: ports.now },
-            "halts",
-        )
+        .patch("halts", row._id, {
+            attempts,
+            convergingAt: null,
+            convergingBy: null,
+            lastError: message,
+            nextAttemptAt: ports.now + haltBackoff(attempts),
+            updatedAt: ports.now,
+        })
         .catch(() => undefined);
 
     if (row.lastError == null) {
@@ -639,9 +643,9 @@ const settleHalted = async (
 
     if ("skipped" in outcome) {
         if (current.state === "resuming") {
-            await database.patch(row._id, { ...RELEASED, updatedAt: ports.now }, "halts");
+            await database.patch("halts", row._id, { ...RELEASED, updatedAt: ports.now });
         } else {
-            await database.delete(row._id, "halts");
+            await database.delete("halts", row._id);
             await audit(database, {
                 action: "halt.skipped",
                 actor: "system:halt-sweep",
@@ -658,16 +662,21 @@ const settleHalted = async (
 
     if (current.state === "resuming") {
         // A resume was asked for while the stub converged: the next tick restores the release.
-        await database.patch(row._id, { ...RELEASED, ...converged, updatedAt: ports.now }, "halts");
+        await database.patch("halts", row._id, { ...RELEASED, ...converged, updatedAt: ports.now });
 
         return;
     }
 
-    await database.patch(
-        row._id,
-        { ...RELEASED, ...converged, attempts: 0, haltedAt: ports.now, lastError: null, nextAttemptAt: null, state: "halted", updatedAt: ports.now },
-        "halts",
-    );
+    await database.patch("halts", row._id, {
+        ...RELEASED,
+        ...converged,
+        attempts: 0,
+        haltedAt: ports.now,
+        lastError: null,
+        nextAttemptAt: null,
+        state: "halted",
+        updatedAt: ports.now,
+    });
     // The stub stops every workflow class's run() with an error, so an instance running at the stop fails on its next wake and does not resume.
     // Listed in the alert, and counted in the audit row. The full list is on the halt record (`stubClasses`), because the audit target is cut to MAX_ERROR.
     // The stub cannot resume such an instance after a resume, so the operator needs the list.
@@ -710,12 +719,12 @@ const settleResumed = async (
 
     if (current.state !== "resuming") {
         // Halted again mid-resume: the release is back on the Worker, so the stub goes on again.
-        await database.patch(row._id, { ...RELEASED, state: "halting", updatedAt: ports.now }, "halts");
+        await database.patch("halts", row._id, { ...RELEASED, state: "halting", updatedAt: ports.now });
 
         return;
     }
 
-    await database.delete(row._id, "halts");
+    await database.delete("halts", row._id);
     await audit(database, {
         action: "halt.resumed",
         actor: "system:halt-sweep",
@@ -811,7 +820,7 @@ export const deployRuleAlert =
             .map((rule) => {
                 return { channel: rule.channel, destination: rule.destination, name: rule.name, ruleId: rule._id };
             });
-        const project = (await database.get(row.projectId, "projects")) as null | { name?: string };
+        const project = (await database.get("projects", row.projectId)) as null | { name?: string };
 
         await fireDeployRules(
             rules,

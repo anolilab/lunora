@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
+import { resolveLazyFunctions } from "@lunora/config";
 import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
@@ -11,7 +12,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import { renderCodegenHint } from "../../util/codegen-error";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveTargetOrError } from "../../util/deploy-target";
+import { resolveTargetOrError } from "../../util/deploy-target-resolve";
 import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { HealthFetch } from "../../util/health-probe";
@@ -50,6 +51,8 @@ interface VerifyCommandOptions {
      */
     healthUrl?: string;
 
+    /** Opt into per-module lazy function imports. */
+    lazyFunctions?: boolean;
     logger: Logger;
     /** Injectable subprocess runner for the tsc step; defaults to the real spawner. */
     spawner?: Spawner;
@@ -234,7 +237,14 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
             return { code: EXIT_CODE.USAGE, error: message, errors: [message], warnings: [], wranglerPath: undefined };
         }
 
-        const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd, target: resolvedTarget.target, ...wranglerCodegenInputs(cwd) });
+        const codegen = runCodegen({
+            apiSpec: options.apiSpec,
+            lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
+            dryRun: true,
+            projectRoot: cwd,
+            target: resolvedTarget.target,
+            ...wranglerCodegenInputs(cwd, resolvedTarget.target),
+        });
 
         // The target is resolved and validated immediately above precisely so
         // the surface is gated against it — reporting everything else this run
@@ -252,7 +262,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
             errors.push(advisoryError);
         }
 
-        const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, command: "verify", logger, readOnly: true });
+        const gate = await runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, command: "verify", logger, readOnly: true });
 
         if (gate.blocked) {
             errors.push(gate.reason);
@@ -291,6 +301,7 @@ const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions, Veri
     const result = await runVerifyCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         cwd,
         env: options.env,
         format,

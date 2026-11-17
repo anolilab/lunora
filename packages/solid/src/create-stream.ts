@@ -3,7 +3,7 @@ import type { Accessor } from "solid-js";
 import { createSignal, onCleanup } from "solid-js";
 
 import { useLunora } from "./context";
-import { trackedEffect } from "./solid-compat";
+import { trackedArgsEffect } from "./reactive-args";
 
 /** The lifecycle of a stream the primitive is observing. */
 type CreateStreamStatus = "complete" | "error" | "idle" | "streaming";
@@ -61,7 +61,9 @@ const createStream = <F extends FunctionReference<"stream">>(
         cancelCurrent?.();
     };
 
-    trackedEffect(resolveArgs, (currentArgs) => {
+    // Re-opens only when the args' content changes, so an accessor that rebuilds
+    // equal args does not cancel the live stream and drop its chunks.
+    trackedArgsEffect(resolveArgs, (currentArgs) => {
         // Reset for the new (or torn-down) stream.
         setChunks(() => []);
         setError(() => undefined);

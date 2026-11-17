@@ -15,15 +15,23 @@ export {
     resolveAiGateway,
 } from "./gateway";
 export type { ModelPrice, ModelUsage } from "./pricing";
-export { DEFAULT_MODEL_PRICES, estimateModelCost, lookupModelPrice } from "./pricing";
+export { DEFAULT_MODEL_PRICES, estimateImageCost, estimateModelCost, lookupModelPrice } from "./pricing";
 export type {
     AiBindingLike,
     AiGatewayOptions,
+    AiImage,
+    AiImageGenerateInput,
+    AiImageGenerateResult,
+    AiMarkdownConversionResult,
+    AiMarkdownDocument,
     AiMetrics,
     AiModelOptions,
     AiRunOptions,
     AiSpan,
     AiTelemetry,
+    AiToMarkdownInput,
+    AiToMarkdownOptions,
+    AiToMarkdownResult,
     AiTracer,
     AiWebSearchItem,
     AiWebSearchOptions,

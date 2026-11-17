@@ -39,3 +39,13 @@ export const mirrorAuthUser = internalMutation
 
         await ctx.db.insertManyUnsafe("users", [{ _id: id, email, name }], { allowExplicitId: true });
     });
+
+/**
+ * The caller's identity as `ctx.auth` resolves it, for the API key e2e spec: a
+ * request carrying only an `x-api-key` header must come back with the key owner's
+ * id, and an anonymous one with `null`.
+ */
+export const whoami = query.query(({ ctx }): { userId: null | string } => {
+    // eslint-disable-next-line unicorn/no-null -- the API key e2e spec asserts an anonymous caller is `null`
+    return { userId: ctx.auth.userId ?? null };
+});

@@ -290,6 +290,50 @@ describe("auth jurisdiction move in workerd", () => {
         await expect(count("eu:move-budget", "bulk")).resolves.toBe(2500);
     });
 
+    it("finishes a copy over 17 or more tables, each call under 50 fetches", async () => {
+        expect.assertions(3);
+
+        await seedSource("move-many");
+
+        const names = Array.from({ length: 20 }, (_, index) => `extra_${String(index + 1).padStart(2, "0")}`);
+
+        await sql("move-many", (storage) => {
+            for (const name of names) {
+                storage.sql.exec(`CREATE TABLE "${name}" ("id" integer PRIMARY KEY, "v" text)`);
+                storage.sql.exec(`INSERT INTO "${name}" ("v") VALUES ('a'), ('b'), ('c')`);
+            }
+        });
+
+        let fetches = 0;
+        let most = 0;
+        const move = moveFor("move-many", (stub) => {
+            return {
+                fetch: async (request) => {
+                    fetches += 1;
+
+                    return stub.fetch(request);
+                },
+            };
+        });
+
+        let result: CopyResult;
+        let calls = 0;
+
+        do {
+            fetches = 0;
+            calls += 1;
+            // eslint-disable-next-line no-await-in-loop -- each call resumes where the previous one stopped
+            result = await move.copy();
+            most = Math.max(most, fetches);
+        } while (!result.done && calls < 10);
+
+        const pairs = await Promise.all(names.map(async (name) => [await count("move-many", name), await count("eu:move-many", name)]));
+
+        expect(result.done).toBe(true);
+        expect(most).toBeLessThanOrEqual(50);
+        expect(pairs.filter(([source, target]) => source !== target)).toEqual([]);
+    });
+
     it("resumes a run that died part-way, from where the pinned object got to", async () => {
         expect.assertions(4);
 

@@ -108,16 +108,17 @@ describe("emitShard — the deferred-delete window", () => {
     });
 
     it("opens the window before the span and settles it against the outcome", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const helper = methodBody(shard(), "private async runMutationTransaction<T>(");
         const open = helper.indexOf("beginDeferredDeletes(ctx)");
-        const span = helper.indexOf("await this.runInTransaction(work)");
+        const span = helper.indexOf("result = await this.runInTransaction(async () => {");
         const flush = helper.indexOf("flushDeferredDeletes(ctx)");
 
         // Opened before the span, so every key the handler queues lands in THIS
         // window and not in the caller's flushable list.
         expect(open).toBeGreaterThan(-1);
+        expect(span).toBeGreaterThan(-1);
         expect(open).toBeLessThan(span);
         // Dropped on rollback, and made flushable on commit — before the flush,
         // which is what turns the commit settle into an actual delete.
@@ -126,17 +127,17 @@ describe("emitShard — the deferred-delete window", () => {
     });
 
     it("settles the window on both exits of the nested branch", () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         const helper = methodBody(shard(), "private async runMutationTransaction<T>(");
-        const nested = helper.indexOf("if (this.isInTransaction()) {");
-        const span = helper.indexOf("await this.runInTransaction(work)");
+        const nested = helper.indexOf("if (this.mutationContexts.has(ctx as object)) {");
+        const span = helper.indexOf("result = await this.runInTransaction(async () => {");
 
-        // A `ctx.runMutation` from inside a mutation rides the enclosing span, so
-        // it never reaches the outer settles below. Leaving its window open would
-        // strand every key it queued in a list nothing drains — and leaving it
-        // unsettled on the throw would hand a rolled-back sub-mutation's keys to
-        // the span that commits.
+        // The marker belongs to the context that entered the current span. A
+        // nested `ctx.runMutation` shares it, so both exits must settle this
+        // nested window before the outer span continues.
+        expect(nested).toBeGreaterThan(-1);
+        expect(span).toBeGreaterThan(nested);
         expect(helper.slice(nested, span)).toContain("settleDeletes(true);");
         expect(helper.slice(nested, span)).toContain("settleDeletes(false);");
     });

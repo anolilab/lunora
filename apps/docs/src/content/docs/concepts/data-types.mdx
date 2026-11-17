@@ -131,8 +131,8 @@ these types.
 ## Size limits
 
 Values live in Durable Object SQLite, so the platform's storage envelope applies:
-a single storage operation is capped at **128 KB**, and a Durable Object's SQLite
-tops out at **10 GB**. Large binary payloads belong in R2 via
+a single row is capped at **2 MB**, and a Durable Object's SQLite storage tops out
+at **10 GB**. Large binary payloads belong in R2 via
 [file storage](/docs/concepts/file-storage) with a `v.storage()` column holding
 the key, not inline in a `v.bytes()` field. See [Limits](/docs/limits) for the
 full table.

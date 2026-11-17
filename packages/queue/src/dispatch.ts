@@ -22,7 +22,16 @@ import { LunoraError, toErrorBody } from "@lunora/errors";
 
 import { openRequeue, sealRequeue } from "./requeue-envelope";
 import { createQueueRunContext } from "./run-context";
-import type { MessageBatchLike, MessageLike, QueueBindingLike, QueueDefinition, QueueMessage, QueueMessageBatch, QueueRetryOptions } from "./types";
+import type {
+    MessageBatchLike,
+    MessageLike,
+    QueueBindingLike,
+    QueueDefinition,
+    QueueLivePublisher,
+    QueueMessage,
+    QueueMessageBatch,
+    QueueRetryOptions,
+} from "./types";
 
 /** One declared queue, keyed for batch routing by its stable wrangler name. */
 interface QueueRegistryEntry {
@@ -124,6 +133,14 @@ interface DispatchOptions {
     env: Record<string, unknown>;
     /** Injectable fetch for the `ctx.run` dispatcher (tests). */
     fetchImpl?: typeof fetch;
+
+    /**
+     * Set while the deployment is paused: no handler runs, and every message is
+     * held for this many seconds instead. See {@link holdBatch}.
+     */
+    holdSeconds?: number;
+    /** The runtime's shard-forwarding live publisher, handed to the handler as `ctx.live`. */
+    live?: QueueLivePublisher;
 
     /**
      * W3C `traceparent` of the consumer invocation's own trace, supplied by the
@@ -600,15 +617,64 @@ const resolveDeclinedBatch = async (
     );
 };
 
+/** Send the fresh copy of `message`; answers why it could not, or `undefined` once it was sent. */
+const sendHeldCopy = async (
+    message: MessageLike,
+    producer: QueueBindingLike | undefined,
+    secret: string | undefined,
+    holdSeconds: number,
+): Promise<string | undefined> => {
+    if (typeof producer?.send !== "function" || secret === undefined) {
+        return "it has no producer binding or no admin token to seal a copy with";
+    }
+
+    try {
+        const view = await viewOf(message, secret);
+
+        await producer.send(await sealRequeue(secret, view.id, view.body), { contentType: "json", delaySeconds: holdSeconds });
+
+        return undefined;
+    } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+    }
+};
+
 /**
- * Look up the handler for `batch.queue` and invoke it with a fresh
- * `QueueRunContext`. Throws a directed error when no push handler is registered
- * for the delivered queue (a misconfiguration — the consumer was declared
- * `pull`, or the queue name drifted from the `defineQueue` export). The
- * registry already carries every per-environment name wrangler.jsonc maps to a
- * declared producer binding (see codegen's `emitQueues`), so the lookup stays exact.
+ * Hold a batch back while the deployment is paused. A plain `retry` would spend
+ * one of the message's delivery attempts per hold, so a pause longer than
+ * `max_retries` times the delay would dead-letter work that never ran. Instead
+ * each message goes back to its own queue as a delayed copy with a fresh attempt
+ * budget (the envelope of {@link resolveDeclinedBatch}, so its id and body
+ * survive), and the original is acked only once the copy was sent. A message
+ * that cannot be copied (no producer binding, no admin token, a failed or
+ * oversized send) is retried with the delay instead: it spends an attempt, but
+ * is never lost, and the reason is logged.
  */
-const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegistry, options: DispatchOptions): Promise<void> => {
+const holdBatch = async (batch: MessageBatchLike, entry: QueueRegistryEntry, env: Record<string, unknown>, holdSeconds: number): Promise<void> => {
+    const secret = requeueSecret(env);
+    const producer = entry.binding === undefined ? undefined : (env[entry.binding] as QueueBindingLike | undefined);
+
+    await Promise.all(
+        batch.messages.map(async (message) => {
+            const failure = await sendHeldCopy(message, producer, secret, holdSeconds);
+
+            if (failure === undefined) {
+                message.ack();
+
+                return;
+            }
+
+            // eslint-disable-next-line no-console -- last-resort operator signal; there is no injected logger on the dispatch path
+            console.error(
+                `@lunora/queue: queue "${batch.queue}" (${entry.exportName}): message ${message.id} is held with a delayed retry because a fresh copy could not be sent (${failure}); it spends a delivery attempt.`,
+            );
+            message.retry({ delaySeconds: holdSeconds });
+        }),
+    );
+};
+
+/** The registry entry for `batch.queue`; throws a directed error when none is declared. */
+const findRegistryEntry = (batch: MessageBatchLike, registry: QueueRegistry): QueueRegistryEntry => {
     // Guard the lookup with `Object.hasOwn`: the registry is an ordinary object
     // literal emitted by codegen, so a batch delivered from an undeclared queue
     // named `constructor` / `toString` / `hasOwnProperty` (all valid wrangler
@@ -627,6 +693,26 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         );
     }
 
+    return entry;
+};
+
+/**
+ * Look up the handler for `batch.queue` and invoke it with a fresh
+ * `QueueRunContext`. Throws a directed error when no push handler is registered
+ * for the delivered queue (a misconfiguration — the consumer was declared
+ * `pull`, or the queue name drifted from the `defineQueue` export). The
+ * registry already carries every per-environment name wrangler.jsonc maps to a
+ * declared producer binding (see codegen's `emitQueues`), so the lookup stays exact.
+ */
+const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegistry, options: DispatchOptions): Promise<void> => {
+    const entry = findRegistryEntry(batch, registry);
+
+    if (options.holdSeconds !== undefined) {
+        await holdBatch(batch, entry, options.env, options.holdSeconds);
+
+        return;
+    }
+
     const { handler } = entry.definition;
 
     if (typeof handler !== "function") {
@@ -638,6 +724,7 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
         exportName: entry.exportName,
         fetchImpl: options.fetchImpl,
         ...(options.traceparent === undefined ? {} : { traceparent: options.traceparent }),
+        live: options.live,
     });
     // Always instrumented, capture sink or not: the wrapper is what gives each
     // message its pinned `run`, and poison-message isolation is a DELIVERY

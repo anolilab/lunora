@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { RELAY_SIGNATURE_HEADER, signSiblingBody } from "@lunora/shard-engine";
+import { describe, expect, it, vi } from "vitest";
 
+import { shardRegistryFrame } from "../../../shared/shard-registry-frame";
 import { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "../src/dynamic-shard-registry";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
+
+const SECRET = "test-relay-secret";
+const env = { LUNORA_RELAY_SECRET: SECRET };
 
 /**
  * Minimal in-process implementation of the ShardRegistryDO surface — same
@@ -19,7 +24,14 @@ const createFakeRegistryDO = (initial: Record<string, string[]> = {}) => {
 
     const fetch = async (request: Request): Promise<Response> => {
         const url = new URL(request.url);
-        const body: unknown = request.method === "POST" ? await request.json() : undefined;
+        const raw = await request.text();
+
+        // The real registry refuses a request that is not signed over this exact frame.
+        if (request.headers.get(RELAY_SIGNATURE_HEADER) !== (await signSiblingBody(SECRET, shardRegistryFrame(request.method, request.url, raw)))) {
+            return new Response("forbidden", { status: 403 });
+        }
+
+        const body: unknown = request.method === "POST" ? JSON.parse(raw) : undefined;
 
         calls.push({ body, method: request.method, path: url.pathname });
 
@@ -83,13 +95,56 @@ const createFakeNamespace = (stub: { fetch: (request: Request) => Promise<Respon
     };
 };
 
+describe("createDynamicShardRegistry through a service binding", () => {
+    it("takes the RPC path even when the stub also answers idFromName, as a service binding's proxy can", async () => {
+        expect.assertions(1);
+
+        const rpc = {
+            idFromName: () => "not-a-namespace",
+            listShardKeys: vi.fn<(table: string) => Promise<string[]>>(async () => ["a"]),
+            register: async () => {},
+            snapshot: async () => {
+                return {};
+            },
+            unregister: async () => {},
+        };
+        const registry = createDynamicShardRegistry({ namespace: rpc });
+
+        await expect(registry.listShardKeys("messages")).resolves.toStrictEqual(["a"]);
+    });
+
+    it("reads and writes the host's RPC surface with no secret, and caches the list", async () => {
+        expect.assertions(4);
+
+        const rows = new Map<string, string[]>([["messages", ["a"]]]);
+        const listShardKeys = vi.fn<(table: string) => Promise<string[]>>(async (table) => [...(rows.get(table) ?? [])]);
+        const rpc = {
+            listShardKeys,
+            register: vi.fn<(table: string, shardKey: string) => Promise<void>>(async (table, shardKey) => {
+                rows.set(table, [...(rows.get(table) ?? []), shardKey]);
+            }),
+            snapshot: async () => Object.fromEntries(rows),
+            unregister: async () => {},
+        };
+        const registry = createDynamicShardRegistry({ namespace: rpc });
+
+        await expect(registry.listShardKeys("messages")).resolves.toStrictEqual(["a"]);
+        await expect(registry.listShardKeys("messages")).resolves.toStrictEqual(["a"]);
+        expect(listShardKeys).toHaveBeenCalledTimes(1);
+
+        await registry.register("messages", "b");
+
+        expect(rpc.register).toHaveBeenCalledWith("messages", "b");
+    });
+});
+
 describe("createDynamicShardRegistry", () => {
     it("listShardKeys returns the keys the DO has registered", async () => {
         expect.assertions(1);
 
         const fakeDO = createFakeRegistryDO({ messages: ["a", "b", "c"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         const result = await registry.listShardKeys("messages");
 
@@ -101,7 +156,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO();
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         await registry.listShardKeys("anything");
 
@@ -113,7 +168,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ cacheTtlMs: 0, namespace });
+        const registry = createDynamicShardRegistry({ env, cacheTtlMs: 0, namespace });
 
         await registry.listShardKeys("messages");
         await registry.listShardKeys("messages");
@@ -141,7 +196,7 @@ describe("createDynamicShardRegistry", () => {
             },
         };
 
-        const registry = createDynamicShardRegistry({ jurisdiction: "us", namespace });
+        const registry = createDynamicShardRegistry({ env, jurisdiction: "us", namespace });
 
         const result = await registry.listShardKeys("messages");
 
@@ -154,7 +209,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO();
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ instanceName: "custom-registry", namespace });
+        const registry = createDynamicShardRegistry({ env, instanceName: "custom-registry", namespace });
 
         await registry.listShardKeys("messages");
 
@@ -167,7 +222,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO();
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         await registry.register("messages", "channel-7");
 
@@ -180,7 +235,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO({ messages: ["x", "y"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         await registry.unregister("messages", "x");
 
@@ -192,7 +247,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ cacheTtlMs: 30_000, namespace });
+        const registry = createDynamicShardRegistry({ env, cacheTtlMs: 30_000, namespace });
 
         await registry.listShardKeys("messages");
         await registry.listShardKeys("messages");
@@ -208,7 +263,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         // Prime the cache.
         await registry.listShardKeys("messages");
@@ -227,7 +282,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO({ messages: ["a", "b"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         await registry.listShardKeys("messages");
         await registry.unregister("messages", "a");
@@ -242,7 +297,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"], tasks: ["x"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         await registry.listShardKeys("messages");
         await registry.listShardKeys("tasks");
@@ -260,7 +315,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"], tasks: ["x"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         await registry.listShardKeys("messages");
         await registry.listShardKeys("tasks");
@@ -280,7 +335,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ cacheTtlMs: 0, namespace });
+        const registry = createDynamicShardRegistry({ env, cacheTtlMs: 0, namespace });
 
         await registry.listShardKeys("messages");
         await registry.listShardKeys("messages");
@@ -294,7 +349,7 @@ describe("createDynamicShardRegistry", () => {
 
         const fakeDO = createFakeRegistryDO({ messages: ["a"], tasks: ["x", "y"] });
         const namespace = createFakeNamespace(fakeDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         const snap = await registry.snapshot();
 
@@ -309,7 +364,7 @@ describe("createDynamicShardRegistry", () => {
             fetch: async () => new Response("oops", { status: 500 }),
         };
         const namespace = createFakeNamespace(failingDO);
-        const registry = createDynamicShardRegistry({ namespace });
+        const registry = createDynamicShardRegistry({ env, namespace });
 
         await expect(registry.listShardKeys("messages")).rejects.toThrow(/registry \/list returned 500/);
     });
@@ -318,5 +373,181 @@ describe("createDynamicShardRegistry", () => {
         expect.assertions(1);
 
         expect(DEFAULT_REGISTRY_CACHE_TTL_MS).toBe(30_000);
+    });
+
+    it("shares one /list request across concurrent misses on an empty cache", async () => {
+        expect.assertions(2);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a", "b"] });
+        const namespace = createFakeNamespace(fakeDO);
+        const registry = createDynamicShardRegistry({ env, namespace });
+
+        const results = await Promise.all(Array.from({ length: 20 }, async () => registry.listShardKeys("messages")));
+
+        expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(1);
+        expect(results.map((keys) => [...keys].toSorted((a, b) => a.localeCompare(b)))).toStrictEqual(Array.from({ length: 20 }, () => ["a", "b"]));
+    });
+
+    it("clears the in-flight request on failure, so the next call retries", async () => {
+        expect.assertions(3);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        let listAttempts = 0;
+        const flaky = {
+            fetch: async (request: Request): Promise<Response> => {
+                if (new URL(request.url).pathname === "/list") {
+                    listAttempts += 1;
+
+                    if (listAttempts === 1) {
+                        return new Response("boom", { status: 500 });
+                    }
+                }
+
+                return fakeDO.fetch(request);
+            },
+        };
+        const registry = createDynamicShardRegistry({ env, namespace: createFakeNamespace(flaky) });
+
+        const first = registry.listShardKeys("messages");
+        const second = registry.listShardKeys("messages");
+
+        await expect(first).rejects.toThrow("shard registry /list returned 500");
+        await expect(second).rejects.toThrow("shard registry /list returned 500");
+
+        expect([...(await registry.listShardKeys("messages"))]).toStrictEqual(["a"]);
+    });
+
+    it("does not join a list that started before a register on the same worker", async () => {
+        expect.assertions(4);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        let listAttempts = 0;
+        let releaseFirst!: () => void;
+        const firstHeld = new Promise<void>((resolve) => {
+            releaseFirst = resolve;
+        });
+        let markFirstRead!: () => void;
+        const firstRead = new Promise<void>((resolve) => {
+            markFirstRead = resolve;
+        });
+        let releaseSecondArrived!: () => void;
+        const secondArrived = new Promise<void>((resolve) => {
+            releaseSecondArrived = resolve;
+        });
+        const gated = {
+            fetch: async (request: Request): Promise<Response> => {
+                if (new URL(request.url).pathname !== "/list") {
+                    return fakeDO.fetch(request);
+                }
+
+                listAttempts += 1;
+
+                if (listAttempts === 2) {
+                    releaseSecondArrived();
+                }
+
+                // The first list reads the table before the register, then its reply is held.
+                if (listAttempts === 1) {
+                    const response = await fakeDO.fetch(request);
+
+                    markFirstRead();
+                    await firstHeld;
+
+                    return response;
+                }
+
+                return fakeDO.fetch(request);
+            },
+        };
+        const registry = createDynamicShardRegistry({ env, namespace: createFakeNamespace(gated) });
+
+        const beforeRegister = registry.listShardKeys("messages");
+
+        // The register must land after the first list has read the table, which signing makes a separate step.
+        await firstRead;
+        await registry.register("messages", "b");
+
+        const afterRegister = registry.listShardKeys("messages");
+
+        // Waits for the fresh list to reach the DO, not for a clock: a call that joined the held list never sends one.
+        await secondArrived;
+
+        expect(listAttempts).toBe(2);
+        expect([...(await afterRegister)].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["a", "b"]);
+
+        releaseFirst();
+
+        expect([...(await beforeRegister)]).toStrictEqual(["a"]);
+        // The held list finished after the fresh one; its stale reply must not replace the fresh cache entry.
+        expect([...(await registry.listShardKeys("messages"))].toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["a", "b"]);
+    });
+
+    it("does not share a request when caching is off, so every call reaches the DO", async () => {
+        expect.assertions(1);
+
+        const fakeDO = createFakeRegistryDO({ messages: ["a"] });
+        const registry = createDynamicShardRegistry({ env, cacheTtlMs: 0, namespace: createFakeNamespace(fakeDO) });
+
+        await Promise.all([registry.listShardKeys("messages"), registry.listShardKeys("messages")]);
+
+        expect(fakeDO.calls.filter((c) => c.path === "/list")).toHaveLength(2);
+    });
+
+    describe("authentication", () => {
+        it("signs every route with the relay secret from env", async () => {
+            expect.assertions(2);
+
+            const fakeDO = createFakeRegistryDO();
+            const registry = createDynamicShardRegistry({ cacheTtlMs: 0, env, namespace: createFakeNamespace(fakeDO) });
+
+            await registry.register("messages", "a");
+            await registry.unregister("messages", "a");
+            await registry.listShardKeys("messages");
+            await registry.snapshot();
+
+            expect(fakeDO.calls.map((call) => call.path)).toStrictEqual(["/register", "/unregister", "/list", "/snapshot"]);
+            expect(fakeDO.calls).toHaveLength(4);
+        });
+
+        it.each([
+            ["no env", undefined],
+            ["an env without LUNORA_RELAY_SECRET", {}],
+            ["an empty LUNORA_RELAY_SECRET", { LUNORA_RELAY_SECRET: "" }],
+        ])("fails closed with %s, before sending anything", async (_label, noSecretEnv) => {
+            expect.assertions(5);
+
+            const fakeDO = createFakeRegistryDO();
+            const registry = createDynamicShardRegistry({ env: noSecretEnv, namespace: createFakeNamespace(fakeDO) });
+
+            await expect(registry.register("messages", "a")).rejects.toThrow("LUNORA_RELAY_SECRET");
+            await expect(registry.unregister("messages", "a")).rejects.toThrow("LUNORA_RELAY_SECRET");
+            await expect(registry.listShardKeys("messages")).rejects.toThrow("LUNORA_RELAY_SECRET");
+            await expect(registry.snapshot()).rejects.toThrow("LUNORA_RELAY_SECRET");
+            expect(fakeDO.calls).toHaveLength(0);
+        });
+
+        it("reports the missing secret as a configuration error, not an internal one, so the message reaches the caller", async () => {
+            expect.assertions(2);
+
+            const registry = createDynamicShardRegistry({ env: {}, namespace: createFakeNamespace(createFakeRegistryDO()) });
+            const failure = await registry.register("messages", "a").then(
+                () => undefined,
+                (error: unknown) => error,
+            );
+
+            expect(failure).toMatchObject({ code: "RELAY_MISCONFIGURED" });
+            expect(failure).toMatchObject({ message: expect.stringContaining("LUNORA_RELAY_SECRET") });
+        });
+
+        it("surfaces a registry that refuses the signature as an error", async () => {
+            expect.assertions(1);
+
+            const registry = createDynamicShardRegistry({
+                env: { LUNORA_RELAY_SECRET: "another-secret" },
+                namespace: createFakeNamespace(createFakeRegistryDO()),
+            });
+
+            await expect(registry.register("messages", "a")).rejects.toThrow("403");
+        });
     });
 });

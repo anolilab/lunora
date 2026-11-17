@@ -49,7 +49,7 @@ const sweepScopedRows = async (
 export const purgeScopedRows = async (context: MutationContext, tables: ReadonlyArray<TableName>, where: Record<string, unknown>): Promise<void> => {
     for (const table of tables) {
         // eslint-disable-next-line no-await-in-loop -- one table at a time keeps the writer simple
-        await sweepScopedRows(context, table, where, (row) => context.db.delete(row._id as never));
+        await sweepScopedRows(context, table, where, (row) => context.db.delete(table, row._id as never));
     }
 };
 
@@ -66,4 +66,4 @@ export const anonymiseScopedRows = (
     table: TableName,
     where: Record<string, unknown>,
     redact: (row: MatchingRow) => Record<string, unknown>,
-): Promise<void> => sweepScopedRows(context, table, where, (row) => context.db.patch(row._id as never, redact(row)));
+): Promise<void> => sweepScopedRows(context, table, where, (row) => context.db.patch(table, row._id as never, redact(row)));

@@ -13,6 +13,8 @@ interface FunctionArgumentDescriptor {
     name: string;
     /** True when the arg is wrapped in `v.optional(...)`. */
     optional: boolean;
+    /** True when the arg's validator tree holds a `v.sensitive` marker (a secret a caller types in). */
+    sensitive?: true;
     /** Target table for an `id` arg (`v.id("table")`). */
     table?: string;
 }
@@ -24,6 +26,26 @@ interface ValidatorLike {
 }
 
 const asValidator = (value: unknown): ValidatorLike => (typeof value === "object" && value !== null ? value : {});
+
+/**
+ * True when a validator, or anything nested in it, is marked `v.sensitive`. Walks
+ * the same `_meta` children `@lunora/values` does, structurally, because this file
+ * does not import the package.
+ */
+const carriesSensitive = (validator: unknown): boolean => {
+    const meta = asValidator(validator)._meta ?? {};
+
+    if (meta["sensitive"] === true) {
+        return true;
+    }
+
+    const members = Array.isArray(meta["members"]) ? (meta["members"] as unknown[]) : [];
+    const shape: unknown[] = typeof meta["shape"] === "object" && meta["shape"] !== null ? Object.values(meta["shape"] as Record<string, unknown>) : [];
+
+    return [meta["inner"], meta["keyValidator"], meta["valueValidator"], ...members, ...shape].some(
+        (child) => typeof child === "object" && child !== null && carriesSensitive(child),
+    );
+};
 
 const kindOf = (validator: ValidatorLike): string => (typeof validator.kind === "string" ? validator.kind : "unknown");
 
@@ -46,6 +68,10 @@ const describeArgument = (name: string, validator: unknown): FunctionArgumentDes
     const kind = kindOf(current);
     const meta = current._meta ?? {};
     const descriptor: FunctionArgumentDescriptor = { kind, name, optional };
+
+    if (carriesSensitive(validator)) {
+        descriptor.sensitive = true;
+    }
 
     if (kind === "id" && typeof meta["tableName"] === "string") {
         descriptor.table = meta["tableName"];

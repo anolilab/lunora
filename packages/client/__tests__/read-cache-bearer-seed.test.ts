@@ -188,7 +188,7 @@ describe("durable read cache on a bearer-token reload", () => {
         client.setAuthToken("tok-refreshed", "user-1");
 
         expect(seeded).toStrictEqual([{ _id: "t1", text: "cached row" }]);
-        expect(client.peekActiveQuerySnapshot("todos.list", {})).toStrictEqual({ present: true, value: [{ _id: "t1", text: "cached row" }] });
+        expect(client.peekActiveQuerySnapshot("todos.list", {})).toStrictEqual({ answered: true, present: true, value: [{ _id: "t1", text: "cached row" }] });
 
         client.close();
     });
@@ -257,7 +257,7 @@ describe("durable read cache on a bearer-token reload", () => {
         client.setAuthToken("tok-second-account");
 
         expect(seen.at(-1)).toBeUndefined();
-        expect(client.peekActiveQuerySnapshot("todos.list", {})).toStrictEqual({ present: true, value: undefined });
+        expect(client.peekActiveQuerySnapshot("todos.list", {})).toStrictEqual({ answered: false, present: true, value: undefined });
         expect(client.peekHydratedQuery("todos.list", {})).toBeUndefined();
 
         // ...and comes back once the session resolve says the new credential is
@@ -336,7 +336,7 @@ describe("durable read cache on a bearer-token reload", () => {
         });
 
         expect(second).toStrictEqual([{ _id: "t1", text: "cached row" }]);
-        expect(client.peekActiveQuerySnapshot("todos.list", {})).toStrictEqual({ present: true, value: [{ _id: "t1", text: "cached row" }] });
+        expect(client.peekActiveQuerySnapshot("todos.list", {})).toStrictEqual({ answered: true, present: true, value: [{ _id: "t1", text: "cached row" }] });
 
         client.close();
     });

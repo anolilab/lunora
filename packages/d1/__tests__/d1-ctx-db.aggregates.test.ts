@@ -125,7 +125,7 @@ describe("d1 aggregateIndex parity", () => {
         await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(4);
         await expect(writer.count("todos", { projectId: "p2" })).resolves.toBe(1);
 
-        await writer.patch("t4", { projectId: "p1" });
+        await writer.patch("todos", "t4", { projectId: "p1" });
 
         await expect(writer.count("todos", { projectId: "p1" })).resolves.toBe(5);
     });
@@ -210,7 +210,7 @@ describe("d1 aggregateIndex parity", () => {
 
             await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(6);
 
-            await writer.patch("t1", { seq: 10 }); // p1: 6 - 1 + 10 = 15
+            await writer.patch("todos", "t1", { seq: 10 }); // p1: 6 - 1 + 10 = 15
 
             await expect(writer.aggregate("todos", { field: "seq", op: "sum", where: { projectId: "p1" } })).resolves.toBe(15);
         });
@@ -242,7 +242,7 @@ describe("d1 aggregateIndex parity", () => {
 
             await expect(writer.aggregate("todos", { field: "seq", op: "avg", where: { projectId: "p1" } })).resolves.toBe(1.5);
 
-            await writer.delete("t4"); // p2 empties
+            await writer.delete("todos", "t4"); // p2 empties
 
             await expect(writer.aggregate("todos", { field: "seq", op: "avg", where: { projectId: "p2" } })).resolves.toBeNull();
         });
@@ -257,8 +257,8 @@ describe("d1 aggregateIndex parity", () => {
             await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(0);
             await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(3);
 
-            await writer.delete("t5"); // removes the p1 min (0) → new min is 1
-            await writer.patch("t3", { seq: 1 }); // the p1 max (3) shrinks to 1 → new max is 2
+            await writer.delete("todos", "t5"); // removes the p1 min (0) → new min is 1
+            await writer.patch("todos", "t3", { seq: 1 }); // the p1 max (3) shrinks to 1 → new max is 2
 
             await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p1" } })).resolves.toBe(1);
             await expect(writer.aggregate("todos", { field: "seq", op: "max", where: { projectId: "p1" } })).resolves.toBe(2);
@@ -271,7 +271,7 @@ describe("d1 aggregateIndex parity", () => {
 
             await seed(writer);
 
-            await writer.delete("t4"); // p2's only row
+            await writer.delete("todos", "t4"); // p2's only row
 
             await expect(writer.aggregate("todos", { field: "seq", op: "min", where: { projectId: "p2" } })).resolves.toBeNull();
         });

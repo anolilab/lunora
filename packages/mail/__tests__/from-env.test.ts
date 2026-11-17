@@ -261,7 +261,7 @@ describe("createMailerFromEnv", () => {
         // Consumer: the dev mailer captures what it drains.
         const result = await consumeQueuedSend(createMailerFromEnv(env, { cloudflareSend }), bodies[0]);
 
-        expect(result).toStrictEqual({ id: "captured-1" });
+        expect(result).toStrictEqual({ deduplicated: false, id: "captured-1" });
         expect(fetch).toHaveBeenCalledTimes(1);
         expect(cloudflareSend).not.toHaveBeenCalled();
     });

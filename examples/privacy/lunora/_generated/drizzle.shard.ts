@@ -14,6 +14,17 @@ export const tasks = sqliteTable("tasks", {
     byUser: index("byUser").on(t.userId),
 }));
 
+export const invoices = sqliteTable("invoices", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    amount: real("amount").notNull(),
+    issuedAt: real("issuedAt").notNull(),
+    number: text("number").notNull(),
+    userId: text("userId").notNull(),
+}, (t) => ({
+    byUser: index("byUser").on(t.userId),
+}));
+
 export const exportFiles = sqliteTable("exportFiles", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
@@ -34,6 +45,7 @@ export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
     prev: real("prev"),
 }, (t) => ({
     by_key: index("by_key").on(t.key),
+    by_ts: index("by_ts").on(t.ts),
 }));
 
 export const privacy_archive = sqliteTable("privacy_archive", {
@@ -64,10 +76,11 @@ export const privacy_requests = sqliteTable("privacy_requests", {
     erasureGraceUntil: real("erasureGraceUntil"),
     expiresAt: real("expiresAt"),
     extendedDueAt: real("extendedDueAt"),
+    nothingErased: integer("nothingErased", { mode: "boolean" }),
     reason: text("reason"),
     receivedAt: real("receivedAt").notNull(),
     requestId: text("requestId").notNull(),
-    status: text("status", { mode: "json" }).$type<"received" | "grace" | "processing" | "ready" | "completed" | "failed" | "cancelled" | "expired">().notNull(),
+    status: text("status", { mode: "json" }).$type<"received" | "grace" | "processing" | "ready" | "completed" | "restored" | "failed" | "cancelled" | "expired">().notNull(),
     storageKey: text("storageKey"),
     subjectId: text("subjectId").notNull(),
     type: text("type", { mode: "json" }).$type<"export" | "erasure">().notNull(),

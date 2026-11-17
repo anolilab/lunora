@@ -189,7 +189,7 @@ describe(runBoxSweep, () => {
                 return Promise.resolve(null);
             },
             database: fakeControlPlaneDb(tables, {
-                patch: (id, patch) => {
+                patch: (_table, id, patch) => {
                     patches.push({ id, patch });
 
                     return Promise.resolve();

@@ -20,11 +20,37 @@ import { ensureVectorMetadataIndexes, metadataTypeFor } from "../../util/vectori
 import readWranglerName from "../../util/wrangler-name";
 import type { MigrateDataCommandOptions } from "../migrate/handler";
 import { runMigrateDataCommand } from "../migrate/handler";
+import { runMigrateSqlCommand } from "../migrate/sql";
 import type { DeployCommandOptions, DeployCommandResult, DeployedIdentity } from "./types";
 
 /**
- * Discover migration ids from `lunora/migrations.ts` and run them in declared
- * order against the now-live worker. The worker's `MigrationRunner` is
+ * The generated SQL files (`lunora/migrations/*.sql`), applied against the now-live worker before any data migration.
+ * A data migration can read a table a generated file creates, so the files go first. The worker records each file, so
+ * a file that already ran is a no-op.
+ */
+const runPostDeploySqlMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
+    const result = await runMigrateSqlCommand({
+        cwd,
+        fetchImpl: options.fetchImpl,
+        logger: options.logger,
+        allowDestructive: options.migrateAllowDestructive === true,
+        // Same production gate as the data migrations below: `--migrate-url` is set, and `--migrate-yes` confirms it.
+        prod: true,
+        token: options.migrateToken,
+        url: options.migrateUrl,
+        yes: options.migrateYes === true,
+    });
+
+    if (result.code !== 0) {
+        options.logger.error("--migrate: the SQL migration files failed — see output above");
+    }
+
+    return result.code;
+};
+
+/**
+ * Runs the generated SQL files first (`runPostDeploySqlMigrations`), then discovers migration ids from
+ * `lunora/migrations.ts` and runs them in declared order against the now-live worker. The worker's `MigrationRunner` is
  * idempotent — running `up` on an already-applied migration is a no-op —
  * so iterating every declared id is safe even when some were previously applied.
  *
@@ -35,6 +61,12 @@ import type { DeployCommandOptions, DeployCommandResult, DeployedIdentity } from
  * auditable, and safe.
  */
 const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
+    const sqlCode = await runPostDeploySqlMigrations(options, cwd);
+
+    if (sqlCode !== 0) {
+        return sqlCode;
+    }
+
     const project = new Project({ skipAddingFilesFromTsConfig: true });
     const lunoraDirectory = join(cwd, "lunora");
     let migrations: ReadonlyArray<{ id: string; table: string }>;
@@ -215,7 +247,10 @@ const finalizeSuccessfulDeploy = async (
 ): Promise<DeployCommandResult> => {
     // Before migrations: a data migration may write rows whose vectors are
     // filtered on immediately afterwards.
-    await provisionVectorMetadataIndexes(options, cwd);
+    // The indexes are named in the schema, not per Worker, so a preview would change production's.
+    if (options.isolatedPreview !== true) {
+        await provisionVectorMetadataIndexes(options, cwd);
+    }
 
     const migrateCode = options.migrate ? await runPostDeployMigrations(options, cwd) : 0;
 
@@ -264,20 +299,16 @@ const completeDeploy = async ({
         deployedAt: new Date().toISOString(),
         dryRun: options.dryRun === true,
         env: options.env,
-        preview: options.preview === true,
         url: options.dryRun === true ? undefined : parseDeployedUrl(stdout),
         workerName: readWranglerName(cwd),
     };
 
-    // A dry run published nothing, and a preview uploaded a Version without
-    // going live — either way, skip the post-deploy finalize (migrations /
+    // A dry run published nothing, so skip the post-deploy finalize (migrations /
     // baseline re-bless), the link write, and the health probe, which only apply
-    // to a live deploy. The URL is still reported.
-    if (options.dryRun === true || options.preview === true) {
+    // to a live deploy.
+    if (options.dryRun === true) {
         if (options.healthCheck === true) {
-            options.logger.warn(
-                `--health-check skipped: ${options.dryRun === true ? "a dry run publishes nothing" : "a preview version serves no live traffic"}`,
-            );
+            options.logger.warn("--health-check skipped: a dry run publishes nothing");
         }
 
         return { code: 0, deployment, descriptor, mintedSecretsFile, validation };
@@ -289,7 +320,9 @@ const completeDeploy = async ({
     // recorded target — nor its architecture the next diff's baseline. Recorded
     // now because the new code is live, whatever the health check and
     // migrations below decide.
-    if (options.temporary !== true) {
+    // A preview is not the checkout's deployment either: its URL and architecture
+    // belong to a throwaway copy.
+    if (options.temporary !== true && options.isolatedPreview !== true) {
         recordArchitecture?.();
         autoLinkFromDeployOutput({ cwd, env: options.env, logger: options.logger, url: deployment.url });
     }
@@ -302,7 +335,10 @@ const completeDeploy = async ({
         return { code: EXIT_CODE.UNAVAILABLE, deployment, descriptor, healthCheck, mintedSecretsFile, validation };
     }
 
-    const finalized = await finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline, mintedSecretsFile);
+    // The committed baseline describes what production runs; a preview shipping a
+    // branch's schema must not advance it.
+    const rebless = options.isolatedPreview === true ? undefined : reblessSchemaBaseline;
+    const finalized = await finalizeSuccessfulDeploy(options, cwd, descriptor, validation, rebless, mintedSecretsFile);
 
     return { ...finalized, deployment, healthCheck };
 };

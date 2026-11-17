@@ -161,10 +161,13 @@ class D1Client {
     private readonly db: D1DatabaseLike;
 
     /**
-     * SQL string -> prepared statement. Prepared statements are reusable in
-     * D1; preparing the same SQL twice forces the worker to round-trip the
-     * statement plan. Caching is per-instance so unit-test isolation holds.
-     * Bounded to {@link STMT_CACHE_CAPACITY} via LRU eviction.
+     * SQL string -> prepared statement. D1 caches compiled statements
+     * server-side keyed by the SQL text — the JS `D1PreparedStatement` is
+     * inert and every execution carries the text + params over RPC anyway —
+     * so this cache buys no round trips: it only avoids re-allocating a
+     * statement object per call and hands repeated binds one object to start
+     * from. Caching is per-instance so unit-test isolation holds. Bounded to
+     * {@link STMT_CACHE_CAPACITY} via LRU eviction.
      */
     private readonly stmtCache = new Map<string, D1PreparedStatementLike>();
 
@@ -172,7 +175,7 @@ class D1Client {
      * Lazily-built drizzle handle over the bare binding. Memoised so a single
      * `D1Client` reuses the same dialect/session machinery across calls.
      */
-    private drizzleHandle: DrizzleD1Database<Record<string, unknown>> | undefined;
+    private drizzleHandle: DrizzleD1Database | undefined;
 
     public constructor(database: D1DatabaseLike) {
         this.db = database;
@@ -198,8 +201,8 @@ class D1Client {
     /**
      * Prepare a statement, reusing a cached one when the SQL text matches.
      * `bind()` on a prepared statement returns a new bound statement and
-     * leaves the underlying prepared plan reusable, so cache hits are safe
-     * even when the previous caller already called `.bind(...).run()`.
+     * leaves the cached one untouched, so cache hits are safe even when the
+     * previous caller already called `.bind(...).run()`.
      */
     public prepare(sql: string): D1PreparedStatementLike {
         return prepareCached(this.stmtCache, (text) => this.db.prepare(text), sql);
@@ -211,7 +214,7 @@ class D1Client {
      * D1 Sessions API (no bookmark pinning). For bookmark-scoped reads, use
      * {@link drizzleSession} instead.
      */
-    public get drizzle(): DrizzleD1Database<Record<string, unknown>> {
+    public get drizzle(): DrizzleD1Database {
         if (this.drizzleHandle) {
             return this.drizzleHandle;
         }
@@ -239,7 +242,7 @@ class D1Client {
      * drizzle calls into, so a single `unknown` cast lets us hand the session to
      * the driver.
      */
-    public drizzleSession(bookmark?: string): DrizzleD1Database<Record<string, unknown>> {
+    public drizzleSession(bookmark?: string): DrizzleD1Database {
         const session = this.db.withSession(bookmark ?? D1_FIRST_UNCONSTRAINED);
 
         return drizzleD1(session as unknown as AnyD1Database, { logger: false });

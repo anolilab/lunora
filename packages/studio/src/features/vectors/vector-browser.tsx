@@ -1,5 +1,4 @@
 import type { VectorIndexSummary, VectorQueryMatch } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
@@ -8,6 +7,7 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 
@@ -39,6 +39,94 @@ const Detail = ({ label, value }: { readonly label: string; readonly value: numb
     </div>
 );
 
+/** The index list; clicking a row selects it (the row carries its name in `data-index`). */
+const VectorIndexTable = ({
+    indexes,
+    onSelect,
+    selected,
+}: {
+    readonly indexes: ReadonlyArray<VectorIndexSummary>;
+    readonly onSelect: (event: React.MouseEvent<HTMLTableRowElement>) => void;
+    readonly selected: null | string;
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <Card className="overflow-hidden py-0">
+            <CardContent className="px-0">
+                <Table data-testid="vector-table">
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>{t("name")}</TableHead>
+                            <TableHead>{t("table")}</TableHead>
+                            <TableHead>{t("dimensions")}</TableHead>
+                            <TableHead>{t("metric")}</TableHead>
+                            <TableHead>{t("vectors")}</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {indexes.map((index) => (
+                            <TableRow
+                                className={index.name === selected ? "border-l-2 border-l-royal-amethyst bg-muted/50" : "cursor-pointer"}
+                                data-index={index.name}
+                                data-testid={`vector-row-${index.name}`}
+                                key={index.name}
+                                onClick={onSelect}
+                            >
+                                <TableCell className="font-mono text-xs">{index.name}</TableCell>
+                                <TableCell className="font-mono text-xs">{index.table}</TableCell>
+                                <TableCell className="tabular-nums">{index.dimensions ?? "—"}</TableCell>
+                                <TableCell>{index.metric ?? "—"}</TableCell>
+                                <TableCell className="tabular-nums">{index.vectorsCount ?? "—"}</TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            </CardContent>
+        </Card>
+    );
+};
+
+/** A similarity search's result: a "no matches" line, or the neighbours by score. */
+const VectorMatches = ({ matches }: { readonly matches: ReadonlyArray<VectorQueryMatch> }): ReactElement => {
+    const t = useT();
+
+    if (matches.length === 0) {
+        return (
+            <p className="mt-2 text-sm text-muted-foreground" data-testid="vector-no-matches">
+                {t("No matches.")}
+            </p>
+        );
+    }
+
+    return (
+        <Card className="mt-3 overflow-hidden py-0">
+            <CardContent className="px-0">
+                <Table data-testid="vector-matches">
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>{t("id")}</TableHead>
+                            <TableHead>{t("score")}</TableHead>
+                            <TableHead>{t("metadata")}</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {matches.map((match) => (
+                            <TableRow data-testid={`vector-match-${match.id}`} key={match.id}>
+                                <TableCell className="font-mono text-xs">{match.id}</TableCell>
+                                <TableCell className="tabular-nums">{match.score.toFixed(4)}</TableCell>
+                                <TableCell className="max-w-md truncate font-mono text-xs">
+                                    {match.metadata === undefined ? "—" : formatCell(match.metadata)}
+                                </TableCell>
+                            </TableRow>
+                        ))}
+                    </TableBody>
+                </Table>
+            </CardContent>
+        </Card>
+    );
+};
+
 /**
  * Read-only **vector index browser**. Lists every Vectorize index the schema
  * declares (via the generated `LUNORA_VECTOR_INDEXES` registry — Vectorize can't
@@ -50,7 +138,7 @@ const Detail = ({ label, value }: { readonly label: string; readonly value: numb
  */
 
 export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [indexes, setIndexes] = useState<VectorIndexSummary[] | null>(null);
@@ -177,40 +265,7 @@ export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}
                 />
             )}
 
-            {indexes !== null && indexes.length > 0 && (
-                <Card className="overflow-hidden py-0">
-                    <CardContent className="px-0">
-                        <Table data-testid="vector-table">
-                            <TableHeader>
-                                <TableRow>
-                                    <TableHead>{t("name")}</TableHead>
-                                    <TableHead>{t("table")}</TableHead>
-                                    <TableHead>{t("dimensions")}</TableHead>
-                                    <TableHead>{t("metric")}</TableHead>
-                                    <TableHead>{t("vectors")}</TableHead>
-                                </TableRow>
-                            </TableHeader>
-                            <TableBody>
-                                {indexes.map((index) => (
-                                    <TableRow
-                                        className={index.name === selected ? "border-l-2 border-l-royal-amethyst bg-muted/50" : "cursor-pointer"}
-                                        data-index={index.name}
-                                        data-testid={`vector-row-${index.name}`}
-                                        key={index.name}
-                                        onClick={onSelect}
-                                    >
-                                        <TableCell className="font-mono text-xs">{index.name}</TableCell>
-                                        <TableCell className="font-mono text-xs">{index.table}</TableCell>
-                                        <TableCell className="tabular-nums">{index.dimensions ?? "—"}</TableCell>
-                                        <TableCell>{index.metric ?? "—"}</TableCell>
-                                        <TableCell className="tabular-nums">{index.vectorsCount ?? "—"}</TableCell>
-                                    </TableRow>
-                                ))}
-                            </TableBody>
-                        </Table>
-                    </CardContent>
-                </Card>
-            )}
+            {indexes !== null && indexes.length > 0 && <VectorIndexTable indexes={indexes} onSelect={onSelect} selected={selected} />}
 
             {selectedIndex !== null && (
                 <section className="border border-border bg-card p-3" data-testid="vector-detail">
@@ -246,38 +301,7 @@ export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}
                         </p>
                     )}
 
-                    {matches !== null && matches.length === 0 && (
-                        <p className="mt-2 text-sm text-muted-foreground" data-testid="vector-no-matches">
-                            {t("No matches.")}
-                        </p>
-                    )}
-
-                    {matches !== null && matches.length > 0 && (
-                        <Card className="mt-3 overflow-hidden py-0">
-                            <CardContent className="px-0">
-                                <Table data-testid="vector-matches">
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>{t("id")}</TableHead>
-                                            <TableHead>{t("score")}</TableHead>
-                                            <TableHead>{t("metadata")}</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {matches.map((match) => (
-                                            <TableRow data-testid={`vector-match-${match.id}`} key={match.id}>
-                                                <TableCell className="font-mono text-xs">{match.id}</TableCell>
-                                                <TableCell className="tabular-nums">{match.score.toFixed(4)}</TableCell>
-                                                <TableCell className="max-w-md truncate font-mono text-xs">
-                                                    {match.metadata === undefined ? "—" : formatCell(match.metadata)}
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </CardContent>
-                        </Card>
-                    )}
+                    {matches !== null && <VectorMatches matches={matches} />}
                 </section>
             )}
         </div>

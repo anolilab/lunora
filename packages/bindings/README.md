@@ -41,4 +41,4 @@ with framework/driver peer deps (`@lunora/browser`, `@lunora/hyperdrive`,
 ## License
 
 The lunora `@lunora/bindings` package is open-sourced software licensed under
-the [FSL-1.1-Apache-2.0 license](./LICENSE.md).
+the [Apache-2.0 license](./LICENSE.md).

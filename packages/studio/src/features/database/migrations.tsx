@@ -1,4 +1,3 @@
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
@@ -15,6 +14,7 @@ import { Label } from "../../components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useAdminQuery } from "../../hooks/use-admin-query";
 import { useShardKey } from "../../hooks/use-shard-key";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -34,12 +34,12 @@ const RUN_MIGRATION = adminRef(ADMIN_FUNCTIONS.runMigration);
  * Reads the persisted run-state via the `__lunora_admin__:migrationStatus` RPC
  * and lets an operator kick off a migration by id (`__lunora_admin__:runMigration`)
  * with a direction and a dry-run toggle. Both calls
- * travel over the ordinary {@link useLunora} client transport and are gated by
+ * travel over the ordinary {@link useStudioClient} client transport and are gated by
  * the server's `LUNORA_ADMIN_TOKEN` — this component issues no credentials of
  * its own.
  */
 export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const { queryShardKey, setShardKey, shardKey } = useShardKey(initialShardKey);

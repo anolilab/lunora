@@ -126,7 +126,7 @@ import { internal } from "#lunora/_generated/internal.js";
 
 const crons = cronJobs();
 
-crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, { roomId: "lobby" });
+crons.interval("purge sessions", { minutes: 5 }, internal.sessions.purgeExpired, {});
 crons.hourly("rollup", { minuteUTC: 17 }, internal.stats.rollup);
 crons.daily("digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest);
 crons.weekly("report", { dayOfWeek: "monday", hourUTC: 8, minuteUTC: 0 }, internal.reports.weekly);

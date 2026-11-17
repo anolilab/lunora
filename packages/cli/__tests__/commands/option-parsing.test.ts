@@ -163,4 +163,13 @@ describe("command option parsing → handler key mapping", () => {
 
         expect(parsed.write).toBe(true);
     });
+
+    it.each([
+        ["deploy", deployCommand],
+        ["prepare", prepareCommand],
+    ])("`%s --update-schema-baseline` is an unknown option, the flag having been removed", async (name, command) => {
+        expect.assertions(1);
+
+        await expect(parseOptions(name, command.options ?? [], [name, "--update-schema-baseline"])).rejects.toThrow(/unknown option/iu);
+    });
 });

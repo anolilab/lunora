@@ -77,13 +77,14 @@ The scaffolded handlers therefore fail closed on three axes:
 The check in the copied file is the fail-closed default, and it sees the URL exactly once. The hard guarantee is `allowedHosts` on `createBrowser`, which is enforced on every navigation **and** every subresource request, so it survives a 3xx redirect and a page that fetches elsewhere:
 
 ```ts
-import { launch } from "@cloudflare/playwright";
 import { createBrowser } from "@lunora/browser";
 
 createShardDO({
-    browser: (env) => createBrowser({ allowedHosts: ["example.com"], binding: env.BROWSER, launch }),
+    browser: (env) => createBrowser({ allowedHosts: ["example.com"], binding: env.BROWSER, playwright: () => import("@cloudflare/playwright") }),
 });
 ```
+
+`playwright` is a loader: `@cloudflare/playwright` is imported on the first browser call, which keeps it out of the Worker's startup graph. Don't import it statically in the entry.
 
 This item cannot write that for you — it scaffolds files under `lunora/`, not your Worker entry — and the `BROWSER` wrangler binding on its own gives `ctx.browser` no allowlist at all. So until you add the call, `lunora codegen` reports `browser_user_url_without_allowlist` (WARN) against both actions. That warning is the advisor asking for exactly this layer; it is meant to stand until you add it, and nothing in the copied file tries to silence it.
 

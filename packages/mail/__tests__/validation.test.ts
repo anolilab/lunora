@@ -211,7 +211,7 @@ describe("consumeQueuedSend rejects malformed queue bodies", () => {
             to: ["a@x.test", "b@x.test"],
         });
 
-        expect(result).toEqual({ id: "queued-send" });
+        expect(result).toEqual({ deduplicated: false, id: "queued-send" });
         expect(mailer.send).toHaveBeenCalledWith(
             expect.objectContaining({ from: "noreply@x.test", headers: { "X-Tag": "welcome" }, subject: "Hi", to: ["a@x.test", "b@x.test"] }),
         );

@@ -8,7 +8,7 @@
         "url": "https://github.com/anolilab"
     },
     "repository": "https://github.com/anolilab/lunora",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "keywords": ["lunora", "cloudflare", "workers", "durable-objects", "realtime", "backend", "typescript", "vite"],
     "interface": {
         "displayName": "Lunora",

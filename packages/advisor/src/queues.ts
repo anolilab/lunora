@@ -39,6 +39,9 @@ export interface AdvisorQueue {
      * lunora file. The handler's call sites then belong to this queue, under that export.
      */
     handlerSite?: { exportName: string; file: string };
+    /** 1-based start line of the declaring statement, when the feeder recorded it. */
+    line?: number;
+
     /** How the queue is consumed: `"push"` (a worker `queue()` handler) or `"pull"` (external HTTP). */
     mode: "pull" | "push";
 
@@ -53,4 +56,14 @@ export interface AdvisorQueue {
     topic?: string;
     /** Push-consumer batch/retry tuning; the `deadLetterQueue`/`maxRetries` the queue lints read. */
     tuning: AdvisorQueueTuning;
+}
+
+/** One topic declared via a `defineTopic()` export in `lunora/queues.ts`. */
+export interface AdvisorTopic {
+    /** The `lunora/queues.ts` export name, e.g. `signups`. */
+    exportName: string;
+    /** Lunora-relative file the topic is declared in, without `.ts` (`queues`, or `billing/queues`). */
+    file?: string;
+    /** 1-based start line of the `defineTopic(...)` statement, under {@link AdvisorTopic.file}. */
+    line?: number;
 }

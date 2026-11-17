@@ -1,6 +1,6 @@
 {
     "name": "@lunora/client",
-    "version": "1.0.0-alpha.213",
+    "version": "1.0.0-alpha.300",
     "description": "Lunora browser SDK: WebSocket transport, optimistic updates, and an offline mutation queue",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -64,6 +64,10 @@
             "types": "./dist/service.d.ts",
             "import": "./dist/service.mjs"
         },
+        "./admin": {
+            "types": "./dist/admin/index.d.ts",
+            "import": "./dist/admin/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -75,9 +79,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -86,16 +88,16 @@
     },
     "dependencies": {
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/wire": "1.0.0-alpha.1",
+        "@lunora/wire": "1.0.0-alpha.6",
         "@visulima/storage-client": "catalog:storage"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/do": "1.0.0-alpha.217",
-        "@lunora/runtime": "1.0.0-alpha.205",
-        "@lunora/shard-engine": "1.0.0-alpha.131",
+        "@lunora/do": "^1.0.0-alpha.287",
+        "@lunora/runtime": "^1.0.0-alpha.289",
+        "@lunora/shard-engine": "^1.0.0-alpha.199",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

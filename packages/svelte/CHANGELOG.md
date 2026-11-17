@@ -1,3 +1,655 @@
+## @lunora/svelte [1.0.0-alpha.320](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.319...@lunora/svelte@1.0.0-alpha.320) (2026-11-10)
+
+- fix(react): pass the provider's query client to TanStack; extend the cross-copy fix to other frameworks (#1524)
+
+## @lunora/svelte [1.0.0-alpha.319](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.318...@lunora/svelte@1.0.0-alpha.319) (2026-11-05)
+
+- fix(client): restart a paginated feed when the server refuses its cursor (#1496)
+
+## @lunora/svelte [1.0.0-alpha.318](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.317...@lunora/svelte@1.0.0-alpha.318) (2026-11-04)
+
+- Release 1.0.0-alpha.318. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
+
+## @lunora/svelte [1.0.0-alpha.317](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.316...@lunora/svelte@1.0.0-alpha.317) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.285
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.196
+
+## @lunora/svelte [1.0.0-alpha.316](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.315...@lunora/svelte@1.0.0-alpha.316) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.284
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.195
+
+## @lunora/svelte [1.0.0-alpha.315](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.314...@lunora/svelte@1.0.0-alpha.315) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.282
+
+## @lunora/svelte [1.0.0-alpha.314](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.313...@lunora/svelte@1.0.0-alpha.314) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.281
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.194
+
+## @lunora/svelte [1.0.0-alpha.313](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.312...@lunora/svelte@1.0.0-alpha.313) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.279
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.192
+
+## @lunora/svelte [1.0.0-alpha.312](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.311...@lunora/svelte@1.0.0-alpha.312) (2026-11-01)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.278
+
+## @lunora/svelte [1.0.0-alpha.311](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.310...@lunora/svelte@1.0.0-alpha.311) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.277
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.191
+
+## @lunora/svelte [1.0.0-alpha.310](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.309...@lunora/svelte@1.0.0-alpha.310) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.276
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.190
+
+## @lunora/svelte [1.0.0-alpha.309](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.308...@lunora/svelte@1.0.0-alpha.309) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.275
+
+## @lunora/svelte [1.0.0-alpha.308](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.307...@lunora/svelte@1.0.0-alpha.308) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.274
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.189
+
+## @lunora/svelte [1.0.0-alpha.307](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.306...@lunora/svelte@1.0.0-alpha.307) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.188
+
+## @lunora/svelte [1.0.0-alpha.306](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.305...@lunora/svelte@1.0.0-alpha.306) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.272
+
+## @lunora/svelte [1.0.0-alpha.305](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.304...@lunora/svelte@1.0.0-alpha.305) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* **server:** presence_present gains a required tenantId column, the
+byRoomSession / byRoom / byRoomLastSeen indexes are replaced by
+byTenantRoomSession and byTenantRoomLastSeen, and sweep takes
+{ roomId, tenantId }. The schema-drift gate reports the added required field
+and removed indexes. Rows written before the upgrade carry no tenantId, so no
+tenant sees or reaps them; they are ephemeral, clear them with a data
+migration. Apps whose identity has an orgId claim now get per-organization
+rooms; better-auth apps must forward activeOrganizationId as orgId from
+resolveIdentity to get that isolation.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(scheduling): pass the presence sweep its room and tenant
+
+The cron example called `internal.presence.sweep` with no args, which
+already failed on the required `roomId` and now also needs `tenantId`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* style(server): rewrap the presence doc comments
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(server): name the tenant-prefixed presence index
+
+The maxSessions and listPresent comments still described the removed
+(roomId, lastSeen) index; the reads go through byTenantRoomLastSeen.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **server:** scope definePresence rooms to the caller's tenant ([#1421](https://github.com/anolilab/lunora/issues/1421)) ([43fecb1](https://github.com/anolilab/lunora/commit/43fecb1cbc099f0cc771a7446a9a9a68c3979e81))
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.187
+
+## @lunora/svelte [1.0.0-alpha.304](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.303...@lunora/svelte@1.0.0-alpha.304) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.269
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.186
+
+## @lunora/svelte [1.0.0-alpha.303](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.302...@lunora/svelte@1.0.0-alpha.303) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.268
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.185
+
+## @lunora/svelte [1.0.0-alpha.302](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.301...@lunora/svelte@1.0.0-alpha.302) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** pin every wire dependent to the workspace version ([#1432](https://github.com/anolilab/lunora/issues/1432)) ([07eaf13](https://github.com/anolilab/lunora/commit/07eaf13f4f4e65319cbcf9089d5def29f431ead3))
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.184
+
+## @lunora/svelte [1.0.0-alpha.301](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.300...@lunora/svelte@1.0.0-alpha.301) (2026-10-30)
+
+### ⚠ BREAKING CHANGES
+
+* **vue,solid,svelte,angular:** `data.value` / `chunks.value` are now the raw pushed values,
+not reactive proxies; mutating them in place no longer triggers updates.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs: describe the page key cache without its history
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(solid): skip stream args tracking during SSR
+
+The args memo evaluates eagerly on the server, so an accessor that reads
+browser globals threw during server rendering, where the previous
+effect-only tracking never called it. Stay idle until the client runs.
+
+Also make the pagination frame-key tests wait on the observable page and
+subscription state instead of an always-passing empty callback.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* style(svelte): format the paginated frame keys test
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(vue): open a stream with the args its key came from
+
+`useStream` read `args` once for the watch key and again for the stream request.
+A getter that returns new content on each read could open a stream the key
+does not describe, so a later tick with an unchanged key left the wrong stream
+open. The args are now resolved once, in the watch source.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(solid): open streams with the args their key came from
+
+trackedArgsEffect read the args accessor once for the content key and
+again for apply, so an accessor that is not a pure function of its
+signals could open a subscription with args the key never described.
+Capture the value in the memo and hand that to apply.
+
+Also make the paginated frame-key tests fail when the first-page
+subscription lookup misses instead of silently skipping every frame.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+### Performance Improvements
+
+* **vue,solid,svelte,angular:** stable stream args, cached page keys, shallow payloads ([#1385](https://github.com/anolilab/lunora/issues/1385)) ([cc0ad69](https://github.com/anolilab/lunora/commit/cc0ad6946d4675a7e99d517c972c138b8d6f3368))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.265
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.183
+
+## @lunora/svelte [1.0.0-alpha.300](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.299...@lunora/svelte@1.0.0-alpha.300) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.264
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.182
+
+## @lunora/svelte [1.0.0-alpha.299](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.298...@lunora/svelte@1.0.0-alpha.299) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.263
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.181
+
+## @lunora/svelte [1.0.0-alpha.298](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.297...@lunora/svelte@1.0.0-alpha.298) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.262
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.180
+
+## @lunora/svelte [1.0.0-alpha.297](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.296...@lunora/svelte@1.0.0-alpha.297) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.261
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.179
+
+## @lunora/svelte [1.0.0-alpha.296](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.295...@lunora/svelte@1.0.0-alpha.296) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.260
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.178
+
+## @lunora/svelte [1.0.0-alpha.295](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.294...@lunora/svelte@1.0.0-alpha.295) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.259
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.177
+
+## @lunora/svelte [1.0.0-alpha.294](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.293...@lunora/svelte@1.0.0-alpha.294) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.258
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.176
+
+## @lunora/svelte [1.0.0-alpha.293](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.292...@lunora/svelte@1.0.0-alpha.293) (2026-10-27)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.257
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.175
+
+## @lunora/svelte [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.291...@lunora/svelte@1.0.0-alpha.292) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.256
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.174
+
+## @lunora/svelte [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.290...@lunora/svelte@1.0.0-alpha.291) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.253
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.172
+
+## @lunora/svelte [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.289...@lunora/svelte@1.0.0-alpha.290) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.252
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.171
+
+## @lunora/svelte [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.288...@lunora/svelte@1.0.0-alpha.289) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.251
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.170
+
+## @lunora/svelte [1.0.0-alpha.288](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.287...@lunora/svelte@1.0.0-alpha.288) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.250
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.169
+
+## @lunora/svelte [1.0.0-alpha.287](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.286...@lunora/svelte@1.0.0-alpha.287) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.249
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.168
+
+## @lunora/svelte [1.0.0-alpha.286](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.285...@lunora/svelte@1.0.0-alpha.286) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.248
+
+## @lunora/svelte [1.0.0-alpha.285](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.284...@lunora/svelte@1.0.0-alpha.285) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.247
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.167
+
+## @lunora/svelte [1.0.0-alpha.284](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.283...@lunora/svelte@1.0.0-alpha.284) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.246
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.166
+
+## @lunora/svelte [1.0.0-alpha.283](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.282...@lunora/svelte@1.0.0-alpha.283) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.245
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.165
+
+## @lunora/svelte [1.0.0-alpha.282](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.281...@lunora/svelte@1.0.0-alpha.282) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.244
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.164
+
+## @lunora/svelte [1.0.0-alpha.281](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.280...@lunora/svelte@1.0.0-alpha.281) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.243
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.163
+
+## @lunora/svelte [1.0.0-alpha.280](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.279...@lunora/svelte@1.0.0-alpha.280) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.242
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.162
+
+## @lunora/svelte [1.0.0-alpha.279](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.278...@lunora/svelte@1.0.0-alpha.279) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.241
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.161
+
+## @lunora/svelte [1.0.0-alpha.278](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.277...@lunora/svelte@1.0.0-alpha.278) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.239
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.159
+
+## @lunora/svelte [1.0.0-alpha.277](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.276...@lunora/svelte@1.0.0-alpha.277) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.238
+
+## @lunora/svelte [1.0.0-alpha.276](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.275...@lunora/svelte@1.0.0-alpha.276) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.237
+
+## @lunora/svelte [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.274...@lunora/svelte@1.0.0-alpha.275) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.236
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.158
+
+## @lunora/svelte [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.273...@lunora/svelte@1.0.0-alpha.274) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.235
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.157
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
+## @lunora/svelte [1.0.0-alpha.273](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.272...@lunora/svelte@1.0.0-alpha.273) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.234
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.156
+
+## @lunora/svelte [1.0.0-alpha.272](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.271...@lunora/svelte@1.0.0-alpha.272) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.233
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.155
+
+## @lunora/svelte [1.0.0-alpha.271](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.270...@lunora/svelte@1.0.0-alpha.271) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.232
+
+## @lunora/svelte [1.0.0-alpha.270](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.269...@lunora/svelte@1.0.0-alpha.270) (2026-10-19)
+
+### Features
+
+* **errors:** add operator-only internal context and client-visible why ([#1260](https://github.com/anolilab/lunora/issues/1260)) ([0b5a07b](https://github.com/anolilab/lunora/commit/0b5a07b31729b5063ccabdc1e81efbbbab13be13))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.231
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.154
+
+## @lunora/svelte [1.0.0-alpha.269](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.268...@lunora/svelte@1.0.0-alpha.269) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.230
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.153
+
+## @lunora/svelte [1.0.0-alpha.268](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.267...@lunora/svelte@1.0.0-alpha.268) (2026-10-19)
+
+### Features
+
+* **live:** typed live topics with declared names, keys and payloads ([#1267](https://github.com/anolilab/lunora/issues/1267)) ([507658e](https://github.com/anolilab/lunora/commit/507658e10fe346d9f213c61e01450e6ca75b92ef))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.229
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.152
+
+## @lunora/svelte [1.0.0-alpha.267](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.266...@lunora/svelte@1.0.0-alpha.267) (2026-10-18)
+
+### Features
+
+* **client:** share one live stream connection and add live topic bindings ([#1252](https://github.com/anolilab/lunora/issues/1252)) ([d108d5a](https://github.com/anolilab/lunora/commit/d108d5af5fa7f8dc099d7a30c42deeeb956fdebe))
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.228
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.151
+
+## @lunora/svelte [1.0.0-alpha.266](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.265...@lunora/svelte@1.0.0-alpha.266) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.227
+
+## @lunora/svelte [1.0.0-alpha.265](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.264...@lunora/svelte@1.0.0-alpha.265) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.226
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.150
+
+## @lunora/svelte [1.0.0-alpha.264](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.263...@lunora/svelte@1.0.0-alpha.264) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.225
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.149
+
+## @lunora/svelte [1.0.0-alpha.263](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.262...@lunora/svelte@1.0.0-alpha.263) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.224
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.148
+
+## @lunora/svelte [1.0.0-alpha.262](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.261...@lunora/svelte@1.0.0-alpha.262) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.222
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.147
+
+## @lunora/svelte [1.0.0-alpha.261](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.260...@lunora/svelte@1.0.0-alpha.261) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.221
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.146
+
+## @lunora/svelte [1.0.0-alpha.260](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.259...@lunora/svelte@1.0.0-alpha.260) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.219
+
+## @lunora/svelte [1.0.0-alpha.259](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.258...@lunora/svelte@1.0.0-alpha.259) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.218
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.145
+
+## @lunora/svelte [1.0.0-alpha.258](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.257...@lunora/svelte@1.0.0-alpha.258) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.217
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.144
+
+## @lunora/svelte [1.0.0-alpha.257](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.256...@lunora/svelte@1.0.0-alpha.257) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.216
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.143
+
+## @lunora/svelte [1.0.0-alpha.256](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.255...@lunora/svelte@1.0.0-alpha.256) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.215
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.142
+
+## @lunora/svelte [1.0.0-alpha.255](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.254...@lunora/svelte@1.0.0-alpha.255) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.141
+
+## @lunora/svelte [1.0.0-alpha.254](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.253...@lunora/svelte@1.0.0-alpha.254) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/client:** upgraded to 1.0.0-alpha.214
+* **@lunora/ratelimit:** upgraded to 1.0.0-alpha.139
+
 ## @lunora/svelte [1.0.0-alpha.253](https://github.com/anolilab/lunora/compare/@lunora/svelte@1.0.0-alpha.252...@lunora/svelte@1.0.0-alpha.253) (2026-10-15)
 
 

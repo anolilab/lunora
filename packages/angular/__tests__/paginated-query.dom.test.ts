@@ -164,6 +164,94 @@ describe(paginatedQuery, () => {
         expect(fake.subscriptions.slice(before).map((sub) => sub.args["paginationOpts"])).toStrictEqual([tailArgs]);
     });
 
+    it("restarts from the first page when a loaded page's cursor no longer decodes, without reporting it", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const errors: SubscriptionError[] = [];
+
+        const { error, loadMore, results, status } = paginatedQuery(
+            fn,
+            {},
+            {
+                client: fake.asClient,
+                destroyRef: destroy.asDestroyRef,
+                initialNumItems: NUM_ITEMS,
+                onError: (e) => errors.push(e),
+            },
+        );
+        const head = { cursor: null, endCursor: null, numItems: NUM_ITEMS };
+        const find = (opts: Record<string, unknown>) => fake.subscriptions.find((sub) => JSON.stringify(sub.args) === JSON.stringify({ paginationOpts: opts }));
+
+        pushByArgs(fake, { paginationOpts: head }, { continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        loadMore(NUM_ITEMS);
+        pushByArgs(
+            fake,
+            { paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } },
+            { continueCursor: "cur-2", isDone: false, page: secondPageItems },
+        );
+
+        expect(results()).toStrictEqual([...firstPageItems, ...secondPageItems]);
+
+        // A deploy changed the cursor format: the re-read of the bounded first page is refused.
+        const before = fake.subscriptions.length;
+
+        find({ cursor: null, endCursor: "cur-1", numItems: NUM_ITEMS })?.emitError({ code: "INVALID_CURSOR", message: "invalid cursor" });
+
+        expect(errors).toStrictEqual([]);
+        // The head page is resnapshotted, so a sibling feed holding it cannot hand back the refused build's cursor.
+        expect(fake.resnapshotCalls).toStrictEqual([{ args: { paginationOpts: head }, functionPath: "messages:list", shardKey: undefined }]);
+        expect(error()).toBeUndefined();
+        expect(status()).toBe("LoadingFirstPage");
+        expect(fake.subscriptions.slice(before).map((sub) => sub.args["paginationOpts"])).toStrictEqual([head]);
+
+        // The dropped tail reporting the same refusal late changes nothing.
+        find({ cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS })?.emitError({ code: "INVALID_CURSOR", message: "invalid cursor" });
+
+        expect(errors).toStrictEqual([]);
+        expect(fake.subscriptions).toHaveLength(before + 1);
+
+        // The head page carries no cursor to be stale, so its refusal is reported, not retried.
+        fake.subscriptions.at(-1)?.emitError({ code: "INVALID_CURSOR", message: "invalid cursor" });
+
+        expect(errors).toStrictEqual([{ code: "INVALID_CURSOR", message: "invalid cursor" }]);
+        expect(fake.subscriptions).toHaveLength(before + 1);
+    });
+
+    it("reports a second cursor refusal instead of restarting again, when nothing past the head loaded in between", () => {
+        const fake = createFakeClient();
+        const destroy = createFakeDestroyRef();
+        const errors: SubscriptionError[] = [];
+
+        const { error, loadMore, status } = paginatedQuery(
+            fn,
+            {},
+            {
+                client: fake.asClient,
+                destroyRef: destroy.asDestroyRef,
+                initialNumItems: NUM_ITEMS,
+                onError: (e) => errors.push(e),
+            },
+        );
+        const loadTailThenRefuse = (): void => {
+            fake.subscriptions.at(-1)?.push({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+            loadMore(NUM_ITEMS);
+            // The server refuses the cursor it has just minted.
+            fake.subscriptions
+                .findLast((sub) => (sub.args["paginationOpts"] as { cursor: unknown }).cursor === "cur-1")
+                ?.emitError({ code: "INVALID_CURSOR", message: "invalid cursor" });
+        };
+
+        loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([]);
+        expect(status()).toBe("LoadingFirstPage");
+
+        loadTailThenRefuse();
+
+        expect(errors).toStrictEqual([{ code: "INVALID_CURSOR", message: "invalid cursor" }]);
+        expect(error()).toStrictEqual({ code: "INVALID_CURSOR", message: "invalid cursor" });
+    });
+
     it("tears down all subscriptions on destroy", () => {
         const fake = createFakeClient();
         const destroy = createFakeDestroyRef();

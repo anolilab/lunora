@@ -144,9 +144,31 @@ const renderSubscribe = (method: SdkMethod): string => {
     ].join("\n");
 };
 
+/**
+ * A query's stream form: the live query as an async iterator, for `async for`. `aclose()` unsubscribes, and is the only release for a watch the loop never started.
+ */
+const renderWatch = (method: SdkMethod): string => {
+    const payload = argsPayload(method);
+
+    const parameters = [
+        "self",
+        ...argsChoice<ReadonlyArray<string>>(method, { none: [], typed: (type) => [`args: ${type}`], untyped: ["args: Any"] }),
+        "*",
+        "shard_key: Optional[str] = None",
+    ];
+
+    return [
+        `    def watch_${memberName(method.functionName)}(`,
+        ...parameters.map((parameter) => `        ${parameter},`),
+        `    ) -> AsyncIterator:`,
+        `        """live ${commentText(method.summary)} as an async iterator — \`async for\` over it; \`aclose()\` unsubscribes, and a watch the loop never started is released only by it."""`,
+        `        return self._client.watch("${stringLiteral(method.functionPath)}", ${payload}, shard_key)`,
+    ].join("\n");
+};
+
 const renderNamespaceClass = (namespace: SdkNamespace): string => {
     const body = namespace.methods
-        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}` : renderCall(method)))
+        .map((method) => (method.verb === "query" ? `${renderCall(method)}\n\n${renderSubscribe(method)}\n\n${renderWatch(method)}` : renderCall(method)))
         .join("\n\n");
 
     return [
@@ -175,7 +197,11 @@ const renderNamespaceClass = (namespace: SdkNamespace): string => {
 const narrowBareExcept = (models: string): string => models.replaceAll(/^([ \t]*)except:$/gmu, "$1except Exception:");
 
 const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> => {
-    assertDistinctMembers(namespaces, "Python", (method) => [memberName(method.functionName), `subscribe_${memberName(method.functionName)}`]);
+    assertDistinctMembers(namespaces, "Python", (method) => [
+        memberName(method.functionName),
+        `subscribe_${memberName(method.functionName)}`,
+        `watch_${memberName(method.functionName)}`,
+    ]);
     const referenced = referencedModels(namespaces);
     const modelImport = referenced.length > 0 ? `from .models import ${referenced.join(", ")}\n` : "";
 
@@ -188,12 +214,13 @@ const render = ({ models, namespaces }: SdkRenderInput): Record<string, string> 
     // unconditionally leaves an unused import (ruff F401) in a deployment where
     // every function declares `.output()`. Gated like the subscription aliases.
     const needsAny = allMethods(namespaces).some((method) => method.resultType === undefined);
+    const needsStream = allMethods(namespaces).some((method) => method.verb === "query");
 
     const rootAttributes = namespaces.map((namespace) => `        self.${memberName(namespace.name)} = ${toPascalCase(namespace.name)}Api(client)`).join("\n");
 
     const api = [
         GENERATED_HEADER,
-        `from typing import ${needsAny ? "Any, Optional" : "Optional"}\n`,
+        `from typing import ${[...(needsAny ? ["Any"] : []), ...(needsStream ? ["AsyncIterator"] : []), "Optional"].join(", ")}\n`,
         `\n`,
         `from lunora.client import ${runtimeImports}\n`,
         modelImport,

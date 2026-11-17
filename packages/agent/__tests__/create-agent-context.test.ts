@@ -120,6 +120,26 @@ describe(createAgentContext, () => {
         expect(dispatches).toStrictEqual([{ args: { instanceId: "run-7", status: "cancelled" }, path: "agents:agentPatchThread" }]);
     });
 
+    it("retries a failed thread-status patch so the cancelled run stops listing its approval", async () => {
+        const { binding } = fakeBinding();
+        let attempts = 0;
+        const dispatch = async (): Promise<unknown> => {
+            attempts += 1;
+
+            if (attempts < 3) {
+                throw new Error("dispatch unavailable");
+            }
+
+            return undefined;
+        };
+
+        const agents = createAgentContext({ SupportAgentWorkflow: binding }, [{ className: "SupportAgentWorkflow", exportName: "support" }], { dispatch });
+
+        await agents["support"]!.cancel("run-8");
+
+        expect(attempts).toBe(3);
+    });
+
     it("still resolves cancel when the thread-status patch fails (the run is already terminated)", async () => {
         const { binding, terminateCalls } = fakeBinding();
         // The status patch fails, but terminate() already succeeded — the run is

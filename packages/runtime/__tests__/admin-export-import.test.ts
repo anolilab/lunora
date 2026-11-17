@@ -124,7 +124,7 @@ describe("createWorker — admin export endpoint", () => {
     });
 
     it("streams NDJSON from orchestrateExport", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
             return {
@@ -177,8 +177,10 @@ describe("createWorker — admin export endpoint", () => {
         const text = await response.text();
         const lines = text.trim().split("\n");
 
-        expect(lines).toHaveLength(2);
+        expect(lines).toHaveLength(3);
         expect(JSON.parse(lines[0]!)).toEqual({ doc: { _id: "u1", email: "a@b.com" }, table: "users" });
+        // The terminal frame is what lets a reader tell this from an export cut on a row boundary.
+        expect(JSON.parse(lines[2]!)).toEqual({ end: true, rows: 2 });
     });
 
     it("answers 502 when a shard's export failed instead of serving a short snapshot", async () => {
@@ -266,7 +268,15 @@ describe("createWorker — admin export endpoint", () => {
 
         const text = await response.text();
 
-        expect(JSON.parse(text.trim())).toEqual({ doc: { _id: "u1" }, table: "users" });
+        expect(
+            text
+                .trim()
+                .split("\n")
+                .map((line) => JSON.parse(line)),
+        ).toEqual([
+            { doc: { _id: "u1" }, table: "users" },
+            { end: true, rows: 1 },
+        ]);
         expect(shardKeys).toEqual(["__root__"]);
     });
 
@@ -298,7 +308,7 @@ describe("createWorker — admin export endpoint", () => {
     });
 
     it("streams D1 globals when exportGlobals is configured", async () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const orchestrateExport = vi.fn<(namespace: unknown, request: { tables: ReadonlyArray<string> }) => Promise<unknown>>(async (_namespace, _request) => {
             return {
@@ -348,8 +358,9 @@ describe("createWorker — admin export endpoint", () => {
         const text = await response.text();
         const lines = text.trim().split("\n");
 
-        expect(lines).toHaveLength(2);
+        expect(lines).toHaveLength(3);
         expect(JSON.parse(lines[0]!)).toMatchObject({ table: "settings" });
+        expect(JSON.parse(lines[2]!)).toEqual({ end: true, rows: 2 });
     });
 });
 
@@ -577,6 +588,69 @@ describe("createWorker — admin import endpoint", () => {
         const shardKeys = captured!.batches.map((batch) => batch.shardKey).toSorted((a, b) => a.localeCompare(b));
 
         expect(shardKeys).toEqual(["__root__", "c1", "c2"]);
+    });
+
+    describe("export end marker", () => {
+        const importBody = async (lines: ReadonlyArray<unknown>): Promise<{ body: { inserted?: Record<string, number> }; status: number }> => {
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateImportSession: vi.fn<() => never>(),
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    shardKeysForTables: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (): ShardingInfo => {
+                    return { mode: { kind: "root" } };
+                },
+                shardDO: noopNamespace,
+            });
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/admin/import", {
+                    body: lines.map((line) => JSON.stringify(line)).join("\n"),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), status: response.status };
+        };
+        const row = (id: string): unknown => {
+            return { doc: { _id: id }, table: "users" };
+        };
+
+        it("imports a body whose end marker matches the rows read, without counting the marker as a row", async () => {
+            expect.assertions(3);
+
+            const { body, status } = await importBody([row("u1"), row("u2"), { end: true, rows: 2 }]);
+
+            expect(status).toBe(200);
+            expect(body.inserted).toEqual({ users: 2 });
+            expect(orchestrateImport).toHaveBeenCalledTimes(1);
+        });
+
+        it.each([
+            ["a count that does not match the rows read", [row("u1"), { end: true, rows: 2 }]],
+            ["a row after the marker", [row("u1"), { end: true, rows: 1 }, row("u2")]],
+            ["a marker with a count that is not a number", [row("u1"), { end: true, rows: "1" }]],
+        ])("refuses %s before writing anything", async (_label, lines) => {
+            expect.assertions(2);
+
+            const { status } = await importBody(lines);
+
+            expect(status).toBe(400);
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
     });
 
     it("imports without a configured queryCoordinator", async () => {
@@ -820,6 +894,72 @@ describe("createWorker — admin import endpoint", () => {
         expect(capturedRows.map((row) => row.line)).toEqual([1, 3]);
     });
 
+    describe("dry run of global rows", () => {
+        const dryRunGlobals = async (workerOptions: {
+            importGlobalsSupportsDryRun?: boolean;
+        }): Promise<{ body: { errors: { code: string; line: number }[]; inserted: Record<string, number> }; importGlobals: ReturnType<typeof vi.fn> }> => {
+            const importGlobals = vi.fn<(request: { dryRun?: boolean; rows: { doc: Record<string, unknown>; table: string }[] }) => Promise<unknown>>(
+                async () => {
+                    return { conflicts: 0, errors: [], inserted: {} };
+                },
+            );
+
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                importGlobals: importGlobals as never,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateImportSession: vi.fn<() => never>(),
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    shardKeysForTables: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                    table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+                shardDO: noopNamespace,
+                ...workerOptions,
+            });
+
+            const response = await worker.fetch(
+                new Request("https://app.example/_lunora/admin/import?dryRun=true", {
+                    body: JSON.stringify({ doc: { _id: "g1" }, table: "settings" }),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), importGlobals };
+        };
+
+        it("refuses the rows without calling an importer that has not opted in", async () => {
+            expect.assertions(3);
+
+            const { body, importGlobals } = await dryRunGlobals({});
+
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(body.errors).toHaveLength(1);
+            expect(body.errors[0]).toMatchObject({ code: "GLOBAL_DRY_RUN_UNSUPPORTED", line: 1 });
+        });
+
+        it("passes the dry run to an importer that has opted in", async () => {
+            expect.assertions(2);
+
+            const { body, importGlobals } = await dryRunGlobals({ importGlobalsSupportsDryRun: true });
+
+            expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
+            expect(body.errors).toHaveLength(0);
+        });
+    });
+
     it("reports global rows as errors when importGlobals is not configured", async () => {
         expect.assertions(2);
 
@@ -860,6 +1000,267 @@ describe("createWorker — admin import endpoint", () => {
 
         expect(body.errors).toHaveLength(1);
         expect(body.errors[0]!.code).toBe("GLOBAL_NOT_CONFIGURED");
+    });
+
+    it("echoes the dry run in its answer, and a real import carries no echo", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateImportSession: vi.fn<() => never>(),
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                shardKeysForTables: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            shardDO: noopNamespace,
+        });
+
+        const post = async (url: string): Promise<Record<string, unknown>> => {
+            const response = await worker.fetch(
+                new Request(url, { body: "\n", headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+                {},
+                fakeContext,
+            );
+
+            return response.json();
+        };
+
+        await expect(post("https://app.example/_lunora/admin/import?dryRun=true")).resolves.toMatchObject({ dryRun: true });
+        await expect(post("https://app.example/_lunora/admin/import")).resolves.not.toHaveProperty("dryRun");
+    });
+
+    describe("onConflict=replace", () => {
+        const replaceImport = async (
+            url: string,
+            workerOptions: { importGlobals?: never; importGlobalsSupportsDryRun?: boolean; importGlobalsSupportsReplace?: boolean },
+        ): Promise<{ body: Record<string, unknown>; importGlobals: ReturnType<typeof vi.fn>; status: number }> => {
+            const importGlobals = vi.fn<(request: { onConflict?: string }) => Promise<unknown>>(async () => {
+                return { conflicts: 0, errors: [], inserted: {}, replaced: 1 };
+            });
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                importGlobals: importGlobals as never,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateImportSession: vi.fn<() => never>(),
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    shardKeysForTables: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                    table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+                shardDO: noopNamespace,
+                ...workerOptions,
+            });
+            const response = await worker.fetch(
+                new Request(url, {
+                    body: [JSON.stringify({ doc: { _id: "g1" }, table: "settings" }), JSON.stringify({ doc: { _id: "u1" }, table: "users" })].join("\n"),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), importGlobals, status: response.status };
+        };
+
+        it("passes the mode to both planes, sums `replaced`, and echoes it", async () => {
+            expect.assertions(4);
+
+            const { body, importGlobals } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", {
+                importGlobalsSupportsReplace: true,
+            });
+
+            expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ onConflict: "replace" }));
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ onConflict: "replace" }));
+            expect(body).toMatchObject({ onConflict: "replace", replaced: 1 });
+            expect(body["errors"]).toStrictEqual([]);
+        });
+
+        it("defaults to skip, with no echo", async () => {
+            expect.assertions(2);
+
+            const { body } = await replaceImport("https://app.example/_lunora/admin/import", { importGlobalsSupportsReplace: true });
+
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ onConflict: "skip" }));
+            expect(body).not.toHaveProperty("onConflict");
+        });
+
+        it("refuses the whole import (400) for a global importer that has not opted in, before any shard row is overwritten", async () => {
+            expect.assertions(3);
+
+            const { importGlobals, status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", {});
+
+            expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses the whole import (400) when no global importer is configured, before any shard row is overwritten", async () => {
+            expect.assertions(2);
+
+            const { status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=replace", { importGlobals: undefined });
+
+            expect(status).toBe(400);
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses it in a dry run too, so a client's check catches it before anything is written", async () => {
+            expect.assertions(2);
+
+            const { importGlobals, status } = await replaceImport("https://app.example/_lunora/admin/import?dryRun=true&onConflict=replace", {
+                importGlobalsSupportsDryRun: true,
+            });
+
+            expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+        });
+
+        it("rejects an unknown mode", async () => {
+            expect.assertions(1);
+
+            const { status } = await replaceImport("https://app.example/_lunora/admin/import?onConflict=merge", { importGlobalsSupportsReplace: true });
+
+            expect(status).toBe(400);
+        });
+    });
+
+    describe('op: "delete" rows', () => {
+        const deleteImport = async (
+            lines: ReadonlyArray<Record<string, unknown>>,
+            workerOptions: { importGlobalsSupportsDelete?: boolean },
+            query = "?deletes=true",
+        ): Promise<{ body: Record<string, unknown>; importGlobals: ReturnType<typeof vi.fn>; status: number }> => {
+            const importGlobals = vi.fn<(request: { rows: ReadonlyArray<{ op?: string }> }) => Promise<unknown>>(async (request) => {
+                return { conflicts: 0, deleted: request.rows.filter((row) => row.op === "delete").length, errors: [], inserted: {} };
+            });
+            const worker = createWorker({
+                adminToken: ADMIN_TOKEN,
+                importGlobals: importGlobals as never,
+                queryCoordinator: {
+                    fanOut: vi.fn<() => never>(),
+                    orchestrateApplyCdc: vi.fn<() => never>(),
+                    orchestrateCdcSync: vi.fn<() => never>(),
+                    orchestrateExport: vi.fn<() => never>(),
+                    orchestrateImport: orchestrateImport as never,
+                    orchestrateImportSession: vi.fn<() => never>(),
+                    orchestrateMigration: vi.fn<() => never>(),
+                    orchestrateRank: vi.fn<() => never>(),
+                    orchestrateRankPage: vi.fn<() => never>(),
+                    orchestrateShardTraffic: vi.fn<() => never>(),
+                    shardKeysForTables: vi.fn<() => never>(),
+                    registry: {} as never,
+                },
+                resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                    table === "settings" ? { mode: { kind: "global" } } : { mode: { field: "orgId", kind: "shardBy" } },
+                shardDO: noopNamespace,
+                ...workerOptions,
+            });
+            const response = await worker.fetch(
+                new Request(`https://app.example/_lunora/admin/import${query}`, {
+                    body: lines.map((line) => JSON.stringify(line)).join("\n"),
+                    headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                    method: "POST",
+                }),
+                {},
+                fakeContext,
+            );
+
+            return { body: await response.json(), importGlobals, status: response.status };
+        };
+
+        it("routes a delete to the shard its doc names and carries the op to both planes", async () => {
+            expect.assertions(4);
+
+            const { body, importGlobals } = await deleteImport(
+                [
+                    { doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" },
+                    { doc: { _id: "g1" }, op: "delete", table: "settings" },
+                ],
+                { importGlobalsSupportsDelete: true },
+            );
+
+            expect(captured?.batches).toStrictEqual([
+                // Each row carries its source line, for a staged replace's error attribution at commit.
+                { rows: [{ doc: { _id: "u1", orgId: "acme" }, line: 1, op: "delete", table: "users" }], shardKey: "acme", startLine: 1 },
+            ]);
+            expect(importGlobals).toHaveBeenCalledWith(expect.objectContaining({ rows: [{ doc: { _id: "g1" }, line: 2, op: "delete", table: "settings" }] }));
+            expect(body).toMatchObject({ deleted: 1, errors: [] });
+            // The shard refuses delete rows unless the fan-out says the request opted in.
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ deletes: true }));
+        });
+
+        it("does not tell the shards the request opted into deletes when it did not", async () => {
+            expect.assertions(1);
+
+            await deleteImport([{ doc: { _id: "u1", orgId: "acme" }, table: "users" }], {}, "");
+
+            expect(orchestrateImport).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ deletes: false }));
+        });
+
+        it("refuses the whole import (400) when global deletes meet an importer that cannot delete, before any shard is pruned", async () => {
+            expect.assertions(3);
+
+            const { importGlobals, status } = await deleteImport(
+                [
+                    { doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" },
+                    { doc: { _id: "g1" }, op: "delete", table: "settings" },
+                ],
+                {},
+            );
+
+            expect(status).toBe(400);
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("refuses a delete row on a request that did not ask for deletes, and deletes nothing", async () => {
+            expect.assertions(3);
+
+            const { body, importGlobals } = await deleteImport(
+                [
+                    { doc: { _id: "u1", orgId: "acme" }, op: "delete", table: "users" },
+                    { doc: { _id: "g1" }, op: "delete", table: "settings" },
+                ],
+                { importGlobalsSupportsDelete: true },
+                "",
+            );
+
+            expect(body).toMatchObject({
+                deleted: 0,
+                errors: [
+                    { code: "BAD_ROW", line: 1 },
+                    { code: "BAD_ROW", line: 2 },
+                ],
+            });
+            expect(importGlobals).not.toHaveBeenCalled();
+            expect(orchestrateImport).not.toHaveBeenCalled();
+        });
+
+        it("rejects an unknown op as a bad row", async () => {
+            expect.assertions(1);
+
+            const { body } = await deleteImport([{ doc: { _id: "u1", orgId: "acme" }, op: "merge", table: "users" }], {});
+
+            expect(body["errors"]).toStrictEqual([{ code: "BAD_ROW", line: 1, message: 'row `op` must be "delete" when set, got "merge"', table: "users" }]);
+        });
     });
 });
 
@@ -1144,7 +1545,8 @@ describe("import streaming — large body", () => {
         // Count any trailing (newline-less) final line without an `if`.
         lineCount += Number(buffer.trim().length > 0);
 
-        expect(lineCount).toBe(10_000);
+        // 10,000 rows plus the terminal end marker.
+        expect(lineCount).toBe(10_001);
     });
 });
 

@@ -1,4 +1,4 @@
-import type { CronJobIR, TableIR, VectorIndexIR } from "../ir";
+import type { CronJobIR, JurisdictionIR, TableIR, VectorIndexIR } from "../ir";
 import { isShardByTable } from "../ir";
 import { baseSpecifiers, GENERATED_HEADER } from "./shared";
 
@@ -75,12 +75,18 @@ export { SchedulerDO } from "@lunora/scheduler";
  * the same signal — so none of the three can disagree about whether the app has
  * a registry.
  */
-const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, useUmbrella: boolean): string => {
+const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, useUmbrella: boolean, jurisdiction?: JurisdictionIR): string => {
     if (!tables.some((table) => isShardByTable(table))) {
         return "";
     }
 
-    return `${GENERATED_HEADER}/**
+    // Schema `.jurisdiction("…")` pins the entrypoint's registry to the same region as the shards that register with it.
+    const registryJurisdiction = jurisdiction ? JSON.stringify(jurisdiction) : "undefined";
+
+    return `${GENERATED_HEADER}import { WorkerEntrypoint } from "cloudflare:workers";
+import { hostedShardRegistry } from "${baseSpecifiers(useUmbrella).do}";
+
+/**
  * The \`ShardRegistryDO\` Durable Object class — the live set of shard keys per
  * \`.shardBy()\` table, which cross-shard export, CDC sync and migrations fan out
  * to. Re-exported so a worker entry can forward it (wrangler binds only what the
@@ -94,8 +100,59 @@ const emitShardRegistry = (tables: ReadonlyArray<Pick<TableIR, "shardMode">>, us
  * worker entry does both whenever this module exists.
  */
 export { ShardRegistryDO } from "${baseSpecifiers(useUmbrella).do}";
+
+/**
+ * The registry's RPC surface. A worker that calls a registry this worker hosts binds
+ * this class with a service binding (\`services: [{ binding, service, entrypoint:
+ * "ShardRegistryEntrypoint" }]\`), so it needs no secret: the binding is the capability.
+ * The host signs its own calls into the registry with its \`LUNORA_RELAY_SECRET\`.
+ */
+export class ShardRegistryEntrypoint extends WorkerEntrypoint<{ SHARD_REGISTRY: unknown; LUNORA_RELAY_SECRET?: string }> {
+    public register(table: string, shardKey: string): Promise<void> {
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).register(table, shardKey);
+    }
+
+    public unregister(table: string, shardKey: string): Promise<void> {
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).unregister(table, shardKey);
+    }
+
+    public listShardKeys(table: string): Promise<string[]> {
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).listShardKeys(table);
+    }
+
+    public snapshot(): Promise<Record<string, string[]>> {
+        return hostedShardRegistry(this.env, ${registryJurisdiction}).snapshot();
+    }
+}
 `;
 };
+
+/**
+ * `_generated/adminRevocations.ts` — the `AdminRevocationDO` class, written for
+ * every app (named admin tokens are a runtime feature, not a schema one).
+ *
+ * The scheduler and registry modules' twin: the class-A composed entry forwards
+ * this module and adds the builder's `.adminRevocations(...)` call off this
+ * FILE's existence, and binding inference provisions `ADMIN_REVOCATIONS` and its
+ * migration off the same signal, so a project needs no setup. The store records
+ * which named admin tokens were revoked outside the default shard's database,
+ * so a point-in-time restore of that shard cannot bring a revoked token back.
+ */
+const emitAdminRevocations = (useUmbrella: boolean): string => `${GENERATED_HEADER}/**
+ * The \`AdminRevocationDO\` Durable Object class: remembers revoked named admin
+ * tokens where a point-in-time restore of the default shard cannot rewind them.
+ * Re-exported so a worker entry can forward it (wrangler binds only what the
+ * entry exports), next to \`.adminRevocations((env) => env.ADMIN_REVOCATIONS)\`:
+ *
+ * \`export { AdminRevocationDO } from "./lunora/_generated/adminRevocations.js";\`
+ *
+ * Name the class in a hand-written entry: binding inference provisions
+ * \`ADMIN_REVOCATIONS\` off the entry's named exports, and cannot see through an
+ * \`export *\`. A Vite-first (class-A) app needs neither line. Without the
+ * binding no named admin token can be created, and any that exist are refused.
+ */
+export { AdminRevocationDO } from "${baseSpecifiers(useUmbrella).do}";
+`;
 
 /**
  * `_generated/durableObjects.ts`, written when `lunora.config` sets
@@ -103,15 +160,16 @@ export { ShardRegistryDO } from "${baseSpecifiers(useUmbrella).do}";
  * composed entry, binding inference and the validator all read.
  */
 const emitDurableObjects = (useUmbrella: boolean): string => `${GENERATED_HEADER}/**
- * Host the shard, the scheduler and the shard registry in ONE Durable Object
- * class, so the app spends one of the account's classes instead of three. A
+ * Host the shard, the scheduler, the shard registry and the admin revocation
+ * store in ONE Durable Object class, so the app spends one of the account's
+ * classes instead of four. A
  * Vite-first (class-A) app needs nothing more: its generated worker entry builds
  * \`LunoraDO\` from these. A hand-written entry does the same by hand:
  *
- * \`export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, shardRegistry: ShardRegistryDO });\`
+ * \`export const LunoraDO = mergeDurableObjects({ shard: app.ShardDO, scheduler: SchedulerDO, shardRegistry: ShardRegistryDO, adminRevocations: AdminRevocationDO });\`
  *
- * and passes \`roleNamespace(env.SHARD, "scheduler")\` / \`roleNamespace(env.SHARD, "shardRegistry")\`
- * to \`.scheduler()\` / \`.shardRegistry()\`. Merge before the first deploy only:
+ * and passes \`roleNamespace(env.SHARD, "scheduler")\` / \`roleNamespace(env.SHARD, "shardRegistry")\` /
+ * \`roleNamespace(env.SHARD, "adminRevocations")\` to \`.scheduler()\` / \`.shardRegistry()\` / \`.adminRevocations()\`. Merge before the first deploy only:
  * data already in \`ShardDO\` does not move, and a deployed merge cannot be undone.
  */
 export { mergeDurableObjects, roleNamespace } from "${baseSpecifiers(useUmbrella).do}";
@@ -254,4 +312,4 @@ export const LUNORA_VECTOR_INDEXES: ReadonlyArray<LunoraVectorIndex> = [${body}]
  */
 const emitWranglerCronTriggers = (crons: ReadonlyArray<CronJobIR>): string[] => [...new Set(crons.map((cron) => cron.cron))];
 
-export { emitCrons, emitDurableObjects, emitScheduler, emitShardRegistry, emitVectors, emitWranglerCronTriggers };
+export { emitAdminRevocations, emitCrons, emitDurableObjects, emitScheduler, emitShardRegistry, emitVectors, emitWranglerCronTriggers };

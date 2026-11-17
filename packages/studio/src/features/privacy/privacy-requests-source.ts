@@ -7,7 +7,7 @@
  * Studio as `privacyRequests`. Without one, the page renders a "not configured"
  * state and makes no request. `examples/privacy` wires both functions in
  * `lunora/admin.ts`: the open list is the package's `admin.open()`, and a retry is
- * its `admin.retry(requestId)`, after which the example restarts a failed erasure's
+ * its `admin.retry(requestId)`, after which the example restarts the failed request's
  * workflow, because only the workflow reaches the tombstone store.
  *
  * The row shape, the status list and the overdue rule come from `shared/`, written for

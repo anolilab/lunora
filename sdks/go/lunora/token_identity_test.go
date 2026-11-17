@@ -225,7 +225,7 @@ func TestANewTokenWithoutAnIdentityEvictsThePreviousSession(t *testing.T) {
 				client.SetIdentity(&transition.identity)
 			}
 
-			client.AttachSocket(func(map[string]any) error { return nil })
+			client.AttachSocket(func(map[string]any) error { return nil }, nil)
 			client.Subscribe("messages:list", map[string]any{}, func(any) {}, nil, "")
 			client.SubscribeShape("roomMessages", map[string]any{"room": "general"}, func([]any) {}, nil)
 			deliverAll(t, client, []any{block["queryFrame"]})

@@ -1,6 +1,5 @@
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
-import { lazy, Suspense } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
@@ -15,11 +14,13 @@ import { cn } from "../../lib/utils";
 import { deriveInsights } from "../advisors/derive-insights";
 import BindingsOverview from "./bindings-overview";
 import { ConnectAgentCard } from "./connect-agent";
+import { Sparkline } from "./sparkline";
 
-// The stat-card sparkline is Home's only `recharts` consumer. Lazy-loading it
-// keeps the (heavy) chart engine out of the studio's entry bundle — Home's
-// structure paints immediately and each sparkline streams in on its own chunk.
-const Sparkline = lazy(() => import("./sparkline"));
+/**
+ * A single point can't read as a trend (and renders as one fat block), so a
+ * sparkline only shows once there are a few buckets.
+ */
+const SPARKLINE_MIN_POINTS = 3;
 
 interface HomePanelProps {
     /** Shard key the health digest targets on first load. Defaults to the root shard. */
@@ -150,11 +151,7 @@ const StatCard = ({
                         <span className="text-2xl font-semibold tabular-nums text-foreground">{value}</span>
                         {unit !== undefined && <span className="text-xs text-muted-foreground">{unit}</span>}
                     </span>
-                    {trend !== undefined && (
-                        <Suspense fallback={<div aria-hidden="true" className="h-8 w-28" />}>
-                            <Sparkline data={trend} />
-                        </Suspense>
-                    )}
+                    {trend !== undefined && trend.length >= SPARKLINE_MIN_POINTS && <Sparkline data={trend} />}
                 </div>
             </div>
             {delta == null ? (

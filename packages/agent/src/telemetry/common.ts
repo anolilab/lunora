@@ -1,3 +1,5 @@
+import { breakdownCount, tokenCount } from "@lunora/ai/create";
+
 /**
  * Privacy options shared by every telemetry integration in this package.
  *
@@ -41,21 +43,63 @@ export const readField = (source: unknown, key: string): unknown => {
 
 /**
  * Project a raw AI SDK `LanguageModelUsage`-shaped value onto a compact,
- * defined-only token summary. Missing or non-numeric fields are dropped;
- * returns `undefined` when nothing usable is present.
+ * defined-only token summary. Totals are `inputTokens`, `outputTokens`, `totalTokens`;
+ * the breakdowns `cacheReadTokens`, `cacheWriteTokens` and `reasoningTokens` are
+ * read from the `*TokenDetails` objects. Breakdowns are subsets of the totals and are
+ * never added to them. Missing or invalid fields are dropped; returns `undefined`
+ * when nothing usable is present.
  */
 export const summarizeUsage = (usage: unknown): Record<string, number> | undefined => {
+    const inputDetails = readField(usage, "inputTokenDetails");
+    const outputDetails = readField(usage, "outputTokenDetails");
     const summary: Record<string, number> = {};
-
-    for (const key of ["inputTokens", "outputTokens", "totalTokens"]) {
-        const value = readField(usage, key);
-
-        if (typeof value === "number") {
+    const put = (key: string, value: number | undefined): void => {
+        if (value !== undefined) {
             summary[key] = value;
         }
-    }
+    };
+
+    put("inputTokens", tokenCount(readField(usage, "inputTokens")));
+    put("outputTokens", tokenCount(readField(usage, "outputTokens")));
+    put("totalTokens", tokenCount(readField(usage, "totalTokens")));
+    put("cacheReadTokens", breakdownCount(readField(inputDetails, "cacheReadTokens")));
+    put("cacheWriteTokens", breakdownCount(readField(inputDetails, "cacheWriteTokens")));
+    put("reasoningTokens", breakdownCount(readField(outputDetails, "reasoningTokens")));
 
     return Object.keys(summary).length > 0 ? summary : undefined;
+};
+
+/**
+ * Key under which a failed model turn's error carries the usage the provider billed for it. `Symbol.for`, so a
+ * bundle that inlines this module twice still reads the key the other copy wrote.
+ */
+export const FAILED_TURN_USAGE: unique symbol = Symbol.for("lunora.failedTurnUsage");
+
+/**
+ * The close event for a call that failed after the provider billed it. A failed attempt has no end event, so
+ * its usage rides on the error that failed it; this re-shapes it the way the SDK's end event carries usage, so
+ * every bridge meters a failed attempt through the same `summarizeUsage` read it uses for a successful one.
+ */
+export const failedTurnEvent = (error: unknown): { usage: unknown } | undefined => {
+    if (typeof error !== "object" || error === null) {
+        return undefined;
+    }
+
+    const billed = (error as Record<symbol, Record<string, number | undefined> | undefined>)[FAILED_TURN_USAGE];
+
+    if (billed === undefined) {
+        return undefined;
+    }
+
+    return {
+        usage: {
+            inputTokenDetails: { cacheReadTokens: billed.cacheReadTokens, cacheWriteTokens: billed.cacheWriteTokens },
+            inputTokens: billed.inputTokens,
+            outputTokenDetails: { reasoningTokens: billed.reasoningTokens },
+            outputTokens: billed.outputTokens,
+            totalTokens: billed.totalTokens,
+        },
+    };
 };
 
 /**

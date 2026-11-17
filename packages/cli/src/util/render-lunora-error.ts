@@ -29,6 +29,8 @@ export const renderLunoraError = (error: unknown, options: RenderLunoraErrorOpti
     const message = error instanceof Error ? error.message : String(error);
     const hint = resolveHint(isLunoraError(error) ? { code: error.code, hint: error.hint, message } : message);
     const hintLines = hint === undefined ? [] : flattenHint(hint).split("\n");
+    // The cause explanation, when the error carries one, is its own line ahead of the fix.
+    const why = isLunoraError(error) && typeof error.why === "string" ? [`Why: ${error.why}`] : [];
 
     // A coded error also names the code it will exit with, so the number a
     // script branches on and the block a human reads say the same thing. Only
@@ -42,10 +44,11 @@ export const renderLunoraError = (error: unknown, options: RenderLunoraErrorOpti
         hintLines.push(`\`${error.code}\` — exits ${String(exitCodeForError(error))}. Run \`lunora docs exit-codes\` for the table.`);
     }
 
+    const block = [...why, ...hintLines];
     const rendered = new VisulimaError({
         // `renderError` iterates `hint` as lines; the shared flattener returns one
         // string, so split it back to lines for the terminal renderer.
-        hint: hintLines.length === 0 ? undefined : hintLines,
+        hint: block.length === 0 ? undefined : block,
         message: options.reason === undefined ? message : `${options.reason}: ${message}`,
         name: error instanceof Error && error.name.length > 0 ? error.name : "Error",
     });

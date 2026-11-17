@@ -86,6 +86,20 @@ describe("toErrorBody redaction sweep", () => {
     });
 });
 
+describe("toErrorBody for a blocked unique index", () => {
+    it("answers 503 with the message intact, so a client reconnects instead of dropping its subscription", () => {
+        expect.assertions(2);
+
+        const { body, redacted, status } = toErrorBody(new LunoraError("UNIQUE_INDEX_DUPLICATES", "unique index users_email blocked by duplicates"));
+
+        expect(status).toBe(503);
+        expect({ body, redacted }).toStrictEqual({
+            body: expect.objectContaining({ code: "UNIQUE_INDEX_DUPLICATES", message: "unique index users_email blocked by duplicates" }),
+            redacted: false,
+        });
+    });
+});
+
 describe("toErrorBody fallback path", () => {
     it("redacts every non-LunoraError throw to the INTERNAL default", () => {
         expect.hasAssertions();

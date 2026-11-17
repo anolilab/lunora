@@ -12,6 +12,7 @@
  * re-close an already-closed socket).
  * - SQLite-in-DO storage handed out by the runtime as `state.storage.sql`.
  */
+import { LunoraError } from "@lunora/errors";
 import { env, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
@@ -72,6 +73,29 @@ const openSocket = async (stub: DurableObjectStub<TestShardDO>, subId: string, q
 };
 
 describe("shardDO (workerd)", () => {
+    it("keeps a thrown error's internal context out of the body, and hands it to a worker that asks", async () => {
+        expect.assertions(4);
+
+        const stub = newStub("shard-rpc-error");
+
+        await runInDurableObject(stub, async (instance) => {
+            instance.setRpcError(new LunoraError("CONFLICT", "stale", { internal: { shardId: "shard-42" }, why: "row moved" }));
+        });
+
+        const response = await stub.fetch("https://shard.internal/rpc", {
+            body: JSON.stringify({ args: {}, functionPath: "orders:place" }),
+            headers: { "content-type": "application/json", "x-lunora-want-error-detail": "1" },
+            method: "POST",
+        });
+        const text = await response.text();
+        const detail = response.headers.get("x-lunora-error-detail");
+
+        expect(response.status).toBe(409);
+        expect(text).toContain("row moved");
+        expect(text).not.toContain("shard-42");
+        expect(decodeURIComponent(detail ?? "")).toContain("shard-42");
+    });
+
     it("instantiates against a real DurableObjectState and serves /rpc", async () => {
         expect.assertions(3);
 

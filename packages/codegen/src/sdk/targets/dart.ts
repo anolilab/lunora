@@ -311,8 +311,8 @@ const dartPayload = (method: SdkMethod): string => argsChoice(method, { none: "n
  * replay it deliberately does not get.
  */
 const WRITE_OPTIONS = {
-    declaration: "LunoraOptimistic? optimistic, LunoraOptimisticUpdate? optimisticUpdate, bool Function()? precondition",
-    forward: "optimistic: optimistic, optimisticUpdate: optimisticUpdate, precondition: precondition",
+    declaration: "LunoraOptimistic? optimistic, LunoraOptimisticUpdate? optimisticUpdate, bool Function()? precondition, bool onlineOnly = false",
+    forward: "optimistic: optimistic, optimisticUpdate: optimisticUpdate, precondition: precondition, onlineOnly: onlineOnly",
 } as const;
 
 /** The parameter list, including the trailing named-parameter block. */

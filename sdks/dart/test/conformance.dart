@@ -24,7 +24,9 @@ import 'model_cases.dart';
 import 'offline_cases.dart';
 import 'optimistic_cases.dart';
 import 'replay_cases.dart';
+import 'retry_cases.dart';
 import 'rpc_cases.dart';
+import 'socket_cases.dart';
 import 'wire_cases.dart';
 
 // ─── Entry point ─────────────────────────────────────────────────────────────
@@ -55,9 +57,18 @@ Future<void> main() async {
   await run(caseNon2xxWithoutErrorEnvelopeFails);
   await run(caseClientFrameBuilders);
   await run(caseServerFrameConsumer);
+  await run(casePageDeltaFramesMergeIntoTheBase);
+  await run(caseUnmergeableRowDeltaKeepsThePreviousValue);
+  await run(casePoisonedSubscriptionFreezesTheResumeCursor);
+  await run(casePageDeltaRunIsHeldUntilItsLastFrame);
+  await run(caseUndecodableRunFrameFreezesTheSubscription);
+  await run(caseIdentityChangeEvictsTheBaseAndThePoison);
+  await run(casePoisonedSubscriptionStaysFrozenWhenTheResendCannotRun);
+  await run(casePoisonedSubscriptionStaysFrozenWhenTheResendThrows);
   await run(caseSubscriptionStreamYieldsFrameValuesInOrder);
   await run(caseShapeSubscribeFrame);
   await run(caseShapeSubscriptionsResendAfterReconnect);
+  await run(caseDetachedSubscriptionIsHeldUntilReattach);
   await run(caseRefusedPayloadReachesTheSubscriptionNotTheReadLoop);
   await run(casePokeSequenceMaterialisesRows);
   await run(casePokePartsDoNotApplyBeforePokeEnd);
@@ -72,6 +83,21 @@ Future<void> main() async {
   await run(caseHydrateAfterConnectingStillReplays);
   await run(caseCloseDuringAFlushSettlesDrainedWrites);
   await run(caseRestoredWriteVerdictsReachTheObserver);
+
+  await run(caseSubscriptionRetryFiresOneColdResubscribeAtTheHint);
+  await run(caseSubscriptionRetryLeavesTheErrorCallbackAsBefore);
+  await run(caseSubscriptionRetryLaterHintReplacesThePendingOne);
+  await run(caseSubscriptionRetryCancelledByAnsweringFrames);
+  await run(caseSubscriptionRetryIgnoresFramesWithoutAValidHint);
+  await run(caseSubscriptionRetryCancelledByUnsubscribeSocketAndClose);
+  await run(caseSubscriptionRetryIgnoresShapeErrors);
+  await run(caseSubscriptionRetryClampedToMaxRetryAfter);
+  await run(caseSubscriptionRetryFailedWriteKeepsUnsentRetriesDue);
+  await run(caseSubscriptionRetryDetachMidBatchStopsRetries);
+  await run(caseSubscriptionRetryDeadlineIsOnThePublicClock);
+  await run(caseSubscriptionRetryKeptByAnUndecodableDelta);
+  await run(caseSubscriptionRetryKeptByASettledThatCutsOffARun);
+  await run(caseSubscriptionRetryLateHintAfterDetachOrCloseSchedulesNothing);
 
   // The shared golden scenarios in protocol/fixtures/offline-optimistic.json,
   // which every port asserts the same values from — the manifest names below
@@ -139,11 +165,29 @@ Future<void> main() async {
   await run(caseBatchMissingSlotIsRetried);
   await run(caseWholeBatchRejectionIsTerminal);
   await run(casePreconditionFailureDiscardsBeforeReplay);
+  await run(caseOnlineOnlyRefusedWhenDisconnected);
+  await run(caseOnlineOnlyRefusedWhenDisconnectedInCallback);
+  await run(caseOnlineOnlySendsWhenConnected);
+  await run(caseOnlineOnlyTransportFailureRefused);
+  await run(caseOnlineOnlyLeavesNormalWritesQueued);
   await run(caseHydrateRestoresAheadOfThisSession);
   await run(caseIdentityChangeDiscardsQueuedWrites);
   await run(caseTokenDigestMatchesTheReferenceClient);
   await run(caseReconnectDuringAFlushIsNotLost);
   await run(caseCloseRejectsPendingWrites);
+
+  await run(caseConnectFrameFirstAndCarriesSessionToken);
+  await run(caseWsUrlCarriesOnlyTheAdminTicket);
+  await run(caseAttachSocketCarriesConnectionContext);
+  await run(caseCloseCodesDriveTokenExpiry);
+  await run(caseWhisperFramesJoinSendAndDeliver);
+  await run(caseWhisperTopicsRejoinAfterReconnect);
+  await run(caseClosedRoomRefusesSends);
+  await run(caseThrowingWhisperListenerDoesNotEndDispatch);
+  await run(caseFailedConnectLeavesTheClientOffline);
+  await run(caseSupersededAttachWritesNoMoreJoins);
+  await run(caseTopicRegisteredDuringConnectIsJoined);
+  await run(caseCloseDuringConnectLeavesTheClientClosed);
 
   // The after-all hook. Adding a name to protocol/conformance-cases.json turns
   // this leg red until a case actually executes under it — the evidence is the

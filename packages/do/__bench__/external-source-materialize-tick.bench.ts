@@ -76,27 +76,29 @@ const pulledBySize = new Map<number, Record<string, unknown>[]>();
 /** Precomputed baseline (`id → canonical json`) for the pure-diff reading, so its body measures only the diff. */
 const baselineBySize = new Map<number, Map<string, string>>();
 
+// File-level, not inside the `describe`: vitest's bench runner skips hooks registered in a `describe` (its
+// `runBenchmarkSuite` recurses into sub-suites without running their hooks), so the fixtures would stay unset.
+beforeAll(async () => {
+    for (const size of SIZES) {
+        const harness = createSqliteExec();
+
+        runShardMigrations(harness.sql, schema);
+
+        const writer = createShardContextDatabase({ schema, sql: harness.sql });
+
+        // eslint-disable-next-line no-await-in-loop -- one-time per-size fixture seed; sizes are independent
+        await seed(writer, size);
+
+        const pulled = readMembership(harness);
+        const baseline = new Map(pulled.map((entry) => [String(entry._id), JSON.stringify(entry)]));
+
+        harnesses.set(size, harness);
+        pulledBySize.set(size, pulled);
+        baselineBySize.set(size, baseline);
+    }
+});
+
 describe("external-source materialize tick (full-pull read + diff)", () => {
-    beforeAll(async () => {
-        for (const size of SIZES) {
-            const harness = createSqliteExec();
-
-            runShardMigrations(harness.sql, schema);
-
-            const writer = createShardContextDatabase({ schema, sql: harness.sql });
-
-            // eslint-disable-next-line no-await-in-loop -- one-time per-size fixture seed; sizes are independent
-            await seed(writer, size);
-
-            const pulled = readMembership(harness);
-            const baseline = new Map(pulled.map((entry) => [String(entry._id), JSON.stringify(entry)]));
-
-            harnesses.set(size, harness);
-            pulledBySize.set(size, pulled);
-            baselineBySize.set(size, baseline);
-        }
-    });
-
     for (const size of SIZES) {
         bench(`pure diff (unchanged) — ${String(size)} rows`, () => {
             // Steady state: pulled equals the baseline, so the diff scans S rows and emits zero ops — the recurring no-op cost.

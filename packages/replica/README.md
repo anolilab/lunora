@@ -17,7 +17,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -224,13 +224,17 @@ statement:
 }
 ```
 
-`EventLogDOClient` wraps the DO's `fetch()` RPC surface. Its only option is
-`fetch` — a function that dispatches a request to the instance you want, which
-is where the namespace and instance id are chosen:
+`EventLogDOClient` wraps the DO's `fetch()` RPC surface. `fetch` is a function that dispatches a request to the
+instance you want, which is where the namespace and instance id are chosen.
+Every route of the DO requires a signed request. The client signs each request with `LUNORA_RELAY_SECRET`,
+read from the `env` you pass, and construction throws when that secret is not set. The DO must hold the same secret:
 
 ```ts
+const id = env.EVENT_LOG_DO.idFromName("my-app");
 const client = new EventLogDOClient({
-    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+    env,
+    fetch: (request) => env.EVENT_LOG_DO.get(id).fetch(request),
+    instance: id.toString(),
 });
 
 // Append takes an ARRAY of events and returns them with their assigned `seq`s.
@@ -252,4 +256,4 @@ SQLite runtime.
 
 ## License
 
-[FSL-1.1-Apache-2.0](./LICENSE.md)
+[Apache-2.0](./LICENSE.md)

@@ -98,7 +98,10 @@ const parseSchemaInfo = (projectRoot: string, schemaDirectory: string): Discover
     }
 
     try {
-        const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+        // `noLib`: discovery only follows symbols (an `.extend(...)` argument to its
+        // declaration), never a type, so parsing the default `lib.*.d.ts` set — most of
+        // this program — bought nothing.
+        const project = new Project({ compilerOptions: { noLib: true }, skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
         // Pass `projectRoot` so a package-defined `.extend(...)` (resolved by
         // importing the dep) is seen here too — keeping binding inference + the
         // wrangler validator consistent with what codegen emits.

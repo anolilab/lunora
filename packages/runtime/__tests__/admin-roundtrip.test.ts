@@ -197,7 +197,8 @@ describe("admin roundtrip — 3 shards", () => {
         const ndjson = await exportResponse.text();
         const lines = ndjson.trim().split("\n");
 
-        expect(lines).toHaveLength(12);
+        // 12 rows and the terminal end marker, which the import then checks against the rows it read.
+        expect(lines).toHaveLength(13);
 
         const targetCluster = buildCluster(channelKeys);
         const targetCoordinator = createQueryCoordinator({ registry });

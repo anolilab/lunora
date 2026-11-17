@@ -6,8 +6,8 @@
  */
 export interface ControlPlaneDatabase {
     // The teardown sweep releases an alias's ownership row once its last
-    // deployment is gone; `table` mirrors `patch`'s optional table qualifier.
-    delete: (id: string, table?: string) => Promise<unknown>;
+    // deployment is gone. Table first, as every by-id call on the ctx-db takes it.
+    delete: (table: string, id: string) => Promise<unknown>;
     findMany: (
         table: string,
         // `limit`/`orderBy` are pass-throughs the underlying ctx-db already honors
@@ -29,7 +29,7 @@ export interface ControlPlaneDatabase {
         },
     ) => Promise<{ continueCursor?: null | string; isDone?: boolean; page: unknown[] }>;
     insert: (table: string, document: Record<string, unknown>) => Promise<unknown>;
-    patch: (id: string, patch: Record<string, unknown>, table?: string) => Promise<unknown>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<unknown>;
 }
 
 /** Follow `continueCursor` until the store reports `isDone`. Mirrors `lunora/paginate.ts`'s `collectAll`. */

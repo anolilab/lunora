@@ -442,6 +442,19 @@ describe("sqliteEncode/sqliteDecode — a user string that looks like a wire pay
     // merely BEGINS with it was decoded as the payload it resembles: the string
     // `"$lunora.wire$hello"` read back as `"hello"`, and `"$lunora.wire$42"` read
     // back as the NUMBER 42 — a string field returning a number.
+    it.each(["any", "from", "union"])("reads a %s column's BLOB back as an ArrayBuffer whatever shape the driver returns", (kind) => {
+        expect.assertions(6);
+
+        const bytes = Uint8Array.from([1, 2, 3]);
+
+        for (const raw of [bytes, Buffer.from(bytes), [1, 2, 3]]) {
+            const decoded = sqliteDecode(raw, kind);
+
+            expect(decoded).toBeInstanceOf(ArrayBuffer);
+            expect(new Uint8Array(decoded as ArrayBuffer)).toStrictEqual(bytes);
+        }
+    });
+
     it.each(["any", "from", "union"])("round-trips a %s column string beginning with the sentinel", (kind) => {
         expect.assertions(2);
 

@@ -18,7 +18,7 @@ const aiMock = (sql: string, available = true): MockClientHooks =>
             }
 
             if (reference === ADMIN_FUNCTIONS.aiGenerateSql) {
-                return { result: { degraded: false, sql } };
+                return { degraded: false, sql };
             }
 
             if (reference === ADMIN_FUNCTIONS.listTables) {
@@ -150,8 +150,8 @@ describe("sql inline edit", () => {
         expect(screen.queryByTestId("sql-inline-edit")).toBeNull();
     });
 
-    it("refuses to splice when Format rewrote the draft after the proposal arrived", async () => {
-        expect.assertions(2);
+    it("refuses to splice a proposal over a draft that changed without a keystroke", async () => {
+        expect.assertions(3);
 
         render(
             <LunoraProvider client={aiMock(REWRITE).asClient}>
@@ -159,15 +159,18 @@ describe("sql inline edit", () => {
             </LunoraProvider>,
         );
 
-        fireEvent.change(editor(), { target: { value: "select * from messages where id = 1" } });
-        await askFor("limit to 10");
+        fireEvent.change(editor(), { target: { value: "select * from messages" } });
+        await askFor("order by created_at");
         await screen.findByTestId("sql-inline-diff");
 
-        // Format writes the draft without going through the textarea, so the
-        // armed offsets now cover different text than the proposal was made for.
+        // Format rewrites the draft through `setDraft`, not the textarea's change
+        // handler, so nothing dismisses the armed rewrite. Accepting would then
+        // splice the proposal over offsets that now point at different text.
         fireEvent.click(screen.getByTestId("sql-format"));
 
         const formatted = editor().value;
+
+        expect(formatted).not.toBe("select * from messages");
 
         fireEvent.click(screen.getByTestId("sql-inline-edit-accept"));
 

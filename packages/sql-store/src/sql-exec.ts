@@ -23,6 +23,13 @@ import { jsonPathSegment } from "../../../shared/json-path-segment";
 import type { SqlDialect, SqlRunResult } from "./dialect";
 import { effectiveColumnKind, sqliteDecode, sqliteEncode } from "./value-codec";
 
+/**
+ * workerd's ceiling on bound parameters per statement — the same limit the shard
+ * engine enforces. Duplicated rather than imported because `@lunora/shard-engine`
+ * keeps its builders internal.
+ */
+const MAX_BOUND_PARAMETERS = 100;
+
 /** Logical field → physical column name (`_id`/`id` → `id`; everything else, incl. `_creationTime`, is itself). */
 const physicalColumn = (field: string): string => (field === "_id" || field === "id" ? "id" : field);
 
@@ -439,12 +446,40 @@ const createIndexIfNotExists = async (
 };
 
 /**
+ * The oid of index `name` on `table`, or NULL. Looked up through the table rather than by the index's own
+ * name, which `search_path` could resolve to a same-named index on another schema's table. `quote_ident`,
+ * so a mixed-case table resolves as the DDL created it; `::name`, so a name past 63 bytes is truncated as
+ * the DDL truncated it.
+ */
+const postgresIndexOf = (table: string, name: string): SQL =>
+    sql`(SELECT ${sql.identifier("c")}.oid FROM pg_index ${sql.identifier("i")} JOIN pg_class ${sql.identifier("c")} ON ${sql.identifier("c")}.oid = ${sql.identifier("i")}.indexrelid WHERE ${sql.identifier("i")}.indrelid = to_regclass(quote_ident(${table})) AND ${sql.identifier("c")}.relname = ${name}::name)`;
+
+/**
  * Drop an index if it exists. MySQL has no `DROP INDEX IF EXISTS` and names the
  * table, so it drops unconditionally and swallows the "can't drop" error
  * (errno 1091) an absent index raises — the mirror of
  * {@link createIndexIfNotExists}.
  */
 const dropIndexIfExists = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, name: string): Promise<void> => {
+    if (dialect.name === "postgres") {
+        // A bare name resolves through `search_path` and can reach a same-named index on another schema's
+        // table. Drop the one on `table`, qualified with its schema from the catalog: `regclass::text` leaves
+        // the schema off when the index is visible on this session's `search_path`, and nothing guarantees
+        // the session that runs the drop has the same one.
+        const [owned] = await queryAll(
+            exec,
+            dialect,
+            sql`SELECT quote_ident(${sql.identifier("n")}.nspname) || '.' || quote_ident(${sql.identifier("c")}.relname) AS ${sql.identifier("qualified")} FROM pg_class ${sql.identifier("c")} JOIN pg_namespace ${sql.identifier("n")} ON ${sql.identifier("n")}.oid = ${sql.identifier("c")}.relnamespace WHERE ${sql.identifier("c")}.oid = ${postgresIndexOf(table, name)}`,
+        );
+        const qualified = owned?.["qualified"];
+
+        if (typeof qualified === "string") {
+            await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.raw(qualified)}`);
+        }
+
+        return;
+    }
+
     if (dialect.name !== "mysql") {
         await queryRun(exec, dialect, sql`DROP INDEX IF EXISTS ${sql.identifier(name)}`);
 
@@ -480,8 +515,7 @@ const indexState = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, 
             return rows.length > 0 ? "valid" : "absent";
         }
         case "postgres": {
-            // `quote_ident`, so a mixed-case name resolves as the DDL created it.
-            const rows = await queryAll(exec, dialect, sql`SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass(quote_ident(${name}))`);
+            const rows = await queryAll(exec, dialect, sql`SELECT indisvalid FROM pg_index WHERE indexrelid = ${postgresIndexOf(table, name)}`);
 
             if (rows.length === 0) {
                 return "absent";
@@ -493,7 +527,7 @@ const indexState = async (exec: SqlCtxExec, dialect: SqlDialect, table: string, 
             const rows = await queryAll(
                 exec,
                 dialect,
-                sql`SELECT 1 AS ${sql.identifier("present")} FROM sqlite_master WHERE type = 'index' AND name = ${name}`,
+                sql`SELECT 1 AS ${sql.identifier("present")} FROM sqlite_master WHERE type = 'index' AND name = ${name} AND tbl_name = ${table}`,
             );
 
             return rows.length > 0 ? "valid" : "absent";
@@ -515,12 +549,21 @@ interface SqlCtxExec {
     // `queryBatch` falls back to the sequential `run()` loop every companion
     // write used before this existed.
     batch?: (statements: ReadonlyArray<{ params: ReadonlyArray<unknown>; sql: string }>) => Promise<void>;
+    // Optional. An exec over a replicated store (D1 sessions) exposes a sibling
+    // that reads the primary, for a read that must see every committed write
+    // (a policy check on a write path). Absent, every read already hits the
+    // authoritative store, so a primary read is the same read.
+    primary?: SqlCtxExec;
     // `void` for D1/node:sqlite (the result is ignored on those paths); a
     // `SqlRunResult` ({ rowsAffected }) for engines whose OCC needs the affected
     // count (MySQL, which has no `RETURNING`). The union lets a PlanetScale
     // `SqlExec` satisfy this without forcing the D1 execs to report a count.
     // eslint-disable-next-line @typescript-eslint/no-invalid-void-type -- `void` is intentional: accepts a void-returning exec (one that reports no affected-rows count)
     run: (sql: string, parameters: ReadonlyArray<unknown>) => Promise<SqlRunResult | void>;
+    // Optional, mirroring `SqlExec.transaction` (see dialect.ts): run `work`
+    // against an exec pinned to one connection inside one transaction,
+    // committed when `work` resolves and rolled back when it throws.
+    transaction?: <T>(work: (tx: SqlCtxExec) => Promise<T>) => Promise<T>;
 }
 
 /**
@@ -801,6 +844,7 @@ export {
     fieldRefSql,
     forEachRowPaged,
     indexState,
+    MAX_BOUND_PARAMETERS,
     nextRowVersion,
     nullSafeEqualsSql,
     pathContainsNeedle,

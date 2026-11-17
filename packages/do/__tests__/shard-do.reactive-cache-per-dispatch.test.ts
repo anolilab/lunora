@@ -64,7 +64,32 @@ class MeteredShard extends ShardDO {
     }
 }
 
-const rpc = async (shard: MeteredShard, functionPath: string): Promise<void> => {
+/** A lazy procedure whose builder reveals that its middleware is per-dispatch only after loading. */
+class LazyMeteredShard extends ShardDO {
+    public charged = 0;
+    private prepared = false;
+
+    public constructor(state: ShardDOState) {
+        super(state, {}, { reactiveCache: {} });
+    }
+
+    public override handleRpc(): Promise<unknown> {
+        this.charged += 1;
+
+        return Promise.resolve({ ok: true });
+    }
+
+    protected override async prepareFunction(): Promise<void> {
+        await Promise.resolve();
+        this.prepared = true;
+    }
+
+    protected override isCacheableQuery(): boolean {
+        return !this.prepared;
+    }
+}
+
+const rpc = async (shard: ShardDO, functionPath: string): Promise<void> => {
     await shard.fetch(
         new Request("https://shard.internal/rpc", {
             body: JSON.stringify({ args: {}, functionPath }),
@@ -99,5 +124,17 @@ describe("reactive cache + per-dispatch middleware", () => {
         await rpc(shard, "posts:feed");
 
         expect(shard.charged.get("posts:feed")).toBe(3);
+    });
+
+    it("prepares a lazy function before deciding whether the reactive cache can skip its middleware", async () => {
+        expect.hasAssertions();
+
+        const shard = new LazyMeteredShard(createFakeState());
+
+        await rpc(shard, "posts:feed");
+        await rpc(shard, "posts:feed");
+        await rpc(shard, "posts:feed");
+
+        expect(shard.charged).toBe(3);
     });
 });

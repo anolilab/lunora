@@ -100,7 +100,7 @@ describe("delta-sync fixture", () => {
         // The changed-tables tick is the whole point of the global changelog: it
         // asks which tables moved, so a tick that omits a shape's table skips
         // that shape's membership drain entirely.
-        expect(shard).toContain("globalDb.cdcChangedTables?.(sinceSeq, { cursorOnly })");
+        expect(shard).toContain("globalDb.cdcChangedTables?.(sinceSeq, cursorOnly === undefined ? {} : { cursorOnly })");
     });
 
     it("threads the shard's cdc flag into every global-writer build", () => {

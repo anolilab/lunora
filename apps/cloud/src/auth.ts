@@ -13,7 +13,8 @@
  */
 
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { createAuth, ensureMigrated, lunoraD1Adapter } from "@lunora/auth";
+import { createAuth, lunoraD1Adapter } from "@lunora/auth";
+import { createMigrationAuth, ensureMigrated } from "@lunora/auth/migrate";
 import { admin, inviteOnly, passkey, twoFactor } from "@lunora/auth/plugins";
 import { createMailerFromEnv } from "@lunora/mail";
 
@@ -213,7 +214,7 @@ export const ensureAuth = async (env: AuthEnv, requestOrigin: string): Promise<L
         // the raw D1 drives the one-time schema migration (better-auth Kysely).
         const instance = createAuth({ ...authOptions(env, requestOrigin), database: lunoraD1Adapter(env.DB as never) });
 
-        await ensureMigrated(createAuth({ ...authOptions(env, requestOrigin), database: env.DB as never }));
+        await ensureMigrated(createMigrationAuth({ ...authOptions(env, requestOrigin), database: env.DB as never }));
 
         return instance;
     })().catch((error: unknown) => {

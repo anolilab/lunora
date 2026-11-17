@@ -51,6 +51,8 @@
  * amount of retrying fixes.
  */
 
+import { withinRpcDeadline } from "./rpc-deadline";
+
 /** Knobs for {@link createPollingFallback}. */
 interface PollingFallbackOptions {
     /**
@@ -83,6 +85,8 @@ interface PollingFallbackOptions {
 
 /** The polling state machine for ONE shard connection. */
 export interface PollingFallback {
+    /** `true` once a connect attempt has failed to reach `open` since the last one that did. */
+    hasFailedOpen: () => boolean;
     /** `true` while the interval is armed AND the latest pass reached the origin. */
     isPolling: () => boolean;
     /** A connect attempt ended without ever reaching `open`. Starts polling at the threshold. */
@@ -168,6 +172,7 @@ export const createPollingFallback = (options: PollingFallbackOptions): PollingF
     };
 
     return {
+        hasFailedOpen: () => failures > 0,
         isPolling: () => timer !== undefined && live,
         noteFailedOpen: () => {
             failures += 1;
@@ -206,22 +211,5 @@ export const POLL_TIMEOUT_MS = 10_000;
  * rejects with a `TypeError`, the same error an unreachable origin gives, even
  * when a `fetch` double ignores the signal.
  */
-export const withinPollTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => {
-            controller.abort();
-            reject(new TypeError("LunoraClient: poll timed out"));
-        }, POLL_TIMEOUT_MS);
-    });
-
-    try {
-        return await Promise.race([run(controller.signal), timeout]);
-    } catch (error) {
-        // The aborted fetch's own `AbortError` is the timeout, not a response.
-        throw controller.signal.aborted ? new TypeError("LunoraClient: poll timed out") : error;
-    } finally {
-        clearTimeout(timer);
-    }
-};
+export const withinPollTimeout = async <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> =>
+    withinRpcDeadline(POLL_TIMEOUT_MS, undefined, run, () => new TypeError("LunoraClient: poll timed out"));

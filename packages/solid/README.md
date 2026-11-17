@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -102,6 +102,7 @@ render(
 | `createQuery`                                       | `useQuery`            | Live query signal — returns `() => T \| undefined`, re-subscribes on arg change.  |
 | `createMutation`                                    | `useMutation`         | Optimistic mutation handle (`data`, `error`, `pending`, `mutate`, `reset`).       |
 | `createSubscription`                                | `useSubscription`     | Raw subscription signal — unbounded live stream.                                  |
+| `createLiveTopic`                                   | `useLiveTopic`        | One declared live topic — `lastEvent` and `error` accessors.                      |
 | `createPaginatedQuery`                              | `usePaginatedQuery`   | Cursor-paginated query with `loadMore`, `status`, `results`, and `error` signals. |
 | `createInfiniteQuery`                               | `useInfiniteQuery`    | Infinite-scroll variant of `createPaginatedQuery`.                                |
 | `createAuth`                                        | `useAuth`             | Reactive auth state (`token`, `user`, `status` signals + `setToken`).             |
@@ -145,11 +146,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora solid package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora solid package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/solid?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/solid

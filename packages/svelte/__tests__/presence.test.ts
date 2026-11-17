@@ -136,6 +136,16 @@ describe("presence (Svelte)", () => {
         Reflect.deleteProperty(globalThis, "window");
     });
 
+    it("throws a RangeError for a non-positive intervalMs", () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+
+        expect(() => presence(fake.client, "room-1", { heartbeat: HEARTBEAT, intervalMs: 0, listPresent: LIST_PRESENT, sessionId: "sess-fixed" })).toThrow(
+            RangeError,
+        );
+    });
+
     it("heartbeats on mount and again on each interval tick", async () => {
         const fake = createPresenceFakeClient();
 

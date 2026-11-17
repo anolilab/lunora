@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a declared queue — push or pull — that has no dead-letter queue.
@@ -61,7 +62,7 @@ const queueWithoutDlq: Lint = {
                 emit(queueWithoutDlq, {
                     cacheKey: `queue_without_dlq:${queue.exportName}`,
                     detail: `Queue "${queue.exportName}" declares no \`deadLetterQueue\`, so a message that exhausts its retries (\`maxRetries\` = ${String(maxRetries)}, ~${String(maxRetries + 1)} delivery attempts) is dropped and permanently lost.`,
-                    metadata: { maxRetries, mode: queue.mode, queue: queue.exportName },
+                    metadata: { ...declarationSiteFields({ file: queue.filePath, line: queue.line }), maxRetries, mode: queue.mode, queue: queue.exportName },
                 }),
             );
         }

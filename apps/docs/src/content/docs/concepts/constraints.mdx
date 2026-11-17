@@ -15,7 +15,7 @@ column validator or the relation, and most are enforced **at write time** by
 the storage layer, so a violating `insert` / `patch` / `delete` throws rather
 than committing.
 
-There is no separate constraint DSL. A constraint is just a modifier on a
+There is no separate constraint DSL. A constraint is a modifier on a
 column (`.unique()`, the default-on `NOT NULL`) or an option on a relation
 (`onDelete`). Codegen and the runtime read these off the same table definition.
 
@@ -131,11 +131,11 @@ rows for dangling references.
 
 ## Error codes
 
-| Error             | `code`       | Status | Thrown when                                                                           |
-| ----------------- | ------------ | ------ | ------------------------------------------------------------------------------------- |
-| `ConflictError`   | `CONFLICT`   | 409    | A `UNIQUE` index breach, an `onDelete: "restrict"` abort, or an OCC conflict.         |
-| `NotUniqueError`  | `NOT_UNIQUE` | —      | The `.unique()` query helper matched more than one row.                               |
-| `ValidationError` | —            | —      | A non-nullable column received `null`/`undefined`, or a `.check()` refinement failed. |
+| Error             | `code`             | Status | Thrown when                                                                           |
+| ----------------- | ------------------ | ------ | ------------------------------------------------------------------------------------- |
+| `ConflictError`   | `CONFLICT`         | 409    | A `UNIQUE` index breach, an `onDelete: "restrict"` abort, or an OCC conflict.         |
+| `NotUniqueError`  | `NOT_UNIQUE`       | 400    | The `.unique()` query helper matched more than one row.                               |
+| `ValidationError` | `VALIDATION_ERROR` | 400    | A non-nullable column received `null`/`undefined`, or a `.check()` refinement failed. |
 
 `ConflictError` is recognized structurally across packages (it declares `code`
 and `status` as own properties), so the runtime maps it to a `409` without an

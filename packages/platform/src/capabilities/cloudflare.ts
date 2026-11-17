@@ -13,16 +13,25 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
     id: "cloudflare",
     name: "Cloudflare",
     features: {
+        adminTokenRevocation: {
+            level: "native",
+            note: "AdminRevocationDO (a small Durable Object, bound as ADMIN_REVOCATIONS and addressed through the ShardDirectory namespace seam like SchedulerDO) holds each named admin token's revocation, keyed by name and createdAt, outside the default shard's database. It is written before the token row is deleted and checked on every verify, so a pitrRestore of the default shard cannot revive a revoked token",
+        },
         shardedState: { level: "native", note: "Durable Objects with SQLite" },
         globalTables: {
             level: "native",
-            note: "D1 with Sessions API. D1 has a documented, expected baseline error rate — Cloudflare's own team calls a handful of transient errors every few hours 'not unexpected' on a healthy database — so read-only statements are retried automatically; writes are not, because every one of those errors is ambiguous about whether the statement applied and D1 has no interactive transactions to resolve it",
+            note: "D1 with Sessions API. D1 has a documented, expected baseline error rate — Cloudflare's own team calls a handful of transient errors every few hours 'not unexpected' on a healthy database — so read-only statements are retried automatically; writes are not, because every one of those errors is ambiguous about whether the statement applied and D1 has no interactive transactions to resolve it. A read with consistency: 'primary' runs on a first-primary Sessions session, so it sees every committed write; a plain read may come from any replica",
         },
         websocketHibernation: { level: "native", note: "DO WebSocket hibernation" },
         dataExportSections: {
             level: "emulated",
             note: "The admin export's format-2 sections — `$auth` (better-auth's tables outside the schema, or every table of the DO-backed auth object), `$kv` (every bound Workers KV namespace: bytes, metadata, expiration; a value over 512 KiB in chunks) and `$storage` (every @lunora/storage bucket, streamed in 512 KiB chunks) — read and write through the admin ops the studio already uses, so `lunora export`, cloud backups and eject carry them. Lunora's format over the bindings, hence emulated. Import is append-only like the table import; a value or object of several chunks is staged under `_lunora/restore/<target>/<session>/` and assembled when its last chunk lands, verified against its SHA-256: a KV value (up to 25 MiB) in memory, an object up to 32 MiB in memory, a larger one through an R2 multipart upload (`storageMultipartUpload`) in equal 5 MiB parts, one held at a time. The next import's header sweeps sessions over a day old. Vectorize is not a section: the binding queries, upserts and fetches by id but cannot enumerate an index, and only the account-token REST API can, so an index is rebuilt (backfillVectors) after a restore",
         },
+        liveStreams: {
+            level: "native",
+            note: "The shard DO streams the SSE response. `ctx.live.publish` reaches the SSE subscribers of the shard it names: from an HTTP action or a queue consumer through the Worker's shard forward, and from a scheduled job's action in-process on the DO it runs in (no hop). A queue consumer has no shard of its own, so it always forwards. There is no cross-shard live fan-out. An in-shard action publish naming another shard is refused, so it reaches no subscriber; the HTTP and queue paths above forward to the shard they name instead",
+        },
+        typedWebSockets: { level: "native", note: "Route and room sockets ride DO WebSocket hibernation" },
         durableStreams: {
             level: "emulated",
             note: "Lunora persists each chunk to the shard's SQLite under a monotonic seq and keeps the producer alive past the socket via waitUntil; the platform has no streaming primitive of its own, and a run whose DO is evicted mid-flight ends as STREAM_INTERRUPTED rather than resuming. From compatibility_date 2026-10-01 (or the durable_object_io_tasks_prevent_eviction flag) that pending waitUntil holds off idle eviction for up to 15 minutes, so a client disconnect no longer interrupts a shorter run, unless durable_object_io_tasks_do_not_prevent_eviction opts out. Deployed Workers apply it by date; a local workerd older than 1.20261001 ignores the date and needs the explicit durable_object_io_tasks_prevent_eviction flag (it rejects the durable_object_io_tasks_do_not_prevent_eviction opt-out at startup)",
@@ -30,6 +39,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         commitOrderedTables: {
             level: "native",
             note: "`state.storage.transaction` makes the `__commit_seq` bump atomic with the rows it stamps, and a Durable Object executes one event at a time — so the allocation order IS the commit order, with no lock of ours in the path",
+        },
+        deliveryAuthorization: {
+            level: "emulated",
+            note: "Lunora builds it: the platform has no such primitive. Permits ride DO WebSocket attachments, fences and receipts live in the shard's SQLite, and the fence install is a signed sibling fetch; all of it runs against the real engine in the workerd suite, including hibernation",
         },
         conditionalWrites: {
             level: "native",
@@ -91,10 +104,17 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "Cloudflare Workflows declared in wrangler `exports` (no workflows[] binding) and reached through `ctx.exports.<Class>` from the shard DO, the Worker and every WorkflowEntrypoint; needs Wrangler >= 4.142 / @cloudflare/vite-plugin >= 1.61 locally",
         },
-        scheduler: { level: "emulated", note: "SchedulerDO (Lunora, on DO alarms) + declarative Cron Triggers; no runtime cron registration" },
+        scheduler: {
+            level: "emulated",
+            note: "SchedulerDO (Lunora, on DO alarms, supports `retry.forever`) + declarative Cron Triggers; no runtime cron registration",
+        },
+        deploymentPause: {
+            level: "emulated",
+            note: "Lunora's own flag, not a platform primitive: held in the SchedulerDO, whose alarm holds jobs while it is set. The worker re-reads it per isolate every 5 s for the router (503 DEPLOYMENT_PAUSED), cron (skipped, recorded) and queue consumer (each message re-sent as a delayed copy with a fresh attempt budget). A pause reaches every named scheduler instance: instances register durably with the configured one in its SchedulerDO storage the first time they are addressed, the admin route fans a pause or resume out to all of them (a partial failure is reported, and repeating the command converges), and an instance first addressed during a pause starts paused. Realtime sockets opened before the pause keep serving subscriptions until they reconnect. An app without a SchedulerDO cannot pause",
+        },
         cronTriggers: {
             level: "native",
-            note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself",
+            note: "wrangler triggers.crons, reconciled from the declared crons at build time, delivered to the worker's scheduled() handler — which is the one cron dispatch that ships: it walks the generated LUNORA_CRONS map itself. Each job runs under a SchedulerDO-held lease, so a tick landing in any isolate while the previous run is still going is skipped, and every fire (run, skip, failure) is recorded in the SchedulerDO",
         },
         authJurisdictionMove: {
             level: "native",
@@ -123,7 +143,7 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "native",
-            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is. `ctx.ai.websearch` is the binding's `websearch()` (Web Search API, beta: Ceramic / Exa / Linkup) on the same gateway, billed to a provider key stored there (the `default` alias unless `byokAlias` names another) or else AI Gateway credits",
+            note: "Workers AI; `<provider>/<model>` and `dynamic/<route>` ids route through AI Gateway over the same binding (Unified Billing for unified-catalog providers, a key stored on the gateway for gateway-path-only ones; `LUNORA_AI_GATEWAY_ID` else the account's `default` gateway). `rejectIfBusy` on `ctx.ai.model` / `ctx.ai.run` is the binding's own option, forwarded as is. `ctx.ai.websearch` is the binding's `websearch()` (Web Search API, beta: Ceramic / Exa / Linkup) on the same gateway, billed to a provider key stored there (the `default` alias unless `byokAlias` names another) or else AI Gateway credits. `ctx.ai.toMarkdown` is the binding's toMarkdown() (Markdown Conversion API), and `ctx.ai.images.generate` runs `@cf/…` image ids through the binding and `openai/` / `google/` slugs through the gateway",
         },
         aiSearch: {
             level: "native",
@@ -175,6 +195,10 @@ const CLOUDFLARE_CAPABILITIES: PlatformCapabilities = {
         },
         mail: { level: "emulated", note: "Resend (third-party) via Cloudflare Queues" },
         secrets: { level: "native", note: "Secrets Store" },
+        secretValues: {
+            level: "native",
+            note: "Held in the shard's own Durable Object key-value storage under a reserved key prefix, so the value stays inside the shard. Sealed with AES-256-GCM under the `LUNORA_SECRET_VALUE_KEY` Worker secret before it is stored, so the stored record is `{ keyId, iv, ciphertext }`. The reserved prefix is hidden from `ShardKvStore`. Point-in-time recovery covers key-value put() data for the last 30 days, so a restore to an earlier bookmark returns the sealed record, and it opens while the sealing key is still configured: erasure is `discard` plus rotating the key out",
+        },
         services: {
             level: "native",
             note: "Cloudflare service bindings: the bound Worker runs on the same thread of the same server, with no extra request fee. Fetch services and WorkerEntrypoint RPC both work, in deploy and in local dev (auxiliary Workers / multiple wrangler configs)",

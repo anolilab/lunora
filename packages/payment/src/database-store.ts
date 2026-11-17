@@ -9,9 +9,10 @@
  */
 import { LunoraPaymentError } from "./errors";
 import { money } from "./money";
-import type { PaymentStore } from "./store";
+import type { PaymentStore, RevisionGuard } from "./store";
 import { foldUsage } from "./store";
 import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
+import { usageFirstDueAt } from "./usage-due";
 
 /**
  * The physical table names `paymentExtension` merges into an app's schema — its `payment` key
@@ -20,6 +21,7 @@ import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, 
 const PAYMENT_TABLES = {
     customers: "payment_customers",
     events: "payment_events",
+    referenceRevisions: "payment_referenceRevisions",
     sessions: "payment_sessions",
     subscriptions: "payment_subscriptions",
     usageEvents: "payment_usageEvents",
@@ -60,7 +62,7 @@ interface PaymentPage {
  * Minimal write/read surface this store needs; `ctx.db` satisfies it structurally.
  */
 interface PaymentDatabase {
-    delete: (id: string) => Promise<void>;
+    delete: (table: string, id: string) => Promise<void>;
     findFirst: (table: string, where: Record<string, unknown>) => Promise<PaymentRow | null>;
 
     /**
@@ -70,7 +72,14 @@ interface PaymentDatabase {
      */
     findMany: (table: string, where: Record<string, unknown>, page?: PaymentPageArgs) => Promise<PaymentPage>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * Applies `patch` to row `id` only if the row still matches `where`, in one atomic step, and says
+     * whether it did. A guarded write needs this: a read-then-patch leaves a window a webhook can write
+     * through.
+     */
+    patchIf: (table: string, id: string, where: Record<string, unknown>, patch: Record<string, unknown>) => Promise<boolean>;
 }
 
 const readString = (row: PaymentRow, key: string): string => (typeof row[key] === "string" ? row[key] : "");
@@ -203,6 +212,7 @@ const rowToSession = (row: PaymentRow): PaymentSession => {
         provider: readString(row, "provider") as ProviderId,
         referenceId: readString(row, "referenceId"),
         refundedAmount: money(readMinorUnits(row, "refundedMinor"), currency),
+        revision: readOptionalNumber(row, "revision"),
         state: readString(row, "state") as PaymentState,
         subscriptionId: readOptionalString(row, "subscriptionId"),
         updatedAt: readNumber(row, "updatedAt"),
@@ -238,6 +248,7 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
         id: readString(row, "providerSubscriptionId"),
         lastEventAt: readOptionalNumber(row, "lastEventAt"),
         priceId: readString(row, "priceId"),
+        revision: readOptionalNumber(row, "revision"),
         // Absent on a row written before the column existed, and on one the webhook path wrote (it
         // carries a single price id). `undefined` is what makes the entitlement read fall back to
         // `[priceId]`, so no backfill is needed — see `Subscription.priceIds`.
@@ -251,6 +262,8 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
 };
 
 const rowToUsageEvent = (row: PaymentRow): UsageEvent => {
+    const reportRetryAt = readOptionalNumber(row, "reportRetryAt");
+
     return {
         createdAt: readNumber(row, "createdAt"),
         featureId: readString(row, "featureId"),
@@ -261,6 +274,7 @@ const rowToUsageEvent = (row: PaymentRow): UsageEvent => {
         quantity: readNumber(row, "quantity"),
         referenceId: readString(row, "referenceId"),
         reportedToProvider: readBoolean(row, "reportedToProvider"),
+        ...(reportRetryAt === undefined ? {} : { reportRetryAt }),
     };
 };
 
@@ -276,20 +290,67 @@ const usageEventToRow = (event: UsageEvent): Record<string, unknown> => {
         quantity: event.quantity,
         referenceId: event.referenceId,
         reportedToProvider: event.reportedToProvider,
+        ...(event.reportRetryAt === undefined ? {} : { reportRetryAt: event.reportRetryAt }),
     };
 };
 
 export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentStore => {
-    const upsert = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>): Promise<void> => {
+    // Customers carry no revision: they are not reconciled against the provider, so nothing guards them.
+    const upsertPlain = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>): Promise<void> => {
         const existing = await database.findFirst(table, where);
 
         if (existing) {
-            await database.patch(existing._id, row);
+            await database.patch(table, existing._id, row);
 
             return;
         }
 
         await database.insert(table, row);
+    };
+
+    // Every write bumps the row's revision. An unguarded write applies unconditionally; a guarded one
+    // applies only while the stored revision still matches the guard. For an existing row that is one
+    // conditional patch. For an absent row there is no conditional insert, so the unique index decides:
+    // a writer that inserted the row after our read makes ours fail, and that loss is reported like a
+    // revision mismatch rather than as an error.
+    const upsertRevisioned = async (table: string, where: Record<string, unknown>, row: Record<string, unknown>, guard?: RevisionGuard): Promise<boolean> => {
+        const existing = await database.findFirst(table, where);
+        const current = existing === null ? undefined : readOptionalNumber(existing, "revision");
+
+        if (guard !== undefined && current !== guard.ifRevision) {
+            return false;
+        }
+
+        const revised = { ...row, revision: (current ?? 0) + 1 };
+
+        if (existing === null) {
+            if (guard === undefined) {
+                await database.insert(table, revised);
+
+                return true;
+            }
+
+            try {
+                await database.insert(table, revised);
+            } catch (error) {
+                if ((await database.findFirst(table, where)) !== null) {
+                    return false;
+                }
+
+                throw error;
+            }
+
+            return true;
+        }
+
+        if (guard === undefined) {
+            await database.patch(table, existing._id, revised);
+
+            return true;
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- SQL bind value: `where` matches an unwritten column with null, not undefined.
+        return database.patchIf(table, existing._id, { revision: guard.ifRevision ?? null }, revised);
     };
 
     // Range read through `by_reference_feature_created`: only the current period's events are
@@ -335,35 +396,57 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             return rows.map((row) => rowToSubscription(row));
         },
 
-        listUnreportedUsage: async (provider, limit) => {
+        listUnreportedUsage: async (provider, limit, now) => {
             const wanted = Math.max(0, Math.floor(limit));
 
             if (wanted === 0) {
                 return [];
             }
 
-            // The port's `where` is equality-only, so the additive/positive
-            // predicate (see `PaymentStore.listUnreportedUsage`) still has to be
-            // applied in memory — but the READ is bounded. Order and limit are
-            // pushed DOWN via `PaymentPageArgs` and the keyset `cursor` walks the
-            // rest, so a provider that has been down for a day costs `wanted`-sized
-            // chunks instead of materialising its whole backlog in a 128 MiB
-            // isolate to take `limit` rows off the front.
-            //
-            // `orderBy` reproduces the previous in-memory sort exactly (createdAt
-            // asc, then idempotencyKey as the tiebreak) so "oldest first" and the
-            // memory store's ordering still agree.
-            const orderBy: Record<string, "asc" | "desc">[] = [{ createdAt: "asc" }, { idempotencyKey: "asc" }];
+            // Rows written before `recordUsage` stamped `reportRetryAt` have none, and the due read
+            // below cannot see them. Stamp one page per sweep through the same index (an absent
+            // column matches `null`), so the backlog drains without an app-side migration. The
+            // explicit order is the index's next columns: the default `_creationTime` order is not,
+            // and would sort the whole legacy backlog before the limit applies.
+            const legacy = await database.findMany(
+                PAYMENT_TABLES.usageEvents,
+                // eslint-disable-next-line unicorn/no-null -- `null` is how ctx.db matches a column the row never wrote
+                { provider, reportedToProvider: false, reportRetryAt: null },
+                { limit: wanted, orderBy: [{ createdAt: "asc" }, { idempotencyKey: "asc" }] },
+            );
+
+            for (const row of legacy.rows) {
+                // Guarded: a concurrent sweep may have stamped and then deferred this row since the
+                // read above, and an unconditional write would make it due again at `createdAt`.
+                // eslint-disable-next-line no-await-in-loop -- one bounded page, serial like the sweep that reads it
+                await database.patchIf(
+                    PAYMENT_TABLES.usageEvents,
+                    row._id,
+                    // eslint-disable-next-line unicorn/no-null -- `null` is how ctx.db matches a column the row never wrote
+                    { reportedToProvider: false, reportRetryAt: null },
+                    { reportRetryAt: usageFirstDueAt(rowToUsageEvent(row)) },
+                );
+            }
+
+            // `by_provider_unreported_due` serves this as one range: the read starts at the most overdue
+            // row and stops at `now`, so rows deferred into the future, and never-forwardable rows
+            // (`USAGE_NEVER_DUE`), are never fetched. Earliest-due first, then oldest.
+            const orderBy: Record<string, "asc" | "desc">[] = [{ reportRetryAt: "asc" }, { createdAt: "asc" }, { idempotencyKey: "asc" }];
             const events: UsageEvent[] = [];
             let cursor: string | undefined;
 
             do {
                 // eslint-disable-next-line no-await-in-loop -- keyset paging is inherently serial: the next cursor is only known once this page returns
-                const page = await database.findMany(PAYMENT_TABLES.usageEvents, { provider, reportedToProvider: false }, { cursor, limit: wanted, orderBy });
+                const page = await database.findMany(
+                    PAYMENT_TABLES.usageEvents,
+                    { provider, reportedToProvider: false, reportRetryAt: { lte: now } },
+                    { cursor, limit: wanted, orderBy },
+                );
 
                 for (const row of page.rows) {
                     const event = rowToUsageEvent(row);
 
+                    // Kept for a `now` at or past `USAGE_NEVER_DUE`, which the range above then admits.
                     if (event.mode !== "set" && event.quantity > 0) {
                         events.push(event);
 
@@ -376,13 +459,40 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
                 cursor = page.cursor;
             } while (cursor !== undefined);
 
-            // ponytail: memory is bounded, total scan length is not. A `"set"` row
-            // (and a non-positive `"add"`) never becomes reported, so it is a
-            // permanent non-match this walk re-reads on every sweep. Upgrade path
-            // when that prefix gets long: record never-forwardable rows as already
-            // reported, or add a `(provider, reportedToProvider, createdAt)` index
-            // so the scan starts past them.
             return events;
+        },
+
+        getReferenceRevision: async (referenceId) => {
+            const row = await database.findFirst(PAYMENT_TABLES.referenceRevisions, { referenceId });
+
+            return row === null ? 0 : readNumber(row, "revision");
+        },
+
+        // Same shape as `upsertRevisioned`: an existing counter moves by one conditional patch, and an absent one by an
+        // insert that the unique `by_reference` index arbitrates, so a loser reports `false` rather than throwing.
+        bumpReferenceRevision: async (referenceId, ifRevision) => {
+            const row = await database.findFirst(PAYMENT_TABLES.referenceRevisions, { referenceId });
+            const current = row === null ? 0 : readNumber(row, "revision");
+
+            if (current !== ifRevision) {
+                return false;
+            }
+
+            if (row === null) {
+                try {
+                    await database.insert(PAYMENT_TABLES.referenceRevisions, { referenceId, revision: 1 });
+                } catch (error) {
+                    if ((await database.findFirst(PAYMENT_TABLES.referenceRevisions, { referenceId })) !== null) {
+                        return false;
+                    }
+
+                    throw error;
+                }
+
+                return true;
+            }
+
+            return database.patchIf(PAYMENT_TABLES.referenceRevisions, row._id, { revision: ifRevision }, { revision: ifRevision + 1 });
         },
 
         markEventProcessed: async (provider, eventId, type) => {
@@ -406,7 +516,15 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             const existing = await database.findFirst(PAYMENT_TABLES.events, { provider, providerEventId: eventId });
 
             if (existing) {
-                await database.delete(existing._id);
+                await database.delete(PAYMENT_TABLES.events, existing._id);
+            }
+        },
+
+        deferUsageReport: async (provider, idempotencyKey, retryAt) => {
+            const existing = await database.findFirst(PAYMENT_TABLES.usageEvents, { idempotencyKey, provider });
+
+            if (existing) {
+                await database.patch(PAYMENT_TABLES.usageEvents, existing._id, { reportRetryAt: retryAt });
             }
         },
 
@@ -414,7 +532,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             const existing = await database.findFirst(PAYMENT_TABLES.usageEvents, { idempotencyKey, provider });
 
             if (existing) {
-                await database.patch(existing._id, { reportedToProvider: true });
+                await database.patch(PAYMENT_TABLES.usageEvents, existing._id, { reportedToProvider: true });
             }
         },
 
@@ -427,7 +545,7 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             // The unique `by_idempotency` index is the real race guard in the DO: a concurrent
             // insert of the same key fails its OCC commit, so at most one caller wins.
-            await database.insert(PAYMENT_TABLES.usageEvents, usageEventToRow(event));
+            await database.insert(PAYMENT_TABLES.usageEvents, usageEventToRow({ ...event, reportRetryAt: event.reportRetryAt ?? usageFirstDueAt(event) }));
 
             return true;
         },
@@ -451,14 +569,20 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         // Keyed on `(provider, referenceId)` — the same key `getCustomerByReference` reads and the
         // memory store writes — so a re-mint (race or provider-side customer replacement) updates the
         // reference's row in place instead of forking a second row the read path can never find.
-        upsertCustomer: async (customer) =>
-            upsert(PAYMENT_TABLES.customers, { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer)),
+        upsertCustomer: async (customer) => {
+            await upsertPlain(PAYMENT_TABLES.customers, { provider: customer.provider, referenceId: customer.referenceId }, customerToRow(customer));
+        },
 
-        upsertPaymentSession: async (session) =>
-            upsert(PAYMENT_TABLES.sessions, { provider: session.provider, providerSessionId: session.id }, sessionToRow(session)),
+        upsertPaymentSession: async (session, guard) =>
+            upsertRevisioned(PAYMENT_TABLES.sessions, { provider: session.provider, providerSessionId: session.id }, sessionToRow(session), guard),
 
-        upsertSubscription: async (subscription) =>
-            upsert(PAYMENT_TABLES.subscriptions, { provider: subscription.provider, providerSubscriptionId: subscription.id }, subscriptionToRow(subscription)),
+        upsertSubscription: async (subscription, guard) =>
+            upsertRevisioned(
+                PAYMENT_TABLES.subscriptions,
+                { provider: subscription.provider, providerSubscriptionId: subscription.id },
+                subscriptionToRow(subscription),
+                guard,
+            ),
     };
 };
 

@@ -82,16 +82,36 @@ to branch on, see [Error handling](/docs/concepts/error-handling).
 
 ## Error codes
 
-All 192 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
+All 246 codes Lunora publishes, generated from the catalog the runtime, CLI, overlay, Studio and client SDK all read.
 Every heading is an anchor, so `/docs/errors#conflict` links straight to one.
 
 ### `ADMIN_FORBIDDEN`
 
 `403` — Admin access forbidden
 
+### `ADMIN_ROOT_REQUIRED`
+
+`403` — Root admin token required
+
+### `ADMIN_SCOPE_REQUIRED`
+
+`403` — Migrations scope required
+
+### `ADMIN_TOKEN_EXISTS`
+
+`409` — Admin token name already in use
+
 ### `ADMIN_TOKEN_NOT_CONFIGURED`
 
 `400` — Admin token not configured
+
+### `AI_CHAT_FAILED`
+
+`500` — Assistant turn failed
+
+### `AI_UNKNOWN_IMAGE_MODEL`
+
+`400` — Unknown image model
 
 ### `ANALYTICS_SQL_QUERY_ERROR`
 
@@ -241,6 +261,10 @@ Narrow the snapshot with `backupTables`, or take this backup off-platform with `
 
 `502` — Too many redirects
 
+### `CASCADE_LIMIT`
+
+`400` — Cascade limit exceeded
+
 ### `CDC_LOG_TRIMMED`
 
 `409` — CDC log trimmed
@@ -281,13 +305,17 @@ Re-read the row and retry the mutation with the fresh value. Lunora serializes a
 
 `500` — Cron expression is not statically analyzable
 
-### `CRON_JOB_NOT_FOUND`
-
-`404` — Cron job not found
-
 ### `CRON_JOBS_NOT_CONFIGURED`
 
 `400` — Cron jobs not configured
+
+### `CRON_JOB_IN_FLIGHT`
+
+`409` — Cron job is already running
+
+### `CRON_JOB_NOT_FOUND`
+
+`404` — Cron job not found
 
 ### `CRON_NAME_NOT_STATIC`
 
@@ -317,6 +345,22 @@ Re-read the row and retry the mutation with the fresh value. Lunora serializes a
 
 `400` — Currency mismatch
 
+### `DELIVERY_FENCED`
+
+`409` — Delivery authorization changed
+
+The operation may have committed. Retry with the same transport key; a committed result from an older authority epoch returns DELIVERY_RECEIPT_FENCED. Do not automatically retry with a new transport key.
+
+### `DELIVERY_RECEIPT_FENCED`
+
+`409` — Committed receipt authorization changed
+
+The operation committed, but its stored result belongs to an older authority epoch. Do not automatically retry with a new transport ID. Recover through the application's durable operation key under current authorization.
+
+### `DEPLOYMENT_PAUSED`
+
+`503` — Deployment is paused
+
 ### `DISPATCH_IN_PROGRESS`
 
 `409` — Dispatch already in progress
@@ -327,7 +371,7 @@ A dispatch with this idempotency id is still running on the shard. Retry it; onc
 
 `403` — Dispatch caller not authenticated
 
-The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current.
+The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER_SECRET` matches on both sides, or that `LUNORA_ADMIN_TOKEN` is set and current. A signed dispatch is also refused when the scheduler's and the worker's clocks differ by more than five minutes.
 
 ### `DUPLICATE_AGENT_CLASS`
 
@@ -352,6 +396,14 @@ The scheduler could not authenticate to the worker. Check that `LUNORA_SCHEDULER
 ### `DUPLICATE_QUEUE_NAME`
 
 `500` — Duplicate queue name
+
+### `DUPLICATE_ROOM_NAME`
+
+`500` — Duplicate room name
+
+### `DUPLICATE_SOCKET_PATH`
+
+`500` — Duplicate socket route path
 
 ### `DUPLICATE_WORKFLOW_CLASS`
 
@@ -405,13 +457,25 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `403` — Shard access forbidden
 
-### `FUNCTION_NOT_FOUND`
+### `FORBIDDEN_TOPIC`
 
-`404` — Function not found
+`403` — Live topic publish forbidden
 
 ### `FUNCTIONS_NOT_CONFIGURED`
 
 `400` — Functions registry not configured
+
+### `FUNCTION_NOT_FOUND`
+
+`404` — Function not found
+
+### `GLOBALS_NOT_CONFIGURED`
+
+`400` — Global-table introspector not configured
+
+### `GLOBAL_DRY_RUN_UNSUPPORTED`
+
+`400` — Global table dry run not supported
 
 ### `GLOBAL_NOT_CONFIGURED`
 
@@ -425,9 +489,11 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `400` — Global table is not editable
 
-### `GLOBALS_NOT_CONFIGURED`
+### `GLOBAL_TRANSACTION_UNSUPPORTED`
 
-`400` — Global-table introspector not configured
+`500` — Global transaction unsupported by driver
+
+A `.global()` write commits its row and companion rows in one transaction. Pass a postgres.js client that has `begin()`, or a mysql2 pool (`createPool`) rather than a single connection.
 
 ### `HASH_MISMATCH`
 
@@ -436,6 +502,10 @@ The message names each failed shard key and its error. Re-run the export once th
 ### `HTTP_STREAM_BAD_CHUNK`
 
 `502` — Malformed HTTP stream chunk
+
+### `HTTP_STREAM_CALLBACK`
+
+`500` — HTTP stream callback threw
 
 ### `HTTP_STREAM_INTERRUPTED`
 
@@ -449,6 +519,9 @@ The message names each failed shard key and its error. Re-run the export once th
 
 `502` — HTTP stream response has no body
 
+The `fetch` implementation resolved with a response that exposes neither a `body` stream nor a `text()` read — a broken `fetch` substitute, not a runtime limitation.
+A response with no `body` stream that can still be read as text (React Native's `whatwg-fetch` polyfill) is buffered through `text()` instead and never raises this code. Check the `fetch` override passed to the client or the `httpStream` call.
+
 ### `HTTP_STREAM_STATUS`
 
 `502` — HTTP stream request failed
@@ -456,6 +529,22 @@ The message names each failed shard key and its error. Re-run the export once th
 ### `HTTP_STREAM_TRANSPORT`
 
 `502` — HTTP stream transport error
+
+### `IDENTITY_CHANGED`
+
+`409` — Socket identity changed
+
+### `IDENTITY_MISMATCH`
+
+`409` — Session changed since the write was queued
+
+A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.
+
+`@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie.
+
+### `IDENTITY_STALE`
+
+`409` — Socket identity stale
 
 ### `ID_COLLISION`
 
@@ -465,13 +554,7 @@ The imported row carries an `_id` that is already held by a DIFFERENT table in t
 
 This is reported per row rather than aborting the import: the remaining rows still apply. Re-mint the id on the source side, or import that table into a shard that does not already hold it.
 
-### `IDENTITY_MISMATCH`
-
-`409` — Session changed since the write was queued
-
-A write queued offline was replayed on a session that now belongs to someone else (a sign-out, or another user's sign-in, while it waited), so the worker refused it rather than commit it as them.
-
-`@lunora/client` re-resolves the session on this refusal and settles the write itself. If every replay is refused while the same user stays signed in, your worker's `resolveIdentity` returns a different `userId` than better-auth's `user.id`, or the RPC request carries no session cookie.
+Only shard tables raise it. A `.global()` table names its table on every by-id call, so the same id in two global tables is two separate rows and the import accepts it.
 
 ### `IMPORT_FORMAT_UNSUPPORTED`
 
@@ -529,6 +612,18 @@ A write queued offline was replayed on a session that now belongs to someone els
 
 `409` — Import session belongs to an earlier session of the same id
 
+### `INDEX_FIELD_NESTED_PATH`
+
+`500` — Index field is a nested path
+
+Indexes cover top-level columns only. Denormalise the nested value into its own column, index that, and keep it in sync with a table `.triggers()` beforeInsert/beforeUpdate.
+
+### `INVALID_CURSOR`
+
+`400` — Invalid cursor
+
+The page cursor was refused: its format prefix is one the engine no longer reads, its payload is not one the server minted, or it carries fewer sort keys than the query orders by now. The engine bumps the prefix whenever a format change would otherwise read old cursors as the wrong rows, so this usually follows a deploy. `usePaginatedQuery` restarts the feed from its first page when a page fails with this code; a hand-written pager should do the same rather than retry the cursor.
+
 ### `INVALID_INDEX`
 
 `502` — Invalid catalog index
@@ -545,6 +640,10 @@ A write queued offline was replayed on a session that now belongs to someone els
 
 `400` — Invalid schedule id
 
+### `INVALID_TRANSITION`
+
+`409` — Invalid state transition
+
 ### `JURISDICTION_MOVE`
 
 `422` — Unacknowledged jurisdiction move
@@ -556,6 +655,38 @@ Acknowledge with `.jurisdiction("eu", { pinAuth: true })` and deploy, then copy 
 ### `KV_NOT_CONFIGURED`
 
 `400` — KV introspector not configured
+
+### `LIVE_CONNECTION_LIMIT`
+
+`503` — Live connection limit reached
+
+### `LIVE_CONNECTION_NOT_FOUND`
+
+`404` — Live connection not found
+
+### `LIVE_CONTROL_SUPERSEDED`
+
+`409` — A later live control call already applied
+
+### `LIVE_STREAMS_UNSUPPORTED`
+
+`501` — Live streams are not served by this worker
+
+### `LIVE_STREAM_DUPLICATE`
+
+`500` — Duplicate live stream id or export name
+
+### `LIVE_STREAM_NOT_EXPORTED`
+
+`500` — Live stream is not a named export
+
+### `LIVE_STREAM_NOT_LITERAL`
+
+`500` — Live stream declaration is not a literal
+
+### `LIVE_TOPIC_INVALID`
+
+`500` — Live topic name or key field is not allowed
 
 ### `LOCAL_DEPENDENCY_MISSING`
 
@@ -583,6 +714,14 @@ Give `createAuthedMcpFetchHandler`'s `stepUp` a non-empty `scope` (such as `luno
 
 `405` — Method not allowed
 
+### `MIGRATION_DESTRUCTIVE`
+
+`409` — Destructive migration not confirmed
+
+A pending SQL migration drops, renames, truncates or replaces, and nothing in it says that is intended, so the runner stopped before applying anything.
+
+If it is intended, put a `-- lunora:allow-destructive` line comment on its own line before the statement and run again. Only migrations that have not run yet are checked, so never add the comment to one that already ran: that changes its hash and is refused as drift.
+
 ### `MIGRATION_DRIFT`
 
 `409` — Migration drift
@@ -603,6 +742,10 @@ An applied SQL migration is never re-run, so the runner stopped before applying 
 ### `MIGRATION_NOT_FOUND`
 
 `404` — Data migration not found
+
+### `MIGRATION_ROOT_REQUIRED`
+
+`403` — Root admin token required for this migration
 
 ### `NAMESPACE_COLLISION`
 
@@ -629,9 +772,29 @@ An applied SQL migration is never re-run, so the runner stopped before applying 
 
 `409` — Offline identity changed
 
+### `OFFLINE_NOT_QUEUED`
+
+`503` — Offline, write not queued
+
+A mutation sent with `onlineOnly: true` found its connection down or reconnecting (the shard had connected before), or, on a shard that has never connected, its request failed on the wire. It was refused instead of queued. Nothing was persisted or replayed; issue the call again once the connection is back. See [keeping a write off the queue](/docs/concepts/offline-first#keeping-a-write-off-the-queue).
+
+### `OFFLINE_QUEUE_OVERFLOW`
+
+`503` — Offline queue full, oldest write dropped
+
+The client held `offlineQueue.maxItems` writes (1000 by default) while offline, so it dropped the oldest one to make room and rejected it with this code. The dropped write was never sent. Raise `maxItems` on the `LunoraClient`, or stop issuing writes while the connection is down; `client.onMutationSettled` reports every dropped write, including one restored after a reload. See [offline-first](/docs/concepts/offline-first).
+
 ### `OUT_OF_ORDER`
 
 `409` — Out-of-order mutation
+
+### `PAUSE_INSTANCES_FAILED`
+
+`502` — Pause did not reach every scheduler instance
+
+### `PAUSE_NOT_CONFIGURED`
+
+`400` — Deployment pause not configured
 
 ### `PAYLOAD_TOO_LARGE`
 
@@ -653,9 +816,25 @@ An applied SQL migration is never re-run, so the runner stopped before applying 
 
 `403` — Recent sign-in required
 
+### `PROCEDURE_META_UNLOADED`
+
+`500` — Procedure meta is not loaded
+
+### `PROJECT_CONFIG_INVALID`
+
+`500` — lunora.config has an unknown key, a mistyped value or no default export
+
 ### `PROVIDER_ERROR`
 
 `502` — Payment provider error
+
+### `PUBLISHED_FUNCTION_UNSUPPORTED`
+
+`500` — Published function cannot be registered from its declaration
+
+### `PUBLISHED_FUNCTION_VISIBILITY_UNKNOWN`
+
+`500` — Published function does not declare its visibility
 
 ### `R2_SQL_ERROR`
 
@@ -709,6 +888,10 @@ This table is secure-by-default: it has no `.public()` marker and no RLS policy 
 
 Add a read policy with `.rls(...)`, or mark the table `.public()` if it is intentionally world-readable.
 
+### `ROOM_NAME_NOT_LITERAL`
+
+`500` — Room name is not a string literal
+
 ### `RUN_KIND_FORBIDDEN`
 
 `500` — Function kind may not be composed from a query
@@ -761,6 +944,10 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 
 `409` — Shape requires change-data-capture
 
+### `SHARD_DRY_RUN_UNSUPPORTED`
+
+`501` — Shard cannot dry-run an import
+
 ### `SHARD_ERROR`
 
 `503` — Shard error
@@ -777,6 +964,18 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 
 `503` — Shard unavailable
 
+### `SOCKET_AUTH_NOT_LITERAL`
+
+`500` — Socket route auth is not a literal boolean
+
+### `SOCKET_PATH_INVALID`
+
+`500` — Socket route path is not a plain URL path
+
+### `SOCKET_PATH_NOT_LITERAL`
+
+`500` — Socket route path is not a string literal
+
 ### `SOCKET_TAG_BUDGET_EXCEEDED`
 
 `400` — Socket tag budget exceeded
@@ -784,6 +983,14 @@ Add a read policy with `.rls(...)`, or mark the table `.public()` if it is inten
 ### `SOLE_ORGANIZATION_OWNER`
 
 `409` — Sole organization owner
+
+### `SQL_MIGRATIONS_NOT_CONFIGURED`
+
+`400` — SQL migrations not configured
+
+### `STALE_CREDENTIAL`
+
+`409` — Stale credential
 
 ### `STORAGE_CHECKSUM_MISMATCH`
 
@@ -829,6 +1036,10 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 
 `503` — Stream disconnected
 
+### `STREAM_IDLE`
+
+`504` — Stream went idle
+
 ### `STREAM_ID_IN_USE`
 
 `409` — Stream id already in use
@@ -845,9 +1056,23 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 
 `507` — Durable stream exceeded its chunk ceiling
 
+### `SUBSCRIPTION_FUNCTION_REQUIRED`
+
+`400` — Subscription needs a function path
+
 ### `SUBSCRIPTION_PERSIST_FAILED`
 
 `500` — Subscription persist failed
+
+### `SUBSCRIPTION_RESULT_TOO_LARGE`
+
+`413` — Subscription result too large
+
+### `SUBSCRIPTION_SEED_FAILED`
+
+`500` — Subscription seed failed
+
+The query behind a subscription threw on its first run, and the error was not a `LunoraError` with a non-internal code, so its message was redacted before it reached the client. The shard logs the real error with `console.error`, prefixed `[@lunora/do] subscription seed failed for <function path>`: read it with `lunora logs` (or `wrangler tail`) in production, or in the `lunora dev` terminal locally. Studio's Logs tab shows only the redacted entry. A query that throws a `LunoraError` with a non-internal code keeps its own code and message instead; an internal-coded one arrives under its own code rather than this one, with its message redacted and the real error logged the same way.
 
 ### `TOKEN_EXPIRED`
 
@@ -856,6 +1081,10 @@ Without it a bucket-backed `lunora backup restore --bucket` cannot read the snap
 The caller's credential verified but its expiry has passed. The worker refuses an HTTP call with this code before it runs; a shard drops a socket with close code `4001` and the same code.
 
 It is a refusal of the credential, not of the call: `@lunora/client` holds a queued write, fires `onTokenExpired`, and re-sends it after `setAuthToken`. The held write survives the refresh only if you pass the same `subject` (the user id) with the new token, `setAuthToken(freshToken, user.id)`; without one a refresh reads as a user switch and the write is rejected `OFFLINE_IDENTITY_CHANGED`. Under a cookie session there is no token to replace: renew the cookie and the write is re-sent on a backoff. The worker can only tell expired from anonymous if your `resolveIdentity` returns the identity with its past `exp` (or `expiresAtMs`), or throws a `LunoraError` with this code. Returning `null` runs the call anonymous.
+
+### `TOO_MANY_LIVE_TOPICS`
+
+`429` — Too many live topics
 
 ### `TOO_MANY_REQUESTS`
 
@@ -885,6 +1114,8 @@ Narrow the read with an index (`.withIndex(...)`) instead of scanning the table,
 
 The ceilings are deliberately conservative — they exist to stop one request taking down the whole shard. A deployment that genuinely needs bigger transactions can raise them by overriding the `transactionLimits()` seam on its generated shard class.
 
+A transaction that reaches 80% of a ceiling without crossing it logs one `warn` line (event `lunora.transaction.near_limit`) naming the limit, so a function that only gets close on development data shows up before production data pushes it over. A single read or write that jumps past the ceiling from below 80% fails without that warning.
+
 ### `UNAUTHENTICATED`
 
 `401` — Unauthenticated
@@ -892,6 +1123,14 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 ### `UNAUTHORIZED`
 
 `401` — Unauthorized
+
+### `UNIQUE_INDEX_DUPLICATES`
+
+`503` — Unique index blocked by duplicate rows
+
+The index was not built, so requests to its store are refused until it is.
+
+Make one row keep each key. For a shard table, write a `defineMigration` in `lunora/migrations.ts` that deletes or merges the duplicates, deploy it, then run `lunora migrate up <id>` with that migration's id; the `lunora-migration-helper` skill covers the pattern. A `.global()` table lives in your SQL database, not a shard, so `defineMigration` does not reach it: delete or merge the duplicate rows directly in the database. Either way the index build is retried on its own, so no second deploy is needed.
 
 ### `UNKNOWN_ADMIN_OP`
 
@@ -925,13 +1164,13 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 
 `400` — Validation failed
 
-### `VECTOR_QUERY_UNSUPPORTED`
-
-`400` — Vector index querying not enabled
-
 ### `VECTORS_NOT_CONFIGURED`
 
 `400` — Vector index introspector not configured
+
+### `VECTOR_QUERY_UNSUPPORTED`
+
+`400` — Vector index querying not enabled
 
 ### `WEBHOOK_EVENT_ID_MISSING`
 
@@ -960,6 +1199,14 @@ The ceilings are deliberately conservative — they exist to stop one request ta
 ### `WORKFLOWS_REST_ERROR`
 
 `502` — Cloudflare Workflows REST API error
+
+### `WORKFLOW_EVENT_DUPLICATE`
+
+`500` — Duplicate workflow event type
+
+### `WORKFLOW_EVENT_NOT_LITERAL`
+
+`500` — Workflow event type is not a string literal
 
 ### `YOU_ARE_NOT_ALLOWED_TO_DELETE_USERS`
 

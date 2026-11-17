@@ -90,7 +90,7 @@ export const runBoxSuspensionSweep = async (
             options.log(`[boxes] could not push box ${box._id}'s routes after a suspension change: ${messageOf(error)}`);
             // The session may never have run (unreachable); mark it so the next tick pushes regardless.
             // eslint-disable-next-line no-await-in-loop -- one row per failure
-            await database.patch(box._id, { routesStale: true }, "boxes").catch(() => undefined);
+            await database.patch("boxes", box._id, { routesStale: true }).catch(() => undefined);
         }
     }
 

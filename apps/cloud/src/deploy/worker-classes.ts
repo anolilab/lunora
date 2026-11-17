@@ -74,11 +74,9 @@ export const beginConverge = async (store: ControlPlaneStore, input: { alias: st
         throw new Error(`alias ${input.alias} has no ownership row, so the classes a converge puts on its Worker could not be recorded; nothing was converged`);
     }
 
-    await store.patch(
-        row._id,
-        { pendingClasses: [...(row.pendingClasses ?? []), { classes: input.classes, startedAt: input.now, token: input.token }] },
-        "aliasOwnership",
-    );
+    await store.patch("aliasOwnership", row._id, {
+        pendingClasses: [...(row.pendingClasses ?? []), { classes: input.classes, startedAt: input.now, token: input.token }],
+    });
 };
 
 /**
@@ -104,31 +102,22 @@ export const endConverge = async (
     if (input.outcome === "succeeded") {
         const { startedAt } = input;
 
-        await store.patch(
-            row._id,
-            {
-                pendingClasses: others.filter(
-                    (entry) =>
-                        !(entry.endedAt != null && entry.endedAt <= startedAt) && !(entry.endedAt == null && entry.startedAt < startedAt - PENDING_STALE_MS),
-                ),
-                workerClasses: input.classes,
-            },
-            "aliasOwnership",
-        );
+        await store.patch("aliasOwnership", row._id, {
+            pendingClasses: others.filter(
+                (entry) => !(entry.endedAt != null && entry.endedAt <= startedAt) && !(entry.endedAt == null && entry.startedAt < startedAt - PENDING_STALE_MS),
+            ),
+            workerClasses: input.classes,
+        });
 
         return;
     }
 
-    await store.patch(
-        row._id,
-        {
-            pendingClasses:
-                input.outcome === "not-uploaded"
-                    ? others
-                    : [...others, { classes: mine?.classes ?? input.classes, endedAt: input.now, startedAt: input.startedAt, token: input.token }],
-        },
-        "aliasOwnership",
-    );
+    await store.patch("aliasOwnership", row._id, {
+        pendingClasses:
+            input.outcome === "not-uploaded"
+                ? others
+                : [...others, { classes: mine?.classes ?? input.classes, endedAt: input.now, startedAt: input.startedAt, token: input.token }],
+    });
 };
 
 /**

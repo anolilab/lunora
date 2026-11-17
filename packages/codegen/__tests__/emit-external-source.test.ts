@@ -77,6 +77,15 @@ describe("emitShard — external-source ingest", () => {
         expect(shard).toContain("this.recordExternalSourceWarning(");
     });
 
+    it("refuses to ingest while a unique index is blocked", () => {
+        expect.assertions(1);
+
+        const shard = emitShard({ schema: discover(SOURCED) });
+        const poll = shard.slice(shard.indexOf("protected override async pollExternalSources"));
+
+        expect(poll.slice(0, poll.indexOf("const shardKey"))).toContain("this.ensureServable();");
+    });
+
     it("forwards the alarm's trace to every contained ingest failure it records", () => {
         expect.assertions(4);
 

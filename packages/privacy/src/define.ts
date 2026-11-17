@@ -19,8 +19,19 @@ import type { PrivacyPorts } from "./ports";
 import type { ErasureSettings, RequestRecord, RequestStore } from "./requests";
 import { cancelRequest, extendRequest, openRequest, requireRequest } from "./requests";
 import type { PrivacyPolicy, PrivacyPreset } from "./rules";
+import { retentionRulesOf } from "./rules";
 import type { ErasureOutcome, ExportOutcome, RunScope, StepRunner } from "./run";
-import { eraseDataset, erasureRun, expireRequestFiles, exportRun, inlineSteps, requireTombstones } from "./run";
+import {
+    archiveBlocked,
+    eraseDataset,
+    erasureBlocksSubject,
+    erasureRun,
+    expireRequestFiles,
+    exportRun,
+    inlineSteps,
+    requireTombstones,
+    retireSubjectRequests,
+} from "./run";
 import { subjectsToReerase, tombstoneKeyOf } from "./tombstones";
 
 /**
@@ -101,10 +112,10 @@ interface Privacy {
 
         /**
          * Retry a failed export or erasure; any other status is refused. The Art. 12(3) clock keeps
-         * running throughout. An export runs again in this call and returns `ran` with its outcome. An
-         * erasure is moved to `processing` in this call and returns `restart`: the app then starts its
-         * erasure workflow for the request, in the same mutation, and the workflow resumes it. Because
-         * the request leaves `failed` here, a second retry is refused rather than starting a second run.
+         * running throughout. The request is moved to `processing` in this call and the result names its
+         * type: the app then starts the workflow for that type, in the same mutation, and the workflow
+         * resumes it. The retry itself never reads the tombstone store. Because the request leaves
+         * `failed` here, a second retry is refused rather than starting a second run.
          */
         readonly retry: (requestId: string) => Promise<RetryResult>;
 
@@ -193,15 +204,14 @@ const runErasureNow = async (scope: Scope, requestId: string): Promise<ErasureOu
 };
 
 /**
- * What `admin.retry` did: an export ran again (`ran`), or an erasure was moved out of `failed` and the
- * app must now start its erasure workflow for `requestId` (`restart`).
+ * What `admin.retry` did: the request of `requestId` was moved out of `failed`, and the app must now start the
+ * workflow for its `type`. Only a workflow reaches the tombstone store, so a retry never runs the request here.
  */
-type RetryResult = { readonly kind: "ran"; readonly outcome: ExportOutcome } | { readonly kind: "restart"; readonly requestId: string };
+type RetryResult = { readonly requestId: string; readonly type: RequestRecord["type"] };
 
 /**
- * Retry a failed request from the operator console. Only a failed request may be retried. An erasure
- * reaches the tombstone store only from its workflow, so it is not run here: it moves to `processing`,
- * which the workflow's start step continues from, and the move is what refuses a second retry.
+ * Retry a failed request from the operator console. Only a failed request may be retried. The request moves to
+ * `processing`, which the workflow's start step continues from, and the move is what refuses a second retry.
  */
 const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResult> => {
     const record = await requireRequest(scope.ports.store, requestId);
@@ -210,18 +220,19 @@ const retryRequest = async (scope: Scope, requestId: string): Promise<RetryResul
         throw new LunoraError("UNPROCESSABLE", `Only a failed request can be retried; this one is "${record.status}".`);
     }
 
-    if (record.type === "erasure") {
-        // The claim is the only gate: a second retry that read `failed` too finds the status already moved.
-        if (!(await scope.ports.store.claim(requestId, "failed", { status: transition("failed", "processing") }))) {
-            throw new LunoraError("UNPROCESSABLE", "This request was already retried.");
-        }
-
-        await scope.ports.store.addEvent(requestId, scope.ports.now(), "processing", "retry");
-
-        return { kind: "restart", requestId };
+    // An erasure of the subject has begun or completed; a run now would collect data the erasure has removed or is removing.
+    if (record.type === "export" && (await erasureBlocksSubject(scope.ports.store, record.subjectId, scope.tombstoneSecret))) {
+        throw new LunoraError("UNPROCESSABLE", "This export's subject is being erased or was erased; it cannot be retried.");
     }
 
-    return { kind: "ran", outcome: await exportRun(scope, inlineSteps, requestId) };
+    // The claim is the only gate: a second retry that read `failed` too finds the status already moved.
+    if (!(await scope.ports.store.claim(requestId, "failed", { status: transition("failed", "processing") }))) {
+        throw new LunoraError("UNPROCESSABLE", "This request was already retried.");
+    }
+
+    await scope.ports.store.addEvent(requestId, scope.ports.now(), "processing", "retry");
+
+    return { requestId, type: record.type };
 };
 
 /** What `admin.sweep` did. */
@@ -314,6 +325,10 @@ const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> 
         throw new LunoraError("UNPROCESSABLE", "This export is not ready to download.");
     }
 
+    if (archiveBlocked(await scope.ports.store.listForSubject(record.subjectId))) {
+        throw new LunoraError("UNPROCESSABLE", "This export's subject is being erased, so its archive is not available.");
+    }
+
     if (record.expiresAt !== undefined && scope.ports.now().getTime() > record.expiresAt.getTime()) {
         throw new LunoraError("UNPROCESSABLE", "This export has expired. Request a new one.");
     }
@@ -321,25 +336,65 @@ const downloadUrlFor = async (scope: Scope, requestId: string): Promise<string> 
     return scope.ports.files.signedUrl(record.storageKey, DOWNLOAD_TTL_SECONDS);
 };
 
+/**
+ * Mark each erasure request a restore brought back as `restored`, so an operator can tell a re-erased request from
+ * an original one. A cancelled request never erased anything and stays cancelled; a restored one stays restored.
+ */
+const markReErased = async (scope: Scope, requestIds: ReadonlyArray<string>): Promise<void> => {
+    await Promise.all(
+        requestIds.map(async (requestId) => {
+            for (;;) {
+                // eslint-disable-next-line no-await-in-loop -- re-read after a lost claim
+                const current = await requireRequest(scope.ports.store, requestId);
+
+                if (current.status === "cancelled" || current.status === "restored") {
+                    return;
+                }
+
+                const status = transition(current.status, "restored");
+
+                // Conditional on the status just read: a run or a cancel that committed in between is read again, never written over.
+                // eslint-disable-next-line no-await-in-loop -- one claim per read
+                if (await scope.ports.store.claim(requestId, current.status, { status })) {
+                    // eslint-disable-next-line no-await-in-loop -- the event follows its claim
+                    await scope.ports.store.addEvent(requestId, scope.ports.now(), status, "re-erased after a backup restore");
+
+                    return;
+                }
+            }
+        }),
+    );
+};
+
+/** The ids of a subject's erasure requests, read while they still carry the raw subject id. */
+const erasureIdsOf = async (scope: Scope, subjectId: string): Promise<ReadonlyArray<string>> => {
+    const requests = await scope.ports.store.listForSubject(subjectId);
+
+    return requests.filter((request) => request.type === "erasure").map((request) => request.id);
+};
+
 /** Erase again the subjects a restore brought back, each in the same dataset order as a first erasure. */
 const restoreSubjects = async (scope: Scope, restoredSubjectIds: ReadonlyArray<string>): Promise<ReadonlyArray<string>> => {
     const tombstones = requireTombstones(scope);
     const subjects = await subjectsToReerase(restoredSubjectIds, tombstones.port, tombstones.secret);
+    // Listed before the loop: the rekey below takes the raw id off these requests, and each subject's rows are only its own.
+    const erasureIdsBySubject = await Promise.all(subjects.map(async (subjectId) => erasureIdsOf(scope, subjectId)));
 
-    for (const subjectId of subjects) {
+    for (const [index, subjectId] of subjects.entries()) {
         for (const dataset of erasureOrder(scope.datasets)) {
             // eslint-disable-next-line no-await-in-loop -- one drain per dataset, in order
             await eraseDataset(scope, dataset, subjectId);
         }
 
-        // The backup also brought back the subject's request rows with their raw id; rewrite them as a first erasure does.
+        // Marked before the rekey, while the requests still carry the raw id, so a retried restore lists them again.
+        // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
+        await markReErased(scope, erasureIdsBySubject[index] ?? []);
+
+        // The backup also brought back the subject's requests with their raw id and their files; retire them as a first erasure does.
         const key = tombstoneKeyOf(subjectId, tombstones.secret);
 
         // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
-        const requests = await scope.ports.store.listForSubject(subjectId);
-
-        // eslint-disable-next-line no-await-in-loop -- one subject at a time, like the erasure above
-        await Promise.all(requests.map(async (request) => scope.ports.store.update(request.id, { subjectId: key })));
+        await retireSubjectRequests(scope.ports, subjectId, key);
     }
 
     return subjects;
@@ -425,7 +480,7 @@ const bind = (settings: Settings, ports: PrivacyPorts, identity: PrivacyIdentity
             },
             exportHandler: async (context) => {
                 await requireType(scope, context.params.requestId, "export");
-                await exportRun(scope, context.step, context.params.requestId);
+                await exportRun(scope, context.step, context.params.requestId, scope.ports.tombstones);
             },
         },
     };
@@ -448,10 +503,33 @@ const checkMonths = (key: string, months: number, min: number): number => {
 };
 
 /**
+ * Refuse a `retain` on a year-end rule that names no `from` column. Without `from` the period would start
+ * at the erasure date, so the record would be kept for years past the one it describes.
+ */
+const checkRetentions = (datasets: ReadonlyArray<Dataset>, presets: ReadonlyArray<PrivacyPreset>): void => {
+    const rules = retentionRulesOf(presets);
+
+    for (const dataset of datasets) {
+        for (const { directive, table } of retainedTables(dataset)) {
+            const rule = rules.get(directive.rule);
+
+            if (rule?.start === "endOfCalendarYear" && directive.from === undefined) {
+                throw new LunoraError(
+                    "BAD_REQUEST",
+                    `Retention for ${dataset.id}.${table} uses rule "${rule.id}", which starts at the end of the record's year. Pass retain("${rule.id}", { from: "<date column>" }).`,
+                );
+            }
+        }
+    }
+};
+
+/**
  * Bind the settings into a factory. Pure construction: nothing runs until a method is
  * called, and each call of the factory binds the ports for that invocation.
  */
 const definePrivacy = <C>(config: PrivacyConfig<C>): PrivacyFor<C> => {
+    checkRetentions(config.datasets, config.presets ?? []);
+
     // Each policy value comes from the last preset that sets it; the grace may be set by the app directly.
     const presetGraceDays = policyValue(config.presets, "erasureGraceDays");
     const deadlines: DeadlinePolicy = {

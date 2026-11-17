@@ -145,6 +145,19 @@ interface PgVectorIndexOptions {
     name: string;
 }
 
+/**
+ * The id list bound as one JSON text parameter rather than a JS array on
+ * `ANY($1::text[])`: postgres.js under `fetch_types: false` (Hyperdrive's
+ * recommended setting) knows no array types and sends an array as a malformed
+ * literal.
+ *
+ * Every JSON parameter here is cast `::text::jsonb`, never bare `::jsonb`:
+ * postgres.js reads the parameter type from the server's Describe, and for a
+ * `jsonb` parameter it JSON-encodes the already-serialised string a second time,
+ * so the server sees a JSON string scalar instead of the object or array.
+ */
+const ID_LIST = "SELECT jsonb_array_elements_text($1::text::jsonb)";
+
 /** Render a vector as the `[1,2,3]` text literal pgvector parses on the `::vector` cast. */
 const vectorLiteral = (values: VectorValues): string => `[${[...values].join(",")}]`;
 
@@ -433,7 +446,7 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
                 // eslint-disable-next-line unicorn/no-null -- a SQL bind needs a real NULL; `undefined` is sent as a missing bind
                 `(${bind(vector.id)}, ${bind(vector.namespace ?? null)}, ${bind(vectorLiteral(vector.values))}::vector, ` +
                 // eslint-disable-next-line unicorn/no-null -- same: absent metadata must bind SQL NULL
-                `${bind(vector.metadata === undefined ? null : JSON.stringify(vector.metadata))}::jsonb)`,
+                `${bind(vector.metadata === undefined ? null : JSON.stringify(vector.metadata))}::text::jsonb)`,
         );
 
         await client.query(`INSERT INTO "${table}" (id, namespace, embedding, metadata) VALUES ${rows.join(", ")} ${onConflict}`, parameters);
@@ -449,7 +462,7 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
 
             await ensure();
 
-            const deleted = await client.query<{ id: string }>(`DELETE FROM "${table}" WHERE id = ANY($1::text[]) RETURNING id`, [[...ids]]);
+            const deleted = await client.query<{ id: string }>(`DELETE FROM "${table}" WHERE id IN (${ID_LIST}) RETURNING id`, [JSON.stringify(ids)]);
 
             return { count: deleted.length, mutationId: nextMutationId() };
         },
@@ -470,8 +483,8 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
             await ensure();
 
             const rows = await client.query<{ embedding: string; id: string; metadata: Record<string, unknown> | null; namespace: null | string }>(
-                `SELECT id, namespace, metadata, embedding::text AS embedding FROM "${table}" WHERE id = ANY($1::text[])`,
-                [[...ids]],
+                `SELECT id, namespace, metadata, embedding::text AS embedding FROM "${table}" WHERE id IN (${ID_LIST})`,
+                [JSON.stringify(ids)],
             );
 
             return rows.map((row) => {
@@ -531,7 +544,7 @@ const createPgVectorIndex = (options: PgVectorIndexOptions): VectorizeIndexLike 
             }
 
             if (queryOptions?.filter !== undefined && Object.keys(queryOptions.filter).length > 0) {
-                where.push(`metadata @> ${bind(JSON.stringify(queryOptions.filter))}::jsonb`);
+                where.push(`metadata @> ${bind(JSON.stringify(queryOptions.filter))}::text::jsonb`);
             }
 
             const projection = ["id", "namespace", `${distance} AS distance`];

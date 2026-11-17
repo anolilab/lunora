@@ -53,8 +53,8 @@ export const members = sqliteTable("members", {
     role: text("role", { mode: "json" }).$type<"owner" | "admin" | "member" | "viewer">().notNull(),
     userId: text("userId").notNull(),
 }, (t) => ({
-    by_user: index("by_user").on(t.userId),
     by_org_user: index("by_org_user").on(t.organizationId, t.userId),
+    by_user: index("by_user").on(t.userId),
 }));
 
 export const projects = sqliteTable("projects", {
@@ -78,9 +78,9 @@ export const projects = sqliteTable("projects", {
     watchPaths: text("watchPaths", { mode: "json" }).$type<Array<string>>(),
     workspacePackages: text("workspacePackages", { mode: "json" }).$type<{ builtAt: number; paths: Array<string>; rootDirectory: string }>(),
 }, (t) => ({
-    by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),
-    by_github_repo: index("by_github_repo").on(t.githubRepo),
     by_placement: index("by_placement").on(t.placementRef),
+    by_github_repo: index("by_github_repo").on(t.githubRepo),
+    by_org_slug: uniqueIndex("by_org_slug").on(t.organizationId, t.slug),
 }));
 
 export const invitations = sqliteTable("invitations", {
@@ -95,8 +95,8 @@ export const invitations = sqliteTable("invitations", {
     status: text("status", { mode: "json" }).$type<"pending" | "accepted" | "revoked">().notNull(),
     tokenHash: text("tokenHash").notNull(),
 }, (t) => ({
-    by_token: uniqueIndex("by_token").on(t.tokenHash),
     by_org: index("by_org").on(t.organizationId),
+    by_token: uniqueIndex("by_token").on(t.tokenHash),
 }));
 
 export const auditLog = sqliteTable("auditLog", {
@@ -122,8 +122,8 @@ export const githubInstallations = sqliteTable("githubInstallations", {
     installedByLogin: text("installedByLogin"),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id),
 }, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
     by_installation: uniqueIndex("by_installation").on(t.installationId),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const deployments = sqliteTable("deployments", {
@@ -166,12 +166,12 @@ export const deployments = sqliteTable("deployments", {
     catalogSlug: text("catalogSlug"),
     catalogVersion: text("catalogVersion"),
 }, (t) => ({
-    by_status: index("by_status").on(t.status),
-    by_script: index("by_script").on(t.scriptName),
-    by_project: index("by_project").on(t.projectId),
-    by_org_created: index("by_org_created").on(t.organizationId, t.createdAt),
-    by_kind: index("by_kind").on(t.kind),
     by_placement: index("by_placement").on(t.placementRef),
+    by_kind: index("by_kind").on(t.kind),
+    by_org_created: index("by_org_created").on(t.organizationId, t.createdAt),
+    by_project: index("by_project").on(t.projectId),
+    by_script: index("by_script").on(t.scriptName),
+    by_status: index("by_status").on(t.status),
 }));
 
 export const halts = sqliteTable("halts", {
@@ -199,9 +199,9 @@ export const halts = sqliteTable("halts", {
     target: text("target", { mode: "json" }).$type<"celld-vps" | "cloudflare-wfp" | "cloudflare-workers">().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_project: index("by_project").on(t.projectId),
-    by_org: index("by_org").on(t.organizationId),
     by_alias: uniqueIndex("by_alias").on(t.alias),
+    by_org: index("by_org").on(t.organizationId),
+    by_project: index("by_project").on(t.projectId),
 }));
 
 export const aliasOwnership = sqliteTable("aliasOwnership", {
@@ -214,8 +214,8 @@ export const aliasOwnership = sqliteTable("aliasOwnership", {
     projectId: text("projectId").references((): AnySQLiteColumn => projects._id).notNull(),
     workerClasses: text("workerClasses", { mode: "json" }).$type<Array<{ binding: string; className: string; sqlite?: boolean; type: string }>>(),
 }, (t) => ({
-    by_project: index("by_project").on(t.projectId),
     by_alias: uniqueIndex("by_alias").on(t.alias),
+    by_project: index("by_project").on(t.projectId),
 }));
 
 export const deployKeys = sqliteTable("deployKeys", {
@@ -233,8 +233,8 @@ export const deployKeys = sqliteTable("deployKeys", {
     revokedAt: real("revokedAt"),
     type: text("type", { mode: "json" }).$type<"production" | "dev" | "preview">().notNull(),
 }, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
     by_hash: uniqueIndex("by_hash").on(t.hashedKey),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const githubDeliveries = sqliteTable("githubDeliveries", {
@@ -243,8 +243,8 @@ export const githubDeliveries = sqliteTable("githubDeliveries", {
     deliveryId: text("deliveryId").notNull(),
     receivedAt: real("receivedAt").notNull(),
 }, (t) => ({
-    by_received: index("by_received").on(t.receivedAt),
     by_delivery: uniqueIndex("by_delivery").on(t.deliveryId),
+    by_received: index("by_received").on(t.receivedAt),
 }));
 
 export const builds = sqliteTable("builds", {
@@ -275,8 +275,8 @@ export const builds = sqliteTable("builds", {
     successfulAt: real("successfulAt"),
     failedAt: real("failedAt"),
 }, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
     by_project_commit: index("by_project_commit").on(t.projectId, t.commitSha),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const buildLogs = sqliteTable("buildLogs", {
@@ -288,8 +288,8 @@ export const buildLogs = sqliteTable("buildLogs", {
     line: text("line").notNull(),
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
 }, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
     by_build: index("by_build").on(t.buildId),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const domains = sqliteTable("domains", {
@@ -314,8 +314,8 @@ export const domains = sqliteTable("domains", {
     updatedAt: real("updatedAt").notNull(),
     verifiedAt: real("verifiedAt"),
 }, (t) => ({
-    by_project: index("by_project").on(t.projectId),
     by_hostname: uniqueIndex("by_hostname").on(t.hostname),
+    by_project: index("by_project").on(t.projectId),
 }));
 
 export const certificateReleases = sqliteTable("certificateReleases", {
@@ -368,8 +368,8 @@ export const tenantBackups = sqliteTable("tenantBackups", {
     status: text("status", { mode: "json" }).$type<"running" | "succeeded" | "failed">().notNull(),
     trigger: text("trigger", { mode: "json" }).$type<"scheduled" | "manual" | "pre-restore">().notNull(),
 }, (t) => ({
-    by_project: index("by_project").on(t.projectId),
     by_org: index("by_org").on(t.organizationId),
+    by_project: index("by_project").on(t.projectId),
 }));
 
 export const boxes = sqliteTable("boxes", {
@@ -396,8 +396,8 @@ export const boxes = sqliteTable("boxes", {
     status: text("status", { mode: "json" }).$type<"pending" | "online" | "offline" | "revoked">().notNull(),
     versions: text("versions", { mode: "json" }).$type<{ caddy: string; celld: string; hostd: string }>(),
 }, (t) => ({
-    by_slug: uniqueIndex("by_slug").on(t.slug),
     by_org: index("by_org").on(t.organizationId),
+    by_slug: uniqueIndex("by_slug").on(t.slug),
 }));
 
 export const boxEnrolments = sqliteTable("boxEnrolments", {
@@ -412,8 +412,8 @@ export const boxEnrolments = sqliteTable("boxEnrolments", {
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     usedAt: real("usedAt"),
 }, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
     by_hash: uniqueIndex("by_hash").on(t.hashedToken),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const hostdReleases = sqliteTable("hostdReleases", {
@@ -447,9 +447,9 @@ export const cloudflareAccounts = sqliteTable("cloudflareAccounts", {
     verifiedAt: real("verifiedAt").notNull(),
     workersSubdomain: text("workersSubdomain").notNull(),
 }, (t) => ({
-    by_org_account: uniqueIndex("by_org_account").on(t.organizationId, t.accountId),
-    by_org: index("by_org").on(t.organizationId),
     by_cell: index("by_cell").on(t.cellId),
+    by_org: index("by_org").on(t.organizationId),
+    by_org_account: uniqueIndex("by_org_account").on(t.organizationId, t.accountId),
 }));
 
 export const metricPoints = sqliteTable("metricPoints", {
@@ -465,8 +465,8 @@ export const metricPoints = sqliteTable("metricPoints", {
     serviceName: text("serviceName"),
     value: real("value").notNull(),
 }, (t) => ({
-    by_org_name_at: index("by_org_name_at").on(t.organizationId, t.name, t.at),
     by_org_at: index("by_org_at").on(t.organizationId, t.at),
+    by_org_name_at: index("by_org_name_at").on(t.organizationId, t.name, t.at),
 }));
 
 export const tenantLogs = sqliteTable("tenantLogs", {
@@ -484,8 +484,8 @@ export const tenantLogs = sqliteTable("tenantLogs", {
     traceId: text("traceId"),
     userId: text("userId"),
 }, (t) => ({
-    by_trace: index("by_trace").on(t.organizationId, t.traceId),
     by_script_time: index("by_script_time").on(t.scriptName, t.createdAt),
+    by_trace: index("by_trace").on(t.organizationId, t.traceId),
 }));
 
 export const observations = sqliteTable("observations", {
@@ -515,10 +515,10 @@ export const observations = sqliteTable("observations", {
     statusMessage: text("statusMessage"),
     traceId: text("traceId").notNull(),
 }, (t) => ({
-    by_org_deployment_started: index("by_org_deployment_started").on(t.organizationId, t.deploymentId, t.startedAt),
-    by_org_session: index("by_org_session").on(t.organizationId, t.sessionId),
-    by_org_started: index("by_org_started").on(t.organizationId, t.startedAt),
     by_trace: index("by_trace").on(t.organizationId, t.traceId),
+    by_org_started: index("by_org_started").on(t.organizationId, t.startedAt),
+    by_org_session: index("by_org_session").on(t.organizationId, t.sessionId),
+    by_org_deployment_started: index("by_org_deployment_started").on(t.organizationId, t.deploymentId, t.startedAt),
 }));
 
 export const issues = sqliteTable("issues", {
@@ -538,8 +538,8 @@ export const issues = sqliteTable("issues", {
     title: text("title").notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_org_culprit: index("by_org_culprit").on(t.organizationId, t.culprit),
     by_org_hash: uniqueIndex("by_org_hash").on(t.organizationId, t.hash),
+    by_org_culprit: index("by_org_culprit").on(t.organizationId, t.culprit),
 }));
 
 export const incidents = sqliteTable("incidents", {
@@ -601,8 +601,8 @@ export const alertRuleState = sqliteTable("alertRuleState", {
     ruleId: text("ruleId").references((): AnySQLiteColumn => alertRules._id).notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
     by_rule: uniqueIndex("by_rule").on(t.ruleId),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const alerts = sqliteTable("alerts", {
@@ -621,8 +621,8 @@ export const alerts = sqliteTable("alerts", {
     target: text("target", { mode: "json" }).$type<"issue" | "incident" | "uptime" | "error_rate" | "latency_p95" | "llm_cost" | "deploy" | "spend" | "usage_anomaly" | "error_anomaly" | "storage_anomaly" | "usage_threshold">().notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_status: index("by_status").on(t.status),
     by_org: index("by_org").on(t.organizationId),
+    by_status: index("by_status").on(t.status),
 }));
 
 export const anomalyBaselines = sqliteTable("anomalyBaselines", {
@@ -705,8 +705,8 @@ export const uptimeState = sqliteTable("uptimeState", {
     organizationId: text("organizationId").references((): AnySQLiteColumn => organizations._id).notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_org: index("by_org").on(t.organizationId),
     by_deployment: index("by_deployment").on(t.deploymentId),
+    by_org: index("by_org").on(t.organizationId),
 }));
 
 export const dashboards = sqliteTable("dashboards", {
@@ -755,8 +755,8 @@ export const notificationDeliveries = sqliteTable("notificationDeliveries", {
     subject: text("subject").notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_status: index("by_status").on(t.status),
     by_org: index("by_org").on(t.organizationId),
+    by_status: index("by_status").on(t.status),
 }));
 
 export const overageDebits = sqliteTable("overageDebits", {
@@ -784,9 +784,9 @@ export const platformUsage = sqliteTable("platformUsage", {
     windowEnd: real("windowEnd"),
     windowStart: real("windowStart"),
 }, (t) => ({
-    by_placement_window: index("by_placement_window").on(t.placementRef, t.windowStart),
-    by_org_period_kind: index("by_org_period_kind").on(t.organizationId, t.periodStart, t.kind),
     by_org: index("by_org").on(t.organizationId),
+    by_org_period_kind: index("by_org_period_kind").on(t.organizationId, t.periodStart, t.kind),
+    by_placement_window: index("by_placement_window").on(t.placementRef, t.windowStart),
 }));
 
 export const usageCheckpoints = sqliteTable("usageCheckpoints", {
@@ -825,8 +825,8 @@ export const payment_customers = sqliteTable("payment_customers", {
     providerCustomerId: text("providerCustomerId").notNull(),
     referenceId: text("referenceId").notNull(),
 }, (t) => ({
-    by_reference: index("by_reference").on(t.referenceId),
     by_provider_customer: uniqueIndex("by_provider_customer").on(t.provider, t.providerCustomerId),
+    by_reference: index("by_reference").on(t.referenceId),
 }));
 
 export const payment_events = sqliteTable("payment_events", {
@@ -855,9 +855,9 @@ export const payment_sessions = sqliteTable("payment_sessions", {
     subscriptionId: text("subscriptionId"),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_reference: index("by_reference").on(t.referenceId),
-    by_provider_subscription: index("by_provider_subscription").on(t.provider, t.subscriptionId),
     by_provider_session: uniqueIndex("by_provider_session").on(t.provider, t.providerSessionId),
+    by_provider_subscription: index("by_provider_subscription").on(t.provider, t.subscriptionId),
+    by_reference: index("by_reference").on(t.referenceId),
 }));
 
 export const payment_subscriptions = sqliteTable("payment_subscriptions", {
@@ -877,8 +877,8 @@ export const payment_subscriptions = sqliteTable("payment_subscriptions", {
     state: text("state").notNull(),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
-    by_reference: index("by_reference").on(t.referenceId),
     by_provider_subscription: uniqueIndex("by_provider_subscription").on(t.provider, t.providerSubscriptionId),
+    by_reference: index("by_reference").on(t.referenceId),
 }));
 
 export const payment_usageEvents = sqliteTable("payment_usageEvents", {
@@ -893,8 +893,8 @@ export const payment_usageEvents = sqliteTable("payment_usageEvents", {
     referenceId: text("referenceId").notNull(),
     reportedToProvider: integer("reportedToProvider", { mode: "boolean" }).notNull(),
 }, (t) => ({
-    by_reference_feature: index("by_reference_feature").on(t.referenceId, t.featureId),
     by_idempotency: uniqueIndex("by_idempotency").on(t.provider, t.idempotencyKey),
+    by_reference_feature: index("by_reference_feature").on(t.referenceId, t.featureId),
 }));
 
 export const catalogInstalls = sqliteTable("catalogInstalls", {
@@ -910,9 +910,9 @@ export const catalogInstalls = sqliteTable("catalogInstalls", {
     status: text("status", { mode: "json" }).$type<"installing" | "live">().notNull(),
     version: text("version").notNull(),
 }, (t) => ({
-    by_active: uniqueIndex("by_active").on(t.activeKey),
-    by_project: index("by_project").on(t.projectId),
     by_org: index("by_org").on(t.organizationId),
+    by_project: index("by_project").on(t.projectId),
+    by_active: uniqueIndex("by_active").on(t.activeKey),
 }));
 
 export const catalogIndexState = sqliteTable("catalogIndexState", {

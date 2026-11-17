@@ -147,7 +147,7 @@ const FlagsPanel = ({ initialShardKey = "" }: FlagsPanelProps): ReactElement => 
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-flags-panel">
-            {error !== null && <ErrorAlert error={errorSource} testId="flags-error" />}
+            {error !== null && <ErrorAlert error={errorSource} shardKey={initialShardKey} testId="flags-error" />}
 
             <p className="text-sm text-muted-foreground">
                 {t(

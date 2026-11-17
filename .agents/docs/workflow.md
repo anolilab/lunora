@@ -9,7 +9,7 @@ touching release config — not for ordinary code changes.
 Git hooks are **vis-native** (no husky). Committed scripts live in `.vis/hooks/`, run via a generated dispatcher at `.vis/hooks/_/` (gitignored); the root `prepare` script (`vis hook install`) wires `core.hooksPath` on every `pnpm install`. The pre-commit stage runs (via `vis.config.ts`, `set -e`):
 
 - `vis secrets --staged` — gitleaks-compatible scan over staged files (aborts before linting on detection).
-- `vis staged` — per-glob commands from the top-level `staged` block (Prettier + ESLint on code, Prettier on Markdown).
+- `vis staged` — per-glob commands from the top-level `staged` block: oxfmt on code, Prettier on Markdown, and for `packages/*` files ESLint per package, with `dependsOn: ["^build"]` building the staged packages' workspace dependencies first. The build must run first: type-aware rules read dependency types from `dist/`, and unbuilt they collapse to `any`, which gives false errors and wrong `--fix` rewrites.
 
 If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate` to diagnose).
 
@@ -17,7 +17,23 @@ If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate`
 
 ## Release
 
-Independent per-package versioning via `multi-semantic-release`. Publishable packages ship a `.releaserc.json` extending `@anolilab/semantic-release-preset/pnpm`. Conventional Commits drive bumps; the `semantic-release.yml` workflow publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
+Independent per-package versioning via `vis release` — the `release` block in `vis.config.ts` is the whole configuration; there is no per-package release file. Conventional Commits drive bumps; `.github/workflows/semantic-release.yml` publishes on push to `alpha` / `main` / `next` / `beta`. Do not author `release` commits manually.
+
+The workflow keeps its filename because npm's trusted publishers are registered against `semantic-release.yml` for every package — renaming it breaks publishing until all 57 entries are updated.
+
+### What the release does on a push
+
+1. The job checks out the branch tip and resolves the baseline: this channel's last release tag (`git describe --match`), or the `base` dispatch input. Not `github.event.before`: a burst of merges during a release cancels every queued run but the last. A channel with no tag yet fails; dispatch with `base`.
+2. `vis release ci release --auto-publish --generate --generate-from <baseline>` writes one change file per package, versions, pushes ONE `chore(release)` commit (rebased and retried up to `pushRetries` when the branch moved), then publishes and pushes the tags. Tags point at the planned commit (`tagTarget: "source"`), so a rebased release commit never strands them. Versions an earlier run left unpublished are published first (`--publish-missing`, on by default). One branch push and one tag push per run. One concurrency group per release branch: runs on the same branch never overlap, while runs on different branches can overlap and are guarded by vis's remote tag-collision check and its rebase-and-retry.
+3. Released PRs and issues get a comment and the `released` label (`successWalk`).
+
+Locally: `vis release status --channel alpha` prints the pending plan, `vis release publish --dry-run` the dist-tag and versions it would publish, and `vis release doctor` checks the setup.
+
+### Rules the release depends on
+
+- **`internalDependencyRanges: "preserve-satisfying"`.** Without it vis rewrites `>=1.0.0-alpha.76 <2.0.0-0` to `>=<new version>` (no ceiling). `scripts/check-sibling-peer-ranges.js` fails the install on a sibling peer range without an upper bound, and if `updateInternalDependencies: "out-of-range"` disappears.
+- **`ignoreCommitPattern` limits releases to feat / fix / perf / revert / breaking**, as before. vis maps every other conventional type to a patch; breaking commits bypass the pattern.
+- **`release.changelog` uses vis's `default` formatter, with the heading template set in `vis.config.ts`.** Entries are a flat `- type(scope): text` list with no `###` sections. `apps/docs`' changelog feed (`apps/docs/src/lib/changelog-source.ts`) reads both shapes: the commit type names the section, and a release with no substantive entries (dependency-only) is not written, so it does not appear in the feed.
 
 ## Internal scaffolding (`vis generate`)
 

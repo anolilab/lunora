@@ -1,4 +1,32 @@
 import type { FunctionReference, LunoraClient } from "@lunora/client";
+import { resolveHint } from "@lunora/errors";
+
+/** An error's own `hint` as lines, the shape `resolveHint` takes: a string is one line, an array keeps its string entries. */
+const ownHint = (hint: unknown): ReadonlyArray<string> | undefined => {
+    if (typeof hint === "string") {
+        return [hint];
+    }
+
+    if (!Array.isArray(hint)) {
+        return undefined;
+    }
+
+    const lines = hint.filter((line): line is string => typeof line === "string");
+
+    return lines.length > 0 ? lines : undefined;
+};
+
+/** A resolved hint as the one string a surface renders: a string as is, lines joined. */
+const hintText = (resolved: ReturnType<typeof resolveHint>): string | undefined => {
+    if (resolved === undefined) {
+        return undefined;
+    }
+
+    return typeof resolved === "string" ? resolved : resolved.join("\n");
+};
+
+/** Error codes no retry will fix: an admin or session rejection a poller must stop on rather than back off from. */
+const TERMINAL_POLL_CODES: ReadonlySet<string> = new Set(["ADMIN_FORBIDDEN", "FORBIDDEN", "UNAUTHORIZED"]);
 
 /**
  * Dispatch a Lunora RPC through the client method that matches the function's
@@ -21,7 +49,9 @@ export const dispatchByKind = (
             return client.action(reference, args, options);
         }
         case "mutation": {
-            return client.mutation(reference, args, options);
+            // The operator sees the answer now, so a write is never parked in the offline queue, where a
+            // sensitive argument would be persisted before the console could refuse it.
+            return client.mutation(reference, args, { ...options, onlineOnly: true });
         }
         default: {
             return client.query(reference, args, options);
@@ -66,23 +96,39 @@ export const errorCode = (error: unknown): string | undefined => {
     return typeof code === "string" ? code : undefined;
 };
 
+/** Whether a poll failure is one no retry will fix. A poll callback that catches its own error must rethrow this so the timer stops. */
+export const isTerminalPollError = (error: unknown): boolean => {
+    const code = errorCode(error);
+
+    return code !== undefined && TERMINAL_POLL_CODES.has(code);
+};
+
 /**
- * Extract an actionable hint (Markdown) carried on a thrown value — a
- * `LunoraClientError` reconstructed from the server envelope exposes `hint` as a
- * string or an array of lines. Returns `undefined` when the error carries none.
+ * Extract an actionable hint (Markdown) for a thrown value. An explicit `hint` on
+ * the error (a `LunoraClientError` reconstructed from the server envelope carries
+ * it as a string or an array of lines) wins; otherwise the central catalog is
+ * matched by its `code` and message, as the CLI renderer does. A thrown string
+ * has no code or hint, so only its text is matched. Returns `undefined` when
+ * nothing has one.
  */
 export const errorHint = (error: unknown): string | undefined => {
-    if (error === null || typeof error !== "object" || !("hint" in error)) {
+    if (typeof error === "string") {
+        return hintText(resolveHint(error));
+    }
+
+    if (error === null || typeof error !== "object") {
         return undefined;
     }
 
-    const { hint } = error as { hint?: unknown };
+    const { code, hint, message } = error as { code?: unknown; hint?: unknown; message?: unknown };
 
-    if (typeof hint === "string") {
-        return hint;
-    }
-
-    return Array.isArray(hint) ? hint.filter((line): line is string => typeof line === "string").join("\n") : undefined;
+    return hintText(
+        resolveHint({
+            code: typeof code === "string" ? code : undefined,
+            hint: ownHint(hint),
+            message: typeof message === "string" ? message : undefined,
+        }),
+    );
 };
 
 /**

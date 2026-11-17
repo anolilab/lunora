@@ -16,7 +16,9 @@ const ADMIN_FUNCTIONS: {
     readonly applyCdc: "__lunora_admin__:applyCdc";
     readonly aiAvailable: "__lunora_admin__:aiAvailable";
     readonly aiChartConfig: "__lunora_admin__:aiChartConfig";
+    readonly aiCronExpression: "__lunora_admin__:aiCronExpression";
     readonly aiGenerateSql: "__lunora_admin__:aiGenerateSql";
+    readonly aiNameQuery: "__lunora_admin__:aiNameQuery";
     readonly aiTableFilter: "__lunora_admin__:aiTableFilter";
     readonly assignIssue: "__lunora_admin__:assignIssue";
     readonly backfillSearch: "__lunora_admin__:backfillSearch";
@@ -26,16 +28,17 @@ const ADMIN_FUNCTIONS: {
     readonly clearCapturedMail: "__lunora_admin__:clearCapturedMail";
     readonly clearQueueMessages: "__lunora_admin__:clearQueueMessages";
     readonly clearTable: "__lunora_admin__:clearTable";
+    readonly createAdminToken: "__lunora_admin__:createAdminToken";
     readonly createWorkflowInstance: "__lunora_admin__:createWorkflowInstance";
     readonly deleteRows: "__lunora_admin__:deleteRows";
     readonly describeTable: "__lunora_admin__:describeTable";
     readonly describeTables: "__lunora_admin__:describeTables";
+    readonly dropOutboxEntry: "__lunora_admin__:dropOutboxEntry";
     readonly explainIssue: "__lunora_admin__:explainIssue";
     readonly exportShard: "__lunora_admin__:exportShard";
     readonly facetColumn: "__lunora_admin__:facetColumn";
     readonly findRelated: "__lunora_admin__:findRelated";
     readonly getAdvisories: "__lunora_admin__:getAdvisories";
-    readonly getAdvisorProcedures: "__lunora_admin__:getAdvisorProcedures";
     readonly getAuditLog: "__lunora_admin__:getAuditLog";
     readonly getAuthMetrics: "__lunora_admin__:getAuthMetrics";
     readonly getCapturedMail: "__lunora_admin__:getCapturedMail";
@@ -44,6 +47,7 @@ const ADMIN_FUNCTIONS: {
     readonly getIssues: "__lunora_admin__:getIssues";
     readonly getMetricHistory: "__lunora_admin__:getMetricHistory";
     readonly getMetricSeries: "__lunora_admin__:getMetricSeries";
+    readonly getScheduleOutbox: "__lunora_admin__:getScheduleOutbox";
     readonly listSubscriptions: "__lunora_admin__:listSubscriptions";
     readonly listTableIndexes: "__lunora_admin__:listTableIndexes";
     readonly listTablesIndexes: "__lunora_admin__:listTablesIndexes";
@@ -64,6 +68,7 @@ const ADMIN_FUNCTIONS: {
     readonly importShard: "__lunora_admin__:importShard";
     readonly importStage: "__lunora_admin__:importStage";
     readonly importStagedRows: "__lunora_admin__:importStagedRows";
+    readonly listAdminTokens: "__lunora_admin__:listAdminTokens";
     readonly listFlags: "__lunora_admin__:listFlags";
     readonly listReactors: "__lunora_admin__:listReactors";
     readonly listQueues: "__lunora_admin__:listQueues";
@@ -85,7 +90,9 @@ const ADMIN_FUNCTIONS: {
     readonly recordQueueMessage: "__lunora_admin__:recordQueueMessage";
     readonly releaseShardRegistration: "__lunora_admin__:releaseShardRegistration";
     readonly replayQueueMessage: "__lunora_admin__:replayQueueMessage";
+    readonly retryOutboxEntry: "__lunora_admin__:retryOutboxEntry";
     readonly resolveIssue: "__lunora_admin__:resolveIssue";
+    readonly revokeAdminToken: "__lunora_admin__:revokeAdminToken";
     readonly rlsPolicies: "__lunora_admin__:rlsPolicies";
     readonly schemaHistory: "__lunora_admin__:schemaHistory";
     readonly schemaVersion: "__lunora_admin__:schemaVersion";
@@ -94,11 +101,13 @@ const ADMIN_FUNCTIONS: {
     readonly runSql: "__lunora_admin__:runSql";
     readonly sendQueueMessage: "__lunora_admin__:sendQueueMessage";
     readonly sendTestMail: "__lunora_admin__:sendTestMail";
+    readonly sendWorkflowEvent: "__lunora_admin__:sendWorkflowEvent";
     readonly setIssueSeverity: "__lunora_admin__:setIssueSeverity";
     readonly storageOrphans: "__lunora_admin__:storageOrphans";
     readonly storageReferences: "__lunora_admin__:storageReferences";
     readonly storageRules: "__lunora_admin__:storageRules";
     readonly studioFeatures: "__lunora_admin__:studioFeatures";
+    readonly verifyAdminToken: "__lunora_admin__:verifyAdminToken";
     readonly writeRow: "__lunora_admin__:writeRow";
 };
 ```
@@ -107,6 +116,18 @@ const ADMIN_FUNCTIONS: {
 
 ```ts
 const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
+```
+
+### `ADMIN_TOKEN_TABLE` (const)
+
+```ts
+const ADMIN_TOKEN_TABLE = "__lunora_admin_tokens__";
+```
+
+### `ADMIN_WILDCARD` (const)
+
+```ts
+const ADMIN_WILDCARD = "*";
 ```
 
 ### `AGGREGATE_SQL_FUNCTION` (const)
@@ -139,6 +160,18 @@ const AGG_VALUE: Name;
 const AUDIT_LOG_TABLE = "__lunora_audit__";
 ```
 
+### `AdminTokenSummary` (interface)
+
+```ts
+interface AdminTokenSummary {
+    createdAt: number;
+    expiresAt?: number;
+    lastUsedAt?: number;
+    name: string;
+    scopes: AdminTokenScope[];
+}
+```
+
 ### `AdvisorProcedure` (interface)
 
 ```ts
@@ -169,14 +202,6 @@ interface AdvisorProcedure {
 }
 ```
 
-### `AdvisorProceduresResult` (interface)
-
-```ts
-interface AdvisorProceduresResult {
-    procedures: AdvisorProcedure[];
-}
-```
-
 ### `AdvisoriesResult` (interface)
 
 ```ts
@@ -198,6 +223,11 @@ interface AdvisoryFinding {
     metadata: Record<string, unknown>;
     name: string;
     remediation: string;
+    suppressed?: {
+        file: string;
+        line: number;
+        reason: string;
+    };
     title: string;
 }
 ```
@@ -263,7 +293,10 @@ interface AppendAuditEntry {
 interface ApplyOnDeleteOptions {
     deletedId: string;
     deletedReference: (references: string) => unknown;
-    findHolders: (holderTable: string, field: string, value: unknown) => Promise<Record<string, unknown>[]>;
+    findHolders: (holderTable: string, field: string, value: unknown, page: {
+        limit: number;
+        select?: ReadonlyArray<string>;
+    }) => Promise<Record<string, unknown>[]>;
     onCascade: (holderTable: string, id: string) => Promise<void>;
     onRestrict: (message: string) => never;
     onSetNull: (holderTable: string, id: string, field: string) => Promise<void>;
@@ -454,6 +487,15 @@ interface ColumnMetaLike {
 }
 ```
 
+### `CompanionMemo` (class)
+
+```ts
+class CompanionMemo {
+    readonly verified: Set<string>;
+    invalidate(): void;
+}
+```
+
 ### `CompanionSync` (interface)
 
 ```ts
@@ -483,6 +525,7 @@ interface CompanionSyncDeps {
     recordCdc: (table: string, id: string, op: "delete" | "insert" | "update", doc?: Record<string, unknown>) => void;
     schema: SchemaLike;
     sql: SqlExec;
+    verified?: Set<string>;
 }
 ```
 
@@ -545,6 +588,7 @@ interface CtxDbOptions {
     cache?: ReactiveCache;
     cdc?: boolean;
     clock?: Clock;
+    companionMemo?: CompanionMemo;
     enforceRls?: boolean;
     globalDb?: DatabaseWriterLike;
     headroom?: TransactionHeadroomTracker;
@@ -604,6 +648,12 @@ const DEFAULT_PROMOTION_THRESHOLDS: PromotionThresholds;
 const DEFAULT_TRANSACTION_LIMITS: TransactionLimits;
 ```
 
+### `DELTA_PLACEHOLDER_TABLE` (const)
+
+```ts
+const DELTA_PLACEHOLDER_TABLE = "__lunora__";
+```
+
 ### `DOC_COLUMN` (const)
 
 ```ts
@@ -640,7 +690,7 @@ type DataMigrationTransform = (document: DataMigrationDocument, context: DataMig
 interface DatabaseWriterLike {
     aggregate: (tableName: string, options: AggregateOptions) => Promise<AggregateResult>;
     asId?: (tableName: string, id: string) => string;
-    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
     cdcChangedTables?: (sinceSeq: number, options?: {
         cursorOnly?: boolean;
     }) => Promise<{
@@ -649,8 +699,9 @@ interface DatabaseWriterLike {
         tables: string[];
     } | undefined>;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string, options?: {
+    delete: (table: string, id: string, options?: {
         hard?: boolean;
+        skipOnDelete?: boolean;
     }) => Promise<void>;
     deleteAll?: (tableName: string, options?: {
         chunkSize?: number;
@@ -658,9 +709,9 @@ interface DatabaseWriterLike {
     }) => Promise<{
         deleted: number;
     }>;
-    deleteMany?: (ids: ReadonlyArray<string>, options?: {
+    deleteMany?: (table: string, ids: ReadonlyArray<string>, options?: {
         limit?: number;
-    }, expectedTable?: string) => Promise<{
+    }) => Promise<{
         deleted: number;
     }>;
     deleteRereadTables?: ReadonlySet<string>;
@@ -673,7 +724,7 @@ interface DatabaseWriterLike {
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByOptions) => Promise<ReadonlyArray<GroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>, options?: {
         allowExplicitId?: boolean;
@@ -693,7 +744,7 @@ interface DatabaseWriterLike {
         tableName: string;
     }>;
     normalizeId: (tableName: string, id: string) => null | string;
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>, options?: PatchWriteOptions) => Promise<void>;
     patchIf?: (tableName: string, id: string, args: {
         patch: Record<string, unknown>;
         verify?: PatchVerifier;
@@ -702,12 +753,12 @@ interface DatabaseWriterLike {
         applied: boolean;
         doc: Record<string, unknown> | null;
     }>;
-    patchMany?: (patches: ReadonlyArray<{
+    patchMany?: (table: string, patches: ReadonlyArray<{
         id: string;
         patch: Record<string, unknown>;
     }>, options?: {
         limit?: number;
-    }, expectedTable?: string) => Promise<{
+    }) => Promise<{
         patched: number;
     }>;
     patchWhere?: (tableName: string, args: {
@@ -726,10 +777,10 @@ interface DatabaseWriterLike {
     related?: (start: RelatedStart, options?: RelatedOptions) => Promise<RelatedPage>;
     relationEdges?: ReadonlyArray<RelationEdge>;
     relationWrites?: RelationWriteMap;
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: {
+    replace: (table: string, id: string, document: Record<string, unknown>, options?: {
         allowExplicitId?: boolean;
     }) => Promise<void>;
-    restore?: (id: string, expectedTable?: string) => Promise<void>;
+    restore?: (table: string, id: string) => Promise<void>;
     softDeleteFields?: ReadonlyMap<string, string>;
     system?: SystemDatabaseReader;
     wipeShard?: (options?: {
@@ -988,6 +1039,7 @@ interface FieldOperators {
 interface FilterClause {
     column: string;
     operator: FilterOperator;
+    path?: string[];
     value?: unknown;
 }
 ```
@@ -995,7 +1047,7 @@ interface FilterClause {
 ### `FilterOperator` (type)
 
 ```ts
-type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
+type FilterOperator = "contains" | "eq" | "gt" | "gte" | "has" | "lt" | "lte" | "ne";
 ```
 
 ### `FlagEvaluation` (interface)
@@ -1224,6 +1276,12 @@ interface IdempotentRecord {
 }
 ```
 
+### `ImportConflictMode` (type)
+
+```ts
+type ImportConflictMode = "replace" | "skip";
+```
+
 ### `ImportError` (interface)
 
 ```ts
@@ -1256,11 +1314,22 @@ interface ImportManifest {
 }
 ```
 
+### `ImportRow` (interface)
+
+```ts
+interface ImportRow extends ExportRow {
+    op?: string;
+}
+```
+
 ### `ImportShardAdminArgs` (interface)
 
 ```ts
 interface ImportShardAdminArgs {
-    rows: ReadonlyArray<ExportRow>;
+    deletes: boolean;
+    dryRun: boolean;
+    onConflict: ImportConflictMode;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1269,9 +1338,12 @@ interface ImportShardAdminArgs {
 
 ```ts
 interface ImportShardArgs {
+    deletes?: boolean;
+    dryRun?: boolean;
     keepIds?: ReadonlySet<string>;
+    onConflict?: ImportConflictMode;
     replaceTables?: ReadonlyArray<string>;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 ```
@@ -1281,9 +1353,11 @@ interface ImportShardArgs {
 ```ts
 interface ImportShardResult {
     conflicts: number;
-    deleted?: Record<string, number>;
+    deleted: number;
     errors: ImportError[];
     inserted: Record<string, number>;
+    pruned?: Record<string, number>;
+    replaced: number;
 }
 ```
 
@@ -1376,6 +1450,22 @@ interface LifecycleEvent {
     context?: Record<string, unknown>;
     shardKey: string;
     userId: string | null;
+}
+```
+
+### `LiveSocketControlCall` (interface)
+
+```ts
+interface LiveSocketControlCall {
+    action: unknown;
+    adminReauth?: true;
+    callerId: string;
+    connectionId: string;
+    identity?: Record<string, unknown>;
+    identityExpiry?: number;
+    key: string;
+    seq?: number;
+    subscriptionId: string;
 }
 ```
 
@@ -1610,21 +1700,25 @@ interface OrderKeyConstraints {
 ```ts
 class OwnerRelay extends RelayLink {
     constructor(host: RelayHost, ownerKey: string);
-    forwardWhisper(topic: string, frame: string): Promise<void>;
+    forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
+    forwardLiveControl(call: LiveSocketControlCall): Promise<Response | undefined>;
+    forwardLiveFrame(topic: string, key: string, frame: string): Promise<void>;
     onFlush(changed: Set<string>, frameCursor: number): Promise<void>;
     seedRelayShape(): Promise<"ok" | undefined | {
         code: string;
         message: string;
     }>;
-    announce(): Promise<void>;
+    announce(): Promise<boolean>;
     announceDrain(): Promise<void>;
     releaseRelayShapes(): Promise<void>;
     relayCount(): number;
     minShapeCursor(): number | undefined;
     isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     protected onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
-    protected onAttach(index: number): void;
-    protected onDetach(index: number): void;
+    protected onAttach(index: number, seq: number | undefined): boolean;
+    protected onDetach(index: number, seq: number | undefined): boolean;
+    protected refusesAsIdle(): boolean;
+    protected onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected onWhisperFrame(message: RelayFrame): Promise<void>;
     protected onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
     protected onShapePoke(): RelayPokeDelivery;
@@ -1635,7 +1729,7 @@ class OwnerRelay extends RelayLink {
 ### `OwnerRelayFrame` (type)
 
 ```ts
-type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
+type OwnerRelayFrame = RelayAttach | RelayDetach | RelayFrame | RelayLiveControl | RelayLiveFrame | RelayRoomEvent | RelayShapePoke | RelayShapeSubscribe | RelayShapeUnsubscribe;
 ```
 
 ### `PaginationOptions` (interface)
@@ -1739,7 +1833,9 @@ const QUEUE_TABLE = "__lunora_queue_messages";
 ```ts
 interface QueryArgs {
     baseWhere?: WhereInput;
+    consistency?: "primary";
     cursor?: null | string;
+    endCursor?: null | string;
     includeDeleted?: boolean;
     limit?: number;
     omitContinueCursor?: boolean;
@@ -1761,6 +1857,7 @@ interface QueryPage {
     isDone: boolean;
     page: Record<string, unknown>[];
     splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 
@@ -1865,6 +1962,12 @@ const RELATION_EXISTS_KEY = "__relationExists";
 
 ```ts
 const RELATION_FUNCTION_PREFIX = "__lunora_relation__:";
+```
+
+### `RELAY_SIGNATURE_HEADER` (const)
+
+```ts
+const RELAY_SIGNATURE_HEADER = "x-lunora-relay-sig";
 ```
 
 ### `REPROJECTION_MIGRATION_PREFIX` (const)
@@ -2107,7 +2210,7 @@ interface ReactorsResult {
 
 ```ts
 interface ReadFootprint {
-    onRead: (table: string, idOrScan?: string) => void;
+    onRead: (table: string, idOrScan?: string, exact?: boolean) => void;
     onReadRange: (range: KeyRange) => void;
     ranges: () => Map<string, KeyRange[]> | undefined;
     tables: Set<string>;
@@ -2117,7 +2220,7 @@ interface ReadFootprint {
 ### `ReadHook` (type)
 
 ```ts
-type ReadHook = (table: string, idOrScan?: string) => void;
+type ReadHook = (table: string, idOrScan?: string, exact?: boolean) => void;
 ```
 
 ### `ReadTablePageOptions` (interface)
@@ -2280,6 +2383,7 @@ type RelationWriteMap = Readonly<Record<string, Readonly<Record<string, Relation
 ```ts
 interface RelayAttach {
     relayIndex: number;
+    seq?: number;
     type: "relay_attach";
 }
 ```
@@ -2289,6 +2393,7 @@ interface RelayAttach {
 ```ts
 interface RelayDetach {
     relayIndex: number;
+    seq?: number;
     type: "relay_detach";
 }
 ```
@@ -2299,6 +2404,7 @@ interface RelayDetach {
 interface RelayFrame {
     cursor?: number;
     epoch?: string;
+    exceptConnectionId?: string;
     frame: string;
     originRelay?: number;
     topic: string;
@@ -2319,14 +2425,18 @@ interface RelayHost {
         rowsPatch: ShapeRowOp[];
     };
     currentCdcEpoch: () => string | undefined;
+    deliverLiveLocal: (topic: string, key: string, frame: string) => number;
     deliverWhisperLocal: (topic: string, frame: string, exclude: undefined | ShardSocketLike) => number;
     doName: () => string | undefined;
+    dropIfLapsed: (ws: ShardSocketLike) => boolean;
     env: () => unknown;
     getWebSockets: () => ShardSocketLike[];
+    liveControl: (control: LiveSocketControlCall) => Promise<Response>;
     maskMetadata: () => MaskPoliciesResult;
     nextPokeId: () => string;
     readAttachment: (ws: ShardSocketLike) => SocketAttachment;
     recordShapePokeFanout: (iterated: number, delivered: number, elapsedMs: number) => void;
+    relayRoomEvent: (event: RelayRoomEvent) => Promise<RelayRoomVerdict>;
     resolveShape: (name: string, args: Record<string, unknown>, identity?: SubscriptionIdentity) => ResolvedShape | undefined;
     rlsMetadata: () => RlsPoliciesResult;
     shardBinding: () => string | undefined;
@@ -2341,19 +2451,22 @@ interface RelayHost {
 class RelayMember extends RelayLink {
     constructor(host: RelayHost, ownerKey: string, relayIndex: number);
     forwardWhisper(topic: string, frame: string): Promise<void>;
+    forwardRoomEvent(event: Omit<RelayRoomEvent, "relayIndex" | "type">): Promise<boolean>;
     onFlush(): Promise<void>;
     seedRelayShape(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery, identity: SubscriptionIdentity): Promise<"ok" | {
         code: string;
         message: string;
     }>;
-    announce(): Promise<void>;
+    announce(): Promise<boolean>;
     announceDrain(closing: ShardSocketLike): Promise<void>;
     releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void>;
     relayCount(): number;
     isShapeRelayUniform(): boolean;
     minShapeCursor(): number | undefined;
-    protected onAttach(): void;
-    protected onDetach(): void;
+    protected onAttach(): boolean;
+    protected refusesAsIdle(): boolean;
+    protected onDetach(): boolean;
+    protected onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected onWhisperFrame(): Promise<void>;
     protected onShapeSubscribe(): RelayShapeSeed;
     protected onShapeUnsubscribe(): void;
@@ -2367,6 +2480,28 @@ class RelayMember extends RelayLink {
 interface RelayPokeDelivery {
     delivered: number;
     matched: number;
+}
+```
+
+### `RelayRoomEvent` (interface)
+
+```ts
+interface RelayRoomEvent {
+    attachment: Pick<SocketAttachment, "connectionId" | "context" | "expiresAt" | "identity" | "ip" | "revalidateAt" | "userId">;
+    connectionId: string;
+    data?: unknown;
+    kind: "join" | "leave" | "message";
+    relayIndex: number;
+    topic: string;
+    type: "relay_room_event";
+}
+```
+
+### `RelayRoomVerdict` (interface)
+
+```ts
+interface RelayRoomVerdict {
+    admitted: boolean;
 }
 ```
 
@@ -2441,9 +2576,12 @@ interface RenderedSql {
 ```ts
 interface ReplicaFollowerHost extends ShardSiblingHost {
     applyChanges: (changes: ReadonlyArray<CdcChange>) => Promise<number>;
+    exportRows: () => Promise<ExportRow[]>;
     importRows: (rows: ReadonlyArray<ExportRow>) => Promise<{
         errors: ReadonlyArray<unknown>;
     }>;
+    reportError?: (scope: string, error: unknown) => void;
+    transactionLimits: () => Partial<TransactionLimits>;
 }
 ```
 
@@ -2662,8 +2800,24 @@ interface SchedulableWorkflowReferenceLike {
 interface ScheduleOutbox {
     admit: (target: string) => number | undefined;
     forget: (id: string) => void;
-    record: (id: string, envelope: ScheduleOutboxEnvelope) => void;
+    handOff?: (id: string, run: () => Promise<unknown>, token?: string) => Promise<void>;
+    record: (id: string, envelope: ScheduleOutboxEnvelope) => string | undefined;
     wake: () => void;
+}
+```
+
+### `ScheduleOutboxEntry` (interface)
+
+```ts
+interface ScheduleOutboxEntry {
+    attempts: number;
+    createdAt: number;
+    forever: boolean;
+    id: string;
+    nextAttemptAt: number;
+    parked: boolean;
+    target: string | undefined;
+    when: number | undefined;
 }
 ```
 
@@ -2695,12 +2849,15 @@ interface ScheduleOutboxRow {
 interface ScheduledFunctionDoc {
     args: Record<string, unknown>;
     attempts?: number;
+    completedAt?: number;
     enqueuedAt: number;
+    error?: string;
     functionPath?: string;
     id: string;
     pool?: string;
     scheduledFor: number;
     shardKey?: string;
+    state?: "canceled" | "failed" | "pending" | "running" | "succeeded";
     workflow?: string;
 }
 ```
@@ -2961,15 +3118,27 @@ interface ShardSocketLike {
 interface SocketAttachment {
     admin?: boolean;
     adminBinding?: string;
+    authenticated?: boolean;
+    broadcastSubs?: Record<string, string>;
     clientId?: string;
     connected?: boolean;
     connectionId?: string;
     context?: Record<string, unknown>;
+    deliveryPermits?: Record<string, {
+        epoch: number;
+        scope: string;
+    }>;
     expiresAt?: number;
     identity?: Record<string, unknown>;
     ip?: string;
+    liveGrants?: Record<string, string>;
     pageDeltas?: boolean;
+    pendingSince?: number;
+    refreshBatch?: boolean;
+    revalidateAt?: number;
     shapes?: Record<string, ShapeSubscriptionQuery>;
+    socketFunction?: string;
+    socketPath?: string;
     subs: Record<string, SubscriptionQuery>;
     userId?: string;
     whispers?: string[];
@@ -3167,7 +3336,9 @@ interface SubscriptionEnvelope {
     };
     sinceCheckpoint?: number;
     sinceChunk?: number;
+    sinceClaims?: string;
     sinceEpoch?: string;
+    token?: string;
     topic?: string;
     type: "ack" | "connect" | "shape_subscribe" | "shape_unsubscribe" | "stream" | "subscribe" | "unsubscribe" | "whisper" | "whisper_subscribe" | "whisper_unsubscribe";
 }
@@ -3199,6 +3370,7 @@ interface SubscriptionInfo {
 interface SubscriptionQuery {
     args?: Record<string, unknown>;
     functionPath?: string;
+    sinceClaims?: string;
     sinceEpoch?: string;
     sinceSeq?: number;
     table?: string;
@@ -3414,7 +3586,9 @@ interface ThroughRelationWriteInfo extends RelationWriteBase {
 
 ```ts
 interface TransactionHeadroom {
+    readBytes: number;
     readRows: number;
+    remainingReadBytes: number;
     remainingReadRows: number;
     remainingWrittenBytes: number;
     remainingWrittenRows: number;
@@ -3427,10 +3601,29 @@ interface TransactionHeadroom {
 
 ```ts
 class TransactionHeadroomTracker {
-    constructor(limits?: Partial<TransactionLimits>);
+    constructor(limits?: Partial<TransactionLimits>, onNearLimit?: (warning: TransactionLimitWarning) => void);
     recordRead(count: number): void;
+    recordReadBytes(bytes: number): void;
+    recordDocumentRead(key: string, bytes: number): void;
+    beginReadWindow(): void;
     recordWrite(row: unknown): void;
     headroom(): TransactionHeadroom;
+}
+```
+
+### `TransactionLimitKind` (type)
+
+```ts
+type TransactionLimitKind = "readBytes" | "readRows" | "writtenBytes" | "writtenRows";
+```
+
+### `TransactionLimitWarning` (interface)
+
+```ts
+interface TransactionLimitWarning {
+    kind: TransactionLimitKind;
+    limit: number;
+    used: number;
 }
 ```
 
@@ -3438,6 +3631,7 @@ class TransactionHeadroomTracker {
 
 ```ts
 interface TransactionLimits {
+    maxReadBytes: number;
     maxReadRows: number;
     maxWrittenBytes: number;
     maxWrittenRows: number;
@@ -3603,7 +3797,7 @@ interface WithInput {
 ### `WorkflowInstanceState` (type)
 
 ```ts
-type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 ```
 
 ### `WorkflowInstanceStatusResult` (interface)
@@ -3634,6 +3828,7 @@ interface WorkflowMetadata {
 
 ```ts
 interface WorkflowsResult {
+    eventTypes?: string[];
     workflows: WorkflowMetadata[];
 }
 ```
@@ -3653,6 +3848,12 @@ interface WriteEvent {
 
 ```ts
 type WriteHook = (event: WriteEvent) => Promise<void> | void;
+```
+
+### `adminTokenExists` (const)
+
+```ts
+const adminTokenExists: (sql: SqlExec, name: string) => boolean;
 ```
 
 ### `advanceClientWatermark` (const)
@@ -3715,6 +3916,12 @@ const appendStreamChunk: (sql: SqlExec, runKey: string, seq: number, dataJson: s
 const applyCdcChanges: (writer: DatabaseWriterLike, changes: ReadonlyArray<CdcChange>) => Promise<void>;
 ```
 
+### `applyInsertDefaults` (const)
+
+```ts
+const applyInsertDefaults: (definition: TableDefinitionLike, document: Record<string, unknown>, auth: ServerDefaultContextLike["auth"]) => Record<string, unknown>;
+```
+
 ### `applyOnDelete` (const)
 
 ```ts
@@ -3773,6 +3980,12 @@ const assertReadonly: (query: string) => void;
 
 ```ts
 const assertShapeShardable: (effectiveWhere: WhereInput | undefined, schema: ResolveContext["schema"], table: string) => void;
+```
+
+### `assertStorableRowId` (const)
+
+```ts
+const assertStorableRowId: (id: string) => void;
 ```
 
 ### `assertValidClientId` (const)
@@ -4022,6 +4235,18 @@ const countLegacyRows: (sql: SqlExec, table: string, fields: ReadonlyArray<strin
 const coveringGeohashes: (center: GeoPoint, radiusMeters: number) => string[];
 ```
 
+### `createAdminTokenRecord` (const)
+
+```ts
+const createAdminTokenRecord: (sql: SqlExec, record: {
+    createdAt: number;
+    digest: string;
+    expiresAt?: number;
+    name: string;
+    scopes?: ReadonlyArray<AdminTokenScope>;
+}) => boolean;
+```
+
 ### `createCompanionSync` (const)
 
 ```ts
@@ -4166,6 +4391,12 @@ const deleteShapePokeCursorsForConnection: (sql: SqlExec, connectionId: string) 
 const deleteStreamRun: (sql: SqlExec, runKey: string) => void;
 ```
 
+### `deltaTableFor` (const)
+
+```ts
+const deltaTableFor: (tables: Iterable<string>) => string;
+```
+
 ### `depKey` (const)
 
 ```ts
@@ -4221,6 +4452,12 @@ const dropImportManifest: (sql: SqlExec, session: string, now: number) => void;
 
 ```ts
 const dropImportSession: (sql: SqlExec, session: string, generation: string) => boolean;
+```
+
+### `dropScheduleOutbox` (const)
+
+```ts
+const dropScheduleOutbox: (sql: SqlExec, id: string) => boolean;
 ```
 
 ### `encodeAggregateKey` (const)
@@ -4299,6 +4536,17 @@ const facetColumn: (sql: SqlExec, options: FacetColumnOptions) => FacetColumnRes
 
 ```ts
 const fanOutScalarCounts: (counter: (tableName: string, where?: WhereInput) => Promise<number>, tableName: string, whereField: string, values: unknown[], policyWhere: WhereInput | undefined) => Promise<Map<unknown, number>>;
+```
+
+### `findManyPage` (const)
+
+```ts
+const findManyPage: (documents: Record<string, unknown>[], read: {
+    endCursor?: null | string;
+    limit: number | undefined;
+    omitContinueCursor?: boolean;
+    orderKeys: OrderKey[];
+}) => QueryPage;
 ```
 
 ### `findRelated` (const)
@@ -4397,13 +4645,19 @@ const groupUnmappedRows: (rows: ReadonlyArray<Record<string, unknown>>) => Map<s
 ### `guardWriter` (const)
 
 ```ts
-const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, tablesOfIds?: TablesOfIds, relationEdges?: ReadonlyArray<RelationEdge>) => W;
+const guardWriter: <W>(raw: W, schema: GuardableSchema, tableOfId: TableOfId, relationEdges?: ReadonlyArray<RelationEdge>) => W;
 ```
 
 ### `handleReplicaControl` (const)
 
 ```ts
 const handleReplicaControl: (host: ReplicaOwnerHost, request: Request) => Promise<Response>;
+```
+
+### `hasScheduleOutboxEntry` (const)
+
+```ts
+const hasScheduleOutboxEntry: (sql: SqlExec, id: string) => boolean;
 ```
 
 ### `hasTrigger` (const)
@@ -4442,7 +4696,7 @@ const isDevEnvironment: (rawEnv: unknown) => boolean;
 ### `isFtsAvailable` (const)
 
 ```ts
-const isFtsAvailable: (sql: SqlExec) => boolean;
+const isFtsAvailable: (wrapper: SqlExec) => boolean;
 ```
 
 ### `isInternalTableName` (const)
@@ -4487,6 +4741,12 @@ const isSoftDeleted: (row: Record<string, unknown>, column: string) => boolean;
 const isSourceDue: (refresh: SourceRefresh | undefined, lastPolledMs: number | undefined, nowMs: number) => boolean;
 ```
 
+### `isTtlExpired` (const)
+
+```ts
+const isTtlExpired: (sql: SqlExec, spec: TtlSweepSpec, id: string, now: number) => boolean;
+```
+
 ### `isVacuousFilterClause` (const)
 
 ```ts
@@ -4524,6 +4784,12 @@ const liftSourceId: (row: Record<string, unknown>, options?: {
 
 ```ts
 const lintReadonlySql: (sql: SqlExec, query: string) => SqlLintResult;
+```
+
+### `listAdminTokens` (const)
+
+```ts
+const listAdminTokens: (sql: SqlExec) => AdminTokenSummary[];
 ```
 
 ### `listReactorStates` (const)
@@ -4694,6 +4960,12 @@ const minShapePokeCursor: (sql: SqlExec) => number | undefined;
 const nextPromotionState: (current: PromotionState, subscribers: number, thresholds?: PromotionThresholds) => PromotionState;
 ```
 
+### `nextTtlExpiry` (const)
+
+```ts
+const nextTtlExpiry: (sql: SqlExec, spec: TtlSweepSpec) => number | undefined;
+```
+
 ### `normalizeCountArgument` (const)
 
 ```ts
@@ -4751,7 +5023,7 @@ const param: (value: unknown) => SQL;
 ### `parkScheduleOutbox` (const)
 
 ```ts
-const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number) => void;
+const parkScheduleOutbox: (sql: SqlExec, id: string, attempts: number, now: number) => void;
 ```
 
 ### `parseExportShardArgs` (const)
@@ -4968,6 +5240,12 @@ const readDeployInfo: (rawEnv: unknown) => DeployInfo;
 const readDueScheduleOutbox: (sql: SqlExec, nowMs: number, limit: number) => ScheduleOutboxRow[];
 ```
 
+### `readDueScheduleOutboxEntry` (const)
+
+```ts
+const readDueScheduleOutboxEntry: (sql: SqlExec, id: string, nowMs: number) => ScheduleOutboxRow | undefined;
+```
+
 ### `readExternalSourceBaseline` (const)
 
 ```ts
@@ -5022,6 +5300,25 @@ const readQueueMessages: (sql: SqlExec, options?: ReadQueueMessagesOptions) => {
 
 ```ts
 const readReactorState: (sql: SqlExec, path: string) => ReactorState | undefined;
+```
+
+### `readScheduleOutbox` (const)
+
+```ts
+const readScheduleOutbox: (sql: SqlExec, limit: number, cursor?: string) => {
+    entries: ScheduleOutboxEntry[];
+    nextCursor: string | undefined;
+};
+```
+
+### `readScheduleOutboxState` (const)
+
+```ts
+const readScheduleOutboxState: (sql: SqlExec, id: string) => {
+    createdAt: number;
+    parked: boolean;
+    version: string;
+} | undefined;
 ```
 
 ### `readSchemaHistory` (const)
@@ -5170,6 +5467,12 @@ const reprojectionMigrationId: (table: string) => string;
 const reprojectionTables: (schema: SchemaLike) => string[];
 ```
 
+### `requeueScheduleOutbox` (const)
+
+```ts
+const requeueScheduleOutbox: (sql: SqlExec, id: string, now: number) => boolean;
+```
+
 ### `resolvePatch` (const)
 
 ```ts
@@ -5201,6 +5504,12 @@ const resolveRelationPredicates: (where: WhereInput | undefined, options: Resolv
 
 ```ts
 const resolveWith: (options: ResolveWithOptions) => Promise<void>;
+```
+
+### `revokeAdminTokenRecord` (const)
+
+```ts
+const revokeAdminTokenRecord: (sql: SqlExec, name: string, createdAt: number) => boolean;
 ```
 
 ### `rowToDocument` (const)
@@ -5239,7 +5548,7 @@ const runReadonlySql: (sql: SqlExec, query: string) => SqlConsoleResult;
 ### `runRowValidators` (const)
 
 ```ts
-const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, tolerateStoredNull?: boolean) => void;
+const runRowValidators: (definition: TableDefinitionLike, document: Record<string, unknown>, options?: RowValidatorOptions) => Record<string, unknown>;
 ```
 
 ### `runShardMigrations` (const)
@@ -5247,11 +5556,12 @@ const runRowValidators: (definition: TableDefinitionLike, document: Record<strin
 ```ts
 const runShardMigrations: (sql: SqlExec, schema: SchemaLike, options?: {
     cdc?: boolean;
+    deferBlockedUniqueIndexes?: boolean;
     schemaSnapshot?: {
         hash: string;
         json: string;
     };
-}) => void;
+}) => ReadonlyArray<string>;
 ```
 
 ### `runSocketPool` (const)
@@ -5351,6 +5661,18 @@ const serverInList: (engine: "mysql" | "postgres") => (reference: SQL, items: Re
 
 ```ts
 const shapeRoutingKey: (name: string, args?: Record<string, unknown>) => string;
+```
+
+### `siblingSecretOf` (const)
+
+```ts
+const siblingSecretOf: (env: unknown) => string | undefined;
+```
+
+### `signSiblingBody` (const)
+
+```ts
+const signSiblingBody: (secret: string, body: string) => Promise<string>;
 ```
 
 ### `softDeleteScope` (const)
@@ -5553,6 +5875,22 @@ const uniqueIndexFields: (indexes: ReadonlyArray<{
 const validateImportRow: (schema: SchemaLike, table: string, record: Record<string, unknown>) => string | undefined;
 ```
 
+### `verifyAdminTokenDigest` (const)
+
+```ts
+const verifyAdminTokenDigest: (sql: SqlExec, name: string, digest: string, now: number) => undefined | {
+    createdAt: number;
+    expiresAt?: number;
+    scopes: AdminTokenScope[];
+};
+```
+
+### `verifySiblingBody` (const)
+
+```ts
+const verifySiblingBody: (env: unknown, supplied: null | string, raw: string) => Promise<boolean>;
+```
+
 ### `whereFilter` (const)
 
 ```ts
@@ -5664,6 +6002,20 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `ADMIN_TOKEN_SCOPES` (const)
+
+```ts
+const ADMIN_TOKEN_SCOPES: readonly [
+    "migrations"
+];
+```
+
+### `AdminTokenScope` (type)
+
+```ts
+type AdminTokenScope = (typeof ADMIN_TOKEN_SCOPES)[number];
+```
+
 ### `BackfillState` (interface)
 
 ```ts
@@ -5727,6 +6079,7 @@ type ExistsPushMode = "always" | "auto";
 
 ```ts
 interface FanoutAttachmentLike {
+    authenticated?: boolean;
     shapes?: Record<string, {
         name?: string;
     }>;
@@ -5874,28 +6227,52 @@ abstract class RelayLink {
     handleControl(request: Request): Promise<Response>;
     maxRelays(): number;
     protected canAddressSiblings(): boolean;
+    protected isAdmitted(ws: ShardSocketLike): boolean;
     protected siblingStub(targetName: string): SiblingStub | undefined;
     protected bindingName(): string | undefined;
+    protected nextRelaySeq(): number;
     protected postRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<void>;
     protected requestRelayMessage(targetName: string, message: OwnerRelayFrame): Promise<Response | undefined>;
-    abstract forwardWhisper(topic: string, frame: string): Promise<void>;
+    abstract forwardWhisper(topic: string, frame: string, exceptConnectionId?: string): Promise<void>;
     abstract onFlush(changed: Set<string>, frameCursor: number): Promise<void>;
     abstract seedRelayShape(ws: ShardSocketLike, subId: string, shape: ShapeSubscriptionQuery, identity: SubscriptionIdentity): Promise<"ok" | undefined | {
         code: string;
         message: string;
     }>;
-    abstract announce(): Promise<void>;
+    abstract announce(): Promise<boolean>;
     abstract announceDrain(closing: ShardSocketLike): Promise<void>;
     abstract releaseRelayShapes(ws: ShardSocketLike, subId?: string): Promise<void>;
     abstract relayCount(): number;
     abstract isShapeRelayUniform(name: string, args: Record<string, unknown>): boolean;
     abstract minShapeCursor(): number | undefined;
-    protected abstract onAttach(index: number): void;
-    protected abstract onDetach(index: number): void;
+    protected abstract onAttach(index: number, seq: number | undefined): boolean;
+    protected abstract onDetach(index: number, seq: number | undefined): boolean;
+    protected abstract onLiveControl(control: LiveSocketControlCall): Promise<Response>;
     protected abstract onWhisperFrame(message: RelayFrame): Promise<void>;
+    protected abstract refusesAsIdle(): boolean;
     protected abstract onShapeSubscribe(message: RelayShapeSubscribe): RelayShapeSeed;
     protected abstract onShapeUnsubscribe(message: RelayShapeUnsubscribe): void;
     protected abstract onShapePoke(poke: RelayShapePoke): RelayPokeDelivery;
+}
+```
+
+### `RelayLiveControl` (interface)
+
+```ts
+interface RelayLiveControl {
+    control: LiveSocketControlCall;
+    type: "relay_live_control";
+}
+```
+
+### `RelayLiveFrame` (interface)
+
+```ts
+interface RelayLiveFrame {
+    frame: string;
+    key: string;
+    topic: string;
+    type: "relay_live_frame";
 }
 ```
 
@@ -5918,6 +6295,18 @@ interface ResolveContext {
 
 ```ts
 type RowPredicate = (document: Record<string, unknown>) => boolean;
+```
+
+### `RowValidatorOptions` (interface)
+
+```ts
+interface RowValidatorOptions {
+    only?: ReadonlySet<string>;
+    previous?: () => Readonly<Record<string, unknown>> | undefined;
+    supplied?: Readonly<Record<string, unknown>>;
+    tolerateStoredNull?: boolean;
+    trusted?: boolean;
+}
 ```
 
 ### `SchemaVersionRow` (interface)
@@ -5963,6 +6352,7 @@ interface SiblingStub {
 ```ts
 interface SocketAttachmentLike {
     admin?: boolean;
+    authenticated?: boolean;
     subs?: Record<string, SubscriptionInfo>;
 }
 ```
@@ -5994,6 +6384,7 @@ interface StagedCondition {
 ```ts
 interface SubscriptionFrameInput {
     cursorSuffix: string;
+    diffKey?: object;
     lastMutationId?: number;
     nextResult: unknown;
     pageDeltas?: boolean;
@@ -6017,12 +6408,6 @@ interface SystemDocMap {
 
 ```ts
 type TableOfId = (id: string, expectedTable?: string) => Promise<string | undefined> | string | undefined;
-```
-
-### `TablesOfIds` (type)
-
-```ts
-type TablesOfIds = (ids: ReadonlyArray<string>, expectedTable?: string) => Promise<ReadonlyMap<string, string>> | ReadonlyMap<string, string>;
 ```
 
 ### `ThroughRelationDefinitionLike` (interface)

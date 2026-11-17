@@ -137,6 +137,21 @@ const recordingWriter = (): { ops: ({ key: string; type: "delete" } | { type: "i
 };
 
 describe(makeDiffEmit, () => {
+    it("emits an update for a row mutated in place and re-emitted in a new map", () => {
+        const syncedJson = new Map<string, string>();
+        const { ops, writer } = recordingWriter();
+        const emit = makeDiffEmit(syncedJson, writer);
+        const row: Row = { _id: "a", text: "1" };
+
+        emit(new Map([["a", row]]));
+        ops.length = 0;
+        // An optimistic transform may mutate the row object and return a new outer container.
+        row.text = "2";
+        emit(new Map([["a", row]]));
+
+        expect(ops).toStrictEqual([{ type: "update", value: { _id: "a", text: "2" } }]);
+    });
+
     it("emits only the rows that changed between snapshots", () => {
         // syncedJson is the single Map<string, string> cache owned at the caller level.
         const syncedJson = new Map<string, string>();

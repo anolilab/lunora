@@ -217,7 +217,7 @@ const evaluateMonth = async (
 
         reads.stateOf.set(rule._id, { _id: id, ...latch, ruleId: rule._id });
     } else {
-        await database.patch(state._id, latch, "alertRuleState");
+        await database.patch("alertRuleState", state._id, latch);
         reads.stateOf.set(rule._id, { ...state, ...latch });
     }
 

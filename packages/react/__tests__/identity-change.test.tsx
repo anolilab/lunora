@@ -6,7 +6,7 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraProvider } from "../src/lunora-provider";
-import usePreloadedQuery from "../src/use-preloaded-query";
+import { usePreloadedQuery } from "../src/use-preloaded-query";
 import useQuery from "../src/use-query";
 import type { MockSocket } from "./mock-socket";
 import { createMockWebSocket } from "./mock-socket";

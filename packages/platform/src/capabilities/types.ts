@@ -34,15 +34,15 @@
  * `cronTriggers`, `crossShardFanout`,
  * `durableStreams`, `globalTables`, `hyperdrive`, `images`, `keyValueStore`,
  * `mail`, `objectStorage`, `pipelines`, `queues`, `relationGraph`,
- * `scheduler`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
+ * `scheduler`, `secretValues`, `secrets`, `services`, `topics`, `vectorStore`, `workerLoaders`, `workflowRollback`,
  * `workflowSchedules`, `workflows`.
  *
- * Every other key here — `authJurisdictionMove`, `conditionalWrites`, `dataExportSections`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
+ * Every other key here — `adminTokenRevocation`, `authJurisdictionMove`, `conditionalWrites`, `dataExportSections`, `deliveryAuthorization`, `edgeRequestMetadata`, `hostTraceFusion`, `httpCache`,
  * `identityProxy`, `localSql`, `logArchive`, `memoryTables`,
  * `objectColumnPaths`, `objectStorageBackups`, `objectStorageCdcArchive`, `pointInTimeRecovery`, `queryExplain`,
  * `serverReactors`,
  * `shardAlarms`, `shardedState`, `shardPlacement`, `shardReadReplicas`,
- * `websocketHibernation`, `alarmRearmBreaker`, `scheduleRateBreaker` — is
+ * `websocketHibernation`, `alarmRearmBreaker`, `scheduleRateBreaker`, `deploymentPause` — is
  * **advisory**: rating one `unsupported` omits no surface and warns nobody. It
  * still records parity honestly, which is its job; it is not a gate.
  *
@@ -82,6 +82,11 @@
  * primitive, and a key every target must rate `native` forever is paperwork, not
  * a control.
  *
+ * `ctx.random` and `ctx.newId` have no key for the same reason: each draws from
+ * JavaScript on every target, with no host primitive to rate. Nor does
+ * `ctx.shardKey`: it reads the key the shard host already routes by, which every
+ * target has by construction.
+ *
  * The rest are advisory only because nobody wired them, and they are the ones
  * to watch: an app DOES declare the feature, codegen CAN see the declaration,
  * and the rating is still consulted by nothing. Codegen already has the shape
@@ -90,7 +95,7 @@
  * (`agents`, `commitOrderedTables`, `containerEgressPolicy`,
  * `containerRuntimeScheduling`, `containerSandboxTools`, `cronTriggers`,
  * `crossShardFanout`, `durableStreams`, `globalTables`, `queues`,
- * `relationGraph`, `secrets`, `services`, `topics`, `vectorStore`, `workflowRollback`,
+ * `relationGraph`, `secretValues`, `secrets`, `services`, `topics`, `vectorStore`, `workflowRollback`,
  * `workflowSchedules`).
  * Promoting one is three lines there: a `PlatformSignals` field, plus its entry
  * in that module's signal-key list and its human-readable label — and then
@@ -129,6 +134,22 @@ export interface Capability {
 export interface PlatformCapabilities {
     /** Feature-level capabilities. */
     features: {
+        /**
+         * Where a named admin token's revocation is recorded so a point-in-time restore of
+         * the default shard, which brings the token row back, cannot revive the token: a
+         * small Durable Object (`AdminRevocationDO`, bound as `ADMIN_REVOCATIONS`) outside
+         * that database, written FIRST on revoke and consulted on every verify.
+         *
+         * Carried by the same `ShardDirectory` namespace seam the scheduler and shard
+         * registry use (`createWorker({ adminRevocations })`). A host that does not bind one
+         * fails closed: no named token can be created and any that exist are refused, so the
+         * root `LUNORA_ADMIN_TOKEN` is the only admin credential there.
+         *
+         * Advisory for codegen by nature — an app declares no named tokens; they are created
+         * at runtime. The module is emitted for every app and the builder always has the method.
+         */
+        adminTokenRevocation?: Capability;
+
         /**
          * Durable agents — a `defineAgent` export in `lunora/agents.ts`.
          *
@@ -333,6 +354,30 @@ export interface PlatformCapabilities {
         dataExportSections?: Capability;
 
         /**
+         * Delivery authorization: `.deliveryAuthorization(...)` rechecks current
+         * authority before an RPC result or subscription frame is delivered, and
+         * fences replayed receipts behind a durable scope/epoch. Rides hibernated
+         * socket attachments, signed sibling fetch and shard SQLite, so a host rates
+         * it no higher than its `websocketHibernation`. Advisory for now, not by
+         * nature: an app opts in by declaring it, so a host rating it `unsupported`
+         * should get a `platform_unsupported_feature` diagnostic rather than the
+         * emitted builder method. No `PlatformSignals` entry exists yet, so until one
+         * does that host emits the surface silently.
+         */
+        deliveryAuthorization?: Capability;
+
+        /**
+         * The operator's incident switch (`lunora pause` / `resume`, Studio, `POST
+         * /_lunora/admin/pause`): function calls answer `503 DEPLOYMENT_PAUSED`,
+         * scheduled jobs are held in place, cron ticks are skipped and recorded,
+         * queue messages are held. The flag is durable in the `SchedulerDO`, and
+         * so is the registry of named scheduler instances a pause fans out to, so a
+         * host rates it by whether it runs one (no separate host contract carries it). Advisory by
+         * nature: an app never declares it, so there is nothing for codegen to gate.
+         */
+        deploymentPause?: Capability;
+
+        /**
          * Durable streams: a `.stream()` run whose chunks are persisted and
          * whose producer outlives the socket that opened it, so a reconnecting
          * or second client resumes the same transcript.
@@ -430,6 +475,16 @@ export interface PlatformCapabilities {
         images?: Capability;
         /** Key-value storage (KV / Redis / DynamoDB). */
         keyValueStore?: Capability;
+
+        /**
+         * Live topic streams — `defineLiveStream` and `ctx.live.publish`. The shard
+         * DO serves one long-lived SSE response per connection and fans publishes
+         * out to its subscribers. A host that cannot serve that connect route
+         * rates this `unsupported`: codegen then refuses a declared `defineLiveStream`
+         * and withholds `ctx.live` from the worker's HTTP context.
+         */
+        liveStreams?: Capability;
+
         /** Local SQL execution inside a shard. */
         localSql?: Capability;
 
@@ -606,8 +661,22 @@ export interface PlatformCapabilities {
          * so a host rates it by its SQL contract. Engine-internal and advisory.
          */
         scheduleRateBreaker?: Capability;
+
         /** Secrets management. */
         secrets?: Capability;
+
+        /**
+         * Human-supplied secret values held for a single durable step — the
+         * `SecretValueHost` contract (`put` / `take` / `discard`), the agent
+         * layer's "request a secret from the human" path. Distinct from
+         * `secrets`, which is the platform's own secret store read by
+         * `ctx.secrets`: this one holds a value an end user typed, scoped to
+         * one run, readable by one claimant, and expiring.
+         *
+         * Gate-bearing through `PlatformSignals.secretValues`, set when an app
+         * imports `requestSecretTool` from `@lunora/agent`.
+         */
+        secretValues?: Capability;
 
         /**
          * `onQueryChange` reactors — server-side reactivity: a subscriber that is
@@ -635,6 +704,7 @@ export interface PlatformCapabilities {
         shardedState?: Capability;
         /** Geographic placement of a shard (`ShardPlacement.locationHint`). */
         shardPlacement?: Capability;
+
         /** Region-local read replicas of a shard, for one-shot queries. */
         shardReadReplicas?: Capability;
 
@@ -646,8 +716,17 @@ export interface PlatformCapabilities {
          * `defineTopic` export.
          */
         topics?: Capability;
+
+        /**
+         * Typed WebSocket routes and rooms — `defineWebSocket` and `defineRoom`.
+         * Rides hibernated sockets on the shard DO, so a host rates it no higher
+         * than its `websocketHibernation`.
+         */
+        typedWebSockets?: Capability;
+
         /** Vector database (Vectorize / pgvector / Pinecone). */
         vectorStore?: Capability;
+
         /** Hibernated WebSocket subscriptions. */
         websocketHibernation?: Capability;
 

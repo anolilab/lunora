@@ -14,7 +14,7 @@ describe("emitApp — notify subscription store wiring", () => {
         // tsc with TS2345 ("Index signature for type 'string' is missing").
         const output = emitApp({ ...baseOptions, hasNotify: true });
 
-        expect(output).toContain("options.notifySubscriptionStore = notifyConfig.store ? notifyConfig.store(env as Record<string, unknown>) : undefined;");
+        expect(output).toContain("options.notifySubscriptionStore = notifyConfig.store(env as Record<string, unknown>);");
         expect(output).toContain('import notifyConfig from "../notify.js";');
     });
 

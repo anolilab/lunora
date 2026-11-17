@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { maskCredentials, MAY_HOLD_SECRET_VALUE, SECRET_VALUE_RULES } from "../../../shared/credential-redaction";
-import { redactArgs, redactSecrets } from "../src/request-log";
+import { redactArgs, redactCredentials } from "../src/request-log";
 
 /**
  * The redaction contract, as a table: every credential key × every value type,
  * the look-alike keys that must stay readable, and the string forms a handler
  * echoes into an error message. `redactArgs` feeds the request log, Logpush,
- * function metrics and span error messages; `redactSecrets` feeds span, event,
+ * function metrics and span error messages; `redactCredentials` feeds span, event,
  * link and metric attributes.
  */
 
@@ -15,7 +15,7 @@ type Sink = "log" | "span";
 
 const sinks: ReadonlyArray<[Sink, (value: unknown) => unknown]> = [
     ["log", (value) => redactArgs(value)],
-    ["span", (value) => redactSecrets(value)],
+    ["span", (value) => redactCredentials(value)],
 ];
 
 const VALUES = { array: [1, "x"], boolean: true, number: 12_345_678, object: { a: 1 }, string: "s3cret-v" } as const;
@@ -159,7 +159,7 @@ describe("span redaction keeps ids", () => {
             traceId: "0af7651916cd43dd8448eb211c80319c",
         };
 
-        expect(redactSecrets(attributes)).toStrictEqual(attributes);
+        expect(redactCredentials(attributes)).toStrictEqual(attributes);
     });
 });
 
@@ -458,7 +458,7 @@ describe("span redaction of look-alikes", () => {
     ])("leaves %s readable", (_name, text) => {
         expect.assertions(1);
 
-        expect(redactSecrets(text)).toBe(text);
+        expect(redactCredentials(text)).toBe(text);
     });
 });
 

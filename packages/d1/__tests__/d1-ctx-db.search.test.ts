@@ -205,8 +205,8 @@ describe.skipIf(!FTS5_IN_BUILD)("d1 ctx-db search", () => {
             const morphId = await writer.insert("docs", { body: "stale", channel: "x", title: "morph" });
             const dropId = await writer.insert("docs", { body: "keeper", channel: "x", title: "drop" });
 
-            await writer.patch(morphId, { body: "keeper now" });
-            await writer.delete(dropId);
+            await writer.patch("docs", morphId, { body: "keeper now" });
+            await writer.delete("docs", dropId);
 
             const results = await writer
                 .query("docs")

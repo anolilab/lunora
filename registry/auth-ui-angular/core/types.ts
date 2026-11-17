@@ -321,6 +321,8 @@ interface FormState<TField extends string> {
     formError?: string;
     /** A `prefill` is in flight. Always false for flows that start empty. */
     loading: boolean;
+    /** Epoch ms before which a send/resend flow refuses another send (see `cooldown.ts`). */
+    resendAvailableAt?: number;
     status: FlowStatus;
     /** A human-readable success line (e.g. "Check your email"). */
     successMessage?: string;

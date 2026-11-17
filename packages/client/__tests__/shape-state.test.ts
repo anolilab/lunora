@@ -6,6 +6,7 @@ import type { RowOp, ServerPokeEndMessage, ServerPokePartMessage, ServerPokeStar
 
 const shape = (overrides: Partial<ShapeSubscriptionState> = {}): ShapeSubscriptionState => {
     return {
+        answered: false,
         args: undefined,
         callbacks: new Set(),
         errorCallbacks: new Set(),
@@ -157,7 +158,7 @@ describe("pokeAssembler", () => {
 
 describe("commitPokeSlice", () => {
     it("applies the buffered ops and advances the cursor, epoch and watermark", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const state = shape({ serverCursor: 3, serverEpoch: "e1" });
         const assembled = buffer({ epoch: "e1", lastMutationId: new Map([["s1", 7]]), parts: new Map([["s1", [upsert("a", { id: "a" })]]]) });
@@ -166,18 +167,22 @@ describe("commitPokeSlice", () => {
         expect(state.rows.get("a")).toStrictEqual({ id: "a" });
         expect(state.serverCursor).toBe(5);
         expect(state.lastMutationId).toBe(7);
+        // An applied poke is the server's answer to the subscribe.
+        expect(state.answered).toBe(true);
     });
 
     it("re-seeds on an epoch fork and does not splice the ops", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
-        const state = shape({ rows: new Map([["old", { id: "old" }]]), serverCursor: 3, serverEpoch: "e1" });
+        const state = shape({ answered: true, rows: new Map([["old", { id: "old" }]]), serverCursor: 3, serverEpoch: "e1" });
         const assembled = buffer({ epoch: "e2", parts: new Map([["s1", [upsert("a", { id: "a" })]]]) });
 
         expect(commitPokeSlice(state, assembled, end("p1", { checkpoint: 5, epoch: "e2" }))).toBe("reseed");
         expect(state.rows.size).toBe(0);
         expect(state.serverCursor).toBeUndefined();
         expect(state.serverEpoch).toBeUndefined();
+        // The re-seed is a new subscribe that nothing has answered yet.
+        expect(state.answered).toBe(false);
     });
 
     it("re-seeds when the part's base is not the cursor the view is at", () => {

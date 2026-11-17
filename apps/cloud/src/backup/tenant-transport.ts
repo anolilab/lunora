@@ -12,6 +12,7 @@
  * a stored row. Snapshot contents are treated the same way: errors carry the
  * tenant's status and error message, never a byte of the body being moved.
  */
+import { exportEndRows } from "../../../../shared/export-end";
 import { stripTrailingSlashes } from "../admin/proxy";
 import readNdjson from "../lib/read-ndjson";
 import readJson from "../read-json";
@@ -349,6 +350,11 @@ export const restoreTenantSnapshot = async (
 
     const encoder = new TextEncoder();
     let received = 0;
+    // The export's terminal frame (`{"end":true,"rows":N}`), checked here and never staged: a batch holds a slice of the
+    // rows, so the tenant would read the file's total as a count mismatch and refuse the batch. A snapshot taken before
+    // exports carried the frame has none and is staged as it is.
+    let snapshotRows = 0;
+    let declaredRows: number | undefined;
     let batch = "";
     let batchBytes = 0;
     let batches = 0;
@@ -386,6 +392,21 @@ export const restoreTenantSnapshot = async (
     try {
         // Batches are staged in snapshot order, one at a time, as the snapshot streams in.
         await readNdjson(gzipped.pipeThrough(new DecompressionStream("gzip")), async (line) => {
+            if (declaredRows !== undefined) {
+                throw new TenantAdminError("the snapshot continues after its end marker, so it is not one export — nothing was changed", 0);
+            }
+
+            // Only a line that opens the way the frame does is parsed; rows are left to the tenant.
+            const end = line.startsWith('{"end":') ? exportEndRows(JSON.parse(line)) : undefined;
+
+            if (end !== undefined) {
+                declaredRows = end;
+
+                return;
+            }
+
+            snapshotRows += 1;
+
             const size = encoder.encode(line).byteLength + 1;
 
             if (size > IMPORT_BATCH_BYTES) {
@@ -399,6 +420,14 @@ export const restoreTenantSnapshot = async (
             batch += `${line}\n`;
             batchBytes += size;
         });
+
+        if (declaredRows !== undefined && declaredRows !== snapshotRows) {
+            throw new TenantAdminError(
+                `the snapshot's end marker declares ${String(declaredRows)} row(s) but ${String(snapshotRows)} were read, so it is incomplete — nothing was changed`,
+                0,
+            );
+        }
+
         await flush();
     } catch (error) {
         await abortSession(send, session);

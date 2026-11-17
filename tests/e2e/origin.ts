@@ -1,5 +1,9 @@
+import { devPortsFor } from "../../shared/dev-ports";
+
 /**
- * The playground's dev origin — the one place this suite decides it.
+ * The playground's dev origin — the one place this suite decides it. The default
+ * is this checkout's derived playground port (see shared/dev-ports.ts); set
+ * `LUNORA_E2E_BASE_URL` to override it.
  *
  * Vite and the embedded worker share a port, so the browser's `baseURL`, the
  * server `globalSetup.ts` spawns, and the fixtures' direct `fetch`es are all
@@ -9,7 +13,7 @@
  * half the suite to a server the other half was not talking to. One variable,
  * one constant, read by everything.
  */
-const configured = process.env.LUNORA_E2E_BASE_URL ?? "http://localhost:5173";
+const configured = process.env.LUNORA_E2E_BASE_URL ?? `http://localhost:${String(devPortsFor(process.env).playground)}`;
 
 /** No trailing slash: every consumer appends an absolute path to this. */
 export const BASE_URL = configured.replace(/\/+$/u, "");

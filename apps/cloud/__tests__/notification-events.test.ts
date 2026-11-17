@@ -37,7 +37,7 @@ const makeCtx = (options: FakeOptions = {}) => {
 
     const database = {
         delete: () => Promise.resolve(),
-        get: (id: string) =>
+        get: (_table: string, id: string) =>
             Promise.resolve(
                 Object.values(tables)
                     .flat()
@@ -51,7 +51,7 @@ const makeCtx = (options: FakeOptions = {}) => {
         members: { findMany: (args?: { where?: Record<string, unknown> }) => Promise.resolve(filtered(tables["members"] ?? [], args)) },
         notificationChannels: { findMany: (args?: { where?: Record<string, unknown> }) => Promise.resolve(filtered(channelRows, args)) },
         notificationDeliveries: { findMany: () => Promise.resolve({ page: [] }) },
-        patch: (id: string, patch: Row) => {
+        patch: (_table: string, id: string, patch: Row) => {
             patched.push({ id, patch });
 
             return Promise.resolve();

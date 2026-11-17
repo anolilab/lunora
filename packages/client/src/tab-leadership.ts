@@ -1,8 +1,23 @@
 import type { ConnectionStatus } from "./connection-state";
 import { dropConfirmedLayers, refoldSubscription } from "./optimistic-layers";
+import type { ShapeSubscriptionState } from "./shape-state";
 import type { SubscriptionError, SubscriptionState } from "./subscription";
-import { fanSubscriptionError } from "./subscription";
+import { fanSubscriptionError, setSubscriptionAck } from "./subscription";
 import { advanceWatermark, commitDataFrame, fanCheckpoints, isForeignStamp, isLiveTransition } from "./subscription-frames";
+
+/**
+ * Whether a frame stamped `claims` was read under the claims this tab holds; if not yet known, `retry` replays the frame.
+ * An unstamped frame carrying `rows` is asked about with `""`: only a tab with no fingerprint of its own accepts it.
+ */
+const claimsAllow = (host: TabLeadershipHost, holdKey: string, claims: string | undefined, retry: () => void, rows = false): boolean => {
+    if (claims === undefined) {
+        return !rows || host.ownClaims(holdKey, retry, "") === null;
+    }
+
+    const own = host.ownClaims(holdKey, retry, claims);
+
+    return own !== undefined && (own === null || own === claims);
+};
 
 /**
  * The leader's last-reported status, as a follower mirrors it. The status is `undefined`
@@ -28,8 +43,17 @@ export interface TabLeadershipHost {
     /** Mark `state` acked and advance its resume position when the frame carries a newer one. */
     ackAndAdvanceCursor: (state: SubscriptionState, cursor: number | undefined, epoch: string | undefined) => void;
 
+    /** Every shape subscription, which a socket answers and a mirror never does. */
+    activeShapes: () => ShapeSubscriptionState[];
+
     /** Every subscription, snapshotted, so a resubscribe cannot change the set it walks. */
     activeSubscriptions: () => SubscriptionState[];
+
+    /**
+     * The leader's socket just came up, before it answered anything on it: what it relayed before is the previous
+     * socket's value, so hold every write guarded by a snapshot of one until the leader relays again.
+     */
+    awaitLeaderAnswers: () => void;
 
     broadcastStatus: (status: ConnectionStatus, identity: string | null) => void;
 
@@ -50,24 +74,50 @@ export interface TabLeadershipHost {
     isLeader: () => boolean;
     readonly leader: LeaderMirror;
 
+    /**
+     * This tab's own claims fingerprint, to compare with the one a leader stamped on data it relayed: the fingerprint
+     * once known, `null` for a tab with no credential (nothing to differ from), `undefined` while it is being fetched.
+     * In that case `retry` is called once it is known, so a held frame is applied or dropped then. `key` names the held
+     * frame (a later one under the same name replaces it). `frameClaims` is the fingerprint the frame carries: when it
+     * differs from a known own value the host verifies that value again, since the server may have changed it, and
+     * `retry` runs with the answer.
+     */
+    ownClaims: (key: string, retry: () => void, frameClaims?: string) => null | string | undefined;
+
     /** Shards with a queued offline write, so their sockets open even with no subscription. */
     queuedShardKeys: () => Iterable<string | undefined>;
 
     queueResubscribe: (state: SubscriptionState) => void;
+
+    /**
+     * `state` has been answered (`readable`) or refused, so release any write held for its answer. A tab demoted
+     * after its socket opened still waits on that socket's answer, and only the mirror can deliver it now.
+     */
+    settleAwaitedAnswer: (state: SubscriptionState, readable: boolean) => void;
 
     /** The subscription a frame addresses, or `undefined` when this tab holds none under `key`. */
     subscription: (key: string) => SubscriptionState | undefined;
 }
 
 /**
- * This tab just won leadership. Reopen the sockets for every subscription and every shard
+ * This tab just won leadership. Reopen the sockets for every subscription, every shape and every shard
  * with a queued write, then broadcast the status once so followers stop showing the
- * previous leader's value.
+ * previous leader's value, and emit it locally: the status this tab reports moved from the
+ * mirror to its own sockets, whether or not anything is subscribed.
  */
 export const onBecomeLeader = (host: TabLeadershipHost): void => {
     for (const state of host.activeSubscriptions()) {
+        // A leader is answered by `ack`; what the previous leader delivered, a mirrored `settled` ack included, no longer counts.
+        setSubscriptionAck(state, "idle");
+        state.valueReceived = false;
         host.ensureSocket(state.shardKey);
         host.queueResubscribe(state);
+    }
+
+    for (const shape of host.activeShapes()) {
+        shape.answered = false;
+        // A tab holding only a shape has no subscription to open this socket, and its open handler resends the shape.
+        host.ensureSocket(shape.shardKey);
     }
 
     for (const shardKey of host.queuedShardKeys()) {
@@ -75,9 +125,14 @@ export const onBecomeLeader = (host: TabLeadershipHost): void => {
     }
 
     host.broadcastStatus(host.computeStatus(), host.identityFingerprint());
+    host.emitConnectionStatus();
 };
 
-/** Another tab now leads. Close this tab's sockets and clear the mirror of the previous leader. */
+/**
+ * Another tab now leads. Close this tab's sockets and clear the mirror of the previous leader,
+ * along with the values it delivered, then emit locally: the status this tab reports moved from
+ * its own sockets back to the (now empty) mirror.
+ */
 export const onStopBeingLeader = (host: TabLeadershipHost): void => {
     host.closeConnections();
 
@@ -85,12 +140,26 @@ export const onStopBeingLeader = (host: TabLeadershipHost): void => {
 
     mirror.status = undefined;
     mirror.wasEverConnected = false;
+
+    // What this tab's own socket acknowledged ends with that socket. A follower is answered by the leader's
+    // mirrored values (which set these again), so the demoted tab's old answers must not count towards sync.
+    for (const state of host.activeSubscriptions()) {
+        setSubscriptionAck(state, "idle");
+        state.valueReceived = false;
+    }
+
+    for (const shape of host.activeShapes()) {
+        shape.answered = false;
+    }
+
+    host.emitConnectionStatus();
 };
 
 /**
  * The leader reported its status. A frame stamped for another identity is dropped. The
  * mirror and the status emit always run. Offline writes flush when the leader becomes
- * reachable, because they replay over HTTP and need no socket of this tab.
+ * reachable, because they replay over HTTP and need no socket of this tab; one guarded by a
+ * snapshot waits for the leader's next relay, which is the answer its socket gives.
  */
 export const onLeaderStatus = (host: TabLeadershipHost, status: ConnectionStatus, identity: string | null | undefined): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
@@ -109,6 +178,7 @@ export const onLeaderStatus = (host: TabLeadershipHost, status: ConnectionStatus
     host.emitConnectionStatus();
 
     if (transitioned) {
+        host.awaitLeaderAnswers();
         host.flushOfflineQueues();
     }
 };
@@ -140,8 +210,25 @@ export const onFollowerSubscriptionData = (
     cursor: number | undefined,
     epoch: string | undefined,
     identity: string | null | undefined,
+    claims?: string,
 ): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
+        return;
+    }
+
+    // Same user is not same claims (another scope or tenant): data read under claims this tab does not hold is not
+    // shown, and nothing claims-stamped is shown until this tab knows its own. A frame with no claims is as before.
+    if (
+        !claimsAllow(
+            host,
+            key,
+            claims,
+            () => {
+                onFollowerSubscriptionData(host, key, data, cursor, epoch, identity, claims);
+            },
+            data !== undefined,
+        )
+    ) {
         return;
     }
 
@@ -152,25 +239,66 @@ export const onFollowerSubscriptionData = (
     }
 
     host.dropCacheSeed(key);
-    commitDataFrame(state, data, cursor === undefined ? {} : { cursor, epoch });
+
+    // A follower sees no `ack`: the leader's first value is the evidence its subscription was answered.
+    // `serverBase` is no evidence of that, a hydrated cache sets it before the leader has said anything.
+    const firstValue = !state.valueReceived;
+
+    state.valueReceived = true;
+    commitDataFrame(state, data, cursor === undefined ? { claims } : { claims, cursor, epoch });
+    state.refusal = undefined;
 
     if (cursor !== undefined) {
         dropConfirmedLayers(state, cursor);
     }
 
     refoldSubscription(state, data);
+
+    if (firstValue) {
+        host.emitConnectionStatus();
+    }
+
+    // Last, so a held write is judged against the value just committed.
+    host.settleAwaitedAnswer(state, true);
 };
 
 /** The leader reported an error for `key`. Fan it to this tab's subscribers. */
-export const onFollowerSubscriptionError = (host: TabLeadershipHost, key: string, error: SubscriptionError, identity: string | null | undefined): void => {
+export const onFollowerSubscriptionError = (
+    host: TabLeadershipHost,
+    key: string,
+    error: SubscriptionError,
+    identity: string | null | undefined,
+    claims?: string,
+): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
+        return;
+    }
+
+    // A refusal is an answer about the claims it ran under: a tab holding other claims may be allowed the query.
+    if (
+        !claimsAllow(host, `error:${key}`, claims, () => {
+            onFollowerSubscriptionError(host, key, error, identity, claims);
+        })
+    ) {
         return;
     }
 
     const state = host.subscription(key);
 
     if (state) {
+        // The leader's refusal answers this tab's request, as its first value would.
+        const firstAnswer = !state.valueReceived;
+
+        state.valueReceived = true;
+        // Held for a subscriber that joins this tab later: a follower sends no subscribe frame of its own.
+        state.refusal = error;
         fanSubscriptionError(state.errorCallbacks, error);
+
+        if (firstAnswer) {
+            host.emitConnectionStatus();
+        }
+
+        host.settleAwaitedAnswer(state, false);
     }
 };
 
@@ -194,6 +322,7 @@ export const onFollowerSubscriptionSettled = (
     lastMutationId: number | undefined,
     clientId: string | undefined,
     identity: string | null | undefined,
+    claims?: string,
 ): void => {
     if (isForeignStamp(identity, host.identityFingerprint())) {
         return;
@@ -202,6 +331,15 @@ export const onFollowerSubscriptionSettled = (
     const state = host.subscription(key);
 
     if (!state) {
+        return;
+    }
+
+    // A position read under claims this tab does not hold must not move the cursor it would resume from.
+    if (
+        !claimsAllow(host, `settled:${key}`, claims, () => {
+            onFollowerSubscriptionSettled(host, key, cursor, epoch, lastMutationId, clientId, identity, claims);
+        })
+    ) {
         return;
     }
 

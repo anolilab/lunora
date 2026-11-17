@@ -41,7 +41,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         ai: {
             level: "emulated",
-            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway. celld's experimental CELLD_AI_URL Workers AI adapter is a daemon-level escape hatch, not a binding on env",
+            note: "Workers AI is not among celld's binding types (Durable Objects, services, vars, assets, D1, KV, Queues, Workflows, R2, worker loaders, containers), so `@cf/…` ids, `ctx.ai.run`, `ctx.ai.websearch` and the `rejectIfBusy` option are unavailable. `<provider>/<model>` slugs route to the OpenAI-compatible proxy named by the LUNORA_AI_PROXY_URL var (LiteLLM, OpenRouter, a self-hosted one; bearer token in LUNORA_AI_PROXY_TOKEN) over plain fetch instead of AI Gateway. celld's experimental CELLD_AI_URL Workers AI adapter is a daemon-level escape hatch, not a binding on env. `ctx.ai.toMarkdown` and `@cf/…` image ids are unavailable (no binding); `ctx.ai.images.generate` takes `openai/<model>` slugs through the same proxy",
         },
         aiSearch: {
             level: "unsupported",
@@ -80,7 +80,7 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         },
         cronTriggers: {
             level: "native",
-            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, a failure retried with doubling backoff (giving up after six, or on `noRetry()`) without ever delaying the next occurrence, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`)",
+            note: "`triggers.crons` is a supported Wrangler key and celld schedules durably fleet-wide: one handler per occurrence across the whole fleet, one at a time per script, a failure retried with doubling backoff (giving up after six, or on `noRetry()`) without ever delaying the next occurrence, and one catch-up run of the most recent missed occurrence after downtime. Two parser gaps: celld rejects a descending range (`SAT-SUN`, `NOV-FEB`) and `*` inside a list (`1,*`). The runtime's SchedulerDO-held per-job lease and run history apply unchanged (the lease is redundant with celld's one-at-a-time-per-script delivery, and harmless)",
         },
         crossShardFanout: {
             level: "emulated",
@@ -122,6 +122,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         keyValueStore: {
             level: "native",
             note: "Workers KV bindings against the fleet bucket. No edge cache, so `cacheTtl` has no effect and `cacheStatus` reads `null`; a value above 1 MiB requires a fleet bucket; and a namespace has a single writer, so write capacity scales by adding namespaces rather than by concurrency",
+        },
+        deliveryAuthorization: {
+            level: "unsupported",
+            note: "Not exercised by the celld TCK, so the socket-attachment permits and signed fence install are unverified on this host. Rate `native` once the TCK drives an authorized RPC, a subscription and a fence install across a hibernation",
         },
         conditionalWrites: {
             level: "native",
@@ -180,17 +184,25 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "celld does not terminate TLS or front a CDN: request.url's hostname comes from the Host header unless a trusted proxy is declared (`--trust-forwarded-headers`, which then reads X-Forwarded-Host / -Proto). Pin the host at the ingress proxy, or configure a base (publicBaseUrl) rather than trusting the request",
         },
+        deploymentPause: {
+            level: "emulated",
+            note: "The same SchedulerDO-held flag as on Cloudflare, on cell storage and alarms: jobs are held by the alarm, the worker's router, cron and queue checks are unchanged. A queue message held while paused is re-sent as a delayed copy with a fresh attempt budget, and the registry of named scheduler instances a pause fans out to lives in the same SchedulerDO storage, so no extra host contract is needed",
+        },
         scheduler: {
             level: "emulated",
-            note: "SchedulerDO's `runAfter`/`runAt` half runs on cell alarms, and declarative crons reach `scheduled()` through celld's fleet-wide Cron Triggers. As on Cloudflare there is no runtime cron registration, and celld's cron parser rejects descending ranges and `*` inside a list",
+            note: "SchedulerDO's `runAfter`/`runAt` half runs on cell alarms and supports `retry.forever`, and declarative crons reach `scheduled()` through celld's fleet-wide Cron Triggers. As on Cloudflare there is no runtime cron registration, and celld's cron parser rejects descending ranges and `*` inside a list",
         },
         secrets: {
             level: "unsupported",
             note: "No Secrets Store equivalent — `vars` is the only value-carrying binding celld accepts, and `celld deploy` stores them as plain strings in the deployment in the fleet bucket, readable by anyone with bucket read access (node-level injection via CELLD_VAR_* was removed in v0.5). @lunora/platform-celld's README covers guarding the bucket and fetching real secrets from a secret manager at runtime",
         },
+        secretValues: {
+            level: "unsupported",
+            note: "No store for human-supplied values. Agents are unsupported on this target (see `agents`), so nothing requests one; a value in the fleet bucket would be plaintext, the same exposure `secrets` describes",
+        },
         services: {
             level: "native",
-            note: "Verified against celld v0.6.0 for a fetch service and a WorkerEntrypoint RPC service. celld resolves a binding from the target Worker's deployment record, so the service must be deployed into the same fleet (or `celld dev` state) first: `lunora deploy` deploys each service before the app, and every dev server (`lunora dev`, `vite dev`, Rsbuild) boots each once into the app's local state before the app starts. On each of them a service edit re-registers it and restarts the app",
+            note: "The celld conformance run calls a fetch service and a WorkerEntrypoint RPC service through ctx.services. celld resolves a binding from the target Worker's deployment record, so the service must be deployed into the same fleet (or `celld dev` state) first: `lunora deploy` deploys each service before the app, and every dev server (`lunora dev`, `vite dev`, Rsbuild) boots each once into the app's local state before the app starts. On each of them a service edit re-registers it and restarts the app",
         },
         topics: {
             level: "emulated",
@@ -212,6 +224,10 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
             level: "native",
             note: "`storage.setAlarm`/`getAlarm`/`deleteAlarm` and the `alarm()` handler, durable across a cell moving between nodes",
         },
+        adminTokenRevocation: {
+            level: "unsupported",
+            note: "Not yet provisioned or exercised on celld: nothing here binds the AdminRevocationDO namespace (createWorker adminRevocations), so no named admin token can be created and any that exist are refused (ADMIN_TOKEN_NOT_CONFIGURED); the root LUNORA_ADMIN_TOKEN is the only admin credential. celld has no bookmark API, so a restore cannot revive a revoked token",
+        },
         shardedState: {
             level: "native",
             note: "Cells are Durable Objects: single-writer, one SQLite database each, replicated to the fleet bucket through a write-behind log",
@@ -231,6 +247,14 @@ const CELLD_CAPABILITIES: PlatformCapabilities = {
         websocketHibernation: {
             level: "native",
             note: "`acceptWebSocket`/`getWebSockets`/`getTags`/attachments, and a hibernatable socket survives its cell hibernating on the same node. It closes when the cell moves to another owner (a node stop, drain, or rebalance), so the client reconnects — which Lunora's client already does. `acceptWebSocket()` throws once the isolate passes 90% of its V8 heap limit (roughly 50,000 hibernatable clients at the 128 MB default)",
+        },
+        typedWebSockets: {
+            level: "native",
+            note: "Rides the hibernatable sockets rated above, so a route or room survives its cell hibernating on the same node and reconnects on a move",
+        },
+        liveStreams: {
+            level: "native",
+            note: "Rated from the celld TCK leg `serves connect, subscribe, publish and unsubscribe from the real ShardDO` (packages/platform-celld/__tests__/celld/celld-tck.test.ts), which runs defineLiveStream connect and control and ctx.live.publish through the shard's own handlers on a live celld binary, and reads the SSE frame back",
         },
         workerLoaders: {
             level: "native",

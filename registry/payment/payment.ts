@@ -12,8 +12,9 @@
  *
  * Stripe is the first-class adapter (via `@lunora/payment/stripe`) — see that
  * subpath for `createStripeAdapter({ client, webhookSecret })`, which takes a
- * single options object; Polar and other providers are supported via the
- * `PaymentAdapter` contract.
+ * single options object whose `client` is a loader (`stripe` is imported on the
+ * first provider call, keeping it out of the Worker's startup graph); Polar and
+ * other providers are supported via the `PaymentAdapter` contract.
  *
  * **Post-add wiring** (see `docs` in registry.json):
  *   0. **Merge the payment tables into your `lunora/schema.ts`**:
@@ -30,14 +31,15 @@
  *      deliberate 500 becomes a 200, the provider never retries it, and the
  *      update is lost for good.
  *      ```ts
- *      import { webhookResponse } from "@lunora/payment";
+ *      import { readWebhookBody, webhookResponse } from "@lunora/payment";
  *
  *      // Every header an adapter verifies with; add yours if it signs with another.
  *      const SIGNATURE_HEADERS = ["creem-signature", "stripe-signature", "svix-id", "svix-signature",
  *          "svix-timestamp", "webhook-id", "webhook-signature", "webhook-timestamp"];
  *
  *      app.post("/payment/webhook", httpAction(async (ctx, request) => {
- *          const body = await request.text();
+ *          // Capped (413 past 1 MiB): the body is read before its signature can be checked.
+ *          const body = await readWebhookBody(request);
  *          const headers = Object.fromEntries(SIGNATURE_HEADERS.flatMap((name) => {
  *              const value = request.headers.get(name);
  *              return value === null ? [] : [[name, value]];

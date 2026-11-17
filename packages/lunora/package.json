@@ -1,6 +1,6 @@
 {
     "name": "lunorash",
-    "version": "1.0.0-alpha.397",
+    "version": "1.0.0-alpha.478",
     "description": "The Lunora umbrella package: one install for the server authoring API, worker runtime, Durable Objects, and the lunora CLI",
     "keywords": [
         "backend",
@@ -13,7 +13,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -33,7 +33,7 @@
         "__assets__"
     ],
     "type": "module",
-    "sideEffects": false,
+    "sideEffects": true,
     "main": "./dist/index.mjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
@@ -118,6 +118,10 @@
             "types": "./dist/client/service.d.ts",
             "import": "./dist/client/service.mjs"
         },
+        "./client/admin": {
+            "types": "./dist/client/admin.d.ts",
+            "import": "./dist/client/admin.mjs"
+        },
         "./flags": {
             "types": "./dist/flags.d.ts",
             "import": "./dist/flags.mjs"
@@ -152,9 +156,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -162,17 +164,17 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/cli": "1.0.0-alpha.398",
-        "@lunora/client": "1.0.0-alpha.213",
-        "@lunora/do": "1.0.0-alpha.217",
-        "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/flags": "1.0.0-alpha.70",
-        "@lunora/observability": "1.0.0-alpha.142",
-        "@lunora/platform": "1.0.0-alpha.64",
-        "@lunora/ratelimit": "1.0.0-alpha.138",
-        "@lunora/runtime": "1.0.0-alpha.205",
-        "@lunora/server": "1.0.0-alpha.206",
-        "@lunora/values": "1.0.0-alpha.66"
+        "@lunora/cli": "^1.0.0-alpha.480",
+        "@lunora/client": "^1.0.0-alpha.286",
+        "@lunora/do": "^1.0.0-alpha.281",
+        "@lunora/errors": ">=1.0.0-alpha.77 <2.0.0-0",
+        "@lunora/flags": "1.0.0-alpha.104",
+        "@lunora/observability": "^1.0.0-alpha.201",
+        "@lunora/platform": "1.0.0-alpha.80",
+        "@lunora/ratelimit": "1.0.0-alpha.196",
+        "@lunora/runtime": "^1.0.0-alpha.276",
+        "@lunora/server": "^1.0.0-alpha.268",
+        "@lunora/values": "^1.0.0-alpha.95"
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",

@@ -1,0 +1,4 @@
+# Copy to .dev.vars (gitignored) for local runs. Cloudflare's documented
+# always-passing Turnstile test secret, paired with the test site key the waitlist
+# form falls back to without VITE_TURNSTILE_SITE_KEY. Never put a real key here.
+TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA

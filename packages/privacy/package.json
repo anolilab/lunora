@@ -1,6 +1,6 @@
 {
     "name": "@lunora/privacy",
-    "version": "1.0.0-alpha.11",
+    "version": "1.0.0-alpha.58",
     "description": "Reusable data-subject rights for Lunora apps: export, erasure and retention holds (GDPR Art. 15, 17, 20).",
     "keywords": [
         "data-subject-rights",
@@ -13,7 +13,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -60,20 +60,19 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check .",
-        "lint:prettier:fix": "prettier --write .",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@cantoo/pdf-lib": "catalog:privacy",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/server": "1.0.0-alpha.206",
-        "@lunora/wire": "1.0.0-alpha.1",
+        "@lunora/server": "^1.0.0-alpha.275",
+        "@lunora/wire": "1.0.0-alpha.6",
         "fflate": "catalog:privacy"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",

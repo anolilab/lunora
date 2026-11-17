@@ -4,7 +4,7 @@ A **protocol-conformant** Swift client for a Lunora deployment, implementing the
 transport specified in [`protocol/README.md`](../../protocol/README.md):
 
 - `query` / `mutation` / `action` round-trips over `POST /_lunora/rpc`.
-- Live `subscribe` — and `stream`, which hands back an `AsyncStream` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
+- Live `subscribe` — and `watch`, which hands back an `AsyncStream` — over the WebSocket `data`/`delta`/`ack`/`error`/`resume`/
   `settled` frames.
 - `subscribeShape` over the poke (`pokeStart`/`pokePart`/`pokeEnd`) partial-
   replication path.
@@ -43,9 +43,17 @@ let messages = try client.query("messages:list", args: ["channel": "general"])
 _ = try client.mutation("messages:send", args: ["channel": "general", "text": "hi"])
 
 // Live subscription: attach your socket, then feed it frames.
-client.attachSocket { frame in try socket.send(Wire.stableStringify(frame)) }
+// The sender cannot throw, so a failed write closes the socket: that ends the run and starts the reconnect.
+client.attachSocket { frame in
+    do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }
+}
 let unsubscribe = client.subscribe("messages:list", args: args, onData: render)
 ```
+
+An RPC POST has no legitimate 3xx: configure the poster to refuse redirects, or a
+redirect would replay your bearer token to another host. With `URLSession`, implement
+`URLSessionTaskDelegate.urlSession(_:task:willPerformHTTPRedirection:newRequest:completionHandler:)`
+and call `completionHandler(nil)`.
 
 The sender receives each outbound frame as a dictionary; serialize it with
 `Wire.stableStringify`, the transport's own writer, so string escaping (a lone
@@ -64,11 +72,97 @@ differs from the shape's — re-seeds instead: the view is emptied, its checkpoi
 and epoch cleared, `onRows` told `[]`, and a cold `shape_subscribe` sent.
 `resendSubscriptions()` re-subscribes everything after a reconnect — queries and
 shape views alike — carrying each one's resume cursor or checkpoint.
+`attachSocket(_:context:)` sends `connect` as the first frame of every open: the client
+id, `context` when one is given, and `token` from `sessionToken` when one is set. Do not
+send `connect` yourself. A caller that still does opens the socket with two. A deployment
+with `LUNORA_WS_BEARER` closes a socket whose first frame is not `connect` with a matching
+`token` (close code 4003). `sessionToken` never goes in the socket URL, and
+`wsURL(shardKey:wsTicket:)` carries only an admin ticket. `authToken`, the RPC bearer, is
+never sent on the socket.
+
+`detachSocket(closeCode:reason:)` takes the close frame that ended the socket; pass nil
+(the default) when there was none. A 4001 always notifies the listeners `onTokenExpired(_:)`
+registers. A 4003 refuses the session credential: it notifies once per credential generation,
+and a new generation starts each
+time `sessionToken` changes. It notifies nothing for a socket that opened under an earlier
+generation, or for a reason of exactly `connect deadline`. A `TOKEN_EXPIRED` error frame
+notifies and is not routed to its subscription; `UNAUTHENTICATED` routes like any other
+error. A listener that throws is contained and its error discarded, so it cannot break the
+read loop.
+
+Whispers relay ephemeral data on a topic. `whisperSubscribe(_:_:)` joins a topic on its
+first listener and returns a handle that leaves it when the last listener goes; every
+attach rejoins each topic right after `connect`. `whisper(_:data:)` returns false when no
+socket is attached, and never queues. `connectRoom(_:_:)` joins `room:<name>` and returns a
+`LunoraRoom` with `send(_:)` and `close()`. A room is never acknowledged, so `send` may be
+used at once.
+
+`attachSocket` and the whisper paths write to the socket while holding the client's lock,
+so a sender on those paths, and any socket-library callback that fires during `send` or
+`close`, must never call back into the client. Hand the call to another queue instead.
+
+Reconnect with exponential backoff capped at 30 s, jittered, reset on an `ack`
+(`handleFrame` returns the frame's type). The sender cannot throw, so a failed write
+closes the socket instead: that makes the blocked `receive()` throw, which ends the run
+and starts the reconnect. The sender runs on app threads and the loop may close the
+socket too, so `close()` must be safe to call twice and from any thread. A flush that requeues writes (or returns `retryAfterMs`) must
+schedule its own retry, or those writes wait for the next reconnect: the retry is a
+`Task` that is cancelled when the socket run ends.
+
+```swift
+// The WebSocket session credential, sent as `connect.token`. Refresh it when the server
+// refuses it; the listener runs on the read loop, so it hands the fetch to a task.
+client.sessionToken = session
+_ = client.onTokenExpired {
+    Task { if let fresh = try? await fetchSession() { client.sessionToken = fresh } }
+}
+
+var attempt = 0
+let shard: String? = nil // this socket's shard key; nil is the default shard
+while !Task.isCancelled {
+    if let socket = try? await connect() { // your socket library
+        var flushRetry: Task<Void, Never>?
+        // attachSocket writes `connect` first, then the whisper joins, under the client's lock, so a
+        // subscribe on another task cannot write ahead of it. A failed write closes the socket: the
+        // receive below then throws, ending the run.
+        client.attachSocket { frame in
+            do { try socket.send(Wire.stableStringify(frame)) } catch { socket.close() }
+        }
+        client.resendSubscriptions()
+        let report = client.flushOfflineQueue(shardKey: shard)
+        if !report.requeued.isEmpty || report.retryAfterMs != nil {
+            flushRetry = Task {
+                var backoff = 1.0
+                var wait = report.retryAfterMs.map { Double($0) / 1000 }
+                while !Task.isCancelled {
+                    let pause = wait ?? Double.random(in: backoff / 2 ... backoff)
+                    try? await Task.sleep(nanoseconds: UInt64(pause * 1_000_000_000))
+                    guard !Task.isCancelled else { return }
+                    let next = client.flushOfflineQueue(shardKey: shard)
+                    if next.requeued.isEmpty && next.retryAfterMs == nil { return }
+                    wait = next.retryAfterMs.map { Double($0) / 1000 }
+                    backoff = min(30, backoff * 2)
+                }
+            }
+        }
+        while let raw = try? await socket.receive() {
+            if client.handleFrame(raw) == "ack" { attempt = 0 }
+        }
+        flushRetry?.cancel()
+        // The close frame that ended the socket, if your library reports one; nil when none.
+        client.detachSocket(closeCode: socket.closeCode, reason: socket.closeReason)
+        socket.close() // your socket library: without this each reconnect leaks a connection
+    }
+    let delay = min(30.0, pow(2.0, Double(min(attempt, 5))))
+    try? await Task.sleep(nanoseconds: UInt64(Double.random(in: delay / 2...delay) * 1_000_000_000))
+    attempt += 1
+}
+```
 
 Every RPC failure is a `LunoraAPIError`: a body that is not JSON or not an object
 is `INTERNAL`, and a success whose `result` does not decode is
 `WIRE_DECODE_FAILED` (the call committed). `close()` also ends every live
-`stream(...)`. `dump(client)` shows the bearer token only as `<redacted>`.
+`watch(...)`. `dump(client)` shows the bearer token only as `<redacted>`.
 
 ## Optimistic updates and offline writes
 
@@ -123,6 +217,15 @@ record whose stored args no longer decode is purged and settled
 every discard — including one the capacity cap evicts out of a _restored_ queue,
 which has no caller left to tell — reaches `client.onMutationSettled`.
 
+A write that must never sit on disk — a credential, a one-time token — passes
+`onlineOnly: true` on its `LunoraSubmitOptions`. It is never queued, persisted or
+replayed: where a normal write would be queued, `submit` throws a
+`LunoraAPIError` coded `LunoraOfflineCode.notQueued` (`OFFLINE_NOT_QUEUED`)
+before the write reaches the queue or the persistence adapter. A send that gets no
+reply while the socket is down throws the same error, with the transport error as
+its `underlying`. It does not wait for a flush or queue behind pending writes, so
+it may land before an older queued write to the same document.
+
 A flush that comes back rate-limited — whole response or one batch slot —
 re-queues rather than dropping, reports the server's `error.data.retryAfterMs` as
 `LunoraFlushReport.retryAfterMs` (clamped at `lunoraMaxRetryAfterMs`, 60 s), and
@@ -133,7 +236,7 @@ half and retried, so no write is dropped for the size of the batch it shared; a
 lone write still refused settles `PAYLOAD_TOO_LARGE`.
 
 One predicate classifies a failed replay, alone or batched: a coded envelope by
-its code alone (`SHARD_ERROR`, `SHARD_UNAVAILABLE`, the rate-limit codes and the
+its code alone (`SHARD_ERROR`, `SHARD_UNAVAILABLE`, `DELIVERY_FENCED`, the rate-limit codes and the
 refused-credential codes `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`
 re-queue — a token refresh fixes those — and every other code, a coded 5xx
 included, is terminal), an envelope-less reply by its status (re-queued, except

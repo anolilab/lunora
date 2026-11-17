@@ -32,7 +32,7 @@ export default defineSchema({
 It is a full `ctx.db` table — indexes, `where`, `orderBy`, pagination, relations
 and live queries all work exactly as they do on a durable one. What differs is
 its **lifetime** — and one consequence of that lifetime, which is that its writes
-never enter the CDC changelog. That rules out `defineShape` over a memory table
+never enter the change data capture (CDC) changelog. That rules out `defineShape` over a memory table
 (see [Restrictions](#restrictions)) and makes every reconnect re-snapshot rather
 than resume.
 
@@ -40,7 +40,7 @@ than resume.
 
 A memory table's rows are cleared whenever the Durable Object is reconstructed.
 
-That is more often than it sounds. Cloudflare evicts a Durable Object routinely —
+That is more often than it sounds. Cloudflare evicts a Durable Object (DO) routinely —
 a shard whose WebSockets are hibernating is evicted as a matter of course — so
 "cold start" is a steady-state event, not a rare one. A memory table is on the
 same footing as the DO's JS heap, and that is the mental model to hold: this is
@@ -71,7 +71,7 @@ Because the clearing is guaranteed, so is the hook that follows it:
 import { onShardInit } from "lunorash/server";
 
 export const warm = onShardInit(async (ctx, event) => {
-    for await (const member of ctx.db.roomMembers.iterate({ where: { roomId: event.shardKey } })) {
+    for await (const member of ctx.db.query("roomMembers").filter((m) => m.roomId === event.shardKey)) {
         await ctx.db.presence.insert({ roomId: event.shardKey, userId: member.userId });
     }
 });
@@ -86,7 +86,7 @@ in the gap.
 
 Hooks run sequentially in manifest order, so one may depend on state an earlier
 one wrote. A hook that throws is logged and contained — it does not fail the
-request that woke the shard, and the memory table is simply left empty.
+request that woke the shard, and the memory table is left empty.
 
 The one case where a handler _can_ see a stale table is a throw **before or
 during** the clear itself (a failing migration, or the clear failing): init is
@@ -97,7 +97,7 @@ SQLite until the clear deletes them — an eviction alone does not remove them �
 so treat them as a cache to be refreshed, never as evidence a peer is live: give
 presence rows a timestamp and ignore old ones.
 
-Without a hook, a memory table just comes back empty. That is a correct state for
+Without a hook, a memory table comes back empty. That is a correct state for
 presence and a wrong one for something being treated as authoritative — which is
 the distinction to make before reaching for `.memory()` at all.
 

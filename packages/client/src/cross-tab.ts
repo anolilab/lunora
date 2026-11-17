@@ -11,6 +11,7 @@
  */
 
 import type { ConnectionStatus } from "./connection-state";
+import { withDeferredNotifications } from "./optimistic-layers";
 import type { SubscriptionError } from "./subscription";
 
 // ---------------------------------------------------------------------------
@@ -81,8 +82,8 @@ interface TabCoordinatorOptions {
      * `onConnectionStatus`'s docblock for the full rationale and the
      * absent-field mixed-version rule — identical here).
      */
-    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
-    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void;
+    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void;
 
     /**
      * Called when the leader broadcasts a `settled` frame's checkpoint advance
@@ -107,16 +108,44 @@ interface TabCoordinatorOptions {
      * `identity` is the leader's `identityFingerprint()` — see
      * `onConnectionStatus`'s docblock for the drop rule (identical here).
      */
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
+    onSubscriptionSettled?: (
+        key: string,
+        cursor?: number,
+        epoch?: string,
+        lastMutationId?: number,
+        clientId?: string,
+        identity?: string | null,
+        claims?: string,
+    ) => void;
 }
 
 type WsFollowerMessage =
-    { tabId: string; ts: number; type: "heartbeat" } | { tabId: string; ts: number; type: "claim-leadership" } | { tabId: string; type: "yield-leadership" };
+    | { tabId: string; ts: number; type: "heartbeat" }
+    | { tabId: string; ts: number; type: "claim-leadership" }
+    | { tabId: string; type: "yield-leadership" };
+
+/**
+ * `more` marks every snapshot of one flush but the last, so a follower applies the whole
+ * flush as one update, as the leader did. A follower that predates it applies each frame
+ * as it lands, as before.
+ */
+type SubscriptionDataMessage = {
+    claims?: string;
+    cursor?: number;
+    data: unknown;
+    epoch?: string;
+    identity?: string | null;
+    key: string;
+    more?: true;
+    tabId: string;
+    type: "subscription-data";
+};
 
 type WsLeaderMessage =
-    | { cursor?: number; data: unknown; epoch?: string; identity?: string | null; key: string; tabId: string; type: "subscription-data" }
-    | { error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
+    | SubscriptionDataMessage
+    | { claims?: string; error: SubscriptionError; identity?: string | null; key: string; tabId: string; type: "subscription-error" }
     | {
+          claims?: string;
           clientId?: string;
           cursor?: number;
           epoch?: string;
@@ -165,6 +194,17 @@ class TabCoordinator {
     /** Timestamp of the most recent leader heartbeat. */
     private lastHeartbeat: number = 0;
 
+    /**
+     * Snapshots waiting for the end of the current tick, latest per key. A
+     * `subscription-data` frame is a full snapshot, so a burst for one key within
+     * a tick only needs its last frame posted — each post structured-clones the
+     * whole value for every tab on the channel.
+     */
+    private readonly pendingData = new Map<string, WsLeaderMessage>();
+
+    /** Snapshots received under `more`, per leader tab, applied with the frame that closes their flush. */
+    private readonly heldData = new Map<string, SubscriptionDataMessage[]>();
+
     private heartbeatTimer: ReturnType<typeof setInterval> | undefined = undefined;
     private leaderCheckTimer: ReturnType<typeof setInterval> | undefined = undefined;
 
@@ -172,11 +212,14 @@ class TabCoordinator {
     private readonly onBecomeLeader: (() => void) | undefined;
     private readonly onStopBeingLeader: (() => void) | undefined;
     private readonly onConnectionStatus: ((status: ConnectionStatus, identity?: string | null) => void) | undefined;
-    private readonly onSubscriptionData: ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void) | undefined;
+    private readonly onSubscriptionData:
+        | ((key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void)
+        | undefined;
     private readonly onLeaderClaimAnswered: (() => void) | undefined;
-    private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null) => void) | undefined;
+    private readonly onSubscriptionError: ((key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void) | undefined;
     private readonly onSubscriptionSettled:
-        ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void) | undefined;
+        | ((key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string) => void)
+        | undefined;
 
     public constructor(options: TabCoordinatorOptions = {}) {
         // A random UUID suffix makes `tabId` globally unique across tabs/realms,
@@ -349,12 +392,18 @@ class TabCoordinator {
      * supplied, since a fixed leader always knows its own identity (never
      * omits it) and `null` must round-trip distinctly from "field absent".
      */
-    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void {
+    public broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string): void {
         if (!this.leader) {
             return;
         }
 
-        this.broadcast({
+        if (this.pendingData.size === 0) {
+            queueMicrotask(() => {
+                this.flushPendingData();
+            });
+        }
+
+        this.pendingData.set(key, {
             type: "subscription-data",
             tabId: this.tabId,
             key,
@@ -362,6 +411,7 @@ class TabCoordinator {
             ...(cursor === undefined ? {} : { cursor }),
             ...(epoch === undefined ? {} : { epoch }),
             ...(identity === undefined ? {} : { identity }),
+            ...(claims === undefined ? {} : { claims }),
         });
     }
 
@@ -377,12 +427,19 @@ class TabCoordinator {
      * deliver one caller's rejection to a tab that had since signed in as
      * someone else.
      */
-    public broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void {
+    public broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null, claims?: string): void {
         if (!this.leader) {
             return;
         }
 
-        this.broadcast({ type: "subscription-error", tabId: this.tabId, key, error, ...(identity === undefined ? {} : { identity }) });
+        this.broadcast({
+            type: "subscription-error",
+            tabId: this.tabId,
+            key,
+            error,
+            ...(identity === undefined ? {} : { identity }),
+            ...(claims === undefined ? {} : { claims }),
+        });
     }
 
     /**
@@ -402,6 +459,7 @@ class TabCoordinator {
         lastMutationId?: number,
         clientId?: string,
         identity?: string | null,
+        claims?: string,
     ): void {
         if (!this.leader) {
             return;
@@ -416,6 +474,7 @@ class TabCoordinator {
             ...(lastMutationId === undefined ? {} : { lastMutationId }),
             ...(clientId === undefined ? {} : { clientId }),
             ...(identity === undefined ? {} : { identity }),
+            ...(claims === undefined ? {} : { claims }),
         });
     }
 
@@ -440,8 +499,72 @@ class TabCoordinator {
     // -----------------------------------------------------------------------
 
     private broadcast(message: TabCoordinatorMessage): void {
+        // Anything else posted for a key goes out BEHIND that key's pending snapshot:
+        // a `settled` frame that advanced the cursor ahead of the value it describes
+        // would leave a follower holding a resume position with nothing cached behind it.
+        this.flushPendingData();
+
         // bc.postMessage is synchronous in modern browsers.
         this.bc?.postMessage(message);
+    }
+
+    /** Post the snapshots queued this tick — unless leadership was lost meanwhile, when the new leader's own snapshots supersede them. */
+    private flushPendingData(): void {
+        if (this.pendingData.size === 0) {
+            return;
+        }
+
+        const frames = [...this.pendingData.values()];
+
+        this.pendingData.clear();
+
+        if (!this.leader) {
+            return;
+        }
+
+        let posted: WsLeaderMessage | undefined;
+        let closed = true;
+
+        for (const [index, frame] of frames.entries()) {
+            const more = index < frames.length - 1;
+
+            try {
+                this.bc?.postMessage(more ? { ...frame, more: true } : frame);
+                posted = frame;
+                closed = !more;
+            } catch {
+                // A value structured clone refuses (a `URL` in a result) skips that key; the rest still go out.
+            }
+        }
+
+        // The closing frame failed: re-post the last one that went out, unmarked, so followers release what they hold.
+        if (!closed && posted !== undefined) {
+            this.bc?.postMessage(posted);
+        }
+    }
+
+    /** Hold a snapshot marked `more`; on the one that closes its flush, apply them all and notify once. */
+    private applySubscriptionData(message: SubscriptionDataMessage): void {
+        // Kept per tab: during a split brain two leaders post at once, and one's closing frame must not release the other's.
+        const held = this.heldData.get(message.tabId) ?? [];
+
+        held.push(message);
+
+        if (message.more === true) {
+            this.heldData.set(message.tabId, held);
+
+            return;
+        }
+
+        this.heldData.delete(message.tabId);
+        withDeferredNotifications(
+            () => {
+                for (const frame of held) {
+                    this.onSubscriptionData?.(frame.key, frame.data, frame.cursor, frame.epoch, frame.identity, frame.claims);
+                }
+            },
+            () => this.running,
+        );
     }
 
     private handleMessage(message: TabCoordinatorMessage): void {
@@ -473,7 +596,7 @@ class TabCoordinator {
                     break; // ignore our own broadcasts
                 }
 
-                this.onSubscriptionData?.(message.key, message.data, message.cursor, message.epoch, message.identity);
+                this.applySubscriptionData(message);
 
                 break;
             }
@@ -483,7 +606,7 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionError?.(message.key, message.error, message.identity);
+                this.onSubscriptionError?.(message.key, message.error, message.identity, message.claims);
 
                 break;
             }
@@ -493,7 +616,15 @@ class TabCoordinator {
                     break;
                 }
 
-                this.onSubscriptionSettled?.(message.key, message.cursor, message.epoch, message.lastMutationId, message.clientId, message.identity);
+                this.onSubscriptionSettled?.(
+                    message.key,
+                    message.cursor,
+                    message.epoch,
+                    message.lastMutationId,
+                    message.clientId,
+                    message.identity,
+                    message.claims,
+                );
 
                 break;
             }
@@ -504,6 +635,9 @@ class TabCoordinator {
                 // waiting for the next health-check tick (up to
                 // `leaderTimeout`) before even starting the claim window would
                 // double the freeze every remaining tab experiences.
+                // A flush the departing leader never closed is never released.
+                this.heldData.delete(message.tabId);
+
                 if (this.knownLeader === message.tabId) {
                     this.knownLeader = undefined;
 
@@ -653,7 +787,8 @@ class TabCoordinator {
         const elapsed = Date.now() - this.lastHeartbeat;
 
         if (elapsed > this.leaderTimeout) {
-            // Leader is gone — attempt to claim.
+            // Leader is gone — attempt to claim. A flush it never closed is never released.
+            this.heldData.delete(this.knownLeader);
             this.knownLeader = undefined;
             this.claimAndPromote();
         }

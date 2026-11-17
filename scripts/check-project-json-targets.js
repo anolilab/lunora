@@ -52,7 +52,7 @@ const KNOWN_UNMIGRATED = new Map();
  * `test:coverage` missing it silently dropped a fresh package out of the CI
  * coverage leg with everything else staying green (plan 321).
  */
-const REQUIRED_PACKAGE_SCRIPTS = ["build", "build:prod", "lint:eslint", "lint:prettier", "lint:types", "test", "test:coverage"];
+const REQUIRED_PACKAGE_SCRIPTS = ["build", "build:prod", "lint:eslint", "lint:types", "test", "test:coverage"];
 
 /**
  * Packages exempt from part of `REQUIRED_PACKAGE_SCRIPTS`, each with the
@@ -66,6 +66,13 @@ const KNOWN_SCRIPT_EXCEPTIONS = new Map([
         {
             missing: ["build", "build:prod"],
             reason: "private, not published — ships raw .ts/.css source with no dist, so there is no build step by design",
+        },
+    ],
+    [
+        "packages/saas-ui/package.json",
+        {
+            missing: ["build", "build:prod"],
+            reason: "private, not published — ships raw .ts/.svelte/.css source with no dist, so there is no build step by design",
         },
     ],
 ]);

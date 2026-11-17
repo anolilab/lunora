@@ -89,7 +89,9 @@ class VerifyEmailCardComponent implements OnInit {
                     (changed)="actions.setField('email', $event)"
                     (blurred)="actions.blur('email')"
                 />
-                <lunora-auth-submit-button [pending]="state().status === 'submitting'">{{ t.verifyEmailResend }}</lunora-auth-submit-button>
+                <lunora-auth-submit-button [availableAt]="state().resendAvailableAt" [pending]="state().status === 'submitting'">{{
+                    t.verifyEmailResend
+                }}</lunora-auth-submit-button>
             </form>
         </lunora-auth-card>
     `,

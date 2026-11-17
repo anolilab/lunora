@@ -36,7 +36,7 @@ interface AccessJwtFallbackOptions extends Omit<RequestVerifyOptions, "aud" | "t
 ### `AccessKeySet` (type)
 
 ```ts
-type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject | Uint8Array;
+type AccessKeySet = CryptoKey | JWTVerifyGetKey | KeyObject;
 ```
 
 ### `AccessRoleMap` (type)
@@ -178,6 +178,12 @@ const accessContext: <Context extends AccessContextInput>() => Middleware<Contex
 
 ```ts
 const accessFacade: (identity: Record<string, unknown> | null | undefined, userId: string | null | undefined) => AccessFacade;
+```
+
+### `lazyAccessFacade` (const)
+
+```ts
+const lazyAccessFacade: (readIdentity: () => Record<string, unknown> | null | undefined, readUserId: () => string | null | undefined) => AccessFacade;
 ```
 
 ## Referenced internal declarations

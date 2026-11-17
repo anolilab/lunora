@@ -95,6 +95,21 @@ describe("usePresence (Vue)", () => {
         Reflect.deleteProperty(globalThis, "window");
     });
 
+    it("throws a RangeError for a non-positive intervalMs", () => {
+        expect.assertions(1);
+
+        const fake = createPresenceFakeClient();
+        const scope = effectScope();
+
+        expect(() =>
+            scope.run(() =>
+                fake.provide(() => usePresence("room-1", { heartbeat: HEARTBEAT, intervalMs: 0, listPresent: LIST_PRESENT, sessionId: "sess-fixed" })),
+            ),
+        ).toThrow(RangeError);
+
+        scope.stop();
+    });
+
     it("heartbeats on mount and again on each interval tick", async () => {
         const fake = createPresenceFakeClient();
 

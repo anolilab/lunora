@@ -1,8 +1,9 @@
 import type { ExecutionContextLike } from "../../../shared/execution-context";
+import { nonEmpty, withoutExpiryClaims } from "../../../shared/jwt-verify";
 import { readIdentityGroups, rolesForGroups } from "./identity-groups";
 import readPlatformIdentity from "./platform-identity";
 import type { AccessClaims, CreateAccessResolverOptions, ResolvedAccessIdentity, ResolvedIdentityLike, ResolveIdentityFunction } from "./types";
-import { assertJwtFallbackOptions, verifyRequest } from "./verify";
+import { assertJwtFallbackOptions, requestVerifier } from "./verify";
 
 /**
  * The "anonymous" identity. `null` is the runtime's `resolveIdentity` contract
@@ -12,15 +13,6 @@ import { assertJwtFallbackOptions, verifyRequest } from "./verify";
  */
 // eslint-disable-next-line unicorn/no-null -- runtime resolveIdentity contract value for "anonymous"
 const ANONYMOUS = null;
-
-/**
- * Narrow a claim to a non-empty string. `""` (and any non-string / nullish value)
- * is treated as absent, so an empty `email` / `common_name` / `mapClaims.userId`
- * never mints an identity whose `userId` is the empty string — every such caller
- * would otherwise collide on one shared id and RLS ownership defaults would stamp
- * rows with `""`.
- */
-const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
 
 /**
  * Derive the stable caller id from verified claims: the IdP `sub` for SSO users,
@@ -68,7 +60,7 @@ const toIdentity = (claims: AccessClaims, options?: CreateAccessResolverOptions)
         ...(claims.exp === undefined ? {} : { exp: claims.exp }),
         ...(claims.groups === undefined ? {} : { groups: claims.groups }),
         ...(roles === undefined ? {} : { roles }),
-        ...overrides,
+        ...withoutExpiryClaims(overrides),
         userId,
     };
 };
@@ -121,6 +113,8 @@ export const createAccessResolver = (options?: CreateAccessResolverOptions): Res
     // request with no signal. `undefined` means "no JWT fallback", which is a
     // legal mode only when the caller named neither option.
     const jwtOptions = assertJwtFallbackOptions(options);
+    // Expired-but-genuine tokens are accepted: see the fallback below.
+    const verifyRequest = jwtOptions === undefined ? undefined : requestVerifier(jwtOptions, true);
 
     return async (request: Request, _env?: unknown, context?: ExecutionContextLike): Promise<ResolvedAccessIdentity | null> => {
         // Platform identity wins when present: it is the stronger of the two
@@ -145,7 +139,7 @@ export const createAccessResolver = (options?: CreateAccessResolverOptions): Res
         // answers `TOKEN_EXPIRED` (a client refreshes and re-sends) rather than
         // running the request anonymous, where the app's own check would read
         // as a verdict on the call.
-        const claims = jwtOptions === undefined ? undefined : await verifyRequest(request, jwtOptions, true);
+        const claims = await verifyRequest?.(request);
 
         return claims === undefined ? ANONYMOUS : toIdentity(claims, options);
     };

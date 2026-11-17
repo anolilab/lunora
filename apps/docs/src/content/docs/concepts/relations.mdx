@@ -154,7 +154,7 @@ export default defineSchema({
 
 - **The schema is checked when it loads.** The join table has to exist, `from` and `to` have to be required
   `v.id` columns on two different columns pointing at the declaring table and the target, and a **unique index over
-  exactly those two columns** is required. The `through_relation_missing_unique_index` advisor lint reports the missing index at
+  exactly those two columns** is required. The join table must not be `.softDelete()`: a disconnected link would still hold its unique pair, so it could never be linked again. The `through_relation_missing_unique_index` advisor lint reports the missing index at
   codegen time.
 - **Reads work like any other `many`.** `with: { tags: true }` loads the linked tags (two batched reads: the join
   rows, then the tags), `where: { tags: { some | every | none: … } }` filters posts through the join, and
@@ -169,7 +169,7 @@ export default defineSchema({
   empty relation. A `limit` on the relation caps the tags returned per parent, not the join rows read to find them.
 - **Deletes follow the join table's own foreign keys.** A through relation declares no `onDelete`. Deleting a post
   or a tag removes its join rows when the join table's `r.one(…, { onDelete: "cascade" })` says so, exactly as it
-  would for a hand-written join table. Without those, the join rows are left behind and simply point at nothing.
+  would for a hand-written join table. Without those, the join rows are left behind and point at nothing.
 - **Writes** use the same `connect` / `disconnect` / `set` operators, and only ever write join rows: the tags
   themselves are read, never changed.
 
@@ -241,8 +241,8 @@ To go the other direction (child → parent), read the FK off the child and
 `get` the parent by id:
 
 ```ts
-const post = await ctx.db.get(postId);
-const author = post && (await ctx.db.get(post.authorId));
+const post = await ctx.db.get("posts", postId);
+const author = post && (await ctx.db.get("users", post.authorId));
 ```
 
 **Load related rows declaratively with `with`.** The typed table accessor's
@@ -294,7 +294,7 @@ await ctx.db.users.patch(userId, { posts: { set: [postB, postC] } }); // exactly
   out with no `connect` is rejected when the row is validated. Setting the key and its relation in the same write
   is refused. `set` cannot be combined with `connect` or `disconnect`, and each list holds at most 500 ids. An
   operator that is not `connect`, `disconnect` or `set` is a `VALIDATION_ERROR`, not a stored column.
-- **Every row goes through its own write**, so RLS policies, triggers and validators run for each child, and
+- **Every row goes through its own write**, so row-level security (RLS) policies, triggers and validators run for each child, and
   live queries see them. The request is validated in full before the first row is written. A `patch` that only
   changes relations changes the children, not the parent row, but the parent's update policy is still checked
   before any child is written, so a caller who can read a parent without updating it cannot re-point its children

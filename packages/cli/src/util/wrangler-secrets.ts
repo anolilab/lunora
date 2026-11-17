@@ -27,6 +27,8 @@ interface ListRemoteSecretsInputs {
     env?: string;
     /** Injected command runner; defaults to a real `wrangler secret list`. */
     runner?: SecretListRunner;
+    /** The deploy target the caller resolved (`--target`, else the config's). Defaults to the config's. */
+    target?: string;
     /** Target a temporary-account deployment (`--temporary`). */
     temporary?: boolean;
 }
@@ -93,9 +95,10 @@ const parseSecretNames = (stdout: string): ReadonlyArray<string> | undefined => 
 };
 
 const listRemoteSecrets = async (inputs: ListRemoteSecretsInputs): Promise<ListRemoteSecretsResult> => {
-    // The toolchain is the target's, not always wrangler's — resolving from the
-    // project keeps a non-default target from shelling out to the wrong CLI.
-    const driver = resolveDeployDriver(resolveProjectTarget(inputs.cwd));
+    // The toolchain is the target's, not always wrangler's — resolving it from the
+    // caller's target (not only the project's config) keeps `--target` from
+    // listing through the wrong CLI.
+    const driver = resolveDeployDriver(inputs.target ?? resolveProjectTarget(inputs.cwd));
     const listCommand = driver.toolchain?.secretList?.({ environment: inputs.env, temporary: inputs.temporary });
 
     if (listCommand === undefined) {

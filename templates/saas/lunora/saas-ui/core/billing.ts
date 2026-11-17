@@ -1,0 +1,233 @@
+/**
+ * Billing's view model: what plan a tenant is on, what that entitles them to,
+ * and whether they have outgrown it.
+ *
+ * The plan catalog lives in code rather than in the provider. The provider owns
+ * money — prices, invoices, the subscription's state machine — and the app owns
+ * what a plan *means*, because "10 seats" is a product decision that has to be
+ * enforced in a mutation the provider never sees. Keeping the two apart is also
+ * what lets the kit ship six payment adapters behind one UI: nothing here names
+ * Stripe.
+ */
+import type { SubscriptionLike } from "./types";
+
+/** A plan as the app defines it. `priceId` is the provider's; everything else is yours. */
+interface Plan {
+    /** Marketing copy for the pricing table. One line. */
+    blurb: string;
+    /** ISO 4217, e.g. `"USD"`. */
+    currency: string;
+    /** Named capabilities this plan unlocks, checked by {@link isEntitled}. */
+    features: ReadonlyArray<string>;
+    /** Stable id used in `saas_organizations.plan` and in gating. */
+    id: string;
+    name: string;
+    /** Provider price id for checkout. Absent on a free plan — there is nothing to buy. */
+    priceId?: string;
+    /** Minor units (cents). `0` renders as "Free". */
+    priceMinor: number;
+    /** Maximum billable members. `undefined` means unmetered. */
+    seats?: number;
+}
+
+/**
+ * States that entitle a tenant to their plan — exactly `@lunora/payment`'s
+ * `ACTIVE_STATES`, so the screen never renders a plan the server's `check`
+ * would refuse. A `past_due` tenant sees the payment notice, not the feature.
+ */
+const ENTITLING_STATES: ReadonlySet<string> = new Set(["active", "trialing"]);
+
+/** Whether a subscription currently entitles its tenant to anything at all. */
+const isEntitling = (subscription: SubscriptionLike | undefined): subscription is SubscriptionLike =>
+    subscription !== undefined && ENTITLING_STATES.has(subscription.state);
+
+/**
+ * Whether the provider still has a subscription for this tenant: anything but
+ * `canceled`. Wider than {@link isEntitling} on purpose — a `past_due` or
+ * `paused` subscription entitles nothing but is still billing, so a second
+ * checkout on top of it would bill the tenant twice.
+ */
+const isOpen = (subscription: SubscriptionLike | undefined): subscription is SubscriptionLike =>
+    subscription !== undefined && subscription.state !== "canceled";
+
+/**
+ * The one subscription a billing screen describes, out of every row stored for
+ * the tenant. A tenant that cancelled and later re-subscribed has both rows, in
+ * no promised order, so taking the first would show a dead plan next to a live
+ * one. Entitling beats merely open; a lone canceled row is returned last so the
+ * screen can still say what ended.
+ */
+const currentSubscription = <T extends SubscriptionLike>(subscriptions: ReadonlyArray<T> | undefined): T | undefined =>
+    subscriptions?.find((subscription) => isEntitling(subscription)) ?? subscriptions?.find((subscription) => isOpen(subscription)) ?? subscriptions?.[0];
+
+/**
+ * The plan a tenant is actually on. Falls back to the catalog's free plan (the
+ * first with no `priceId`) rather than to `undefined`, so a screen never has to
+ * branch on "no subscription" separately from "on the free tier" — they are the
+ * same state to a user.
+ */
+const currentPlan = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined): Plan | undefined => {
+    if (isEntitling(subscription)) {
+        // Every price the subscription bills, like the server's `priceIdsOf`: a
+        // multi-item subscription carries its add-ons in `priceIds`.
+        const billed = new Set(subscription.priceIds ?? [subscription.priceId]);
+        const matched = plans.find((plan) => plan.priceId !== undefined && billed.has(plan.priceId));
+
+        if (matched) {
+            return matched;
+        }
+    }
+
+    return plans.find((plan) => plan.priceId === undefined);
+};
+
+/**
+ * Whether a tenant may use a named capability.
+ *
+ * This is the CLIENT-side half, and it decides what to render — never what to
+ * allow. The mutation checks the same thing server-side, because a gate a user
+ * can edit in devtools is a suggestion. Rendering the upsell instead of the
+ * feature is exactly the right use of it.
+ */
+const isEntitled = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined, feature: string): boolean => {
+    if (isEntitling(subscription)) {
+        // Every plan the subscription bills a price of, not just the one
+        // \`currentPlan\` shows: an add-on is a plan of its own, and grants its
+        // features beside the base plan's, as the server's entitlements do.
+        const billed = new Set(subscription.priceIds ?? [subscription.priceId]);
+
+        if (plans.some((plan) => plan.priceId !== undefined && billed.has(plan.priceId) && plan.features.includes(feature))) {
+            return true;
+        }
+    }
+
+    return currentPlan(plans, subscription)?.features.includes(feature) ?? false;
+};
+
+interface SeatUsage {
+    /** `undefined` on an unmetered plan. */
+    limit?: number;
+    /** `true` once `used` exceeds `limit`. Unmetered plans are never over. */
+    over: boolean;
+    /** Fraction of the allowance consumed, 0-1. `0` when unmetered — there is no bar to draw. */
+    ratio: number;
+    used: number;
+}
+
+/**
+ * Seat usage against the plan's allowance.
+ *
+ * Seats are counted from the organisation's member list, not from
+ * `subscription.quantity`: the provider's count is what the tenant is *billed*
+ * for, which lags what they are *using* by however long it takes a webhook to
+ * land. Showing the billed number would tell someone who just invited three
+ * people that nothing happened.
+ */
+const seatUsage = (plan: Plan | undefined, memberCount: number): SeatUsage => {
+    const limit = plan?.seats;
+
+    if (limit === undefined) {
+        return { over: false, ratio: 0, used: memberCount };
+    }
+
+    return { limit, over: memberCount > limit, ratio: limit === 0 ? 1 : Math.min(1, memberCount / limit), used: memberCount };
+};
+
+/** The seat line both ports render — "8 of 10 seats used", or "8 members, unmetered". */
+const seatSummary = (usage: SeatUsage): string =>
+    usage.limit === undefined ? `${usage.used.toString()} members, unmetered` : `${usage.used.toString()} of ${usage.limit.toString()} seats used`;
+
+/** The alert for an organisation over its allowance; `undefined` while it fits. */
+const seatAlert = (usage: SeatUsage): string | undefined =>
+    usage.over ? "This organization is over its seat allowance. Upgrade, or remove members." : undefined;
+
+/** What `Gated` shows in place of a feature the plan lacks, when the caller passes no fallback. */
+const notEntitledLabel = (feature: string): string => `Your plan does not include ${feature}.`;
+
+/**
+ * Format a price for display. `amountMinor` is in the currency's minor unit,
+ * which is a hundredth for most currencies but the whole yen or won, and a
+ * thousandth of a dinar; ICU knows which, and workerd and celld both ship it.
+ * A code ICU rejects is shown as a plain decimal rather than crashing the page.
+ */
+const formatMoney = (amountMinor: number, currency: string, locale?: string): string => {
+    let format: Intl.NumberFormat;
+
+    try {
+        format = new Intl.NumberFormat(locale, { currency, style: "currency" });
+    } catch {
+        return `${(amountMinor / 100).toFixed(2)} ${currency}`;
+    }
+
+    return format.format(amountMinor / 10 ** (format.resolvedOptions().maximumFractionDigits ?? 2));
+};
+
+/** One pricing-table row. Only a purchasable row carries a `priceId`, so a view never has to assert one. */
+type PricingRow = { current: boolean; plan: Plan; price: string } & ({ priceId: string; purchasable: true } | { purchasable: false });
+
+/** The pricing table's rows: the catalog, marked with which one is current. */
+const pricingRows = (plans: ReadonlyArray<Plan>, subscription: SubscriptionLike | undefined): ReadonlyArray<PricingRow> => {
+    const current = currentPlan(plans, subscription);
+
+    return plans.map((plan) => {
+        const base = {
+            current: plan.id === current?.id,
+            plan,
+            price: plan.priceMinor === 0 ? "Free" : formatMoney(plan.priceMinor, plan.currency),
+        };
+
+        // A plan is purchasable when it has a provider price and the tenant has no
+        // subscription yet. Checkout opens a NEW subscription, so offering it on
+        // top of an open one bills the tenant twice; every plan change — up or
+        // down — goes through the portal, which is the provider's job (proration
+        // is not a thing an app should reimplement).
+        return plan.priceId !== undefined && !base.current && !isOpen(subscription)
+            ? { ...base, priceId: plan.priceId, purchasable: true }
+            : { ...base, purchasable: false };
+    });
+};
+
+/**
+ * A one-line status for the billing panel. Separate from the plan name because
+ * these two say different things: the plan is what you bought, this is whether
+ * it is working.
+ */
+const subscriptionNotice = (subscription: SubscriptionLike | undefined): string | undefined => {
+    if (!subscription) {
+        return undefined;
+    }
+
+    if (subscription.cancelAtPeriodEnd) {
+        return "Cancels at the end of the current period.";
+    }
+
+    switch (subscription.state) {
+        case "past_due": {
+            return "Payment failed — update your card to avoid interruption.";
+        }
+        case "paused": {
+            return "This subscription is paused.";
+        }
+        case "trialing": {
+            return "Trial in progress.";
+        }
+        default: {
+            return undefined;
+        }
+    }
+};
+
+export type { Plan, PricingRow, SeatUsage };
+export {
+    currentPlan,
+    currentSubscription,
+    formatMoney,
+    isEntitled,
+    isEntitling,
+    notEntitledLabel,
+    pricingRows,
+    seatAlert,
+    seatSummary,
+    seatUsage,
+    subscriptionNotice,
+};

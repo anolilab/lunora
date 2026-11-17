@@ -53,7 +53,7 @@ export interface RetainDirective {
     readonly rule: string;
 }
 
-/** Erase the rows of a table that a rule would otherwise keep. */
+/** Keep a table's rows under the named retention rule instead of erasing them. */
 export const retain = (rule: string, options: { from?: string } = {}): RetainDirective => {
     return {
         kind: "retain",

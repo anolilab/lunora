@@ -4,6 +4,7 @@ export type {
     AuthAdmin,
     AuthAdminSession,
     AuthAdminUser,
+    AuthApiKey,
     AuthCapabilities,
     AuthConfigInfo,
     AuthInvitation,
@@ -33,7 +34,7 @@ export type {
 } from "./audit";
 export { appendAuthAuditEntry, AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable, readAuthAuditLog } from "./audit";
 export type { AuthAuditHookConfig } from "./audit-hooks";
-export { authAuditHook, buildAuditEntry, eventForPath, withAuthAudit } from "./audit-hooks";
+export { authAuditBeforeHook, authAuditHook, buildAuditEntry, eventForPath, withAuthAudit } from "./audit-hooks";
 export type { AuthDoOptions, AuthDoState } from "./auth-do";
 export {
     READ_AUDIT_PATH as AUTH_DO_AUDIT_PATH,
@@ -53,6 +54,7 @@ export type { EmailGateHookConfig } from "./email-gate";
 export { emailGateDatabaseHooks, withEmailGate } from "./email-gate";
 export type { EmailClass, EmailClassification, EmailGateConfig, EmailGateMiddlewareOptions } from "./email-guard";
 export { assertEmailAllowed, classifyEmail, emailGateMiddleware, loadEmailDomainLists } from "./email-guard";
+export { default as isDevEnvironment } from "./environment";
 export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler";
 export type { InviteOnlyOptions, IssuedSignUpInvitation, SignUpInvitation } from "./invite-only";
 export { createSignUpInvitation, listSignUpInvitations, pruneSignUpInvitations, revokeSignUpInvitation } from "./invite-only";
@@ -64,6 +66,8 @@ export { compileMigrationsSql, ensureMigrated } from "./migrate";
 export { default as authTables } from "./schema";
 export type { SessionPolicy } from "./session";
 export { sessionPresets, validateSessionPolicy } from "./session";
+export type { SessionIdentity } from "./session-identity";
+export { resolveSessionIdentity } from "./session-identity";
 export type { SqlExecutor } from "./sql-store";
 export { createSqlAuthStore, d1Executor } from "./sql-store";
 export type { AuthQuery, AuthRow, AuthStore, AuthWhereClause } from "./store";

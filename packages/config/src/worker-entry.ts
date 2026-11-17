@@ -103,6 +103,7 @@ const isGeneratedOutput = (relativeMain: string): boolean =>
  * to export a class of this exact name, so detection keys on the class name.
  */
 const DURABLE_OBJECT_BINDINGS = {
+    AdminRevocationDO: "ADMIN_REVOCATIONS",
     LunoraDO: "SHARD",
     SchedulerDO: "SCHEDULER",
     SessionDO: "SESSION",
@@ -185,7 +186,7 @@ const COMPOSED_ENTRY_DURABLE_OBJECTS: DurableObjectClass[] = ["ShardDO"];
  * has a `.scheduler()` method at all. `@lunora/vite` depends on `@lunora/config`, so config
  * owning it is the direction the dependency graph allows.
  */
-const GENERATED_CLASS_MODULES = ["agents", "containers", "scheduler", "shardRegistry", "workflows"] as const;
+const GENERATED_CLASS_MODULES = ["adminRevocations", "agents", "containers", "scheduler", "shardRegistry", "workflows"] as const;
 
 /** One {@link GENERATED_CLASS_MODULES} entry. */
 type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
@@ -197,6 +198,7 @@ type GeneratedClassModule = (typeof GENERATED_CLASS_MODULES)[number];
  * the class.
  */
 const GENERATED_MODULE_DURABLE_OBJECTS: Partial<Record<GeneratedClassModule, DurableObjectClass>> = {
+    adminRevocations: "AdminRevocationDO",
     scheduler: "SchedulerDO",
     shardRegistry: "ShardRegistryDO",
 };

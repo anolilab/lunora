@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Minimal, protocol-conformant Python client for a Lunora deployment."
 readme = "README.md"
 requires-python = ">=3.9"
-license = { text = "MIT" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Lunora" }]
 keywords = ["lunora", "cloudflare", "durable-objects", "realtime"]
 dependencies = []

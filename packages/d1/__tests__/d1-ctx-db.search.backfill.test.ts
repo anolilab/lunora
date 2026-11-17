@@ -286,7 +286,7 @@ describe("d1 ctx-db search backfill", () => {
         const writer = writerFor(searchSchema);
 
         await writer.insert("docs", { _id: "d1", body: "before", channel: "x" }, { allowExplicitId: true });
-        await writer.patch("d1", { body: "after" });
+        await writer.patch("docs", "d1", { body: "after" });
 
         const stale = await writer
             .query("docs")

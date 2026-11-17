@@ -165,7 +165,7 @@ export const overageFleetPorts = (
             if (!existing) {
                 await database.insert("overageDebits", { debitedCredits, organizationId, periodStart, updatedAt: now });
             } else if (debitedCredits > existing.debitedCredits) {
-                await database.patch(existing._id, { debitedCredits, updatedAt: now }, "overageDebits");
+                await database.patch("overageDebits", existing._id, { debitedCredits, updatedAt: now });
             }
         },
         ledger,
@@ -174,7 +174,7 @@ export const overageFleetPorts = (
                 return; // already suspended (by any mechanism) — don't override the reason
             }
 
-            await database.patch(organizationId, { suspendedAt: now, suspendedReason: "overage" }, "organizations");
+            await database.patch("organizations", organizationId, { suspendedAt: now, suspendedReason: "overage" });
             await database.insert("auditLog", {
                 action: "organization.suspend",
                 actorUserId: "system:overage",
@@ -189,7 +189,7 @@ export const overageFleetPorts = (
                 return;
             }
 
-            await database.patch(organizationId, { suspendedAt: null, suspendedReason: null }, "organizations");
+            await database.patch("organizations", organizationId, { suspendedAt: null, suspendedReason: null });
             await database.insert("auditLog", {
                 action: "organization.unsuspend",
                 actorUserId: "system:overage",

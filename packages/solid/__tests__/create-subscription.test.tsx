@@ -138,6 +138,25 @@ describe(createSubscription, () => {
         expect(surfaced?.message).toBe("token expired");
     });
 
+    it("keeps the SubscriptionError why explanation on the surfaced error", () => {
+        const fake = createFakeClient();
+        let capturedError: (() => Error | undefined) | undefined;
+
+        render(
+            () => {
+                const { error } = createSubscription(msgRef, { channelId: "c1" });
+                capturedError = error;
+
+                return <pre>{String(error()?.message)}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        fake.subscriptions[0]?.error({ code: "CONFLICT", message: "stale", why: "row moved" });
+
+        expect((capturedError!() as LunoraError & { why?: string }).why).toBe("row moved");
+    });
+
     it("surfaces a bare Error when the SubscriptionError carries no code", () => {
         const fake = createFakeClient();
         let capturedError: (() => Error | undefined) | undefined;

@@ -20,6 +20,21 @@ describe("memory store", () => {
 
         expect(store.get("k")).toBeUndefined();
     });
+
+    it("sweeps an expired entry written behind a NaN timestamp", async () => {
+        expect.assertions(2);
+
+        const store = createMemoryStore();
+
+        await store.set("a", { ts: 100, value: 1 });
+        await store.set("nan", { ts: Number.NaN, value: 1 });
+        await store.set("old", { ts: 0, value: 1 });
+
+        await store.sweep?.(50, 32);
+
+        expect(store.get("old")).toBeUndefined();
+        expect(store.get("a")).toBeDefined();
+    });
 });
 
 describe("sql store (real node:sqlite)", () => {
@@ -123,5 +138,170 @@ describe("concurrent consumes through a synchronous store", () => {
         } finally {
             harness.close();
         }
+    });
+});
+
+describe("sql store retention sweep (real node:sqlite)", () => {
+    let harness: ReturnType<typeof createSqliteSql>;
+
+    beforeEach(() => {
+        harness = createSqliteSql();
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    const keys = (): string[] =>
+        harness.sql
+            .exec<{ k: string }>(`SELECT k FROM "_lunora_rate_limits" ORDER BY k`)
+            .toArray()
+            .map((row) => row.k);
+
+    it("creates a partial index on ts that excludes debts", () => {
+        expect.assertions(1);
+
+        createSqlStore({ sql: harness.sql });
+
+        expect(harness.sql.exec<{ sql: string }>(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = '_lunora_rate_limits_ts'`).toArray()).toEqual([
+            { sql: expect.stringContaining("WHERE value >= 0") as string },
+        ]);
+    });
+
+    it("deletes rows at or before the horizon and keeps rows inside it", async () => {
+        expect.assertions(1);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("old", { ts: 100, value: 1 });
+        await store.set("edge", { ts: 500, value: 1 });
+        await store.set("fresh", { ts: 900, value: 1 });
+
+        await store.sweep?.(500, 32);
+
+        expect(keys()).toEqual(["fresh"]);
+    });
+
+    it("keeps a reserved debt however old, and does not count it against the limit", async () => {
+        expect.assertions(1);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("debt", { ts: 1, value: -10 });
+        await store.set("a", { ts: 100, value: 1 });
+        await store.set("b", { ts: 200, value: 1 });
+
+        await store.sweep?.(500, 1);
+
+        expect(keys()).toEqual(["b", "debt"]);
+    });
+
+    it("deletes at most limit rows per call", async () => {
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        for (const index of [1, 2, 3, 4, 5]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential writes keep the fixture deterministic
+            await store.set(`k${String(index)}`, { ts: index, value: 1 });
+        }
+
+        await store.sweep?.(500, 2);
+
+        expect(keys()).toHaveLength(3);
+
+        await store.sweep?.(500, 2);
+
+        expect(keys()).toHaveLength(1);
+    });
+
+    it("keeps a key with a lone surrogate apart from its U+FFFD look-alike", async () => {
+        // UTF-8 TEXT would store the lone surrogate as U+FFFD, so the two keys would share one budget.
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("ip:a\uD800", { ts: 1, value: 1 });
+        await store.set("ip:a\uFFFD", { ts: 2, value: 9 });
+
+        expect(store.get("ip:a\uD800")).toStrictEqual({ ts: 1, value: 1 });
+        expect(store.get("ip:a\uFFFD")).toStrictEqual({ ts: 2, value: 9 });
+    });
+
+    it("round-trips a key that starts with the escape marker", async () => {
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("\uFFFFx", { ts: 1, value: 3 });
+
+        expect(store.get("\uFFFFx")).toStrictEqual({ ts: 1, value: 3 });
+        expect(store.get(`\uFFFF${JSON.stringify("\uFFFFx")}`)).toBeUndefined();
+    });
+
+    it("lets its owner sweep a key that had to be escaped", async () => {
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("mine:\uD800", { ts: 1, value: 1 });
+        await store.set("theirs:\uD800", { ts: 1, value: 1 });
+        await store.sweep?.(500, 32, (k) => k.startsWith("mine:"));
+
+        expect(store.get("mine:\uD800")).toBeUndefined();
+        expect(store.get("theirs:\uD800")).toStrictEqual({ ts: 1, value: 1 });
+    });
+
+    it("sweeps a marker-prefixed row written before keys were escaped", async () => {
+        expect.assertions(2);
+
+        const store = createSqlStore({ sql: harness.sql });
+
+        await store.set("warm", { ts: 1000, value: 1 });
+        // A row from before escaping: its stored text starts with the marker but is not JSON.
+        harness.sql.exec(`INSERT INTO "_lunora_rate_limits" (k, value, ts, prev) VALUES (?, 1, 1, NULL)`, "\uFFFFlegacy");
+
+        const owned: string[] = [];
+
+        await store.sweep?.(500, 32, (k) => {
+            owned.push(k);
+
+            return true;
+        });
+
+        expect(owned).toStrictEqual(["\uFFFFlegacy"]);
+        expect(
+            harness.sql
+                .exec<{ k: string }>(`SELECT k FROM "_lunora_rate_limits"`)
+                .toArray()
+                .map((row) => row.k),
+        ).toStrictEqual(["warm"]);
+    });
+
+    it("deletes only owned rows, in one DELETE however many expired", async () => {
+        expect.assertions(2);
+
+        const statements: string[] = [];
+        const { exec } = harness.sql;
+        const store = createSqlStore({
+            sql: {
+                exec: <Row = Record<string, unknown>>(query: string, ...params: unknown[]) => {
+                    statements.push(query);
+
+                    return exec<Row>(query, ...params);
+                },
+            },
+        });
+
+        for (const key of ["mine:a", "mine:b", "theirs:c", "mine:d"]) {
+            // eslint-disable-next-line no-await-in-loop -- sequential writes keep the fixture deterministic
+            await store.set(key, { ts: 1, value: 1 });
+        }
+
+        statements.length = 0;
+        await store.sweep?.(500, 32, (k) => k.startsWith("mine:"));
+
+        expect(keys()).toEqual(["theirs:c"]);
+        expect(statements.filter((query) => query.startsWith("DELETE"))).toHaveLength(1);
     });
 });

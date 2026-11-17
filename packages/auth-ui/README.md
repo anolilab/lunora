@@ -191,4 +191,4 @@ unregistered and the gate frozen, which is exactly the bug the rename fixes.
 ## License
 
 The lunora `@lunora/auth-ui` package is open-sourced software licensed under
-the [FSL-1.1-Apache-2.0 license](./LICENSE.md).
+the [Apache-2.0 license](./LICENSE.md).

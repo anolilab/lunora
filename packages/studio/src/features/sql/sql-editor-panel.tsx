@@ -1,21 +1,24 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { explainQueryPlan } from "../../../../../shared/sql-readonly";
 import { classifyOne, splitStatements } from "../../../../../shared/sql-split-statements";
-import type { SqlConsoleResult } from "../../lib/admin";
+import { useAssistant } from "../../components/assistant-provider";
+import { useAssistantRpc } from "../../hooks/use-assistant-rpc";
+import useStudioClient from "../../hooks/use-studio-client";
+import { useT } from "../../i18n/i18n-context";
+import type { SchemaFact, SqlConsoleResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { usePersistedValue } from "../../lib/browser-storage";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
+import { adminRef, callOptions, errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import formatSql from "./format-sql";
-import { useSqlAssistant } from "./hooks/use-sql-assistant";
 import { useSqlDiagnostics } from "./hooks/use-sql-diagnostics";
 import { useSqlEditorSurface } from "./hooks/use-sql-editor-surface";
 import type { ScriptRun } from "./hooks/use-sql-editor-tabs";
 import { useSqlEditorTabs } from "./hooks/use-sql-editor-tabs";
 import { useSqlLibrary } from "./hooks/use-sql-library";
+import type { SqlSchema } from "./sql-autocomplete";
 import SqlEditorPane from "./sql-editor-pane";
 import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
 import SqlResultsPane from "./sql-results-pane";
@@ -27,6 +30,8 @@ import { makeTab } from "./sql-tabs";
 interface SqlEditorPanelProps {
     /** Shard key the query runs against on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
+    /** Clock the run timer reads. Injected by tests so a duration is asserted, not measured. */
+    readonly now?: () => number;
 }
 
 const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
@@ -36,6 +41,58 @@ const SPLIT_VIEW_KEY = "lunora-studio-sql-split-view";
 /** The tab the editor opens with on a fresh browser: the first template. */
 const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
 
+// Wrapped rather than passing `performance.now` itself: the browser throws
+// "Illegal invocation" when the method is called detached from `performance`.
+const defaultNow = (): number => performance.now();
+
+/**
+ * Per-tab run generations. Replacing a tab's draft advances its generation, and a run
+ * lands its output only if the generation it started under is still current — else
+ * the tab would show the replaced query's result under the new draft.
+ */
+const useRunGenerations = (): { readonly advance: (tabId: string) => void; readonly begin: (tabId: string) => () => boolean } => {
+    const generations = useRef(new Map<string, number>());
+
+    return {
+        advance: (tabId) => {
+            generations.current.set(tabId, (generations.current.get(tabId) ?? 0) + 1);
+        },
+        // The check is true only while no load has superseded the run it was taken for.
+        begin: (tabId) => {
+            const generation = generations.current.get(tabId) ?? 0;
+
+            return () => (generations.current.get(tabId) ?? 0) === generation;
+        },
+    };
+};
+
+/**
+ * Starter questions for a freshly opened console session.
+ *
+ * Built from the probed schema so they name real tables. A generic prompt list is
+ * only marginally better than a blank box — the point of a suggestion is that it
+ * is answerable HERE.
+ */
+const consoleSuggestions = (schema: SqlSchema, t: ReturnType<typeof useT>): string[] => {
+    const table = schema.tables[0];
+
+    return table === undefined
+        ? [t("What tables does this app have?")]
+        : [t("What tables does this app have?"), t("Show me the most recent rows in {table}", { table }), t("Is anything wrong with my schema?")];
+};
+
+/**
+ * The editor's schema, as the chat engine's grounding block wants it.
+ *
+ * A table whose columns have not been probed yet still contributes its NAME — the
+ * system prompt tells the model to invent nothing, so knowing a table exists is
+ * worth more than omitting it until its columns arrive.
+ */
+const groundingFacts = (schema: SqlSchema): SchemaFact[] =>
+    schema.tables.map((table) => {
+        return { columns: [...(schema.columns[table] ?? [])], table };
+    });
+
 /**
  * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
  * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
@@ -44,23 +101,26 @@ const seedTab = (): SqlTab => makeTab(TEMPLATES[0]?.sql ?? "");
  * SELECT / WITH / EXPLAIN, so raw writes can't desync the doc-store's shadow
  * tables (use the Data grid's inline edit for mutations).
  */
-export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactElement => {
-    const client = useLunora();
+export const SqlEditorPanel = ({ initialShardKey, now = defaultNow }: SqlEditorPanelProps): ReactElement => {
+    const client = useStudioClient();
 
     // Multiple editor tabs: each persisted tab owns its draft + the saved-query it
     // mirrors, plus an ephemeral per-tab output, so a reload restores the open tabs
     // (and their text) but re-runs for results.
     const editorTabs = useSqlEditorTabs(seedTab);
-    const { activeTab, output, patchActiveOutput, patchActiveTab, setActiveTabId, unlinkQuery } = editorTabs;
+    const { activeTab, openEditorTab, output, patchActiveOutput, patchActiveTab, setActiveTabId, unlinkQuery } = editorTabs;
+
+    const runGenerations = useRunGenerations();
 
     // Load `sql` into the active tab as a fresh draft, link it to `savedId` (or
     // unlink with `null`), and clear that tab's stale result/error.
     const loadIntoActiveTab = (sql: string, savedId: null | string): void => {
+        runGenerations.advance(activeTab.id);
         patchActiveTab({ activeId: savedId, sql });
         // `script` too: without it the previous run's statement strip survives into
         // a new draft, and selecting one of its entries shows a result belonging to
-        // a query the editor no longer holds.
-        patchActiveOutput({ chart: undefined, error: null, failed: undefined, result: null, script: undefined });
+        // a query the editor no longer holds. `running` too: a superseded run never clears it.
+        patchActiveOutput({ chart: undefined, durationMs: undefined, error: null, failed: undefined, result: null, running: false, script: undefined });
     };
 
     const library = useSqlLibrary({ loadIntoActiveTab, unlinkQuery });
@@ -73,20 +133,113 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     // Editor↔results layout: stacked (default) or side-by-side, persisted across reloads.
     const [splitView, setSplitView] = usePersistedValue<boolean>(SPLIT_VIEW_KEY, false);
+    /*
+     * The assistant is the SHELL's, not this panel's.
+     *
+     * It used to be a column inside this component with its own transcript, which
+     * meant navigating away threw the conversation out and no other page could
+     * reach it. Now the console opens the shared one and hands it the grounding it
+     * has; the panel renders in the layout beside whatever page is open.
+     *
+     * `undefined` when no provider is mounted (a bare-composed Studio panel), in
+     * which case every affordance below is simply not offered.
+     */
+    const t = useT();
+    const assistantShell = useAssistant();
 
     const { probe, schema } = useSqlSchema(shardKey);
 
-    // Set the active tab's draft and keep the linked saved query in sync (auto-save).
-    const setDraft = (value: string): void => {
-        patchActiveTab({ sql: value });
+    /*
+     * Set the active tab's draft and keep the linked saved query in sync (auto-save).
+     *
+     * The `useCallback` is INERT, and kept anyway. React Compiler does run over
+     * this file — `packem.config.ts` wires `babel-plugin-react-compiler` through
+     * `createReactPreset` with no `sources` filter, and the standalone app's
+     * `vite.config.ts` mirrors it over the same source — and it erases this
+     * wrapper, emitting its own cache keyed on exactly `[activeId,
+     * patchActiveTab, updateQuerySql]`. Deleting it produces byte-identical
+     * compiled output (verified), and uncompiled it never memoized anything
+     * either: both deps are plain closures their hooks re-create every render.
+     *
+     * What keeps it here is `react-hooks/exhaustive-deps`, which has no
+     * compiler-aware mode for this hint and fails `lint:eslint --max-warnings=0`
+     * the moment the wrapper goes. Removing it needs that gate taught about the
+     * compiler, not a suppression here.
+     */
+    const setDraft = useCallback(
+        (value: string): void => {
+            patchActiveTab({ sql: value });
 
-        if (activeId !== null) {
-            updateQuerySql(activeId, value);
+            if (activeId !== null) {
+                updateQuerySql(activeId, value);
+            }
+        },
+        [activeId, patchActiveTab, updateQuerySql],
+    );
+
+    /*
+     * Tell the assistant this page can accept an insert, and withdraw on the way
+     * out. A boolean rather than a callback: `setDraft` closes over the active tab
+     * and is re-created every render, so registering IT would either re-run this
+     * effect on every keystroke or pin the target to the first render's tab.
+     */
+    const setHasEditor = assistantShell?.setHasEditor;
+
+    useEffect(() => {
+        if (setHasEditor === undefined) {
+            return undefined;
         }
-    };
+
+        setHasEditor(true);
+
+        return () => {
+            setHasEditor(false);
+        };
+    }, [setHasEditor]);
+
+    /*
+     * Collect a statement the assistant offered.
+     *
+     * An effect because the trigger is outside this component — the operator
+     * pressed Insert in the shell-wide panel — and this runs with the CURRENT
+     * render's `setDraft`, so it always writes to the tab that is actually open.
+     * That is what the mirrored ref used to buy, and it is free once what crosses
+     * the boundary is a value rather than a closure. `takeInsert` clears it by id,
+     * so a re-render never re-inserts and the same statement can be inserted twice.
+     */
+    const insertRequest = assistantShell?.insertRequest;
+    const takeInsert = assistantShell?.takeInsert;
+
+    useEffect(() => {
+        if (insertRequest === undefined || takeInsert === undefined) {
+            return;
+        }
+
+        takeInsert(insertRequest.id);
+
+        /*
+         * Never over the operator's work. `setDraft` replaces the whole draft and,
+         * on a tab linked to a saved query, auto-saves over that query too — so an
+         * Insert pressed with unsaved or saved SQL on screen would destroy it with
+         * no confirmation and no undo. Only an empty, unlinked draft is replaced;
+         * otherwise the statement opens in a tab of its own. At the tab cap, where
+         * making room would close something, it is appended to this tab instead —
+         * detached from its saved query first, so the append cannot be auto-saved
+         * into it.
+         */
+        if (draft.trim() === "" && activeId === null) {
+            setDraft(insertRequest.sql);
+        } else if (!openEditorTab(insertRequest.sql)) {
+            patchActiveTab({ activeId: null, sql: draft.trim() === "" ? insertRequest.sql : `${draft.trimEnd()}\n\n${insertRequest.sql}` });
+        }
+        // `setDraft` and the tab opener are real dependencies and are listed. They
+        // are re-created every render, so this effect re-runs often — but
+        // `takeInsert` clears the request by id, so every run after the first is a
+        // no-op, and no suppression is needed to make that true.
+    }, [activeId, draft, insertRequest, openEditorTab, patchActiveTab, takeInsert, setDraft]);
 
     const diagnostics = useSqlDiagnostics(draft, schema, shardKey);
-    const assistant = useSqlAssistant(shardKey);
+    const rpc = useAssistantRpc(shardKey);
 
     const inferChart = (): void => {
         if (result === null) {
@@ -95,7 +248,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         const apply = async (): Promise<void> => {
             // The result's SHAPE only — never its rows (plan 202 Phase 0).
-            const chart = await assistant.inferChart({
+            const chart = await rpc.inferChart({
                 columns: result.columns,
                 rowCount: result.rowCount,
                 types: Object.fromEntries(result.columns.map((column) => [column, typeof (result.rows[0]?.[column] ?? "")])),
@@ -109,12 +262,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     /** Run one statement, never a script: the gate refuses a `;`-joined string. */
     const runOne = async (sql: string): Promise<ScriptRun> => {
+        const started = now();
         try {
             const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
+            const durationMs = now() - started;
 
             recordHistory(sql);
 
-            return { error: null, result: next, sql };
+            return { durationMs, error: null, result: next, sql };
         } catch (error_: unknown) {
             return { error: errorMessage(error_), result: null, sql };
         }
@@ -140,7 +295,13 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // keeps `running` (and the result it guards) scoped to the tab that
         // actually ran the query, not whichever tab happens to be active when the
         // response lands.
-        patchActiveOutput({ running: true });
+        const stillCurrent = runGenerations.begin(activeTab.id);
+
+        // The statement an Explain run is ABOUT, captured when it runs and kept on
+        // this tab's output beside its plan. `draft` moves on the moment the
+        // operator types, and the plan on screen keeps describing what actually
+        // ran — so "Read this plan" must send this, not whatever is in the editor.
+        patchActiveOutput({ running: true, ...(mode === "explain" ? { explained: draft.trim() } : {}) });
 
         // EXPLAIN wraps the whole draft, so the wrapper must be gated as ONE
         // statement — `classifyOne`, never `splitStatements`. Splitting it turned
@@ -168,6 +329,11 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         recordShard(shardKey);
 
+        // The draft was replaced while this ran: its output must not land in the tab.
+        if (!stillCurrent()) {
+            return;
+        }
+
         // The last statement is what the panes show — the one an operator writing
         // a script is looking for. Everything before it stays reachable through
         // the statement strip.
@@ -176,6 +342,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         patchActiveOutput({
             chart: undefined,
+            durationMs: shown?.durationMs,
             error: shown?.error ?? null,
             failed: shown?.error === null || shown === undefined ? undefined : { error: shown.error, sql: shown.sql },
             pane: mode,
@@ -196,6 +363,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
         patchActiveOutput({
             chart: undefined,
+            durationMs: shown.durationMs,
             error: shown.error,
             failed: shown.error === null ? undefined : { error: shown.error, sql: shown.sql },
             result: shown.result,
@@ -211,7 +379,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         // The chord is inert on a deployment that cannot run the assistant —
         // swallowing ⌘I to open a panel that renders nothing is worse than
         // leaving the key to the browser.
-        inlineEditEnabled: !assistant.unavailable,
+        inlineEditEnabled: !rpc.unavailable,
         onSubmit: () => {
             fireAndForget(run(output.pane));
         },
@@ -250,6 +418,120 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         setSplitView(!splitView);
     };
 
+    const toggleChat = (): void => {
+        if (assistantShell === undefined) {
+            return;
+        }
+
+        // A toggle closes as well as opens. `openAssistant` only ever opens — it is
+        // what a seeded question calls — so pressing this button twice left the
+        // panel showing and the `aria-pressed` state lying about it.
+        if (assistantShell.open) {
+            assistantShell.close();
+
+            return;
+        }
+
+        // Grounding travels with the toggle, not just with a seeded question: an
+        // operator who opens the assistant and types their own question should get
+        // the same schema the "Debug with AI" path does.
+        assistantShell.openAssistant({
+            schema: groundingFacts(schema),
+            shardKey,
+            // Named from the schema this console has actually probed, so the
+            // starters mention the operator's own tables rather than a generic
+            // "ask me about your data".
+            suggestions: consoleSuggestions(schema, t),
+            title: t("SQL console"),
+        });
+    };
+
+    /*
+     * The operator changed the console's shard.
+     *
+     * A conversation's tools read the shard it was opened on. An open conversation that
+     * was opened from this console follows the shard the operator is looking at; the
+     * provider decides whether that means moving it or starting a new one, so that no
+     * transcript spans two shards.
+     */
+    const changeShard = (next: string): void => {
+        assistantShell?.rebindShard(shardKey, next);
+        setShardKey(next);
+    };
+
+    /*
+     * Open the assistant on the failing statement.
+     *
+     * The statement and the error travel in the QUESTION rather than as separate
+     * fields, because the transcript is what the model reads — a turn the operator
+     * can then follow up on ("why does that column not exist?") instead of a
+     * one-shot repair that rewrites their draft and explains nothing.
+     */
+    const debugError = (): void => {
+        if (failedRun === undefined) {
+            return;
+        }
+
+        assistantShell?.openAssistant({
+            ask: t("This statement failed:\n{sql}\n\nThe database said: {error}\n\nWhy, and what should it be?", {
+                error: failedRun.error,
+                sql: failedRun.sql,
+            }),
+            schema: groundingFacts(schema),
+            shardKey,
+            title: t("Debug query"),
+        });
+    };
+
+    /*
+     * Explain the draft, rather than write a new one.
+     *
+     * The statement travels verbatim inside the question so the answer lands in a
+     * transcript the operator can follow up in — the same shape `debugError` uses,
+     * and the reason neither of them rewrites the editor.
+     */
+    const explainSql = (): void => {
+        const statement = draft.trim();
+
+        if (statement === "") {
+            return;
+        }
+
+        assistantShell?.openAssistant({
+            ask: t("Explain what this query does, step by step:\n{statement}", { statement }),
+            schema: groundingFacts(schema),
+            shardKey,
+            title: t("Explain query"),
+        });
+    };
+
+    /*
+     * Read the plan the Explain tab is showing.
+     *
+     * The plan ROWS travel, not just the statement — a plan the operator can see
+     * and the model cannot is the whole thing they are asking about. They are
+     * `EXPLAIN QUERY PLAN` output (operation descriptions), not table data, so
+     * this carries no end-user rows regardless of the deployment's opt-in level.
+     */
+    const explainPlan = (): void => {
+        // The statement captured when THIS tab's Explain run started, never the
+        // draft the operator has typed since.
+        const statement = output.explained;
+
+        if (result === null || result.rows.length === 0 || statement === undefined) {
+            return;
+        }
+
+        const plan = result.rows.map((row) => result.columns.map((column) => formatCell(row[column])).join(" | ")).join("\n");
+
+        assistantShell?.openAssistant({
+            ask: t("SQLite planned this query:\n{statement}\n\nas:\n{plan}\n\nWhat is it doing, and is anything here slow?", { plan, statement }),
+            schema: groundingFacts(schema),
+            shardKey,
+            title: t("Read plan"),
+        });
+    };
+
     // Editor + results share a flex container; `splitView` flips its axis (and the
     // results pane from a bottom band to a right column) — the only layout change.
     const workspaceClass = splitView ? "flex min-h-0 flex-1 flex-row" : "flex min-h-0 flex-1 flex-col";
@@ -268,11 +550,13 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                 onLoadHistory={library.loadFromHistory}
                 onLoadTemplate={library.loadTemplate}
                 onNew={library.newQuery}
+                onRename={library.renameQuery}
                 onSearchChange={library.onSearchChange}
                 onSelect={library.selectQuery}
                 onToggleRememberHistory={library.setRememberHistory}
                 queries={library.queries}
                 rememberHistory={library.rememberHistory}
+                rpc={rpc}
                 search={library.search}
             />
 
@@ -283,7 +567,6 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                 {/* Editor + results workspace — stacked, or split side-by-side. */}
                 <div className={workspaceClass}>
                     <SqlEditorPane
-                        assistant={assistant}
                         autocomplete={surface.autocompleteState}
                         diagnostics={diagnostics}
                         draft={draft}
@@ -299,24 +582,37 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         onPickSuggestion={surface.onPickSuggestion}
                         onRevealDiagnostic={surface.revealDiagnostic}
                         overlayRef={surface.overlayRef}
+                        rpc={rpc}
                     />
 
+                    {/*
+                     * Below the editor, above the results: a reply that suggests a
+                     * statement is one Insert away from the editor it sits under.
+                     * Renders nothing without an `AI` binding, on the same latch as
+                     * the prompt bar.
+                     */}
                     <SqlResultsPane
-                        assistant={assistant}
                         chart={inferredChart}
+                        chatOpen={assistantShell?.open === true}
                         className={resultsClass}
+                        durationMs={output.durationMs}
                         error={error}
+                        onDebugError={failedRun === undefined ? undefined : debugError}
+                        onExplainPlan={assistantShell === undefined || assistantShell.unavailable || tab !== "explain" ? undefined : explainPlan}
+                        onExplainSql={assistantShell === undefined || assistantShell.unavailable ? undefined : explainSql}
                         onFormat={formatDraft}
                         onInferChart={inferChart}
                         onRun={onRun}
                         onSelectStatement={onSelectStatement}
-                        onShardKeyChange={setShardKey}
+                        onShardKeyChange={changeShard}
                         onShowChart={showChart}
                         onShowExplain={showExplain}
                         onShowResults={showResults}
+                        onToggleChat={assistantShell === undefined || assistantShell.unavailable ? undefined : toggleChat}
                         onToggleSplit={toggleSplit}
                         pane={tab}
                         result={result}
+                        rpc={rpc}
                         running={running}
                         script={output.script}
                         shardKey={shardKey}
@@ -324,6 +620,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                     />
                 </div>
             </div>
+
+            {/*
+             * The assistant panel itself is rendered by the shell, beside this
+             * page — see `StudioLayoutShell`. What the console registers here is
+             * the one thing only it can do: put a suggested statement in the
+             * editor. The shell hands `onInsert` to the panel, so the Insert
+             * button appears on this page and nowhere it could not work.
+             */}
         </div>
     );
 };

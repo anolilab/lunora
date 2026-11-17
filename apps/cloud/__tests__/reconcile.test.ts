@@ -68,7 +68,7 @@ describe(overageFleetPorts, () => {
         // org_a already at 30 → advancing to 50 patches forward.
         await ports.advanceWatermark("org_a", 500, 50);
 
-        expect(patch).toHaveBeenCalledWith("w1", { debitedCredits: 50, updatedAt: 1000 }, "overageDebits");
+        expect(patch).toHaveBeenCalledWith("overageDebits", "w1", { debitedCredits: 50, updatedAt: 1000 });
 
         // org_b has no row → insert.
         await ports.advanceWatermark("org_b", 500, 10);
@@ -83,7 +83,7 @@ describe(overageFleetPorts, () => {
 
         await ports.onExhausted("org_a");
 
-        expect(patch).toHaveBeenCalledWith("org_a", { suspendedAt: 1000, suspendedReason: "overage" }, "organizations");
+        expect(patch).toHaveBeenCalledWith("organizations", "org_a", { suspendedAt: 1000, suspendedReason: "overage" });
         expect(insert).toHaveBeenCalledWith("auditLog", expect.objectContaining({ action: "organization.suspend", actorUserId: "system:overage" }));
     });
 
@@ -110,7 +110,7 @@ describe(overageFleetPorts, () => {
 
         await ports.onRecovered?.("org_over");
 
-        expect(patch).toHaveBeenCalledWith("org_over", { suspendedAt: null, suspendedReason: null }, "organizations");
+        expect(patch).toHaveBeenCalledWith("organizations", "org_over", { suspendedAt: null, suspendedReason: null });
 
         patch.mockClear();
         await ports.onRecovered?.("org_dun"); // dunning suspension must stay

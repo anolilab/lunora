@@ -340,9 +340,10 @@ class LunoraTransport {
     return (low * b + (((high * b) & 0xFFFF) << 16)) & 0xFFFFFFFF;
   }
 
-  /// The socket URL: the origin with its scheme swapped, plus the shard and
-  /// credential query parameters when present.
-  String wsUrl({String? shardKey, String? token}) {
+  /// The socket URL: the origin with its scheme swapped, plus the shard and,
+  /// when given, the admin [ticket] as `?token=`. The session credential is
+  /// never a URL parameter: it goes in `buildConnectFrame`'s `token`.
+  String wsUrl({String? shardKey, String? ticket}) {
     var endpoint = join(lunoraWsPath);
 
     if (endpoint.startsWith('https://')) {
@@ -353,7 +354,7 @@ class LunoraTransport {
 
     final params = <String>[
       if (shardKey != null && shardKey.isNotEmpty) 'shard=${Uri.encodeQueryComponent(shardKey)}',
-      if (token != null) 'token=${Uri.encodeQueryComponent(token)}',
+      if (ticket != null) 'token=${Uri.encodeQueryComponent(ticket)}',
     ];
 
     if (params.isEmpty) {

@@ -94,6 +94,16 @@ class SubmitOptions(val functionPath: String, val args: WireValue? = null) {
      */
     var precondition: (() -> Boolean)? = null
 
+    /**
+     * Never queued, persisted or replayed. Where a normal write would be queued, submit throws an
+     * [OfflineException] coded [OFFLINE_NOT_QUEUED] before any optimistic layer is installed, so
+     * the arguments never reach the queue or the persistence adapter. It does not wait for a queue
+     * flush or queue behind pending writes, so it may overtake them. A transport failure sent
+     * directly while the connection is down is refused the same way, with the transport error as
+     * the cause. For a credential or a one-time token.
+     */
+    var onlineOnly: Boolean = false
+
     /** Reports the eventual verdict on a queued write. */
     var onSettled: ((MutationSettled) -> Unit)? = null
 }
@@ -129,17 +139,25 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
         // enqueued onto a queue that was just cleared settles to nobody.
         if (closed) throw OfflineException(CLIENT_CLOSED, "client is closed")
 
+        val queueIt = send == null && (wasEverConnected || offlineQueue.queueBeforeFirstConnect)
+
+        // Refused before any layer is installed, so no overlay outlives the call.
+        if (queueIt && options.onlineOnly) throw notQueued(options.functionPath)
+
         val installed = recorded.map { Optimistic.install(it, deferred) }
 
         handles = installed
-        evicted = if (send != null || !(wasEverConnected || offlineQueue.queueBeforeFirstConnect)) {
-            null
-        } else {
-            offlineQueue.enqueue(queuedWrite(options, writeId, installed))
-        }
+        evicted = if (queueIt) offlineQueue.enqueue(queuedWrite(options, writeId, installed)) else null
     }
 
     for (call in deferred) call()
+
+    // The callbacks above are consumer code, and one may have dropped the socket. An online-only write that would
+    // now queue is refused here, with its overlays rolled back, rather than sent while the shard is down.
+    if (options.onlineOnly && synchronized(lock) { send == null && (wasEverConnected || offlineQueue.queueBeforeFirstConnect) }) {
+        rollbackLayers(handles)
+        throw notQueued(options.functionPath)
+    }
 
     if (evicted != null) {
         // Settled with the monitor released: the cap's discard rolls optimistic
@@ -154,6 +172,15 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
     } catch (error: Exception) {
         rollbackLayers(handles)
 
+        // An online-only write is never queued, so a transport failure while the shard has no
+        // open connection is refused as the queued path refuses it. A coded reply is the
+        // server's verdict, and an ApiException is the only error carrying one.
+        val wireFailure = error !is ApiException && Client.isTransient(error)
+
+        if (options.onlineOnly && wireFailure && synchronized(lock) { send == null }) {
+            throw notQueued(options.functionPath, error)
+        }
+
         throw error
     }
 
@@ -165,6 +192,10 @@ fun Client.submit(options: SubmitOptions): MutationOutcome {
 
     return MutationOutcome(MutationStatus.COMMITTED, writeId, reply.value(), reply.commitCursor)
 }
+
+/** The refusal an online-only write gets when it cannot go out over a live connection. */
+private fun notQueued(functionPath: String, cause: Throwable? = null): OfflineException =
+    OfflineException(OFFLINE_NOT_QUEUED, "'$functionPath' is online-only and the connection is not live, so it was not queued", cause)
 
 /**
  * Replays one shard's queued writes, in order, over HTTP. Call it when that

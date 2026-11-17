@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
 import renderEmail from "../src/render";
@@ -27,6 +27,23 @@ describe("renderEmail", () => {
         // react-email upper-cases <h1> headings in the plain text output.
         expect(result.text.toLowerCase()).toContain("welcome, alice!");
         expect(result.text).not.toContain("<h1>");
+    });
+
+    it("renders the element once for both the HTML and the plain text", async () => {
+        expect.assertions(3);
+
+        const onRender = vi.fn<() => number>();
+        const Counted = () => {
+            onRender();
+
+            return <p>render {String(onRender.mock.calls.length)}</p>;
+        };
+
+        const result = await renderEmail(<Counted />);
+
+        expect(onRender).toHaveBeenCalledTimes(1);
+        expect(result.html).toContain("render <!-- -->1");
+        expect(result.text).toBe("render 1");
     });
 
     it("createMailer.send() renders react templates before handing off to transport", async () => {

@@ -705,6 +705,181 @@ Future<void> casePreconditionFailureDiscardsBeforeReplay() async {
   equals(poster.paths.length, 0, 'nothing was sent for the discarded write');
 }
 
+/// The credential-shaped argument an online-only write carries; it must never
+/// reach the queue or the persistence adapter.
+const String _onlineOnlySecret = 'sentinel-secret-7731';
+
+/// With the socket down an online-only write is refused before anything is
+/// queued, persisted or sent.
+Future<void> caseOnlineOnlyRefusedWhenDisconnected() async {
+  covers('offline_online_only_refused_when_disconnected');
+  final store = MemoryPersistence();
+  final poster = Poster(result: 'null');
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true))
+    ..attachSocket((_) {})
+    ..setConnected(true)
+    ..setConnected(false);
+
+  // A subscription on the write's own path and args, primed with a server value, so
+  // an overlay the write applied would be displayed.
+  final args = <String, Object?>{'token': _onlineOnlySecret};
+  final seen = <Object?>[];
+
+  client.subscribe('auth:setPassword', args: args, onData: seen.add);
+  pushData(client, 'sub_1', <Object?>['a'], cursor: 1);
+
+  try {
+    await client.mutation(
+      'auth:setPassword',
+      args: args,
+      onlineOnly: true,
+      optimistic: (current) => <Object?>[...(current! as List<Object?>), 'c'],
+    );
+    failures.add('an online-only write must be refused while disconnected');
+  } on LunoraApiException catch (error) {
+    equals(error.code, offlineNotQueued, 'the refusal names why');
+  }
+
+  equals(client.pendingWrites, 0, 'nothing is queued');
+  equals(store.records.length, 0, 'the persistence adapter never sees the write');
+  equals(poster.paths.length, 0, 'and a refused write never reaches the wire');
+  check(seen.every((value) => canonical(value) != canonical(<Object?>['a', 'c'])), "a refused write's overlay is never displayed");
+}
+
+/// A socket that drops inside the write's own optimistic callback refuses an online-only write
+/// the same way one that was down before it began does: nothing is sent or queued.
+Future<void> caseOnlineOnlyRefusedWhenDisconnectedInCallback() async {
+  covers('offline_online_only_refused_when_disconnected_in_callback');
+  final store = MemoryPersistence();
+  final poster = Poster(result: 'null');
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true))
+    ..attachSocket((_) {})
+    ..setConnected(true);
+
+  // The optimistic callback runs only for a subscription the write matches, so one is primed first.
+  final args = <String, Object?>{'token': _onlineOnlySecret};
+  client.subscribe('auth:setPassword', args: args, onData: (_) {});
+  pushData(client, 'sub_1', <Object?>['a'], cursor: 1);
+
+  try {
+    await client.mutation(
+      'auth:setPassword',
+      args: args,
+      onlineOnly: true,
+      optimistic: (current) {
+        client.setConnected(false);
+
+        return <Object?>[...(current! as List<Object?>), 'c'];
+      },
+    );
+    failures.add('an online-only write whose socket drops in its callback must be refused');
+  } on LunoraApiException catch (error) {
+    equals(error.code, offlineNotQueued, 'the refusal names why');
+  }
+
+  equals(client.pendingWrites, 0, 'nothing is queued');
+  equals(store.records.length, 0, 'the persistence adapter never sees the write');
+  equals(poster.paths.length, 0, 'and the refused write never reaches the wire');
+}
+
+/// With the socket up an online-only write is sent normally and commits.
+Future<void> caseOnlineOnlySendsWhenConnected() async {
+  covers('offline_online_only_sends_when_connected');
+  final store = MemoryPersistence();
+  final poster = Poster(result: 'null');
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true))
+    ..attachSocket((_) {})
+    ..setConnected(true);
+
+  await client.mutation('auth:setPassword', args: <String, Object?>{'token': _onlineOnlySecret}, onlineOnly: true);
+
+  equals(poster.paths.length, 1, 'the write is sent once');
+  check(jsonEncode(poster.bodies).contains(_onlineOnlySecret), 'with its arguments on the wire');
+  equals(store.records.length, 0, 'and is never persisted');
+}
+
+/// A normal write made with the socket down still queues beside an online-only one.
+Future<void> caseOnlineOnlyLeavesNormalWritesQueued() async {
+  covers('offline_online_only_leaves_normal_writes_queued');
+  final store = MemoryPersistence();
+  final poster = Poster(result: 'null');
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store, queueBeforeFirstConnect: true));
+
+  client.mutation('messages:send', args: <String, Object?>{'text': 'hi'});
+
+  equals(client.pendingWrites, 1, 'a normal write queues while disconnected');
+  equals(store.records.length, 1, 'and is persisted');
+  equals(poster.paths.length, 0, 'and nothing is sent');
+}
+
+/// An online-only write that never reached the server while the socket is down is
+/// refused as `OFFLINE_NOT_QUEUED`, with the transport error as its cause, after its
+/// overlay is rolled back. A coded rejection surfaces as itself.
+Future<void> caseOnlineOnlyTransportFailureRefused() async {
+  covers('offline_online_only_transport_failure_refused');
+  final store = _RecordingPersistence();
+  final poster = Poster(result: 'null')..transportFailures = 1;
+  final client = LunoraClient(url: 'https://app.example', post: poster.call, offlineQueue: OfflineQueue(persistence: store));
+
+  final args = <String, Object?>{'token': _onlineOnlySecret};
+  final seen = <Object?>[];
+
+  client.subscribe('auth:setPassword', args: args, onData: seen.add);
+  pushData(client, 'sub_1', <Object?>['a'], cursor: 1);
+
+  try {
+    await client.mutation(
+      'auth:setPassword',
+      args: args,
+      onlineOnly: true,
+      optimistic: (current) => <Object?>[...(current! as List<Object?>), 'c'],
+    );
+    failures.add('a transport failure on an online-only write must be refused');
+  } on LunoraApiException catch (error) {
+    equals(error.code, offlineNotQueued, 'the refusal names why');
+    check(error.cause is SocketFailure, 'the transport error is kept as the cause');
+  }
+
+  equals(poster.paths.length, 1, 'the write was sent once');
+  equals(client.pendingWrites, 0, 'nothing is queued');
+  equals(store.appended.length, 0, 'nothing is persisted');
+  check(seen.any((value) => canonical(value) == canonical(<Object?>['a', 'c'])), 'the overlay was shown while the write was in flight');
+  equals(canonical(seen.last), canonical(<Object?>['a']), 'and rolled back once the write was refused');
+
+  poster.codedFailures = 1;
+
+  try {
+    await client.mutation('auth:setPassword', args: args, onlineOnly: true);
+    failures.add('a coded rejection must surface');
+  } on LunoraApiException catch (error) {
+    equals(error.code, 'CONFLICT', 'a coded rejection surfaces as itself');
+    check(error.cause == null, 'and is not a transport refusal');
+  }
+
+  // Once the socket is up, the same failure is the server's to report, not a refusal.
+  client.attachSocket((_) {});
+  client.setConnected(true);
+  poster.transportFailures = 1;
+
+  try {
+    await client.mutation('auth:setPassword', args: args, onlineOnly: true);
+    failures.add('a failure while connected must surface');
+  } on SocketFailure {
+    // Surfaced as the raw throw, as before.
+  }
+
+  // An argument the codec refuses never left the process, so it surfaces as itself, not as a refusal.
+  final other = Poster(result: 'null');
+  final disconnected = LunoraClient(url: 'https://app.example', post: other.call, offlineQueue: OfflineQueue(persistence: _RecordingPersistence()));
+
+  try {
+    await disconnected.mutation('auth:setPassword', args: <String, Object?>{'token': Object()}, onlineOnly: true);
+    failures.add('an unencodable argument must surface');
+  } on WireFormatException {
+    equals(other.paths.length, 0, 'and nothing was sent');
+  }
+}
+
 /// Durable order is authoritative: a prior session's write is older than
 /// anything from this one, so it must replay first.
 Future<void> caseHydrateRestoresAheadOfThisSession() async {

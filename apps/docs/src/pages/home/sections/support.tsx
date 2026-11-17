@@ -57,7 +57,7 @@ const weeklyInstalls = Object.values(stats.weeklyDownloads).reduce((total, count
 const format = (value: number): string => value.toLocaleString("en-US");
 
 const MANIFEST: { label: string; tone?: "accent"; value: string }[] = [
-    { label: "license", value: "FSL-1.1-Apache-2.0" },
+    { label: "license", value: "Apache-2.0" },
     { label: "stars", value: format(stats.stars) },
     { label: "contributors", value: format(stats.contributors) },
     { label: "packages", value: format(Object.keys(stats.weeklyDownloads).length) },
@@ -111,9 +111,9 @@ const SupportSection: FC = () => (
                     </dl>
 
                     <div className="mt-6 border-t border-hairline pt-5">
-                        <Kicker size="micro">Converts to Apache-2.0</Kicker>
+                        <Kicker size="micro">Apache-2.0 from this release</Kicker>
                         <p className="mt-2 font-sans text-blurb text-ink-muted">
-                            Each release relicenses on a fixed schedule, so adopting it now is not a bet on us staying friendly.
+                            The framework has no conversion date to wait for. It is Apache-2.0 today, so adopting it is not a bet on us staying friendly.
                         </p>
                     </div>
                 </aside>

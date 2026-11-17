@@ -72,6 +72,14 @@ const CORE_SECRETS: ReadonlyArray<SecretEntry> = [
     },
 ];
 
+/** The relay secret's key, and the registry sources that declare it: the host mints it, a client takes the host's value. */
+const SHARD_RELAY_SECRET_KEY = "LUNORA_RELAY_SECRET";
+/** The value a host's `.dev.vars` carries for the relay key until it is generated. A client's line carries its angle-bracket template instead, so it is never generated. */
+const SHARD_RELAY_HOST_PLACEHOLDER = "replace-with-openssl-rand-hex-32";
+/** The sources of the sources that host a relay-secured DO: the host mints the relay key, a client takes its value. */
+const RELAY_HOST_SOURCES: ReadonlySet<string> = new Set(["@lunora/do:shardRegistry", "@lunora/replica:eventLog"]);
+const RELAY_CLIENT_SOURCE = "@lunora/replica:eventLogClient";
+
 /**
  * Secret keys Lunora mints locally that no PACKAGE declares, so
  * {@link MINTABLE_SECRET_KEYS} cannot derive them from the map below: they
@@ -113,6 +121,32 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "http://localhost:8787",
         },
     ],
+    // `requestSecretTool` seals the value a human supplies under this key. It is
+    // base64 of 32 random bytes, not hex: a hex value is 64 characters that also
+    // decode as base64, but to 48 bytes, which the host refuses. The angle-bracket
+    // placeholder keeps the key out of MINTABLE_SECRET_KEYS, so nothing generates
+    // it and the operator runs the openssl command below.
+    "@lunora/agent:requestSecretTool": [
+        {
+            description:
+                "AES-256 key that seals secret values held for one agent step, base64 of 32 bytes. Generate with: openssl rand -base64 32. Rotate by moving the old value to LUNORA_SECRET_VALUE_KEY_PREVIOUS first.",
+            docsUrl: "https://lunora.sh/docs/packages/agent#secret-values",
+            key: "LUNORA_SECRET_VALUE_KEY",
+            placeholderValue: "<your-base64-32-byte-key>",
+        },
+    ],
+    // Keyed `<package>:<detail>` because nothing imports it: `ShardRegistryDO` is bound by
+    // wrangler and called from generated code, so `secretSourcesFromBindings` reports it
+    // off the registry binding (`hostsShardRegistry`).
+    "@lunora/do:shardRegistry": [
+        {
+            description:
+                "Signs every request to ShardRegistryDO, which refuses unsigned ones, and the shard-to-shard control channel. Set the same value on the worker and every Durable Object. Generate with: openssl rand -hex 32",
+            docsUrl: "https://lunora.sh/docs/concepts/sharding#the-shard-registry",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: SHARD_RELAY_HOST_PLACEHOLDER,
+        },
+    ],
     // Keyed by the SUBPATH, because that is what `FLAG_PACKAGES` reports for
     // `ctx.r2sql` (the surface is codegen-wired onto ActionCtx; nothing imports
     // the package). Without these three the emitted ctx-builder fell through to
@@ -147,22 +181,50 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
             placeholderValue: "<your-resend-api-key>",
         },
     ],
+    // Keyed by the event-log DO an app exports rather than a package import: `EventLogDO` refuses
+    // every request without this secret, and `EventLogDOClient` throws at construction without it.
+    "@lunora/replica:eventLog": [
+        {
+            description:
+                "Signs every request to EventLogDO, which refuses unsigned ones, and the calls from the worker that reads or appends the log. Set the same value on the worker and every Durable Object. Generate with: openssl rand -hex 32",
+            docsUrl: "https://lunora.sh/docs/packages/replica#eventlogdo",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: SHARD_RELAY_HOST_PLACEHOLDER,
+        },
+    ],
+    // A worker that only constructs `EventLogDOClient` takes the value its host minted. Not a relay host source, so it never mints one.
+    "@lunora/replica:eventLogClient": [
+        {
+            description:
+                "The LUNORA_RELAY_SECRET of the worker that hosts EventLogDO. EventLogDOClient throws at construction without it, and the log refuses every request signed with another value.",
+            docsUrl: "https://lunora.sh/docs/packages/replica#eventlogdo",
+            key: SHARD_RELAY_SECRET_KEY,
+            placeholderValue: "<your-eventlogdo-host-relay-secret>",
+        },
+    ],
     // `@lunora/notify` itself needs no secret: each push channel's are keyed by the
     // channel `defineNotify` configures, so a webPush-only app is not told to set
     // FCM_* (#1039) — the same reason the payment adapters are keyed by subpath.
     "@lunora/notify:fcm": [
         {
-            description: "Firebase project id for FCM (HTTP v1) push. Found in the Firebase console project settings.",
+            description:
+                "Google service-account key file for FCM HTTP v1, base64-encoded on one line for .dev.vars (.dev.vars cannot hold its JSON quotes); in production use: wrangler secret put FCM_SERVICE_ACCOUNT < key.json. fcmFromEnv mints access tokens from it and reads the project id from it. Download it from the Firebase console (Project settings → Service accounts).",
+            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
+            key: "FCM_SERVICE_ACCOUNT",
+            placeholderValue: "<base64-of-your-service-account-key-json>",
+        },
+    ],
+    // An `fcm` channel that passes its own `getAccessToken` needs no key file for its token, but still
+    // takes its project from env unless it sets a literal `projectId` too (then no source at all).
+    // fcmFromEnv would also read the project from FCM_SERVICE_ACCOUNT; the registry cannot express
+    // "either key", so it asks for the dedicated one.
+    "@lunora/notify:fcmTokenSource": [
+        {
+            description:
+                "Firebase project id for FCM HTTP v1. Your fcm channel supplies its own getAccessToken, so only the project id comes from env. Find it in the Firebase console (Project settings).",
             docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
             key: "FCM_PROJECT_ID",
             placeholderValue: "<your-firebase-project-id>",
-        },
-        {
-            description:
-                "OAuth2 access token for FCM (HTTP v1). Convenient for dev but expires — in production supply a getAccessToken() in defineNotify instead. Obtain via the Google Cloud SDK / a service account.",
-            docsUrl: "https://lunora.sh/docs/packages/notify#fcm",
-            key: "FCM_ACCESS_TOKEN",
-            placeholderValue: "<your-fcm-access-token>",
         },
     ],
     "@lunora/notify:webPush": [
@@ -276,7 +338,9 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
  * Every secret key Lunora can mint a value for locally (a random 32-byte hex,
  * like `openssl rand -hex 32`) — the registry entries whose placeholder is that
  * marker rather than an angle-bracket `<your-…>` one (which means the value comes
- * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}.
+ * from a provider's dashboard), plus {@link EXTRA_MINTABLE_SECRET_KEYS}. The relay
+ * key is left out: {@link mintableSecretKeysFor} adds it back for every project
+ * that does not only construct the client.
  *
  * This set, not a key's NAME, is what makes a value safe to generate. A
  * secret-LOOKING key nothing here declares (`OPENAI_API_KEY`, a project's own
@@ -287,18 +351,30 @@ const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntr
 const MINTABLE_SECRET_KEYS: ReadonlySet<string> = new Set([
     ...EXTRA_MINTABLE_SECRET_KEYS,
     ...[...CORE_SECRETS, ...Object.values(PACKAGE_SECRETS_REGISTRY).flat()]
-        .filter((entry) => isSecretKeyName(entry.key) && !entry.placeholderValue.startsWith("<"))
+        .filter((entry) => isSecretKeyName(entry.key) && !entry.placeholderValue.startsWith("<") && entry.key !== SHARD_RELAY_SECRET_KEY)
         .map((entry) => entry.key),
 ]);
+
+/**
+ * The keys a project may mint, given its secret sources. The relay key is withheld only from a project that just constructs
+ * `EventLogDOClient`: that worker must take its host's value, so a fresh one would only be refused. Every other project mints it,
+ * including one with no relay source at all, where a generated value is never read and so does no harm.
+ */
+const mintableSecretKeysFor = (packageNames: ReadonlyArray<string>): ReadonlySet<string> => {
+    const clientOnly = packageNames.includes(RELAY_CLIENT_SOURCE) && !packageNames.some((name) => RELAY_HOST_SOURCES.has(name));
+
+    return clientOnly ? MINTABLE_SECRET_KEYS : new Set([...MINTABLE_SECRET_KEYS, SHARD_RELAY_SECRET_KEY]);
+};
 
 const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] => {
     const result: SecretEntry[] = [];
 
     for (const name of packageNames) {
-        const entries = PACKAGE_SECRETS_REGISTRY[name];
-
-        if (entries !== undefined) {
-            result.push(...entries);
+        for (const entry of PACKAGE_SECRETS_REGISTRY[name] ?? []) {
+            // Two sources can declare one key (a host with both the registry and the log): list it once.
+            if (!result.some((existing) => existing.key === entry.key)) {
+                result.push(entry);
+            }
         }
     }
 
@@ -306,4 +382,12 @@ const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] 
 };
 
 export type { SecretEntry };
-export { CORE_SECRETS, MINTABLE_SECRET_KEYS, PACKAGE_SECRETS_REGISTRY, secretsForPackages };
+export {
+    CORE_SECRETS,
+    MINTABLE_SECRET_KEYS,
+    mintableSecretKeysFor,
+    PACKAGE_SECRETS_REGISTRY,
+    secretsForPackages,
+    SHARD_RELAY_HOST_PLACEHOLDER,
+    SHARD_RELAY_SECRET_KEY,
+};

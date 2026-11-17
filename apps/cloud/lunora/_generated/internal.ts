@@ -69,7 +69,7 @@ export interface InternalApiTypes {
         cleanupExpiredPreviews: FunctionReference<"mutation", {}, { destroyed: number; }>;
         ejectTarget: FunctionReference<"query", { deployKey: unknown; deploymentId: Id<"deployments"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
         pruneSuperseded: FunctionReference<"mutation", {}, { pruned: number; }>;
-        releaseTarget: FunctionReference<"query", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; cronSpecs?: string[]; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; runtime?: "worker"; target?: string }>;
+        releaseTarget: FunctionReference<"query", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; cronSpecs?: string[]; kind: "production" | "preview" | "dev"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; runtime?: "worker"; target?: string }>;
         rollback: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
     };
     domains: {

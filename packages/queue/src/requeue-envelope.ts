@@ -15,7 +15,7 @@
  */
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/dispatch is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { signRequeue, verifyRequeue } from "@lunora/dispatch";
-import { decodeWire, encodeWire } from "@lunora/wire";
+import { encodeWire, parseWire } from "@lunora/wire";
 
 /** The reserved body key a re-enqueued copy carries. */
 const REQUEUED_KEY = "$lunora.requeued$";
@@ -66,7 +66,7 @@ const openRequeue = async (secret: string | undefined, body: unknown): Promise<{
         return undefined;
     }
 
-    return { body: decodeWire(JSON.parse(envelope.body)), id: envelope.id };
+    return { body: parseWire(envelope.body), id: envelope.id };
 };
 
 export { hasRequeueKey, openRequeue, REQUEUED_KEY, sealRequeue };

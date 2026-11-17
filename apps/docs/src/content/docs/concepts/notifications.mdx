@@ -11,7 +11,7 @@ related:
 
 `@lunora/notify` adds multi-channel notifications, wrapping the
 [`@visulima/notification`](https://visulima.com/packages/notification) engine.
-**Web Push** and **FCM** come first, alongside chat, in-app inbox, and webhook
+**Web Push** and **Firebase Cloud Messaging (FCM)** come first, alongside chat, in-app inbox, and webhook
 channels; both are edge-safe under workerd (`fetch` + Web Crypto, no `node:*`).
 It exposes two facades on the function context:
 
@@ -19,8 +19,8 @@ It exposes two facades on the function context:
 - `ctx.push`: the device-push sub-facade (`register`, `send`, `broadcast`, `list`, `unregister`).
 
 <Callout type="info">
-    APNs (`node:http2`) and SMS, plus the BullMQ / pg-boss / SQS queue adapters, are Node-only and are **not** wired into the edge facade. Route heavy fan-out
-    or those channels through [`@lunora/queue`](/docs/packages/queue) instead.
+    Apple Push Notification service (APNs) over `node:http2`, SMS, plus the BullMQ / pg-boss / SQS queue adapters, are Node-only and are **not** wired into the
+    edge facade. Route heavy fan-out or those channels through [`@lunora/queue`](/docs/packages/queue) instead.
 </Callout>
 
 ## Configure `defineNotify`
@@ -36,7 +36,7 @@ import { defineNotify, webPushFromEnv, fcmFromEnv, d1SubscriptionStore } from "@
 
 export default defineNotify({
     webPush: (env) => webPushFromEnv(env), // VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
-    fcm: (env) => fcmFromEnv(env), // FCM_PROJECT_ID / FCM_ACCESS_TOKEN (prefer a getAccessToken in prod)
+    fcm: (env) => fcmFromEnv(env), // FCM_SERVICE_ACCOUNT (+ optional FCM_PROJECT_ID)
     store: (env) => d1SubscriptionStore(env.DB),
 });
 ```
@@ -44,16 +44,48 @@ export default defineNotify({
 ## VAPID / FCM config via `.dev.vars`
 
 `lunora dev` scaffolds these keys into `.dev.vars` from `@lunora/config`'s
-package-secrets registry — only for the channels `defineNotify` configures. Generate a VAPID keypair once with
+package-secrets registry — only for the channels `defineNotify` configures. Generate a Voluntary Application Server Identification (VAPID) keypair once with
 `npx web-push generate-vapid-keys`:
 
 ```
 VAPID_PUBLIC_KEY=<your-vapid-public-key>
 VAPID_PRIVATE_KEY=<your-vapid-private-key>
 VAPID_SUBJECT=mailto:you@example.com
-FCM_PROJECT_ID=<your-firebase-project-id>
-FCM_ACCESS_TOKEN=<your-fcm-access-token>
+FCM_SERVICE_ACCOUNT=<base64-of-your-service-account-key-json>
 ```
+
+`FCM_SERVICE_ACCOUNT` is the Google service-account key file, as JSON or base64 of it.
+`.dev.vars` cannot hold the JSON's quotes, so store it base64-encoded there:
+`lunora env set FCM_SERVICE_ACCOUNT "$(base64 < key.json | tr -d '\n')"`. In production
+the raw JSON works too: `wrangler secret put FCM_SERVICE_ACCOUNT < key.json`.
+`fcmFromEnv` mints FCM access tokens from it on demand (edge-safe, via Web Crypto)
+and caches each token until shortly before it expires, so the same
+`fcmFromEnv(env)` line is correct in production. `FCM_PROJECT_ID` is optional; it
+overrides the `project_id` in the key. A static `FCM_ACCESS_TOKEN` is still accepted
+when no service account is set, for local work only: it expires within the hour.
+
+To mint tokens yourself, for example with `google-auth-library`, pass your own
+`getAccessToken`: `fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken })` or
+`fcm: (env) => fcmFromEnv(env, { getAccessToken })`. Lunora reads that from
+the `fcm` entry of an inline `defineNotify({...})` in `lunora/notify.ts`, so `lunora dev`
+and `lunora deploy` then ask for `FCM_PROJECT_ID` instead of `FCM_SERVICE_ACCOUNT`. Set
+it even if the key file is still in env: the preflight does not take the project id from
+the key file. If the same object also sets `projectId` to a string, no FCM key is asked
+for at all. A config the build cannot read keeps asking for `FCM_SERVICE_ACCOUNT`.
+
+A push payload must fit in 4096 bytes, the limit for both FCM and Web Push. A larger
+send is rejected with `PAYLOAD_TOO_LARGE` before any device is contacted.
+
+## Native devices (Android and iOS)
+
+Native FCM tokens come from the device, not from Expo's push service:
+
+- **Android:** `getDevicePushTokenAsync()` from `expo-notifications` returns the FCM
+  registration token. Register it with `ctx.push.register({ kind: "fcm", token, userId })`.
+- **iOS:** `getDevicePushTokenAsync()` returns an APNs token, which FCM v1 does not
+  accept. Get an FCM token from the Firebase Messaging SDK instead (with your APNs key
+  uploaded to the Firebase project) and register that the same way. Direct APNs
+  delivery uses `node:http2`, so it is not on the edge facade.
 
 ## Register a browser push subscription
 

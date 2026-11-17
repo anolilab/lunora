@@ -23,6 +23,7 @@ export type {
     NavigateOptions,
     PageLike,
     PdfOptions,
+    PlaywrightModuleLike,
     QuickActionName,
     QuickActionOptions,
     RouteLike,

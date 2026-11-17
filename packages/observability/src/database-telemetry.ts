@@ -31,7 +31,8 @@ import type { LogFields } from "../../../shared/log-fields";
 import { otlpRandomHex } from "../../../shared/otlp";
 import type { SpanEvent } from "../../../shared/span-event";
 import type { TraceAnchor } from "./context-telemetry";
-import { redactArgs } from "./request-log";
+import type { SensitiveScope } from "./request-log";
+import { NO_SENSITIVE_SCOPE, redactArgs } from "./request-log";
 import { sqlOperationName, sqlSystemOf } from "./sql-operation";
 import { toErrorType } from "./trace-context";
 
@@ -90,10 +91,10 @@ const INSTRUMENTED_METHODS = new Set([
 
 /**
  * Methods whose FIRST argument is the table name. Used only to give a span a
- * low-cardinality name (`db.findMany messages`); the id-first methods
- * (`get`/`patch`/`delete`) deliberately do NOT put the id in the name, because a
- * span name containing a row id makes every call its own group in a collector
- * and destroys the aggregate views the span exists to feed.
+ * low-cardinality name (`db.findMany messages`). A by-id call takes the table
+ * first too, so its span is named by table; the row id is never in the name,
+ * because a span name containing a row id makes every call its own group in a
+ * collector and destroys the aggregate views the span exists to feed.
  *
  * Local on purpose, and NOT `@lunora/shard-engine`'s `LOOP_GATED_METHODS`: that
  * one records how the RLS guard wraps a method, so it omits `deleteWhere` and
@@ -105,21 +106,28 @@ const INSTRUMENTED_METHODS = new Set([
 const TABLE_FIRST_METHODS = new Set([
     "aggregate",
     "count",
+    "delete",
+    "deleteMany",
     "deleteWhere",
     "explain",
     "findFirst",
     "findFirstOrThrow",
     "findMany",
+    "get",
     "groupBy",
     "insert",
     "insertMany",
     "insertManyUnsafe",
+    "patch",
     "patchIf",
+    "patchMany",
     "patchWhere",
     "rank",
     "rankBefore",
     "rankPage",
     "rankPageRows",
+    "replace",
+    "restore",
 ]);
 
 /** Table name from a call's arguments, when the method takes it first. */
@@ -209,6 +217,8 @@ interface DatabaseTelemetryDeps {
     mode: DatabaseInstrumentation;
     /** Hand a finished span to the buffer + sink (`"spans"` mode only). */
     record: (span: SpanEvent) => void;
+    /** The invocation's `v.sensitive` values; a driver's error message can quote one. */
+    scope?: SensitiveScope;
 
     /** Shard key for single-shard calls; absent for the unnamed root DO. */
     shardKey: string | undefined;
@@ -257,11 +267,16 @@ interface CallOutcome {
  * data Lunora never owned and a PII pattern will not reliably catch.
  */
 const failureMessage = (failure: unknown, deps: DatabaseTelemetryDeps, policy: "redact" | "type-only"): string => {
+    // A driver's message can quote the row it rejected (a Postgres unique-key
+    // violation names the key), so the invocation's marked values come out first,
+    // on the dev path too.
+    const scrubbed = (deps.scope ?? NO_SENSITIVE_SCOPE).text(describeFailure(failure));
+
     if (policy === "redact") {
-        return redactArgs(describeFailure(failure), deps.captureRaw) as string;
+        return redactArgs(scrubbed, deps.captureRaw) as string;
     }
 
-    return deps.captureRaw === true ? describeFailure(failure) : toErrorType(failure);
+    return deps.captureRaw === true ? scrubbed : toErrorType(failure);
 };
 
 /**
@@ -318,6 +333,8 @@ const observeCall = async (
     const startTs = Date.now();
     let failure: unknown;
     let result: unknown;
+    // Held until the span is recorded: the call can settle after the dispatch has.
+    const releaseScope = (deps.scope ?? NO_SENSITIVE_SCOPE).hold();
 
     try {
         result = await run();
@@ -354,6 +371,8 @@ const observeCall = async (
         } catch {
             // Best-effort throughout.
         }
+
+        releaseScope();
     }
 };
 

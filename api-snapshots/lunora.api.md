@@ -161,7 +161,15 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DefineRoomOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DefineStorageRuleInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DefineWebSocketOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -262,6 +270,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `HttpRouteBuilder` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `HttpRouteCacheOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -385,6 +397,62 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LivePublishOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LivePublisher` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveRouterApp` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveRouterFallback` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveStream` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveStreamConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveStreamMount` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveSubscribeHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveSubscribeOptions` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicDeclaration` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicKey` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicPayload` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicRef` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopics` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LogFields` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -481,6 +549,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MigrationCovers` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MigrationCtx` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -549,6 +621,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `PROCEDURE_META` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `PaginationOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -586,6 +662,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `PolicyDecisionOf` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `PolicyMiddleware` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -657,6 +737,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredLifecycleHook` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -681,11 +777,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredRoom` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredShape` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredStream` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredWebSocket` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -737,6 +841,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RlsContextIn` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RlsOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -749,7 +857,31 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RoomJoinHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RoomLeaveHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RoomMessageHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RoomMessageOf` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RoomSocket` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RunQueryOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduleRunOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -758,6 +890,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -805,6 +945,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ShardFetch` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ShardFetchInit` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShardInitEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -842,6 +990,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SseEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1049,6 +1201,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `UNLOADED_META` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `VERSION` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1110,6 +1266,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `VectorizeOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketCloseHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketMessageHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketOpenHandler` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1261,7 +1433,15 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `defineLazyFacade` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineListArgs` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineLiveStream` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1305,6 +1485,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `defineRoom` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineSchema` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1330,6 +1514,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineVectorIndex` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineWebSocket` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1381,6 +1569,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `lastEventId` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `liveStreamRouter` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `mask` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1417,6 +1613,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `procedureMeta` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `protectPublic` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -1430,6 +1630,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `serveStorageObject` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `sseEvent` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -1462,6 +1666,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 ### `ActionCallOptions` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AdminTokenSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `ArgsOf` (type)
 
@@ -1498,6 +1706,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 ### `AuthSession` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `AuthTokenFetcher` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AuthTokenProviderOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `AuthUser` (interface)
 
@@ -1551,15 +1767,43 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `ConnectLiveStreamOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `ConnectionStatus` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CreatedAdminToken` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `CronJobInfo` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `CronRunInFlight` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CronRunRecord` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CronRunStatus` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `CronRunsResult` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `DEFAULT_MAX_BUFFER` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `DeploymentPauseStatus` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1639,6 +1883,30 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `LiveStream` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `LiveStreamEvent` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `LiveStreamSubscribeError` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `LiveStreamSubscribeOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `LiveTopicOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `LiveTopicRef` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `LunoraClient` (class)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1684,6 +1952,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `OfflineQueueOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `OnlineOnlyOption` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1779,6 +2051,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `RoomRef` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `RowOp` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1796,6 +2072,18 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `ScheduleRetryPolicy` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduledHistoryPage` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1851,6 +2139,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `SubscribeLiveTopicOptions` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `SubscriptionCallback` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1868,6 +2160,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `SubscriptionState` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `SyncStatus` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -1903,6 +2199,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `WorkflowInstanceCreated` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `WorkflowInstanceDetail` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -1928,6 +2228,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `applyDelta` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `connectLiveStream` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2023,6 +2327,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `liveTopicSubscription` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `maxSeq` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -2043,9 +2351,43 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `setAuthTokenProvider` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `subscribeLiveTopic` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+## `lunorash/client/admin`
+
+### `LunoraAdminClient` (class)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isLunoraAdminClient` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `requireAdminAuthClient` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ## `lunorash/client/auth`
 
+### `ADMIN_AUTH_DEFAULT_PAGE_SIZE` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `AUTH_STATUSES` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AdminAuthList` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `AdminAuthListQueryOptions` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2053,7 +2395,47 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `AuthUsersListFilter` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `IdentityStore` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `adminAuthImpersonateMutation` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `adminAuthListHasMore` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `adminAuthListPlaceholder` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `adminAuthListQueryKey` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `adminAuthListQueryOptions` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `authOrganizationsList` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `authSessionsList` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `authSignUpInvitationsList` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `authUsersList` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2069,6 +2451,14 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `nextAdminAuthLimit` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `subscribeAdminAuthIdentity` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ## `lunorash/client/pagination`
 
 ### `JOIN_FACTOR` (const)
@@ -2076,6 +2466,10 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `Page` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `PageFailure` (type)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2099,11 +2493,23 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `classifyPageFailure` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `derivePaginationStatus` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `headPage` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
 ### `initialPages` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `isHeadPage` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2118,6 +2524,14 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `FunctionReference` (interface)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `LunoraQueryKey` (type)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `LunoraQueryOptions` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2154,6 +2568,18 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `createQuerySubscription` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `lunoraQueryKey` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `lunoraQueryKeyFromArgsKey` (const)
+
+Re-exported from `@lunora/client` — signature tracked at its source.
+
+### `lunoraQueryOptions` (const)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
@@ -2365,6 +2791,14 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ## `lunorash/do`
 
+### `ADMIN_REVOCATION_DO_NAME` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `AdminRevocationDO` (class)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `AdvisorProcedure` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
@@ -2384,6 +2818,18 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 ### `DatabaseWriterLike` (interface)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `DeliveryAuthorization` (type)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `DeliveryAuthorizationRequest` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `DeliveryPermit` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `DispatchBookmark` (interface)
 
@@ -2553,6 +2999,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `SensitiveScope` (interface)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `SessionDO` (class)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
@@ -2582,6 +3032,10 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 ### `ShardRegistryDO` (class)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
+### `ShardRegistryRpc` (interface)
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
@@ -2721,6 +3175,10 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 Re-exported from `@lunora/do` — signature tracked at its source.
 
+### `createStableRandomFactory` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `createWorkerPlatform` (const)
 
 Re-exported from `@lunora/platform-cloudflare` — signature tracked at its source.
@@ -2729,9 +3187,17 @@ Re-exported from `@lunora/platform-cloudflare` — signature tracked at its sour
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
+### `hostedShardRegistry` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
+
 ### `importShardRows` (const)
 
 Re-exported from `@lunora/shard-engine` — signature tracked at its source.
+
+### `installDeliveryFence` (const)
+
+Re-exported from `@lunora/do` — signature tracked at its source.
 
 ### `isSourceDue` (const)
 
@@ -2795,6 +3261,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
+### `ERROR_HINTS` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
 ### `ErrorBody` (interface)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
@@ -2808,6 +3278,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `ErrorLocation` (interface)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `HTTP_STREAM_NO_BODY_HINT` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
@@ -2832,6 +3306,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `MESSAGE_SOLUTIONS` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `OFFLINE_NOT_QUEUED_HINT` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
@@ -2868,6 +3346,10 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
 ### `getCatalogEntry` (const)
+
+Re-exported from `@lunora/errors` — signature tracked at its source.
+
+### `getCatalogHint` (const)
 
 Re-exported from `@lunora/errors` — signature tracked at its source.
 
@@ -3259,6 +3741,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `NO_SENSITIVE_SCOPE` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `QueryInsightBucket` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -3311,6 +3797,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `SENSITIVE_ARG_MASK` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `SecurityAuditResult` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -3324,6 +3814,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `SecurityFindingLevel` (type)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `SensitiveScope` (interface)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3411,6 +3905,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `createSensitiveScope` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `createSpanCollector` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
@@ -3472,6 +3970,10 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
 ### `latencyBucketIndex` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `maskSensitiveArgs` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3551,7 +4053,19 @@ Re-exported from `@lunora/observability` — signature tracked at its source.
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
+### `redactCredentials` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
 ### `resolveTraceAnchor` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `sensitiveNames` (const)
+
+Re-exported from `@lunora/observability` — signature tracked at its source.
+
+### `sensitiveValues` (const)
 
 Re-exported from `@lunora/observability` — signature tracked at its source.
 
@@ -3745,6 +4259,18 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `SECRET_VALUE_MAX_BYTES` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SECRET_VALUE_MAX_TTL_MS` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SOCKET_TAG_BUDGET` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `ScheduleOptions` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
@@ -3753,11 +4279,47 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
+### `ScheduledJobRecord` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
 ### `ScheduledJobStatus` (interface)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `SchedulerHost` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueHost` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueKeyError` (class)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueKeyOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValuePutOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueStore` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueTakeOptions` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `SecretValueTooLargeError` (class)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -3862,6 +4424,22 @@ Re-exported from `@lunora/platform` — signature tracked at its source.
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
 ### `VectorizeVector` (interface)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `assertSecretValueSize` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `clampSecretValueTtl` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `encryptingSecretValueHost` (const)
+
+Re-exported from `@lunora/platform` — signature tracked at its source.
+
+### `findSocketTagBudgetViolation` (const)
 
 Re-exported from `@lunora/platform` — signature tracked at its source.
 
@@ -4021,6 +4599,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AdminTokenSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `AiRunBinding` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `AirbyteMessage` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4034,6 +4620,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `AnalyticsEngineSinkOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `AssetsFetcherLike` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4113,6 +4703,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `CreatedAdminToken` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `CronHandler` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4122,6 +4716,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `CronJobInfo` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `CrossOriginOpenerPolicy` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4705,6 +5303,10 @@ Re-exported from `@lunora/shard-engine` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `ShardRegistryRpc` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `ShardTrafficEntry` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4721,6 +5323,22 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `SinkEnricher` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SinkEvent` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SinkRouteOptions` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `SinkSignalKind` (type)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `SpanEvent` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4734,6 +5352,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `StorageObject` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `StudioDocumentName` (type)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -4909,6 +5531,14 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `enrichSink` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `filterSink` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `handleCorsPreflight` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -4918,6 +5548,10 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `isBackupManifestKey` (const)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `loadStudioDocument` (const)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
@@ -5175,7 +5809,15 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `DefineRoomOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `DefineStorageRuleInput` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `DefineWebSocketOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5276,6 +5918,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `HttpRouteBuilder` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `HttpRouteCacheOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5399,6 +6045,62 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `LivePublishOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LivePublisher` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveRouterApp` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveRouterFallback` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveStream` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveStreamConfig` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveStreamMount` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveSubscribeHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveSubscribeOptions` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicDeclaration` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicKey` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicPayload` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopicRef` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `LiveTopics` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `LogFields` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5495,6 +6197,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `MigrationCovers` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `MigrationCtx` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5563,6 +6269,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `PROCEDURE_META` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `PaginationOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5600,6 +6310,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `PolicyDecisionOf` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `PolicyMiddleware` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5671,6 +6385,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredLifecycleHook` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5695,11 +6425,19 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredRoom` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredShape` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `RegisteredStream` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredWebSocket` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5751,6 +6489,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RlsContextIn` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RlsOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5763,7 +6505,31 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RoomJoinHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RoomLeaveHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RoomMessageHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RoomMessageOf` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RoomSocket` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RunQueryOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduleRunOptions` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5772,6 +6538,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -5819,6 +6593,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ShardFetch` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ShardFetchInit` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ShardInitEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -5856,6 +6638,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `SpanOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `SseEvent` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6063,6 +6849,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `UNLOADED_META` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `VERSION` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6124,6 +6914,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `VectorizeOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketCloseHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketHandle` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketMessageHandler` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `WebSocketOpenHandler` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6275,7 +7081,15 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `defineLazyFacade` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineListArgs` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineLiveStream` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6319,6 +7133,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `defineRoom` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `defineSchema` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6344,6 +7162,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `defineVectorIndex` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `defineWebSocket` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6395,6 +7217,14 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `lastEventId` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `liveStreamRouter` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `mask` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6431,6 +7261,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `procedureMeta` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `protectPublic` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -6444,6 +7278,10 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `serveStorageObject` (const)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `sseEvent` (const)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -6639,6 +7477,26 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 ## `lunorash/server/drizzle`
 
+### `AnySQLiteAsyncDelete` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncInsert` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncRelationalQuery` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncSelect` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `AnySQLiteAsyncUpdate` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `AnySQLiteColumn` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -6671,7 +7529,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `BaseSQLiteDatabase` (class)
+### `AnySQLiteView` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6703,11 +7561,15 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `CustomTypeValues` (type)
+### `CustomTypeValues` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `DBResult` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `DrizzleSQLiteConfig` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6759,6 +7621,14 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `NoDuplicateColumns` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `NoUnknownKeysInInsertSelection` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `OnConflict` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -6795,7 +7665,143 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteAsyncDialect` (class)
+### `SQLiteAliasType` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncCountBuilder` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncCountBuilderKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDatabase` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDelete` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeleteBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeleteExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeleteHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncDeletePrepare` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsert` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertBuilder` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncInsertPrepare` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncPreparedQuery` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncPreparedQueryConfig` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRaw` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRelationalQuery` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRelationalQueryHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncRelationalQueryKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelect` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectBuilder` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSelectPrepare` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncSession` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncTransaction` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdate` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateBase` (class+interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateBuilder` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateExecute` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdateHKT` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteAsyncUpdatePrepare` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6815,19 +7821,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteBigIntBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteBlobBuffer` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteBlobBufferBuilder` (class)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteBlobBufferBuilderInitial` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6839,10 +7837,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteBlobJsonBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteBoolean` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -6851,7 +7845,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteBooleanBuilderInitial` (type)
+### `SQLiteBuildRelationalQueryConfig` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteCodecs` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6863,7 +7861,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteColumnBuilderBase` (interface)
+### `SQLiteColumnType` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteColumns` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6899,11 +7901,15 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteDeleteExecute` (type)
+### `SQLiteDeleteHKTBase` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteDeletePrepare` (type)
+### `SQLiteDeleteKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteDeleteQueryBuilderHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6947,6 +7953,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `SQLiteInsertBuilderConstructor` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `SQLiteInsertConfig` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -6955,7 +7965,15 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteInsertExecute` (type)
+### `SQLiteInsertHKTBase` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteInsertKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteInsertOnConflict` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6963,7 +7981,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteInsertPrepare` (type)
+### `SQLiteInsertQueryBuilderHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6975,7 +7993,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteInsertSelectQueryBuilder` (type)
+### `SQLiteInsertSelection` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -6995,10 +8013,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteIntegerBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteNumeric` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7011,15 +8025,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteNumericBigIntBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteNumericBuilder` (class)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteNumericBuilderInitial` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7035,11 +8041,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteNumericNumberBuilderInitial` (type)
+### `SQLitePreparedQuery` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLitePreparedQuery` (class)
+### `SQLiteQueryExecutors` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7051,19 +8057,19 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteRealBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteSelect` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteSelectBase` (class+interface)
+### `SQLiteSelectBase` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteSelectBuilder` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteSelectBuilderConstructor` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7080,10 +8086,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteSelectExecute` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteSelectHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7107,15 +8109,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteSelectPrepare` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteSelectQueryBuilder` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteSelectQueryBuilderBase` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7147,7 +8141,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteSyncDialect` (class)
+### `SQLiteSyncCountBuilder` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteSyncRelationalQuery` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7179,10 +8177,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteTextBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteTextConfig` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7195,10 +8189,6 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteTextJsonBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteTimestamp` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7207,15 +8197,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteTimestampBuilderInitial` (type)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
-### `SQLiteTransaction` (class)
-
-Re-exported from `drizzle-orm` — signature tracked at its source.
-
 ### `SQLiteTransactionConfig` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteType` (type)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7231,6 +8217,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `SQLiteUpdateBuilderConstructor` (interface)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `SQLiteUpdateConfig` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7239,7 +8229,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteUpdateExecute` (type)
+### `SQLiteUpdateHKTBase` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7247,7 +8237,11 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `SQLiteUpdatePrepare` (type)
+### `SQLiteUpdateKind` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteUpdateQueryBuilderHKT` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7272,6 +8266,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `SQLiteView` (class)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `SQLiteViewFn` (interface)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7327,6 +8325,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `ValidateInsertSelectionKey` (type)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `ViewBuilder` (class)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7355,6 +8357,46 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `booleanFromInteger` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBinary` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBinaryIfAvailable` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBytes` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromBytesIfAvailable` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bufferFromHex` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `bytesFromUtf8` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `camelCase` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `castToHex` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `castToText` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `check` (function)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7363,15 +8405,31 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `dateFromMilliseconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `dateFromSeconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `dateFromStoredMilliseconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `dateFromStoredSeconds` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `except` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `extractUsedTable` (function)
+### `foreignKey` (function)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `foreignKey` (function)
+### `genericSQLiteCodecs` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7399,6 +8457,14 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `migrateAsync` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `migrateSync` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `numeric` (function)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7411,6 +8477,22 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
+### `refineSqliteCodecs` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `resolveSQLiteTypeAlias` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `resolveUnionType` (function)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `snakeCase` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
 ### `sqliteTable` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
@@ -7419,7 +8501,7 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
-### `sqliteView` (function)
+### `sqliteView` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7432,6 +8514,10 @@ Re-exported from `drizzle-orm` — signature tracked at its source.
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
 ### `unionAll` (const)
+
+Re-exported from `drizzle-orm` — signature tracked at its source.
+
+### `unionsTypeTable` (const)
 
 Re-exported from `drizzle-orm` — signature tracked at its source.
 
@@ -7677,6 +8763,22 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `RegisteredInternalAction` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalMutation` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalQuery` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `RegisteredInternalStream` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `RegisteredLifecycleHook` (type)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
@@ -7737,11 +8839,23 @@ Re-exported from `@lunora/server` — signature tracked at its source.
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
+### `ScheduleRunOptions` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
 ### `ScheduledFunctionDoc` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
 ### `ScheduledJob` (interface)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobState` (type)
+
+Re-exported from `@lunora/server` — signature tracked at its source.
+
+### `ScheduledJobView` (interface)
 
 Re-exported from `@lunora/server` — signature tracked at its source.
 
@@ -8199,6 +9313,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 
+### `containsSensitive` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
 ### `cyrb53` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
@@ -8219,6 +9337,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 
+### `isStringValidator` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
 ### `jsonSchemaFromNode` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
@@ -8232,6 +9354,10 @@ Re-exported from `@lunora/values` — signature tracked at its source.
 Re-exported from `@lunora/values` — signature tracked at its source.
 
 ### `parseValidatorMap` (const)
+
+Re-exported from `@lunora/values` — signature tracked at its source.
+
+### `sensitiveArgumentNames` (const)
 
 Re-exported from `@lunora/values` — signature tracked at its source.
 

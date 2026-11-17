@@ -134,8 +134,8 @@ Install dependencies and start the dev server with your package manager
 
 ```bash
 pnpm build                   # vite build → dist/analog (client + Nitro server)
-wrangler deploy              # single worker: Analog SSR + Lunora + ShardDO
-# or: pnpm deploy
+lunora deploy                # single worker: Analog SSR + Lunora + ShardDO
+# or: pnpm run deploy
 ```
 
 ## Stack

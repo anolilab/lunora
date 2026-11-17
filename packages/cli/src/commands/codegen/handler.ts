@@ -1,15 +1,15 @@
 import type { Finding } from "@lunora/codegen";
 import { runCodegen } from "@lunora/codegen";
-import { applyLintIgnores, detectLintTools, inferLunoraBindings, resolveSchemaDirectory } from "@lunora/config";
+import { applyLintIgnores, detectLintTools, inferLunoraBindings, resolveLazyFunctions, resolveSchemaDirectory } from "@lunora/config";
 import type { ExportGap } from "@lunora/config/cloudflare";
-import { collectExportGaps, warnCloudflareCliConfigOnce, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { collectExportGaps, reconcileStudioAssets, warnCloudflareCliConfigOnce, wranglerCodegenInputs } from "@lunora/config/cloudflare";
 
 import { evaluateAdvisoryGate, resolveStrictAdvisories } from "../../util/advisory-gate";
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveTargetOrError } from "../../util/deploy-target";
+import { resolveTargetOrError } from "../../util/deploy-target-resolve";
 import { EXIT_CODE } from "../../util/exit-code";
 import { reportLintIgnoreOutcomes } from "../../util/lint-ignore-report";
 import type { Logger } from "../../util/logger";
@@ -26,6 +26,8 @@ interface CodegenCommandOptions {
     cwd?: string;
     /** Output format: `pretty` (default) or `json`. */
     format?: OutputFormat;
+    /** Opt into per-module lazy function loading; also enabled by LUNORA_LAZY_FUNCTIONS. */
+    lazyFunctions?: boolean;
     logger: Logger;
 
     /**
@@ -40,7 +42,7 @@ interface CodegenCommandOptions {
 
 /** The `--format json` payload: what codegen wrote, and what it has to say about it. */
 interface CodegenCommandData {
-    advisories: ReadonlyArray<{ detail: string; level: Finding["level"]; name: string; remediation: string }>;
+    advisories: ReadonlyArray<{ detail: string; level: Finding["level"]; name: string; remediation: string; suppressed?: Finding["suppressed"] }>;
     cronTriggers: ReadonlyArray<string>;
     /** ERROR-level advisories that made the run fail, when strict mode is on. */
     failedAdvisories: number;
@@ -92,10 +94,15 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
 
     const result = runCodegen({
         apiSpec: options.apiSpec,
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         projectRoot,
         target,
-        ...wranglerCodegenInputs(projectRoot),
+        ...wranglerCodegenInputs(projectRoot, target),
     });
+
+    // The emitted Studio loaders may read `ASSETS`; a plain `wrangler deploy` after this never reconciles it.
+    reconcileStudioAssets(projectRoot, target, logger);
+
     const commandResult: CodegenCommandResult = {
         advisories: result.advisories.map((advisory) => {
             return {
@@ -103,6 +110,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
                 level: advisory.level,
                 name: advisory.name,
                 remediation: advisory.remediation,
+                suppressed: advisory.suppressed,
             };
         }),
         cronTriggers: result.cronTriggers,
@@ -118,11 +126,24 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     // Static schema advisories (unindexed FKs, …). Surface each with its
     // remediation so the warning is actionable; one grouped `warn` keeps it in
     // line with the cron-trigger warning below.
-    if (result.advisories.length > 0) {
-        const count = result.advisories.length;
-        const lines = result.advisories.map((advisory) => `  [${advisory.level}] ${advisory.name} — ${advisory.detail}\n      ↳ ${advisory.remediation}`);
+    // A suppressed finding was accepted by an inline directive: it stays listed
+    // with its reason, but it is not a warning to act on.
+    const active = result.advisories.filter((advisory) => advisory.suppressed === undefined);
+    const suppressed = result.advisories.filter((advisory) => advisory.suppressed !== undefined);
+
+    if (active.length > 0) {
+        const count = active.length;
+        const lines = active.map((advisory) => `  [${advisory.level}] ${advisory.name} — ${advisory.detail}\n      ↳ ${advisory.remediation}`);
 
         logger.warn(`${count.toString()} schema ${count === 1 ? "advisory" : "advisories"}:\n${lines.join("\n")}`);
+    }
+
+    if (suppressed.length > 0) {
+        const lines = suppressed.map(
+            (advisory) => `  [${advisory.level}] ${advisory.name} (suppressed: ${advisory.suppressed?.reason ?? ""}) — ${advisory.detail}`,
+        );
+
+        logger.info(`${suppressed.length.toString()} suppressed:\n${lines.join("\n")}`);
     }
 
     const platform = reportPlatformDiagnostics(result.platformDiagnostics, logger);
@@ -242,6 +263,7 @@ const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions, Co
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         format,
+        lazyFunctions: resolveLazyFunctions(options.lazyFunctions),
         logger,
         strictAdvisories: options.strictAdvisories,
         target: options.target,

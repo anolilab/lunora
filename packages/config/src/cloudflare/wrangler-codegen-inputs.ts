@@ -3,23 +3,38 @@
  * that writes `_generated/` spreads this into its options, so the CLI, the Vite
  * and Rspack plugins and the studio all emit the same files.
  */
-import { relative } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 
 import type { WranglerQueueProducerIR, WranglerVariableIR } from "@lunora/codegen";
 
 import { isPlainObject } from "./guards";
+import { spaAssetsBinding as spaAssetsBindingOf } from "./spa-assets";
+import { studioAssetsPlan } from "./studio-assets";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
-import { scanWranglerVariablesForSecrets } from "./wrangler-secret-variables";
+import { scanWranglerVariablesForSecrets, variableKeyLines } from "./wrangler-secret-variables";
 import type { QueuesShape } from "./wrangler-shape";
 
 /** The slices read here. Parsed from untrusted JSONC, so any level may be `null` or the wrong type. */
 interface WranglerCodegenShape {
-    env?: Record<string, { queues?: QueuesShape | null } | null> | null;
+    assets?: unknown;
+    env?: Record<string, { assets?: unknown; queues?: QueuesShape | null } | null> | null;
+    main?: unknown;
     queues?: QueuesShape | null;
     vars?: Record<string, unknown> | null;
 }
 
 interface WranglerCodegenInputs {
+    /**
+     * The assets binding of every `assets` block (top level, then each `env.<name>`) that falls back to a single-page
+     * app, each name once. An environment's block replaces the top-level one whole, so each may name its own binding.
+     */
+    spaAssetsBindings?: string[];
+
+    /**
+     * Where Studio's documents ship as Workers Static Assets: the binding, and the assets directory relative to the
+     * project root. Absent keeps them in the Worker bundle (see `studio-assets.ts`).
+     */
+    studioAssets?: { binding: string; directory: string };
     /** Every well-formed `queues.producers[]` entry of the top level and each `env.<name>` block. */
     wranglerQueueProducers: WranglerQueueProducerIR[];
     /** Top-level `vars` entries that look like plaintext secrets. */
@@ -38,18 +53,35 @@ const producersOf = (queues: QueuesShape | null | undefined, env?: string): Wran
     );
 };
 
-/** Both inputs are empty when there is no wrangler config or it does not parse. */
-const wranglerCodegenInputs = (projectRoot: string): WranglerCodegenInputs => {
+/**
+ * Both inputs are empty when there is no wrangler config or it does not parse. Pass the `target` codegen runs with, so
+ * an explicit `--target` decides the Studio documents' placement the same way `reconcileStudioAssets` does.
+ */
+const wranglerCodegenInputs = (projectRoot: string, target?: string): WranglerCodegenInputs => {
     const wranglerPath = findWranglerFile(projectRoot);
-    const parsed = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerCodegenShape>(wranglerPath).parsed;
+    const read = wranglerPath === undefined ? undefined : readWranglerJsonc<WranglerCodegenShape>(wranglerPath);
+    const parsed = read?.parsed;
 
-    if (wranglerPath === undefined || parsed === undefined) {
+    if (wranglerPath === undefined || read?.text === undefined || parsed === undefined) {
         return { wranglerQueueProducers: [], wranglerVariables: [] };
     }
 
+    const keyLines = variableKeyLines(read.text);
+    const spaAssetsBindings = [
+        ...new Set([parsed.assets, ...Object.values(parsed.env ?? {}).map((block) => block?.assets)].flatMap((assets) => spaAssetsBindingOf(assets) ?? [])),
+    ];
+
+    const studioAssets = studioAssetsPlan(projectRoot, parsed, target);
+
     return {
+        ...(spaAssetsBindings.length === 0 ? {} : { spaAssetsBindings }),
+        ...(studioAssets === undefined
+            ? {}
+            : { studioAssets: { binding: studioAssets.binding, directory: relative(projectRoot, resolve(dirname(wranglerPath), studioAssets.directory)) } }),
         wranglerQueueProducers: [...producersOf(parsed.queues), ...Object.entries(parsed.env ?? {}).flatMap(([env, block]) => producersOf(block?.queues, env))],
-        wranglerVariables: scanWranglerVariablesForSecrets(isPlainObject(parsed.vars) ? parsed.vars : undefined, relative(projectRoot, wranglerPath)),
+        wranglerVariables: scanWranglerVariablesForSecrets(isPlainObject(parsed.vars) ? parsed.vars : undefined, relative(projectRoot, wranglerPath), (key) =>
+            keyLines.get(key),
+        ),
     };
 };
 

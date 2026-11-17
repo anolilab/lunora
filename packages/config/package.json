@@ -1,6 +1,6 @@
 {
     "name": "@lunora/config",
-    "version": "1.0.0-alpha.358",
+    "version": "1.0.0-alpha.464",
     "description": "Internal shared CLI + Vite config layer for Lunora: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding",
     "keywords": [
         "bindings",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -52,6 +52,10 @@
             "types": "./dist/cloudflare/index.d.ts",
             "import": "./dist/cloudflare/index.mjs"
         },
+        "./cli": {
+            "types": "./dist/cli/index.d.ts",
+            "import": "./dist/cli/index.mjs"
+        },
         "./studio-host": {
             "types": "./dist/studio-host/index.d.ts",
             "import": "./dist/studio-host/index.mjs"
@@ -66,9 +70,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -76,21 +78,26 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/codegen": "1.0.0-alpha.311",
-        "@lunora/container": "1.0.0-alpha.76",
+        "@lunora/codegen": "^1.0.0-alpha.420",
+        "@lunora/container": "1.0.0-alpha.108",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/seed": "1.0.0-alpha.225",
+        "@lunora/seed": "^1.0.0-alpha.282",
         "@visulima/colorize": "catalog:cli",
         "@visulima/find-ai-runner": "catalog:cli",
         "@visulima/fs": "catalog:cli",
         "@visulima/package": "catalog:cli",
         "dockerode": "catalog:tooling",
         "dotenv": "catalog:node",
+        "dotenv-expand": "catalog:node",
         "es-module-lexer": "catalog:vite",
+        "jiti": "catalog:tooling",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@electric-sql/pglite": "catalog:sql",
+        "@electric-sql/pglite-pgvector": "catalog:sql",
+        "@electric-sql/pglite-socket": "catalog:sql",
         "@types/dockerode": "catalog:types",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
@@ -101,9 +108,21 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
+        "@electric-sql/pglite": "^0.5.8",
+        "@electric-sql/pglite-pgvector": "^0.0.9",
+        "@electric-sql/pglite-socket": "^0.2.11",
         "@lunora/studio": ">=1.0.0-alpha.50 <2.0.0-0"
     },
     "peerDependenciesMeta": {
+        "@electric-sql/pglite": {
+            "optional": true
+        },
+        "@electric-sql/pglite-pgvector": {
+            "optional": true
+        },
+        "@electric-sql/pglite-socket": {
+            "optional": true
+        },
         "@lunora/studio": {
             "optional": true
         }

@@ -149,7 +149,7 @@ export const releaseIdleAliases = async (
     for (const row of owned) {
         if (!claimed.has(row.alias)) {
             // eslint-disable-next-line no-await-in-loop -- one scope's aliases are few
-            await context.db.delete(row._id);
+            await context.db.delete("aliasOwnership", row._id);
         }
     }
 };

@@ -20,13 +20,20 @@ import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import { overlayProviderSubscription, ownerOf } from "./store";
-import type { PaymentSession, PaymentState, Subscription } from "./types";
+import { storeSubscription } from "./subscription-policy";
+import type { Customer, PaymentSession, PaymentState, Subscription } from "./types";
 
 interface ReconcileInput {
     readonly adapter: PaymentAdapter;
     /** Optional telemetry sink — fired per drifted row and once on completion. */
     readonly observability?: PaymentObserver;
     readonly paymentSessionIds?: ReadonlyArray<string>;
+
+    /**
+     * Refuse a second subscription that grants access on one reference. Required, so a sweep cannot re-grant access
+     * the policy refused: pass the same value as `createPayment`'s `singleSubscriptionPerReference`.
+     */
+    readonly singleSubscriptionPerReference: boolean;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
 
@@ -54,6 +61,15 @@ interface ReconcileResult {
 
 /** Usage events retried per sweep when the caller does not say otherwise. */
 const DEFAULT_USAGE_REPORT_LIMIT = 100;
+
+/**
+ * Bounds on how long a failed usage forward waits before the sweep retries it. The wait is the
+ * event's age, clamped: a fresh failure (a 5xx) is retried within minutes, and one that keeps
+ * failing for days (a reference with no provider customer) settles at the cap, so it takes a
+ * batch slot a few times a day rather than on every tick.
+ */
+const USAGE_RETRY_MIN_MS = 60_000;
+const USAGE_RETRY_MAX_MS = 6 * 60 * 60 * 1000;
 
 const sameCurrencyAmount = (a: PaymentSession["amount"], b: PaymentSession["amount"]): boolean => a.currency === b.currency && compareMoney(a, b) === 0;
 
@@ -134,33 +150,85 @@ const mergePaymentTruth = (existing: PaymentSession | undefined, current: Paymen
     };
 };
 
-// Re-sync one subscription against the provider's truth. Returns whether the store changed.
-const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
-    const current = await adapter.getSubscriptionStatus(id);
-    const existing = await store.getSubscription(adapter.identifier, id);
+// Amounts are bigints, which `JSON.stringify` refuses without a replacer.
+const bigintAsString = (_key: string, value: unknown): unknown => (typeof value === "bigint" ? value.toString() : value);
 
-    if (!subscriptionDrifted(existing, current)) {
+/**
+ * Whether a store row changed between two reads. The whole row is compared, not
+ * `updatedAt`/`lastEventAt`: those are milliseconds (a write in the same one would
+ * pass) and `lastEventAt` is optional, so a webhook could change a row and leave
+ * both standing.
+ */
+const rowChanged = (before: unknown, after: unknown): boolean => JSON.stringify(after, bigintAsString) !== JSON.stringify(before, bigintAsString);
+
+// Re-sync one subscription against the provider's truth. Returns whether the store changed.
+//
+// The row is read on both sides of the provider call: a webhook that lands while the adapter call
+// is in flight is newer than the provider snapshot, and only a `before` read taken ahead of that
+// call can see it change. The write is then guarded on the revision read at `after`, so a webhook
+// that lands after that read makes the write a no-op rather than an overwrite.
+const reconcileSubscription = async (
+    adapter: PaymentAdapter,
+    store: PaymentStore,
+    id: string,
+    observer: PaymentObserver | undefined,
+    singleSubscriptionPerReference: boolean,
+): Promise<boolean> => {
+    const before = await store.getSubscription(adapter.identifier, id);
+    const current = await adapter.getSubscriptionStatus(id);
+    const after = await store.getSubscription(adapter.identifier, id);
+
+    if (rowChanged(before, after)) {
+        return false;
+    }
+
+    if (!subscriptionDrifted(after, current)) {
         return false;
     }
 
     // Provider truth for the lifecycle; the store keeps the owner (a read may not echo checkout
     // metadata, or report Dodo's customer id), `createdAt` and `lastEventAt`.
-    await store.upsertSubscription(overlayProviderSubscription(existing, current));
+    const outcome = await storeSubscription(store, singleSubscriptionPerReference, after, overlayProviderSubscription(after, current), {
+        ifRevision: after?.revision,
+    });
+
+    // A refusal is still a write: the policy records the subscription in a state that grants nothing. It is counted and
+    // reported as drift, so a sweep's totals and events show the row it changed.
+    if (outcome === "rejected") {
+        return false;
+    }
+
+    if (outcome === "refused") {
+        notifyObserver(observer, { provider: adapter.identifier, subscriptionId: id, type: "subscription.duplicate" });
+    }
+
     notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
 };
 
+// Same before/after guard as `reconcileSubscription`.
 const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
+    const before = await store.getPaymentSession(adapter.identifier, id);
     const providerTruth = await adapter.getPaymentStatus(id);
-    const existing = await store.getPaymentSession(adapter.identifier, id);
-    const current = mergePaymentTruth(existing, providerTruth);
+    const after = await store.getPaymentSession(adapter.identifier, id);
 
-    if (!paymentDrifted(existing, current)) {
+    if (rowChanged(before, after)) {
         return false;
     }
 
-    await store.upsertPaymentSession({ ...current, createdAt: existing?.createdAt ?? current.createdAt });
+    const current = mergePaymentTruth(after, providerTruth);
+
+    if (!paymentDrifted(after, current)) {
+        return false;
+    }
+
+    const written = await store.upsertPaymentSession({ ...current, createdAt: after?.createdAt ?? current.createdAt }, { ifRevision: after?.revision });
+
+    if (!written) {
+        return false;
+    }
+
     notifyObserver(observer, { id, kind: "payment", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
@@ -198,14 +266,28 @@ const sweepUnreportedUsage = async (
         return { checked: 0, failed: 0, updated: 0 };
     }
 
-    const pending = await store.listUnreportedUsage(adapter.identifier, limit);
+    const now = Date.now();
+    const pending = await store.listUnreportedUsage(adapter.identifier, limit, now);
+    // Scoped to this tick: a batch often carries several events for one reference,
+    // and each would repeat the same lookup. Only a found customer is memoised: a miss
+    // (or a failed lookup, which throws before it is stored) is re-read by the next
+    // event in this tick, so a customer created mid-tick is picked up.
+    const customers = new Map<string, Customer>();
     let updated = 0;
     let failed = 0;
 
     for (const event of pending) {
         try {
-            // eslint-disable-next-line no-await-in-loop -- a retry sweep against a provider that just failed: serial, not a stampede
-            const customer = await store.getCustomerByReference(adapter.identifier, event.referenceId);
+            let customer = customers.get(event.referenceId);
+
+            if (customer === undefined) {
+                // eslint-disable-next-line no-await-in-loop -- a retry sweep against a provider that just failed: serial, not a stampede
+                customer = await store.getCustomerByReference(adapter.identifier, event.referenceId);
+
+                if (customer !== undefined) {
+                    customers.set(event.referenceId, customer);
+                }
+            }
 
             // eslint-disable-next-line no-await-in-loop -- see above
             await reportUsage({
@@ -220,6 +302,14 @@ const sweepUnreportedUsage = async (
             updated += 1;
         } catch {
             failed += 1;
+
+            // From the failure, not the sweep's start: a slow batch would otherwise store a time already past.
+            const failedAt = Date.now();
+            const retryAt = failedAt + Math.min(Math.max(failedAt - event.createdAt, USAGE_RETRY_MIN_MS), USAGE_RETRY_MAX_MS);
+
+            // A failed deferral only means the row stays due next tick, which is the old behaviour.
+            // eslint-disable-next-line no-await-in-loop -- see above
+            await store.deferUsageReport(adapter.identifier, event.idempotencyKey, retryAt).catch(() => {});
             notifyObserver(observer, {
                 featureId: event.featureId,
                 provider: adapter.identifier,
@@ -237,6 +327,9 @@ interface SweepCounts {
     readonly updated: number;
 }
 
+// ponytail: fixed guess under Stripe's rate limit; make it an option when a provider needs another value.
+const RECONCILE_CONCURRENCY = 8;
+
 // Fan out over a batch with per-id fault isolation: a single failing id (a 404'd/deleted row, a
 // transient 5xx, a 429) must never abort the whole sweep, or drift for every other id would never
 // self-heal. Each rejection is surfaced as a `reconcile.error` signal rather than thrown.
@@ -247,7 +340,26 @@ const sweep = async (
     adapter: PaymentAdapter,
     observer?: PaymentObserver,
 ): Promise<SweepCounts> => {
-    const settled = await Promise.allSettled(ids.map((id) => reconcileOne(id)));
+    // Bounded: one provider read per id, so an unbounded fan-out over a large batch trips the
+    // provider's rate limit. Workers pull the next id off a shared cursor.
+    const settled: PromiseSettledResult<boolean>[] = Array.from({ length: ids.length });
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+        while (cursor < ids.length) {
+            const index = cursor;
+
+            cursor += 1;
+
+            try {
+                // eslint-disable-next-line no-await-in-loop -- each worker reconciles serially; the pool is the concurrency
+                settled[index] = { status: "fulfilled", value: await reconcileOne(ids[index] ?? "") };
+            } catch (error) {
+                settled[index] = { reason: error, status: "rejected" };
+            }
+        }
+    };
+
+    await Promise.all(Array.from({ length: Math.min(RECONCILE_CONCURRENCY, ids.length) }, () => worker()));
 
     let updated = 0;
     let failed = 0;
@@ -274,7 +386,7 @@ const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
     const subscriptionCounts = await sweep(
         subscriptionIds,
         "subscription",
-        (id) => reconcileSubscription(adapter, store, id, observability),
+        (id) => reconcileSubscription(adapter, store, id, observability, input.singleSubscriptionPerReference),
         adapter,
         observability,
     );

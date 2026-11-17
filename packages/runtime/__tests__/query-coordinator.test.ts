@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { LunoraError } from "../src/errors";
 import type { ExportFanOutRequest, FanOutRequest, MigrationFanOutRequest, RankFanOutRequest, ShardRegistry } from "../src/query-coordinator";
-import { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
+import { createDefaultShardRegistry, createQueryCoordinator, createStaticShardRegistry, refreshShardHeadersPerCall } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardCall {
@@ -262,6 +262,54 @@ describe("merge strategies", () => {
         expect(result.data).toEqual([{ x: 1 }, { x: 2 }]);
     });
 
+    it("topK — k close to N returns the same rows as a stable full sort", async () => {
+        expect.assertions(1);
+
+        const registry = createStaticShardRegistry({ messages: ["a"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        // Heavy ties (score repeats every 37 rows) so tie order is exercised too.
+        const input = Array.from({ length: 2000 }, (_, i) => {
+            return { id: String(i), score: (i * 7) % 37 };
+        });
+        const expected = input.toSorted((a, b) => b.score - a.score).slice(0, 1900);
+
+        const spy = createShardSpy(() => json(input));
+
+        const result = await coordinator.fanOut(
+            spy.namespace,
+            buildRequest({
+                fanOut: { merge: { by: "score", k: 1900, kind: "topK" }, table: "messages" },
+            }),
+        );
+
+        expect(result.data).toEqual(expected);
+    });
+
+    it("topK — ascending-score input with mid-size k matches a stable full sort", async () => {
+        expect.assertions(1);
+
+        const registry = createStaticShardRegistry({ messages: ["a", "b"] });
+        const coordinator = createQueryCoordinator({ registry });
+
+        const ascending = Array.from({ length: 1000 }, (_, i) => {
+            return { id: String(i), score: Math.floor(i / 3) };
+        });
+        const shards: Record<string, unknown[]> = { a: ascending.slice(0, 500), b: ascending.slice(500) };
+        const expected = ascending.toSorted((a, b) => a.score - b.score).slice(0, 300);
+
+        const spy = createShardSpy((shardKey) => json(shards[shardKey] ?? []));
+
+        const result = await coordinator.fanOut(
+            spy.namespace,
+            buildRequest({
+                fanOut: { merge: { by: "score", direction: "asc", k: 300, kind: "topK" }, table: "messages" },
+            }),
+        );
+
+        expect(result.data).toEqual(expected);
+    });
+
     it("topK — orders rows with missing/non-numeric `by` field deterministically (no NaN comparator)", async () => {
         expect.assertions(2);
 
@@ -483,6 +531,32 @@ describe("error handling", () => {
             expect(result.errors[0]?.shardKey).toBe("slow");
             expect(result.errors[0]?.timedOut).toBe(true);
             expect(result.data).toEqual([{ from: "fast" }]);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("times out a shard call whose header refresh hangs", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        try {
+            const coordinator = createQueryCoordinator({ perShardTimeoutMs: 100, registry: createStaticShardRegistry({ messages: ["s1"] }) });
+            const spy = createShardSpy(async (shardKey) => json([{ from: shardKey }]));
+            const headers = { "x-lunora-admin-signal": "stale" };
+
+            // A token-store lookup that never answers.
+            refreshShardHeadersPerCall(headers, async () => new Promise<Record<string, string>>(() => {}));
+
+            const pending = coordinator.fanOut(spy.namespace, buildRequest({ headers }));
+
+            await vi.advanceTimersByTimeAsync(200);
+
+            const result = await pending;
+
+            expect(result.errors[0]?.timedOut).toBe(true);
+            expect(spy.calls).toHaveLength(0);
         } finally {
             vi.useRealTimers();
         }

@@ -97,7 +97,7 @@ const recordFailure = async (database: ControlPlaneStore, ports: EdgeBlockPorts,
     const firstFailure = row.edgeBlockError == null;
 
     ports.log(`[edge-block] ${action} failed for domain ${row._id}: ${message}`);
-    await database.patch(row._id, { edgeBlockError: message, updatedAt: ports.now }, "domains").catch(() => undefined);
+    await database.patch("domains", row._id, { edgeBlockError: message, updatedAt: ports.now }).catch(() => undefined);
 
     if (firstFailure) {
         await audit(database, ports.now, row.organizationId, `domain.${action}_failed`, `${row.hostname}: ${message}`).catch(() => undefined);
@@ -114,8 +114,8 @@ const recordFailure = async (database: ControlPlaneStore, ports: EdgeBlockPorts,
  * the step writes nothing and the next tick plans again from fresh rows.
  */
 const confirmedRow = async (database: ControlPlaneStore, zone: SaasZone, planned: DomainRow, suspended: boolean): Promise<DomainRow> => {
-    const current = (await database.get(planned._id, "domains")) as DomainRow | null;
-    const organization = current === null ? null : ((await database.get(current.organizationId, "organizations")) as OrganizationRow | null);
+    const current = (await database.get("domains", planned._id)) as DomainRow | null;
+    const organization = current === null ? null : ((await database.get("organizations", current.organizationId)) as OrganizationRow | null);
     const { page: owners } = await database.findMany("domains", { where: { hostname: planned.hostname } });
 
     if (
@@ -158,18 +158,14 @@ const blockHostname = async (database: ControlPlaneStore, ports: EdgeBlockPorts,
     }
 
     // The issuer and scope stay recorded: they are where the restore recreates it.
-    await database.patch(
-        row._id,
-        {
-            certificateError: SUSPENDED_CERTIFICATE_ERROR,
-            certificateStatus: "suspended",
-            customHostnameId: null,
-            edgeBlockedAt: ports.now,
-            edgeBlockError: null,
-            updatedAt: ports.now,
-        },
-        "domains",
-    );
+    await database.patch("domains", row._id, {
+        certificateError: SUSPENDED_CERTIFICATE_ERROR,
+        certificateStatus: "suspended",
+        customHostnameId: null,
+        edgeBlockedAt: ports.now,
+        edgeBlockError: null,
+        updatedAt: ports.now,
+    });
     await audit(database, ports.now, row.organizationId, "domain.edge_block", `${row.hostname} (custom hostname ${id})`);
 };
 
@@ -211,18 +207,14 @@ const unblockHostname = async (database: ControlPlaneStore, ports: EdgeBlockPort
         certificate = certificateOf(zone, restored);
     }
 
-    await database.patch(
-        row._id,
-        {
-            ...(certificate === undefined
-                ? { certificateError: null, certificateStatus: "unverified" }
-                : { certificateError: certificate.error ?? null, certificateStatus: certificate.sslStatus, customHostnameId: certificate.customHostnameId }),
-            edgeBlockedAt: null,
-            edgeBlockError: null,
-            updatedAt: ports.now,
-        },
-        "domains",
-    );
+    await database.patch("domains", row._id, {
+        ...(certificate === undefined
+            ? { certificateError: null, certificateStatus: "unverified" }
+            : { certificateError: certificate.error ?? null, certificateStatus: certificate.sslStatus, customHostnameId: certificate.customHostnameId }),
+        edgeBlockedAt: null,
+        edgeBlockError: null,
+        updatedAt: ports.now,
+    });
     await audit(
         database,
         ports.now,

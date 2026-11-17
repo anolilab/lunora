@@ -65,6 +65,23 @@ const MUTATION_NEW_DATE = `
     });
 `;
 
+/** A query drawing `ctx.random()` (unkeyed, so `Math.random()`) and a mutation drawing it (replay-stable). */
+const QUERY_CTX_RANDOM = `
+    import { mutation, query } from "@lunora/server";
+
+    export const drawQuery = query({
+        args: {},
+        handler: async (ctx) => ctx.random(),
+    });
+
+    export const drawMutation = mutation({
+        args: {},
+        handler: async (ctx) => {
+            await ctx.db.insert("draws", { value: ctx.random() });
+        },
+    });
+`;
+
 /** A deterministic mutation — no non-deterministic calls to record. */
 const CLEAN_MUTATION = `
     import { mutation } from "@lunora/server";
@@ -139,6 +156,100 @@ describe("discoverNondeterministicCalls", () => {
         const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
 
         expect(calls.map((call) => call.callee).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["crypto.randomUUID", "new Date"]);
+    });
+
+    it("records ctx.random() in a query but not in a mutation", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "draws.ts"), QUERY_CTX_RANDOM, "utf8");
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([expect.objectContaining({ callee: "ctx.random", exportName: "drawQuery", kind: "query" })]);
+    });
+
+    it("records random() on a query context bound under another name", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nexport const drawQuery = query({ args: {}, handler: async (context) => context.random() });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([expect.objectContaining({ callee: "ctx.random", exportName: "drawQuery", kind: "query" })]);
+    });
+
+    it("records random() on a builder handler that destructures the context under another name", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nexport const drawQuery = query({ args: {}, handler: async ({ ctx: context }) => context.random() });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([expect.objectContaining({ callee: "ctx.random", exportName: "drawQuery", kind: "query" })]);
+    });
+
+    it("records random() when a bag-parameter handler takes the context out of its body", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nexport const drawQuery = query({ args: {}, handler: async (request) => { const { ctx } = request; return ctx.random(); } });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([expect.objectContaining({ callee: "ctx.random", exportName: "drawQuery", kind: "query" })]);
+    });
+
+    it("does not record a random() on a nested callback's own parameter that shadows the handler's context", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nexport const shadowQuery = query({ args: {}, handler: async (context) => [1, 2].map((context) => context.random()) });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([]);
+    });
+
+    it("does not record a random() on a ctx destructured from an unrelated object", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nconst other = { ctx: { random: () => 0.5 } };\nexport const drawQuery = query({ args: {}, handler: async (request) => { const { ctx: local } = other; return local.random(); } });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([]);
+    });
+
+    it("does not record a random() on a ctx destructured from a call's result", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(workdir, "lunora", "draws.ts"),
+            `import { query } from "@lunora/server";\nconst makeGenerator = () => ({ ctx: { random: () => 0.5 } });\nexport const drawQuery = query({ args: {}, handler: async (request) => { const { ctx: generator } = makeGenerator(); return generator.random(); } });\n`,
+            "utf8",
+        );
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls).toStrictEqual([]);
     });
 
     it("records nothing for a deterministic mutation", () => {

@@ -52,7 +52,7 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  */
 export interface IndexNamesByTable {
     tasks: "by_status_and_order";
-    ratelimit_buckets: "by_key";
+    ratelimit_buckets: "by_key" | "by_ts";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];

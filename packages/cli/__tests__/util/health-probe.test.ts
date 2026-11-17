@@ -20,7 +20,7 @@ describe("probeHealth", () => {
         expect.assertions(3);
 
         const fetchImpl = vi.fn<HealthFetch>(async () => {
-            return { ok: true, status: 200 };
+            return { headers: new Headers(), ok: true, status: 200 };
         });
 
         const result = await probeHealth({ baseUrl: "https://app.workers.dev", fetchImpl });
@@ -36,11 +36,11 @@ describe("probeHealth", () => {
         // The reason the budget exists: a version that isn't serving yet answers
         // 503 on the first probe and 200 moments later.
         const responses = [
-            { ok: false, status: 503 },
-            { ok: false, status: 503 },
-            { ok: true, status: 200 },
+            { headers: new Headers(), ok: false, status: 503 },
+            { headers: new Headers(), ok: false, status: 503 },
+            { headers: new Headers(), ok: true, status: 200 },
         ];
-        const fetchImpl = vi.fn<HealthFetch>(async () => responses.shift() ?? { ok: true, status: 200 });
+        const fetchImpl = vi.fn<HealthFetch>(async () => responses.shift() ?? { headers: new Headers(), ok: true, status: 200 });
 
         const result = await probeHealth({ attempts: 5, baseUrl: "https://app.workers.dev", fetchImpl, sleep: noSleep });
 
@@ -52,7 +52,7 @@ describe("probeHealth", () => {
         expect.assertions(2);
 
         const fetchImpl = vi.fn<HealthFetch>(async () => {
-            return { ok: false, status: 503 };
+            return { headers: new Headers(), ok: false, status: 503 };
         });
 
         const result = await probeHealth({ attempts: 3, baseUrl: "https://app.workers.dev", fetchImpl, sleep: noSleep });
@@ -64,7 +64,9 @@ describe("probeHealth", () => {
     it("falls back to the next path when the first 404s (an older deployment has no readiness gate)", async () => {
         expect.assertions(3);
 
-        const fetchImpl = vi.fn<HealthFetch>(async (url: string) => (url.endsWith("/ready") ? { ok: false, status: 404 } : { ok: true, status: 200 }));
+        const fetchImpl = vi.fn<HealthFetch>(async (url: string) =>
+            url.endsWith("/ready") ? { headers: new Headers(), ok: false, status: 404 } : { headers: new Headers(), ok: true, status: 200 },
+        );
 
         const result = await probeHealth({ baseUrl: "https://app.workers.dev", fetchImpl, paths: [HEALTH_READY_PATH, HEALTH_PATH] });
 
@@ -77,7 +79,7 @@ describe("probeHealth", () => {
         expect.assertions(2);
 
         const fetchImpl = vi.fn<HealthFetch>(async () => {
-            return { ok: false, status: 503 };
+            return { headers: new Headers(), ok: false, status: 503 };
         });
 
         const result = await probeHealth({ baseUrl: "https://app.workers.dev", fetchImpl, paths: [HEALTH_READY_PATH, HEALTH_PATH] });
@@ -119,5 +121,242 @@ describe("probeHealth", () => {
         } finally {
             globalFetch.mockRestore();
         }
+    });
+
+    it("runs the https hop against the deadline of the request it follows, not a fresh one", async () => {
+        expect.assertions(2);
+
+        const globalFetch = vi
+            .spyOn(globalThis, "fetch")
+            .mockImplementation(async (input) =>
+                new Request(input).url.startsWith("http:")
+                    ? new Response(null, { headers: { location: "https://app.example.com/_lunora/health" }, status: 301 })
+                    : new Response("ok"),
+            );
+
+        try {
+            const result = await probeHealth({ baseUrl: "http://app.example.com", sleep: noSleep });
+            const [first, hop] = globalFetch.mock.calls.map(([, init]) => init?.signal);
+
+            expect(result.error).toBeUndefined();
+            expect(hop).toBe(first);
+        } finally {
+            globalFetch.mockRestore();
+        }
+    });
+
+    describe("cloudflare Access", () => {
+        const accessEnv = { CF_ACCESS_CLIENT_ID: "id.access", CF_ACCESS_CLIENT_SECRET: "secret" };
+        const loginRedirect = {
+            headers: new Headers({ location: "https://acme.cloudflareaccess.com/cdn-cgi/access/login/app.example.com" }),
+            ok: false,
+            status: 302,
+        };
+
+        it("sends the service token from CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET and leaves redirects to the probe", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<HealthFetch>(async () => {
+                return { headers: new Headers(), ok: true, status: 200 };
+            });
+
+            const result = await probeHealth({ baseUrl: "https://app.example.com", env: accessEnv, fetchImpl });
+
+            expect(result.error).toBeUndefined();
+            expect(fetchImpl).toHaveBeenCalledWith("https://app.example.com/_lunora/health", {
+                headers: { "CF-Access-Client-Id": "id.access", "CF-Access-Client-Secret": "secret" },
+                redirect: "manual",
+            });
+        });
+
+        it("sends no Access headers when only one variable is set, and names the missing one at the login redirect", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<HealthFetch>(async () => loginRedirect);
+
+            const result = await probeHealth({ baseUrl: "https://app.example.com", env: { CF_ACCESS_CLIENT_ID: "id.access" }, fetchImpl });
+
+            expect(fetchImpl).toHaveBeenCalledWith("https://app.example.com/_lunora/health", { headers: {}, redirect: "manual" });
+            expect(result.error).toContain("set CF_ACCESS_CLIENT_SECRET too");
+        });
+
+        it("says the host is behind Access when the probe is sent to its login, instead of a bare status", async () => {
+            expect.assertions(2);
+
+            const result = await probeHealth({ baseUrl: "https://app.example.com", env: {}, fetchImpl: async () => loginRedirect });
+
+            expect(result.error).toContain("returned HTTP 302: the host is behind Cloudflare Access");
+            expect(result.error).toContain("Set CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET");
+        });
+
+        it("says the token was refused when Access still redirects with it sent", async () => {
+            expect.assertions(1);
+
+            const result = await probeHealth({ baseUrl: "https://app.example.com", env: accessEnv, fetchImpl: async () => loginRedirect });
+
+            expect(result.error).toContain("Cloudflare Access refused the service token");
+        });
+
+        it("reads any other redirect as red, not as the deployment answering", async () => {
+            expect.assertions(1);
+
+            const result = await probeHealth({
+                baseUrl: "https://app.example.com",
+                env: {},
+                fetchImpl: async () => {
+                    return { headers: new Headers({ location: "https://elsewhere.example.com/" }), ok: false, status: 301 };
+                },
+            });
+
+            expect(result.error).toContain("returned HTTP 301 redirecting to https://elsewhere.example.com — the health route does not redirect");
+        });
+
+        it("follows a same-host http → https redirect once, sending the token only on the https hop", async () => {
+            expect.assertions(3);
+
+            const fetchImpl = vi.fn<HealthFetch>(async (url) =>
+                url.startsWith("http:")
+                    ? { headers: new Headers({ location: "https://app.example.com/_lunora/health" }), ok: false, status: 301 }
+                    : { headers: new Headers(), ok: true, status: 200 },
+            );
+
+            const result = await probeHealth({ baseUrl: "http://app.example.com", env: accessEnv, fetchImpl });
+
+            expect(result).toStrictEqual({ url: "https://app.example.com/_lunora/health" });
+            expect(fetchImpl).toHaveBeenNthCalledWith(1, "http://app.example.com/_lunora/health", { headers: {}, redirect: "manual" });
+            expect(fetchImpl).toHaveBeenNthCalledWith(2, "https://app.example.com/_lunora/health", {
+                headers: { "CF-Access-Client-Id": "id.access", "CF-Access-Client-Secret": "secret" },
+                redirect: "manual",
+            });
+        });
+
+        it("names the hop when the https answer fails, and does not follow an https redirect to another host", async () => {
+            expect.assertions(3);
+
+            const upgraded = await probeHealth({
+                baseUrl: "http://app.example.com",
+                env: {},
+                fetchImpl: async (url) =>
+                    url.startsWith("http:")
+                        ? { headers: new Headers({ location: "https://app.example.com/_lunora/health" }), ok: false, status: 308 }
+                        : { headers: new Headers(), ok: false, status: 503 },
+            });
+
+            expect(upgraded.error).toBe(
+                "health probe failed: https://app.example.com/_lunora/health (redirected from http://app.example.com/_lunora/health) returned HTTP 503",
+            );
+
+            const fetchImpl = vi.fn<HealthFetch>(async () => {
+                return { headers: new Headers({ location: "https://other.example.com/_lunora/health" }), ok: false, status: 301 };
+            });
+            const elsewhere = await probeHealth({ baseUrl: "http://app.example.com", env: accessEnv, fetchImpl });
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            expect(elsewhere.error).toContain("redirecting to https://other.example.com — the health route does not redirect");
+        });
+
+        it("does not follow an https redirect to another path on the same host, whose page would answer 200", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<HealthFetch>(async (url) =>
+                url.startsWith("http:")
+                    ? { headers: new Headers({ location: "https://app.example.com/" }), ok: false, status: 301 }
+                    : { headers: new Headers(), ok: true, status: 200 },
+            );
+
+            const result = await probeHealth({ baseUrl: "http://app.example.com", env: {}, fetchImpl });
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            expect(result.error).toContain("returned HTTP 301 redirecting to https://app.example.com — the health route does not redirect");
+        });
+
+        it("names no redirect destination when the request carried the service token, which the destination could echo", async () => {
+            expect.assertions(3);
+
+            const result = await probeHealth({
+                baseUrl: "https://app.example.com",
+                env: accessEnv,
+                fetchImpl: async () => {
+                    return { headers: new Headers({ location: "https://echo.example.com/x?token=secret" }), ok: false, status: 302 };
+                },
+            });
+
+            expect(result.error).toContain("returned HTTP 302 — the health route does not redirect");
+            expect(result.error).not.toContain("echo.example.com");
+            expect(result.error).not.toContain("secret");
+        });
+
+        it("reports only a redirect's origin when no token was sent", async () => {
+            expect.assertions(1);
+
+            const result = await probeHealth({
+                baseUrl: "https://app.example.com",
+                env: {},
+                fetchImpl: async () => {
+                    return { headers: new Headers({ location: "https://echo.example.com/x?state=abc" }), ok: false, status: 302 };
+                },
+            });
+
+            expect(result.error).toContain("redirecting to https://echo.example.com — the health route does not redirect");
+        });
+
+        it("does not follow an http → https redirect to another port, which would receive the token", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<HealthFetch>(async (url) =>
+                url.startsWith("http:")
+                    ? { headers: new Headers({ location: "https://app.example.com:8443/_lunora/health" }), ok: false, status: 301 }
+                    : { headers: new Headers(), ok: true, status: 200 },
+            );
+
+            const result = await probeHealth({ baseUrl: "http://app.example.com", env: accessEnv, fetchImpl });
+
+            expect(fetchImpl).toHaveBeenCalledTimes(1);
+            expect(result.error).toContain("redirecting to https://app.example.com:8443 —");
+        });
+
+        it("sends the token to an https URL whatever the scheme's case", async () => {
+            expect.assertions(1);
+
+            const fetchImpl = vi.fn<HealthFetch>(async () => {
+                return { headers: new Headers(), ok: true, status: 200 };
+            });
+
+            await probeHealth({ baseUrl: "HTTPS://app.example.com", env: accessEnv, fetchImpl });
+
+            expect(fetchImpl.mock.calls[0]?.[1]).toStrictEqual({
+                headers: { "CF-Access-Client-Id": "id.access", "CF-Access-Client-Secret": "secret" },
+                redirect: "manual",
+            });
+        });
+
+        it("never sends the token over http, and says so when Access asks for it", async () => {
+            expect.assertions(2);
+
+            const fetchImpl = vi.fn<HealthFetch>(async () => loginRedirect);
+
+            const result = await probeHealth({ baseUrl: "http://app.example.com", env: accessEnv, fetchImpl });
+
+            expect(fetchImpl).toHaveBeenCalledWith("http://app.example.com/_lunora/health", { headers: {}, redirect: "manual" });
+            expect(result.error).toContain("the service token is sent only over https and http://app.example.com/_lunora/health is http");
+        });
+
+        it("refuses a token value no header can carry without sending it, or echoing it", async () => {
+            expect.assertions(3);
+
+            const fetchImpl = vi.fn<HealthFetch>(async () => {
+                return { headers: new Headers(), ok: true, status: 200 };
+            });
+
+            const result = await probeHealth({
+                baseUrl: "https://app.example.com",
+                env: { CF_ACCESS_CLIENT_ID: "id.access", CF_ACCESS_CLIENT_SECRET: "s3cret-value\n" },
+                fetchImpl,
+            });
+
+            expect(fetchImpl).not.toHaveBeenCalled();
+            expect(result.error).toContain("CF_ACCESS_CLIENT_SECRET contains a character an HTTP header cannot carry");
+            expect(result.error).not.toContain("s3cret-value");
+        });
     });
 });

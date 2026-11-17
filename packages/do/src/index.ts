@@ -1,3 +1,6 @@
+export { ADMIN_REVOCATION_DO_NAME, AdminRevocationDO } from "./admin-revocation-do";
+export type { DeliveryAuthorization, DeliveryAuthorizationRequest, DeliveryPermit } from "./delivery-authorization";
+export { installDeliveryFence } from "./delivery-authorization";
 export type { DurableObjectHandlers, MergedDurableObject, MergedRole, MergedRoles, RoleClass, RoleNamespaceTarget } from "./merge-durable-objects";
 export { MERGED_ROLES, mergeDurableObjects, roleNamespace } from "./merge-durable-objects";
 // `external-source-cursor` is an internal ingest detail (the durable watermark
@@ -28,6 +31,7 @@ export type {
     RunShardRankPageArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
+    SensitiveScope,
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,
@@ -35,8 +39,9 @@ export type {
     TraceRefLike,
 } from "./shard-do";
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
-export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
-export { createStableIdFactory } from "./stable-id";
+export type { ShardRegistryRpc } from "./shard-registry-do";
+export { hostedShardRegistry, SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
+export { createStableIdFactory, createStableRandomFactory } from "./stable-id";
 // Cloudflare implementations of the `@lunora/platform` host contracts. These
 // are what `@lunora/platform-cloudflare` will re-export as the default host.
 export { createShardAlarms, createShardDirectory, createShardHost, createShardKvStore, createSocketHost } from "@lunora/platform-cloudflare";

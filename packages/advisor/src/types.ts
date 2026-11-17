@@ -12,6 +12,7 @@ import type { AdvisorContainerKeyAccess } from "./container-key-accesses";
 import type { AdvisorContainerOverride } from "./container-overrides";
 import type { AdvisorContainer } from "./containers";
 import type { AdvisorCountRead } from "./counts";
+import type { AdvisorCron } from "./crons";
 import type { AdvisorExportSink } from "./export-sinks";
 import type { AdvisorFailOpenGuard } from "./fail-open-guards";
 import type { AdvisorFlagRead } from "./flag-reads";
@@ -33,12 +34,13 @@ import type { AdvisorMutatorWrite } from "./mutator-writes";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorNormalizeIdAuthorization } from "./normalize-id-authorization";
 import type { AdvisorNotifyCall, AdvisorNotifyConfig } from "./notify-calls";
+import type { AdvisorOpenShardAccess } from "./open-shard-access";
 import type { AdvisorOwnerFieldWrite } from "./owner-field-writes";
 import type { AdvisorPaymentWebhook } from "./payment-webhooks";
 import type { AdvisorPrivilegedDispatch } from "./privileged-dispatches";
 import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
-import type { AdvisorQueue } from "./queues";
+import type { AdvisorQueue, AdvisorTopic } from "./queues";
 import type { AdvisorR2sqlCall } from "./r2sql-calls";
 import type { AdvisorRatelimitKeySelector } from "./ratelimit-key-selectors";
 import type { AdvisorRawRowReturn } from "./raw-row-returns";
@@ -119,6 +121,20 @@ export interface Finding {
     name: string;
     /** How to fix it — a doc URL or short imperative guidance. */
     remediation: string;
+
+    /**
+     * Set when an inline `// lunora-advisor-exempt <rule> -- <reason>` directive
+     * accepts this finding. The finding stays in the list so every surface can show
+     * it and its reason, but the gate, the health map and the blocking check ignore it.
+     */
+    suppressed?: {
+        /** The directive's site, relative to the project root. */
+        file: string;
+        /** 1-based line of the directive. */
+        line: number;
+        /** The directive's trimmed reason, required to be non-empty. */
+        reason: string;
+    };
     /** Short headline for the finding. */
     title: string;
 }
@@ -268,6 +284,9 @@ export interface LintContext {
     containers?: ReadonlyArray<AdvisorContainer>;
     /** Every `count()` call found in function bodies; the `count_without_index` lint reads it. Absent for a runtime caller. */
     countReads?: ReadonlyArray<AdvisorCountRead>;
+
+    /** Every `cronJobs()` registration; the `cron_every_minute` lint reads it. Supplied by the codegen feeder; absent for runtime callers. */
+    crons?: ReadonlyArray<AdvisorCron>;
 
     /**
      * The `namespace:export` keys of the function-targeted cron jobs. A cron fires
@@ -464,7 +483,7 @@ export interface LintContext {
     mutators?: ReadonlyArray<AdvisorMutatorDeclaration>;
 
     /**
-     * Whole-row `ctx.db.replace(id, document)` writes lifted from custom
+     * Whole-row `ctx.db.replace("table", id, document)` writes lifted from custom
      * mutators' authoritative `server` impls (the `mutator_full_row_replace`
      * input). Each `replace` overwrites the entire row, clobbering a concurrent
      * edit to a different column on a synced table. Supplied by the codegen
@@ -510,6 +529,13 @@ export interface LintContext {
      * callers, where the lint finds nothing.
      */
     notifyConfig?: AdvisorNotifyConfig;
+
+    /**
+     * Literal `allowUnauthenticatedShardAccess: true` sites in the app — the
+     * `open_shard_access` input. Supplied by `lunora deploy`'s project scan only;
+     * absent for codegen and runtime callers, where the lint finds nothing.
+     */
+    openShardAccess?: ReadonlyArray<AdvisorOpenShardAccess>;
 
     /**
      * `ctx.db` writes (`insert` / `replace` / `patch` / `insertManyUnsafe`) that set
@@ -724,6 +750,11 @@ export interface LintContext {
      * absent for runtime callers.
      */
     tableWrites?: ReadonlyArray<AdvisorTableWrite>;
+
+    /**
+     * Topics declared via `defineTopic` exports in `lunora/queues.ts`. The lint that reports a topic's subscription count reads its declaration site; absent for runtime callers.
+     */
+    topics?: ReadonlyArray<AdvisorTopic>;
 
     /**
      * Literal-infinite loops (`while (true)`, `for (;;)`, `do … while (true)`)

@@ -81,7 +81,7 @@ const openDb = (): DatabaseWriterLike => {
 /** Insert a document, filling the required literal columns with their one legal value. */
 const roundTrip = async (db: DatabaseWriterLike, document: Record<string, unknown>): Promise<Record<string, unknown>> => {
     const id = await db.insert("docs", { litBigint: 7n, litBoolean: true, litNumber: 1, litString: "x", untyped: "ok", ...document });
-    const read = await db.get(id);
+    const read = await db.get("docs", id);
 
     if (read === null) {
         throw new Error("row not found");

@@ -6,8 +6,7 @@ Durable AI agents for [Lunora](https://lunora.sh): `defineAgent` compiles a repl
 
 ```ts
 // lunora/agents.ts
-import { defineAgent, defineAgentTool } from "@lunora/agent";
-import { jsonSchema } from "@lunora/ai";
+import { defineAgent, defineAgentTool, jsonSchema } from "@lunora/agent/core";
 
 export const support = defineAgent({
     instructions: "You are a helpful support agent.",
@@ -49,4 +48,4 @@ See the package docs for the full API.
 
 ## License
 
-FSL-1.1-Apache-2.0
+Apache-2.0

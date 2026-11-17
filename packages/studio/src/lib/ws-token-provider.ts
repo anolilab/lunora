@@ -6,7 +6,7 @@
  * master admin token there, this provider mints a short-lived HMAC-signed
  * sub-token from the worker (`POST /_lunora/admin/ws-token`, authenticated by
  * the master token in the HEADER) and hands it to the client as its
- * `wsToken` provider, re-minting on every (re)connect.
+ * `wsTicket` provider, re-minting on every (re)connect.
  *
  * Caching: the minted `{ token, expiresAtMs }` is reused until ~10s before
  * expiry (so a reconnect burst doesn't hammer the mint endpoint), and
@@ -43,7 +43,7 @@ interface AdminWsTokenProviderOptions {
 }
 
 interface AdminWsTokenProvider {
-    /** Resolve the WS credential: a cached-or-fresh ephemeral sub-token. Pass as the client's `wsToken`. */
+    /** Resolve the WS credential: a cached-or-fresh ephemeral sub-token. Pass as the client's `wsTicket`. */
     readonly getToken: () => Promise<string>;
     /** Drop the cached token so the next `getToken` re-mints. Wire to `client.onTokenExpired`. */
     readonly invalidate: () => void;

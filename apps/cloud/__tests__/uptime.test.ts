@@ -140,7 +140,7 @@ describe(runUptimeSweep, () => {
 
         await run();
 
-        expect(patch).toHaveBeenCalledWith("state1", expect.objectContaining({ consecutiveFailures: 0, lastOk: true }), "uptimeState");
+        expect(patch).toHaveBeenCalledWith("uptimeState", "state1", expect.objectContaining({ consecutiveFailures: 0, lastOk: true }));
         expect(insert).not.toHaveBeenCalledWith("uptimeState", expect.anything());
     });
 

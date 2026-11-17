@@ -43,10 +43,10 @@ export const AUDIT_LOG_RETENTION_MS = 3 * 365 * DAY_MS;
 /** Rows deleted per table per tick. A backlog drains over several ticks. */
 const PRUNE_BATCH = 200;
 
-/** The two financial tables, typed as one facade shape each (the union of the two is not callable). */
-const financialFacades = (context: MutationContext): ReadonlyArray<FindManyFacade> => [
-    context.db.payment_sessions as unknown as FindManyFacade,
-    context.db.payment_subscriptions as unknown as FindManyFacade,
+/** The two financial tables, each with one facade shape (the union of the two is not callable) and the name a delete takes. */
+const financialFacades = (context: MutationContext): ReadonlyArray<{ facade: FindManyFacade; table: "payment_sessions" | "payment_subscriptions" }> => [
+    { facade: context.db.payment_sessions as unknown as FindManyFacade, table: "payment_sessions" },
+    { facade: context.db.payment_subscriptions as unknown as FindManyFacade, table: "payment_subscriptions" },
 ];
 
 interface FindManyFacade {
@@ -67,7 +67,7 @@ export const prune = internalMutation.mutation(
         const cutoff = financialCutoff(context.now);
         let financial = 0;
 
-        for (const facade of financialFacades(context)) {
+        for (const { facade, table } of financialFacades(context)) {
             // The redacted reference marks a row whose organization was erased; a
             // live row is never swept here.
             // eslint-disable-next-line no-await-in-loop -- one table at a time keeps the writer simple
@@ -79,7 +79,7 @@ export const prune = internalMutation.mutation(
 
             for (const row of stale) {
                 // eslint-disable-next-line no-await-in-loop -- small batch; sequential deletes keep the writer simple
-                await context.db.delete(row._id as never);
+                await context.db.delete(table, row._id as never);
             }
 
             financial += stale.length;
@@ -93,7 +93,7 @@ export const prune = internalMutation.mutation(
 
         for (const row of events) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential deletes keep the writer simple
-            await context.db.delete(row._id);
+            await context.db.delete("payment_events", row._id);
         }
 
         const { page: entries } = await context.db.auditLog.findMany({
@@ -104,7 +104,7 @@ export const prune = internalMutation.mutation(
 
         for (const row of entries) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential deletes keep the writer simple
-            await context.db.delete(row._id);
+            await context.db.delete("auditLog", row._id);
         }
 
         const { page: destroyed } = await (context.db.deployments as unknown as FindManyFacade).findMany({
@@ -115,7 +115,7 @@ export const prune = internalMutation.mutation(
 
         for (const row of destroyed) {
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential deletes keep the writer simple
-            await context.db.delete(row._id as never);
+            await context.db.delete("deployments", row._id as never);
         }
 
         return { auditLog: entries.length, deployments: destroyed.length, events: events.length, financial };

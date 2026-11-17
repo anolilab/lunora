@@ -10,6 +10,15 @@ import { mergeWranglerEnvironment, NON_INHERITABLE_KEYS } from "../src/cloudflar
  * that overrides one is a known rule, not an "unverified" key.
  */
 describe(mergeWranglerEnvironment, () => {
+    it("treats hyperdrive as non-inheritable, as wrangler does, so a top-level entry does not count for a named environment", () => {
+        expect.assertions(2);
+
+        const { merged } = mergeWranglerEnvironment({ env: { staging: {} }, hyperdrive: [{ binding: "HYPERDRIVE", id: "top-level" }] }, "staging");
+
+        expect(NON_INHERITABLE_KEYS).toContain("hyperdrive");
+        expect(merged.hyperdrive).toBeUndefined();
+    });
+
     it.each(NON_INHERITABLE_KEYS)("does not inherit a top-level %s into a declared env", (key) => {
         expect.assertions(2);
 

@@ -58,6 +58,9 @@ import preparedStatement from "./prepared-statement";
  */
 const nodeDialect: SqlDialect = { ...sqliteDialect, searchBackfillHint: "run the global store's migrate(), which backfills every search index to completion" };
 
+/** The transaction open on each connection, if any: settles when it does. */
+const transactionGates = new WeakMap<Database.Database, { open?: Promise<void> }>();
+
 /**
  * The Node store options — the shared store options minus the two this binding
  * owns. `dialect` is fixed (SQLite) and `exec` is the store's own connection;
@@ -77,9 +80,21 @@ export type NodeGlobalContextDatabaseOptions = Omit<SqlCtxDbOptions, "dialect" |
  * move a document's mapping while the other's entry was mid-write, leaving an
  * entry no later write or purge could reach. The `sqlite` dialect's contract
  * requires an ordered, atomic `batch` for exactly that reason.
+ *
+ * `transaction` holds `BEGIN IMMEDIATE` … `COMMIT` open across the awaits of
+ * an async `work`, which `better-sqlite3`'s own synchronous `transaction()`
+ * cannot. The connection is shared, so while one is open every other statement
+ * waits for it to settle: run in between, another writer's statement would land
+ * inside it and be rolled back with it. The wait and the statement (or the
+ * `BEGIN`) run with no `await` between them, so nothing slips in after the check.
  */
 export const createNodeSqlExec = (database: Database.Database): SqlCtxExec => {
-    return {
+    // Per connection, not per wrapper: two execs over one database must still wait on each other's transaction.
+    const shared = transactionGates.get(database) ?? {};
+
+    transactionGates.set(database, shared);
+
+    const direct: SqlCtxExec = {
         // eslint-disable-next-line @typescript-eslint/require-await -- the exec seam is async so a networked engine can await; better-sqlite3 is synchronous
         all: async (statement, parameters) => preparedStatement(database, statement).all(...(parameters as unknown[])) as Record<string, unknown>[],
         // eslint-disable-next-line @typescript-eslint/require-await -- see `all`
@@ -95,6 +110,68 @@ export const createNodeSqlExec = (database: Database.Database): SqlCtxExec => {
             const result = preparedStatement(database, statement).run(...(parameters as unknown[]));
 
             return { rowsAffected: result.changes };
+        },
+    };
+
+    return {
+        all: async (statement, parameters) => {
+            while (shared.open !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- another transaction may open before this one resumes
+                await shared.open;
+            }
+
+            return await direct.all(statement, parameters);
+        },
+        batch: async (statements) => {
+            while (shared.open !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- another transaction may open before this one resumes
+                await shared.open;
+            }
+            await direct.batch?.(statements);
+        },
+        run: async (statement, parameters) => {
+            while (shared.open !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- another transaction may open before this one resumes
+                await shared.open;
+            }
+
+            return await direct.run(statement, parameters);
+        },
+        transaction: async (work) => {
+            while (shared.open !== undefined) {
+                // eslint-disable-next-line no-await-in-loop -- another transaction may open before this one resumes
+                await shared.open;
+            }
+
+            let settle: () => void = () => undefined;
+
+            shared.open = new Promise<void>((resolve) => {
+                settle = resolve;
+            });
+
+            // Set only once this wrapper's own BEGIN took: a refused one (the caller already holds a transaction on
+            // the exposed connection) leaves that transaction theirs to finish.
+            let owned = false;
+
+            try {
+                database.exec("BEGIN IMMEDIATE");
+                owned = true;
+
+                const result = await work(direct);
+
+                database.exec("COMMIT");
+
+                return result;
+            } catch (error) {
+                if (owned && database.inTransaction) {
+                    database.exec("ROLLBACK");
+                }
+
+                throw error;
+            } finally {
+                shared.open = undefined;
+                settle();
+            }
         },
     };
 };

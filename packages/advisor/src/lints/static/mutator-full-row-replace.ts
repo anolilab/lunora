@@ -3,7 +3,7 @@ import type { Lint } from "../../types";
 
 /**
  * Flags a custom mutator whose authoritative `server` impl writes a row with
- * `ctx.db.replace(id, document)` — a whole-document overwrite.
+ * `ctx.db.replace("table", id, document)` — a whole-document overwrite.
  *
  * The local-first sync engine serializes mutators in the shard DO, so two
  * mutators that touch the *same row* but *different columns* both run to
@@ -12,7 +12,7 @@ import type { Lint } from "../../types";
  * to another column (committed between this mutator's read and its write, or
  * carried as a pending optimistic overlay on a client) is silently clobbered:
  * the kind of "two offline edits to different fields fight each other" data loss
- * a column-level merge avoids. `ctx.db.patch(id, { onlyTheChangedField })`
+ * a column-level merge avoids. `ctx.db.patch("table", id, { onlyTheChangedField })`
  * merges at the column level instead, so independent field edits coexist.
  *
  * `WARN`, not `ERROR`: `replace` is legitimate when the mutator genuinely owns
@@ -27,12 +27,12 @@ import type { Lint } from "../../types";
 const mutatorFullRowReplace: Lint = {
     categories: ["SCHEMA"],
     description:
-        "A custom mutator's `server` impl writes with `ctx.db.replace(id, document)` — a whole-row overwrite. On a synced table this clobbers a concurrent edit to a different column; `ctx.db.patch(id, { field })` merges at the column level so independent field edits coexist.",
+        'A custom mutator\'s `server` impl writes with `ctx.db.replace("table", id, document)` — a whole-row overwrite. On a synced table this clobbers a concurrent edit to a different column; `ctx.db.patch("table", id, { field })` merges at the column level so independent field edits coexist.',
     facing: "EXTERNAL",
     level: "WARN",
     name: "mutator_full_row_replace",
     remediation:
-        "Prefer `ctx.db.patch(id, { onlyTheChangedField })` so a concurrent edit to another column isn't lost. Keep `replace` only when the mutator genuinely owns the entire row (e.g. a full-form save).",
+        'Prefer `ctx.db.patch("table", id, { onlyTheChangedField })` (or `ctx.db.<table>.patch(id, …)`) so a concurrent edit to another column isn\'t lost. Keep `replace` only when the mutator genuinely owns the entire row (e.g. a full-form save).',
     run: (context) => {
         if (context.mutatorWrites === undefined) {
             return [];
@@ -41,7 +41,7 @@ const mutatorFullRowReplace: Lint = {
         return context.mutatorWrites.map((write) =>
             emit(mutatorFullRowReplace, {
                 cacheKey: `mutator_full_row_replace:${write.exportName}:${String(write.line)}`,
-                detail: `Mutator \`${write.exportName}\` (${write.file}:${String(write.line)}) writes with \`ctx.db.replace(...)\`, overwriting the whole row. A concurrent edit to a different column is clobbered — use \`ctx.db.patch(id, { field })\` to merge at the column level.`,
+                detail: `Mutator \`${write.exportName}\` (${write.file}:${String(write.line)}) writes with \`ctx.db.replace(...)\`, overwriting the whole row. A concurrent edit to a different column is clobbered — use \`ctx.db.patch("table", id, { field })\` to merge at the column level.`,
                 metadata: { exportName: write.exportName, file: write.file, line: write.line },
             }),
         );

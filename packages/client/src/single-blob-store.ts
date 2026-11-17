@@ -1,4 +1,4 @@
-import { decodeWire, encodeWire } from "@lunora/wire";
+import { encodeWire, parseWire } from "@lunora/wire";
 
 import type { AsyncStorageLike } from "./async-storage-persistence";
 
@@ -27,7 +27,7 @@ interface SingleBlobStore {
  * transactions, no secondary indexes, no partial reads). Backs both
  * `createAsyncStoragePersistence` and `createAsyncStorageQueryCache`.
  *
- * Values pass through the transport's {@link encodeWire}/{@link decodeWire}
+ * Values pass through the transport's {@link encodeWire}/{@link parseWire}
  * codec, NOT raw `JSON.stringify`: both adapters hold values (caller args, decoded
  * server results) whose `bigint` would make raw JSON throw and whose `Date`,
  * `Map`, `Set`, bytes, or `NaN` it would silently mangle — the IndexedDB
@@ -64,7 +64,7 @@ const singleBlobStore = (storage: AsyncStorageLike, key: string): SingleBlobStor
             }
 
             try {
-                return decodeWire(JSON.parse(raw));
+                return parseWire(raw);
             } catch {
                 return CORRUPT_BLOB;
             }

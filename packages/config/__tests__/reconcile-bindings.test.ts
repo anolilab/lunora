@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { reconcileWranglerBindings } from "../src/cloudflare/reconcile-bindings";
+import { reconcileWranglerBindings } from "../src/cloudflare/apply-bindings";
+import { HYPERDRIVE_PLACEHOLDER_ID } from "../src/cloudflare/placeholder-ids";
+import { planWranglerBindings } from "../src/cloudflare/reconcile-bindings";
 import type { InferredBindings } from "../src/infer-bindings";
 import type { DurableObjectSpec } from "../src/worker-entry";
 
@@ -37,7 +39,9 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesMail: false,
         usesNotify: false,
         usesNotifyFcm: false,
+        usesNotifyFcmTokenSource: false,
         usesNotifyWebPush: false,
+        usesRequestSecretTool: false,
         usesPaymentAutumn: false,
         usesPaymentCreem: false,
         usesPaymentDodopayments: false,
@@ -47,10 +51,14 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesPipelines: false,
         usesR2sql: false,
         usesScheduler: false,
+        hostsEventLog: false,
+        usesEventLogClient: false,
+        hostsShardRegistry: false,
         usesStorage: false,
         usesWorkerLoader: false,
         usesX402Charge: false,
         usesX402: false,
+        workerRoutes: [],
         workflows: [],
         ...overrides,
     };
@@ -177,7 +185,7 @@ describe("reconcileWranglerBindings", () => {
 
         expect(result.changed).toBe(true);
         expect(result.added).toContain("observability");
-        expect(readConfig().observability).toEqual({ enabled: true, head_sampling_rate: 1 });
+        expect(readConfig().observability).toEqual({ enabled: true, head_sampling_rate: 1, redact_query_string: true });
     });
 
     describe("upload_source_maps", () => {
@@ -221,6 +229,220 @@ describe("reconcileWranglerBindings", () => {
 
             expect(result.added).not.toContain("upload_source_maps");
             expect(readConfig().upload_source_maps).toBe(false);
+        });
+    });
+
+    describe("assets.run_worker_first", () => {
+        const withAssets = (assets: string, environment = ""): string => `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    // the client build
+    "assets": ${assets},
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true },
+    "upload_source_maps": true,${environment}
+}
+`;
+
+        it("routes the reserved Lunora paths to the Worker first when the key is absent, keeping comments", () => {
+            expect.assertions(4);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client", "not_found_handling": "none" }'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.added).toContain("assets.run_worker_first");
+            expect(readConfig().assets).toEqual({
+                directory: "./dist/client",
+                not_found_handling: "none",
+                run_worker_first: ["/_lunora/*", "/__lunora/*"],
+            });
+            expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toContain("// the client build");
+
+            // Idempotent: the second pass finds the key and writes nothing.
+            expect(reconcileWranglerBindings(root, baseInferred()).changed).toBe(false);
+        });
+
+        it("runs the Worker first for every path of a single-page app with an assets binding, exempting its static output", () => {
+            expect.assertions(3);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            mkdirSync(join(root, "public", "img"), { recursive: true });
+            writeFileSync(join(root, "public", "favicon.ico"), "", "utf8");
+            writeFileSync(join(root, "public", "_headers"), "", "utf8");
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets(
+                    '{ "binding": "ASSETS", "directory": "./dist/client", "not_found_handling": "single-page-application" }',
+                    '\n    "env": { "staging": { "assets": { "directory": "./dist/staging" } } },',
+                ),
+                "utf8",
+            );
+
+            // `/static/:file` is the Worker's, so `/static/*` is not exempted.
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe", "/static/:file"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/*", "!/_astro/*", "!/assets/*", "!/favicon.ico", "!/img/*"]);
+            // The env block has its own assets without the fallback, so it keeps the named list.
+            expect(readConfig().env.staging.assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/static/*", "/webhooks/stripe"]);
+            // Owned like any list Lunora writes.
+            expect(reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe", "/static/:file"] })).changed).toBe(false);
+        });
+
+        it("rewrites the old rspack-react list to the worker-first form once the SPA has a binding", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets(
+                    '{ "binding": "ASSETS", "directory": "./dist", "not_found_handling": "single-page-application", "run_worker_first": ["/_lunora/*"] }',
+                ),
+                "utf8",
+            );
+
+            reconcileWranglerBindings(root, baseInferred());
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/*", "!/_astro/*", "!/assets/*", "!/static/*"]);
+        });
+
+        it("keeps the named list for a single-page app without a binding, and says to add one", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets('{ "directory": "./dist/client", "not_found_handling": "single-page-application" }'),
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
+            expect(result.warnings.join(" ")).toContain('assets falls back to a single-page app but sets no "binding"');
+        });
+
+        it("writes an env block's own assets too", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets(
+                    '{ "directory": "./dist/client", "run_worker_first": true }',
+                    '\n    "env": { "staging": { "assets": { "directory": "./dist/staging" } } },',
+                ),
+                "utf8",
+            );
+
+            reconcileWranglerBindings(root, baseInferred());
+
+            expect(readConfig().env.staging.assets).toEqual({
+                directory: "./dist/staging",
+                run_worker_first: ["/_lunora/*", "/__lunora/*"],
+            });
+        });
+
+        it("never rewrites an authored value, and warns when it leaves a reserved path to the assets", () => {
+            expect.assertions(3);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client", "run_worker_first": ["/api/*"] }'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(result.changed).toBe(false);
+            expect((readConfig().assets as { run_worker_first: unknown }).run_worker_first).toEqual(["/api/*"]);
+            expect(result.warnings.join(" ")).toContain("assets.run_worker_first does not send /_lunora/*, /__lunora/* to the Worker first");
+        });
+
+        it("warns when a negative rule takes part of a reserved path back to the assets", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                withAssets('{ "directory": "./dist/client", "run_worker_first": ["/_lunora/*", "/__lunora/*", "!/_lunora/admin/auth/*"] }'),
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+            const warnings = result.warnings.join(" ");
+
+            expect(result.changed).toBe(false);
+            expect(warnings).toContain('sends /_lunora/* to the Worker first, but "!/_lunora/admin/auth/*" takes part of it back to the assets');
+            expect(warnings).not.toContain("does not send");
+        });
+
+        it("leaves a config with no assets block alone", () => {
+            expect.assertions(1);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets("{}").replace('    // the client build\n    "assets": {},\n', ""), "utf8");
+
+            expect(reconcileWranglerBindings(root, baseInferred()).added).not.toContain("assets.run_worker_first");
+        });
+
+        it("adds the app's routes, a parameter becoming a wildcard in place, and rewrites the list it owns when they change", () => {
+            expect.assertions(3);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/api/todos/:id", "/webhooks/stripe", "/api/auth/*"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/api/auth", "/api/auth/*", "/api/todos/*", "/webhooks/stripe"]);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            expect(result.updated).toContain("assets.run_worker_first");
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
+        });
+
+        it("leaves a list the user edited after Lunora wrote it, and says which routes it misses", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            const edited = readFileSync(join(root, "wrangler.jsonc"), "utf8").replace('"/webhooks/stripe"', '"/webhooks/*"');
+
+            writeFileSync(join(root, "wrangler.jsonc"), edited, "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe", "/hooks/github"] }));
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/*"]);
+            expect(result.warnings.join(" ")).toContain("does not send /hooks/github to the Worker first");
+        });
+
+        it("owns the /_lunora/* list the old rspack-react template wrote, and adds the rest without a warning", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist", "run_worker_first": ["/_lunora/*"] }'), "utf8");
+
+            const result = reconcileWranglerBindings(root, baseInferred());
+
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*"]);
+            expect(result.warnings.join(" ")).not.toContain("run_worker_first does not send");
+        });
+
+        it("leaves an owned list as it is when the routes could not be read", () => {
+            expect.assertions(2);
+
+            writeFileSync(join(root, "package.json"), '{ "name": "app" }\n', "utf8");
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+            reconcileWranglerBindings(root, baseInferred({ workerRoutes: ["/webhooks/stripe"] }));
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workerRoutes: undefined }));
+
+            expect(result.changed).toBe(false);
+            expect(readConfig().assets.run_worker_first).toEqual(["/_lunora/*", "/__lunora/*", "/webhooks/stripe"]);
+        });
+
+        it.each([["celld"], ["node"]])("leaves assets alone on the %s target", (target) => {
+            expect.assertions(1);
+
+            writeFileSync(join(root, "wrangler.jsonc"), withAssets('{ "directory": "./dist/client" }'), "utf8");
+
+            reconcileWranglerBindings(root, baseInferred(), { target });
+
+            expect((readConfig().assets as { run_worker_first?: unknown }).run_worker_first).toBeUndefined();
         });
     });
 
@@ -339,6 +561,26 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).toMatch(/placeholder database_id/u);
     });
 
+    it("writes the placeholder D1 id on celld, which projects it onto the database name, and does not warn", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ needsD1: true }), { target: "celld" });
+
+        expect(readConfig().d1_databases).toStrictEqual([{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "lunora-app" }]);
+        expect(result.warnings.join(" ")).not.toMatch(/placeholder database_id/u);
+    });
+
+    it.each([["celld"], ["node"]])("keeps the placeholder D1 id on %s, so a later Cloudflare deploy still finds it", (target) => {
+        expect.assertions(2);
+
+        reconcileWranglerBindings(root, baseInferred({ needsD1: true }), { target });
+        const cloudflare = reconcileWranglerBindings(root, baseInferred({ needsD1: true }));
+
+        // The deploy gate refuses only this literal; a name-derived id would ship an unbound DB.
+        expect(readConfig().d1_databases).toStrictEqual([{ binding: "DB", database_id: "<replace-with-d1-create-id>", database_name: "lunora-app" }]);
+        expect(cloudflare.changed).toBe(false);
+    });
+
     it("adds the parameterless ai binding when @lunora/ai is inferred", () => {
         expect.assertions(2);
 
@@ -425,16 +667,35 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().r2_buckets).toBeUndefined();
     });
 
-    it("warns about a missing artifacts binding, naming the schema's jurisdiction, and never writes one", () => {
+    it("writes an ARTIFACTS binding whose namespace is the Worker's name, once", () => {
+        expect.assertions(4);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }));
+
+        expect(first.added).toContain("ARTIFACTS (Cloudflare Artifacts)");
+        expect(readConfig().artifacts).toStrictEqual([{ binding: "ARTIFACTS", namespace: "lunora-app" }]);
+        expect(first.warnings.join(" ")).not.toMatch(/"artifacts" binding/u);
+        expect(reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true })).added).toStrictEqual([]);
+    });
+
+    it("writes no ARTIFACTS binding for a schema that pins a jurisdiction, and says to create the namespace first", () => {
         expect.assertions(3);
 
-        const unpinned = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }));
-        const pinned = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
+        // A logged-in dev session's first create() would make the namespace unrestricted, for good.
+        const result = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "us", usesArtifacts: true }));
 
-        expect(unpinned.warnings.join(" ")).toMatch(/add an "artifacts" binding/u);
-        expect(pinned.warnings.join(" ")).toMatch(/"jurisdiction": "us"/u);
-        // The namespace's residency is fixed at creation, so nothing is auto-written.
+        expect(result.added).not.toContain("ARTIFACTS (Cloudflare Artifacts)");
         expect(readConfig().artifacts).toBeUndefined();
+        expect(result.warnings.join(" ")).toContain('pins data to "us"');
+    });
+
+    it("writes no ARTIFACTS binding for a non-Cloudflare target, and says what to add", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesArtifacts: true }), { target: "node" });
+
+        expect(readConfig().artifacts).toBeUndefined();
+        expect(result.warnings.join(" ")).toMatch(/add an "artifacts" binding/u);
     });
 
     describe("an existing artifacts binding", () => {
@@ -849,6 +1110,18 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.some((warning) => warning.includes(`already bound by \`${owner}\``))).toBe(true);
     });
 
+    it("does not write the AI binding when another section already holds its name", () => {
+        expect.assertions(3);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `${MINIMAL_WRANGLER.trimEnd().slice(0, -1)}    "vars": { "AI": "on" },\n}\n`, "utf8");
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAi: true }));
+
+        expect(readConfig().ai).toBeUndefined();
+        expect(result.warnings.some((warning) => warning.startsWith("ai: not adding"))).toBe(true);
+        expect(result.warnings.some((warning) => warning.includes("already bound by `vars`"))).toBe(true);
+    });
+
     it("does not write AI_SEARCH when a Durable Object binding already holds the name", () => {
         expect.assertions(3);
 
@@ -880,17 +1153,78 @@ describe("reconcileWranglerBindings", () => {
         expect(second.changed).toBe(false);
     });
 
-    it("warns rather than writes a kv_namespaces binding when @lunora/bindings/kv is used (the namespace id can't be minted)", () => {
-        expect.assertions(2);
+    it("writes a KV namespace binding without an id, once, so wrangler creates the namespace on deploy", () => {
+        expect.assertions(4);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
+        const first = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
 
-        expect(result.warnings.join(" ")).toMatch(/kv_namespaces/u);
-        expect(readConfig().kv_namespaces).toBeUndefined();
+        expect(first.added).toContain("KV (Workers KV, created on deploy)");
+        expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "KV" }]);
+        expect(first.warnings.join(" ")).not.toMatch(/kv_namespaces/u);
+        expect(reconcileWranglerBindings(root, baseInferred({ usesKv: true })).added).toStrictEqual([]);
     });
 
-    it("does not warn about kv when a kv_namespaces binding already exists", () => {
-        expect.assertions(1);
+    it("writes no KV or Hyperdrive binding for the node target, and says what to add instead", () => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target: "node" });
+
+        expect(readConfig().kv_namespaces).toBeUndefined();
+        expect(readConfig().hyperdrive).toBeUndefined();
+        expect(result.warnings.join(" ")).toMatch(/no kv_namespaces binding exists[\s\S]*no hyperdrive binding exists/u);
+    });
+
+    // The celld projection derives the id; one written here would follow a later
+    // switch to Cloudflare into a deploy that needs the id-less shape.
+    it("writes a celld KV binding without an id, as on Cloudflare, and no Hyperdrive binding", () => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true, usesKv: true }), { target: "celld" });
+
+        expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "KV" }]);
+        expect(readConfig().hyperdrive).toBeUndefined();
+        expect(result.added).toContain("KV (Workers KV, celld namespace lunora-app-KV)");
+    });
+
+    it.each([
+        ["KV", { usesKv: true }, '"vars": { "KV": "x" }', "kv_namespaces"],
+        ["HYPERDRIVE", { usesHyperdrive: true }, '"vars": { "HYPERDRIVE": "x" }', "hyperdrive"],
+        ["ARTIFACTS", { usesArtifacts: true }, '"vars": { "ARTIFACTS": "x" }', "artifacts"],
+    ])("leaves the config alone and warns when the name %s is already bound by another section", (name, inferred, bound, key) => {
+        expect.assertions(3);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    ${bound},
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred(inferred));
+
+        expect(readConfig()[key as "hyperdrive"]).toBeUndefined();
+        expect(result.added.join(" ")).not.toContain(`${name} (`);
+        expect(result.warnings.join(" ")).toContain(`not adding "${name}"`);
+    });
+
+    it("keeps the hint for a jurisdiction-pinned schema, because a namespace wrangler creates is unrestricted", () => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ jurisdiction: "eu", usesKv: true }));
+
+        expect(readConfig().kv_namespaces).toBeUndefined();
+        expect(result.added).not.toContain("KV (Workers KV, created on deploy)");
+        expect(result.warnings.join(" ")).toMatch(/--jurisdiction eu/u);
+    });
+
+    it("leaves a project's own kv_namespaces binding alone and writes no second one", () => {
+        expect.assertions(2);
 
         writeFileSync(
             join(root, "wrangler.jsonc"),
@@ -908,19 +1242,22 @@ describe("reconcileWranglerBindings", () => {
         const result = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
 
         expect(result.warnings.join(" ")).not.toMatch(/kv_namespaces/u);
+        expect(readConfig().kv_namespaces).toStrictEqual([{ binding: "CACHE", id: "abc123" }]);
     });
 
-    it("warns rather than writes a hyperdrive binding when @lunora/hyperdrive is used (the id can't be minted)", () => {
-        expect.assertions(2);
+    it("writes a HYPERDRIVE binding with a placeholder id, once, so dev works and deploy has something to replace", () => {
+        expect.assertions(4);
 
-        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
+        const first = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
 
-        expect(result.warnings.join(" ")).toMatch(/hyperdrive/u);
-        expect(readConfig().hyperdrive).toBeUndefined();
+        expect(first.added).toContain("HYPERDRIVE (Hyperdrive, created on deploy)");
+        expect(readConfig().hyperdrive).toStrictEqual([{ binding: "HYPERDRIVE", id: HYPERDRIVE_PLACEHOLDER_ID }]);
+        expect(first.warnings.join(" ")).not.toMatch(/hyperdrive/u);
+        expect(reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true })).added).toStrictEqual([]);
     });
 
     it("does not warn about hyperdrive when a hyperdrive binding already exists", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         writeFileSync(
             join(root, "wrangler.jsonc"),
@@ -938,6 +1275,7 @@ describe("reconcileWranglerBindings", () => {
         const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
 
         expect(result.warnings.join(" ")).not.toMatch(/hyperdrive is used/u);
+        expect(readConfig().hyperdrive).toStrictEqual([{ binding: "PG", id: "real-hyperdrive-id" }]);
     });
 
     describe("voice agents", () => {
@@ -1449,6 +1787,34 @@ describe("reconcileWranglerBindings", () => {
             expect(readConfig().queues.consumers).toHaveLength(1);
         });
 
+        it("plans additions and retunes without writing the config or the ownership record", () => {
+            expect.assertions(4);
+
+            seedConsumer(`{ "queue": "receipt-queue", "max_retries": 3 }`);
+
+            // A Vite project, so the Studio documents' `assets` block stays out of the plan.
+            const manifest = `{ "name": "app", "devDependencies": { "@lunora/vite": "*" }, "lunora": {} }\n`;
+
+            writeFileSync(join(root, "package.json"), manifest, "utf8");
+
+            const wrangler = readFileSync(join(root, "wrangler.jsonc"), "utf8");
+            const inferred = baseInferred({ needsD1: true, queues: [receiptQueue({ maxRetries: 5 })] });
+            const plan = planWranglerBindings(root, inferred);
+
+            expect({ added: plan.added, changed: plan.edit?.text !== plan.edit?.original, updated: plan.updated }).toStrictEqual({
+                added: ["DB (D1)"],
+                changed: true,
+                updated: ["queues.consumers/receipt-queue (max_retries)"],
+            });
+            expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toBe(wrangler);
+            expect(readFileSync(join(root, "package.json"), "utf8")).toBe(manifest);
+
+            // Applying the same plan writes both — planning alone is what kept them untouched.
+            reconcileWranglerBindings(root, inferred);
+
+            expect(readFileSync(join(root, "package.json"), "utf8")).not.toBe(manifest);
+        });
+
         it("leaves a field defineQueue does not declare exactly as the user wrote it", () => {
             expect.assertions(1);
 
@@ -1530,8 +1896,13 @@ describe("reconcileWranglerBindings", () => {
         // no longer declares. Whether it goes depends on the ownership record in
         // package.json: only a field reconcile wrote, still at the value it wrote, is removed.
         describe("an option removed from defineQueue", () => {
+            // A Vite project: wrangler bundling one would also get the Studio documents' `assets` block, which is not what these test.
             const seedManifest = (lunora?: Record<string, unknown>): void => {
-                writeFileSync(join(root, "package.json"), `${JSON.stringify({ name: "app", ...(lunora === undefined ? {} : { lunora }) }, null, 4)}\n`, "utf8");
+                writeFileSync(
+                    join(root, "package.json"),
+                    `${JSON.stringify({ devDependencies: { "@lunora/vite": "*" }, name: "app", ...(lunora === undefined ? {} : { lunora }) }, null, 4)}\n`,
+                    "utf8",
+                );
             };
 
             const readManifest = (): Record<string, unknown> => JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Record<string, unknown>;

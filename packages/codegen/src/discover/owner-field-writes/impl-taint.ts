@@ -90,7 +90,7 @@ const MAX_VARIABLE_HOPS = 8;
  * A value whose member / call chain is ROOTED in the impl's own `ctx`
  * parameter, directly or through `const`s, is server-scoped: rows read through
  * `ctx.db`, even when the query filters on `args`. So is a `Promise`
- * combinator over such reads (`Promise.all(ids.map((id) => ctx.db.get(id)))`).
+ * combinator over such reads (`Promise.all(ids.map((id) => ctx.db.get("t", id)))`).
  * A helper result (`getMembers(ctx, args.orgId)`) is not. Neither is a row that
  * may have been changed since: see {@link CompromiseWalk}, which follows the
  * row wherever it flows inside the impl.
@@ -264,7 +264,7 @@ class ImplTaint implements TaintOracle {
         return callArguments.some((argument, position) => reaches(position) && this.isTaintedValue(argument, false));
     }
 
-    /** `Promise.all([ctx.db.get(a), …])` / `Promise.all(xs.map((x) => ctx.db.get(x)))`: every settled value is ctx-rooted. */
+    /** `Promise.all([ctx.db.get("t", a), …])` / `Promise.all(xs.map((x) => ctx.db.get("t", x)))`: every settled value is ctx-rooted. */
     private isContextRootedCombinator(call: CallExpression, hops: number): boolean {
         const callee = unwrapExpression(call.getExpression());
         const object = Node.isPropertyAccessExpression(callee) ? callee.getExpression() : undefined;

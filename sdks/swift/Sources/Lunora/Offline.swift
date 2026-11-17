@@ -10,6 +10,8 @@ public enum LunoraOfflineCode {
     public static let queueOverflow = "OFFLINE_QUEUE_OVERFLOW"
     /// The write's precondition no longer held when the flush reached it.
     public static let preconditionFailed = "OFFLINE_PRECONDITION_FAILED"
+    /// An online-only write was refused because the connection is not live. Nothing was queued.
+    public static let notQueued = "OFFLINE_NOT_QUEUED"
     /// The write was queued under a different identity than the one now in effect.
     public static let identityChanged = "OFFLINE_IDENTITY_CHANGED"
     /// The write's arguments cannot be wire-encoded, so it can never replay.
@@ -27,7 +29,7 @@ public enum LunoraOfflineCode {
     /// would lose it to a transient condition. Every other coded error IS a
     /// verdict: replaying it would only re-trigger the same failure, a
     /// poison-message loop.
-    public static let transient: Set<String> = ["SHARD_ERROR", "SHARD_UNAVAILABLE"]
+    public static let transient: Set<String> = ["DELIVERY_FENCED", "SHARD_ERROR", "SHARD_UNAVAILABLE"]
 
     /// Codes that say "not now" rather than "no".
     ///

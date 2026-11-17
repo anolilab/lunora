@@ -219,17 +219,21 @@ class R2UploadPartWriter {
         const bytes = new Uint8Array(size);
         let offset = 0;
 
-        for (const segment of this.segments) {
-            // eslint-disable-next-line no-await-in-loop -- segments are joined in order
-            const object = await this.bucket.get(segment.key);
+        // Each segment is an R2 round trip, and up to MAX_SEGMENTS wait at once:
+        // read them concurrently and only lay them out in order.
+        const bodies = await Promise.all(
+            this.segments.map(async (segment) => {
+                const object = await this.bucket.get(segment.key);
 
-            if (object === null) {
-                return throwErrorCode(ERRORS.STORAGE_ERROR, `Buffered upload segment ${segment.key} is missing`);
-            }
+                if (object === null) {
+                    return throwErrorCode(ERRORS.STORAGE_ERROR, `Buffered upload segment ${segment.key} is missing`);
+                }
 
-            // eslint-disable-next-line no-await-in-loop -- see above
-            const body = new Uint8Array(await object.arrayBuffer());
+                return new Uint8Array(await object.arrayBuffer());
+            }),
+        );
 
+        for (const body of bodies) {
             bytes.set(body, offset);
             offset += body.byteLength;
         }

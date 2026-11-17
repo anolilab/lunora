@@ -327,9 +327,9 @@ describe.skipIf(!FTS5_IN_BUILD)("search parity — sharded DO vs .global()", () 
 
         for (const writer of [shard, global, inverted]) {
             // eslint-disable-next-line no-await-in-loop -- the three engines must see the same writes in the same order
-            await writer.patch("a", { body: "totally rewritten" });
+            await writer.patch("docs", "a", { body: "totally rewritten" });
             // eslint-disable-next-line no-await-in-loop -- same
-            await writer.delete("b");
+            await writer.delete("docs", "b");
         }
 
         const run = async (writer: DatabaseWriterLike): Promise<unknown[]> =>

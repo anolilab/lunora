@@ -101,4 +101,21 @@ export interface RateLimitStore {
      * (`createDbStore`: every call is awaited I/O) must have it.
      */
     setIf?: (storageKey: string, value: RateLimitValue, prior: RateLimitValue | undefined) => Promise<boolean>;
+
+    /**
+     * Optional eviction hint, called by the limiter after each successful write.
+     * Remove up to `limit` entries whose `ts` is at or before `olderThanTs`, except
+     * entries with a negative `value`: a reserved debt is kept, whatever its age.
+     * The memory store examines up to `limit` entries from its oldest end; the
+     * durable stores delete at most `limit` matching rows. A returned promise is
+     * awaited, so a store whose sweep is I/O (`createDbStore`) finishes it before the
+     * consume returns. The durable stores implement it so a table stays bounded
+     * without a scheduled job; see `createSqlStore` and `createDbStore` for the
+     * table shape.
+     *
+     * `owns` says whether a storage key belongs to the limiter asking for the
+     * sweep. A store shared with another limiter must leave the other limiter's
+     * keys alone: its horizon is not this one's. Absent means every key is owned.
+     */
+    sweep?: (olderThanTs: number, limit: number, owns?: (storageKey: string) => boolean) => Promise<void> | void;
 }

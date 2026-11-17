@@ -53,11 +53,11 @@ describe("shard admin import — replace mode", () => {
             ],
         });
 
-        expect(result).toStrictEqual({ conflicts: 0, deleted: { notes: 1 }, errors: [], inserted: { notes: 2 } });
+        expect(result).toStrictEqual({ conflicts: 0, deleted: 0, errors: [], inserted: { notes: 2 }, pruned: { notes: 1 }, replaced: 0 });
         await expect(titles()).resolves.toStrictEqual({ "deleted-since": "back", kept: "as snapshotted" });
         // The snapshot's creation time is restored, not the overwritten row's.
-        await expect(writer.get("kept")).resolves.toMatchObject({ _creationTime: 1 });
-        await expect(writer.get("t1")).resolves.toMatchObject({ label: "outside the scope" });
+        await expect(writer.get("notes", "kept")).resolves.toMatchObject({ _creationTime: 1 });
+        await expect(writer.get("tasks", "t1")).resolves.toMatchObject({ label: "outside the scope" });
     });
 
     it("empties a table in scope that the import holds no rows for", async () => {
@@ -65,7 +65,7 @@ describe("shard admin import — replace mode", () => {
 
         const result = await importShardRows(writer, schema, { keepIds: new Set(), replaceTables: ["notes"], rows: [] });
 
-        expect(result.deleted).toStrictEqual({ notes: 2 });
+        expect(result.pruned).toStrictEqual({ notes: 2 });
         await expect(titles()).resolves.toStrictEqual({});
     });
 
@@ -77,7 +77,7 @@ describe("shard admin import — replace mode", () => {
             rows: [{ doc: { _id: "kept", title: "as snapshotted" }, table: "notes" }],
         });
 
-        expect(result).toStrictEqual({ conflicts: 0, errors: [], inserted: { notes: 1 } });
+        expect(result).toStrictEqual({ conflicts: 0, deleted: 0, errors: [], inserted: { notes: 1 }, replaced: 0 });
         await expect(titles()).resolves.toStrictEqual({ "created-since": "new", kept: "as snapshotted" });
     });
 
@@ -86,7 +86,7 @@ describe("shard admin import — replace mode", () => {
 
         const result = await importShardRows(writer, schema, { keepIds: new Set(["kept"]), replaceTables: ["notes"], rows: [] });
 
-        expect(result.deleted).toStrictEqual({ notes: 1 });
+        expect(result.pruned).toStrictEqual({ notes: 1 });
         await expect(titles()).resolves.toStrictEqual({ kept: "edited since" });
     });
 
@@ -107,7 +107,7 @@ describe("shard admin import — replace mode", () => {
             [2, "BAD_ROW"],
             [3, "BAD_ROW"],
         ]);
-        expect(result.deleted).toBeUndefined();
+        expect(result.pruned).toBeUndefined();
         await expect(titles()).resolves.toMatchObject({ "created-since": "new" });
     });
 
@@ -116,7 +116,7 @@ describe("shard admin import — replace mode", () => {
 
         const result = await importShardRows(writer, schema, { rows: [{ doc: { _id: "kept", title: "as snapshotted" }, table: "notes" }] });
 
-        expect(result).toStrictEqual({ conflicts: 1, errors: [], inserted: {} });
+        expect(result).toStrictEqual({ conflicts: 1, deleted: 0, errors: [], inserted: {}, replaced: 0 });
         await expect(titles()).resolves.toMatchObject({ kept: "edited since" });
     });
 });

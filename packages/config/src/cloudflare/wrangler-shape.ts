@@ -1,5 +1,6 @@
 /** The slice of `wrangler.jsonc` the binding reconciler reads and rewrites, and the step each reconcile returns. */
 
+import type { Manifest } from "./lunora-manifest";
 import type { WranglerObservability } from "./wrangler-config";
 
 interface DurableObjectBinding {
@@ -80,6 +81,8 @@ interface WranglerShape {
     analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
     // Hint-only: the namespace's jurisdiction is fixed at creation — warned, never written.
     artifacts?: ReadonlyArray<{ binding?: string; namespace?: string }>;
+    // Only `run_worker_first` is written: when absent, or rewritten while Lunora owns it (see reconcileAssetRouting).
+    assets?: unknown;
     // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileBrowser).
     browser?: { binding?: string };
     containers?: ReadonlyArray<ContainerEntry>;
@@ -113,8 +116,21 @@ interface WranglerShape {
     workflows?: ReadonlyArray<WorkflowEntry>;
 }
 
+/** Ownership a reconcile step records in `package.json`'s `lunora` object, written only once the config it describes is on disk. */
+interface OwnershipRecord {
+    /** What goes wrong until the record is written, for the warning when writing it fails. */
+    consequence: string;
+    /** The key under `lunora`. */
+    key: string;
+    label: string;
+    /** `devConfigWritten` is false when the dev sidecar's config failed to write, so nothing may claim what it would have held. */
+    write: (manifest: Manifest, options: { devConfigWritten: boolean }) => void;
+}
+
 interface ReconcileStep {
     added: string[];
+    /** What the step now owns, recorded after the config is written. */
+    record?: OwnershipRecord;
     text: string;
     /** Existing entries rewritten in place; see `ReconcileBindingsResult.updated` (`reconcile-bindings.ts`). */
     updated?: string[];
@@ -122,4 +138,4 @@ interface ReconcileStep {
     warnings?: string[];
 }
 
-export type { MigrationEntry, QueueConsumerEntry, QueuesShape, ReconcileStep, WranglerShape };
+export type { MigrationEntry, OwnershipRecord, QueueConsumerEntry, QueuesShape, ReconcileStep, WranglerShape };

@@ -1,4 +1,4 @@
-import { decodeWire } from "@lunora/wire";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LunoraClient } from "../src/lunora-client";
@@ -188,6 +188,37 @@ describe("subscription resilience", () => {
         // the value the subscriber is displaying.
         expect(client.debug().subscriptions[0]?.serverCursor).toBe(1);
         expect(received).toStrictEqual([[{ _id: "a", n: 1 }]]);
+
+        client.close();
+    });
+
+    it("decodes a tagged data frame and refuses an over-deep tagless one", () => {
+        expect.assertions(3);
+
+        const client = makeClient();
+        const received: unknown[] = [];
+        const errors: unknown[] = [];
+
+        client.subscribe(fnRef("messages:list"), {}, (data) => received.push(data), { onError: (error) => errors.push(error) });
+
+        const socket = latestSocket();
+
+        socket.open();
+
+        const id = frames(socket).find((frame) => frame.type === "subscribe")?.id as string;
+        let deep: unknown = 1;
+
+        for (let level = 0; level < 80; level += 1) {
+            deep = { a: deep };
+        }
+
+        socket.receive({ cursor: 1, data: encodeWire({ list: [7n], note: "$lunora.wire$" }), id, type: "data" });
+        // Past the codec's 64-level cap: a peer-sent frame must hit the decode-failure path, tagged or not.
+        socket.receive({ cursor: 2, data: deep, id, type: "data" });
+
+        expect(received).toStrictEqual([{ list: [7n], note: "$lunora.wire$" }]);
+        expect(errors).toHaveLength(1);
+        expect(errors[0]).toMatchObject({ code: "WIRE_DECODE_FAILED" });
 
         client.close();
     });

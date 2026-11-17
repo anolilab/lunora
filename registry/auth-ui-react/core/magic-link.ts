@@ -14,6 +14,7 @@ const createMagicLinkController = (context: ControllerContext): FormController<M
         fields: {
             email: { validate: (value, _values, localization) => validateEmail(value, localization) },
         },
+        resendCooldown: true,
         submit: async (values, context_) => {
             assertOk(
                 await context_.authClient.signIn.magicLink({

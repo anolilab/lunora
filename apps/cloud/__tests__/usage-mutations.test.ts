@@ -61,7 +61,7 @@ const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000, userId:
         db: {
             alertRules: facade("alertRules"),
             findFirst: () => Promise.resolve(null),
-            get: (id: string) =>
+            get: (_table: string, id: string) =>
                 Promise.resolve(
                     Object.values(tables)
                         .flat()
@@ -70,7 +70,7 @@ const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000, userId:
             members: facade("members"),
             payment_subscriptions: facade("payment_subscriptions"),
             query: () => emptyQuery,
-            delete: (id: string) => {
+            delete: (_table: string, id: string) => {
                 ops.push({ id, kind: "delete" });
 
                 return Promise.resolve();
@@ -82,7 +82,7 @@ const makeCtx = (tables: Record<string, Row[]>, now = 1_700_000_000_000, userId:
             },
             deployKeys: facade("deployKeys"),
             organizations: facade("organizations"),
-            patch: (id: string, patch: Row) => {
+            patch: (_table: string, id: string, patch: Row) => {
                 ops.push({ id, kind: "patch", patch });
 
                 return Promise.resolve();

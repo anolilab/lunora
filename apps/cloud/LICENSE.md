@@ -1,131 +1,105 @@
-# PolyForm Noncommercial License 1.0.0
+# Functional Source License, Version 1.1, Apache 2.0 Future License
 
-<https://polyformproject.org/licenses/noncommercial/1.0.0>
+## Abbreviation
 
-## Acceptance
+FSL-1.1-Apache-2.0
 
-In order to get any license under these terms, you must agree
-to them as both strict obligations and conditions to all
-your licenses.
+## Notice
 
-## Copyright License
+Copyright 2026 anolilab and contributors
 
-The licensor grants you a copyright license for the
-software to do everything you might do with the software
-that would otherwise infringe the licensor's copyright
-in it for any permitted purpose. However, you may
-only distribute the software according to [Distribution
-License](#distribution-license) and make changes or new works
-based on the software according to [Changes and New Works
-License](#changes-and-new-works-license).
+## Terms and Conditions
 
-## Distribution License
+### Licensor ("We")
 
-The licensor grants you an additional copyright license
-to distribute copies of the software. Your license
-to distribute covers distributing the software with
-changes and new works permitted by [Changes and New Works
-License](#changes-and-new-works-license).
+The party offering the Software under these Terms and Conditions.
 
-## Notices
+### The Software
 
-You must ensure that anyone who gets a copy of any part of
-the software from you also gets a copy of these terms or the
-URL for them above, as well as copies of any plain-text lines
-beginning with `Required Notice:` that the licensor provided
-with the software. For example:
+The "Software" is each version of the software that we make available under
+these Terms and Conditions, as indicated by our inclusion of these Terms and
+Conditions with the Software.
 
-> Required Notice: Copyright Daniel Bannert (https://github.com/anolilab/lunora)
+### License Grant
 
-## Changes and New Works License
+Subject to your compliance with this License Grant and the Patents,
+Redistribution and Trademark clauses below, we hereby grant you the right to
+use, copy, modify, create derivative works, publicly perform, publicly display
+and redistribute the Software for any Permitted Purpose identified below.
 
-The licensor grants you an additional copyright license to
-make changes and new works based on the software for any
-permitted purpose.
+### Permitted Purpose
 
-## Patent License
+A Permitted Purpose is any purpose other than a Competing Use. A Competing Use
+means making the Software available to others in a commercial product or service
+that:
 
-The licensor grants you a patent license for the software that
-covers patent claims the licensor can license, or becomes able
-to license, that you would infringe by using the software.
+1. substitutes for the Software;
 
-## Noncommercial Purposes
+2. substitutes for any other product or service we offer using the Software that
+   exists as of the date we make the Software available; or
 
-Any noncommercial purpose is a permitted purpose.
+3. offers the same or substantially similar functionality as the Software.
 
-## Personal Uses
+Permitted Purposes specifically include using the Software:
 
-Personal use for research, experiment, and testing for
-the benefit of public knowledge, personal study, private
-entertainment, hobby projects, amateur pursuits, or religious
-observance, without any anticipated commercial application,
-is use for a permitted purpose.
+1. for your internal use and access;
 
-## Noncommercial Organizations
+2. for non-commercial education;
 
-Use by any charitable organization, educational institution,
-public research organization, public safety or health
-organization, environmental protection organization,
-or government institution is use for a permitted purpose
-regardless of the source of funding or obligations resulting
-from the funding.
+3. for non-commercial research; and
 
-## Fair Use
+4. in connection with professional services that you provide to a licensee using
+   the Software in accordance with these Terms and Conditions.
 
-You may have "fair use" rights for the software under the
-law. These terms do not limit them.
+### Patents
 
-## No Other Rights
+To the extent your use for a Permitted Purpose would necessarily infringe our
+patents, the license grant above includes a license under our patents. If you
+make a claim against any party that the Software infringes or contributes to the
+infringement of any patent, then your patent license to the Software ends
+immediately.
 
-These terms do not allow you to sublicense or transfer any of
-your licenses to anyone else, or prevent the licensor from
-granting licenses to anyone else. These terms do not imply
-any other licenses.
+### Redistribution
 
-## Patent Defense
+The Terms and Conditions apply to all copies, modifications and derivatives of
+the Software.
 
-If you make any written claim that the software infringes or
-contributes to infringement of any patent, your patent license
-for the software granted under these terms ends immediately. If
-your company makes such a claim, your patent license ends
-immediately for work on behalf of your company.
+If you redistribute any copies, modifications or derivatives of the Software,
+you must include a copy of or a link to these Terms and Conditions and not
+remove any copyright notices provided in or with the Software.
 
-## Violations
+### Disclaimer
 
-The first time you are notified in writing that you have
-violated any of these terms, or done anything with the software
-not covered by your licenses, your licenses can nonetheless
-continue if you come into full compliance with these terms,
-and take practical steps to correct past violations, within
-32 days of receiving notice. Otherwise, all your licenses
-end immediately.
+THE SOFTWARE IS PROVIDED "AS IS" AND WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING WITHOUT LIMITATION WARRANTIES OF FITNESS FOR A PARTICULAR
+PURPOSE, MERCHANTABILITY, TITLE OR NON-INFRINGEMENT.
 
-## No Liability
+IN NO EVENT WILL WE HAVE ANY LIABILITY TO YOU ARISING OUT OF OR RELATED TO THE
+SOFTWARE, INCLUDING INDIRECT, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES, EVEN
+IF WE HAVE BEEN INFORMED OF THEIR POSSIBILITY IN ADVANCE.
 
-**_As far as the law allows, the software comes as is, without
-any warranty or condition, and the licensor will not be liable
-to you for any damages arising out of these terms or the use
-or nature of the software, under any kind of legal claim._**
+### Trademarks
 
-## Definitions
+Except for displaying the License Details and identifying us as the origin of
+the Software, you have no right under these Terms and Conditions to use our
+trademarks, trade names, service marks or product names.
 
-The **licensor** is the individual or entity offering these
-terms, and the **software** is the software the licensor makes
-available under these terms.
+## Grant of Future License
 
-**You** refers to the individual or entity agreeing to these
-terms.
+We hereby irrevocably grant you an additional license to use the Software under
+the Apache License, Version 2.0 that is effective on the second anniversary of
+the date we make the Software available. On or after that date, you may use the
+Software under the Apache License, Version 2.0, in which case the following will
+apply:
 
-**Your company** is any legal entity, sole proprietorship,
-or other kind of organization that you work for, plus all
-organizations that have control over, are under the control of,
-or are under common control with that organization. **Control**
-means ownership of substantially all the assets of an entity,
-or the power to direct its management and policies by vote,
-contract, or otherwise. Control can be direct or indirect.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License.
 
-**Your licenses** are all the licenses granted to you for the
-software under these terms.
+You may obtain a copy of the License at
 
-**Use** means anything you do with the software requiring one
-of your licenses.
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.

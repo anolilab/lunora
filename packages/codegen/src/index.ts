@@ -21,6 +21,7 @@ export { describeErrorLevelFindings, errorAdvisoryNames, errorPlatformDiagnostic
 // The capability table's usage-probe facets, read by `@lunora/config` (see below).
 export type { CapabilityKey, CapabilityProbe } from "./capabilities";
 export { CAPABILITY_PROBES } from "./capabilities";
+export { COMPANION_BINDING, COMPANION_SERVICE_NAME } from "./companion";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { AGENTS_FILENAME, discoverAgents } from "./discover/agents";
 // The canonical `lunora/` source walk — exported so a consumer deciding what
@@ -30,12 +31,13 @@ export { isTestPath, listLunoraSourceFiles } from "./discover/ast";
 export { default as discoverAuthApiCalls } from "./discover/authapi-calls";
 export { CONTAINERS_FILENAME, discoverContainers } from "./discover/containers";
 export { default as discoverCrons } from "./discover/crons";
+export { ENV_FILENAME } from "./discover/env";
 // The capability probe's per-file reading (value imports and re-exports, dynamic
 // imports, sandbox tools, `ctx.<property>` reads), its fold across files and the
 // one "is it used" matcher — exported so `@lunora/config`'s binding inference
 // marks a capability used on exactly the signals, and by exactly the rule, codegen does.
-export type { SourceCapabilitySignals } from "./discover/feature-usage";
-export { capabilitiesUsedBy, foldCapabilitySignals, mayReadCapabilityContext, sourceCapabilitySignals } from "./discover/feature-usage";
+export type { SourceCapabilitySignals, TargetScope } from "./discover/feature-usage";
+export { capabilitiesUsedBy, createTargetScope, foldCapabilitySignals, mayReadCapabilityContext, sourceCapabilitySignals } from "./discover/feature-usage";
 export { discoverFlags, FLAGS_FILENAME } from "./discover/flags";
 export { default as discoverFunctions } from "./discover/functions";
 export { default as discoverHttpRoutes } from "./discover/http-routes";
@@ -45,8 +47,8 @@ export { default as discoverMaskProcedures } from "./discover/mask-procedures";
 export { default as discoverMigrations } from "./discover/migrations";
 export { discoverMutators, MUTATORS_FILENAME } from "./discover/mutators";
 export { default as discoverNondeterministicCalls } from "./discover/nondeterministic-calls";
-export type { NotifyChannels } from "./discover/notify";
-export { discoverNotifyCalls, discoverNotifyChannels, discoverNotifyConfig, NOTIFY_FILENAME } from "./discover/notify";
+export type { FcmCredentials, NotifyChannels } from "./discover/notify";
+export { ALL_NOTIFY_CHANNELS, discoverNotifyCalls, discoverNotifyChannels, discoverNotifyConfig, NOTIFY_FILENAME } from "./discover/notify";
 // Exported so the CLI's scaffolds pick the same import form codegen emits —
 // `lunorash/server` for an umbrella project, `@lunora/server` otherwise.
 // Returns `undefined` (not an empty set) for an absent/unparseable manifest, so
@@ -60,7 +62,13 @@ export { default as discoverRlsMetadata } from "./discover/rls-procedures/metada
 export type { SandboxUsage } from "./discover/sandbox";
 export { discoverSandboxUsage } from "./discover/sandbox";
 export { default as discoverSchema } from "./discover/schema";
-export { readServiceBindings, resolveServiceBindings } from "./discover/service-bindings";
+export {
+    companionServiceBinding,
+    readBoundServiceBindings,
+    readDevServiceBindings,
+    readServiceBindings,
+    resolveServiceBindings,
+} from "./discover/service-bindings";
 export { discoverShapes, SHAPES_FILENAME } from "./discover/shapes";
 export { default as discoverStorageRulesMetadata } from "./discover/storage-rules";
 export { discoverWorkflows, WORKFLOWS_FILENAME } from "./discover/workflows";
@@ -130,11 +138,19 @@ export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION }
 export type { PlatformDiagnostic } from "./platform-target";
 export { DEFAULT_TARGET, platformMatrixIds, readProjectTarget, resolveCodegenTarget } from "./platform-target";
 export type { LoadedProjectConfig, LunoraProjectConfig, ProjectConfigLiterals, ServiceLiteral } from "./project-config-file";
-export { findProjectConfigFile, loadProjectConfig, PROJECT_CONFIG_FILENAMES, readProjectConfigLiterals } from "./project-config-file";
+export {
+    findProjectConfigFile,
+    loadProjectConfig,
+    PROJECT_CONFIG_FILENAMES,
+    readProjectConfigLiterals,
+    readProjectLazyFunctions,
+    readProjectSecurityHeaders,
+} from "./project-config-file";
+export { findCodegenConfigFile, projectConfigCandidatePaths } from "./project-config-path";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
-export { createCodegenProject, findTsconfig, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME } from "./run-codegen";
-export type { SchemaDriftDecision } from "./schema-drift";
-export { buildSchemaSnapshot, evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError } from "./schema-drift";
+export { createCodegenProject, findTsconfig, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME, tsconfigFingerprint } from "./run-codegen";
+export type { IndexReference, SchemaDriftDecision } from "./schema-drift";
+export { buildSchemaSnapshot, evaluateSchemaDrift, indexReferencesOf, parseSchemaSnapshot, SchemaSnapshotParseError } from "./schema-drift";
 export { default as fingerprintSchemaSources } from "./schema-fingerprint";
 export { schemaFromIr } from "./schema-from-ir";
 export { LUNORA_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";

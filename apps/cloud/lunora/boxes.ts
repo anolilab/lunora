@@ -198,7 +198,7 @@ export const get = query
     .query(async ({ ctx: context, args: { id, organizationId } }): Promise<BoxView | null> => {
         await assertMember(context, organizationId);
 
-        const row = await context.db.get(id);
+        const row = await context.db.get("boxes", id);
 
         return row?.organizationId === organizationId ? toBoxView(row, await latestStableVersions(context)) : null;
     });
@@ -227,13 +227,13 @@ export const rename = mutation
     .mutation(async ({ ctx: context, args: { id, name, organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "box");
+        await assertRowInOrg(context, "boxes", id, organizationId, "box");
 
         if (name.trim() === "") {
             throw new LunoraError("BAD_REQUEST", "a box needs a name");
         }
 
-        await context.db.patch(id, { name: name.trim() });
+        await context.db.patch("boxes", id, { name: name.trim() });
         await context.db.insert("auditLog", {
             action: "box.rename",
             actorUserId: member.userId,
@@ -261,12 +261,12 @@ export const revoke = internalMutation
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ ipv4?: string; ipv6?: string; slug: string }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "box");
+        await assertRowInOrg(context, "boxes", id, organizationId, "box");
 
-        const row = (await context.db.get(id)) as BoxRow;
+        const row = (await context.db.get("boxes", id)) as BoxRow;
 
         if (row.status !== "revoked") {
-            await context.db.patch(id, { revokedAt: context.now, status: "revoked" });
+            await context.db.patch("boxes", id, { revokedAt: context.now, status: "revoked" });
             await context.db.insert("auditLog", { action: "box.revoke", actorUserId: member.userId, createdAt: context.now, organizationId, target: row.slug });
         }
 
@@ -288,9 +288,9 @@ export const authorizeDiagnose = internalMutation
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<{ slug: string }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "box");
+        await assertRowInOrg(context, "boxes", id, organizationId, "box");
 
-        const row = (await context.db.get(id)) as BoxRow;
+        const row = (await context.db.get("boxes", id)) as BoxRow;
 
         if (row.status === "revoked") {
             throw new LunoraError("CONFLICT", "this box is revoked; it takes no more jobs");
@@ -373,7 +373,7 @@ export const enrol = internalMutation
         }
 
         if (enrolment.usedAt != null) {
-            const existing = enrolment.boxId == null ? null : await context.db.get(enrolment.boxId);
+            const existing = enrolment.boxId == null ? null : await context.db.get("boxes", enrolment.boxId);
 
             if (existing?.publicKey === args.publicKey && existing.status !== "revoked") {
                 return {
@@ -415,7 +415,7 @@ export const enrol = internalMutation
             versions: args.versions,
         });
 
-        await context.db.patch(enrolment._id, { boxId, usedAt: context.now });
+        await context.db.patch("boxEnrolments", enrolment._id, { boxId, usedAt: context.now });
         await context.db.insert("auditLog", {
             action: "box.enrol",
             actorUserId: "system:box-enrol",
@@ -441,7 +441,7 @@ export const enrol = internalMutation
 export const recordDns = internalMutation
     .input({ boxId: v.id("boxes"), dnsError: v.union(v.null(), boundedString(LIMITS.token)) })
     .mutation(async ({ ctx: context, args: { boxId, dnsError } }): Promise<void> => {
-        await context.db.patch(boxId, { dnsError });
+        await context.db.patch("boxes", boxId, { dnsError });
     });
 
 /**
@@ -455,7 +455,7 @@ export const identity = internalQuery
             ctx: context,
             args: { boxId },
         }): Promise<null | { organizationId: Id<"organizations">; publicKey: string; revoked: boolean; slug: string }> => {
-            const row = await context.db.get(boxId);
+            const row = await context.db.get("boxes", boxId);
 
             return row ? { organizationId: row.organizationId, publicKey: row.publicKey, revoked: row.status === "revoked", slug: row.slug } : null;
         },
@@ -469,7 +469,11 @@ export const identity = internalQuery
 export const ownsDeployment = internalQuery
     .input({ boxId: v.id("boxes"), deploymentId: v.id("deployments") })
     .query(async ({ ctx: context, args: { boxId, deploymentId } }): Promise<boolean> => {
-        const deployment = (await context.db.get(deploymentId)) as null | { organizationId: string; projectId: Id<"projects">; target?: null | string };
+        const deployment = (await context.db.get("deployments", deploymentId)) as null | {
+            organizationId: string;
+            projectId: Id<"projects">;
+            target?: null | string;
+        };
         const target = deployment ? storedTarget(deployment.target) : undefined;
 
         if (deployment === null || target === undefined || placedOnOf(target) !== "box") {
@@ -477,8 +481,8 @@ export const ownsDeployment = internalQuery
         }
 
         const [box, project] = await Promise.all([
-            context.db.get(boxId),
-            context.db.get(deployment.projectId) as Promise<null | { organizationId: string; placementRef?: null | string }>,
+            context.db.get("boxes", boxId),
+            context.db.get("projects", deployment.projectId) as Promise<null | { organizationId: string; placementRef?: null | string }>,
         ]);
 
         return (
@@ -518,13 +522,13 @@ export const setDesiredRelease = internalMutation
         }
 
         const everyBox = boxIds === undefined ? await context.db.boxes.findMany({}) : undefined;
-        const fetched = everyBox === undefined ? await Promise.all((boxIds ?? []).map((id) => context.db.get(id))) : [];
+        const fetched = everyBox === undefined ? await Promise.all((boxIds ?? []).map((id) => context.db.get("boxes", id))) : [];
         const rows = everyBox === undefined ? fetched.filter((row): row is BoxRow => row !== null) : (everyBox.page as BoxRow[]);
         const targets = rows.filter((row) => row.status !== "revoked");
 
         for (const row of targets) {
             // eslint-disable-next-line no-await-in-loop -- one patch per box; a fleet rollout is an operator action
-            await context.db.patch(row._id, { allowDowngrade, desiredReleaseId: releaseId });
+            await context.db.patch("boxes", row._id, { allowDowngrade, desiredReleaseId: releaseId });
 
             if (allowDowngrade) {
                 // eslint-disable-next-line no-await-in-loop -- see above

@@ -274,7 +274,7 @@ const encodeSignal = (
  * a hook. Listed once so {@link combineSinks} cannot silently drop a field the
  * next one adds — the whole reason `traceFetch` went missing.
  */
-const SINK_CONFIG_FIELDS = ["fuseCloudflareTraces", "instrumentDatabase", "metricHistory", "traceFetch"] as const;
+export const SINK_CONFIG_FIELDS = ["fuseCloudflareTraces", "instrumentDatabase", "metricHistory", "traceFetch"] as const;
 
 /**
  * A sink that logs each event via `console`.

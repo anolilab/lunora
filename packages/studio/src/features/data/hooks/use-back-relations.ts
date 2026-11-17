@@ -1,6 +1,6 @@
-import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import useStudioClient from "../../../hooks/use-studio-client";
 import type { BackRelation, BackRelationCountsResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
@@ -29,7 +29,7 @@ const useBackRelations = (
     ids: ReadonlyArray<string>,
     shardKey: string,
 ): CountsByRelation => {
-    const client = useLunora();
+    const client = useStudioClient();
 
     const [counts, setCounts] = useState<CountsByRelation>({});
 

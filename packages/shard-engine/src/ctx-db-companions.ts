@@ -38,7 +38,19 @@ import { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggr
 import type { SchemaLike, SqlExec } from "./ctx-db";
 import { aggregateSignature, rankSignature, readCompanionSignature, writeCompanionSignature } from "./ctx-db-companion-state";
 import { runAll, runDrizzle } from "./do-exec";
-import { AGG_COUNT, AGG_KEY, AGG_VALUE, aggUpsertSql, DOC_COLUMN, geoTableName, isFtsAvailable, jsonPathSql, rowToDocument, serializeSqlValue } from "./do-sql";
+import {
+    AGG_COUNT,
+    AGG_KEY,
+    AGG_VALUE,
+    aggUpsertSql,
+    DOC_COLUMN,
+    geoTableName,
+    isFtsAvailable,
+    jsonPathSql,
+    rowToDocument,
+    serializeSqlValue,
+    unwrapSql,
+} from "./do-sql";
 import { param, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { ftsPurgeDocument, ftsWriteDocument } from "./fts-companion";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
@@ -68,11 +80,11 @@ const rankColumnsSql = (index: RankIndexDefinitionLike): SQL =>
     );
 
 /**
- * INSERT one row's rank-companion entry (id, canonical partition key, the
- * serialized sort values). `columnsSql` is prebuilt via {@link rankColumnsSql}
- * so a backfill loop hoists it out of its per-row iteration.
+ * One row's rank-companion value tuple, in {@link rankColumnsSql} order: id,
+ * canonical partition key, the serialized sort values. Shared by the single-row
+ * insert and the chunked rebuild so the two encodings cannot diverge.
  */
-const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefinitionLike, columnsSql: SQL, id: string, record: Record<string, unknown>): void => {
+const rankRowValuesSql = (index: RankIndexDefinitionLike, id: string, record: Record<string, unknown>): SQL => {
     const partitionKey = encodePartitionKey(index.partitionBy ?? [], record);
     // eslint-disable-next-line unicorn/no-null -- binds the rank sort column to SQLite: a missing sort field is a NULL column value, not undefined
     const sortValues = index.sortBy.map((key) => serializeSqlValue(record[key.field] ?? null));
@@ -81,27 +93,59 @@ const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefiniti
         dsql`, `,
     );
 
-    runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES (${valuesSql})`);
+    return dsql`(${valuesSql})`;
 };
 
-/** One full scan of `tableName`, decoded, keeping the rows a companion tallies: live, and matching its static `where`. */
-const companionSourceRows = (
+/** INSERT one row's rank-companion entry. `columnsSql` is prebuilt via {@link rankColumnsSql}. */
+const insertRankRow = (sql: SqlExec, rankTable: string, index: RankIndexDefinitionLike, columnsSql: SQL, id: string, record: Record<string, unknown>): void => {
+    runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES ${rankRowValuesSql(index, id, record)}`);
+};
+
+/** Rows read per page by {@link companionSourceRows}. */
+const SOURCE_PAGE_ROWS = 1000;
+
+/**
+ * One full scan of `tableName`, decoded, keeping the rows a companion tallies:
+ * live, and matching its static `where`. Read in primary-key pages, so a
+ * rebuild holds one page in memory rather than the whole table, and no cursor
+ * is open while the caller writes between pages (better-sqlite3 refuses a
+ * write on a connection mid-iteration).
+ *
+ * Reads past the writer's read-byte meter: the rebuild is a one-page-at-a-time
+ * self-heal, not the transaction's own read, and charging a whole table to it
+ * would fail every write to that table until the companion could be rebuilt.
+ */
+const companionSourceRows = function* companionSourceRows(
     sql: SqlExec,
     tableName: string,
     softField: string | undefined,
     matchesWhere: (record: Record<string, unknown>) => boolean,
-): Record<string, unknown>[] => {
-    const records: Record<string, unknown>[] = [];
+): Generator<Record<string, unknown>> {
+    let after: string | undefined;
 
-    for (const row of runDrizzle(sql, dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}`)) {
-        const record = rowToDocument(row);
+    for (;;) {
+        const afterSql = after === undefined ? dsql`` : dsql` WHERE id > ${param(after)}`;
+        const page = [
+            ...runDrizzle(
+                unwrapSql(sql),
+                dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}${afterSql} ORDER BY id LIMIT ${param(SOURCE_PAGE_ROWS)}`,
+            ),
+        ];
 
-        if (record && isLiveForCompanion(record, softField) && matchesWhere(record)) {
-            records.push(record);
+        for (const row of page) {
+            const record = rowToDocument(row);
+
+            if (record && isLiveForCompanion(record, softField) && matchesWhere(record)) {
+                yield record;
+            }
         }
-    }
 
-    return records;
+        if (page.length < SOURCE_PAGE_ROWS) {
+            return;
+        }
+
+        after = String(page.at(-1)?.["id"]);
+    }
 };
 
 /**
@@ -167,13 +211,29 @@ const ensureAggregateCompanion = (sql: SqlExec, tableName: string, index: Aggreg
 const rebuildRankCompanion = (sql: SqlExec, tableName: string, index: RankIndexDefinitionLike, softField: string | undefined, signature: string): void => {
     const rankTable = rankTableName(tableName, index.name);
     const columnsSql = rankColumnsSql(index);
-    const records = companionSourceRows(sql, tableName, softField, (candidate) => !index.where || matchesRankStaticWhere(candidate, index.where));
 
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(rankTable)}`);
 
-    for (const record of records) {
-        insertRankRow(sql, rankTable, index, columnsSql, record["_id"] as string, record);
+    // id + partition + one per sort key bound per row, so one statement lands just under Workerd's per-statement parameter cap.
+    const CHUNK_ROWS = Math.max(1, Math.floor(WORKERD_SQLITE_LIMITS.boundParams / (2 + index.sortBy.length)));
+    let chunk: SQL[] = [];
+    const flushChunk = (): void => {
+        if (chunk.length > 0) {
+            runDrizzle(sql, dsql`INSERT INTO ${dsql.identifier(rankTable)} (${columnsSql}) VALUES ${dsql.join(chunk, dsql`, `)}`);
+            chunk = [];
+        }
+    };
+
+    // Inserted chunk by chunk as the scan pages, so the rebuild never holds the whole table.
+    for (const record of companionSourceRows(sql, tableName, softField, (candidate) => !index.where || matchesRankStaticWhere(candidate, index.where))) {
+        chunk.push(rankRowValuesSql(index, record["_id"] as string, record));
+
+        if (chunk.length >= CHUNK_ROWS) {
+            flushChunk();
+        }
     }
+
+    flushChunk();
 
     writeCompanionSignature(sql, rankTable, signature);
 };
@@ -252,6 +312,13 @@ interface CompanionSyncDeps {
     schema: SchemaLike;
     /** Project of `state.storage.sql` — the DO's SQLite handle. */
     sql: SqlExec;
+
+    /**
+     * Companions already verified against their durable marker. A host that builds
+     * a ctx-db per dispatch passes one long-lived set so only the first touch per
+     * shard instance pays the lookup; omitted, each ctx-db keeps its own.
+     */
+    verified?: Set<string>;
 }
 
 /** The companion-maintenance surface the writer destructures back into its hot write path. */
@@ -290,9 +357,9 @@ interface CompanionSync {
 const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
     const { broadcast, indexKeysFor, invalidateCache, recordCdc, schema, sql } = deps;
 
-    // Companions this ctx-db has already verified against the durable marker,
-    // so only the first touch per instance pays the lookup.
-    const verified = new Set<string>();
+    // Companions already verified against the durable marker, so only the first
+    // touch per memo pays the lookup.
+    const verified = deps.verified ?? new Set<string>();
 
     /**
      * The table's soft-delete marker column, or `undefined` when it has none.
@@ -385,8 +452,10 @@ const createCompanionSync = (deps: CompanionSyncDeps): CompanionSync => {
         const validator = schema.tables[tableName]?.shape[field];
 
         if (validator && mayHoldProjectedValue(validator)) {
+            // Maintenance the caller cannot see or avoid: a group's survivors are rescanned, so the
+            // read goes around the transaction's read meter, as the companion backfills do.
             const rows = runDrizzle(
-                sql,
+                unwrapSql(sql),
                 dsql`SELECT id, _creationTime, ${dsql.identifier(DOC_COLUMN)} FROM ${dsql.identifier(tableName)}${whereSql}`,
             ).toArray();
             // The canonical reducer, not a second copy of it: this is the same

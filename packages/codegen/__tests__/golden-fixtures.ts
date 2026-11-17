@@ -102,6 +102,8 @@ const GOLDEN_FIXTURES: ReadonlyArray<readonly [string, string, ReadonlyArray<str
     ["artifacts", "expected/_generated", ["app.ts", "server.ts", "shard.ts"]],
     ["ai-search", "lunora/_generated"],
     ["analytics-sql", "lunora/_generated"],
+    ["live-stream", "lunora/_generated"],
+    ["random-replay", "lunora/_generated"],
 ];
 
 /** Every emitted artifact captured into a golden directory, as `[filename, CodegenResult key]`. */
@@ -119,6 +121,7 @@ const GOLDEN_OUTPUTS: ReadonlyArray<readonly [string, keyof CodegenResult["gener
     ["openapi.ts", "openApiModule"],
     ["openrpc.json", "openRpc"],
     ["openrpc.ts", "openRpcModule"],
+    ["advisor-procedures.json", "advisorProceduresJson"],
 ];
 
 export { GOLDEN_FIXTURES, GOLDEN_OUTPUTS, makeFixtureWorkdir };

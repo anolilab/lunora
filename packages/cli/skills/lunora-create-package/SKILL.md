@@ -97,8 +97,9 @@ This writes `packages/search/` with `package.json` (ESM-only,
 `"sideEffects": false`, catalog versions), `src/index.ts`, `tsconfig.json`,
 `vitest.config.ts`, `packem.config.ts`, `eslint.config.js`,
 `prettier.config.js`, `project.json` (tags `type:package` +
-`category:<category>`), `.releaserc.json` and `README.md`. It does not create
-`__tests__/` or `LICENSE.md`. Then:
+`category:<category>`) and `README.md`. It does not create `__tests__/` or
+`LICENSE.md`, and no release config — `vis release` releases every non-private
+package from the root `vis.config.ts`. Then:
 
 1. `cp packages/config/LICENSE.md packages/search/LICENSE.md` (packem and
    `files` expect it).

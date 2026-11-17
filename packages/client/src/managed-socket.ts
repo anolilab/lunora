@@ -100,10 +100,12 @@ const openManagedSocket = (
     url: string,
     options: ManagedSocketOptions,
     handlers: {
-        onClose: (event?: { code?: number }) => void;
+        onClose: (event?: { code?: number; reason?: string }) => void;
         onMessage: (event: MessageEvent) => void;
         /** Optional: the scheduled-jobs socket has nothing to do on `open` (its backoff resets on the first payload frame, not here). */
         onOpen?: () => void;
+        /** Subprotocols to offer on the handshake (the bearer-on-upgrade path). Omitted, the socket is built with the URL alone. */
+        protocols?: string[];
     },
 ): void => {
     const { WebSocketImpl, connectTimeoutMs, heartbeatIntervalMs } = options;
@@ -118,7 +120,7 @@ const openManagedSocket = (
     // so the handlers below and the caller's own bookkeeping observe the
     // same state machine (mirrors `handleDisconnect`).
     /* eslint-disable no-param-reassign -- mutate the shared connection state machine in place */
-    const socket = new WebSocketImpl(url);
+    const socket = handlers.protocols === undefined ? new WebSocketImpl(url) : new WebSocketImpl(url, handlers.protocols);
 
     conn.socket = socket;
 
@@ -137,7 +139,7 @@ const openManagedSocket = (
     };
 
     /** The two-step disconnect sequence every trigger below runs: tear down this attempt's bookkeeping, then hand the (optional) close event to the caller. */
-    const disconnect = (event?: { code?: number }): void => {
+    const disconnect = (event?: { code?: number; reason?: string }): void => {
         teardown();
         handlers.onClose(event);
     };
@@ -207,7 +209,12 @@ const openManagedSocket = (
             console.error("[lunora] connection open handler threw", error);
         }
 
-        startHeartbeat(conn, heartbeatIntervalMs, disconnect);
+        // `onOpen` may have torn this connection down (a route handle closed from its own
+        // open callback). Only a socket still owned by the connection gets a heartbeat,
+        // so a timer never outlives the socket it watches.
+        if (conn.socket === socket) {
+            startHeartbeat(conn, heartbeatIntervalMs, disconnect);
+        }
     });
 
     socket.addEventListener("message", (event: MessageEvent): void => {
@@ -240,7 +247,7 @@ const openManagedSocket = (
         }
     });
 
-    socket.addEventListener("close", (event?: { code?: number }): void => {
+    socket.addEventListener("close", (event?: { code?: number; reason?: string }): void => {
         // Ignore a late close from a socket the connection already moved past
         // (e.g. the fail-fast timeout force-closed it and a reconnect already
         // built a newer socket). Acting on it would tear down the live socket.

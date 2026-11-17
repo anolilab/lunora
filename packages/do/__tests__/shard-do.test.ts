@@ -1,6 +1,8 @@
 import { serialize } from "node:v8";
 
+import { LunoraError } from "@lunora/errors";
 import type { IndexKeyEntry, KeyRange, MutationDelta, SocketAttachment, SubscriptionEnvelope, TransactionHeadroomTracker } from "@lunora/shard-engine";
+import { ADMIN_WILDCARD, DELTA_PLACEHOLDER_TABLE, UNVOUCHABLE_DEP } from "@lunora/shard-engine";
 import { encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -168,6 +170,13 @@ class ReexecShard extends ShardDO {
     /** When set alongside `changedTableOnRpc`, threaded through as the write's index position. */
     public changedIndexKeysOnRpc: ReadonlyArray<IndexKeyEntry> | undefined;
 
+    /** functionPath -> the error `executeSubscription` throws, standing in for an auth refusal. */
+    public readonly refusals = new Map<string, Error>();
+
+    public emit(delta: MutationDelta): void {
+        this.broadcastDelta(delta);
+    }
+
     public override async handleRpc(): Promise<unknown> {
         this.userIdDuringRpc = this.getCurrentUserId();
 
@@ -210,6 +219,12 @@ class ReexecShard extends ShardDO {
         // anonymous identity, so a concurrent RPC's `currentRequestUserId` can
         // never leak in.
         this.userIdDuringExec = identity?.userId;
+
+        const refusal = this.refusals.get(functionPath);
+
+        if (refusal !== undefined) {
+            return Promise.reject(refusal);
+        }
 
         const outcome = this.outcomes.get(functionPath);
 
@@ -397,6 +412,136 @@ describe("shardDO", () => {
         expect(other.sent).toHaveLength(1);
         expect(unrelated.sent).toHaveLength(0);
         expect(JSON.parse(matching.sent[0]!)).toMatchObject({ delta: { op: "insert", table: "messages" }, id: "a", type: "delta" });
+    });
+
+    it("broadcastDelta still reaches a table-only subscription on a shard that re-executes", () => {
+        expect.assertions(2);
+
+        const reexec = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        reexec.registerSocket(ws, { subs: { t: { table: "messages" } } });
+        reexec.emit({
+            key: "m1",
+            op: "insert",
+            row: { _id: "m1" },
+            table: "messages",
+        });
+
+        expect(ws.sent).toHaveLength(1);
+        expect(JSON.parse(ws.sent[0]!)).toMatchObject({ delta: { table: "messages" }, id: "t", type: "delta" });
+    });
+
+    describe("broadcastDelta on a shard that overrides executeSubscription", () => {
+        const stray: MutationDelta = { key: "m1", op: "insert", row: { _id: "m1" }, table: "messages:list" };
+        const subscribe = { id: "s", query: { args: {}, functionPath: "messages:list", table: "messages:list" }, type: "subscribe" } as const;
+        const deltaFrames = (ws: FakeWebSocket): unknown[] =>
+            ws.sent.map((frame) => JSON.parse(frame) as { type: string }).filter((frame) => frame.type === "delta");
+
+        it("reaches a subscription whose seed resolved to null", async () => {
+            expect.assertions(1);
+
+            const reexec = new ReexecShard(state, {});
+            const ws = createFakeWebSocket();
+
+            reexec.registerSocket(ws);
+            await reexec.driveMessage(ws, subscribe);
+            reexec.emit(stray);
+
+            expect(deltaFrames(ws)).toStrictEqual([{ delta: stray, id: "s", type: "delta" }]);
+        });
+
+        it("still reaches a null-seeded subscription after the shard wakes from hibernation", async () => {
+            expect.assertions(1);
+
+            const ws = createFakeWebSocket();
+            const before = new ReexecShard(state, {});
+
+            before.registerSocket(ws);
+            await before.driveMessage(ws, subscribe);
+
+            // A fresh instance over the same state keeps only what the attachment persisted.
+            new ReexecShard(state, {}).emit(stray);
+
+            expect(deltaFrames(ws)).toHaveLength(1);
+        });
+
+        it("does not reach a subscription whose seed was refused", async () => {
+            expect.assertions(2);
+
+            const reexec = new ReexecShard(state, {});
+            const ws = createFakeWebSocket();
+
+            reexec.refusals.set("messages:list", new LunoraError("UNAUTHORIZED", "sign in"));
+            reexec.registerSocket(ws);
+            await reexec.driveMessage(ws, subscribe);
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            reexec.emit(stray);
+            warn.mockRestore();
+
+            expect(deltaFrames(ws)).toStrictEqual([]);
+            expect(ws.sent.map((frame) => (JSON.parse(frame) as { type: string }).type)).toContain("error");
+        });
+
+        it("does not reach a function-path subscription that has not been seeded", () => {
+            expect.assertions(1);
+
+            const reexec = new ReexecShard(state, {});
+            const ws = createFakeWebSocket();
+
+            reexec.registerSocket(ws, { subs: { s: { args: {}, functionPath: "messages:list", table: "messages:list" } } });
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            reexec.emit(stray);
+            warn.mockRestore();
+
+            expect(deltaFrames(ws)).toStrictEqual([]);
+        });
+
+        it("stops reaching a null-seeded subscription for good once a re-run returns a result", async () => {
+            expect.assertions(1);
+
+            const ws = createFakeWebSocket();
+            const before = new ReexecShard(state, {});
+
+            before.registerSocket(ws);
+            await before.driveMessage(ws, subscribe);
+            before.outcomes.set("messages:list", { result: [], tables: new Set(["messages"]) });
+            before.changedTableOnRpc = "messages";
+            await before.writeRpc();
+
+            const start = ws.sent.length;
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            // After a wake the diff baseline is gone; only the persisted attachment says the subscription switched.
+            new ReexecShard(state, {}).emit(stray);
+            warn.mockRestore();
+
+            expect(ws.sent.slice(start)).toStrictEqual([]);
+        });
+
+        it("stops reaching a subscription once a resubscribe seeds it with a result", async () => {
+            expect.assertions(1);
+
+            const reexec = new ReexecShard(state, {});
+            const ws = createFakeWebSocket();
+
+            reexec.registerSocket(ws);
+            await reexec.driveMessage(ws, subscribe);
+            reexec.outcomes.set("messages:list", { result: [], tables: new Set(["messages"]) });
+            await reexec.driveMessage(ws, subscribe);
+
+            const start = ws.sent.length;
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            reexec.emit(stray);
+            warn.mockRestore();
+
+            expect(ws.sent.slice(start)).toStrictEqual([]);
+        });
     });
 
     it("broadcastDelta does not deliver to a socket whose credential expired", () => {
@@ -939,22 +1084,20 @@ describe("shardDO upgrade gating", () => {
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Origin: "https://staging.example" } }));
     });
 
-    it("rejects upgrade with 403 when bearer required but missing", async () => {
-        expect.assertions(1);
+    it("accepts an upgrade with no bearer as unauthenticated, to be decided by connect.token", async () => {
+        expect.hasAssertions();
 
         const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
-        const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
 
-        expect(response.status).toBe(403);
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/"));
     });
 
-    it("rejects upgrade with 403 when bearer token mismatches", async () => {
-        expect.assertions(1);
+    it("accepts an upgrade with a wrong bearer as unauthenticated, to be decided by connect.token", async () => {
+        expect.hasAssertions();
 
         const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
-        const response = await shard.fetch(upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer wrong" } }));
 
-        expect(response.status).toBe(403);
+        await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer wrong" } }));
     });
 
     it("accepts bearer via Authorization header", async () => {
@@ -965,12 +1108,13 @@ describe("shardDO upgrade gating", () => {
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer s3cret" } }));
     });
 
-    it("accepts bearer via ?token query parameter as a browser escape hatch", async () => {
-        expect.hasAssertions();
+    it("refuses the bearer in ?token= with 403, so the session credential never rides the URL", async () => {
+        expect.assertions(1);
 
         const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
+        const response = await shard.fetch(upgradeRequest("https://shard.internal/?token=s3cret"));
 
-        await expectPassedGate(shard, upgradeRequest("https://shard.internal/?token=s3cret"));
+        expect(response.status).toBe(403);
     });
 });
 
@@ -1841,6 +1985,123 @@ describe("shardDO subscription delta push", () => {
         expect(last.delta).toEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: "messages" });
     });
 
+    it("a query that read two tables stamps the placeholder, not the first table, on a row delta", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables: new Set(["members", "messages"]) });
+
+        await subscribeMessages(shard, ws);
+
+        shard.outcomes.set("messages:list", {
+            result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })],
+            tables: new Set(["members", "messages"]),
+        });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const last = JSON.parse(ws.sent.at(-1)!);
+
+        expect(last).toMatchObject({ id: "sub-1", type: "delta" });
+        expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: DELTA_PLACEHOLDER_TABLE });
+    });
+
+    it("a subscription served by re-execution never receives a broadcast delta", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        const tables = new Set(["members", "messages"]);
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables });
+
+        await shard.driveMessage(ws, { id: "sub-1", query: { args: {}, functionPath: "messages:list", table: "messages:list" }, type: "subscribe" });
+
+        const start = ws.sent.length;
+
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })], tables });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        shard.emit({
+            key: "x",
+            op: "insert",
+            row: idRow("x", { text: "stray" }),
+            table: "messages:list",
+        });
+
+        shard.outcomes.set("messages:list", {
+            result: [...filler(16), idRow("a"), idRow("b", { text: "hi" }), idRow("c")],
+            tables,
+        });
+        await shard.writeRpc();
+
+        const keys = ws.sent
+            .slice(start)
+            .map((frame) => JSON.parse(frame) as { delta?: { key: string }; type: string })
+            .filter((frame) => frame.type === "delta")
+            .map((frame) => frame.delta?.key);
+
+        expect(keys).toStrictEqual(["b", "c"]);
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
+    it("a single-table query still names its table alongside an unvouchable read", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables: new Set(["messages", UNVOUCHABLE_DEP]) });
+
+        await subscribeMessages(shard, ws);
+
+        shard.outcomes.set("messages:list", {
+            result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })],
+            tables: new Set(["messages", UNVOUCHABLE_DEP]),
+        });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const last = JSON.parse(ws.sent.at(-1)!);
+
+        expect(last).toMatchObject({ id: "sub-1", type: "delta" });
+        expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: "messages" });
+    });
+
+    it("an admin read that depends on every table stamps the placeholder, not the wildcard", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        shard.outcomes.set("messages:list", { result: [...filler(16), idRow("a")], tables: new Set([ADMIN_WILDCARD]) });
+
+        await subscribeMessages(shard, ws);
+
+        shard.outcomes.set("messages:list", {
+            result: [...filler(16), idRow("a"), idRow("b", { text: "hi" })],
+            tables: new Set([ADMIN_WILDCARD]),
+        });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const last = JSON.parse(ws.sent.at(-1)!);
+
+        expect(last).toMatchObject({ id: "sub-1", type: "delta" });
+        expect(last.delta).toStrictEqual({ key: "b", op: "insert", row: idRow("b", { text: "hi" }), table: DELTA_PLACEHOLDER_TABLE });
+    });
+
     it("a non-list result still pushes a data snapshot on a subsequent change", async () => {
         expect.assertions(2);
 
@@ -1976,9 +2237,130 @@ describe("shardDO subscription delta push", () => {
         // Derive the expected wire strings directly from subscriptionListDeltas,
         // encoding each delta the legacy way (JSON.stringify(delta)).
         const expectedDeltas = subscriptionListDeltas(JSON.stringify(prevResult), nextResult, "messages");
-        const expectedLines = (expectedDeltas ?? []).map((delta) => `{"type":"delta","id":"sub-1","delta":${JSON.stringify(delta)}}`);
+        // Every frame but the last of a run is marked `more`, which is how the client holds the run.
+        const expectedLines = (expectedDeltas ?? []).map(
+            (delta, index, all) => `{"type":"delta","id":"sub-1","delta":${JSON.stringify(delta)}${index === all.length - 1 ? "" : ',"more":true'}}`,
+        );
 
         expect(sentDeltaLines).toHaveLength(expectedLines.length);
         expect(sentDeltaLines).toEqual(expectedLines);
+    });
+});
+
+describe("shardDO operator-only error.internal never reaches a client", () => {
+    // Distinctive sentinel: a client must never see it, in any transport's bytes.
+    const SENTINEL = "INTERNAL_CONTEXT_SENTINEL_7f3a";
+    const failure = (): LunoraError => new LunoraError("CONFLICT", "stale", { internal: { query: SENTINEL }, why: "row moved" });
+
+    it("keeps internal out of the HTTP RPC body and headers, and hands it only to a worker that asked", async () => {
+        expect.assertions(4);
+
+        const shard = new TestShard(createFakeState(), {});
+
+        shard.handleRpc = async () => {
+            throw failure();
+        };
+
+        const rpc = (headers: Record<string, string>) =>
+            shard.fetch(
+                new Request("https://shard.internal/rpc", { body: JSON.stringify({ args: {}, functionPath: "orders:place" }), headers, method: "POST" }),
+            );
+
+        const unasked = await rpc({});
+        const asked = await rpc({ "x-lunora-want-error-detail": "1" });
+
+        await expect(unasked.text()).resolves.not.toContain(SENTINEL);
+        // The header is worker-only plumbing: it may carry the context, but only to the asking worker.
+        expect(unasked.headers.get("x-lunora-error-detail")).toBeNull();
+        expect(asked.headers.get("x-lunora-error-detail")).toContain(encodeURIComponent(SENTINEL));
+        await expect(asked.text()).resolves.not.toContain(SENTINEL);
+    });
+
+    it("keeps internal out of the admin RPC response (reserved `__lunora_admin__:*` path)", async () => {
+        expect.assertions(2);
+
+        const shard = new TestShard(createFakeState(), { LUNORA_ADMIN_TOKEN: "metrics-fixture-admin" });
+
+        // Admin reads are served by a private dispatcher ahead of `handleRpc`; make the
+        // wildcard admin read throw so the failure travels the real admin response path.
+        (shard as unknown as { readAdminWildcardOp: () => never }).readAdminWildcardOp = () => {
+            throw failure();
+        };
+
+        const response = await shard.fetch(
+            new Request("https://shard.internal/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "__lunora_admin__:getLogs" }),
+                headers: { authorization: "Bearer metrics-fixture-admin", "content-type": "application/json" }, // gitleaks:allow -- test fixture, not a credential
+                method: "POST",
+            }),
+        );
+
+        expect(response.status).toBe(409);
+        await expect(response.text()).resolves.not.toContain(SENTINEL);
+    });
+
+    it("keeps internal out of the WebSocket error frame of a failed subscription", async () => {
+        expect.assertions(3);
+
+        class ThrowingSubShard extends ReexecShard {
+            protected override async executeSubscription(): Promise<SubscriptionOutcome | null> {
+                // Count the attempt as the base class does, so the stub reads instance state.
+                this.execCount += 1;
+                await Promise.resolve();
+
+                throw failure();
+            }
+        }
+
+        const shard = new ThrowingSubShard(createFakeState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await shard.driveMessage(ws, {
+            id: "sub-1",
+            query: { args: { roomId: "lobby" }, functionPath: "cursors:listCursors", table: "cursors" },
+            type: "subscribe",
+        });
+
+        const frames = ws.sent.join("\n");
+
+        expect(ws.sent.some((line) => (JSON.parse(line) as { type: string }).type === "error")).toBe(true);
+        expect(frames).toContain("stale");
+        expect(frames).not.toContain(SENTINEL);
+    });
+
+    it("redacts an unhandled seed failure for the client and logs the real error server-side", async () => {
+        expect.assertions(3);
+
+        const sensitive = "column secret_token does not exist";
+        const thrown = new Error(sensitive);
+
+        class SeedFailShard extends ReexecShard {
+            protected override async executeSubscription(): Promise<SubscriptionOutcome | null> {
+                this.execCount += 1;
+                await Promise.resolve();
+
+                throw thrown;
+            }
+        }
+
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const shard = new SeedFailShard(createFakeState(), {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+        await shard.driveMessage(ws, {
+            id: "sub-1",
+            query: { args: { roomId: "lobby" }, functionPath: "cursors:listCursors", table: "cursors" },
+            type: "subscribe",
+        });
+
+        const frames = ws.sent.join("\n");
+
+        expect(frames).toContain("SUBSCRIPTION_SEED_FAILED");
+        expect(frames).not.toContain(sensitive);
+        expect(errorSpy).toHaveBeenCalledWith("[@lunora/do] subscription seed failed for cursors:listCursors:", thrown);
+
+        errorSpy.mockRestore();
     });
 });

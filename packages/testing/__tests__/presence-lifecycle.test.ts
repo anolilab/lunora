@@ -15,7 +15,7 @@ const lifecycleEvent = (overrides: Partial<LifecycleEvent>): never =>
  * End-to-end (in-memory, no workerd) proof that the presence `onDisconnect` hook
  * removes a member the instant the socket drops — the immediate-departure path,
  * not the TTL fallback. The hook runs against the harness's real `node:sqlite`
- * db through `@lunora/do`'s ctx-db, so the `byRoomSession` index lookup + delete
+ * db through `@lunora/do`'s ctx-db, so the `byTenantRoomSession` index lookup + delete
  * are exercised exactly as production dispatches them on `webSocketClose`.
  */
 const presence = definePresence({ ttlMs: 10_000 });
@@ -69,5 +69,31 @@ describe("presence onDisconnect (end-to-end)", () => {
         const survivors = (await t.query(presence.functions.listPresent, { roomId: "room-1" })) as unknown[];
 
         expect(survivors).toHaveLength(1);
+    });
+
+    it("keeps the same room name in two organizations apart, cleanup included", async () => {
+        expect.assertions(4);
+
+        const t = start();
+        const alice = t.withIdentity({ orgId: "org-a", userId: "user-1" });
+        // Same user id, other org: only the tenant tells the two rows apart.
+        const inOrgB = t.withIdentity({ orgId: "org-b", userId: "user-1" });
+
+        await alice.mutation(presence.functions.heartbeat, { roomId: "doc-1", sessionId: "sess-1" });
+        await inOrgB.mutation(presence.functions.heartbeat, { roomId: "doc-1", sessionId: "sess-1" });
+
+        // A socket in org B closing with org A's (roomId, sessionId) only reaches org B's row.
+        await inOrgB.run((context) =>
+            presence.functions.disconnect.handler(context, lifecycleEvent({ context: { roomId: "doc-1", sessionId: "sess-1" }, userId: "user-1" })),
+        );
+
+        const seenByA = (await alice.query(presence.functions.listPresent, { roomId: "doc-1" })) as { roomId: string; userId?: string }[];
+        const seenByB = (await inOrgB.query(presence.functions.listPresent, { roomId: "doc-1" })) as unknown[];
+        const appWide = (await t.query(presence.functions.listPresent, { roomId: "doc-1" })) as unknown[];
+
+        expect(seenByA).toHaveLength(1);
+        expect(seenByA[0]?.userId).toBe("user-1");
+        expect(seenByB).toHaveLength(0);
+        expect(appWide).toHaveLength(0);
     });
 });

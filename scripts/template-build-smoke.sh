@@ -130,12 +130,6 @@ ONLY_TEMPLATE="${1:-}"
 # Any template IN this list that passes build is an XPASS (also a failure —
 # remove it from the list when the fix lands).
 # ---------------------------------------------------------------------------
-# (This used to record react-router and solid-start as removed for supporting only
-# Vite <=7. Both are back: `templates/react-router` and
-# `templates/tanstack-start-solid` exist, pin `vite ^8.0.16`, and pass the matrix.
-# The note is kept as history because the removal is in the git log and a reader
-# finding no trace of it is worse than a dated sentence.)
-#
 # Currently empty: every template builds. It stays as a mechanism because the
 # XPASS branch makes it self-cleaning — an entry that starts passing fails the
 # run, so a fix can never quietly leave a stale exemption behind. That is how
@@ -196,6 +190,9 @@ is_skipped() {
 #
 #   TYPECHECK_DEP   — devDependency the scaffold needs for the checker (empty
 #                     when the template already ships the binary)
+#   TYPECHECK_OVERRIDES — pnpm override lines (`  "sel": "ver"`) the checker needs
+#                     to load at all, added under `overrides:` in the scaffold's
+#                     pnpm-workspace.yaml (empty when it needs none)
 #   TYPECHECK_PREP  — argv run first, to generate the framework's own tsconfig
 #                     and ambient types (empty when there is nothing to generate)
 #   TYPECHECK_CMD   — the checker itself
@@ -218,6 +215,7 @@ is_skipped() {
 # ---------------------------------------------------------------------------
 set_typecheck() {
     TYPECHECK_DEP=""
+    TYPECHECK_OVERRIDES=""
     TYPECHECK_PREP=()
     # TypeScript's own format, shared by `tsc` and `vue-tsc`.
     FILE_RE='\([0-9]+,[0-9]+\): error TS'
@@ -232,6 +230,13 @@ set_typecheck() {
             # `formatDiagnosticsWithColorAndContext` — which always colours, hence
             # the ANSI strip at the call site — and rewrites `TS1234` to `ts(1234)`.
             TYPECHECK_DEP="@astrojs/check@^0.9.10"
+            # @astrojs/astro2tsx pins @emnapi/core 1.x but leaves @emnapi/runtime to
+            # the peer range of its @napi-rs/wasm-runtime 1.2.4 (`^1.7.1 ||
+            # ^2.0.0-alpha.4`). pnpm fills that peer from the graph, and astro's
+            # rolldown (1.3.0+) pins runtime 2.0.0-beta.2, so the checker loads a 2.x
+            # runtime against a 1.x core and throws `setLastError is not a function`
+            # on import. astro reports that as "@astrojs/check is not installed".
+            TYPECHECK_OVERRIDES='  "@napi-rs/wasm-runtime@1.2.4>@emnapi/runtime": "1.11.3"'
             TYPECHECK_CMD=(pnpm exec astro check)
             AUTHUI_RE='^lunora/auth-ui/.*error ts\('
             ERROR_RE='error ts\('
@@ -275,17 +280,6 @@ set_typecheck() {
             # but never which files, and a count cannot say whether the payload
             # was among them.
             COVERAGE_MODE="canary"
-            ;;
-        react-router)
-            # `react-router typegen` writes `.react-router/types/**` — the route
-            # module types every route imports as `./+types/<route>`, resolved through
-            # the tsconfig's `rootDirs`. This is what the template's own `typecheck`
-            # script runs and what React Router documents for CI; without it every
-            # route fails on `Cannot find module './+types/root'`.
-            TYPECHECK_PREP=(pnpm exec react-router typegen)
-            TYPECHECK_CMD=(pnpm exec tsc --noEmit)
-            AUTHUI_RE='^lunora/auth-ui/'
-            ERROR_RE='error TS'
             ;;
         *)
             TYPECHECK_CMD=(pnpm exec tsc --noEmit)
@@ -633,6 +627,13 @@ authui_file_re() {
 # ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).
 # ---------------------------------------------------------------------------
+# A name that is not a template directory would match nothing below and report PASS over zero templates. The pattern rules out
+# `.`, `..` and path separators, which would name a directory without naming a template.
+if [[ -n "$ONLY_TEMPLATE" ]] && { [[ ! "$ONLY_TEMPLATE" =~ ^[a-z0-9][a-z0-9-]*$ ]] || [[ ! -d "$REPO_ROOT/templates/$ONLY_TEMPLATE" ]]; }; then
+    echo "FAILED — '$ONLY_TEMPLATE' is not a template name under templates/"
+    exit 1
+fi
+
 TEMPLATES=()
 SKIPPED=()
 for t_dir in "$REPO_ROOT/templates"/*/; do
@@ -648,6 +649,16 @@ done
 if [[ ${#TEMPLATES[@]} -eq 0 ]]; then
     echo "ERROR: no template directories found under $REPO_ROOT/templates/" >&2
     exit 1
+fi
+
+# A requested template that the skip list removed would leave nothing to test, and the run would still pass. Fail it instead.
+if [[ -n "$ONLY_TEMPLATE" ]]; then
+    only_found=0
+    for t in "${TEMPLATES[@]}"; do [[ "$t" == "$ONLY_TEMPLATE" ]] && only_found=1; done
+    if [[ $only_found -eq 0 ]]; then
+        echo "FAILED — '$ONLY_TEMPLATE' was requested but is in the skip list (SMOKE_SKIP_TEMPLATES); nothing would be tested" >&2
+        exit 1
+    fi
 fi
 
 echo "==> Discovered ${#TEMPLATES[@]} templates: ${TEMPLATES[*]}"
@@ -951,6 +962,20 @@ for tname in "${TEMPLATES[@]}"; do
         continue
     fi
 
+    # One app, one definition. A template whose dev and deploy entries each type
+    # their own `defineApp<Env>()…` chain drifts the day someone adds `.auth()`
+    # or a shard gate to one of them — dev is locked down, production is open.
+    # Export the builder once and finish it in each entry (see sveltekit's
+    # `lunora/app.ts`). Source files only: a README may quote the call.
+    define_sites="$(grep -rnE 'defineApp<' "$scaffold_dir" --include='*.ts' --include='*.tsx' --include='*.mts' --exclude-dir=node_modules --exclude-dir=_generated || true)"
+    # Count occurrences, not lines: two calls on one line are still two definitions.
+    if [[ "$(printf '%s' "$define_sites" | grep -o 'defineApp<' | grep -c . || true)" -gt 1 ]]; then
+        echo "  FAIL: $tname has more than one \`defineApp<\` call site — export one builder and import it:"
+        echo "$define_sites" | sed "s|$scaffold_dir/|    |"
+        FAIL+=("$tname(duplicate-defineApp)")
+        continue
+    fi
+
     # -- Inject overrides ---------------------------------------------------
     inject_overrides "$scaffold_dir"
     inject_peer_deps "$scaffold_dir"
@@ -961,6 +986,15 @@ for tname in "${TEMPLATES[@]}"; do
     if [[ -n "$TYPECHECK_DEP" ]]; then
         echo "  ==> injecting typechecker $TYPECHECK_DEP"
         inject_typecheck_dep "$scaffold_dir" "$TYPECHECK_DEP"
+    fi
+    if [[ -n "$TYPECHECK_OVERRIDES" ]]; then
+        TYPECHECK_OVERRIDES="$TYPECHECK_OVERRIDES" node -e "
+const fs = require('fs');
+const file = '$scaffold_dir/pnpm-workspace.yaml';
+const text = fs.readFileSync(file, 'utf8');
+if (!text.includes('\\noverrides:\\n')) { throw new Error('no overrides: block in ' + file); }
+fs.writeFileSync(file, text.replace('\\noverrides:\\n', '\\noverrides:\\n' + process.env.TYPECHECK_OVERRIDES + '\\n'));
+"
     fi
 
     # -- pnpm install -------------------------------------------------------

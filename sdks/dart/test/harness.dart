@@ -233,6 +233,18 @@ void pushData(LunoraClient client, String id, Object? data, {int? cursor}) {
   client.handleFrame(jsonEncode(<String, Object?>{'type': 'data', 'id': id, 'data': data, if (cursor != null) 'cursor': cursor}));
 }
 
+/// Attaches [sent] as the socket's sender, after checking the frame
+/// `attachSocket` writes first is `connect`. Then empties [sent], so a case
+/// counts only the frames that follow it. The check is what keeps this from
+/// hiding the connect frame.
+void attachRecording(LunoraClient client, List<Map<String, Object?>> sent) {
+  client.attachSocket(sent.add);
+
+  check(sent.length == 1 && sent.first['type'] == 'connect', 'attachSocket must write connect as its first frame, got ${sent.map((frame) => frame['type'])}');
+
+  sent.clear();
+}
+
 /// A valueless frame — `resume`/`settled` carry a cursor and nothing else.
 void pushCursorFrame(LunoraClient client, String id, String kind, {int? cursor}) {
   client.handleFrame(jsonEncode(<String, Object?>{'type': kind, 'id': id, if (cursor != null) 'cursor': cursor}));

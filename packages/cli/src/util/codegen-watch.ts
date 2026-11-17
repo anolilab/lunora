@@ -14,6 +14,10 @@
  * retrigger itself (see {@link HOOK_SETTLE_MS}) and it can outlive `close()`
  * (see {@link CodegenWatcherHandle.close}).
  *
+ * `lunora dev` serves Studio from this same process, and a Studio schema or
+ * policy edit runs codegen in its own request. The watcher's event for that
+ * write therefore runs only the hook, not codegen again.
+ *
  * The Vite and framework-worker flavors don't reach here — their ongoing
  * regeneration is owned by `@lunora/vite`'s codegen plugin, which runs the same
  * hook from its own `buildStart` and watcher, with the same self-retrigger
@@ -23,13 +27,27 @@
  * a Vite project's behalf would execute an arbitrary project script twice per
  * regeneration.
  */
+import { createHash } from "node:crypto";
 import type { FSWatcher } from "node:fs";
-import { existsSync, watch } from "node:fs";
+import { existsSync, readFileSync, statSync, watch } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { CodegenOptions } from "@lunora/codegen";
-import { readServiceBindings, runCodegen } from "@lunora/codegen";
-import { wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import {
+    createCodegenProject,
+    findTsconfig,
+    PROJECT_CONFIG_FILENAMES,
+    projectConfigCandidatePaths,
+    readServiceBindings,
+    refreshCodegenProject,
+    runCodegen,
+} from "@lunora/codegen";
+import { resolveLazyFunctions } from "@lunora/config";
+import { reconcileStudioAssets, WRANGLER_FILES, wranglerCodegenInputs } from "@lunora/config/cloudflare";
+import { consumeStudioWrite, STUDIO_WRITE_TEMP_SUFFIX } from "@lunora/config/studio-host";
+import { LunoraError } from "@lunora/errors";
+import type { Project } from "ts-morph";
+import { ts } from "ts-morph";
 
 import { renderCodegenFailure } from "./codegen-error";
 import type { Logger } from "./logger";
@@ -69,6 +87,116 @@ const HOOK_SETTLE_MS = 300;
 /** Splits a watch filename into path segments to detect `_generated` writes. */
 const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
 
+/** A file's contents, or `""` when it is absent or unreadable. */
+const readFileOrEmpty = (path: string): string => {
+    try {
+        return readFileSync(path, "utf8");
+    } catch {
+        return "";
+    }
+};
+
+/** A file's modification time and size, or `""` when it is absent. */
+const statOrEmpty = (path: string): string => {
+    try {
+        const { mtimeMs, size } = statSync(path);
+
+        return `${String(mtimeMs)}:${String(size)}`;
+    } catch {
+        return "";
+    }
+};
+
+/**
+ * Lockfiles and install markers. A dependency update rewrites one of these, and a cached Project keeps the declarations it read from
+ * `node_modules`, which `refreshCodegenProject` never re-reads.
+ */
+const INSTALL_MARKERS = [
+    "pnpm-lock.yaml",
+    "package-lock.json",
+    "yarn.lock",
+    "bun.lock",
+    "node_modules/.modules.yaml",
+    "node_modules/.package-lock.json",
+    "node_modules/.yarn-integrity",
+];
+
+/** `projectRoot` and every directory above it, nearest first: a workspace keeps its lockfile and `node_modules` above the project. */
+const directoriesAbove = (projectRoot: string): string[] => {
+    const parent = dirname(projectRoot);
+
+    return parent === projectRoot ? [projectRoot] : [projectRoot, ...directoriesAbove(parent)];
+};
+
+/**
+ * What a tsconfig resolves to once its `extends` chain is applied, without its file list. The `include` globs are the costly part of
+ * the watch's input check, and a file they newly match is not seen until the project is next rebuilt. This is the trade for not
+ * globbing the whole include tree on every save.
+ */
+const tsconfigSettings = (tsconfigPath: string): string => {
+    const host: ts.ParseConfigFileHost = { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => undefined, readDirectory: () => [] };
+    const parsed = ts.getParsedCommandLineOfConfigFile(tsconfigPath, {}, host);
+
+    return parsed === undefined ? "" : JSON.stringify(parsed.options);
+};
+
+/**
+ * The tsconfig and its settings, `lunora.config.*` contents and install state a cached Project was built from. `refreshCodegenProject`
+ * only re-reads files the program already knows about, so a changed `paths`, `include` or `codegen.exclude`, and a dependency update, are
+ * invisible to it and need a fresh Project.
+ */
+const readProjectInputs = (projectRoot: string, absoluteLunoraDirectory: string): string => {
+    const tsconfigPath = findTsconfig(absoluteLunoraDirectory);
+    const configPaths = new Set([...projectConfigCandidatePaths(absoluteLunoraDirectory), ...PROJECT_CONFIG_FILENAMES.map((name) => join(projectRoot, name))]);
+    const configs = [...configPaths].map((path) => `${path}\n${readFileOrEmpty(path)}`);
+    const installs = directoriesAbove(projectRoot).flatMap((directory) =>
+        INSTALL_MARKERS.map((marker) => `${join(directory, marker)}\n${statOrEmpty(join(directory, marker))}`),
+    );
+
+    // The path matters too: a nearer tsconfig with identical bytes resolves paths against another directory. The bytes matter as well,
+    // since `include` and `files` are not in the settings.
+    const tsconfig = tsconfigPath === undefined ? "" : `${tsconfigPath}\n${readFileOrEmpty(tsconfigPath)}\n${tsconfigSettings(tsconfigPath)}`;
+
+    return [tsconfig, ...configs, ...installs].join("\0");
+};
+
+interface ReusableProject {
+    /** Forget the Project, so the next `get()` builds a fresh one. */
+    drop: () => void;
+    /** The cached Project refreshed from disk, or a new one on first use or after a project-input change. */
+    get: () => Project;
+}
+
+/**
+ * Holds the ts-morph Project across watch runs, as `@lunora/vite` and
+ * `@lunora/rspack` do: built on first use, then refreshed from disk, so a save
+ * costs a re-read of the changed files instead of a cold TypeScript program
+ * build. A changed tsconfig or `lunora.config.*` (see
+ * {@link readProjectInputs}) rebuilds it.
+ */
+const createReusableProject = (projectRoot: string, absoluteLunoraDirectory: string): ReusableProject => {
+    let project: Project | undefined;
+    let projectInputs: string | undefined;
+
+    return {
+        drop: (): void => {
+            project = undefined;
+        },
+        get: (): Project => {
+            const inputs = readProjectInputs(projectRoot, absoluteLunoraDirectory);
+
+            if (project === undefined || inputs !== projectInputs) {
+                projectInputs = inputs;
+                project = createCodegenProject(absoluteLunoraDirectory);
+            } else {
+                refreshCodegenProject(project, absoluteLunoraDirectory);
+            }
+
+            return project;
+        },
+    };
+};
+
 /**
  * Run codegen once, logging success or surfacing a parse/emit error without
  * throwing.
@@ -78,12 +206,37 @@ const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
  * to feed `setTimeout`'s trailing-argument passing — which a closure does just
  * as well, without leaving an argument order for the next parameter to get
  * wrong.
+ *
+ * A run that throws drops the reused Project: it may be left half-mutated, so
+ * the next run starts clean.
  */
-const runOnce = (options: Pick<CodegenWatcherOptions, "apiSpec" | "logger" | "projectRoot" | "target">, lunoraDirectory: string, reason: string): boolean => {
-    const { apiSpec, logger, projectRoot, target } = options;
+const runOnce = (
+    options: Pick<CodegenWatcherOptions, "apiSpec" | "lazyFunctions" | "logger" | "projectRoot" | "target">,
+    lunoraDirectory: string,
+    reason: string,
+    project: ReusableProject,
+): boolean => {
+    const { apiSpec, lazyFunctions, logger, projectRoot, target } = options;
 
     try {
-        const result = runCodegen({ apiSpec, lunoraDirectory, projectRoot, target, ...wranglerCodegenInputs(projectRoot) });
+        // Codegen takes a built Project, so a missing schema is reported here, before one is constructed and seeded.
+        const schemaPath = join(projectRoot, lunoraDirectory, "schema.ts");
+
+        if (!existsSync(schemaPath)) {
+            throw new LunoraError("INTERNAL", `schema.ts not found at ${schemaPath}`);
+        }
+
+        const result = runCodegen({
+            apiSpec,
+            lazyFunctions: resolveLazyFunctions(lazyFunctions),
+            lunoraDirectory,
+            project: project.get(),
+            projectRoot,
+            target,
+            ...wranglerCodegenInputs(projectRoot, target),
+        });
+
+        reconcileStudioAssets(projectRoot, target, logger);
 
         logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
 
@@ -91,12 +244,83 @@ const runOnce = (options: Pick<CodegenWatcherOptions, "apiSpec" | "logger" | "pr
         // loop emits a gated surface and says nothing about it.
         reportPlatformDiagnostics(result.platformDiagnostics, logger);
     } catch (error: unknown) {
+        project.drop();
         logger.error(renderCodegenFailure(error, reason));
 
         return false;
     }
 
     return true;
+};
+
+/**
+ * A digest of the config files codegen would read: the content a codegen run generated from. A config save that leaves this
+ * unchanged, such as a `postcodegen` hook rewriting the same bytes, has nothing new for codegen to read.
+ */
+const configDigest = (candidates: ReadonlyArray<string>): string => {
+    const hash = createHash("sha256");
+
+    for (const candidate of candidates) {
+        hash.update(candidate).update("\0");
+
+        // Presence is hashed on its own, so an empty file and no file at all are different inputs.
+        if (existsSync(candidate)) {
+            hash.update("present\0");
+
+            try {
+                hash.update(readFileSync(candidate));
+            } catch {
+                // Removed between the check and the read: recorded as unreadable, which still differs from its content.
+                hash.update("unreadable");
+            }
+        } else {
+            hash.update("absent");
+        }
+
+        hash.update("\0");
+    }
+
+    return hash.digest("hex");
+};
+
+/** The message and stack of a watch failure, so the warning says where it came from. */
+const watchFailureDetail = (error: unknown): string => (error instanceof Error ? (error.stack ?? error.message) : String(error));
+
+/**
+ * The watchers for the folders that can hold a `lunora.config` codegen reads, each reporting only the candidate files in it.
+ * Best effort: a folder the platform will not watch is skipped, and the Lunora folder's watch still runs.
+ */
+const watchConfigFolders = (
+    candidates: ReadonlySet<string>,
+    onConfigChange: (filename: string | undefined) => void,
+    warn: (message: string) => void,
+): FSWatcher[] => {
+    const watchers: FSWatcher[] = [];
+
+    for (const folder of new Set([...candidates].map((candidate) => dirname(candidate)))) {
+        if (existsSync(folder)) {
+            try {
+                const watcher = watch(folder, (_event, filename) => {
+                    // Some platforms report no name; the save may still be to a config, so it is forwarded as unnamed rather than dropped.
+                    if (typeof filename !== "string") {
+                        onConfigChange(undefined);
+                    } else if (candidates.has(join(folder, filename))) {
+                        onConfigChange(filename);
+                    }
+                });
+
+                watcher.on("error", (error) => {
+                    warn(`codegen watch: stopped watching ${folder} for lunora.config changes\n${watchFailureDetail(error)}`);
+                    watcher.close();
+                });
+                watchers.push(watcher);
+            } catch (error: unknown) {
+                warn(`codegen watch: could not watch ${folder} for lunora.config changes\n${watchFailureDetail(error)}`);
+            }
+        }
+    }
+
+    return watchers;
 };
 
 /**
@@ -125,9 +349,16 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     let closed = false;
     let running = false;
     let hookRunning = false;
-    let pending: string | undefined;
+    // `codegen: false` is a burst made only of studio writes, whose handler already
+    // ran codegen. A run queued behind it for anything else needs codegen again.
+    let pending: undefined | { codegen: boolean; reason: string };
     let settledAt = 0;
+    // The config content the last codegen run read; a replayed config save that leaves it unchanged regenerates nothing.
+    let codegenDigest: string | undefined;
+    // Codegen also reads the app's wrangler config (cron triggers, the companion Worker's name and observability), at the project root.
+    const configPaths = [...projectConfigCandidatePaths(watchDirectory), ...WRANGLER_FILES.map((name) => join(options.projectRoot, name))];
     let idle: Promise<void> = Promise.resolve();
+    const project = createReusableProject(options.projectRoot, watchDirectory);
 
     // Resolves when the STARTUP run — codegen plus the project's `postcodegen` —
     // has finished, so a caller can hold off work that reads generated output.
@@ -139,12 +370,12 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         resolveReady = resolve;
     });
 
-    const enqueue = (reason: string): void => {
+    const enqueue = (reason: string, codegen: boolean): void => {
         if (closed) {
             return;
         }
 
-        pending = reason;
+        pending = { codegen: codegen || pending?.codegen === true, reason };
 
         if (running) {
             return;
@@ -164,7 +395,10 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     // No hook on a failed run: `postcodegen` exists to finish
                     // generated output, and running it over a tree codegen did
                     // not write is the one way to make a bad state worse.
-                    if (!runOnce(options, lunoraDirectory, next)) {
+                    if (next.codegen) {
+                        codegenDigest = configDigest(configPaths);
+                    }
+                    if (next.codegen && !runOnce(options, lunoraDirectory, next.reason, project)) {
                         continue;
                     }
 
@@ -221,7 +455,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         })();
     };
 
-    enqueue("startup");
+    enqueue("startup", true);
 
     const unavailable = (cause: string): CodegenWatcherHandle => {
         options.logger.warn(`codegen watch unavailable (${cause}) — schema edits will NOT auto-regenerate. Run \`lunora codegen\` manually after each edit.`);
@@ -249,10 +483,19 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         return unavailable(`no such directory: ${watchDirectory}`);
     }
 
-    const onEvent = (filename: string | null): void => {
+    // Files under `lunora/` changed in the current debounce burst, classified
+    // once it fires. Classifying each event would treat the second event one
+    // write raises (macOS reports a rename twice) as a developer save.
+    const burst = new Set<string>();
+    // Set by a change that cannot be a studio write: an unnamed event, or one
+    // under an RPC service folder.
+    let burstNeedsCodegen = false;
+
+    const onEvent = (path: string | undefined, label: string): void => {
         // Skip anything a `postcodegen` run wrote, so a hook that touches a
         // watched file doesn't retrigger it: while it runs, and for a settle
-        // window after it exits. See HOOK_SETTLE_MS.
+        // window after it exits. See HOOK_SETTLE_MS. Studio writes are the
+        // exception below.
         if (hookRunning || Date.now() - settledAt < HOOK_SETTLE_MS) {
             // Also drop a debounce an earlier event already scheduled —
             // otherwise the hook's first write still lands a queued rerun on
@@ -262,7 +505,32 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 timer = undefined;
             }
 
+            // A studio write is the one event here the hook cannot have made, and
+            // its handler ran codegen but not the hook, so it still gets a
+            // hook-only run once this one settles. Every record is spent, so a
+            // second event for the same write cannot queue another.
+            let studioWrite = false;
+
+            for (const changed of [...burst, path]) {
+                if (changed !== undefined && consumeStudioWrite(changed)) {
+                    studioWrite = true;
+                }
+            }
+
+            burst.clear();
+            burstNeedsCodegen = false;
+
+            if (studioWrite) {
+                enqueue(`change: ${label}`, false);
+            }
+
             return;
+        }
+
+        if (path === undefined) {
+            burstNeedsCodegen = true;
+        } else {
+            burst.add(path);
         }
 
         if (timer) {
@@ -270,28 +538,70 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         }
 
         timer = setTimeout(() => {
-            enqueue(`change: ${filename ?? "?"}`);
+            // A studio handler ran codegen from its own write before the event
+            // arrived, so a burst of nothing but those needs only the hook.
+            const echoes = [...burst].map((changed) => consumeStudioWrite(changed));
+            const codegen = burstNeedsCodegen || echoes.includes(false);
+
+            burst.clear();
+            burstNeedsCodegen = false;
+            enqueue(`change: ${label}`, codegen);
         }, debounceMs);
     };
 
     // An RPC service's folder too: `_generated/services/` snapshots its types.
     const serviceWatchers: FSWatcher[] = [];
+    // The config files codegen reads (`codegen.exclude`, `codegen.lazyFunctions`, the wrangler config) sit beside the Lunora folder or
+    // above it, outside the watched tree, so each folder that can hold one is watched for those files alone.
+    const configWatchers: FSWatcher[] = [];
+    const configCandidates = new Set(configPaths);
+    // A config save that lands while a hook runs, or in its settle window, is replayed once the window is over. The hook's own
+    // writes are dropped there; a save of the config is not one of them, so it must not be lost.
+    let configReplay: ReturnType<typeof setTimeout> | undefined;
+    const replayConfigEvent = (filename: string | undefined): void => {
+        if (closed) {
+            return;
+        }
+
+        if (!hookRunning && Date.now() - settledAt >= HOOK_SETTLE_MS) {
+            clearTimeout(configReplay);
+            // A hook rewriting identical content ends the cycle here: the bytes codegen last read are still the bytes there are.
+            // An event that names no file cannot be checked, so it regenerates.
+            if (filename === undefined || configDigest(configPaths) !== codegenDigest) {
+                onEvent(undefined, filename ?? "?");
+            }
+
+            return;
+        }
+
+        clearTimeout(configReplay);
+        configReplay = setTimeout(() => {
+            replayConfigEvent(filename);
+        }, HOOK_SETTLE_MS);
+    };
 
     try {
         watcher = watch(watchDirectory, { recursive: true }, (_event, filename) => {
-            // Skip writes to the generated output so regeneration doesn't retrigger itself.
-            if (typeof filename === "string" && filename.split(PATH_SEGMENT_SEPARATOR).includes("_generated")) {
+            if (typeof filename !== "string") {
+                onEvent(undefined, "?");
+
                 return;
             }
 
-            onEvent(filename);
+            // Skip writes to the generated output so regeneration doesn't retrigger itself, and the
+            // temporary file a studio write renames into place: the rename raises its own event.
+            if (filename.split(PATH_SEGMENT_SEPARATOR).includes("_generated") || filename.endsWith(STUDIO_WRITE_TEMP_SUFFIX)) {
+                return;
+            }
+
+            onEvent(join(watchDirectory, filename), filename);
         });
 
         for (const service of readServiceBindings(options.projectRoot).services) {
             if (service.rpcEntrypoint !== undefined) {
                 const serviceWatcher = watch(dirname(service.wranglerPath), { recursive: true }, (_event, filename) => {
                     if (typeof filename === "string" && SERVICE_SOURCE_RE.test(filename) && !filename.split(PATH_SEGMENT_SEPARATOR).includes("node_modules")) {
-                        onEvent(filename);
+                        onEvent(undefined, filename);
                     }
                 });
 
@@ -304,11 +614,26 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 serviceWatchers.push(serviceWatcher);
             }
         }
+        configWatchers.push(
+            ...watchConfigFolders(
+                configCandidates,
+                (filename) => {
+                    replayConfigEvent(filename);
+                },
+                (message) => {
+                    options.logger.warn(message);
+                },
+            ),
+        );
     } catch (error: unknown) {
         watcher?.close();
 
         for (const serviceWatcher of serviceWatchers) {
             serviceWatcher.close();
+        }
+
+        for (const configWatcher of configWatchers) {
+            configWatcher.close();
         }
 
         return unavailable(error instanceof Error ? error.message : String(error));
@@ -327,10 +652,16 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 clearTimeout(timer);
             }
 
+            clearTimeout(configReplay);
+
             liveWatcher.close();
 
             for (const serviceWatcher of serviceWatchers) {
                 serviceWatcher.close();
+            }
+
+            for (const configWatcher of configWatchers) {
+                configWatcher.close();
             }
 
             // Clearing `pending` stops the loop before its next iteration, and
@@ -357,6 +688,9 @@ export interface CodegenWatcherOptions {
      * turns this on for `--json` AND for a detected AI agent.
      */
     jsonLogs?: boolean;
+
+    /** Opt into per-module lazy function loading; omitted keeps the eager registry. */
+    lazyFunctions?: CodegenOptions["lazyFunctions"];
     logger: Logger;
     /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
     lunoraDirectory?: string;
@@ -400,3 +734,5 @@ export interface CodegenWatcherHandle {
      */
     watchAvailable: boolean;
 }
+
+export { configDigest };

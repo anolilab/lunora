@@ -17,7 +17,7 @@ import { resolveAdminBearer } from "../../util/admin-token";
 import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveTargetOrError } from "../../util/deploy-target";
+import { resolveTargetOrError } from "../../util/deploy-target-resolve";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import type { ProfileType } from "../../util/pprof-capture";

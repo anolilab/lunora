@@ -12,6 +12,8 @@ interface BuildContextParts {
     actionOnlyFields: ReadonlyArray<string>;
     agentsBuild: string;
     agentsContextField: string;
+    /** The expression the scheduler is built from — the agent wrapper's, when the app declares agents. */
+    agentsSchedulerSource: string;
     containersBuild: string;
     containersContextField: string;
     databaseOptions: string;
@@ -19,6 +21,8 @@ interface BuildContextParts {
     everyContextField: string;
     facadeBlock: string;
     globalDatabaseLine: string;
+    hasSensitiveArgs?: boolean;
+    lazyFunctions?: boolean;
     notifyBuild: string;
     ormContextField: string;
     paymentsBuild: string;
@@ -39,6 +43,7 @@ const renderBuildContext = ({
     actionOnlyFields,
     agentsBuild,
     agentsContextField,
+    agentsSchedulerSource,
     containersBuild,
     containersContextField,
     databaseOptions,
@@ -46,6 +51,8 @@ const renderBuildContext = ({
     everyContextField,
     facadeBlock,
     globalDatabaseLine,
+    hasSensitiveArgs = false,
+    lazyFunctions = false,
     notifyBuild,
     ormContextField,
     paymentsBuild,
@@ -60,6 +67,12 @@ const renderBuildContext = ({
     workflowsContextField,
 }: BuildContextParts): string => {
     const actionOnlyHasAny = actionOnlyFields.length > 0;
+    const databaseContextReturn = ormContextField === "" ? "{ db }" : "{ db, orm: bindOrm(facade) }";
+    const databaseContextField = ormContextField === "" ? "" : "\n                orm: databaseContext.orm,";
+    const mutationOrmDescriptor =
+        ormContextField === ""
+            ? ""
+            : "\n                                orm: { configurable: true, enumerable: true, value: mutationDatabase.orm, writable: true },";
     // The builds are written at `buildCtx` body depth (they are shared with the
     // every-context helpers' shape); here they sit one block deeper.
     const actionOnlyBlock = actionOnlyHasAny
@@ -74,8 +87,15 @@ ${actionOnlyBuild.replaceAll(/^(?=.)/gmu, "    ")}${actionOnlyFields.map((field)
     // Only emit `isAction` when an action-only helper is wired — otherwise it
     // would be an unused local.
     const isActionLine = actionOnlyHasAny ? `            const isAction = contextKind === "action";\n` : "";
+    // Only with a `v.sensitive` argument somewhere in the app: the key is the one
+    // `admitSensitiveArgs` in `@lunora/server` looks up, and a validator can only
+    // hand over a marked value when one exists.
+    const sensitiveAdmitField = hasSensitiveArgs
+        ? `
+                [Symbol.for("lunora.admitSensitiveArgs")]: (args: Record<string, unknown>, names: ReadonlySet<string>): void => this.admitSensitiveValues(options.sensitive, args, names),`
+        : "";
 
-    return `        private buildCtx(options: { bookmarks?: DispatchBookmark; functionPath?: string; headroom?: TransactionHeadroomTracker; identity?: SubscriptionIdentity; kind?: "query"; onRead?: (table: string, idOrScan?: string) => void; onReadRange?: (range: KeyRange) => void; scope?: QueryReadScope; trusted?: boolean } = {}): unknown {
+    return `        private buildCtx(options: { bookmarks?: DispatchBookmark | undefined; functionPath?: string | undefined; headroom?: TransactionHeadroomTracker | undefined; identity?: SubscriptionIdentity | undefined; kind?: "query" | undefined; onRead?: ((table: string, idOrScan?: string) => void) | undefined; onReadRange?: ((range: KeyRange) => void) | undefined; replayKey?: boolean | undefined; scope?: QueryReadScope | undefined; sensitive?: SensitiveScope | undefined; trusted?: boolean | undefined } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             // The caller context this ctx runs under, resolved ONCE on one
             // discriminant. When the caller threads an explicit identity
@@ -90,12 +110,48 @@ ${actionOnlyBuild.replaceAll(/^(?=.)/gmu, "    ")}${actionOnlyFields.map((field)
             // One expression, not one per field: three parallel ternaries on the
             // same discriminant is how \`ip\` came to be the only one still reading
             // the shared field.
-            const caller: SubscriptionIdentity = options.identity ?? {
-                identity: this.getCurrentIdentity(),
-                ip: this.getCurrentIp(),
-                userId: this.getCurrentUserId(),
+            const caller: SubscriptionIdentity = options.identity ?? (() => {
+                const identity = this.getCurrentIdentity();
+                const ip = this.getCurrentIp();
+                const userId = this.getCurrentUserId();
+
+                return {
+                    ...(identity === undefined ? {} : { identity }),
+                    ...(ip === undefined ? {} : { ip }),
+                    ...(userId === undefined ? {} : { userId }),
+                };
+            })();
+            // The ONLY way to the caller: there are deliberately no \`identity\` /
+            // \`userId\` / \`ip\` locals. Each reader marks this function path as
+            // reading its caller, which is what keeps a live query that reads it from
+            // sharing one run across subscribers (see \`noteIdentityRead\`). A consumer
+            // that copies a value at build time marks every ctx of the app; one that
+            // reads it lazily marks only the handlers that reach it.
+            //
+            // Only a registered path is marked: only one can ever be shared, and a
+            // client-chosen name (a shape, a relation fan-out) must not grow the set.
+            const identityPath = Object.hasOwn(LUNORA_FUNCTIONS, options.functionPath ?? "") ? options.functionPath : undefined;
+            const noteCallerRead = (): void => {
+                if (identityPath !== undefined) {
+                    this.noteIdentityRead(identityPath);
+                }
             };
-            const { identity, ip, userId } = caller;
+            const readIdentity = (): Record<string, unknown> | undefined => {
+                noteCallerRead();
+
+                return caller.identity;
+            };
+            const readUserId = (): string | undefined => {
+                noteCallerRead();
+
+                return caller.userId;
+            };
+            const readIp = (): string | undefined => {
+                noteCallerRead();
+                options.scope?.markIpRead();
+
+                return caller.ip;
+            };
 ${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBuild}${topicsBuild}${agentsBuild}
             // Which dispatch this ctx belongs to. Drives the two deferral facades
             // below and the \`ctx.run*\` caller guard; a ctx built for an
@@ -107,16 +163,14 @@ ${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBu
             // reaches through, and pending jobs live in the SchedulerDO — nothing the
             // CDC changelog records — so reading them must forfeit a delta resume.
             // The scheduler's own \`runAfter\`/\`runAt\`/\`cancel\` are writes and stay unstamped.
-            const schedulerBase = markUnvouchableReads((config.scheduler?.(env) ?? schedulerStub) as SchedulerLike, options.onRead, ["get", "list"]);
+            const schedulerBase = markUnvouchableReads(${agentsSchedulerSource}, options.onRead, ["get", "list"]);
             // \`ctx.scheduler.runAfter(0, ...)\` is documented as the deterministic
             // equivalent of an \`afterCommit\` hook, and the SchedulerDO persists the
             // job the moment it is called — so inside a mutation the call is BUFFERED
             // and replayed after the transaction commits (a rollback drops it).
-            // Wrapped on the same dispatches as the deferred-delete queue and for the
-            // same reason: \`ctx.runMutation\` hands the CALLER's ctx to the callee, so
-            // a mutation reached from an action schedules through the action's ctx.
-            // An action's own schedules stay immediate — the window is only open
-            // while a transaction is (see \`runMutationTransaction\`).
+            // Composed mutations get their own facade when the caller is outside
+            // a transaction. True nested calls share the enclosing facade and open
+            // a nested window. The action's own schedules stay immediate.
             //
             // Every kind but \`query\` is wrapped, because \`runMutationTransaction\`
             // is installed on \`ctx.runMutation\` for every kind but \`query\`: a
@@ -169,12 +223,11 @@ ${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBu
                 ]);
             const storage = makeStorage(requestOrigin);
             // \`ctx.storage.deleteAfterCommit(key)\`, on every dispatch that can host
-            // a MUTATION handler — which is not only a mutation dispatch:
-            // \`ctx.runMutation\` hands the CALLER's ctx to the callee, so a mutation
-            // reached from an action runs on the action's ctx. Wrapping mutations
-            // alone made that composition throw a bare TypeError on a method the
-            // handler's own type promises. Queries stay unwrapped: they cannot host
-            // one, and their ctx is built on the hot subscription path.
+            // a MUTATION handler — which is not only a mutation dispatch. An
+            // action's composed mutation gets a child ctx with its own deferred
+            // delete queue, while mutations reuse the admitted ctx. Queries stay
+            // unwrapped: they cannot host one, and their ctx is built on the hot
+            // subscription path.
             //
             // Every dispatch wrapped here also flushes (see \`handleRpc\` and
             // \`runReactor\`) — a queue nothing drains leaks silently, which is worse
@@ -195,7 +248,7 @@ ${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBu
             // dispatch's wide-event handle.
             const observability = config.observability?.(env);
             const logFunctionPath = options.functionPath ?? "";
-            const log = this.makeLogger(logFunctionPath, observability);
+            const log = this.makeLogger(logFunctionPath, observability, undefined, options.sensitive);
             const traceAnchor = this.resolveDispatchAnchor(Boolean(options.identity));
 
             // \`ctx.span\`: the handle onto the DISPATCH's own span — the wide-event
@@ -203,22 +256,29 @@ ${vectorsBuild}${everyContextBuild}${containersBuild}${workflowsBuild}${queuesBu
             // and are folded into the one span it already emits, instead of
             // becoming N separate log lines. Shares \`traceAnchor\` with \`ctx.trace\`
             // so both write to the same trace.
-            const span = this.makeDispatchSpan(traceAnchor, observability);
+            const span = this.makeDispatchSpan(traceAnchor, observability, options.sensitive);
 
 ${globalDatabaseLine}            // \`ctx.db\`, wrapped in automatic instrumentation: by default this
             // adds aggregate counters (call count, total time, per-operation
             // breakdown) to the wide event rather than a span per call, so a
             // handler making hundreds of queries stays readable. See
             // \`instrumentDatabase\` for the \`"spans"\` / \`"off"\` levels.
-            const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb(${databaseOptions}), logFunctionPath, traceAnchor, observability);
-${facadeBlock}${paymentsBuild}
+            // Schema triggers close over this DB's scheduler, so a composed
+            // mutation must rebuild its DB and table/ORM views with its own queue.
+            const makeDatabaseContext = (scheduler: SchedulerLike) => {
+                const db: DatabaseWriterLike = this.instrumentDb(createShardCtxDb(${databaseOptions}), logFunctionPath, traceAnchor, observability, options.sensitive);
+${facadeBlock}                return ${databaseContextReturn};
+            };
+            const databaseContext = makeDatabaseContext(scheduler);
+            const db = databaseContext.db;
+${paymentsBuild}
 
             // \`ctx.trace\` / \`ctx.metrics\`: spans and measurements to the same sink.
             // The trace anchor is threaded explicitly for the same reason \`identity\`
             // is — a deferred caller (a subscription re-run) must not inherit the
             // writing mutation's trace from the shared per-request field.
-            const trace = this.makeTracer(logFunctionPath, observability, traceAnchor);
-            const metrics = this.makeMetrics(logFunctionPath, observability);
+            const trace = this.makeTracer(logFunctionPath, observability, traceAnchor, options.sensitive);
+            const metrics = this.makeMetrics(logFunctionPath, observability, options.sensitive);
 ${notifyBuild}
             // \`ctx.now\`: the wall-clock instant (epoch ms) this function began,
             // captured ONCE so the whole handler body sees a single stable value.
@@ -231,25 +291,54 @@ ${notifyBuild}
             // advisor flags \`Date.now()\`. Actions may still use ambient \`Date.now()\`.
             const now = Date.now();
 
+            // A reactor run is driven by the writer's inline refresh, not replayed by the writer, so it must not
+            // inherit the writer's key: every run would restart the same id and random sequence.
+            const stableKey = options.replayKey !== false && options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined;
+            // The scope reads the caller, so a factory is only built (and the read only made) on its first draw: a
+            // query that carries a replay key but never draws must not count as reading its caller. Both factories
+            // ignore the scope without a replay key, and most dispatches have none.
+            // The request-scoped parts are captured now: instance state may belong to another request by the first draw.
+            const scopeHead = stableKey === undefined ? [] : [this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? ""];
+            let scopeText: string | undefined;
+            const stableScope = (): string => (scopeText ??= JSON.stringify([...scopeHead, readUserId() ?? ""]));
+            const scoped = <T>(create: (scope: string) => () => T): (() => T) => {
+                if (stableKey === undefined) {
+                    return create("");
+                }
+
+                let made: (() => T) | undefined;
+
+                return () => (made ??= create(stableScope()))();
+            };
+            // One sequence for every mutation this run composes: their ids share one counter (the copied \`newId\`), so their draws must too.
+            // Created on the first composed mutation that gets a ctx of its own; most dispatches compose none.
+            let composedRandom: (() => number) | undefined;
+
             const ctx: Record<string, unknown> = {
                 auth: {
-                    getIdentity: async () => identity ?? null,
-                    userId: userId ?? null,
+                    getIdentity: async () => readIdentity() ?? null,
+                    get userId() {
+                        return readUserId() ?? null;
+                    },
                 },
                 db,
                 // \`ctx.newId()\`: a replay of the same top-level mutation gets the same ids. A nested or
                 // subscription-driven build (\`options.identity\`) is not a replay.
                 // A replay key only means something inside the caller's dedup namespace; without one the call is not
                 // deduplicated, so its ids stay random.
-                newId: createStableIdFactory(
-                    options.identity === undefined && this.idempotencyNamespace() !== undefined ? this.getCurrentMutationId() : undefined,
-                    JSON.stringify([this.currentShardKey(), options.functionPath ?? "", this.idempotencyNamespace() ?? "", userId ?? ""]),
-                ),
+                // \`ctx.random()\` shares the replay key and scope, so a replay reproduces both sequences.
+                // A query is never replayed, so its ids skip \`scoped\` (whose first draw reads the caller) and stay random.
+                newId: contextKind === "query" ? createStableIdFactory(undefined, "") : scoped((scope) => createStableIdFactory(stableKey, scope)),
+                // Only a mutation is a replay the key reproduces; a query or action carrying the header draws Math.random,
+                // and never goes through \`scoped\`, whose first draw reads the caller.
+                random: contextKind === "mutation" ? scoped((scope) => createStableRandomFactory(stableKey, scope)) : createStableRandomFactory(undefined, ""),
+                shardKey: this.currentShardKey(),
                 // Instrumented \`fetch\`: a CLIENT span per outbound call plus W3C
                 // \`traceparent\` propagation, so time spent in a downstream service
                 // is visible and its spans join this trace. Degrades to the bare
-                // global when no sink is configured.
-                fetch: this.makeFetch(logFunctionPath, traceAnchor, observability),
+                // global when no sink is configured. Not built for a query or a
+                // mutation: those refuse network I/O (see \`refuseFetch\`).
+                fetch: contextKind === "query" || contextKind === "mutation" ? refuseFetch : this.makeFetch(logFunctionPath, traceAnchor, observability, options.sensitive),
                 // A GETTER, not a plain field, so the reactive cache can tell a
                 // handler that reads the caller's address from the majority that
                 // never do. \`ctx.ip\` is per-request state the memo must be keyed
@@ -259,9 +348,7 @@ ${notifyBuild}
                 // Reading it here marks the dispatch's scope; \`runCachedQuery\`
                 // folds the address into the key for this function from then on.
                 get ip() {
-                    options.scope?.markIpRead();
-
-                    return ip;
+                    return readIp();
                 },
                 log,
                 metrics,
@@ -270,20 +357,64 @@ ${notifyBuild}
                 // to the handler so code that signs its own URLs (a copy-in
                 // \`createStorage\`) can fall back to it too. \`undefined\` for a
                 // query and for a deferred dispatch, for the reasons given there.
-                origin: requestOrigin,${ormContextField}
+                origin: requestOrigin,${databaseContextField}
                 scheduler,
                 span,
                 storage: contextStorage,
-                trace,${vectorsContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}
+                trace,${vectorsContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}${queuesContextField}${topicsContextField}${agentsContextField}${sensitiveAdmitField}
             };
 ${isActionLine}${actionOnlyBlock}
-            const installRun = (target: Record<string, unknown>, kind: typeof contextKind): void => {
-                target.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind);
+${
+    lazyFunctions
+        ? `            const captureScope = (): (() => void) => {
+                const requestScope = this.captureRequestScope();
+                return () => this.restoreRequestScope(requestScope);
+            };
+
+`
+        : ""
+}            const installRun = (target: Record<string, unknown>, kind: typeof contextKind): void => {
+                target.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => {
+                    // The callee runs inside this invocation, so its marked arguments are scrubbed here too.
+                    this.admitSensitiveArgs(options.sensitive, reference.__lunoraRef, fnArgs);
+
+                    return dispatchRun("action", reference.__lunoraRef, fnArgs, target, kind${lazyFunctions ? ", undefined, captureScope" : ""});
+                };
                 // The composed mutation runs under the SAME wrapper the top-level RPC
                 // uses, so "do the transactional work in a mutation and call it from the
                 // action" — the recipe the docs give for atomicity — actually is atomic.
-                target.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) =>
-                    dispatchRun("mutation", reference.__lunoraRef, fnArgs, target, kind, async (work) => this.runMutationTransaction(target, work));
+                target.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => {
+                    this.admitSensitiveArgs(options.sensitive, reference.__lunoraRef, fnArgs);
+                    // An action can start sibling mutations concurrently. Each owns its
+                    // context and deferral queues; only calls from an admitted mutation
+                    // inherit that mutation's transaction.
+                    const mutationCtx: Record<string, unknown> = this.mutationContexts.has(target)
+                        ? target
+                        : (() => {
+                            const mutationScheduler = withDeferredSchedules(schedulerBase, this.scheduleOutbox());
+                            const mutationDatabase = makeDatabaseContext(mutationScheduler);
+                            // The composed mutation's ids come from the action's replay key and counter, so its draws do too; a
+                            // fresh factory per call would repeat the same draws across sibling mutations.
+                            const mutationRandom = (composedRandom ??= scoped((scope) => createStableRandomFactory(stableKey, scope)));
+
+                            // Copied from an action's ctx, which carries the real \`fetch\`; a mutation
+                            // refuses network I/O wherever it runs, so its \`fetch\` is overridden here.
+                            return Object.defineProperties({}, {
+                                ...Object.getOwnPropertyDescriptors(target),
+                                db: { configurable: true, enumerable: true, value: mutationDatabase.db, writable: true },${mutationOrmDescriptor}
+                                fetch: { configurable: true, enumerable: true, value: refuseFetch, writable: true },
+                                random: { configurable: true, enumerable: true, value: mutationRandom, writable: true },
+                                scheduler: { configurable: true, enumerable: true, value: mutationScheduler, writable: true },
+                                storage: { configurable: true, enumerable: true, value: withDeferredDeletes(storage), writable: true },
+                            });
+                        })();
+
+                    if (mutationCtx !== target) {
+                        installRun(mutationCtx, kind);
+                    }
+
+                    return dispatchRun("mutation", reference.__lunoraRef, fnArgs, mutationCtx, kind, async (work) => this.runMutationTransaction(mutationCtx, work)${lazyFunctions ? ", captureScope" : ""});
+                };
                 // \`ctx.runQuery(ref, args, { untracked: true })\` runs the sub-query on
                 // its OWN query context, built without the subscription's read-footprint
                 // hooks — so its reads never enter this subscription's footprint and a
@@ -297,16 +428,19 @@ ${isActionLine}${actionOnlyBlock}
                 // to the shared per-request fields, which a concurrent RPC may have
                 // re-set, and an RLS-scoped sub-query would then read as the wrong user
                 // from the wrong address. A tracked call runs on \`queryContext()\` below.
-                target.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) =>
-                    dispatchRun(
+                target.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>, runOptions?: { untracked?: boolean }) => {
+                    this.admitSensitiveArgs(options.sensitive, reference.__lunoraRef, fnArgs);
+
+                    return dispatchRun(
                         "query",
                         reference.__lunoraRef,
                         fnArgs,
                         runOptions?.untracked === true
-                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", scope: options.scope })
+                            ? this.buildCtx({ bookmarks: options.bookmarks, functionPath: options.functionPath, headroom: options.headroom, identity: caller, kind: "query", scope: options.scope, sensitive: options.sensitive })
                             : queryContext(),
-                        kind,
+                        kind,${lazyFunctions ? "\n                        undefined,\n                        captureScope," : ""}
                     );
+                };
             };
 
             // A query composed from a mutation or action runs on a QUERY view of
@@ -315,8 +449,9 @@ ${isActionLine}${actionOnlyBlock}
             // depends on the dispatch kind or the request origin is re-derived for a
             // query — no \`ctx.origin\`, storage with no origin fallback (and no
             // \`deleteAfterCommit\`), the unwrapped scheduler, no ActionCtx-only
-            // helpers, and a \`run*\` guard that refuses a mutation or action. A new
-            // kind- or origin-dependent ctx field must be overridden here too.
+            // helpers, no \`fetch\` (a query is re-run, see \`refuseFetch\`), and a \`run*\` guard
+            // that refuses a mutation or action. A new kind- or origin-dependent ctx field must
+            // be overridden here too.
             // Copied by descriptor so the \`ip\` getter is carried over, not read.
             // Built on the first composed call only; a query ctx is its own view.
             let queryView: Record<string, unknown> | undefined;
@@ -332,7 +467,10 @@ ${actionOnlyFields.map((field) => `                    delete descriptors.${fiel
 
                     queryView = Object.defineProperties({}, {
                         ...descriptors,
+                        fetch: field(refuseFetch),
                         origin: field(undefined),
+                        // A composed query is not a mutation replay, so it must not advance the mutation's random sequence.
+                        random: field(scoped((scope) => createStableRandomFactory(undefined, scope))),
                         scheduler: field(schedulerBase),
                         storage: field(makeStorage()),
                     }) as Record<string, unknown>;

@@ -15,23 +15,24 @@ the same provider-agnostic `ctx.payments` surface as every other provider:
 hosted checkout, subscriptions, entitlement checks, usage metering, a native
 billing portal, and webhook sync through the shared payment/subscription state
 machine. As with every adapter, the package **never imports the Polar SDK**: you
-inject a client, so `@polar-sh/sdk` stays an optional peer dependency.
+pass a loader for the client, so `@polar-sh/sdk` stays an optional peer dependency.
 
 The adapter advertises these capabilities:
 
-| Capability         | Value  | What it means                                                                        |
-| ------------------ | :----: | ------------------------------------------------------------------------------------ |
-| `merchantOfRecord` | `true` | Polar owns tax/VAT, invoices, and disputes. Manual authorize/capture is not a thing. |
-| `portal`           | `true` | Native hosted customer portal (`customerSessions.create`).                           |
-| `usageMetering`    | `true` | Usage-based billing via Polar's event ingestion (`events.ingest`).                   |
+| Capability         |  Value  | What it means                                                                        |
+| ------------------ | :-----: | ------------------------------------------------------------------------------------ |
+| `checkoutExpiry`   | `false` | `createCheckout` refuses an `expiresAt` with `PROVIDER_ERROR`.                       |
+| `merchantOfRecord` | `true`  | Polar owns tax/VAT, invoices, and disputes. Manual authorize/capture is not a thing. |
+| `portal`           | `true`  | Native hosted customer portal (`customerSessions.create`).                           |
+| `usageMetering`    | `true`  | Usage-based billing via Polar's event ingestion (`events.ingest`).                   |
 
 ## Polar vs. Stripe: when to choose it
 
 <Callout type="info">
     Choose **Polar** (or another MoR such as Dodo Payments or Creem) when you want tax/VAT handled for you and don't want to register for sales tax in every
-    jurisdiction you sell into. Choose **Stripe** (a PSP) when you need direct control over the money movement, manual authorize/capture, or you already run
-    your own tax and invoicing. Because the provider is a stateless translator and the store owns all state, switching later is a configuration change, not a
-    rewrite.
+    jurisdiction you sell into. Choose **Stripe** (a payment service provider, PSP) when you need direct control over the money movement, manual
+    authorize/capture, or you already run your own tax and invoicing. Because the provider is a stateless translator and the store owns all state, switching
+    later is a configuration change, not a rewrite.
 </Callout>
 
 Practical consequences of the MoR model in this adapter:
@@ -83,8 +84,8 @@ POLAR_WEBHOOK_SECRET=<your-polar-webhook-secret>
 
 ## Install
 
-Add the package and the Polar SDK (an optional peer, since the adapter takes the
-client by injection):
+Add the package and the Polar SDK (an optional peer, since the app loads the
+client itself):
 
 <Tabs items={["pnpm","npm","yarn","bun"]}>
 
@@ -116,24 +117,30 @@ your Polar secrets, comes from a `payment(env)` thunk you pass to
 <Steps>
 <Step>
 
-**Construct and inject the Polar SDK client.** A real `Polar` instance satisfies
+**Pass a loader for the Polar SDK client.** The adapter calls it on its first
+provider call and reuses the client, so `@polar-sh/sdk` stays out of the
+Worker's startup graph; a static `import { Polar } from "@polar-sh/sdk"` in the
+entry is evaluated at startup and defeats this. A real `Polar` instance satisfies
 the structural `PolarClientLike`; the cast keeps this package free of a hard
 `@polar-sh/sdk` dependency. Pass `server: "sandbox"` while developing.
 
 ```ts title="lunora/server.ts"
 import type { PolarClientLike } from "@lunora/payment/polar";
 import { createPolarAdapter } from "@lunora/payment/polar";
-import { Polar } from "@polar-sh/sdk";
 import { createShardDO } from "./_generated/shard";
 
 export const ShardDO = createShardDO({
     payment: (env) => ({
         adapter: createPolarAdapter({
-            client: new Polar({
-                accessToken: env.POLAR_ACCESS_TOKEN,
-                // Drop `server` (or set "production") for live mode.
-                server: "sandbox",
-            }) as unknown as PolarClientLike,
+            client: async () => {
+                const { Polar } = await import("@polar-sh/sdk");
+
+                return new Polar({
+                    accessToken: env.POLAR_ACCESS_TOKEN,
+                    // Drop `server` (or set "production") for live mode.
+                    server: "sandbox",
+                }) as unknown as PolarClientLike;
+            },
             webhookSecret: env.POLAR_WEBHOOK_SECRET,
             // Optional clock-skew tolerance for the signed webhook timestamp (seconds; default 300).
             webhookToleranceSeconds: 300,
@@ -165,7 +172,11 @@ translator.
 
 <TypeTable
     type={{
-        client: { type: "PolarClientLike", description: "An injected @polar-sh/sdk Polar instance (structural). The package never imports the SDK itself." },
+        client: {
+            type: "() => PolarClientLike | Promise<PolarClientLike>",
+            description:
+                "Loads an @polar-sh/sdk Polar instance (structural) on the first provider call; reused after. The package never imports the SDK itself.",
+        },
         webhookSecret: {
             type: "string",
             description: "The endpoint signing secret from your Polar webhook settings; verifies inbound events (POLAR_WEBHOOK_SECRET).",
@@ -215,6 +226,8 @@ owner. Redirect the browser to the returned `url`; Polar hosts the checkout.
 </Callout>
 
 ### Manage subscriptions
+
+The facade cancels immediately by default, or at the end of the period with `atPeriodEnd`:
 
 ```ts
 // Cancel now, or at period end.
@@ -334,6 +347,8 @@ app.post(
 );
 ```
 
+The following internal action runs in the shard and passes the raw body and headers to `handleWebhook`:
+
 ```ts title="lunora/billing.ts"
 import { internalAction, v } from "./_generated/server";
 
@@ -360,7 +375,7 @@ export const processPolarWebhook = internalAction
 `WebhookAction`, and applies it through the state machine. Once verified it
 returns `200` once applied or deduplicated, so Polar stops retrying; a duplicate is
 acknowledged, not re-applied. An **orphaned** event — one whose subscription or
-customer row has not been created yet, i.e. an out-of-order delivery — returns
+payment row has not been created yet, i.e. an out-of-order delivery — returns
 `500` instead, so Polar redelivers it after the parent row lands. Standard Webhooks
 carries no body id, so the adapter uses the `webhook-id` header as the
 idempotency key backing the append-only `events` log.
@@ -409,9 +424,9 @@ await ctx.payments.refundPayment({ sessionId: orderId, amount: money(500n, "USD"
 ```
 
 <Callout type="warn">
-    Go through the facade, not `ctx.payments.adapter.refundPayment`. Polar's [Create Refund](https://polar.sh/docs/api-reference/refunds/create) accepts no
-    idempotency key, so nothing on the wire dedupes a retry: the facade's local refund ledger is the only thing that stops a repeated call from moving the money
-    twice. It also authorizes the caller and rejects an over-refund before anything is issued.
+    Refund through `ctx.payments.refundPayment`. Polar's [Create Refund](https://polar.sh/docs/api-reference/refunds/create) accepts no idempotency key, so
+    nothing on the wire dedupes a retry: the facade's local refund ledger is the only thing that stops a repeated call from moving the money twice. It also
+    authorizes the caller and rejects an over-refund before anything is issued.
 </Callout>
 
 ## Billing portal
@@ -423,7 +438,7 @@ customer session and returns its `customerPortalUrl`:
 const { url } = await ctx.payments.createPortalSession(ctx.auth.userId, "https://app.test/account");
 ```
 
-The customer is derived from the store (never a caller-supplied id, so no IDOR).
+The customer is derived from the store (never a caller-supplied id, so no insecure direct object reference (IDOR)).
 Polar's portal is a session URL, so the `returnUrl` argument is accepted for
 interface parity but Polar controls the in-portal navigation.
 
@@ -439,9 +454,12 @@ tax) in integer minor units.
 ## Limitations
 
 <Callout type="info">
-    - **No manual capture/authorize.** `capturePayment` / `cancelPayment` throw; MoR captures at checkout. - **Product-based.** The cross-provider `priceId`
-    carries a Polar **product** id, not a separate price id. - **Refunds are dashboard/API-initiated in Polar**, synced back via `refund.created`; the facade
-    also exposes `refundPayment` (see [Refunds](#refunds)). - **Portal `returnUrl` is advisory**: Polar controls the hosted portal's navigation.
+
+- **No manual capture/authorize.** `capturePayment` / `cancelPayment` throw; MoR captures at checkout.
+- **Product-based.** The cross-provider `priceId` carries a Polar **product** id, not a separate price id.
+- **Refunds are dashboard/API-initiated in Polar**, synced back via `refund.created`; the facade also exposes `refundPayment` (see [Refunds](#refunds)).
+- **Portal `returnUrl` is advisory**: Polar controls the hosted portal's navigation.
+
 </Callout>
 
 ## Troubleshooting

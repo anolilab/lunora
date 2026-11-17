@@ -13,7 +13,9 @@ export type {
     ExportRow,
     ExportShardAdminArgs,
     ExportShardArgs,
+    ImportConflictMode,
     ImportError,
+    ImportRow,
     ImportShardAdminArgs,
     ImportShardArgs,
     ImportShardResult,
@@ -27,6 +29,8 @@ export {
     selectExportTables,
     validateImportRow,
 } from "./admin-export-import";
+export type { AdminTokenSummary } from "./admin-tokens";
+export { ADMIN_TOKEN_TABLE, adminTokenExists, createAdminTokenRecord, listAdminTokens, revokeAdminTokenRecord, verifyAdminTokenDigest } from "./admin-tokens";
 export { AGGREGATE_SQL_FUNCTION, aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 export type { AggregateTally } from "./aggregate-tally";
 export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
@@ -53,6 +57,7 @@ export type {
 export {
     applyCdcChanges,
     assertNoExplicitUndefined,
+    assertStorableRowId,
     assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,
@@ -91,7 +96,7 @@ export type { CdcArchiveScope } from "./ctx-db-cdc-archive";
 export { archiveCdcSegment, cdcArchiveRewound, readArchivedCdcChanges, readCdcArchivedThrough, writeCdcArchivedThrough } from "./ctx-db-cdc-archive";
 export { advanceClientWatermark, CLIENT_WATERMARK_TABLE, migrateClientWatermark, readClientWatermark } from "./ctx-db-client-watermark";
 export { allocateCommitSeq, COMMIT_SEQ_FIELD, COMMIT_SEQ_TABLE, migrateCommitSeq, readCommitSeq } from "./ctx-db-commit-seq";
-export { clearCompanionSignatures } from "./ctx-db-companion-state";
+export { clearCompanionSignatures, CompanionMemo } from "./ctx-db-companion-state";
 export type { CompanionSync, CompanionSyncDeps } from "./ctx-db-companions";
 export { createCompanionSync } from "./ctx-db-companions";
 export {
@@ -107,15 +112,21 @@ export { IDEMPOTENCY_TABLE, migrateIdempotency, readIdempotent, trimIdempotent, 
 export { clearMemoryTables, isMemoryTable, memoryTableNames } from "./ctx-db-memory";
 export type { RankPageComputation, RankPageDeps } from "./ctx-db-rank-page";
 export { computeRankPage, resolveRankSeekTuple } from "./ctx-db-rank-page";
-export type { ScheduleOutbox, ScheduleOutboxEnvelope, ScheduleOutboxRow } from "./ctx-db-schedule-outbox";
+export type { ScheduleOutbox, ScheduleOutboxEntry, ScheduleOutboxEnvelope, ScheduleOutboxRow } from "./ctx-db-schedule-outbox";
 export {
     deferScheduleOutbox,
+    dropScheduleOutbox,
     forgetScheduleOutbox,
+    hasScheduleOutboxEntry,
     migrateScheduleOutbox,
     parkScheduleOutbox,
     probeScheduleOutbox,
     readDueScheduleOutbox,
+    readDueScheduleOutboxEntry,
+    readScheduleOutbox,
+    readScheduleOutboxState,
     recordScheduleOutbox,
+    requeueScheduleOutbox,
     SCHEDULE_OUTBOX_TABLE,
     trimScheduleOutbox,
 } from "./ctx-db-schedule-outbox";
@@ -214,7 +225,6 @@ export {
 export type {
     AdvisoriesResult,
     AdvisorProcedure,
-    AdvisorProceduresResult,
     AdvisoryFinding,
     AuditLogResult,
     ColumnMeta,
@@ -340,7 +350,7 @@ export { ReactiveCache, reactiveCacheKey, stableStringify, stableWireKey } from 
 export type { ReactorDispatchResult, ReactorState, ReactorStats } from "./reactor-state";
 export { listReactorStates, migrateReactorState, REACTOR_STATE_TABLE, reactorNeedsRun, readReactorState, writeReactorState } from "./reactor-state";
 export type { ReadFootprint } from "./read-footprint";
-export { createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "./read-footprint";
+export { ADMIN_WILDCARD, createReadFootprint, markUnvouchableReads, UNVOUCHABLE_DEP } from "./read-footprint";
 export type { IndexKeyEntry, KeyRange } from "./read-write-set";
 export { buildIndexRange, indexKeysForRow, keysTouchRanges } from "./read-write-set";
 export type { WhereFilter } from "./reader-where-filter";
@@ -354,20 +364,24 @@ export {
     composeReadPredicate,
     containsRelationPredicate,
     DEFAULT_MAX_RELATION_KEYS,
+    findManyPage,
     isRelationPredicate,
     resolveRelationPredicates,
 } from "./relation-predicates";
 export type { KeyedRelationWriteInfo, RelationWriteInfo, RelationWriteMap, ThroughRelationWriteInfo } from "./relation-writes";
 export { describeRelationWrites } from "./relation-writes";
 export type { ApplyOnDeleteOptions } from "./relations";
-export { applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
+export { applyInsertDefaults, applyOnDelete, distinctValues, fanOutScalarCounts, relationHooks, resolveWith, runRowValidators } from "./relations";
 export type {
+    LiveSocketControlCall,
     OwnerRelayFrame,
     PromotionState,
     PromotionThresholds,
     RelayAttach,
     RelayDetach,
     RelayFrame,
+    RelayRoomEvent,
+    RelayRoomVerdict,
     RelayShapePoke,
     RelayShapeSeed,
     RelayShapeSubscribe,
@@ -469,6 +483,7 @@ export { buildPokeFrames, diffGlobalMembership, encodeRowsPatch, projectColumns 
 export type { ShardRunnerOptions } from "./shard-runner";
 export { ShardRunner } from "./shard-runner";
 export { stubByName } from "./sibling-channel";
+export { RELAY_SIGNATURE_HEADER, siblingSecretOf, signSiblingBody, verifySiblingBody } from "./sibling-channel";
 export { runSocketPool } from "./socket-pool";
 export type { SqlConsoleResult } from "./sql-console";
 export type { SqlLintResult } from "./sql-console";
@@ -478,8 +493,8 @@ export { lintReadonlySql } from "./sql-console";
 // builds and reverses the same keys for the `.global()` plane and the two are
 // compared by a parity test, so there must be exactly one encoder and one
 // decoder of each.
-export { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey, decodeFloat64SqlKey, float64SqlKey } from "./sql-projection";
-export { awaitWsDrain, subscriptionFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
+export { BIGINT_KEY_DIGITS, bigintSqlKey, decodeBigintSqlKey, decodeFloat64SqlKey, float64SqlKey } from "./sql-projection"; // secret-scanner:allow -- export list of codec names, not a credential
+export { awaitWsDrain, DELTA_PLACEHOLDER_TABLE, deltaTableFor, subscriptionFrames, subscriptionListDeltas, trySendFrame } from "./subscription-delivery";
 export type { ChangedKeys, SubscriptionReadFootprint } from "./subscription-range-gate";
 export { mergeChangedKeys, recordChangedKeys, writeTouchesMemo } from "./subscription-range-gate";
 export type {
@@ -497,12 +512,12 @@ export { createSystemReader } from "./system-reader";
 export type { ConflictKind } from "./transaction";
 export type { TransactionSqlLike } from "./transaction";
 export { ConflictError } from "./transaction";
-export type { TransactionHeadroom, TransactionLimits } from "./transaction-headroom";
+export type { TransactionHeadroom, TransactionLimitKind, TransactionLimits, TransactionLimitWarning } from "./transaction-headroom";
 export { DEFAULT_TRANSACTION_LIMITS, TransactionHeadroomTracker } from "./transaction-headroom";
 export type { RunTriggersOptions } from "./triggers";
 export { hasTrigger, runTriggers } from "./triggers";
 export type { TtlSweepSpec } from "./ttl-sweep";
-export { selectExpiredIds } from "./ttl-sweep";
+export { isTtlExpired, nextTtlExpiry, selectExpiredIds } from "./ttl-sweep";
 export type {
     LifecycleDispatchInfo,
     LifecycleEvent,

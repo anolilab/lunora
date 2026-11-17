@@ -44,7 +44,11 @@ export interface SubscriptionError {
      * so narrowing it to `LunoraErrorCode` would be a lie a newer server tells.
      */
     code?: LunoraErrorCodeInput;
+    /** The actionable fix text (Markdown), when the frame carried one. */
+    hint?: string | string[];
     message: string;
+    /** The client-visible explanation of the cause, when the frame carried one. */
+    why?: string;
 }
 
 export type SubscriptionErrorCallback = (error: SubscriptionError) => void;
@@ -74,8 +78,13 @@ export interface OptimisticLayer {
 }
 
 export interface SubscriptionState {
-    /** True once the server has acked the subscription on the current socket. */
-    acked: boolean;
+    /**
+     * Where this subscription's `subscribe` frame stands on the current socket:
+     * none outstanding (`"idle"`), sent and not yet answered (`"inflight"`, so a
+     * second subscriber joins it instead of sending another), or acknowledged by
+     * the server (`"acked"`). Written only through {@link setSubscriptionAck}.
+     */
+    ack: "acked" | "idle" | "inflight";
     readonly args: Record<string, unknown>;
 
     /**
@@ -85,6 +94,22 @@ export interface SubscriptionState {
      * every mutation.
      */
     readonly argsKey: string;
+
+    /**
+     * Set by `LunoraClient.resnapshot` until the snapshot it asked for is committed: the
+     * held `lastValue` is known to be stale, so a subscriber that joins meanwhile is not handed
+     * it and waits for the fresh value. Subscribers already holding it keep it until then.
+     */
+    awaitingSnapshot?: boolean;
+
+    /**
+     * Set when the committed base is missing rows the server has confirmed: a held run was discarded
+     * or a row change was refused. Deltas and settled frames wait until a `data` frame commits or a
+     * `resume` from before the gap applies. Kept apart from `awaitingSnapshot`, which a failure clears
+     * to release joiners, so a failure cannot reopen the gate.
+     */
+    baseIncomplete?: boolean;
+
     readonly callbacks: Set<SubscriptionCallback>;
 
     /**
@@ -103,6 +128,7 @@ export interface SubscriptionState {
     readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     /** Notified when the server rejects this subscription (e.g. admin auth). */
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
+
     readonly fn: FunctionReference;
 
     readonly id: string;
@@ -127,6 +153,28 @@ export interface SubscriptionState {
     optimisticLayers: OptimisticLayer[];
 
     /**
+     * The merged value of a delta run whose final, cursor-carrying frame has not
+     * arrived yet. Held aside so a run of k frames commits, notifies and
+     * broadcasts once. Dropped when a snapshot, a `resume`, or a new socket
+     * supersedes the run.
+     */
+    pendingDeltaRun?: { payload: unknown };
+
+    /**
+     * The refusal the server answered this subscription with, handed to a subscriber
+     * that joins later: the state is already `"acked"`, so no frame goes out and no
+     * value will come. Kept until the subscription is re-armed or a value lands.
+     */
+    refusal?: SubscriptionError;
+
+    /**
+     * Bumped each time the identity whose layers this subscription carried is
+     * signed out, so a value fan already under way can stop handing out that
+     * identity's value (see `notifySubscription`). Absent until the first one.
+     */
+    retirements?: number;
+
+    /**
      * The authoritative server value the optimistic layers fold onto — the value
      * with NO optimistic overlay. Tracks `lastValue` exactly whenever no layers
      * are active; diverges only while a per-call optimistic write is pending. A
@@ -134,6 +182,19 @@ export interface SubscriptionState {
      * persists this, never the optimistic overlay.
      */
     serverBase: unknown;
+
+    /**
+     * Set when a full data frame was committed, so a result that is itself `undefined` still counts as a value this
+     * subscription holds. `serverBase` alone cannot say: `undefined` there also means nothing has arrived.
+     */
+    serverBaseCommitted?: boolean;
+
+    /**
+     * Fingerprint of the claims the value and cursor were read under, as the shard announced it; replayed
+     * as `sinceClaims` so the server resumes only when the socket's claims are still those. Absent when the
+     * shard announced none, which the server treats as a mismatch (a full snapshot).
+     */
+    serverClaims?: string;
 
     /**
      * The `__cdc_log` high-watermark (`cursor`) the `lastValue` reflects,
@@ -153,6 +214,15 @@ export interface SubscriptionState {
      */
     serverEpoch?: string;
     readonly shardKey?: string;
+
+    /**
+     * Whether a poll or the leader tab has delivered a value for this subscription on the
+     * CURRENT connection. A polling connection and a follower tab see no server `ack`, so this
+     * is their only evidence of an answer, and `serverBase` cannot stand in for it: a hydrated
+     * cache sets that before anything has arrived. A WebSocket never sets it, `acked` is its
+     * evidence.
+     */
+    valueReceived: boolean;
 
     /**
      * The wire-encoded form of `args`, computed once at `subscribe` time (so an
@@ -246,6 +316,27 @@ export class SubscriptionRegistry {
 }
 
 /**
+ * Move `state`'s {@link SubscriptionState.ack} to `next`. The one writer of the
+ * field, shared by the client and the cross-tab leadership hooks.
+ */
+export const setSubscriptionAck = (state: SubscriptionState, next: SubscriptionState["ack"]): void => {
+    // eslint-disable-next-line no-param-reassign -- the shared subscription state is advanced in place
+    state.ack = next;
+    // eslint-disable-next-line no-param-reassign -- a re-armed subscription no longer holds the refusal it was answered with
+    state.refusal = undefined;
+};
+
+/**
+ * Stand `state`'s outstanding `subscribe` frame down without an answer, so the
+ * next `subscribe` may send again. An acknowledged subscription stays acknowledged.
+ */
+export const releaseSubscribeFrame = (state: SubscriptionState): void => {
+    if (state.ack === "inflight") {
+        setSubscriptionAck(state, "idle");
+    }
+};
+
+/**
  * Wrap a subscriber's callback in a fresh closure, so registering it in a
  * `Set` gives THIS subscriber its own slot.
  *
@@ -271,11 +362,42 @@ export function wrapSubscriber<A>(callback: ((argument: A) => void) | undefined)
 
 /** Fan an error out to every registered `onError` callback, swallowing throws so one bad listener can't starve the rest. */
 export const fanSubscriptionError = (callbacks: Iterable<SubscriptionErrorCallback>, error: SubscriptionError): void => {
-    for (const errorCallback of callbacks) {
+    // A copy: a callback that subscribes again joins the set and is handed the refusal on joining, not a second time here.
+    const snapshot = [...callbacks];
+
+    for (const errorCallback of snapshot) {
         try {
             errorCallback(error);
         } catch {
             /* user callback threw — ignore */
         }
+    }
+};
+
+/**
+ * Report a subscription's failure to its subscribers. A snapshot `resnapshot` was waiting on
+ * will not come now, so a subscriber that joins afterwards is handed the held value again
+ * rather than waiting for nothing.
+ */
+export const failSubscription = (state: SubscriptionState, error: SubscriptionError): void => {
+    // eslint-disable-next-line no-param-reassign -- the flag is the shared subscription's own state
+    state.awaitingSnapshot = false;
+    fanSubscriptionError(state.errorCallbacks, error);
+};
+
+/**
+ * Hand a late subscriber the refusal the subscription was answered with: a refused query sends no
+ * frame for a joiner, so this is the only answer it will get. A value held from before the refusal is
+ * replayed too, as the subscribers already present saw it, and does not stand in for the refusal.
+ */
+export const replaySubscriptionRefusal = (state: SubscriptionState, errorCallback: SubscriptionErrorCallback | undefined): void => {
+    if (errorCallback === undefined || state.refusal === undefined) {
+        return;
+    }
+
+    try {
+        errorCallback(state.refusal);
+    } catch {
+        /* user callback threw — ignore */
     }
 };

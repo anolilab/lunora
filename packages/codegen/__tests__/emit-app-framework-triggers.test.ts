@@ -40,4 +40,49 @@ describe("emitApp — framework-host trigger passthrough", () => {
 
         expect(output).not.toContain("typeof host.email");
     });
+
+    it("awaits auth before every entry point that can build the worker", () => {
+        expect.assertions(6);
+
+        // The worker is built once per isolate and reads `getAuth()` while it builds,
+        // so whichever entry point runs first must find auth initialised.
+        const output = emitApp({ ...baseOptions, hasAuth: true, hasFramework: true, hasQueue: true });
+        const builds = output.split(/worker \?\?= buildWorker\(|\? \(worker \?\?= buildWorker\(/u).slice(0, -1);
+
+        // fetch, scheduled, serverQuery, queue, host email.
+        expect(builds).toHaveLength(5);
+
+        const [fetchSegment, scheduledSegment, serverQuerySegment, queueSegment, emailSegment] = builds as [string, string, string, string, string];
+
+        expect(fetchSegment.trimEnd()).toMatch(/await ensureAuth\(env\);$/u);
+        expect(serverQuerySegment.trimEnd()).toMatch(/await ensureAuth\(rawEnv as Env\);$/u);
+
+        for (const segment of [scheduledSegment, queueSegment, emailSegment]) {
+            expect(segment.trimEnd()).toMatch(/const target = \(await authReady\(rawEnv as Env\)\)$/u);
+        }
+    });
+
+    it("logs why auth failed when a host-owned event carries on without it", () => {
+        expect.assertions(2);
+
+        // Auth retries on every event, so an isolate that only ever sees cron, queue or mail would otherwise
+        // repeat the failure indefinitely with nothing in the logs saying why admin and auth are missing.
+        const output = emitApp({ ...baseOptions, hasAuth: true, hasFramework: true, hasQueue: true });
+        const helper = output.slice(output.indexOf("const authReady"), output.indexOf("const authReady") + 600);
+
+        expect(helper).toMatch(/console\.error\(/u);
+        expect(helper).toMatch(/error\)/u);
+    });
+
+    it("gives a host-owned event an uncached worker when auth failed to initialise", () => {
+        expect.assertions(3);
+
+        // A failed auth init must not take the host's cron/queue/mail down, and must not leave a
+        // cached worker that was built without auth.
+        const output = emitApp({ ...baseOptions, hasAuth: true, hasFramework: true, hasQueue: true });
+
+        expect(output).toContain("ensureAuth(env).then(");
+        expect(output).toContain(": buildWorker(rawEnv as Env, deferred);");
+        expect(output).toContain("return target.queue?.(batch, rawEnv, context);");
+    });
 });

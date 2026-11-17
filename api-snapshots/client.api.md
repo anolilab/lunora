@@ -14,8 +14,13 @@ here is a public-API change and must be reviewed as one (SemVer applies).
 ```ts
 interface ActionCallOptions {
     shardKey?: string;
+    signal?: AbortSignal;
 }
 ```
+
+### `AdminTokenSummary` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ### `ArgsOf` (type)
 
@@ -72,6 +77,20 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `AuthTokenFetcher` (type)
+
+```ts
+type AuthTokenFetcher = () => Promise<string | null>;
+```
+
+### `AuthTokenProviderOptions` (interface)
+
+```ts
+interface AuthTokenProviderOptions {
+    subject?: string | null;
+}
+```
+
 ### `AuthUser` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
@@ -84,7 +103,7 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 ```ts
 type BatchSlot = {
-    error: LunoraClientError;
+    error: LunoraClientError | LunoraError;
     ok: false;
 } | {
     ok: true;
@@ -111,6 +130,7 @@ const CONFLICT_ERROR_CODE = "CONFLICT";
 
 ```ts
 interface CachedQuery {
+    claims?: string;
     credential?: string;
     identity: string | null;
     serverCursor?: number;
@@ -188,6 +208,7 @@ interface ClientShapeSubscribeMessage {
         name: string;
     };
     sinceCheckpoint?: number;
+    sinceClaims?: string;
     sinceEpoch?: string;
     type: "shape_subscribe";
 }
@@ -202,20 +223,91 @@ interface ClientShapeUnsubscribeMessage {
 }
 ```
 
+### `ConnectLiveStreamOptions` (interface)
+
+```ts
+interface ConnectLiveStreamOptions {
+    fetch?: typeof fetch;
+    headers?: Record<string, string>;
+    idleTimeoutMs?: number;
+    maxDelayMs?: number;
+    retryDelay?: number;
+    withCredentials?: boolean;
+}
+```
+
 ### `ConnectionStatus` (type)
 
 ```ts
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline" | "polling";
 ```
 
+### `CreatedAdminToken` (interface)
+
+Re-exported from `@lunora/runtime` — signature tracked at its source.
+
 ### `CronJobInfo` (interface)
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
+
+### `CronRunInFlight` (interface)
+
+```ts
+interface CronRunInFlight {
+    name: string;
+    renewedAt?: number;
+    runId: string;
+    skipped: number;
+    startedAt: number;
+}
+```
+
+### `CronRunRecord` (interface)
+
+```ts
+interface CronRunRecord {
+    durationMs: number;
+    endedAt: number;
+    error?: string;
+    name: string;
+    reason?: "in-flight" | "paused";
+    runId: string;
+    skipped: number;
+    startedAt: number;
+    status: CronRunStatus;
+}
+```
+
+### `CronRunStatus` (type)
+
+```ts
+type CronRunStatus = "failed" | "skipped" | "succeeded";
+```
+
+### `CronRunsResult` (interface)
+
+```ts
+interface CronRunsResult {
+    inFlight: CronRunInFlight[];
+    runs: CronRunRecord[];
+}
+```
 
 ### `DEFAULT_MAX_BUFFER` (const)
 
 ```ts
 const DEFAULT_MAX_BUFFER = 1024;
+```
+
+### `DeploymentPauseStatus` (interface)
+
+```ts
+interface DeploymentPauseStatus {
+    paused: boolean;
+    pausedAt?: number;
+    reason?: string;
+    supported: boolean;
+}
 ```
 
 ### `FunctionArgumentDescriptor` (interface)
@@ -226,6 +318,7 @@ interface FunctionArgumentDescriptor {
     kind: string;
     name: string;
     optional: boolean;
+    sensitive?: true;
     table?: string;
 }
 ```
@@ -236,6 +329,9 @@ interface FunctionArgumentDescriptor {
 interface FunctionDescriptor {
     args?: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+    meta?: unknown;
+    metaUnencodable?: true;
+    metaUnloaded?: true;
     path: string;
 }
 ```
@@ -276,6 +372,8 @@ interface GlobalFacetValue {
 ```ts
 interface GlobalFilterClause {
     column: string;
+    operator?: string;
+    path?: string[];
     value: unknown;
 }
 ```
@@ -328,7 +426,12 @@ interface HttpStreamOptions {
     baseUrl?: string;
     fetch?: typeof fetch;
     headers?: Record<string, string>;
+    idleTimeoutMs?: number;
+    lastEventId?: string;
     maxBuffer?: number;
+    onEventId?: (id: string) => void;
+    onRetry?: (ms: number) => void;
+    reconnect?: boolean;
     signal?: AbortSignal;
 }
 ```
@@ -384,6 +487,67 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 
 Re-exported from `@lunora/runtime` — signature tracked at its source.
 
+### `LiveStream` (interface)
+
+```ts
+interface LiveStream {
+    close: () => void;
+    readonly connectionId: string | undefined;
+    onEvent: (handler: (event: LiveStreamEvent) => void) => () => void;
+    readonly ready: Promise<void>;
+    subscribe: (options: LiveStreamSubscribeOptions) => () => void;
+}
+```
+
+### `LiveStreamEvent` (interface)
+
+```ts
+interface LiveStreamEvent {
+    payload: unknown;
+    topic: string;
+}
+```
+
+### `LiveStreamSubscribeError` (interface)
+
+```ts
+interface LiveStreamSubscribeError {
+    status: number;
+    subscriptionId: string;
+    topic: string;
+}
+```
+
+### `LiveStreamSubscribeOptions` (interface)
+
+```ts
+interface LiveStreamSubscribeOptions {
+    id?: string;
+    onError?: (error: LiveStreamSubscribeError) => void;
+    onEvent?: (payload: unknown) => void;
+    topic: string;
+}
+```
+
+### `LiveTopicOptions` (interface)
+
+```ts
+interface LiveTopicOptions<Payload = unknown> extends Omit<SubscribeLiveTopicOptions, "onEvent" | "topic" | "url"> {
+    onEvent?: (payload: Payload) => void;
+    shardKey?: string;
+}
+```
+
+### `LiveTopicRef` (interface)
+
+```ts
+interface LiveTopicRef<Payload = unknown> {
+    readonly __payload?: Payload;
+    readonly __lunoraLive: string;
+    readonly topic: string;
+}
+```
+
 ### `LunoraClient` (class)
 
 ```ts
@@ -391,6 +555,7 @@ class LunoraClient {
     static createClientQuery<T>(key: string, defaultValue: T): ClientQueryRef<T>;
     readonly url: string;
     readonly wsUrl: string;
+    protected readonly adminHost: AdminHost;
     constructor(options: LunoraClientOptions);
     setAuthToken(token: string | null, subject?: string | null): void;
     getAuthToken(): string | null;
@@ -412,6 +577,7 @@ class LunoraClient {
     identityEpoch(): number;
     getCurrentUser(): Promise<User | null>;
     setWsToken(token: string | undefined | WsTokenProvider): void;
+    setWsTicket(ticket: string | undefined | WsTokenProvider): void;
     setConnectionContext(context: Record<string, unknown> | undefined, options?: {
         shardKey?: string;
     }): void;
@@ -421,39 +587,77 @@ class LunoraClient {
     whisperSubscribe(topic: string, handler: (data: unknown, from?: string) => void, options?: {
         shardKey?: string;
     }): Unsubscribe;
+    subscribeLiveTopic(options: {
+        onError?: (error: {
+            status: number;
+            topic: string;
+        }) => void;
+        onEvent: (payload: unknown) => void;
+        shardKey?: string;
+        stream: string;
+        topic: string;
+    }): Unsubscribe;
     whisper(topic: string, data?: unknown, options?: {
         shardKey?: string;
-    }): void;
+    }): boolean;
+    connectRoom<Message>(room: RoomRef<Message>, handlers: {
+        onMessage: (message: Message) => void;
+    }, options?: {
+        shardKey?: string;
+    }): {
+        close: () => void;
+        send: (message: Message) => boolean;
+    };
+    connectWebSocket<Message>(path: string, handlers: {
+        onClose?: () => void;
+        onMessage: (message: Message) => void;
+        onOpen?: () => void;
+    }, options?: {
+        shardKey?: string;
+    }): {
+        close: () => void;
+        send: (message: Message) => void;
+    };
     onTokenExpired(listener: () => void): Unsubscribe;
     connectionStatus(): ConnectionStatus;
     onConnectionStatus(listener: (status: ConnectionStatus) => void): Unsubscribe;
+    syncStatus(): SyncStatus;
+    onSyncStatus(listener: (status: SyncStatus) => void): Unsubscribe;
     pendingCount(): number;
     debug(): ClientDebugSnapshot;
     onPendingChange(listener: (pending: number) => void): Unsubscribe;
     onMutationSettled(listener: (event: MutationSettledEvent) => void): Unsubscribe;
     getWebSocketImpl(): typeof WebSocket | undefined;
+    isCrossTabFollower(): boolean;
+    expectsPush(options?: {
+        shardKey?: string;
+    }): boolean;
     getClientQuery<T>(ref: ClientQueryRef<T>): T;
     setClientQuery<T>(ref: ClientQueryRef<T>, value: T): void;
     subscribeClientQuery(ref: ClientQueryRef, callback: (value: unknown) => void): Unsubscribe;
     resetClientQuery(ref: ClientQueryRef): void;
     snapshotPrecondition(functionRef: FunctionReference, args: Record<string, unknown>, shardKey?: string): () => boolean;
-    whenReady(): Promise<void>;
+    whenReady(options?: {
+        signal?: AbortSignal;
+    }): Promise<void>;
     get isReady(): boolean;
     peekHydratedQuery(functionPath: string, args: Record<string, unknown>, shardKey?: string): unknown;
     peekHydratedQueryByKey(functionPath: string, argsKey: string, shardKey?: string): unknown;
     peekActiveQuerySnapshot(functionPath: string, args: Record<string, unknown>, shardKey?: string): {
+        answered: boolean;
         present: boolean;
         value: unknown;
     };
     query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: {
         shardKey?: string;
+        signal?: AbortSignal;
     }): Promise<ReturnOf<F>>;
     batch(calls: ReadonlyArray<{
         args?: Record<string, unknown>;
         fn: FunctionReference;
         shardKey?: string;
     }>): Promise<BatchSlot[]>;
-    mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>): Promise<ReturnOf<F>>;
+    mutation<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>> & OnlineOnlyOption<F>): Promise<ReturnOf<F>>;
     canQueueOffline(shardKey?: string): boolean;
     action<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: ActionCallOptions): Promise<ReturnOf<F>>;
     importRows(function_: FunctionReference, rows: ReadonlyArray<unknown>, options?: {
@@ -470,300 +674,15 @@ class LunoraClient {
         imported: number;
         queued: number;
     }>;
-    shardTraffic(table: string): Promise<ShardTrafficResult>;
-    listScheduledJobs(): Promise<ScheduleRecord[]>;
-    schedulerStatus(): Promise<SchedulerStatus>;
-    cancelScheduledJob(id: string): Promise<{
-        cancelled: boolean;
-    }>;
-    listDeadJobs(): Promise<ScheduleRecord[]>;
-    retryDeadJob(id: string): Promise<{
-        retried: boolean;
-    }>;
-    removeDeadJob(id: string): Promise<{
-        removed: boolean;
-    }>;
-    listWorkflowInstances(options: {
-        name: string;
-        page?: number;
-        perPage?: number;
-        status?: WorkflowInstanceStatus;
-    }): Promise<WorkflowInstancePage>;
-    getWorkflowInstance(options: {
-        id: string;
-        name: string;
-    }): Promise<WorkflowInstanceDetail>;
-    setWorkflowInstanceStatus(options: {
-        action: WorkflowInstanceAction;
-        id: string;
-        name: string;
-    }): Promise<{
-        status: WorkflowInstanceStatus;
-    }>;
     subscribeScheduledJobs(onJobs: (jobs: ScheduleRecord[]) => void): Unsubscribe;
-    listFunctions(): Promise<FunctionDescriptor[]>;
-    getCronJobs(): Promise<CronJobInfo[]>;
-    runCronJob(name: string): Promise<{
-        name: string;
-        ran: boolean;
-    }>;
-    fetchOpenApi(): Promise<Record<string, unknown>>;
-    fetchArchitecture(): Promise<Record<string, unknown>>;
-    fetchOpenRpc(): Promise<Record<string, unknown>>;
-    listStorageObjects(options?: {
-        bucket?: string;
-        cursor?: string;
-        limit?: number;
-        prefix?: string;
-    }): Promise<StorageListPage>;
-    deleteStorageObject(key: string, options?: {
-        bucket?: string;
-    }): Promise<{
-        deleted: boolean;
-        key: string;
-    }>;
-    listStorageBuckets(): Promise<string[]>;
-    uploadStorageObject(options: {
-        body: ArrayBuffer | Blob;
-        bucket?: string;
-        contentType?: string;
-        key: string;
-    }): Promise<{
-        etag?: string;
-        key: string;
-    }>;
-    signedStorageUrl(key: string, options?: {
-        bucket?: string;
-        expiresInSeconds?: number;
-    }): Promise<string>;
-    listGlobalTables(): Promise<GlobalTableInfo[]>;
-    readGlobalTablePage(options: {
-        filters?: GlobalFilterClause[];
-        limit?: number;
-        offset?: number;
-        table: string;
-    }): Promise<GlobalTablePage>;
-    facetGlobalColumn(options: {
-        column: string;
-        filters?: GlobalFilterClause[];
-        limit?: number;
-        table: string;
-    }): Promise<GlobalFacetResult>;
-    listVectorIndexes(): Promise<VectorIndexSummary[]>;
-    queryVectorIndex(options: {
-        name: string;
-        text: string;
-        topK?: number;
-    }): Promise<VectorQueryMatch[]>;
-    queryLogArchive(query?: PipelineLogQuery): Promise<PipelineLogPage>;
-    listKvNamespaces(): Promise<KvNamespaceSummary[]>;
-    listKvKeys(options: {
-        cursor?: string;
-        limit?: number;
-        namespace: string;
-        prefix?: string;
-    }): Promise<KvKeyListResult>;
-    getKvValue(options: {
-        key: string;
-        namespace: string;
-    }): Promise<KvValueResult>;
-    putKvValue(options: {
-        expiration?: number;
-        expirationTtl?: number;
-        key: string;
-        metadata?: unknown;
-        namespace: string;
-        value: string;
-    }): Promise<void>;
-    deleteKvKey(options: {
-        key: string;
-        namespace: string;
-    }): Promise<void>;
-    listAuthUsers(options?: {
-        filterField?: string;
-        filterValue?: string;
-        limit?: number;
-        offset?: number;
-        search?: string;
-        searchField?: string;
-        sortBy?: string;
-        sortDirection?: "asc" | "desc";
-    }): Promise<AuthPage<AuthUser>>;
-    createAuthUser(input: {
-        data?: Record<string, unknown>;
-        email: string;
-        name: string;
-        password?: string;
-        role?: string | string[];
-    }): Promise<AuthUser>;
-    setAuthUserRole(input: {
-        role: string | string[];
-        userId: string;
-    }): Promise<AuthUser>;
-    banAuthUser(input: {
-        expiresInSeconds?: number;
-        reason?: string;
-        userId: string;
-    }): Promise<AuthUser>;
-    unbanAuthUser(input: {
-        userId: string;
-    }): Promise<AuthUser>;
-    setAuthUserPassword(input: {
-        newPassword: string;
-        userId: string;
-    }): Promise<void>;
-    removeAuthUser(input: {
-        userId: string;
-    }): Promise<void>;
-    impersonateAuthUser(input: {
-        userId: string;
-    }): Promise<AuthImpersonation>;
-    revokeAuthSession(input: {
-        sessionId: string;
-    }): Promise<void>;
-    revokeAuthUserSessions(input: {
-        userId: string;
-    }): Promise<void>;
-    getAuthCapabilities(): Promise<AuthCapabilities>;
-    updateAuthUser(input: {
-        data: Record<string, unknown>;
-        userId: string;
-    }): Promise<AuthUser>;
-    listAuthAccounts(input: {
-        userId: string;
-    }): Promise<Record<string, unknown>[]>;
-    unlinkAuthAccount(input: {
-        accountId: string;
-        userId: string;
-    }): Promise<void>;
-    listAuthPasskeys(input: {
-        userId: string;
-    }): Promise<Record<string, unknown>[]>;
-    deleteAuthPasskey(input: {
-        passkeyId: string;
-    }): Promise<void>;
-    disableAuthTwoFactor(input: {
-        userId: string;
-    }): Promise<void>;
-    listAuthOrganizations(options?: {
-        limit?: number;
-        offset?: number;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    listAuthOrgMembers(input: {
-        limit?: number;
-        offset?: number;
-        organizationId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    listAuthOrgInvitations(input: {
-        limit?: number;
-        offset?: number;
-        organizationId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    listAuthSignUpInvitations(options?: {
-        limit?: number;
-        offset?: number;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    createAuthSignUpInvitation(input: {
-        email: string;
-        expiresInSeconds?: number;
-        invitedBy?: string;
-    }): Promise<Record<string, unknown>>;
-    revokeAuthSignUpInvitation(input: {
-        email: string;
-    }): Promise<void>;
-    removeAuthOrgMember(input: {
-        memberId: string;
-    }): Promise<void>;
-    cancelAuthOrgInvitation(input: {
-        invitationId: string;
-    }): Promise<void>;
-    getAuthConfig(): Promise<AuthConfigInfo>;
-    createAuthOrganization(input: {
-        logo?: string;
-        metadata?: Record<string, unknown>;
-        name: string;
-        ownerId?: string;
-        slug?: string;
-    }): Promise<Record<string, unknown>>;
-    updateAuthOrganization(input: {
-        logo?: string;
-        metadata?: Record<string, unknown>;
-        name?: string;
-        organizationId: string;
-        slug?: string;
-    }): Promise<Record<string, unknown>>;
-    deleteAuthOrganization(input: {
-        organizationId: string;
-    }): Promise<void>;
-    addAuthOrgMember(input: {
-        organizationId: string;
-        role?: string;
-        userId: string;
-    }): Promise<Record<string, unknown>>;
-    inviteAuthOrgMember(input: {
-        email: string;
-        inviterId?: string;
-        organizationId: string;
-        role?: string;
-    }): Promise<Record<string, unknown>>;
-    setAuthOrgMemberRole(input: {
-        memberId: string;
-        role: string | string[];
-    }): Promise<Record<string, unknown>>;
-    listAuthOrgTeams(input: {
-        limit?: number;
-        offset?: number;
-        organizationId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    createAuthOrgTeam(input: {
-        name: string;
-        organizationId: string;
-    }): Promise<Record<string, unknown>>;
-    updateAuthOrgTeam(input: {
-        name: string;
-        teamId: string;
-    }): Promise<Record<string, unknown>>;
-    removeAuthOrgTeam(input: {
-        teamId: string;
-    }): Promise<void>;
-    listAuthOrgTeamMembers(input: {
-        limit?: number;
-        offset?: number;
-        teamId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    addAuthOrgTeamMember(input: {
-        teamId: string;
-        userId: string;
-    }): Promise<Record<string, unknown>>;
-    removeAuthOrgTeamMember(input: {
-        teamMemberId: string;
-    }): Promise<void>;
-    listAuthOrgRoles(input: {
-        limit?: number;
-        offset?: number;
-        organizationId: string;
-    }): Promise<AuthPage<Record<string, unknown>>>;
-    createAuthOrgRole(input: {
-        organizationId: string;
-        permission: Record<string, string[]>;
-        role: string;
-    }): Promise<Record<string, unknown>>;
-    updateAuthOrgRole(input: {
-        permission: Record<string, string[]>;
-        roleId: string;
-    }): Promise<Record<string, unknown>>;
-    deleteAuthOrgRole(input: {
-        roleId: string;
-    }): Promise<void>;
-    listAuthSessions(options?: {
-        limit?: number;
-        offset?: number;
-        userId?: string;
-    }): Promise<AuthPage<AuthSession>>;
+    resnapshot<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: {
+        shardKey?: string;
+    }): void;
     subscribe<F extends FunctionReference>(function_: F, args: ArgsOf<F>, callback: (data: ReturnOf<F>) => void, options?: {
         onCheckpoint?: (watermark: SyncWatermark) => void;
         onError?: SubscriptionErrorCallback;
         shardKey?: string;
+        signal?: AbortSignal;
     }): Unsubscribe;
     subscribeShape(shape: {
         args?: Record<string, unknown>;
@@ -783,6 +702,11 @@ class LunoraClient {
         maxBuffer?: number;
         signal?: AbortSignal;
     }): StreamIterable<HttpStreamChunkOf<Ref>>;
+    streamRpc(function_: FunctionReference, args?: Record<string, unknown>, options?: {
+        onFrame?: (frame: unknown) => void;
+        shardKey?: string;
+        signal?: AbortSignal;
+    }): Promise<unknown>;
     close(): void;
 }
 ```
@@ -794,7 +718,9 @@ type LunoraClientError = Error & {
     code?: LunoraErrorCode | (string & {});
     data?: unknown;
     docsUrl?: string;
+    headers?: Readonly<Record<string, string>>;
     hint?: string | string[];
+    why?: string;
 };
 ```
 
@@ -803,6 +729,7 @@ type LunoraClientError = Error & {
 ```ts
 interface LunoraClientOptions {
     authBasePath?: string;
+    authTokenOnUpgrade?: boolean;
     bookmarkStorage?: BookmarkStorage;
     clientId?: string;
     connectionContext?: Record<string, unknown>;
@@ -821,8 +748,10 @@ interface LunoraClientOptions {
     };
     queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
+    rpcTimeoutMs?: number;
     url: string;
     WebSocket?: typeof WebSocket;
+    wsTicket?: string | WsTokenProvider;
     wsToken?: string | WsTokenProvider;
     wsUrl?: string;
 }
@@ -837,12 +766,14 @@ Re-exported from `@lunora/errors` — signature tracked at its source.
 ```ts
 interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
     mutationId?: string;
+    onlineOnly?: boolean;
     optimistic?: (current: TCurrent | undefined) => TValue;
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     precondition?: () => boolean;
     replayBaseline?: null | number;
     replayCredential?: ReplayCredential;
     shardKey?: string;
+    signal?: AbortSignal;
 }
 ```
 
@@ -904,7 +835,10 @@ class OfflineQueue {
     readonly queueBeforeFirstConnect: boolean;
     constructor(options?: OfflineQueueOptions, deps?: OfflineQueueDeps);
     get size(): number;
+    get replaying(): number;
     enqueue<T>(entry: QueuedMutation<T>): void;
+    discard(id: string): void;
+    flushUnpersisted(): void;
     hydrate(): Promise<(string | undefined)[]>;
     restampIdentity(from: string | null, to: string | null): void;
     hasPending(predicate: (item: QueuedMutation) => boolean): boolean;
@@ -923,6 +857,16 @@ interface OfflineQueueOptions {
     onPersistenceError?: (context: PersistenceErrorContext) => void;
     queueBeforeFirstConnect?: boolean;
 }
+```
+
+### `OnlineOnlyOption` (type)
+
+```ts
+type OnlineOnlyOption<F> = F extends {
+    readonly sensitive: true;
+} ? {
+    onlineOnly?: true;
+} : unknown;
 ```
 
 ### `OptimisticLocalStore` (interface)
@@ -1057,12 +1001,14 @@ interface QueryCacheAdapter {
 
 ```ts
 interface QueuedMutation<T = unknown> {
+    readonly ambiguousSend?: boolean;
     readonly args: Record<string, unknown>;
     readonly baselineSeq?: number;
     clientId?: string;
     readonly functionPath: string;
     id?: string;
     identity?: string | null;
+    readonly issueSeq?: number;
     liveAwaiter?: boolean;
     readonly onCommit?: (commitCursor: number | undefined) => void;
     readonly precondition?: () => boolean;
@@ -1134,6 +1080,15 @@ type ReplayIdentityVerdict = {
 type ReturnOf<F> = F extends FunctionReference<infer _K, infer _A, infer R> ? R : never;
 ```
 
+### `RoomRef` (interface)
+
+```ts
+interface RoomRef<Message = unknown> {
+    readonly __lunoraRoomMessage?: Message;
+    readonly name: string;
+}
+```
+
 ### `RowOp` (interface)
 
 ```ts
@@ -1181,6 +1136,8 @@ interface ScheduleRecord {
     args: Record<string, unknown>;
     attempts?: number;
     enqueuedAt: number;
+    error?: string;
+    firstDueAt?: number;
     functionPath?: string;
     id: string;
     instanceName?: string;
@@ -1198,8 +1155,33 @@ interface ScheduleRecord {
 interface ScheduleRetryPolicy {
     backoff?: "exponential" | "linear";
     baseMs?: number;
+    forever?: boolean;
     maxAttempts?: number;
     maxMs?: number;
+}
+```
+
+### `ScheduledHistoryPage` (interface)
+
+```ts
+interface ScheduledHistoryPage {
+    cursor?: string;
+    records: ScheduledJobView[];
+}
+```
+
+### `ScheduledJobState` (type)
+
+```ts
+type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+```
+
+### `ScheduledJobView` (interface)
+
+```ts
+interface ScheduledJobView extends ScheduleRecord {
+    completedAt?: number;
+    state: ScheduledJobState;
 }
 ```
 
@@ -1227,7 +1209,7 @@ interface SchedulerStatus {
 ### `ServerMessage` (type)
 
 ```ts
-type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage;
+type ServerMessage = ServerAckMessage | ServerBatchMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerIdentityMessage | ServerLiveMessage | ServerPokeEndMessage | ServerPokePartMessage | ServerPokeStartMessage | ServerResumeMessage | ServerSettledMessage | ServerWhisperMessage | ServerWhisperSubscribedMessage;
 ```
 
 ### `ServerPokeEndMessage` (interface)
@@ -1335,6 +1317,18 @@ interface StreamIterable<T> extends AsyncIterable<T> {
 }
 ```
 
+### `SubscribeLiveTopicOptions` (interface)
+
+```ts
+interface SubscribeLiveTopicOptions extends Omit<ConnectLiveStreamOptions, "fetch"> {
+    onError?: (error: LiveStreamSubscribeError) => void;
+    onEvent?: (payload: unknown) => void;
+    sessionKey?: string;
+    topic: string;
+    url: string;
+}
+```
+
 ### `SubscriptionCallback` (type)
 
 ```ts
@@ -1346,7 +1340,9 @@ type SubscriptionCallback = (data: unknown) => void;
 ```ts
 interface SubscriptionError {
     code?: LunoraErrorCodeInput;
+    hint?: string | string[];
     message: string;
+    why?: string;
 }
 ```
 
@@ -1375,9 +1371,11 @@ class SubscriptionRegistry {
 
 ```ts
 interface SubscriptionState {
-    acked: boolean;
+    ack: "acked" | "idle" | "inflight";
     readonly args: Record<string, unknown>;
     readonly argsKey: string;
+    awaitingSnapshot?: boolean;
+    baseIncomplete?: boolean;
     readonly callbacks: Set<SubscriptionCallback>;
     readonly checkpointCallbacks: Set<(watermark: SyncWatermark) => void>;
     readonly errorCallbacks: Set<SubscriptionErrorCallback>;
@@ -1386,11 +1384,30 @@ interface SubscriptionState {
     lastMutationId?: number;
     lastValue: unknown;
     optimisticLayers: OptimisticLayer[];
+    pendingDeltaRun?: {
+        payload: unknown;
+    };
+    refusal?: SubscriptionError;
+    retirements?: number;
     serverBase: unknown;
+    serverBaseCommitted?: boolean;
+    serverClaims?: string;
     serverCursor?: number;
     serverEpoch?: string;
     readonly shardKey?: string;
+    valueReceived: boolean;
     readonly wireArgs: Record<string, unknown>;
+}
+```
+
+### `SyncStatus` (interface)
+
+```ts
+interface SyncStatus {
+    connection: ConnectionStatus;
+    pendingSubscriptions: number;
+    pendingWrites: number;
+    synced: boolean;
 }
 ```
 
@@ -1416,9 +1433,9 @@ class TabCoordinator {
     get leaderTabId(): string | undefined;
     get id(): string;
     get isRunning(): boolean;
-    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null): void;
-    broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null): void;
-    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null): void;
+    broadcastSubscriptionData(key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string): void;
+    broadcastSubscriptionError(key: string, error: SubscriptionError, identity?: string | null, claims?: string): void;
+    broadcastSubscriptionSettled(key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string): void;
     broadcastConnectionStatus(status: ConnectionStatus, identity?: string | null): void;
 }
 ```
@@ -1463,7 +1480,16 @@ Re-exported from `@lunora/runtime` — signature tracked at its source.
 ### `WorkflowInstanceAction` (type)
 
 ```ts
-type WorkflowInstanceAction = "pause" | "resume" | "terminate";
+type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
+```
+
+### `WorkflowInstanceCreated` (interface)
+
+```ts
+interface WorkflowInstanceCreated {
+    id: string;
+    status: WorkflowInstanceStatus;
+}
 ```
 
 ### `WorkflowInstanceDetail` (interface)
@@ -1492,7 +1518,7 @@ interface WorkflowInstancePage {
 ### `WorkflowInstanceStatus` (type)
 
 ```ts
-type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "rollingBack" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 ```
 
 ### `WorkflowInstanceSummary` (interface)
@@ -1532,6 +1558,12 @@ type WsTokenProvider = () => Promise<string | undefined> | string | undefined;
 
 ```ts
 const applyDelta: (current: unknown, delta: MutationDelta) => Record<string, unknown> | undefined | unknown[];
+```
+
+### `connectLiveStream` (const)
+
+```ts
+const connectLiveStream: (url: string, options?: ConnectLiveStreamOptions) => LiveStream;
 ```
 
 ### `createAsyncStoragePersistence` (const)
@@ -1593,7 +1625,7 @@ const createIndexedDbQueryCache: (options?: IndexedDbQueryCacheOptions) => Query
 ### `createLocalStore` (const)
 
 ```ts
-const createLocalStore: (subscriptions: SubscriptionRegistry, shardKey: string | undefined) => {
+const createLocalStore: (subscriptions: SubscriptionRegistry, shardKey: string | undefined, identityInForce?: () => boolean) => {
     confirms: ((commitCursor: number | undefined) => void)[];
     rollbacks: (() => void)[];
     store: OptimisticLocalStore;
@@ -1627,6 +1659,7 @@ const createSnapshotPrecondition: (client: LunoraClient, functionRef: FunctionRe
 const createStream: <T>(options: {
     maxBuffer?: number;
     onCancel: () => void;
+    onFail?: () => void;
 }) => {
     handle: StreamHandle<T>;
     iterable: StreamIterable<T>;
@@ -1695,6 +1728,14 @@ const isUnauthorizedError: (error: unknown) => error is Error & {
 };
 ```
 
+### `liveTopicSubscription` (const)
+
+```ts
+const liveTopicSubscription: <Payload>(client: {
+    readonly url: string;
+}, ref: LiveTopicRef<Payload>, options?: LiveTopicOptions<Payload>) => SubscribeLiveTopicOptions;
+```
+
 ### `maxSeq` (const)
 
 ```ts
@@ -1729,7 +1770,369 @@ const queryCacheKey: (functionPath: string, argsKey: string, shardKey?: string) 
 const reconcileOptimistic: (optimistic: ReadonlyArray<OptimisticMessage>, durable: ReadonlyArray<ReconcileDurableMessage>) => OptimisticMessage[];
 ```
 
+### `setAuthTokenProvider` (const)
+
+```ts
+const setAuthTokenProvider: (client: LunoraClient, fetchToken: AuthTokenFetcher, options?: AuthTokenProviderOptions) => Unsubscribe;
+```
+
+### `subscribeLiveTopic` (const)
+
+```ts
+const subscribeLiveTopic: (options: SubscribeLiveTopicOptions) => (() => void);
+```
+
+## `@lunora/client/admin`
+
+### `LunoraAdminClient` (class)
+
+```ts
+class LunoraAdminClient extends LunoraClient {
+    shardTraffic(table: string): Promise<ShardTrafficResult>;
+    getDeploymentPause(): Promise<DeploymentPauseStatus>;
+    setDeploymentPause(paused: boolean, reason?: string): Promise<DeploymentPauseStatus>;
+    listScheduledJobs(): Promise<ScheduleRecord[]>;
+    schedulerStatus(): Promise<SchedulerStatus>;
+    getScheduledJob(id: string): Promise<ScheduledJobView | null>;
+    listScheduledHistory(options?: {
+        cursor?: string;
+    }): Promise<ScheduledHistoryPage>;
+    listCronRuns(): Promise<CronRunsResult>;
+    cancelScheduledJob(id: string): Promise<{
+        cancelled: boolean;
+    }>;
+    listDeadJobs(): Promise<ScheduleRecord[]>;
+    retryDeadJob(id: string): Promise<{
+        retried: boolean;
+    }>;
+    removeDeadJob(id: string): Promise<{
+        removed: boolean;
+    }>;
+    listWorkflowInstances(options: {
+        name: string;
+        page?: number;
+        perPage?: number;
+        status?: WorkflowInstanceStatus;
+    }): Promise<WorkflowInstancePage>;
+    getWorkflowInstance(options: {
+        id: string;
+        name: string;
+    }): Promise<WorkflowInstanceDetail>;
+    createWorkflowInstance(options: {
+        id?: string;
+        name: string;
+        params?: unknown;
+    }): Promise<WorkflowInstanceCreated>;
+    sendWorkflowEvent(options: {
+        id: string;
+        name: string;
+        payload?: unknown;
+        type: string;
+    }): Promise<{
+        instanceId: string;
+        timestamp?: string;
+    }>;
+    setWorkflowInstanceStatus(options: {
+        action: WorkflowInstanceAction;
+        id: string;
+        name: string;
+    }): Promise<{
+        status: WorkflowInstanceStatus;
+    }>;
+    listFunctions(): Promise<FunctionDescriptor[]>;
+    getCronJobs(): Promise<CronJobInfo[]>;
+    runCronJob(name: string): Promise<{
+        name: string;
+        ran: boolean;
+    }>;
+    fetchOpenApi(): Promise<Record<string, unknown>>;
+    fetchArchitecture(): Promise<Record<string, unknown>>;
+    fetchOpenRpc(): Promise<Record<string, unknown>>;
+    listStorageObjects(options?: {
+        bucket?: string;
+        cursor?: string;
+        limit?: number;
+        prefix?: string;
+    }): Promise<StorageListPage>;
+    deleteStorageObject(key: string, options?: {
+        bucket?: string;
+    }): Promise<{
+        deleted: boolean;
+        key: string;
+    }>;
+    listStorageBuckets(): Promise<string[]>;
+    uploadStorageObject(options: {
+        body: ArrayBuffer | Blob;
+        bucket?: string;
+        contentType?: string;
+        key: string;
+    }): Promise<{
+        etag?: string;
+        key: string;
+    }>;
+    signedStorageUrl(key: string, options?: {
+        bucket?: string;
+        expiresInSeconds?: number;
+    }): Promise<string>;
+    listGlobalTables(): Promise<GlobalTableInfo[]>;
+    readGlobalTablePage(options: {
+        filters?: GlobalFilterClause[];
+        limit?: number;
+        offset?: number;
+        table: string;
+    }): Promise<GlobalTablePage>;
+    facetGlobalColumn(options: {
+        column: string;
+        filters?: GlobalFilterClause[];
+        limit?: number;
+        table: string;
+    }): Promise<GlobalFacetResult>;
+    listVectorIndexes(): Promise<VectorIndexSummary[]>;
+    queryVectorIndex(options: {
+        name: string;
+        text: string;
+        topK?: number;
+    }): Promise<VectorQueryMatch[]>;
+    queryLogArchive(query?: PipelineLogQuery): Promise<PipelineLogPage>;
+    listAdminTokens(): Promise<AdminTokenSummary[]>;
+    createAdminToken(options: {
+        expiresAt?: number;
+        name: string;
+        scopes?: ReadonlyArray<string>;
+    }): Promise<CreatedAdminToken>;
+    revokeAdminToken(name: string): Promise<void>;
+    listKvNamespaces(): Promise<KvNamespaceSummary[]>;
+    listKvKeys(options: {
+        cursor?: string;
+        limit?: number;
+        namespace: string;
+        prefix?: string;
+    }): Promise<KvKeyListResult>;
+    getKvValue(options: {
+        key: string;
+        namespace: string;
+    }): Promise<KvValueResult>;
+    putKvValue(options: {
+        expiration?: number;
+        expirationTtl?: number;
+        key: string;
+        metadata?: unknown;
+        namespace: string;
+        value: string;
+    }): Promise<void>;
+    deleteKvKey(options: {
+        key: string;
+        namespace: string;
+    }): Promise<void>;
+    listAuthUsers(options?: {
+        filterField?: string;
+        filterValue?: string;
+        limit?: number;
+        offset?: number;
+        search?: string;
+        searchField?: string;
+        sortBy?: string;
+        sortDirection?: "asc" | "desc";
+    }): Promise<AuthPage<AuthUser>>;
+    createAuthUser(input: {
+        data?: Record<string, unknown>;
+        email: string;
+        name: string;
+        password?: string;
+        role?: string | string[];
+    }): Promise<AuthUser>;
+    setAuthUserRole(input: {
+        role: string | string[];
+        userId: string;
+    }): Promise<AuthUser>;
+    banAuthUser(input: {
+        expiresInSeconds?: number;
+        reason?: string;
+        userId: string;
+    }): Promise<AuthUser>;
+    unbanAuthUser(input: {
+        userId: string;
+    }): Promise<AuthUser>;
+    setAuthUserPassword(input: {
+        newPassword: string;
+        userId: string;
+    }): Promise<void>;
+    removeAuthUser(input: {
+        userId: string;
+    }): Promise<void>;
+    impersonateAuthUser(input: {
+        userId: string;
+    }): Promise<AuthImpersonation>;
+    revokeAuthSession(input: {
+        sessionId: string;
+    }): Promise<void>;
+    revokeAuthUserSessions(input: {
+        userId: string;
+    }): Promise<void>;
+    getAuthCapabilities(): Promise<AuthCapabilities>;
+    updateAuthUser(input: {
+        data: Record<string, unknown>;
+        userId: string;
+    }): Promise<AuthUser>;
+    listAuthAccounts(input: {
+        userId: string;
+    }): Promise<Record<string, unknown>[]>;
+    unlinkAuthAccount(input: {
+        accountId: string;
+        userId: string;
+    }): Promise<void>;
+    listAuthApiKeys(input: {
+        userId: string;
+    }): Promise<Record<string, unknown>[]>;
+    deleteAuthApiKey(input: {
+        apiKeyId: string;
+    }): Promise<void>;
+    listAuthPasskeys(input: {
+        userId: string;
+    }): Promise<Record<string, unknown>[]>;
+    deleteAuthPasskey(input: {
+        passkeyId: string;
+    }): Promise<void>;
+    disableAuthTwoFactor(input: {
+        userId: string;
+    }): Promise<void>;
+    listAuthOrganizations(options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthOrgMembers(input: {
+        limit?: number;
+        offset?: number;
+        organizationId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthOrgInvitations(input: {
+        limit?: number;
+        offset?: number;
+        organizationId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    listAuthSignUpInvitations(options?: {
+        limit?: number;
+        offset?: number;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthSignUpInvitation(input: {
+        email: string;
+        expiresInSeconds?: number;
+        invitedBy?: string;
+    }): Promise<Record<string, unknown>>;
+    revokeAuthSignUpInvitation(input: {
+        email: string;
+    }): Promise<void>;
+    removeAuthOrgMember(input: {
+        memberId: string;
+    }): Promise<void>;
+    cancelAuthOrgInvitation(input: {
+        invitationId: string;
+    }): Promise<void>;
+    getAuthConfig(): Promise<AuthConfigInfo>;
+    createAuthOrganization(input: {
+        logo?: string;
+        metadata?: Record<string, unknown>;
+        name: string;
+        ownerId?: string;
+        slug?: string;
+    }): Promise<Record<string, unknown>>;
+    updateAuthOrganization(input: {
+        logo?: string;
+        metadata?: Record<string, unknown>;
+        name?: string;
+        organizationId: string;
+        slug?: string;
+    }): Promise<Record<string, unknown>>;
+    deleteAuthOrganization(input: {
+        organizationId: string;
+    }): Promise<void>;
+    addAuthOrgMember(input: {
+        organizationId: string;
+        role?: string;
+        userId: string;
+    }): Promise<Record<string, unknown>>;
+    inviteAuthOrgMember(input: {
+        email: string;
+        inviterId?: string;
+        organizationId: string;
+        role?: string;
+    }): Promise<Record<string, unknown>>;
+    setAuthOrgMemberRole(input: {
+        memberId: string;
+        role: string | string[];
+    }): Promise<Record<string, unknown>>;
+    listAuthOrgTeams(input: {
+        limit?: number;
+        offset?: number;
+        organizationId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthOrgTeam(input: {
+        name: string;
+        organizationId: string;
+    }): Promise<Record<string, unknown>>;
+    updateAuthOrgTeam(input: {
+        name: string;
+        teamId: string;
+    }): Promise<Record<string, unknown>>;
+    removeAuthOrgTeam(input: {
+        teamId: string;
+    }): Promise<void>;
+    listAuthOrgTeamMembers(input: {
+        limit?: number;
+        offset?: number;
+        teamId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    addAuthOrgTeamMember(input: {
+        teamId: string;
+        userId: string;
+    }): Promise<Record<string, unknown>>;
+    removeAuthOrgTeamMember(input: {
+        teamMemberId: string;
+    }): Promise<void>;
+    listAuthOrgRoles(input: {
+        limit?: number;
+        offset?: number;
+        organizationId: string;
+    }): Promise<AuthPage<Record<string, unknown>>>;
+    createAuthOrgRole(input: {
+        organizationId: string;
+        permission: Record<string, string[]>;
+        role: string;
+    }): Promise<Record<string, unknown>>;
+    updateAuthOrgRole(input: {
+        permission: Record<string, string[]>;
+        roleId: string;
+    }): Promise<Record<string, unknown>>;
+    deleteAuthOrgRole(input: {
+        roleId: string;
+    }): Promise<void>;
+    listAuthSessions(options?: {
+        limit?: number;
+        offset?: number;
+        userId?: string;
+    }): Promise<AuthPage<AuthSession>>;
+}
+```
+
+### `isLunoraAdminClient` (const)
+
+```ts
+const isLunoraAdminClient: (client: LunoraClient) => client is LunoraAdminClient;
+```
+
+### `requireAdminAuthClient` (const)
+
+```ts
+const requireAdminAuthClient: (client: LunoraClient) => LunoraAdminClient;
+```
+
 ## `@lunora/client/auth`
+
+### `ADMIN_AUTH_DEFAULT_PAGE_SIZE` (const)
+
+```ts
+const ADMIN_AUTH_DEFAULT_PAGE_SIZE = 50;
+```
 
 ### `AUTH_STATUSES` (const)
 
@@ -1742,10 +2145,42 @@ const AUTH_STATUSES: readonly [
 ];
 ```
 
+### `AdminAuthList` (interface)
+
+```ts
+interface AdminAuthList<T> {
+    readonly fetchPage: (limit: number) => Promise<AuthPage<T>>;
+    readonly key: ReadonlyArray<unknown>;
+}
+```
+
+### `AdminAuthListQueryOptions` (interface)
+
+```ts
+interface AdminAuthListQueryOptions<T> {
+    readonly queryFn: () => Promise<AuthPage<T>>;
+    readonly queryKey: ReadonlyArray<unknown>;
+    readonly staleTime: number;
+}
+```
+
 ### `AuthStatus` (type)
 
 ```ts
 type AuthStatus = (typeof AUTH_STATUSES)[number];
+```
+
+### `AuthUsersListFilter` (interface)
+
+```ts
+interface AuthUsersListFilter {
+    filterField?: string;
+    filterValue?: string;
+    search?: string;
+    searchField?: string;
+    sortBy?: string;
+    sortDirection?: "asc" | "desc";
+}
 ```
 
 ### `IdentityStore` (interface)
@@ -1756,6 +2191,64 @@ interface IdentityStore {
     getUser: () => User | null;
     subscribe: (onChange: () => void) => () => void;
 }
+```
+
+### `adminAuthImpersonateMutation` (const)
+
+```ts
+const adminAuthImpersonateMutation: (client: LunoraAdminClient) => {
+    readonly mutationFn: (userId: string) => Promise<AuthImpersonation>;
+};
+```
+
+### `adminAuthListHasMore` (const)
+
+```ts
+const adminAuthListHasMore: (page: AuthPage<unknown> | undefined) => boolean;
+```
+
+### `adminAuthListPlaceholder` (const)
+
+```ts
+const adminAuthListPlaceholder: <T>(previous: AuthPage<T> | undefined, previousKey: ReadonlyArray<unknown> | undefined, queryKey: ReadonlyArray<unknown>) => AuthPage<T> | undefined;
+```
+
+### `adminAuthListQueryKey` (const)
+
+```ts
+const adminAuthListQueryKey: (identity: string | null, list: AdminAuthList<unknown>, limit: number) => ReadonlyArray<unknown>;
+```
+
+### `adminAuthListQueryOptions` (const)
+
+```ts
+const adminAuthListQueryOptions: <T>(list: AdminAuthList<T>, identity: string | null, limit: number) => AdminAuthListQueryOptions<T>;
+```
+
+### `authOrganizationsList` (const)
+
+```ts
+const authOrganizationsList: (client: LunoraAdminClient) => AdminAuthList<Record<string, unknown>>;
+```
+
+### `authSessionsList` (const)
+
+```ts
+const authSessionsList: (client: LunoraAdminClient, options?: {
+    userId?: string;
+}) => AdminAuthList<AuthSession>;
+```
+
+### `authSignUpInvitationsList` (const)
+
+```ts
+const authSignUpInvitationsList: (client: LunoraAdminClient) => AdminAuthList<Record<string, unknown>>;
+```
+
+### `authUsersList` (const)
+
+```ts
+const authUsersList: (client: LunoraAdminClient, filter?: AuthUsersListFilter) => AdminAuthList<AuthUser>;
 ```
 
 ### `getIdentityStore` (const)
@@ -1776,6 +2269,18 @@ const isAuthenticatedStatus: (status: AuthStatus) => boolean;
 const isLoadingStatus: (status: AuthStatus) => boolean;
 ```
 
+### `nextAdminAuthLimit` (const)
+
+```ts
+const nextAdminAuthLimit: (current: number, pageSize: number, hasMore: boolean) => number;
+```
+
+### `subscribeAdminAuthIdentity` (const)
+
+```ts
+const subscribeAdminAuthIdentity: (client: LunoraClient, onChange: () => void) => (() => void);
+```
+
 ## `@lunora/client/pagination`
 
 ### `JOIN_FACTOR` (const)
@@ -1792,6 +2297,12 @@ interface Page {
     numItems: number;
     upper: null | string;
 }
+```
+
+### `PageFailure` (type)
+
+```ts
+type PageFailure = "ignore" | "restart" | "surface";
 ```
 
 ### `PaginatedCoreResult` (interface)
@@ -1812,6 +2323,7 @@ interface PaginationResult<T = unknown> {
     isDone: boolean;
     page: T[];
     splitCursor?: null | string;
+    splitRequired?: boolean;
 }
 ```
 
@@ -1833,6 +2345,14 @@ const SPLIT_FACTOR = 2;
 const applyLoadMore: (pages: Page[], cursor: null | string | undefined, numberItems: number) => Page[] | undefined;
 ```
 
+### `classifyPageFailure` (const)
+
+```ts
+const classifyPageFailure: (pages: Page[], isFailedPage: (page: Page) => boolean, error: {
+    code?: string;
+}, restartedSinceLoad: boolean) => PageFailure;
+```
+
 ### `derivePaginationStatus` (const)
 
 ```ts
@@ -1842,10 +2362,22 @@ const derivePaginationStatus: <T>(skipped: boolean, pageResults: (PaginationResu
 };
 ```
 
+### `headPage` (const)
+
+```ts
+const headPage: (numberItems: number) => Page;
+```
+
 ### `initialPages` (const)
 
 ```ts
 const initialPages: (numberItems: number) => Page[];
+```
+
+### `isHeadPage` (const)
+
+```ts
+const isHeadPage: (page: Page) => boolean;
 ```
 
 ### `rebalance` (const)
@@ -1863,6 +2395,22 @@ Re-exported from `@lunora/client` — signature tracked in that section.
 ### `FunctionReference` (interface)
 
 Re-exported from `@lunora/client` — signature tracked in that section.
+
+### `LunoraQueryKey` (type)
+
+```ts
+type LunoraQueryKey = ReadonlyArray<unknown>;
+```
+
+### `LunoraQueryOptions` (interface)
+
+```ts
+interface LunoraQueryOptions<F extends FunctionReference> {
+    queryFn: () => Promise<ReturnOf<F>>;
+    queryKey: LunoraQueryKey;
+    staleTime: number;
+}
+```
 
 ### `QuerySubscriptionOptions` (interface)
 
@@ -1914,6 +2462,26 @@ Re-exported from `@lunora/client` — signature tracked in that section.
 
 ```ts
 const createQuerySubscription: <F extends FunctionReference, T = ReturnOf<F>>(client: LunoraClient, function_: F, args: ResolvedArgs<F>, sinks: QuerySubscriptionSinks<T>, options?: QuerySubscriptionOptions) => Unsubscribe;
+```
+
+### `lunoraQueryKey` (const)
+
+```ts
+const lunoraQueryKey: (function_: FunctionReference, args: Record<string, unknown>, shardKey: string | undefined) => LunoraQueryKey;
+```
+
+### `lunoraQueryKeyFromArgsKey` (const)
+
+```ts
+const lunoraQueryKeyFromArgsKey: (ref: string, argsKey: string, shardKey: string | undefined) => LunoraQueryKey;
+```
+
+### `lunoraQueryOptions` (const)
+
+```ts
+const lunoraQueryOptions: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
+    shardKey?: string;
+}) => LunoraQueryOptions<F>;
 ```
 
 ### `toSubscriptionError` (const)
@@ -2197,6 +2765,15 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `AdminHost` (interface)
+
+```ts
+interface AdminHost {
+    adminFetch: (path: string, method: "DELETE" | "GET" | "POST" | "PUT", payload?: ArrayBuffer | Blob | Record<string, unknown>, contentType?: string) => Promise<unknown>;
+    assertOpen: () => void;
+}
+```
+
 ### `CallRunnerSinks` (interface)
 
 ```ts
@@ -2224,6 +2801,7 @@ interface ClientConnectMessage {
     clientId?: string;
     context?: Record<string, unknown>;
     id: string;
+    token?: string;
     type: "connect";
 }
 ```
@@ -2252,6 +2830,7 @@ interface ClientSubscribeMessage {
     query: {
         args?: Record<string, unknown>;
         functionPath?: string;
+        sinceClaims?: string;
         sinceEpoch?: string;
         sinceSeq?: number;
         table?: string;
@@ -2313,6 +2892,7 @@ type NullableTimestamp = null | number | string;
 ```ts
 interface OfflineQueueDeps {
     onEvict?: EvictHandler;
+    onReplayingChange?: () => void;
     onSizeChange?: (size: number) => void;
     persistence?: PersistenceAdapter;
     version?: string;
@@ -2355,6 +2935,14 @@ interface ServerAckMessage {
 }
 ```
 
+### `ServerBatchMessage` (interface)
+
+```ts
+interface ServerBatchMessage {
+    type: "batchEnd" | "batchStart";
+}
+```
+
 ### `ServerChunkMessage` (interface)
 
 ```ts
@@ -2386,6 +2974,7 @@ interface ServerDataMessage {
     epoch?: string;
     id: string;
     lastMutationId?: number;
+    more?: boolean;
     type: "data" | "delta";
 }
 ```
@@ -2405,8 +2994,23 @@ interface ServerErrorMessage {
 
 ```ts
 interface ServerIdentityMessage {
+    claims?: string;
+    connectionId?: string;
+    revalidateMs?: number;
     subject: null | string;
     type: "identity";
+    whisperAck?: boolean;
+}
+```
+
+### `ServerLiveMessage` (interface)
+
+```ts
+interface ServerLiveMessage {
+    data: unknown;
+    stream: string;
+    topic: string;
+    type: "live";
 }
 ```
 
@@ -2445,6 +3049,15 @@ interface ServerWhisperMessage {
 }
 ```
 
+### `ServerWhisperSubscribedMessage` (interface)
+
+```ts
+interface ServerWhisperSubscribedMessage {
+    topic: string;
+    type: "whisper_subscribed";
+}
+```
+
 ### `ShapeCallback` (type)
 
 ```ts
@@ -2462,9 +3075,9 @@ interface TabCoordinatorOptions {
     onConnectionStatus?: (status: ConnectionStatus, identity?: string | null) => void;
     onLeaderClaimAnswered?: () => void;
     onStopBeingLeader?: () => void;
-    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null) => void;
-    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null) => void;
-    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null) => void;
+    onSubscriptionData?: (key: string, data: unknown, cursor?: number, epoch?: string, identity?: string | null, claims?: string) => void;
+    onSubscriptionError?: (key: string, error: SubscriptionError, identity?: string | null, claims?: string) => void;
+    onSubscriptionSettled?: (key: string, cursor?: number, epoch?: string, lastMutationId?: number, clientId?: string, identity?: string | null, claims?: string) => void;
 }
 ```
 

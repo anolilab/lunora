@@ -2,15 +2,14 @@
 // Run `lunora codegen` to regenerate.
 
 import type { HyperdriveEngine } from "@lunora/hyperdrive/global";
-import { createHyperdriveGlobalCtxDb } from "@lunora/hyperdrive/global";
+import { applyHyperdriveGlobalCdc, createHyperdriveGlobalCtxDb, createHyperdriveGlobalIntrospector, exportHyperdriveGlobalRows, importHyperdriveGlobalRows, readHyperdriveGlobalCdc } from "@lunora/hyperdrive/global";
 import type { SqlCtxDbOptions, SqlExec } from "@lunora/sql-store";
-import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, ShardingInfo, ShardNamespaceLike, WorkerOptions } from "@lunora/runtime";
+import type { ExecutionContextLike, HttpRouterLike, LunoraWorker, Route, ScheduledControllerLike, SecurityOptions, ShardingInfo, ShardNamespaceLike, ShardRegistryRpc, WorkerOptions } from "@lunora/runtime";
 import { createCrossShardRelationCapabilities, createDynamicShardRegistry, createQueryCoordinator, createWorker, resolveLogArchiveFromEnv } from "@lunora/runtime";
 
 import schema from "../schema.js";
 import { LUNORA_CRONS } from "./crons.js";
 import { LUNORA_FUNCTIONS } from "./functions.js";
-import { openApiSpec } from "./openapi.js";
 import { createShardDO } from "./shard.js";
 
 /** Read a value off the per-request `env`. Returns `undefined` to leave the capability unconfigured (its `ctx.*`/admin surface stays a clear-error stub). */
@@ -23,7 +22,7 @@ type ShardConfig = NonNullable<Parameters<typeof createShardDO>[0]>;
 interface HyperdriveGlobalDeclaration<Env> {
     /** The Hyperdrive engine — selects the Postgres or MySQL dialect. */
     engine: HyperdriveEngine;
-    /** Build the `SqlExec` from `env` — e.g. `buildPgExec(fromPostgresJs(postgres(env.HYPERDRIVE.connectionString)))`. Cache the driver on the DO instance; rebuild lazily after hibernation. */
+    /** Build the `SqlExec` from `env` — e.g. `buildPgExec(fromPostgresJs(async () => (await import("postgres")).default(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 })))`. Called per request, by the shard and by the stateless worker's admin plane, so return an exec on a connection opened for that call: never cache a driver or socket at module scope, since Workers refuse I/O across requests. */
     exec: (env: Env) => SqlExec;
     /** The worker origin used to fan reverse cross-backend relations across shards. Without it, such a relation throws a clear error. */
     origin?: Selector<Env, string>;
@@ -44,8 +43,10 @@ interface ComposedApp extends LunoraWorker {
  * first request so per-isolate singletons are built once.
  */
 class AppBuilder<Env extends object> {
+    private adminRevocationsSelector?: Selector<Env, ShardNamespaceLike>;
     private adminToken?: Selector<Env, string>;
     private cdcEnabled = false;
+    private deliveryAuthorizationSelector?: ShardConfig["deliveryAuthorization"];
     private reactiveCacheConfig: boolean | { maxBytes?: number; maxEntries?: number } = false;
     private maxRelationKeysLimit?: ShardConfig["maxRelationKeys"];
     private observabilitySink?: ShardConfig["observability"];
@@ -54,7 +55,7 @@ class AppBuilder<Env extends object> {
     private hyperdriveGlobalDeclaration?: HyperdriveGlobalDeclaration<Env>;
     private httpRouterApp?: HttpRouterLike;
     private readonly routeMap: Record<string, Route> = {};
-    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike>;
+    private shardRegistrySelector?: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>;
     private shardSelector?: Selector<Env, ShardNamespaceLike>;
 
     private emailHandler?: (env: Env) => (message: unknown, env: unknown, context: ExecutionContextLike) => Promise<void>;
@@ -115,6 +116,13 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** Authorize each RPC/subscription read and fence its eventual delivery against durable authority epochs. */
+    public deliveryAuthorization(selector: (env: Env) => ReturnType<NonNullable<ShardConfig["deliveryAuthorization"]>>): this {
+        this.deliveryAuthorizationSelector = selector as NonNullable<ShardConfig["deliveryAuthorization"]>;
+
+        return this;
+    }
+
     /** Escape hatch — merge raw `WorkerOptions` (anything not yet sugared) over the derived options at build time. The second `derived` argument is a snapshot of the options assembled so far (after `.auth(...)` etc.), so you can compose rather than clobber — e.g. wrap `derived.resolveIdentity` instead of replacing it. */
     public extend(fn: (env: Env, derived: Readonly<WorkerOptions>) => Partial<WorkerOptions>): this {
         this.extendFns.push(fn);
@@ -157,8 +165,15 @@ class AppBuilder<Env extends object> {
         return this;
     }
 
+    /** The `AdminRevocationDO` namespace (typically `env.ADMIN_REVOCATIONS`). Records revoked named admin tokens where a point-in-time restore of the default shard cannot rewind them. Without it no named admin token can be created and any that exist are refused. */
+    public adminRevocations(selector: Selector<Env, ShardNamespaceLike>): this {
+        this.adminRevocationsSelector = selector;
+
+        return this;
+    }
+
     /** The `ShardRegistryDO` namespace (typically `env.SHARD_REGISTRY`). Each shard registers itself for the `.shardBy()` tables it writes, and cross-shard export, CDC sync and migrations fan out to the shards it lists. Without it they refuse a `.shardBy()` table. */
-    public shardRegistry(selector: Selector<Env, ShardNamespaceLike>): this {
+    public shardRegistry(selector: Selector<Env, ShardNamespaceLike | ShardRegistryRpc>): this {
         this.shardRegistrySelector = selector;
 
         return this;
@@ -176,10 +191,11 @@ class AppBuilder<Env extends object> {
             reactiveCache: this.reactiveCacheConfig,
             ...(this.maxRelationKeysLimit === undefined ? {} : { maxRelationKeys: this.maxRelationKeysLimit }),
             ...(this.observabilitySink === undefined ? {} : { observability: this.observabilitySink }),
+            ...(this.deliveryAuthorizationSelector === undefined ? {} : { deliveryAuthorization: this.deliveryAuthorizationSelector }),
             ...(this.relationExistsPushDownMode === undefined ? {} : { relationExistsPushDown: this.relationExistsPushDownMode }),
             ...(this.hyperdriveGlobalDeclaration
                 ? {
-                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown>; userId?: string | null }) => {
+                      hyperdriveGlobal: (rawEnv: Record<string, unknown>, request?: { cdc?: boolean; cdcRetentionMs?: number; identity?: Record<string, unknown> | undefined; userId?: string | null | undefined }) => {
                           const env = rawEnv as Env;
                           const declaration = this.hyperdriveGlobalDeclaration;
                           const exec = declaration?.exec(env) as SqlExec | undefined;
@@ -190,13 +206,31 @@ class AppBuilder<Env extends object> {
 
                           const origin = declaration.origin?.(env);
                           const crossShard = origin
-                              ? createCrossShardRelationCapabilities({ identity: request?.identity, origin, userId: request?.userId ?? undefined })
+                              ? createCrossShardRelationCapabilities({
+                                    get identity() {
+                                        return request?.identity;
+                                    },
+                                    origin,
+                                    get userId() {
+                                        return request?.userId ?? undefined;
+                                    },
+                                })
                               : undefined;
 
                           return createHyperdriveGlobalCtxDb({
                               ...(crossShard ? { crossShardCounter: crossShard.crossShardCounter, crossShardReader: crossShard.crossShardReader } : {}),
                               ...(request?.cdcRetentionMs === undefined ? {} : { cdcRetentionMs: request.cdcRetentionMs }),
-                              auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
+                              // Getters, like the cross-shard identity above: reading the
+                              // request's caller marks the live query as caller-dependent, so
+                              // it may happen only when a `.serverDefault` column is stamped.
+                              auth: {
+                                  get identity() {
+                                      return request?.identity ?? null;
+                                  },
+                                  get userId() {
+                                      return request?.userId ?? null;
+                                  },
+                              },
                               // See the D1 twin: one `cdc` switch, both changelogs.
                               cdc: request?.cdc ?? false,
                               engine: declaration.engine as HyperdriveEngine,
@@ -254,16 +288,20 @@ class AppBuilder<Env extends object> {
     /** Fan the recorded declarations into the worker-side `createWorker` options. */
     private buildWorkerOptions(env: Env, _getAuth: () => null): WorkerOptions {
         const options: WorkerOptions = {
+            aiChatBinding: (env as Record<string, unknown>)["AI"] as WorkerOptions["aiChatBinding"],
+            aiOptInLevel: (env as Record<string, unknown>)["LUNORA_AI_OPT_IN"] as WorkerOptions["aiOptInLevel"],
             cronJobs: LUNORA_CRONS,
             functions: LUNORA_FUNCTIONS,
-            openApiSpec,
+            openApiSpec: () => import("./openapi.js").then((module) => module.openApiSpec),
             ...(this.httpRouterApp ? { httpRouter: this.httpRouterApp } : {}),
             routes: this.routeMap,
             shardDO: this.shardSelector?.(env) ?? (undefined as unknown as ShardNamespaceLike),
         };
 
-        if (this.adminToken) {
-            options.adminToken = this.adminToken(env);
+        const adminToken = this.adminToken?.(env);
+
+        if (adminToken !== undefined) {
+            options.adminToken = adminToken;
         }
 
         const tableSharding = new Map<string, ShardingInfo>([
@@ -277,10 +315,66 @@ class AppBuilder<Env extends object> {
         const shardRegistry = this.shardRegistrySelector?.(env);
 
         if (shardRegistry) {
-            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ namespace: shardRegistry }) });
+            options.queryCoordinator = createQueryCoordinator({ registry: createDynamicShardRegistry({ env, namespace: shardRegistry }) });
         }
 
-        options.logArchive = resolveLogArchiveFromEnv(env);
+        const adminRevocations = this.adminRevocationsSelector?.(env);
+
+        if (adminRevocations) {
+            options.adminRevocations = adminRevocations;
+        }
+
+        const hyperdriveDeclaration = this.hyperdriveGlobalDeclaration;
+
+        if (hyperdriveDeclaration) {
+            const engine = hyperdriveDeclaration.engine;
+            const hyperdriveSchema = schema as unknown as SqlCtxDbOptions["schema"];
+            const exec = (): SqlExec => hyperdriveDeclaration.exec(env);
+            const cdc = this.cdcEnabled;
+
+            options.globalIntrospector = {
+                facetColumn: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).facetColumn(request),
+                listTables: () => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).listTables(),
+                readTablePage: (request) => createHyperdriveGlobalIntrospector(engine, exec(), hyperdriveSchema).readTablePage(request),
+            };
+            options.importGlobals = (request) =>
+                importHyperdriveGlobalRows({
+                    cdc,
+                    dryRun: request.dryRun === true,
+                    engine,
+                    exec: exec(),
+                    onConflict: request.onConflict ?? "skip",
+                    rows: request.rows,
+                    schema: hyperdriveSchema,
+                    ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
+                });
+            options.importGlobalsSupportsDryRun = true;
+            options.importGlobalsSupportsReplace = true;
+            options.importGlobalsSupportsDelete = true;
+            options.exportGlobals = (request) => exportHyperdriveGlobalRows({ engine, exec: exec(), schema: hyperdriveSchema, tables: request.tables });
+            options.syncGlobals = async (request) => {
+                const page = await readHyperdriveGlobalCdc(engine, exec(), request);
+
+                // `as unknown as`: `CdcChange` is an interface, which carries no implicit index signature.
+                return { changes: page.changes as unknown as ReadonlyArray<Record<string, unknown>>, cursor: page.cursor };
+            };
+            options.applyGlobals = (request) =>
+                applyHyperdriveGlobalCdc({
+                    cdc,
+                    changes: request.changes as unknown as Parameters<typeof applyHyperdriveGlobalCdc>[0]["changes"],
+                    engine,
+                    exec: exec(),
+                    schema: hyperdriveSchema,
+                });
+        }
+
+        const logArchive = resolveLogArchiveFromEnv(env);
+
+        if (logArchive !== undefined) {
+            options.logArchive = logArchive;
+        }
+
+        options.agentWorkflows = [];
 
         for (const fn of this.extendFns) {
             Object.assign(options, fn(env, { ...options }));
@@ -303,14 +397,18 @@ interface LunoraConfig<Env extends object = object> {
     advisor?: { accept?: ReadonlyArray<{ exportName: string; file: string; reason: string; rule: string }>; minSeverity?: "error" | "info" | "warn" };
     /** Receives this project's `defineApp()` builder and returns it — where a Vite-first app makes the builder calls its generated entry cannot derive. */
     app?: (app: AppBuilder<Env>) => AppBuilder<Env>;
-    /** Codegen's source walk. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. A literal array of strings, for the same reason as `target`. */
-    codegen?: { exclude?: string[] };
+    /** Codegen settings. `exclude` adds globs (relative to `lunora/`, e.g. `"seed/**"`) to skip on top of the built-in test-file patterns. `lazyFunctions: true` emits the per-module lazy function registry for every command and bundler plugin that generates or checks `_generated/`. Literals, for the same reason as `target`. */
+    codegen?: { exclude?: string[]; lazyFunctions?: boolean };
     /** Host the shard, scheduler and shard registry in ONE Durable Object class (`merge: true`, plan 462) — before the first deploy only. A literal, for the same reason as `target`. */
     durableObjects?: { merge?: boolean };
     /** Opt into remote-binding dev without `--remote` or `LUNORA_REMOTE` on every run. A literal, for the same reason as `target`. */
     remote?: boolean;
     /** Sibling Workers the app calls through service bindings — key → its folder and, for RPC, the exported `WorkerEntrypoint` class (`rpc: false` binds that class but calls it with plain `fetch`, without importing the service's sources). Becomes `ctx.services.<key>` in actions, a wrangler `services[]` entry, one `lunora dev` session and a services-first `lunora deploy`. Literals, for the same reason as `target`. */
     services?: Record<string, { dir: string; entrypoint?: string; rpc?: false }>;
+    /** Baseline security headers for the Worker AND the static assets' generated `_headers` (`crossOriginOpenerPolicy`, `frameAncestors`, `csp`, …; `false` omits a header, `headers: false` all of them). A `security.headers` set in code wins. Literals, for the same reason as `target`. */
+    security?: { headers?: SecurityOptions["headers"] };
+    /** Studio settings. `companion: true` emits the companion Worker that serves the advisor procedure list to a hosted Studio, bound to the app as `ADVISOR_COMPANION`. A literal, for the same reason as `target`. */
+    studio?: { companion?: boolean };
     /** Deploy target id — `lunora deploy`/`verify` read it when no `--target` is passed. Must be a literal: `runCodegen` resolves it synchronously by PARSING this file, so a computed value is not seen — `lunora verify` reports `platform_unreadable_target` rather than defaulting in silence. */
     target?: string;
 }

@@ -194,11 +194,12 @@ export const resolveDeployKeyOrg = async (context: QueryContext, key: string): P
  */
 export const assertRowInOrg = async <T extends TableName>(
     context: QueryContext,
+    table: T,
     id: Id<T>,
     organizationId: Id<"organizations">,
     label: string,
 ): Promise<void> => {
-    const row = (await context.db.get(id)) as { organizationId?: Id<"organizations"> } | null;
+    const row = (await context.db.get(table, id)) as { organizationId?: Id<"organizations"> } | null;
 
     if (row?.organizationId !== organizationId) {
         throw new LunoraError("NOT_FOUND", `${label} not found in this organization`);

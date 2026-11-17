@@ -52,11 +52,11 @@ export interface CloudflareAccountTable {
 /** The table over the control-plane store (`ControlPlaneStore`), pinned to `cloudflareAccounts`. */
 export const accountTableIn = (database: {
     findMany: (table: string, options: { where: Record<string, unknown> }) => Promise<{ page: ReadonlyArray<unknown> }>;
-    get: (id: string, table?: string) => Promise<unknown>;
+    get: (table: string, id: string) => Promise<unknown>;
 }): CloudflareAccountTable => {
     return {
         findMany: async (options) => database.findMany("cloudflareAccounts", options),
-        get: async (id) => database.get(id, "cloudflareAccounts"),
+        get: async (id) => database.get("cloudflareAccounts", id),
     };
 };
 

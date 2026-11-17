@@ -76,7 +76,7 @@ const enqueueBestEffort = mutation.input({}).mutation(async ({ ctx }) => {
 });
 
 const delayTooLong = mutation.input({}).mutation(async ({ ctx }) => {
-    await (ctx as unknown as WithQueues).queues.jobs.send({}, { delaySeconds: 50_000 });
+    await (ctx as unknown as WithQueues).queues.jobs.send({}, { delaySeconds: 90_000 });
 });
 
 const registerDevice = mutation.input({ token: v.string() }).mutation(async ({ args, ctx }) => {
@@ -161,7 +161,7 @@ describe("recording ctx.queues", () => {
 
         const t = start({ queues: ["jobs"] });
 
-        await expect(t.mutation(delayTooLong, {})).rejects.toThrow(/ceiling of 43200/u);
+        await expect(t.mutation(delayTooLong, {})).rejects.toThrow(/ceiling of 86400/u);
         await expect(t.mutation(sendToUndeclared, {})).rejects.toThrow(/no queue named "typo" \(known queues: jobs\)/u);
         expect(t.queues.sent()).toStrictEqual([]);
     });

@@ -5,26 +5,35 @@
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
     // The SPA `rsbuild build` writes. Unknown paths fall back to `index.html` so
-    // client-side routes deep-link; `/_lunora/*` always reaches the Worker first,
-    // or a navigation there would get the SPA shell instead of Lunora.
+    // client-side routes deep-link. `lunora dev` / `lunora deploy` rewrite
+    // `run_worker_first` to run the Worker first for every path but the static
+    // output, and the Worker serves the shell and the remaining files through
+    // `ASSETS`, so a route Lunora cannot see (a webhook on a Hono router) still
+    // reaches it. Edit the list and Lunora leaves it as you wrote it.
     "assets": {
+        "binding": "ASSETS",
         "directory": "./dist",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/_lunora/*"],
+        "run_worker_first": ["/_lunora/*", "/__lunora/*"],
     },
     "durable_objects": {
         "bindings": [
             { "name": "SHARD", "class_name": "ShardDO" },
             { "name": "SHARD_REGISTRY", "class_name": "ShardRegistryDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
         ],
     },
-    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] }],
+    "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["ShardDO", "ShardRegistryDO"] },
+        { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
+    ],
     // Blast-radius cap. Alerting is lagging by definition — by the time a
     // threshold trips, the runaway handler has already run — so a CPU ceiling is
     // one of the few controls that bounds the damage rather than reporting it.
     // Raise it if a legitimate handler needs longer.
     "limits": { "cpu_ms": 30000 },
-    "observability": { "enabled": true, "head_sampling_rate": 1, "logs": { "invocation_logs": true } },
+    // Cost default: sample 10% of requests into Workers Logs. Raise it while debugging.
+    "observability": { "enabled": true, "head_sampling_rate": 0.1, "redact_query_string": true, "logs": { "invocation_logs": true } },
     // Deploy attribution: the runtime reads this binding and stamps
     // `deploymentId` / `versionTag` onto every request-log row and Workers-Logs
     // event, so a spike resolves to a deploy by group-by, not by eyeballing graphs.

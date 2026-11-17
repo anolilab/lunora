@@ -13,11 +13,11 @@ its reads consistent, and it is also why a reader on the other side of the world
 pays the round trip. This page covers the three controls that move work closer
 to the reader, and what each one costs.
 
-None of them are on by default. A single-region app should leave them alone.
+`shardRegion` and `replicaReads` are off unless you set them, and a single-region app should leave them alone. Relays are the exception: they are promoted automatically once a shard gets hot (see [Sockets near the client](#sockets-near-the-client)).
 
 ## Where a shard is created
 
-By default Cloudflare creates a Durable Object in the data centre nearest the
+By default Cloudflare creates a Durable Object (DO) in the data centre nearest the
 request that first touched it. That is usually right, since the first request is
 normally a user's, but not always: a shard first materialized by a cron fire, a
 migration fan-out, a seeding run, or the Studio lands wherever _that_ ran, and
@@ -79,7 +79,7 @@ Set the whole thing up and watch reads still go to the owner, and it is almost
 always (2) or (4).
 
 A replica is a second Durable Object, named after the shard it follows, that
-replays the shard's CDC changelog into its own SQLite. It is a follower in the
+replays the shard's change data capture (CDC) changelog into its own SQLite. It is a follower in the
 strict sense: it never accepts a write, never originates a row, and refuses any
 dispatch the runtime did not explicitly route to it as a read.
 

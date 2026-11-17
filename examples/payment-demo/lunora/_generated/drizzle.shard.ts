@@ -27,6 +27,15 @@ export const payment_events = sqliteTable("payment_events", {
     by_provider_event: uniqueIndex("by_provider_event").on(t.provider, t.providerEventId),
 }));
 
+export const payment_referenceRevisions = sqliteTable("payment_referenceRevisions", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    referenceId: text("referenceId").notNull(),
+    revision: real("revision").notNull(),
+}, (t) => ({
+    by_reference: uniqueIndex("by_reference").on(t.referenceId),
+}));
+
 export const payment_sessions = sqliteTable("payment_sessions", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
@@ -40,6 +49,7 @@ export const payment_sessions = sqliteTable("payment_sessions", {
     refundedMinor: real("refundedMinor").notNull(),
     state: text("state").notNull(),
     subscriptionId: text("subscriptionId"),
+    revision: real("revision"),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_provider_session: uniqueIndex("by_provider_session").on(t.provider, t.providerSessionId),
@@ -62,10 +72,12 @@ export const payment_subscriptions = sqliteTable("payment_subscriptions", {
     quantity: real("quantity").notNull(),
     referenceId: text("referenceId").notNull(),
     state: text("state").notNull(),
+    revision: real("revision"),
     updatedAt: real("updatedAt").notNull(),
 }, (t) => ({
     by_provider_subscription: uniqueIndex("by_provider_subscription").on(t.provider, t.providerSubscriptionId),
     by_reference: index("by_reference").on(t.referenceId),
+    by_state: index("by_state").on(t.state),
 }));
 
 export const payment_usageEvents = sqliteTable("payment_usageEvents", {
@@ -79,10 +91,12 @@ export const payment_usageEvents = sqliteTable("payment_usageEvents", {
     quantity: real("quantity").notNull(),
     referenceId: text("referenceId").notNull(),
     reportedToProvider: integer("reportedToProvider", { mode: "boolean" }).notNull(),
+    reportRetryAt: real("reportRetryAt"),
 }, (t) => ({
     by_idempotency: uniqueIndex("by_idempotency").on(t.provider, t.idempotencyKey),
     by_reference_feature_created: index("by_reference_feature_created").on(t.referenceId, t.featureId, t.createdAt),
     by_reference_created: index("by_reference_created").on(t.referenceId, t.createdAt),
+    by_provider_unreported_due: index("by_provider_unreported_due").on(t.provider, t.reportedToProvider, t.reportRetryAt, t.createdAt, t.idempotencyKey),
 }));
 
 export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
@@ -94,4 +108,5 @@ export const ratelimit_buckets = sqliteTable("ratelimit_buckets", {
     prev: real("prev"),
 }, (t) => ({
     by_key: index("by_key").on(t.key),
+    by_ts: index("by_ts").on(t.ts),
 }));

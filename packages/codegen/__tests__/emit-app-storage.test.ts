@@ -43,7 +43,7 @@ describe("emitApp — storage bucket factory", () => {
 
         const output = emitApp(baseOptions);
 
-        expect(output).toContain("publicBaseUrl: declaration.publicBaseUrl?.(env) ?? origin,");
+        expect(output).toContain("const publicBaseUrl = declaration.publicBaseUrl?.(env) ?? origin;");
         expect(output).toContain("storage: (rawEnv: Record<string, unknown>, origin?: string) => this.resolveStorage(rawEnv as Env, origin)");
         expect(output).toContain("options.storage = (rawEnv: unknown, origin?: string) => this.resolveStorage(rawEnv as Env, origin);");
     });

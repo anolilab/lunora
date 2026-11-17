@@ -1,10 +1,12 @@
-import type { Expression, Node as TsNode, ObjectLiteralExpression } from "ts-morph";
-import { Node } from "ts-morph";
+import type { Expression, Identifier, Node as TsNode, ObjectLiteralExpression, PropertyAssignment, ShorthandPropertyAssignment } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
 import { globalTtlMessage } from "../../../../../../shared/global-ttl";
 import { isInternalTableName } from "../../../../../../shared/internal-table-name";
+import type { CodegenDiagnosticError } from "../../../diagnostics";
 import { diagnosticAt } from "../../../diagnostics";
 import type {
+    DeclarationSiteIR,
     ExternalSourceIR,
     GeoIndexIR,
     IndexIR,
@@ -20,8 +22,10 @@ import type {
 } from "../../../ir";
 import { parseObjectShape, resolveObjectLiteral } from "../../../parse-validator";
 import { RESERVED_JS_WORDS } from "../../../reserved-words";
-import { findObjectProperty, propertyKeyName } from "../../ast";
+import { findObjectProperty, propertyKeyName, symbolConstInitializer, unwrapExpression } from "../../ast";
 import { asMetric, getBooleanProperty, getNumberProperty, getStringArrayProperty, getStringProperty, indexNameOf, stringArrayPropertyOf } from "./properties";
+import type { SiteLocator } from "./sites";
+import { noSite } from "./sites";
 
 const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 
@@ -245,7 +249,7 @@ const relationFromProperty = (property: Node): RelationIR | undefined => {
  * `r.one(table, opts)` / `r.many(table, opts)` call. `references` defaults to
  * `_id`; `onDelete` is captured only on `one`.
  */
-const parseRelations = (argument: Node): RelationIR[] => {
+const parseRelations = (argument: Node, locate: SiteLocator): RelationIR[] => {
     const body = relationsObjectBody(argument);
 
     if (!body) {
@@ -258,7 +262,9 @@ const parseRelations = (argument: Node): RelationIR[] => {
         const relation = relationFromProperty(property);
 
         if (relation) {
-            relations.push(relation);
+            const site = locate(property);
+
+            relations.push(site === undefined ? relation : { ...relation, site });
         }
     }
 
@@ -289,6 +295,8 @@ const assertTopLevelIndexField = (element: TsNode, field: string, indexName: str
         element,
         `index "${indexName}" indexes the nested path ${JSON.stringify(field)} — Lunora indexes only top-level columns. ` +
             `Denormalise the value into its own column (e.g. \`${denormalised}\`), index that instead, and keep it in sync with a table \`.triggers()\` beforeInsert/beforeUpdate.`,
+        // Same code `defineSchema` throws at runtime, so the CLI maps either path to exit 2.
+        { code: "INDEX_FIELD_NESTED_PATH", name: "LunoraError", status: 500 },
     );
 };
 
@@ -490,6 +498,8 @@ interface TableBuilderAccumulator {
     globalBackend?: TableIR["globalBackend"];
     indexes: IndexIR[];
     isPublic: boolean;
+    /** Resolves a node to its declaration site; the index and relation rows record theirs through it. */
+    locate: SiteLocator;
     memory: boolean;
     rankIndexes: RankIndexIR[];
     relations: RelationIR[];
@@ -571,7 +581,14 @@ const parseSourceCall = (args: ReadonlyArray<Node>): ExternalSourceIR => {
 };
 
 /** Apply one chained method call (`.index`, `.shardBy`, …) to the accumulator. */
-const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, args: ReadonlyArray<Node>, name: string): void => {
+/** `row` with its declaration site attached, unless the site is unknown (the row then stays as the parser built it). */
+const withSite = <T extends object>(row: T, site: DeclarationSiteIR | undefined): T & { site?: DeclarationSiteIR } =>
+    site === undefined ? row : { ...row, site };
+
+const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, args: ReadonlyArray<Node>, name: string, methodNameNode: Node): void => {
+    // The method name, not the whole call: a chained `.index(...)` call starts on the line of its `defineTable(...)` head.
+    const site = accumulator.locate(methodNameNode);
+
     switch (method) {
         case "aggregateIndex": {
             // The index's options are read by the runtime; codegen needs only that one exists.
@@ -598,7 +615,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
         }
 
         case "geoIndex": {
-            accumulator.geoIndexes.push(parseGeoIndexCall(args));
+            accumulator.geoIndexes.push(withSite(parseGeoIndexCall(args), site));
 
             break;
         }
@@ -611,7 +628,9 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
         }
 
         case "index": {
-            accumulator.indexes.push(parseIndexCall(args));
+            // The chain is unwound outermost-first, so each index is prepended to land in declaration order: the
+            // planner lets an earlier index claim a shared column, so the order is part of the schema.
+            accumulator.indexes.unshift(withSite(parseIndexCall(args), site));
 
             break;
         }
@@ -630,7 +649,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
         }
 
         case "rankIndex": {
-            accumulator.rankIndexes.push(parseRankIndexCall(args));
+            accumulator.rankIndexes.push(withSite(parseRankIndexCall(args), site));
 
             break;
         }
@@ -639,14 +658,14 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             const builder = args[0];
 
             if (builder) {
-                accumulator.relations.push(...parseRelations(builder));
+                accumulator.relations.push(...parseRelations(builder, accumulator.locate));
             }
 
             break;
         }
 
         case "searchIndex": {
-            accumulator.searchIndexes.push(parseSearchIndexCall(args));
+            accumulator.searchIndexes.push(withSite(parseSearchIndexCall(args), site));
 
             break;
         }
@@ -694,7 +713,7 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
             const vectorIndex = parseVectorizeCall(args, name);
 
             if (vectorIndex) {
-                accumulator.vectorIndexes.push(vectorIndex);
+                accumulator.vectorIndexes.push(withSite(vectorIndex, site));
             }
 
             break;
@@ -821,7 +840,146 @@ const withInjectedColumns = (expression: Expression, shape: Record<string, Valid
     return { ...shape, ...injected };
 };
 
-const parseTableBuilder = (expression: Expression, name: string): TableIR => {
+/** Const bindings one table may be followed through before codegen gives up on reading it. */
+const TABLE_SOURCE_HOPS = 4;
+
+/**
+ * The expression `identifier` is bound to by a module-scope `const`, in this file
+ * or in the module it is imported from (followed through the import alias).
+ * A shorthand `{ users }` name's own symbol is the property, so its value is
+ * looked up through the checker instead.
+ */
+const tableBindingInitializer = (identifier: Identifier): TsNode | undefined => {
+    const parent = identifier.getParent();
+    const symbol = Node.isShorthandPropertyAssignment(parent) && parent.getNameNode() === identifier ? parent.getValueSymbol() : identifier.getSymbol();
+
+    return symbolConstInitializer(symbol?.isAlias() === true ? symbol.getAliasedSymbol() : symbol);
+};
+
+/**
+ * Codegen reads a table only from a `defineTable({...})` chain, written inline or
+ * bound to a module-scope `const`. Any other shape (a factory call, a conditional,
+ * a `let` or a parameter) has no readable columns, and a column-less table is
+ * never intended, so it is an error rather than an empty table.
+ */
+const unreadableTable = (node: TsNode, name: string): CodegenDiagnosticError =>
+    diagnosticAt(
+        node,
+        `table "${name}" is defined as ${JSON.stringify(node.getText())}, but codegen reads a table only from an inline defineTable(...) chain or one bound to a module-scope const. ` +
+            `Inline the defineTable(...) call, or bind it to a const.`,
+    );
+
+/**
+ * Builder methods mutate and return the same object, so `base.softDelete()` as its
+ * own statement changes the table that `base.timestamps()` later returns. Codegen
+ * reads only the chain it walks, so a method call on the followed binding from
+ * anywhere else would leave the generated metadata short of the runtime table.
+ */
+const assertBindingNotMutatedElsewhere = (followed: Identifier, initializer: TsNode, name: string): void => {
+    const declaration = initializer.getParentIfKind(SyntaxKind.VariableDeclaration);
+    const bindingName = declaration?.getNameNode();
+
+    if (bindingName === undefined || !Node.isIdentifier(bindingName)) {
+        return;
+    }
+
+    for (const reference of bindingName.findReferencesAsNodes()) {
+        const access = reference.getParent();
+
+        if (
+            reference !== followed &&
+            Node.isPropertyAccessExpression(access) &&
+            access.getExpression() === reference &&
+            Node.isCallExpression(access.getParent()) &&
+            access.getParentIfKindOrThrow(SyntaxKind.CallExpression).getExpression() === access
+        ) {
+            throw diagnosticAt(
+                reference,
+                `table "${name}" is built from "${bindingName.getText()}", which also has .${access.getName()}(...) called on it outside the chain the schema uses. ` +
+                    `Table builder methods change the shared builder, so codegen cannot see that call. Chain every method in one expression.`,
+            );
+        }
+    }
+};
+
+/**
+ * Reads the expressions a table's builder chain is written in, for one table: each
+ * call returns the expression with parentheses and casts stripped and each
+ * identifier followed to the `const` it names. The hop count is shared across the
+ * reader's calls so a chain of bindings cannot run unbounded.
+ */
+const tableSourceReader = (name: string): ((node: TsNode) => TsNode) => {
+    let hops = 0;
+
+    return (node) => {
+        let current: TsNode = unwrapExpression(node) ?? node;
+
+        while (Node.isIdentifier(current)) {
+            hops += 1;
+
+            if (hops > TABLE_SOURCE_HOPS) {
+                throw diagnosticAt(
+                    current,
+                    `table "${name}" is reached through more than ${String(TABLE_SOURCE_HOPS)} const bindings, and codegen follows at most ${String(TABLE_SOURCE_HOPS)}. Inline the defineTable(...) call.`,
+                );
+            }
+
+            const initializer = tableBindingInitializer(current);
+
+            if (initializer === undefined) {
+                throw unreadableTable(current, name);
+            }
+
+            assertBindingNotMutatedElsewhere(current, initializer, name);
+            current = unwrapExpression(initializer) ?? initializer;
+        }
+
+        return current;
+    };
+};
+
+/**
+ * Whether `callee` names `defineTable`, by its local name or, for
+ * `import { defineTable as table }`, by the name it was imported under.
+ */
+const isDefineTableCallee = (callee: Identifier): boolean => {
+    if (callee.getText() === "defineTable") {
+        return true;
+    }
+
+    return (
+        callee
+            .getSymbol()
+            ?.getDeclarations()
+            .some((declaration) => Node.isImportSpecifier(declaration) && declaration.getName() === "defineTable") === true
+    );
+};
+
+/** The base shape of a `defineTable(...)` call, read from its first argument. */
+const defineTableShape = (first: TsNode | undefined, name: string): Record<string, ValidatorIR> => {
+    if (first === undefined) {
+        return {};
+    }
+
+    if (Node.isObjectLiteralExpression(first)) {
+        return parseObjectShape(first);
+    }
+
+    // `defineTable(fieldsIdentifier)` is what anyone writes to share a
+    // field map between the schema and an `.input()`. Codegen reads the
+    // shape syntactically, so a non-literal argument silently yielded a
+    // table with NO columns — `Doc_<table>` came out with `_id` and
+    // `_creationTime` and nothing else, with no error anywhere.
+    // A column-less table is never intended.
+    throw diagnosticAt(
+        first,
+        `table "${name}" calls defineTable(${JSON.stringify(first.getText())}), but codegen reads the field map syntactically and can only read an object literal. ` +
+            `Inline the fields into the defineTable(...) call. To reuse them in an \`.input()\`, derive from the generated \`Doc_${name}\` / \`Insert_${name}\` type instead of sharing the runtime value.`,
+    );
+};
+
+/** The table a `defineTable(...)` chain declares; `locate` gives the base `defineTable(...)` call's site. */
+const parseTableBuilder = (expression: Expression, name: string, locate: SiteLocator = noSite): TableIR => {
     const accumulator: TableBuilderAccumulator = {
         aggregateIndexed: false,
         commitOrdered: false,
@@ -829,6 +987,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         geoIndexes: [],
         indexes: [],
         isPublic: false,
+        locate,
         memory: false,
         rankIndexes: [],
         relations: [],
@@ -838,7 +997,10 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         vectorIndexes: [],
     };
     let shape: Record<string, ValidatorIR> = {};
-    let current: Expression = expression;
+    const followSource = tableSourceReader(name);
+    let current: TsNode = followSource(expression);
+    let basedOnDefineTable = false;
+    let defineTableCall: TsNode | undefined;
 
     // Unwind the chain: e.g. defineTable({...}).index(...).shardBy("x")
     while (Node.isCallExpression(current)) {
@@ -846,32 +1008,21 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
         const args = current.getArguments();
 
         if (Node.isPropertyAccessExpression(callee)) {
-            applyTableMethod(accumulator, callee.getName(), args, name);
-            current = callee.getExpression();
-        } else if (Node.isIdentifier(callee) && callee.getText() === "defineTable") {
+            applyTableMethod(accumulator, callee.getName(), args, name, callee.getNameNode());
+            current = followSource(callee.getExpression());
+        } else if (Node.isIdentifier(callee) && isDefineTableCallee(callee)) {
             // Reached the base defineTable({...}) call.
-            const first = args[0];
-
-            if (first && Node.isObjectLiteralExpression(first)) {
-                shape = parseObjectShape(first);
-            } else if (first) {
-                // `defineTable(fieldsIdentifier)` is what anyone writes to share a
-                // field map between the schema and an `.input()`. Codegen reads the
-                // shape syntactically, so a non-literal argument silently yielded a
-                // table with NO columns — `Doc_<table>` came out with `_id` and
-                // `_creationTime` and nothing else, with no error anywhere.
-                // A column-less table is never intended.
-                throw diagnosticAt(
-                    first,
-                    `table "${name}" calls defineTable(${JSON.stringify(first.getText())}), but codegen reads the field map syntactically and can only read an object literal. ` +
-                        `Inline the fields into the defineTable(...) call. To reuse them in an \`.input()\`, derive from the generated \`Doc_${name}\` / \`Insert_${name}\` type instead of sharing the runtime value.`,
-                );
-            }
-
+            defineTableCall = current;
+            shape = defineTableShape(args[0], name);
+            basedOnDefineTable = true;
             break;
         } else {
-            break;
+            throw unreadableTable(current, name);
         }
+    }
+
+    if (!basedOnDefineTable) {
+        throw unreadableTable(current, name);
     }
 
     shape = withInjectedColumns(expression, shape, accumulator);
@@ -880,12 +1031,15 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
 
     assertNoGlobalTtl(expression, name, accumulator);
 
+    const site = defineTableCall === undefined ? undefined : locate(defineTableCall);
+
     return {
         ...(accumulator.aggregateIndexed ? { aggregateIndexed: true as const } : {}),
         commitOrdered: accumulator.commitOrdered,
         externallyManaged: accumulator.externallyManaged,
         externalSource: accumulator.externalSource,
         geoIndexes: accumulator.geoIndexes,
+        ...(site === undefined ? {} : { site }),
         globalBackend: accumulator.shardMode === "global" ? (accumulator.globalBackend ?? "d1") : undefined,
         indexes: accumulator.indexes,
         isPublic: accumulator.isPublic,
@@ -903,6 +1057,13 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
 };
 
 /**
+ * The expression a `defineSchema` member reads its table from: a property's
+ * initializer, or a shorthand `{ users }`'s name, which is the const holding it.
+ */
+const tableMemberSource = (member: PropertyAssignment | ShorthandPropertyAssignment): Expression | undefined =>
+    Node.isPropertyAssignment(member) ? member.getInitializer() : member.getNameNode();
+
+/**
  * Parse the base `defineSchema({ table: defineTable(...) })` object literal into
  * {@link TableIR}s.
  *
@@ -917,7 +1078,13 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
  * check spans the spread and the inline keys together, which is exactly the
  * collision `authTables`' own docs warn silently loses a table to spread order.
  */
-const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = [], seenNames = new Set<string>(), visited = new Set<Node>()): TableIR[] => {
+const parseBaseTables = (
+    object: ObjectLiteralExpression,
+    locate: SiteLocator = noSite,
+    tables: TableIR[] = [],
+    seenNames = new Set<string>(),
+    visited = new Set<Node>(),
+): TableIR[] => {
     visited.add(object);
 
     for (const property of object.getProperties()) {
@@ -925,17 +1092,17 @@ const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = []
             const spread = resolveObjectLiteral(property.getExpression());
 
             if (spread !== undefined && !visited.has(spread)) {
-                parseBaseTables(spread, tables, seenNames, visited);
+                parseBaseTables(spread, locate, tables, seenNames, visited);
             }
 
             continue;
         }
 
-        if (!Node.isPropertyAssignment(property)) {
+        if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
             continue;
         }
 
-        const initializer = property.getInitializer();
+        const initializer = tableMemberSource(property);
 
         if (initializer) {
             const name = propertyKeyName(property);
@@ -950,11 +1117,11 @@ const parseBaseTables = (object: ObjectLiteralExpression, tables: TableIR[] = []
             }
 
             seenNames.add(name);
-            tables.push(parseTableBuilder(initializer, name));
+            tables.push(parseTableBuilder(initializer, name, locate));
         }
     }
 
     return tables;
 };
 
-export { assertTableNameAllowed, parseBaseTables, parseTableBuilder, RESERVED_TABLE_NAMES, TABLE_NAME_IDENTIFIER_RE };
+export { assertTableNameAllowed, parseBaseTables, parseTableBuilder, RESERVED_TABLE_NAMES, TABLE_NAME_IDENTIFIER_RE, tableMemberSource };

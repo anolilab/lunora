@@ -62,7 +62,14 @@ interface WranglerObservability {
  * Workers Observability is billed. One constant so the writers and the doctor
  * cannot drift apart.
  */
-const DEFAULT_OBSERVABILITY: Readonly<{ enabled: true; head_sampling_rate: 1 }> = Object.freeze({ enabled: true, head_sampling_rate: 1 });
+const DEFAULT_OBSERVABILITY: Readonly<{ enabled: true; head_sampling_rate: 1; redact_query_string: true }> = Object.freeze({
+    enabled: true,
+    head_sampling_rate: 1,
+    // Auth flows carry their secret in the query (`?token=` on verify-email and
+    // reset-password links). Workers Logs persists the request URL as-is, so
+    // without this every emailed token lands in the log store at full sampling.
+    redact_query_string: true,
+});
 
 /** Wrangler's own default `head_sampling_rate` for logs and traces: 1, every request. */
 const WRANGLER_DEFAULT_SAMPLING_RATE = 1;
@@ -170,7 +177,13 @@ interface WranglerConfig {
     artifacts?: ReadonlyArray<{ binding?: string; namespace?: string; remote?: boolean } | null | undefined>;
     // Workers Static Assets (serves the client build alongside the worker). NOT
     // Cloudflare Pages (an explicit non-goal). See `validateAssets`.
-    assets?: { binding?: string; directory?: string; html_handling?: string; not_found_handling?: string };
+    assets?: {
+        binding?: string;
+        directory?: string;
+        html_handling?: string;
+        not_found_handling?: string;
+        run_worker_first?: boolean | ReadonlyArray<string>;
+    };
     // Browser Rendering binding (`env.BROWSER`). Self-describing { binding }.
     browser?: { binding?: string };
     // Workers Cache toggle (`"cache": { "enabled": true }`). Parsed from

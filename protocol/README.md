@@ -326,10 +326,12 @@ and `lastMutationId` (per-client watermark) are optional echoes.
 Failure — the body carries an `error` envelope (HTTP status also non-2xx):
 
 ```json
-{ "error": { "code": "<CODE>", "message": "<msg>", "data": <encodeWire(data)?>, "hint": <string|string[]?>, "docsUrl": <string?> } }
+{ "error": { "code": "<CODE>", "message": "<msg>", "data": <encodeWire(data)?>, "hint": <string|string[]?>, "docsUrl": <string?>, "why": <string?> } }
 ```
 
-The client raises an error carrying `code`, `message`, and `decodeWire(data)`.
+The client raises an error carrying `code`, `message`, `decodeWire(data)`, and `why`
+(the cause explanation, when the server sent a string). `why` is client-visible like
+`hint`; the operator-only `internal` context is never part of the envelope.
 A non-2xx response whose JSON body has no `error` envelope is surfaced as an
 `INTERNAL` transport error. An `error` slot holding anything but an OBJECT is no
 envelope either — a proxy's `{"error": "bad gateway"}` page is the everyday shape
@@ -405,9 +407,12 @@ Each slot's `body` is exactly a §4.2 envelope — `{ result }` or `{ error }` �
 a client classifies a slot the way it classifies a whole single-call response.
 Four rules a conforming client MUST follow, because each one is a durable write:
 
-- A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`
-  or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
-  entry — it could not reach the shard, or a limiter refused to look — so it is
+- A slot whose `error.code` is `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`,
+  `RATE_LIMITED` or `TOO_MANY_REQUESTS` is **transient**: the server reached no verdict on that
+  entry — it could not reach the shard, a limiter refused to look, or its delivery authorization
+  changed before the reply could be released (the write may have committed; a retry under the same
+  mutation id replays its stored result, or fails with the terminal `DELIVERY_RECEIPT_FENCED` when
+  that result belongs to an older authority epoch) — so it is
   retried rather than reported failed. So is a refused CREDENTIAL —
   `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED` — which the client HOLDS
   rather than settles: a write queued offline replays with the bearer it held
@@ -464,7 +469,7 @@ terminal, which is the default for every coded error.
 
 | Outcome                             | Codes or condition                                                                                                                                                | Replay behaviour                                                                                                                                                          |
 | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Transient, retry with backoff       | `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `RATE_LIMITED`, `TOO_MANY_REQUESTS`; a `429`/`5xx` with no envelope                                                           | Keep the write queued; honour `retryAfterMs` / `Retry-After` when present, otherwise a bounded jittered backoff                                                           |
+| Transient, retry with backoff       | `SHARD_UNAVAILABLE`, `SHARD_ERROR`, `DELIVERY_FENCED`, `RATE_LIMITED`, `TOO_MANY_REQUESTS`; a `429`/`5xx` with no envelope                                        | Keep the write queued; honour `retryAfterMs` / `Retry-After` when present, otherwise a bounded jittered backoff                                                           |
 | Hold for a credential               | `UNAUTHORIZED`, `TOKEN_EXPIRED`, `UNAUTHENTICATED`                                                                                                                | Hold until a new token is set, then replay under the current token. Never settle                                                                                          |
 | Split and retry                     | `413` on a chunk of more than one entry                                                                                                                           | Split the chunk and resend; do not settle the writes                                                                                                                      |
 | Terminal, the write is dropped      | `CONFLICT` (unique-index breach, or an optimistic-concurrency conflict), `WIRE_DECODE_FAILED`, `PAYLOAD_TOO_LARGE` on a single entry, and every other coded error | Settle rejected with the server's code. The write is not retried. Re-running it with different arguments is the application's job, because the client never rewrites args |
@@ -520,35 +525,69 @@ defaults to 1 MiB and closes with `1009`, on every reconnect) must raise it.
 
 ### 5.1 Client → server frames
 
-| `type`                                      | Shape                                                                               |
-| ------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context? }` — one-shot, first on open     |
-| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch? } }`        |
-| `unsubscribe`                               | `{ type, id }`                                                                      |
-| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch? }`               |
-| `shape_unsubscribe`                         | `{ type, id }`                                                                      |
-| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk?, generation? }` |
-| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                   |
-| `whisper`                                   | `{ type, topic, data? }`                                                            |
+| `type`                                      | Shape                                                                                      |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `connect`                                   | `{ type, id: "connect", clientId?, caps?, context?, token? }` — one-shot, first on open    |
+| `subscribe`                                 | `{ type, id, query: { functionPath, args, table, sinceSeq?, sinceEpoch?, sinceClaims? } }` |
+| `unsubscribe`                               | `{ type, id }`                                                                             |
+| `shape_subscribe`                           | `{ type, id, shape: { name, args? }, sinceCheckpoint?, sinceEpoch?, sinceClaims? }`        |
+| `shape_unsubscribe`                         | `{ type, id }`                                                                             |
+| `stream`                                    | `{ type, id, query: { functionPath, args?, shardKey? }, sinceChunk?, generation? }`        |
+| `whisper_subscribe` / `whisper_unsubscribe` | `{ type, topic }`                                                                          |
+| `whisper`                                   | `{ type, topic, data? }`                                                                   |
 
 `subscribe.query.args` is `encodeWire(args)`. `functionPath` selects the query
 the server re-executes; `table` addresses the legacy raw-delta fan-out
-(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A client
+(`ShardDO.broadcastDelta`), which compares it to `delta.table` verbatim. A subscription
+the server serves by re-execution (every `__lunora_admin__:` and flag subscription,
+and, on a shard that re-runs queries, every subscription with a `functionPath` whose seed returned
+a result, is still in flight, or was refused) never receives a `broadcastDelta` frame. A seed that
+deliberately resolves to no result leaves its subscription to `broadcastDelta` until a later
+re-run returns one; that re-run sends a full snapshot and ends the broadcasts for good. At any
+moment one subscription id is fed by exactly one of the two paths. A client
 that has no table name to give sends the function path there — `@lunora/client`
 always does, because a function reference carries only its `namespace:fn` id — so
-those subscriptions are fed by re-execution alone. The non-JS SDKs carry `table`
+on a generated shard, whose seeds return results, those subscriptions are fed by re-execution
+alone. The non-JS SDKs carry `table`
 on their frame BUILDERS only (`build_subscribe_frame` / `BuildSubscribeFrame` /
 `buildSubscribeFrame`), where it likewise defaults to `functionPath`; no public
 `subscribe` in any of the eight takes it, and every one of them passes that
 default. So `broadcastDelta` is not addressable from any client in this tree —
-only by a consumer that builds the frame itself. `sinceSeq` /
+only by a consumer that builds the frame itself. **Breaking for legacy table clients:** on a socket that carries a user or claims, a `subscribe`
+with no `functionPath` is refused with an `error` frame (`SUBSCRIPTION_FUNCTION_REQUIRED`,
+`400`) before anything is stored or sent, because raw table deltas are not claim-scoped and
+nothing can reset such a view when the claims change. An anonymous socket (no user, no claims)
+keeps accepting table-only subscribes as before. `sinceSeq` /
 `sinceEpoch` ride along only on a resume. Subscription ids are conventionally
 `sub_<n>`; shape ids `shape_<n>`; stream ids `stream_<n>`.
 
 `whisper_subscribe` and `whisper` are authorized per topic when the app declares
 an `onWhisper` authorizer; with none declared the topic's only boundary is the
-shard. A denied frame is **dropped silently** — neither has an ack frame, and
-adding an error frame for a denial would let a client probe which topics exist.
+shard. A denied frame is **dropped silently**, and adding an error frame for a
+denial would let a client probe which topics exist. A `whisper_subscribe` to a
+**live (non-room) topic** is answered with a `whisper_subscribed` frame (below)
+once the shard has made its admit-or-deny decision and written membership, whatever
+that decision was, so the answer carries no authorization signal. A denied join
+still gets it and then receives nothing. A client that must publish or receive
+only after its join took effect waits for that frame.
+
+A **room** topic (one a `defineRoom` handler serves) is never acknowledged. Its
+join is answered by its own history frame, and its `onJoin` runs after the
+membership write and can take longer than a client's grant timeout, so an ack
+there would reveal whether the join was admitted. A client must not wait for an
+ack on a room topic.
+
+The shard sends no `whisper_subscribed` on these paths: the socket is closing, so
+the join is dropped; a `whisper_subscribe` is refused by the delivery-authorization
+guard, which answers with a `NOT_IMPLEMENTED` subscription error instead; or the
+frame is malformed (an empty or non-string `topic` is ignored). An authorizer that
+throws is a denial, so it still gets the ack. A leave (`whisper_unsubscribe`) is
+never acknowledged.
+
+The `identity` frame carries `whisperAck: true` when the shard acknowledges live
+joins as described above. A client waits for the ack before it posts a live grant
+for a topic only when that flag was advertised on the socket's `identity` frame;
+a shard that omits it gets the grant at once, as it did before the ack existed.
 
 `stream.sinceChunk` is the **durable-stream** resume watermark and is unrelated
 to `subscribe.query.sinceSeq` (a CDC cursor): it is the highest `chunk.seq` the
@@ -572,6 +611,13 @@ entirely, exactly as they ignore `sinceChunk`.
 The `connect` frame is sent once per socket open, **before** resubscribing, so
 `onConnect`/`onDisconnect` lifecycle hooks fire symmetrically.
 
+`connect.token` is the session credential for a socket opened without an
+`Authorization` header (see §6). It is the only way a browser or SDK presents
+one: it never goes in the URL. A socket that needs it is refused — `error`
+frame with code `UNAUTHENTICATED`, then close `4003` — when `connect` is not its
+first frame, or when `token` does not match. The deadline for a missing `connect`
+and the pending cap are in §6.
+
 #### 5.1.1 `connect.caps` — capability negotiation
 
 `caps` is an optional array of string tokens naming wire behaviours the client
@@ -580,9 +626,10 @@ what an SDK should do until it implements a token: the server then keeps to the
 behaviour every client has always understood. A server that does not recognise a
 token ignores it, so the field is additive in both directions.
 
-| Token       | The client guarantees                                                                     |
-| ----------- | ----------------------------------------------------------------------------------------- |
-| `pageDelta` | It can merge a `delta` frame's `RowOp` into the `page` array of a paginated query result. |
+| Token          | The client guarantees                                                                          |
+| -------------- | ---------------------------------------------------------------------------------------------- |
+| `pageDelta`    | It can merge a `delta` frame's `RowOp` into the `page` array of a paginated query result.      |
+| `refreshBatch` | It holds the frames between `batchStart` and `batchEnd` and applies them as one update (§5.5). |
 
 **`pageDelta` in detail.** A paginated read (`.paginate()`) returns
 `{ page: [...], isDone, continueCursor }` — an object, not an array. Without this
@@ -598,6 +645,19 @@ result, and returning the surrounding fields unchanged. The server only sends
 page deltas when every field outside `page` is byte-identical to the last
 delivered value, so a moved `continueCursor` or a flipped `isDone` always arrives
 as a full `data` snapshot instead.
+
+**`delta.table`.** A **re-execution** row delta's `table` is a real table name only when the
+query's read set is exactly one table and nothing else. A query that read several tables, read
+none, or depends on every table (the admin wildcard behind Studio's live views, whose result may
+depend on any table) gets the placeholder `"__lunora__"` instead (a leading `__` is reserved for
+framework tables, so no user table has that name). The server diffs the query's result, whose rows
+carry no record of their source table, so it cannot name the table of each row. A
+`broadcastDelta` frame (§5.1, legacy raw-delta fan-out) carries the string the server stamped on
+the write, which under the default matcher equals the subscription's own registered `table` (the
+written table, on the `createShardCtxDb` route); its `row` is the written row as stored, not
+filtered by the subscriber's query, row-level security or column masks. A client MUST NOT route,
+key or filter by this field: the merge is by `key` / `_id` alone, and `table` only marks the
+payload as a row delta (it must be a string).
 
 **Insert placement.** An `insert` op carries no index, so a merging client
 decides the position itself: if the new row and its neighbours all carry a
@@ -624,27 +684,41 @@ Run `pageDeltaFrames` only once you announce the token.
 
 ### 5.2 Server → client frames
 
-| `type`     | Shape                                                           | Effect                                                                     |
-| ---------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `ack`      | `{ type, id }`                                                  | subscription acknowledged                                                  |
-| `data`     | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`  | deliver `decodeWire(data)` as the new value                                |
-| `delta`    | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId? }` | merge delta into server base; the LAST frame of a run carries the cursor   |
-| `resume`   | `{ type, id, cursor?, epoch?, lastMutationId? }`                | nothing changed; keep value, advance cursor                                |
-| `settled`  | `{ type, id, cursor?, epoch?, lastMutationId? }`                | write touched tables, byte-identical result; advance only                  |
-| `error`    | `{ type, id?, error: { code?, message? }, message? }`           | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)  |
-| `complete` | `{ type, id }`                                                  | subscription/stream closed server-side                                     |
-| `chunk`    | `{ type, id, data: <wire>, seq?, generation? }`                 | one streaming-query chunk (`seq` + run `generation` on a durable run only) |
-| `whisper`  | `{ type, topic, data: <wire>, from? }`                          | ephemeral relay                                                            |
-| `identity` | `{ type, subject: <string \| null> }`                           | the user this socket is authenticated as (`null` = anonymous)              |
+| `type`               | Shape                                                                                    | Effect                                                                                                                                                                                                                                                             |
+| -------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `ack`                | `{ type, id }`                                                                           | subscription acknowledged                                                                                                                                                                                                                                          |
+| `data`               | `{ type, id, data: <wire>, cursor?, epoch?, lastMutationId? }`                           | deliver `decodeWire(data)` as the new value                                                                                                                                                                                                                        |
+| `delta`              | `{ type, id, delta: <wire>, cursor?, epoch?, lastMutationId?, more? }`                   | merge delta into server base; the LAST frame of a run carries the cursor                                                                                                                                                                                           |
+| `resume`             | `{ type, id, cursor?, epoch?, lastMutationId? }`                                         | nothing changed; keep value, advance cursor                                                                                                                                                                                                                        |
+| `settled`            | `{ type, id, cursor?, epoch?, lastMutationId? }`                                         | write touched tables, byte-identical result; advance only                                                                                                                                                                                                          |
+| `error`              | `{ type, id?, error: { code?, message?, hint?, why?, retryAfterMs? }, message? }`        | subscription/stream-scoped error (`4001`/`TOKEN_EXPIRED` = token expired)                                                                                                                                                                                          |
+| `complete`           | `{ type, id }`                                                                           | subscription/stream closed server-side                                                                                                                                                                                                                             |
+| `chunk`              | `{ type, id, data: <wire>, seq?, generation? }`                                          | one streaming-query chunk (`seq` + run `generation` on a durable run only)                                                                                                                                                                                         |
+| `whisper`            | `{ type, topic, data: <wire>, from? }`                                                   | ephemeral relay                                                                                                                                                                                                                                                    |
+| `live`               | `{ type, stream, topic, data: <wire> }`                                                  | a server live publish to a WebSocket member granted the stream (server-only; a client `live` frame is refused)                                                                                                                                                     |
+| `identity`           | `{ type, connectionId, subject: <string \| null>, whisperAck?, revalidateMs?, claims? }` | the user this socket is authenticated as (`null` = anonymous); `connectionId` names the socket for live control; `whisperAck` advertises the live-join ack; `revalidateMs` is the re-auth window (§6.1); `claims` fingerprints the socket's verified claims (§6.1) |
+| `whisper_subscribed` | `{ type, topic }`                                                                        | a live (non-room) `whisper_subscribe` was processed, admitted or not (server-only; additive, an unknown frame is a no-op)                                                                                                                                          |
+
+The server sets `error.retryAfterMs` (milliseconds) on a live subscription's refresh-failure
+frame and on the answer to a failed retry. A client that ignores it sees the same frames as before.
+A client that honours it re-subscribes that id once, at the hint; a newer hint replaces the
+pending re-subscribe. Any `data` (other than a stale seed older than the held cursor), `ack`,
+`resume` or `settled` frame for the id, an `error` frame for the id without `retryAfterMs` (the
+server sends one when it has ended the subscription), an unsubscribe, a disconnect or closing the
+client cancels it. The server treats a same-args re-subscribe of a registered subscription as a
+retry: a re-run that fails again keeps the subscription registered and is answered with the next
+hint in the sequence 1 s, 1 s, 2 s, 4 s, … capped at 60 s. The streak lives in memory, so after
+the Durable Object hibernates the sequence restarts at 1 s rather than ending.
 
 `identity` is sent in reply to every `connect` frame (§5.1), including a re-sent
-one. `subject` is the resolved user id the socket was upgraded under, or `null`
-for an anonymous socket — never absent. It exists for a client whose credential
-it cannot see: under a browser cookie session nothing on the client changes when
-the user signs out or someone else signs in, and a socket keeps the identity it
-was upgraded with for its whole life. The reference client adopts it as its
-identity when the socket carried the cookie alone (no `?token=`, no bearer held),
-and retires every live query on a change between two known identities. A client
+one, and only after the socket has passed the §6 gate. `subject` is the resolved
+user id the socket was upgraded under, or `null` for an anonymous socket — never
+absent. It exists for a client whose credential it cannot see: under a browser
+cookie session nothing on the client changes when the user signs out or someone
+else signs in, and a socket keeps the identity it was upgraded with for its whole
+life. The reference client adopts it as its identity when it holds no credential
+at all (no `connect.token`, no ticket, no bearer), and retires every live query on
+a change between two known identities. A client
 that states its own credential — every `sdks/*` port — MAY ignore the frame, and
 all eight do: an unknown `type` is already a no-op in each of them.
 
@@ -734,9 +808,14 @@ counterweight `contiguousPokeSequence` pin both directions.
 ### 5.4 Delta runs and the resume cursor
 
 One value change can go out as a RUN of `delta` frames (one per changed row).
-Unlike a poke the run has no start/end envelope — the client applies each frame
-as it arrives — so `cursor`/`epoch` ride only the **last** frame of the run, and a
-client MUST NOT advance its resume position on a frame that omits them.
+Unlike a poke the run has no start/end envelope, so `cursor`/`epoch` ride only
+the **last** frame of the run, and a client MUST NOT advance its resume position on
+a frame that omits them. Every frame of a run except the last carries
+`more: true`; a client SHOULD hold those frames and commit the run once its last
+frame (which carries no `more`) arrives. A client that applies each frame as it
+arrives still converges, but subscribers see every intermediate state. A delta
+without `more` is a whole change on its own, which is how the legacy
+`broadcastDelta` fan-out is delivered, and is applied on arrival.
 `lastMutationId` is the opposite and rides every frame (it is idempotent and
 monotonic on the read side).
 
@@ -744,41 +823,223 @@ Without that split, a socket dying mid-run left the client having ACKed a
 checkpoint whose remaining rows it never received: its next `sinceSeq` resolved
 as "already current" and the half-applied list was never re-snapshotted.
 
+A `settled` that arrives while a run is held, and a `delta` frame the decoder refuses,
+whether or not it is part of a run, discard the held frames and freeze the subscription,
+as a row change that cannot merge does. The settled cursor is past rows the client never
+applied, and a refused frame's rows never reached the base. A later valid `delta` would
+commit against a base missing them and advance the cursor past them, so a reconnect
+would never replay them. While frozen, `delta`, `resume` and `settled` frames are
+ignored until a `data` frame or a resubscribe clears the freeze. A refused frame
+reports `WIRE_DECODE_FAILED` once; a mid-run `settled` reports nothing. A
+resubscribe after the freeze replays the run from before it.
+
 A single-frame run is its own last frame and carries the cursor as before; so
 does the `data` snapshot.
 
 Golden cases: [`fixtures/ws-frames.json`](./fixtures/ws-frames.json).
 
-## 6. Auth & the ephemeral WS token (plan 095)
+### 5.5 Refresh batches (`refreshBatch`)
+
+One write can change several live queries on one socket — a count and the list
+it counts. Sent one frame at a time, a client renders the first before the
+second arrives, and for that moment its views disagree. A socket that announced
+`refreshBatch` (§5.1.1) and holds more than one subscription receives the frames
+one write produces for it between two markers:
+
+| `type`       | Shape      | Effect                                                                          |
+| ------------ | ---------- | ------------------------------------------------------------------------------- |
+| `batchStart` | `{ type }` | start holding `data`, `delta`, `settled`, `resume` and any `error` with an `id` |
+| `batchEnd`   | `{ type }` | apply every held frame in arrival order, then notify each changed query once    |
+
+Every other frame (pokes, whispers, stream chunks, `identity`, an `error` with
+no `id`) is handled as it arrives. A frame another path sends while a bracket is
+open — a fresh subscription's seed — is held with the rest. The server opens a
+bracket only when the visit sends a frame, never nests one, and always closes
+it; a socket that closes mid-bracket drops what it held (nothing was applied, so
+the reconnect resumes from the cursor before the batch). Each held frame keeps
+its own `cursor`, so §5.4's rules apply inside a batch unchanged.
+
+A client that does not announce the token never sees either marker, and a
+client that ignores unknown types applies the frames unbracketed — which is
+what every `sdks/*` port does today.
+
+## 6. WebSocket credentials and the upgrade gate
 
 - **HTTP RPC** auth is the `authorization: Bearer <token>` header.
-- **WebSocket** auth rides the `?token=` query param (browsers cannot set WS
-  headers). The server matches it against `LUNORA_WS_BEARER` (upgrade gate) and/or
-  `LUNORA_ADMIN_TOKEN` (admin subscriptions).
+- **WebSocket** credentials stay out of URLs. There are three channels:
+    1. **`Authorization: Bearer <LUNORA_WS_BEARER>` on the upgrade.** For clients
+       that can set headers. A match admits the socket authenticated.
+    2. **`connect.token`** (the session credential; browsers and every SDK). The
+       upgrade is accepted without a credential and the socket stays
+       unauthenticated until its first frame. That frame must be `connect` with a
+       `token` equal to `LUNORA_WS_BEARER`. A token that does not match, or any
+       other first frame, gets an `error` frame (`code: "UNAUTHENTICATED"`) and a
+       close with code `4003`. The check runs before `identity` is sent and before
+       `onConnect` fires. With `LUNORA_WS_BEARER` unset the token is ignored and
+       every socket is authenticated as before. A socket still awaiting `connect`
+       10 seconds after its upgrade is closed with `4003` (`connect deadline`) when
+       the shard next admits an unauthenticated upgrade. A shard holds at most 1024
+       such sockets; past that, an unauthenticated upgrade gets `503`. That is
+       transient: retry with backoff.
+    3. **`?token=<ticket>`**, the only credential that may appear in a URL. A ticket
+       is an ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`
+       (authenticated by the master admin token in the `Authorization` **header**):
+       `{ token, expiresAtMs }`, where
 
-Because a URL token lands in logs/history, the studio path uses a short-lived
-**ephemeral sub-token**. `POST /_lunora/admin/ws-token` (authenticated by the
-master admin token in the `Authorization` **header**) returns
-`{ token, expiresAtMs }`, where:
+        ```
+        token = "v1." + expEpochMs + "." + base64url(HMAC_SHA256(key = LUNORA_ADMIN_TOKEN, msg = "v1." + expEpochMs))
+        ```
+
+        Default TTL 60s. Verification is stateless (worker and DO both hold the
+        master token in `env`); rotating the master token invalidates all
+        outstanding tickets. A lapsed ticket grants nothing: the socket is admitted
+        unauthenticated, like any other socket without a credential.
+
+A raw `LUNORA_WS_BEARER` or `LUNORA_ADMIN_TOKEN` in `?token=` is refused with
+`403` at upgrade. The query string is where it leaks (access logs, history,
+`Referer`), so a client that still sends one fails at once instead of working
+quietly.
+
+Admin subscriptions (`__lunora_admin__:*`) are granted only at upgrade: by the
+master token in the `Authorization` header or by a valid ticket. A
+`connect.token` never grants admin, so a studio socket uses a ticket.
+
+A `defineWebSocket` route socket has no `connect` frame, so it cannot present
+`connect.token`. Under `LUNORA_WS_BEARER` it is admitted only with the
+`Authorization` header or an admin ticket; a route that a browser reaches with
+the session credential alone is refused (`403`).
+
+### 6.1 User identity on the upgrade
+
+The channels above admit the **socket**. The **user** a socket acts as comes from
+the worker's `resolveIdentity` on the upgrade request. A past `exp` closes the
+socket with `4001` unless a same-user refresh moves the expiry (below). An
+authenticated subscription socket is also held to a **revalidation window**
+(60 s): it must be re-authenticated through the route below within that window,
+or the shard closes it with `4005` (`identity_stale`). Without the window, a revoked
+session or a changed tenant claim would keep receiving on a socket that was
+already open. The `identity` frame announces the window as `revalidateMs`. It is
+absent for an anonymous socket and for a `defineWebSocket` route socket, and
+neither is held to a window. `4005` is an ordinary reconnect, not a
+token expiry: a client MUST NOT report it as one. A client that never
+re-authenticates stays correct and reconnects once per window, re-resolving its
+identity on the upgrade. A browser sends its session
+cookie automatically. A client whose session is a bearer (an external IdP's JWT,
+or a cross-origin API) presents it in one of two ways:
+
+- **`Authorization: Bearer <session token>`**, for clients that can set headers
+  on an upgrade (React Native, server SDKs).
+- **`Sec-WebSocket-Protocol: lunora, lunora.bearer.<base64url(token)>`**, for
+  browsers. The token is UTF-8, base64url-encoded without padding. The worker
+  passes it to `resolveIdentity` as `Authorization: Bearer <token>` (a real
+  `Authorization` header wins), forwards only `lunora` to the shard, and answers
+  the handshake selecting `lunora`. A client that offers `lunora` MUST accept
+  `lunora` as the selected subprotocol.
+
+This bearer is a user credential only. It never satisfies the `LUNORA_WS_BEARER`
+or admin checks above, which read the forwarded upgrade and the `connect` frame.
+
+**Refreshing the credential on an open socket.** A socket's frames reach only
+its shard, which cannot run `resolveIdentity`, so a refreshed bearer does not go
+on the socket. The client posts it to the worker instead:
 
 ```
-token = "v1." + expEpochMs + "." + base64url(HMAC_SHA256(key = LUNORA_ADMIN_TOKEN, msg = "v1." + expEpochMs))
+POST /_lunora/ws/reauth?shard=<key>
+Authorization: Bearer <refreshed token>
+{ "connectionId": "<from the socket's identity frame>" }
 ```
 
-Default TTL 60s. Verification is stateless (worker and DO both hold the master
-token in `env`); rotating the master token invalidates all outstanding
-sub-tokens.
+The worker resolves the credential as it would an upgrade — a lapsed one is
+`401 TOKEN_EXPIRED`, none at all `401 UNAUTHENTICATED` — and forwards only the
+server-minted identity to the shard. The shard moves the socket's expiry and
+restarts its revalidation window when the socket belongs to the same user and
+every claim except `exp`, `expiresAtMs`, `iat`, `nbf` and `jti` is unchanged, and
+answers `200 { ok: true }`. Nothing is re-sent on the socket. It refuses an unknown or another
+user's socket (`404`), and a credential older than the one the socket holds or,
+for a socket that has an expiry, one without any (`409 STALE_CREDENTIAL`). Those
+refusals leave the socket as it was, still closing at its old expiry or window.
+Changed claims (`409 IDENTITY_CHANGED`) also close the socket at once with `4005` and the
+reason `identity_changed`: the identity it was delivering under no longer holds. The close can
+reach the client before the `409`, so a client MUST treat that close reason as `IDENTITY_CHANGED`
+too (a socket it already retired for it needs nothing more). A client counts only the
+`{ ok: true }` body as success. On any refusal it SHOULD reconnect the socket
+under the current credential, which re-seeds as any upgrade does. After
+`IDENTITY_CHANGED` the reconnect MUST be cold (no `sinceSeq`, shape views
+emptied): the rows held were resolved under the old claims, and a resumed diff
+would not remove the ones the new claims cannot see. A server
+without the route answers `404`, so the same fallback covers it.
 
-A client SHOULD accept an **async token provider** (`() -> token`) resolved fresh
-on every (re)connect, so a short-lived credential is re-minted after a `4001`
-`token_expired` close. The TS contract is `WsTokenProvider`
-(`packages/client/src/types.ts`).
+**Admin sockets.** A socket admitted with an admin credential (the master bearer, or the
+short-lived `?token=` ticket) that also carries a user is re-authenticated with the admin
+credential as well: the client puts a freshly minted ticket in `?token=` on
+`POST /_lunora/ws/reauth`, as its upgrade did. The worker checks it exactly as the upgrade
+does (a constant-time verify against the current admin token) and exempts it from the
+per-shard user gate, so a user the gate would refuse does not make the socket reconnect each
+half window. The shard keeps such a socket only when it was admitted by the admin token that
+is current now AND the worker verified an admin credential on this request; otherwise (a
+rotated or missing credential) it closes the socket with `4005` (`identity_stale`,
+`409 IDENTITY_STALE`). If the user is gone or its claims changed it closes with
+`identity_changed`, so the client reconnects holding only what the admin credential grants.
+A client that does not present the credential on re-auth loses an admin socket that carries a
+user at its first window; a socket with no user is never held to a window. This is a
+protocol change for admin clients that re-auth (the reference client and Studio do).
+
+**Claims fingerprint route.** A cross-tab follower tab has no socket and so no `identity` frame of
+its own. `POST /_lunora/claims` (no body needed) answers a caller, resolved with the same
+credential check as `POST /_lunora/ws/reauth` (a missing or lapsed credential is `401`), with
+`{ "claims": "<fingerprint>" }` and nothing else: the fingerprint of the caller's own verified
+claims, from the same function and the same forwarded identity the shard uses for a socket's
+`identity` frame, so the two agree. A follower reads it on a credential change and drops leader
+data (and cached values) stamped with other `claims`; until it knows its own it shows nothing
+a leader stamped with `claims`. A frame without `claims`, and a tab with no credential, behave
+as before. The route is an HTTP route of the worker, not a `ctx.*` surface or a binding, so it
+has no entry in `PlatformCapabilities`, like the re-auth route. The non-JS SDKs have no
+leader/follower model and do not call it.
+
+**Resuming under the claims a cursor was read under.** A socket can close with `4005`
+because its window lapsed while the client was away, and the claims it holds can change in
+that gap, so a cursor read before it may describe rows the new claims cannot see. The
+`identity` frame therefore carries `claims`, an opaque fingerprint of the socket's verified
+claims (the user id and every claim except `exp`, `expiresAtMs`, `iat`, `nbf` and `jti`; the
+claims themselves are never sent). A client stores it beside every value and cursor it
+commits, and puts it on `subscribe.query.sinceClaims` / `shape_subscribe.sinceClaims` when it
+resumes from that cursor with `sinceSeq` / `sinceCheckpoint`. The shard fingerprints the
+socket's claims as they are now and resumes only when the two are equal. When they differ,
+or when `sinceClaims` is absent (an older client), it drops `sinceSeq`/`sinceEpoch`
+(`sinceCheckpoint`/`sinceEpoch`) and answers with a full snapshot, so the client holds
+nothing resolved under the old claims once that snapshot lands. A client that was never told a
+fingerprint (an older shard) sends none, and every resume is then cold on a shard that
+enforces this; that is the safe direction. The client never computes a fingerprint.
+
+`connectionId` is opaque to a client: a server MAY put routing in it. The Cloudflare shard does so for
+a socket held by a fan-out relay, prefixing the id with `r<index>.` so the owner sends that socket's
+re-auth to the one relay named, not to every relay. A re-auth whose holding relay does not answer is
+refused (`404`) and the socket lapses at its window with `4005`; an id with no prefix, or one naming a
+relay the owner has not attached, is asked of every relay. The relay tier is a Durable Object
+mechanism: other targets have no relay, so their ids stay bare and nothing about it is advertised in
+`PlatformCapabilities`.
+
+A cookie session re-authenticates the same way, with no `Authorization` header:
+the request carries the cookie. The reference client re-authenticates each socket
+at half its `revalidateMs`, presenting the credential its upgrade presented.
+
+A client SHOULD accept an **async token provider** (`() -> token`) for both
+credentials, resolved fresh on every (re)connect. The TS contract is
+`WsTokenProvider` (`packages/client/src/types.ts`): `wsToken` takes the session
+credential, which is sent in `connect`, and `wsTicket` takes the ticket, which
+goes in `?token=`. A provider re-mints the ticket on every reconnect, so a lapsed
+ticket is replaced on the next attempt.
+
+**Ceiling:** while `LUNORA_WS_BEARER` is set, an unauthenticated socket is
+accepted and held until its first frame. An attacker can open such sockets
+without sending a credential. Gate them at the edge if this matters.
 
 ## 7. HTTP streaming routes (SSE)
 
 `httpRoute.<verb>(path).stream()` routes stream Server-Sent Events: one
 `data: <json>\n\n` frame per chunk, a terminal `event: complete` frame, and an
-`event: error` frame carrying `{ code, message }` on throw. Frames are separated
+`event: error` frame carrying `{ code, message }` (plus `hint` and `why` when the error is not
+redacted) on throw. Frames are separated
 by `\n\n`; multiple `data:` lines join with `\n`; one optional space after the
 field colon is stripped. See `packages/client/src/http-stream.ts`.
 

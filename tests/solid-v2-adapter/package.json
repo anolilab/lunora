@@ -6,7 +6,7 @@
     "type": "module",
     "sideEffects": false,
     "scripts": {
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run"
     },
     "devDependencies": {

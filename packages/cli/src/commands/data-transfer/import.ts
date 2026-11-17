@@ -6,10 +6,10 @@
  * `LUNORA_ADMIN_TOKEN`. `--prod` (with an explicit `--url`) is the guardrail
  * against accidentally targeting localhost in production scripts.
  */
-import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 
+import { createExportEndTracker } from "../../../../../shared/export-end";
 import { resolveAdminBearer, targetsRemoteWorker } from "../../util/admin-token";
 import { adminFetch, resolveAdminBaseUrl } from "../../util/admin-url";
 import type { Refusal } from "../../util/exit-code";
@@ -18,9 +18,10 @@ import type { Logger } from "../../util/logger";
 import type { CommandResult, OutputFormat } from "../../util/output-format";
 import { tuiConfirm } from "../../util/tui-prompts";
 import { CONVEX_STORAGE_TABLE } from "../convex-snapshot";
-import { resolveTables } from "./export";
-import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportStagedReplace, ImportTotals } from "./import-batcher";
+import type { ImportBatcher, ImportRowError, ImportShardFailure, ImportTotals } from "./import-batcher";
 import { createImportBatcher } from "./import-batcher";
+import type { ImportMode, ImportPlan, SourceIndex, TablePlan } from "./import-plan";
+import { overwrites, planDestroysRows, planImport, recordSourceRow, reportPlan, unkeyedRows } from "./import-plan";
 import { createRowTransformer } from "./import-rows";
 import type { ImportSource, ImportSourceName } from "./import-source";
 import { readConvexExport, resolveImportSource } from "./import-source";
@@ -31,7 +32,7 @@ import { readFirestoreExport } from "./sources/firebase";
 import { scanFirebaseDump, scanSupabaseDump } from "./sources/scan";
 import { listLocalObjects, listSupabaseObjects, transferStorageObjects } from "./sources/storage-transfer";
 import { readSupabaseExport } from "./sources/supabase";
-import { migrateStorageBlobs } from "./storage-blobs";
+import { migrateStorageBlobs, readStorageBlobKeys } from "./storage-blobs";
 import type { ImportConvexMapping } from "./storage-mapping";
 import { readImportConvexMapping, scanStorageColumns } from "./storage-mapping";
 import type { StoragePathIndex } from "./storage-path-index";
@@ -52,9 +53,11 @@ const MAX_IMPORT_BATCH_BYTES = 900_000;
 interface ImportCommandOptions {
     /** Rows per HTTP request. Defaults to {@link DEFAULT_IMPORT_BATCH_SIZE}. */
     batchSize?: number;
-    /** Inject a custom confirmer for `--replace` (tests, non-TTY callers). Returns `true` on confirmation. */
+    /** Ask before overwriting or deleting stored rows. Defaults to the TUI prompt on a TTY. Returns `true` on confirmation. */
     confirm?: (prompt: string) => Promise<boolean>;
     cwd?: string;
+    /** Check the file and print the plan against the target's rows; write nothing. */
+    dryRun?: boolean;
     fetchImpl?: StreamingFetchLike;
     /** Source NDJSON file. Required. */
     file: string;
@@ -69,14 +72,10 @@ interface ImportCommandOptions {
      */
     from?: ImportSourceName;
     logger: Logger;
-    prod?: boolean;
 
-    /**
-     * Make the import the exact contents of its tables (`?mode=replace`): rows
-     * the file carries overwrite theirs, every other row is deleted. Scoped by
-     * `tables`; without it, every table in the schema.
-     */
-    replace?: boolean;
+    /** How the rows the target already holds are treated. Defaults to `append`; see {@link ImportMode}. */
+    mode?: ImportMode;
+    prod?: boolean;
 
     /**
      * Scan the export for columns holding `_storage` ids and write a candidate
@@ -97,12 +96,6 @@ interface ImportCommandOptions {
      */
     table?: string;
 
-    /**
-     * `--replace` scope, comma-separated. Rows of other tables in the file are
-     * skipped, as are the `$auth`/`$kv`/`$storage` sections. Defaults to `table`
-     * when `--table` is set.
-     */
-    tables?: string;
     token?: string;
 
     url?: string;
@@ -135,13 +128,17 @@ interface ImportCommandOptions {
  */
 interface ImportSummary {
     conflicts: number;
-    /** `--replace` only: rows removed per table because the file did not carry them. */
-    deleted?: Record<string, number>;
+    /** Stored rows `--mode replace` deleted because the file lacks them. */
+    deleted: number;
     errors: ImportRowError[];
     /** Shards the endpoint could not reach (it answered 207). Their rows are MISSING, not rejected — present only when non-empty. */
     failed?: ImportShardFailure[];
     inserted: Record<string, number>;
+    /** What the run planned against the target's rows, per table. Present for every mode but `append` and for `--dry-run`. */
+    plan?: TablePlan[];
     received: number;
+    /** Existing rows overwritten under `--mode upsert` / `--mode replace`. */
+    replaced: number;
     storage?: {
         /** Up to {@link UNRESOLVED_REPORT_LIMIT} distinct references — a sample, not the whole set. See `ambiguousTotal`. */
         ambiguous: StorageRemapReport["ambiguous"];
@@ -169,6 +166,8 @@ interface ImportCommandResult extends CommandResult<ImportCommandData> {
     body: ImportSummary | undefined;
     /** Total inserted rows across batches. */
     inserted: number;
+    /** Existing rows overwritten under `--mode upsert` / `--mode replace`; absent when the run wrote nothing. */
+    replaced?: number;
 }
 
 interface ImportRequest {
@@ -187,12 +186,6 @@ interface ImportRequest {
  * a bare `undefined` left the caller unable to tell them apart.
  */
 const resolveImportRequest = async (options: ImportCommandOptions): Promise<ImportRequest | Refusal> => {
-    if (options.tables !== undefined && options.replace !== true) {
-        options.logger.error("--tables scopes a --replace; an append imports every table in the file");
-
-        return { refused: EXIT_CODE.USAGE };
-    }
-
     if (options.prod && options.url === undefined) {
         options.logger.error("--prod requires an explicit --url (refusing to import to the implicit localhost worker)");
 
@@ -212,7 +205,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
     // Gated on the RESOLVED destination, not on `--prod`: the flag is a
     // self-declaration, and a bulk write to `--url https://…` without it is
     // just as destructive.
-    if (targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && options.yes !== true) {
+    if (targetsRemoteWorker({ prod: options.prod, url: baseUrl }) && options.yes !== true && options.dryRun !== true) {
         options.logger.error(`import bulk-writes ${baseUrl}, which is not local. Re-run with --yes to confirm.`);
 
         return { refused: EXIT_CODE.USAGE };
@@ -255,14 +248,16 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
  * The machine-readable run summary. The storage block is present only when blobs
  * were migrated, so a plain import's output shape is unchanged.
  */
-const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string> | undefined, report: StorageRemapReport): ImportSummary => {
+const buildImportBody = (totals: ImportTotals, storageIdMap: Map<string, string> | undefined, report: StorageRemapReport, plan?: ImportPlan): ImportSummary => {
     return {
         conflicts: totals.conflicts,
-        ...(totals.deleted === undefined ? {} : { deleted: totals.deleted }),
+        deleted: totals.deleted,
         errors: totals.errors,
         ...(totals.failed.length > 0 ? { failed: totals.failed } : {}),
         inserted: totals.inserted,
+        ...(plan === undefined ? {} : { plan: plan.tables }),
         received: totals.received,
+        replaced: totals.replaced,
         // A SAMPLE plus the totals, never the whole arrays: an unmapped 200k-row
         // import produced tens of thousands of distinct references and pushed a
         // multi-megabyte blob through one `logger.info`, burying the summary the
@@ -307,126 +302,6 @@ const openSourceStream = (
             return createReadStream(options.file, { encoding: "utf8" });
         }
     }
-};
-
-/** Section lines a scoped replace leaves out; the `$lunora` header still goes through. */
-const SECTION_TABLES = new Set(["$auth", "$kv", "$storage"]);
-
-/** The `table` of a serialised import row, or `undefined` when it is not one (the endpoint then reports the line). */
-const tableOf = (row: string): string | undefined => {
-    try {
-        const parsed: unknown = JSON.parse(row);
-
-        return typeof parsed === "object" && parsed !== null && typeof (parsed as { table?: unknown }).table === "string"
-            ? (parsed as { table: string }).table
-            : undefined;
-    } catch {
-        return undefined;
-    }
-};
-
-/**
- * Narrow a row transform to the `--tables` of a scoped replace, counting what
- * it skips: anything else in the file is not part of the replace, and the
- * endpoint would refuse the whole request over it.
- */
-const scopeRows = (
-    toRow: (line: string, lineNumber: number) => string | undefined,
-    tables: ReadonlySet<string> | undefined,
-    skipped: Map<string, number>,
-): ((line: string, lineNumber: number) => string | undefined) => {
-    if (tables === undefined) {
-        return toRow;
-    }
-
-    return (line, lineNumber) => {
-        const row = toRow(line, lineNumber);
-
-        if (row === undefined) {
-            return undefined;
-        }
-
-        const table = tableOf(row);
-
-        if (table === undefined) {
-            return row;
-        }
-
-        if (tables.has(table) || (table.startsWith("$") && !SECTION_TABLES.has(table))) {
-            return row;
-        }
-
-        skipped.set(table, (skipped.get(table) ?? 0) + 1);
-
-        return undefined;
-    };
-};
-
-/**
- * Confirm a `--replace`, following `lunora reset`: `--yes` skips the prompt, a
- * TTY asks, anything else is refused. `undefined` means go ahead.
- */
-const confirmReplace = async (
-    options: ImportCommandOptions,
-    baseUrl: string,
-    tables: ReadonlyArray<string> | undefined,
-): Promise<ImportCommandResult | undefined> => {
-    if (options.yes === true) {
-        return undefined;
-    }
-
-    const scope = tables === undefined ? "every table in the schema" : `the table(s) ${tables.join(", ")}`;
-
-    if (!process.stdin.isTTY && options.confirm === undefined) {
-        const error = `import --replace: stdin is not a TTY — re-run with --yes to confirm replacing ${scope}`;
-
-        options.logger.error(error);
-
-        return { body: undefined, code: EXIT_CODE.USAGE, error, inserted: 0 };
-    }
-
-    const confirmer = options.confirm ?? tuiConfirm;
-
-    if (await confirmer(`This replaces ${scope} on ${baseUrl}: every row ${options.file} does not carry is deleted. Continue?`)) {
-        return undefined;
-    }
-
-    options.logger.info("import: aborted");
-
-    return { body: undefined, code: EXIT_CODE.CANCELLED, error: "import: aborted at the confirmation prompt", inserted: 0 };
-};
-
-/**
- * Resolve a `--replace` run: confirm it, then name its staged session's URLs
- * and the tables it is scoped to (`undefined`: the whole schema). An append run
- * resolves to neither.
- */
-const planReplace = async (
-    options: ImportCommandOptions,
-    baseUrl: string,
-    requestUrl: string,
-): Promise<{ refused: ImportCommandResult } | { replace?: ImportStagedReplace; scope?: ReadonlySet<string> }> => {
-    if (options.replace !== true) {
-        return {};
-    }
-
-    const tables = resolveTables(options.tables) ?? (options.table === undefined ? undefined : [options.table]);
-    const refused = await confirmReplace(options, baseUrl, tables);
-
-    if (refused !== undefined) {
-        return { refused };
-    }
-
-    const session = `cli-${randomUUID()}`;
-    const scoped = tables === undefined ? "" : `&tables=${encodeURIComponent(tables.join(","))}`;
-    const replace: ImportStagedReplace = {
-        abortUrl: `${requestUrl}/abort`,
-        commitUrl: `${requestUrl}/commit`,
-        session,
-        stageUrl: `${requestUrl}?mode=replace${scoped}&stage=${session}`,
-    };
-
-    return tables === undefined ? { replace } : { replace, scope: new Set(tables) };
 };
 
 /**
@@ -603,6 +478,24 @@ const createSourceRowTransformer = (config: {
 };
 
 /**
+ * What the operator is told to do after a failed drain. `unkeyed` is the file's rows without an `_id`: the target gives each a fresh id,
+ * so a re-run writes those already imported a second time, and "conflict rather than duplicate" would be false.
+ */
+const drainFailureAdvice = (received: number, unkeyed: number): string => {
+    if (unkeyed === 0) {
+        return received === 0
+            ? "re-run the same command once the worker is reachable (existing rows conflict rather than duplicate)"
+            : "the rows below had already been written — re-run the same command to resume (existing rows conflict rather than duplicate)";
+    }
+
+    const keyless = `${String(unkeyed)} row(s) without an _id`;
+
+    return received === 0
+        ? `re-run the same command once the worker is reachable; any of the ${keyless} that did land are written a second time`
+        : `the rows below had already been written — re-running the same command writes any of the ${keyless} that landed a second time; remove the imported rows from the source before re-running (an _id added now would not match the id the target already gave them)`;
+};
+
+/**
  * Feed a source's text chunks through the row transform into the batcher,
  * returning the error that stopped it (or `undefined`).
  *
@@ -614,12 +507,15 @@ const createSourceRowTransformer = (config: {
  * on batch 900 of 2,000 has already written 899 batches, and the operator needs
  * to know how far it got before deciding whether to resume. Letting the error
  * escape prints one line and discards every tally.
+ *
+ * `unkeyed` is the whole file's rows without an `_id` (zero for the check pass, which writes nothing).
  */
 const drainIntoBatcher = async (
     stream: AsyncIterable<Buffer | string>,
     toWireRow: (line: string, lineNumber: number) => string | undefined,
     batcher: ImportBatcher,
     logger: Logger,
+    unkeyed: number,
 ): Promise<unknown> => {
     let buffer = "";
     let lineNumber = 0;
@@ -661,47 +557,79 @@ const drainIntoBatcher = async (
         // `received` grows only once a batch's response is read, so zero means no
         // write was CONFIRMED, not that none landed: a batch the server committed
         // and then lost the connection on still counts zero here.
-        if (batcher.totals.received === 0) {
-            logger.error(`import failed before any batch was acknowledged: ${message}`);
-            logger.error("re-run the same command once the worker is reachable (existing rows conflict rather than duplicate)");
-        } else {
-            logger.error(`import failed part-way through: ${message}`);
-            logger.error("the rows below had already been written — re-run the same command to resume (existing rows conflict rather than duplicate)");
-        }
+        const { received } = batcher.totals;
+
+        logger.error(received === 0 ? `import failed before any batch was acknowledged: ${message}` : `import failed part-way through: ${message}`);
+        logger.error(drainFailureAdvice(received, unkeyed));
 
         return error;
     }
 };
 
+/** What the document rewrite needs from the storage phase, worked out before any blob moves. */
+interface StoragePlan {
+    mapping?: ImportConvexMapping;
+    /** Convex only: the `storageId → R2 key` map, derived from the metadata, so it is exact before the upload runs. */
+    storageIdMap?: Map<string, string>;
+}
+
 /**
- * Upload every `_storage` blob and build the `storageId → R2 key` map the
- * document rewrite needs. Returns `undefined` after logging when the export
- * cannot support the request.
+ * The storage facts the check needs, read without moving a byte.
+ *
+ * A Convex blob's key is its content hash, so the map is known from the
+ * metadata alone. The check must rewrite with it: an unrewritten
+ * `{ $storage }` reference is an object, and the worker refuses it where the
+ * real pass sends a string. Foreign sources have no such map, because their
+ * keys only exist after the transfer, but their rewrite only swaps one string
+ * for another, so the check's verdict does not depend on it.
  */
-const runStorageMigration = async (
-    context: { baseUrl: string; fetchImpl: StreamingFetchLike; token: string },
-    source: Extract<ImportSource, { kind: "convex" }>,
-    cwd: string,
-    logger: Logger,
-): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap: Map<string, string> }> => {
-    const mapping = await readImportConvexMapping(cwd, logger);
+const planStoragePhase = async (source: ImportSource, options: ImportCommandOptions, cwd: string): Promise<undefined | StoragePlan> => {
+    if (options.withStorage !== true || source.kind !== "convex") {
+        return {};
+    }
+
+    const mapping = await readImportConvexMapping(cwd, options.logger);
     const storageTableEntry = source.tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
 
     if (storageTableEntry === undefined) {
-        logger.error("--with-storage requires a Convex export with a `_storage` metadata table — re-export with `npx convex export --include-file-storage`.");
+        options.logger.error(
+            "--with-storage requires a Convex export with a `_storage` metadata table — re-export with `npx convex export --include-file-storage`.",
+        );
 
         return undefined;
     }
 
-    const storageIdMap = await migrateStorageBlobs(context, source.snapshot, storageTableEntry, mapping?.keyPrefix ?? "", logger);
-
-    logger.info(`storage map: ${String(storageIdMap.size)} blobs mapped`);
-
-    return { mapping, storageIdMap };
+    return { mapping, storageIdMap: await readStorageBlobKeys(source.snapshot, storageTableEntry, mapping?.keyPrefix ?? "", options.logger) };
 };
 
 /**
- * Run whichever storage phase this source has, or none.
+ * Upload every `_storage` blob. The map it returns is the one the plan already
+ * derived, built from the same keys, so the rows the check rewrote and the rows
+ * the real pass rewrites agree. Returns `undefined` when the export has no
+ * `_storage` table, which `planStoragePhase` has already refused and logged.
+ */
+const runStorageMigration = async (
+    context: { baseUrl: string; fetchImpl: StreamingFetchLike; token: string },
+    source: Extract<ImportSource, { kind: "convex" }>,
+    plan: StoragePlan,
+    logger: Logger,
+): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap: Map<string, string> }> => {
+    const storageTableEntry = source.tables.find((entry) => entry.table === CONVEX_STORAGE_TABLE);
+
+    if (storageTableEntry === undefined) {
+        return undefined;
+    }
+
+    const storageIdMap = await migrateStorageBlobs(context, source.snapshot, storageTableEntry, plan.mapping?.keyPrefix ?? "", logger);
+
+    logger.info(`storage map: ${String(storageIdMap.size)} blobs mapped`);
+
+    return { mapping: plan.mapping, storageIdMap };
+};
+
+/**
+ * Run whichever storage phase this source has, or none. Runs only after the
+ * check has passed the file, so a refused import uploads nothing.
  *
  * Convex carries its blobs inside the export; Supabase and Firebase keep theirs
  * in a bucket that has to be walked. Both end at the same place — a map from the
@@ -712,13 +640,14 @@ const runStoragePhase = async (
     source: ImportSource,
     options: ImportCommandOptions,
     cwd: string,
+    plan: StoragePlan,
 ): Promise<undefined | { mapping?: ImportConvexMapping; storageIdMap?: Map<string, string>; transferredPaths?: Map<string, string> }> => {
     if (options.withStorage !== true) {
         return {};
     }
 
     if (source.kind === "convex") {
-        return runStorageMigration(context, source, cwd, options.logger);
+        return runStorageMigration(context, source, plan, options.logger);
     }
 
     if (source.kind !== "supabase" && source.kind !== "firebase") {
@@ -762,11 +691,12 @@ const reportImportOutcome = (
     logger: Logger,
     outcome: {
         conflicts: number;
-        deleted: Record<string, number> | undefined;
+        deleted: number;
         errorCount: number;
         failed: boolean;
         insertedTotal: number;
         received: number;
+        replaced: number;
         warnings: ReadonlyArray<string>;
     },
 ): void => {
@@ -774,19 +704,15 @@ const reportImportOutcome = (
         logger.warn(warning);
     }
 
-    for (const [table, count] of Object.entries(outcome.deleted ?? {})) {
-        logger.info(`replace: deleted ${String(count)} row(s) from ${table}`);
-    }
-
-    const unaccounted = outcome.received - outcome.insertedTotal - outcome.conflicts - outcome.errorCount;
+    const unaccounted = outcome.received - outcome.insertedTotal - outcome.replaced - outcome.conflicts - outcome.errorCount;
 
     if (unaccounted > 0) {
-        logger.warn(`${String(unaccounted)} of ${String(outcome.received)} rows were neither inserted, conflicted, nor reported as errors`);
+        logger.warn(`${String(unaccounted)} of ${String(outcome.received)} rows were neither inserted, replaced, conflicted, nor reported as errors`);
     }
 
-    const deletedTotal = Object.values(outcome.deleted ?? {}).reduce((a, b) => a + b, 0);
-    const deletedNote = outcome.deleted === undefined ? "" : `, deleted ${String(deletedTotal)}`;
-    const summary = `imported ${String(outcome.insertedTotal)} of ${String(outcome.received)} rows (${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)${deletedNote}`;
+    const replaced = `${outcome.replaced > 0 ? `${String(outcome.replaced)} replaced, ` : ""}${outcome.deleted > 0 ? `${String(outcome.deleted)} deleted, ` : ""}`;
+    // A replaced row was written too, so it counts toward the imported total; the breakdown names it.
+    const summary = `imported ${String(outcome.insertedTotal + outcome.replaced)} of ${String(outcome.received)} rows (${replaced}${String(outcome.conflicts)} conflicts, ${String(outcome.errorCount)} errors)`;
 
     // A run that exits 1 must not end on a green line — the summary is the last
     // thing an operator reads, and only the exit code disagreed with it.
@@ -811,37 +737,503 @@ const scanOnly = async (source: ImportSource, cwd: string, options: ImportComman
     return { body: undefined, code: 0, inserted: 0 };
 };
 
+/** The storage phase's result: the storage mapping and the `storageId → R2 key` map the row rewrite reads. */
+type StoragePhaseResult = NonNullable<Awaited<ReturnType<typeof runStoragePhase>>>;
+
+/** Where a pass POSTs its batches, and how many rows each may carry. */
+interface ImportPassTarget {
+    batchSize: number;
+    fetchImpl: StreamingFetchLike;
+    requestUrl: string;
+    token: string;
+}
+
+/** What one pass over the source produced. Each pass keeps its own counters, so a check never shares a tally with the real pass. */
+interface ImportPass {
+    batcher: ImportBatcher;
+    remapReport: StorageRemapReport;
+    sourceRows: Map<string, number>;
+    streamFailure: unknown;
+    unresolvedPaths: Set<string>;
+}
+
 /**
- * Run the drain inside a replace's staged session: refuse a worker without one
- * first, commit once every batch staged, abort when the drain failed. A plain
- * append is just the drain. Returns the failure, as the drain does.
+ * The code a worker gives a global row it cannot check without writing. A check cannot judge such a row, so the refusal is not a reason to
+ * stop: the real pass writes it, as it did before the check existed.
  */
-const drainReplace = async (batcher: ImportBatcher, drain: () => Promise<unknown>, logger: Logger): Promise<unknown> => {
+const GLOBAL_DRY_RUN_UNSUPPORTED = "GLOBAL_DRY_RUN_UNSUPPORTED";
+
+const quietLogger: Logger = { error: () => undefined, info: () => undefined, success: () => undefined, warn: () => undefined };
+
+/** The options a check runs with: the same source and flags, and no narration, since the real pass narrates the same rows. */
+const quietOptions = (options: ImportCommandOptions): ImportCommandOptions => {
+    return { ...options, logger: quietLogger };
+};
+
+/**
+ * Read the source once and POST its rows in batches of `target`. The Convex reader tallies what it emits into `sourceRows` as it goes; the
+ * parity check after the run compares that against what the endpoint says it inserted. Only the Convex directory and Supabase CSV readers
+ * stream the source itself; the ZIP and Firestore readers materialise one table at a time.
+ */
+const runImportPass = async (
+    options: ImportCommandOptions,
+    source: ImportSource,
+    storage: StoragePhaseResult,
+    target: ImportPassTarget,
+    sourceIndex?: { index: SourceIndex; keepIds: boolean },
+    unkeyed = 0,
+): Promise<ImportPass> => {
+    const unresolvedPaths = new Set<string>();
+    const remapReport: StorageRemapReport = { ambiguous: [], rewritten: 0, unmigrated: [] };
+    const sourceRows = new Map<string, number>();
+    const stream = openSourceStream(source, options, storage.storageIdMap !== undefined, sourceRows);
+    const batcher = createImportBatcher({
+        batchSize: target.batchSize,
+        fetchImpl: target.fetchImpl,
+        maxBatchBytes: MAX_IMPORT_BATCH_BYTES,
+        requestUrl: target.requestUrl,
+        token: target.token,
+    });
+    const toRow = createSourceRowTransformer({
+        report: remapReport,
+        source,
+        storageColumns: storage.mapping?.storageColumns,
+        storageIdMap: storage.storageIdMap,
+        table: options.table,
+        transferredPaths: storage.transferredPaths,
+        unresolvedPaths,
+    });
+    // A plain NDJSON file is a Lunora export, which ends with a marker carrying its row count; one cut on a row boundary
+    // still parses, so the file is only complete when the marker is there and agrees. Other sources have no such marker.
+    const ended = source.kind === "ndjson" && options.table === undefined ? createExportEndTracker() : undefined;
+    const markedToRow =
+        ended === undefined
+            ? toRow
+            : (line: string, lineNumber: number): string | undefined => {
+                  if (line.trim().length > 0) {
+                      let parsed: unknown;
+
+                      try {
+                          parsed = JSON.parse(line);
+                      } catch {
+                          // The row transform reports a malformed line with its number.
+                          return toRow(line, lineNumber);
+                      }
+
+                      if (!ended.read(parsed)) {
+                          return undefined;
+                      }
+                  }
+
+                  return toRow(line, lineNumber);
+              };
+    // Both passes index what they send: the check pass so the plan can match the file's `_id`s against the target's without a
+    // third read, the write pass so the prune never deletes a row it just wrote. A check whose plan is skipped keeps only the counts.
+    const indexedToRow =
+        sourceIndex === undefined
+            ? markedToRow
+            : (line: string, lineNumber: number): string | undefined => {
+                  const row = markedToRow(line, lineNumber);
+
+                  if (row !== undefined) {
+                      recordSourceRow(sourceIndex.index, row, { keepIds: sourceIndex.keepIds });
+                  }
+
+                  return row;
+              };
+    // Every source is a `for await`-able of text, so one drain loop drives all of
+    // them and the POST size stays bounded by `batchSize`.
+    const drained = await drainIntoBatcher(stream, indexedToRow, batcher, options.logger, unkeyed);
+    const incomplete = drained === undefined ? ended?.problem() : undefined;
+    const streamFailure = incomplete === undefined ? drained : new Error(`${options.file}: ${incomplete}`);
+
+    return { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths };
+};
+
+/** The message of a failure the stream or the batcher raised. A value that is not an Error is named as it is. */
+const failureMessage = (failure: unknown): string => {
+    if (failure instanceof Error) {
+        return failure.message;
+    }
+
+    return typeof failure === "string" ? failure : "an unknown failure";
+};
+
+/**
+ * Whether the check met a row the shard already holds: one the worker reported as written, or an `_id` it found in use. A check writes nothing,
+ * so either means the worker ignored the dry-run flag or already has the row.
+ */
+const checkMetWrites = (check: ImportPass): boolean => {
+    const { conflicts, inserted } = check.batcher.totals;
+
+    return conflicts > 0 || Object.values(inserted).some((count) => count > 0);
+};
+
+/**
+ * The result of a check that refuses the file: the check's own report, the reason it refused, and nothing written. Each shard the check
+ * could not reach and a stream failure are named here, as the real pass names them.
+ */
+const refuseFile = (options: ImportCommandOptions, check: ImportPass, refusal: string, storageIdMap: Map<string, string> | undefined): ImportCommandResult => {
+    const body = buildImportBody(check.batcher.totals, storageIdMap, check.remapReport);
+    const checkWrote = checkMetWrites(check);
+
+    // Pretty mode only: in json the same object is the document's `summary`.
+    if (options.format !== "json") {
+        options.logger.info(JSON.stringify(body, undefined, 2));
+    }
+
+    if (check.streamFailure !== undefined) {
+        const message = failureMessage(check.streamFailure);
+
+        options.logger.error(
+            check.batcher.totals.received === 0
+                ? `import failed before any batch was acknowledged: ${message}`
+                : `import failed while checking the rows: ${message}`,
+        );
+        options.logger.error(
+            checkWrote
+                ? "rows may already be written by the check; check the shard before running the command again"
+                : "no rows were written; re-run the same command once the worker is reachable",
+        );
+    }
+
+    for (const shard of check.batcher.totals.failed) {
+        options.logger.error(
+            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — no rows were written: ${shard.message}`,
+        );
+    }
+
+    // A worker that wrote during the check has already changed the shard, so the refusal must not say the file was not written.
+    const written = Object.values(check.batcher.totals.inserted).reduce((sum, count) => sum + count, 0);
+    const error = checkWrote
+        ? `import: ${options.file} was refused, and rows may already be written: ${refusal}`
+        : `import: ${options.file} was not written: ${refusal}`;
+
+    return { body, code: 1, data: { file: options.file, inserted: written, summary: body }, error, inserted: written };
+};
+
+/**
+ * Why a check refuses the file, or `undefined` when every row may be written. A check writes nothing, so a row it wrote, a conflict it met, a
+ * shard it could not reach or a row it refused each means the file cannot be imported as it stands. A worker that writes during a check
+ * ignored the dry-run flag, and the rows it wrote are already in place. Under `--verify` a storage reference that resolves to no exported blob
+ * refuses too, since the real pass would fail on it only after the blobs and rows are written.
+ */
+const checkRefusal = (check: ImportPass, verify: boolean): string | undefined => {
+    if (check.streamFailure !== undefined) {
+        return `the check stopped early: ${failureMessage(check.streamFailure)}`;
+    }
+
+    const { errors, failed } = check.batcher.totals;
+
+    if (checkMetWrites(check)) {
+        return "this worker wrote rows during its check, so it cannot check an import before writing, and some rows may already be written";
+    }
+
+    if (failed.length > 0) {
+        return `${String(failed.length)} shard(s) could not be reached to check`;
+    }
+
+    const refused = errors.filter((error) => error.code !== GLOBAL_DRY_RUN_UNSUPPORTED);
+
+    if (refused.length > 0) {
+        return `${String(refused.length)} row(s) would be refused`;
+    }
+
+    const unmigrated = check.remapReport.unmigrated.length;
+
+    return verify && unmigrated > 0 ? `${String(unmigrated)} storage reference(s) resolve to no exported blob` : undefined;
+};
+
+/** The check ran quietly, so a refusal over unresolved storage references names them here: the operator needs to know which blobs the export lacks. */
+const logUnmigratedRefusal = (options: ImportCommandOptions, check: ImportPass): void => {
+    if (options.verify === true && check.remapReport.unmigrated.length > 0) {
+        reportStorageOutcome(options.logger, check.remapReport, true);
+    }
+};
+
+/** Each shard the fan-out never reached. Its rows are in neither `inserted` nor `errors`, so the run has to name them. */
+const logUnreachedShards = (logger: Logger, shards: ImportShardFailure[]): void => {
+    for (const shard of shards) {
+        logger.error(
+            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — its rows were NOT written: ${shard.message}`,
+        );
+    }
+};
+
+/**
+ * Why the worker cannot check a file before writing it, or `undefined` when it can. A worker built before `?dryRun=true` existed ignores the
+ * flag and writes every row it is sent, and the check would learn that only after the rows are in. So the probe sends no row, which no worker
+ * version can write, and only a worker that honours the flag echoes `dryRun: true` in its answer. An overwriting mode is probed the same way:
+ * a worker that ignores `?onConflict=replace` would report every existing row as a conflict and overwrite none of them. `--mode replace`
+ * also needs delete rows, which only a worker that reports a `deleted` count understands.
+ */
+const probeDryRunSupport = async (target: ImportPassTarget, mode: ImportMode): Promise<string | undefined> => {
+    const replace = overwrites(mode);
+
     try {
-        await batcher.start();
+        const response = await target.fetchImpl(`${target.requestUrl}?dryRun=true${replace ? "&onConflict=replace" : ""}`, {
+            // A blank line rather than an empty body: a request with no body is refused before any line is read.
+            body: "\n",
+            headers: { authorization: `Bearer ${target.token}`, "content-type": "application/x-ndjson" },
+            method: "POST",
+        });
+
+        if (!response.ok) {
+            return `the worker at ${target.requestUrl} answered HTTP ${String(response.status)} to the check`;
+        }
+
+        const json = (await response.json()) as { deleted?: unknown; dryRun?: unknown; onConflict?: unknown };
+
+        if (json.dryRun !== true) {
+            return `the worker at ${target.requestUrl} predates ?dryRun=true, so it would write the file while checking it; deploy the current runtime and import again`;
+        }
+
+        if (replace && json.onConflict !== "replace") {
+            return `the worker at ${target.requestUrl} predates ?onConflict=replace, so --mode ${mode} would overwrite nothing; deploy the current runtime and import again`;
+        }
+
+        return mode === "replace" && typeof json.deleted !== "number"
+            ? `the worker at ${target.requestUrl} cannot delete rows, so --mode replace could not remove the rows the file lacks; deploy the current runtime and import again`
+            : undefined;
+    } catch (error) {
+        return `the worker at ${target.requestUrl} did not answer the check: ${failureMessage(error)}`;
+    }
+};
+
+/** The endpoint as the check pass and the write pass call it; an overwriting mode puts `onConflict=replace` on both. */
+const importUrls = (endpoint: string, replace: boolean): { check: string; write: string } => {
+    const mode = replace ? "onConflict=replace" : undefined;
+
+    return { check: `${endpoint}?dryRun=true${mode === undefined ? "" : `&${mode}`}`, write: mode === undefined ? endpoint : `${endpoint}?${mode}` };
+};
+
+/**
+ * Read the target's rows for the file's tables, print what the import would do,
+ * and decide whether it may go ahead: `require-empty` refuses a populated table,
+ * `--dry-run` stops here, and an overwrite or delete needs a confirmation (a
+ * prompt on a TTY, `--yes` otherwise). Returns the plan, or the result to stop on.
+ */
+const planAndConfirm = async (
+    options: ImportCommandOptions,
+    request: ImportRequest,
+    sourceIndex: SourceIndex,
+    mode: ImportMode,
+): Promise<{ plan: ImportPlan } | { stop: ImportCommandResult }> => {
+    // The run's one line on why it stopped: pretty mode prints a result's `error` nowhere else.
+    const stop = (code: number, error: string): { stop: ImportCommandResult } => {
+        options.logger.error(error);
+
+        return { stop: { body: undefined, code, error, inserted: 0 } };
+    };
+
+    let plan: ImportPlan;
+
+    try {
+        plan = await planImport({ baseUrl: request.baseUrl, fetchImpl: request.fetchImpl, token: request.token }, sourceIndex, mode, options.dryRun !== true);
     } catch (error: unknown) {
-        logger.error(`import: ${error instanceof Error ? error.message : String(error)}`);
-
-        return error;
+        return stop(1, `import: ${options.file} was not written: ${failureMessage(error)}`);
     }
 
-    const failure = await drain();
+    reportPlan(options.logger, plan, mode);
 
-    if (failure !== undefined) {
-        await batcher.abort();
+    const populated = plan.tables.filter((table) => table.target > 0);
 
-        return failure;
+    if (mode === "require-empty" && populated.length > 0) {
+        const named = populated.map((table) => `${table.table} (${String(table.target)} rows)`).join(", ");
+
+        return stop(
+            1,
+            `import: ${options.file} was not written: --mode require-empty, and the target already holds ${named}. Use --mode replace to make those tables match the file.`,
+        );
     }
+
+    if (options.dryRun === true) {
+        const body = buildImportBody(
+            { conflicts: 0, deleted: 0, errors: [], failed: [], inserted: {}, received: 0, replaced: 0, warnings: [] },
+            undefined,
+            { ambiguous: [], rewritten: 0, unmigrated: [] },
+            plan,
+        );
+
+        options.logger.success("dry run: nothing was written");
+
+        return { stop: { body, code: 0, data: { file: options.file, inserted: 0, summary: body }, inserted: 0 } };
+    }
+
+    if (!planDestroysRows(plan, mode) || options.yes === true) {
+        return { plan };
+    }
+
+    // The prompt draws on stdout, which `--format json` reserves for the one summary document.
+    if (options.confirm === undefined && (!process.stdin.isTTY || options.format === "json")) {
+        return stop(EXIT_CODE.USAGE, `import: --mode ${mode} overwrites or deletes stored rows and cannot prompt here; re-run with --yes to confirm`);
+    }
+
+    const confirmed = await (options.confirm ?? tuiConfirm)(`--mode ${mode} overwrites or deletes the stored rows above. Continue?`);
+
+    return confirmed ? { plan } : stop(EXIT_CODE.CANCELLED, "import: aborted, nothing was written");
+};
+
+/**
+ * Delete the stored rows the file lacks, after a clean write pass. Each delete
+ * carries the row as exported, so it routes to the shard that holds it. A row
+ * the write pass sent is never deleted, even if the plan's read of the file
+ * lacked it: the file changed between the passes, and its newer content wins.
+ */
+const pruneMissingRows = async (plan: ImportPlan, target: ImportPassTarget, written: SourceIndex): Promise<{ batcher: ImportBatcher; failure: unknown }> => {
+    // Only this pass asks for deletes; the endpoint refuses a delete row on any other request.
+    const batcher = createImportBatcher({ ...target, maxBatchBytes: MAX_IMPORT_BATCH_BYTES, requestUrl: `${target.requestUrl}?deletes=true` });
 
     try {
-        await batcher.finish();
+        for (const row of plan.deletions) {
+            const id = row.doc["_id"];
 
+            if (typeof id === "string" && written.get(row.table)?.ids.has(id) === true) {
+                continue;
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- the batcher POSTs when full; deletes go out in order
+            await batcher.push(JSON.stringify({ doc: row.doc, op: "delete", table: row.table }));
+        }
+
+        await batcher.flush();
+
+        return { batcher, failure: undefined };
+    } catch (error: unknown) {
+        return { batcher, failure: error };
+    }
+};
+
+/**
+ * Why the worker would refuse the planned deletes, checked as a dry run before
+ * anything is written. Deletes travel in batches, so a worker that takes the
+ * shard deletes but refuses a `.global()` one (a hand-wired importer without
+ * delete support) would otherwise leave the prune half-applied, and every re-run
+ * would stop at the same batch.
+ */
+const pruneRefusal = async (plan: ImportPlan | undefined, mode: ImportMode, target: ImportPassTarget): Promise<string | undefined> => {
+    if (plan === undefined || mode !== "replace" || plan.deletions.length === 0) {
         return undefined;
-    } catch (error: unknown) {
-        logger.error(`import: ${error instanceof Error ? error.message : String(error)}`);
-
-        return error;
     }
+
+    const batcher = createImportBatcher({ ...target, maxBatchBytes: MAX_IMPORT_BATCH_BYTES, requestUrl: `${target.requestUrl}?dryRun=true&deletes=true` });
+
+    try {
+        for (const row of plan.deletions) {
+            // eslint-disable-next-line no-await-in-loop -- the batcher POSTs when full; the check mirrors the prune's batches
+            await batcher.push(JSON.stringify({ doc: row.doc, op: "delete", table: row.table }));
+        }
+
+        await batcher.flush();
+    } catch (error: unknown) {
+        return failureMessage(error);
+    }
+
+    // A shard the check could not reach has not said it would accept its deletes: proceeding would write the file and prune
+    // only the reachable shards.
+    if (batcher.totals.failed.length > 0) {
+        return `${String(batcher.totals.failed.length)} shard(s) could not be reached to check the deletes`;
+    }
+
+    const [first] = batcher.totals.errors;
+
+    return first === undefined ? undefined : `${String(batcher.totals.errors.length)} planned delete(s) refused, first: ${first.table} ${first.message}`;
+};
+
+/**
+ * `--mode replace`'s second step: delete the stored rows the file lacks, and only
+ * once every row of the file landed. A write that stopped or left a row unwritten
+ * deletes nothing, so a failed run leaves the old rows plus what was written —
+ * never fewer rows than before — and re-running the same command converges: the
+ * upsert overwrites what already landed, and the prune runs once the write is
+ * clean. Deletes and writes are separate requests, so the switch-over is not
+ * atomic: a reader between the two passes sees both.
+ */
+const pruneAfterWrite = async (
+    options: ImportCommandOptions,
+    plan: ImportPlan | undefined,
+    write: { batcher: ImportBatcher; streamFailure: unknown; verifyFailed: boolean; written: SourceIndex },
+    target: ImportPassTarget,
+): Promise<{ failed: boolean; totals?: ImportTotals }> => {
+    if (plan === undefined || options.mode !== "replace" || plan.deletions.length === 0) {
+        return { failed: false };
+    }
+
+    const count = String(plan.deletions.length);
+
+    const { totals: written } = write.batcher;
+
+    // `--verify`'s parity and storage checks are part of "the write came back clean": a run they fail must not delete.
+    if (write.streamFailure !== undefined || write.verifyFailed || written.errors.length > 0 || written.failed.length > 0) {
+        options.logger.error(
+            `--mode replace: the write did not finish cleanly, so the ${count} stored row(s) the file lacks were NOT deleted; fix the errors and re-run the same command`,
+        );
+
+        return { failed: true };
+    }
+
+    options.logger.info(`--mode replace: deleting ${count} stored row(s) the file lacks`);
+
+    const { batcher, failure } = await pruneMissingRows(plan, target, write.written);
+    const { totals } = batcher;
+
+    if (failure !== undefined || totals.errors.length > 0 || totals.failed.length > 0) {
+        options.logger.error(
+            `--mode replace: deleting stopped part-way${failure === undefined ? "" : ` (${failureMessage(failure)})`}; every file row is written, and re-running the same command deletes the rest`,
+        );
+
+        return { failed: true, totals };
+    }
+
+    return { failed: false, totals };
+};
+
+/** The write pass's totals with the prune pass's deletes, row errors and unreached shards folded in. */
+const withPruneTotals = (write: ImportTotals, prune: ImportTotals | undefined): ImportTotals =>
+    prune === undefined
+        ? write
+        : { ...write, deleted: write.deleted + prune.deleted, errors: [...write.errors, ...prune.errors], failed: [...write.failed, ...prune.failed] };
+
+/**
+ * Whether the run reads the target to plan, and so needs the file's `_id`s. `append` without `--dry-run` reads nothing: it never overwrites
+ * or deletes, and reading every stored row of a large table only to report the conflicts the write reports anyway is not worth its cost.
+ * An upsert's plan only feeds its confirmation, so `--yes` skips it too. A mode that plans is added here; a mode that prunes must also be added to `writeIndexing`.
+ */
+const needsPlan = (options: Pick<ImportCommandOptions, "dryRun" | "yes">, mode: ImportMode): boolean =>
+    !((mode === "append" || (mode === "upsert" && options.yes === true)) && options.dryRun !== true);
+
+/** What the write pass indexes: only `--mode replace` prunes, so only it keeps what the write sent. */
+const writeIndexing = (mode: ImportMode, written: SourceIndex): { index: SourceIndex; keepIds: boolean } | undefined =>
+    mode === "replace" ? { index: written, keepIds: true } : undefined;
+
+/** The plan the run acts on, or the result to stop on. */
+const planUnlessAppend = async (
+    options: ImportCommandOptions,
+    request: ImportRequest,
+    sourceIndex: SourceIndex,
+    mode: ImportMode,
+): Promise<{ plan: ImportPlan | undefined } | { stop: ImportCommandResult }> =>
+    needsPlan(options, mode) ? planAndConfirm(options, request, sourceIndex, mode) : { plan: undefined };
+
+/**
+ * Warn before the first write when `append` or `upsert` will insert rows without an `_id`. `replace` refuses them in the plan, so it never
+ * reaches a write that needs the warning.
+ */
+const warnUnkeyedRows = (logger: Logger, mode: ImportMode, index: SourceIndex): void => {
+    const total = unkeyedRows(index);
+
+    if (total === 0 || !(mode === "append" || mode === "upsert")) {
+        return;
+    }
+
+    const perTable = [...index]
+        .filter(([, entry]) => entry.unkeyed > 0)
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([table, entry]) => `${table}: ${String(entry.unkeyed)}`);
+
+    logger.warn(
+        `${String(total)} row(s) have no _id (${perTable.join(", ")}): the target gives each a fresh id, so if this import stops part-way, re-running it writes the ones already imported a second time`,
+    );
 };
 
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {
@@ -870,27 +1262,79 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         return { body: undefined, code: request.refused, error: "import: could not resolve the worker URL and admin token", inserted: 0 };
     }
 
-    const { baseUrl, fetchImpl, requestUrl, token } = request;
+    const { baseUrl, fetchImpl, token } = request;
+    const mode = options.mode ?? "append";
+    const urls = importUrls(request.requestUrl, overwrites(mode));
+    const { write: requestUrl } = urls;
     const batchSize = options.batchSize ?? DEFAULT_IMPORT_BATCH_SIZE;
-    const replace = await planReplace(options, baseUrl, requestUrl);
+    const target: ImportPassTarget = { batchSize, fetchImpl, requestUrl: request.requestUrl, token };
 
-    if ("refused" in replace) {
-        return replace.refused;
+    // Before any row or blob is sent: a worker that cannot check must not see the file at all.
+    const unsupported = await probeDryRunSupport(target, mode);
+
+    if (unsupported !== undefined) {
+        return { body: undefined, code: 1, error: `import: ${options.file} was not written: ${unsupported}`, inserted: 0 };
     }
 
-    // Phase 1: move the files first, so no imported document can reference an
-    // object that is not there yet.
-    const storage = await runStoragePhase({ baseUrl, fetchImpl, token }, source, options, cwd);
+    // Phase 1: check the whole file, writing nothing, before any blob moves. A
+    // refused file leaves neither a row nor a blob behind. The check runs quietly
+    // and its errors come back in its own totals.
+    const plan = await planStoragePhase(source, options, cwd);
+
+    if (plan === undefined) {
+        // `planStoragePhase` logged which requirement the export does not meet.
+        return { body: undefined, code: 1, error: "import: the storage phase failed — no rows were written", inserted: 0 };
+    }
+
+    // The check carries the mode too: a worker whose global importer cannot replace refuses those rows here,
+    // before any blob or shard row is written, rather than after the shard plane has already been overwritten.
+    const sourceIndex: SourceIndex = new Map();
+    const check = await runImportPass(
+        quietOptions(options),
+        source,
+        plan,
+        { ...target, requestUrl: urls.check },
+        { index: sourceIndex, keepIds: needsPlan(options, mode) },
+    );
+    const refusal = checkRefusal(check, options.verify === true);
+
+    if (refusal !== undefined) {
+        logUnmigratedRefusal(options, check);
+
+        // Nothing was uploaded, so the refusal reports no storage block.
+        return refuseFile(options, check, refusal, undefined);
+    }
+
+    warnUnkeyedRows(options.logger, mode, sourceIndex);
+
+    // Planned after the check, so a file the worker would refuse never costs a read of the target, and before any blob moves.
+    const planned = await planUnlessAppend(options, request, sourceIndex, mode);
+
+    if ("stop" in planned) {
+        return planned.stop;
+    }
+
+    const importPlan = planned.plan;
+    const deleteRefusal = await pruneRefusal(importPlan, mode, target);
+
+    if (deleteRefusal !== undefined) {
+        const error = `import: ${options.file} was not written: the worker would refuse the deletes --mode replace needs (${deleteRefusal})`;
+
+        options.logger.error(error);
+
+        return { body: undefined, code: 1, error, inserted: 0 };
+    }
+
+    // Phase 2: move the files, so no imported document can reference an object
+    // that is not there yet.
+    const storage = await runStoragePhase({ baseUrl, fetchImpl, token }, source, options, cwd, plan);
 
     if (storage === undefined) {
         // `runStoragePhase` logged which object it could not move.
         return { body: undefined, code: 1, error: "import: the storage phase failed — no rows were written", inserted: 0 };
     }
 
-    const { mapping, storageIdMap, transferredPaths } = storage;
-    const unresolvedPaths = new Set<string>();
-    const storageColumns = mapping?.storageColumns;
-    const remapReport: StorageRemapReport = { ambiguous: [], rewritten: 0, unmigrated: [] };
+    const { storageIdMap } = storage;
 
     options.logger.info(
         source.kind === "convex"
@@ -898,70 +1342,43 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
             : `POST ${requestUrl} -> import ${options.file}`,
     );
 
-    // Every source is a `for await`-able of text, so one drain loop drives all of
-    // them and the POST size stays bounded by `batchSize`. Note that only the
-    // Convex *directory* and Supabase CSV readers stream the source itself; the
-    // ZIP and Firestore readers materialise one table at a time.
-    //
-    // The Convex reader tallies what it emits into `sourceRows` as it goes; the
-    // parity check after the run compares that against what the endpoint says it
-    // inserted.
-    const sourceRows = new Map<string, number>();
-    const batcher = createImportBatcher({
-        batchSize,
-        fetchImpl,
-        maxBatchBytes: MAX_IMPORT_BATCH_BYTES,
-        replace: replace.replace,
-        requestUrl,
-        token,
-    });
-    const transform = createSourceRowTransformer({
-        report: remapReport,
+    // Only the prune reads what the write sent, and only `--mode replace` prunes; any other mode leaves `written` empty.
+    const written: SourceIndex = new Map();
+    const { batcher, remapReport, sourceRows, streamFailure, unresolvedPaths } = await runImportPass(
+        options,
         source,
-        storageColumns,
-        storageIdMap,
-        table: options.table,
-        transferredPaths,
-        unresolvedPaths,
-    });
-    const skippedRows = new Map<string, number>();
-    const toRow = scopeRows(transform, replace.scope, skippedRows);
-
-    // The source is opened only once a replace's worker check passed, so a refused run reads nothing.
-    const streamFailure = await drainReplace(
-        batcher,
-        async () => drainIntoBatcher(openSourceStream(source, options, storageIdMap !== undefined, sourceRows), toRow, batcher, options.logger),
-        options.logger,
+        storage,
+        { ...target, requestUrl },
+        writeIndexing(mode, written),
+        unkeyedRows(sourceIndex),
     );
 
-    const { conflicts, deleted, errors, failed: failedShards, inserted, received, warnings } = batcher.totals;
-
-    for (const [table, count] of skippedRows) {
-        options.logger.warn(`replace: skipped ${String(count)} row(s) of ${table}, which is not in --tables`);
-    }
-
     // Parity over an aborted run only restates the abort, so skip it there and
-    // let the failure be the verdict.
-    const parityMismatch = options.verify === true && streamFailure === undefined ? checkRowParity(options.logger, sourceRows, { conflicts, inserted }) : 0;
+    // let the failure be the verdict. A replaced row is accounted for the way a
+    // conflict is: present in the target, just not newly inserted.
+    const parityMismatch =
+        options.verify === true && streamFailure === undefined
+            ? checkRowParity(options.logger, sourceRows, { conflicts: batcher.totals.conflicts + batcher.totals.replaced, inserted: batcher.totals.inserted })
+            : 0;
     const unmigratedFailure = storageIdMap !== undefined && reportStorageOutcome(options.logger, remapReport, options.verify === true);
 
     const unresolvedPathFailure = reportUntransferredPaths(options.logger, unresolvedPaths, options.verify === true);
+    const verifyFailed = parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
+    const prune = await pruneAfterWrite(options, importPlan, { batcher, streamFailure, verifyFailed, written }, target);
+    const totals = withPruneTotals(batcher.totals, prune.totals);
+
+    const { conflicts, deleted, errors, failed: failedShards, inserted, received, replaced, warnings } = totals;
 
     const insertedTotal = Object.values(inserted).reduce((a, b) => a + b, 0);
-    const body = buildImportBody(batcher.totals, storageIdMap, remapReport);
+    const body = buildImportBody(totals, storageIdMap, remapReport, importPlan);
 
     // A shard the fan-out never reached leaves an unknown slice of the import
     // unwritten, and its rows land in neither `inserted` nor `errors`. The
     // endpoint says so with 207 Multi-Status, whose `Response.ok` is `true` —
     // so without this the run reported a clean success over missing data.
-    for (const shard of failedShards) {
-        options.logger.error(
-            `import: shard "${shard.shardKey}" was never reached${shard.timedOut ? " (timed out)" : ""} — its rows were NOT written: ${shard.message}`,
-        );
-    }
+    logUnreachedShards(options.logger, failedShards);
 
-    const failed =
-        streamFailure !== undefined || errors.length > 0 || failedShards.length > 0 || parityMismatch > 0 || unmigratedFailure || unresolvedPathFailure;
+    const failed = streamFailure !== undefined || errors.length > 0 || failedShards.length > 0 || verifyFailed || prune.failed;
 
     // The batcher's roll-up, spelled out for a human. Pretty mode only: in json
     // the same object IS the document's `summary`, and printing it here too said
@@ -970,18 +1387,27 @@ const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCo
         options.logger.info(JSON.stringify(body, undefined, 2));
     }
 
-    reportImportOutcome(options.logger, { conflicts, deleted, errorCount: errors.length, failed, insertedTotal, received, warnings });
+    reportImportOutcome(options.logger, {
+        conflicts,
+        deleted,
+        errorCount: errors.length,
+        failed,
+        insertedTotal,
+        received,
+        replaced,
+        warnings,
+    });
 
     const data = { file: options.file, inserted: insertedTotal, summary: body };
 
     if (failed) {
         // The per-row detail is in `data.summary`; this is the one line that says
         // the run did not come out clean.
-        return { body, code: 1, data, error: `import: ${options.file} did not import cleanly`, inserted: insertedTotal };
+        return { body, code: 1, data, error: `import: ${options.file} did not import cleanly`, inserted: insertedTotal, replaced };
     }
 
-    return { body, code: 0, data, inserted: insertedTotal };
+    return { body, code: 0, data, inserted: insertedTotal, replaced };
 };
 
 export type { ImportCommandData, ImportCommandOptions, ImportCommandResult };
-export { DEFAULT_IMPORT_BATCH_SIZE, runImportCommand };
+export { DEFAULT_IMPORT_BATCH_SIZE, needsPlan, runImportCommand };

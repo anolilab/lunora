@@ -1,7 +1,8 @@
+import { USAGE_ATTRIBUTE, usageStatus } from "@lunora/ai/create";
 import type { Telemetry } from "ai";
 
 import type { CommonOptions } from "./common";
-import { contentText, readField, summarizeUsage, toolInputOf } from "./common";
+import { contentText, failedTurnEvent, readField, summarizeUsage, toolInputOf } from "./common";
 import { createInFlightCalls } from "./in-flight-calls";
 
 const stringOr = (value: unknown, fallback: string): string => (typeof value === "string" && value.length > 0 ? value : fallback);
@@ -115,10 +116,15 @@ export const sentryTelemetry = (options: SentryTelemetryOptions): Telemetry => {
             // the moment `doStream` hands the stream back.
             const usage = summarizeUsage(readField(event, "usage") ?? readField(call.result, "usage"));
 
-            if (usage) {
-                attributes["gen_ai.usage.input_tokens"] = usage.inputTokens;
-                attributes["gen_ai.usage.output_tokens"] = usage.outputTokens;
-                attributes["gen_ai.usage.total_tokens"] = usage.totalTokens;
+            attributes["lunora.usage.status"] = usageStatus(usage);
+
+            // Breakdowns are subsets of the totals, emitted only when reported.
+            const names: Record<string, string> = { totalTokens: "gen_ai.usage.total_tokens", ...USAGE_ATTRIBUTE };
+
+            for (const [key, name] of Object.entries(names)) {
+                if (usage?.[key] !== undefined) {
+                    attributes[name] = usage[key];
+                }
             }
 
             if (recordOutputs) {
@@ -168,7 +174,7 @@ export const sentryTelemetry = (options: SentryTelemetryOptions): Telemetry => {
             message = raw;
         }
 
-        calls.close(callId, false, message, undefined);
+        calls.close(callId, false, message, failedTurnEvent(raw));
     };
 
     return {
@@ -208,7 +214,7 @@ export const sentryTelemetry = (options: SentryTelemetryOptions): Telemetry => {
                 } catch (error) {
                     // The provider call itself failed, so this IS the end of the
                     // span and no end event will follow.
-                    calls.close(callId, false, error instanceof Error ? error.message : String(error), undefined);
+                    calls.close(callId, false, error instanceof Error ? error.message : String(error), failedTurnEvent(error));
 
                     throw error;
                 }
@@ -253,7 +259,9 @@ export const sentryTelemetry = (options: SentryTelemetryOptions): Telemetry => {
             // Fired after the response has been normalized and parsed — for a
             // stream that is after its `finish` part, so this is the first moment
             // the call's real duration AND its token usage are both known.
-            calls.close(callId, true, undefined, event);
+            // The registry grades the end event by its `finishReason`, so an error finish that
+            // reaches the end event (the turn guard forwards it) closes as a failure, not a success.
+            calls.fromLifecycle(event);
         },
         onStepEnd: (event: unknown) => {
             calls.fromLifecycle(event);

@@ -44,8 +44,8 @@ describe("runShardMigrations — a field added after the table was provisioned",
         const newWriter = createShardContextDatabase({ clock, schema: afterDeploy, sql: harness.sql });
         const newId = await newWriter.insert("notes", { body: "written after the deploy", pinned: true });
 
-        await expect(newWriter.get(oldId)).resolves.toMatchObject({ body: "written before the deploy" });
-        await expect(newWriter.get(oldId)).resolves.not.toHaveProperty("pinned", true);
-        await expect(newWriter.get(newId)).resolves.toMatchObject({ body: "written after the deploy", pinned: true });
+        await expect(newWriter.get("notes", oldId)).resolves.toMatchObject({ body: "written before the deploy" });
+        await expect(newWriter.get("notes", oldId)).resolves.not.toHaveProperty("pinned", true);
+        await expect(newWriter.get("notes", newId)).resolves.toMatchObject({ body: "written after the deploy", pinned: true });
     });
 });

@@ -339,7 +339,7 @@ describe("boxSessionDO", () => {
             const { key, session, state, store } = await twoOrgs({});
             const { get } = store;
 
-            store.get = async (id, table) => (id === "org_1" ? Promise.reject(new Error("D1 timeout")) : get(id, table));
+            store.get = async (table, id) => (id === "org_1" ? Promise.reject(new Error("D1 timeout")) : get(table, id));
 
             expect(routed(await handshake(session, state, key, "box_1"))).toStrictEqual(["shop"]);
             expect(store.tables["boxes"]?.[0]).toMatchObject({ routesWithheld: ["org_1"] });
@@ -369,11 +369,11 @@ describe("boxSessionDO", () => {
                 let armed = true;
 
                 Object.assign(store, {
-                    get: async (id: string, table?: string): Promise<unknown> => {
+                    get: async (table: string, id: string): Promise<unknown> => {
                         if (armed && id === "org_1") {
                             armed = false;
 
-                            const snapshot = structuredClone(await get(id, table));
+                            const snapshot = structuredClone(await get(table, id));
 
                             reach();
                             await gate;
@@ -381,7 +381,7 @@ describe("boxSessionDO", () => {
                             return snapshot;
                         }
 
-                        return get(id, table);
+                        return get(table, id);
                     },
                 });
 
@@ -486,14 +486,14 @@ describe("boxSessionDO", () => {
             const { patch } = store;
             let failOnce = true;
 
-            store.patch = async (id, document, table) => {
+            store.patch = async (table, id, document) => {
                 if (failOnce && "routesWithheld" in document) {
                     failOnce = false;
 
                     throw new Error("D1 write failed");
                 }
 
-                return patch(id, document, table);
+                return patch(table, id, document);
             };
 
             await expect(session.pushRoutes()).rejects.toThrow("D1 write failed");
@@ -727,7 +727,7 @@ describe("boxSessionDO", () => {
         const { key, session, state, store } = await setup();
         const socket = await handshake(session, state, key, "box_1");
 
-        await store.patch("box_1", { revokedAt: 1, status: "revoked" });
+        await store.patch("boxes", "box_1", { revokedAt: 1, status: "revoked" });
         await session.alarm();
 
         expect(socket.received().at(-1)).toMatchObject({ code: "BOX_REVOKED", type: "error" });
@@ -738,7 +738,7 @@ describe("boxSessionDO", () => {
         const { key, session, state, store } = await setup();
         const socket = await handshake(session, state, key, "box_1");
 
-        await store.delete("box_1", "boxes");
+        await store.delete("boxes", "box_1");
         await session.alarm();
 
         expect(socket.received().at(-1)).toMatchObject({ code: "BOX_REVOKED", type: "error" });
@@ -855,7 +855,7 @@ describe("boxSessionDO", () => {
 
                 expect(configs()).toHaveLength(1);
 
-                await store.patch("key_ingest", { revokedAt: NOW });
+                await store.patch("deployKeys", "key_ingest", { revokedAt: NOW });
                 vi.setSystemTime(NOW + 2 * CONFIG_REFRESH_MS);
                 socket.attachment = { ...socket.attachment, seenAt: Date.now() };
                 await session.alarm();

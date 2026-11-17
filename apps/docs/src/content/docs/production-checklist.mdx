@@ -25,6 +25,19 @@ containers, log drains) live in [Deployment](/docs/deployment).
       their ids in, and mints the local `.dev.vars` secrets. It refuses to write
       `.dev.vars` unless git ignores it. `--fix --dry-run` prints the same
       changes without making them. R2 buckets and queues are not created by it.
+- [ ] You know what keeps a Durable Object awake. From `compatibility_date`
+      `2026-10-01` (flag `durable_object_io_tasks_prevent_eviction`), a pending
+      timer, `waitUntil` or outbound call blocks idle eviction for up to 15
+      minutes per operation, and that time is billed. Lunora's own shards arm
+      timers only while a live stream is open. A `LunoraClient` or an
+      `EventsSync` poll created **inside** a Durable Object keeps heartbeat and
+      poll timers armed while idle, so that Durable Object never evicts. Run
+      such clients in a Worker, or opt out with
+      `durable_object_io_tasks_do_not_prevent_eviction`.
+- [ ] A single-page app calls `client.close()` when it tears the client down.
+      Unsubscribing every query releases a shard's socket after a short idle
+      window, but the default shard's socket is the client's home connection and
+      stays open (with its heartbeat) until `close()` or page unload.
 
 ## Secrets
 
@@ -36,6 +49,12 @@ Cloudflare Worker secrets, set per environment. `wrangler deploy` never pushes
 - [ ] Every key in `.dev.vars.example` has a production value:
       `wrangler secret put NAME --env production`, or push in bulk with
       `lunora env push --prod`.
+- [ ] `LUNORA_RELAY_SECRET` is set on the Worker and on every Durable Object
+      namespace whenever you run more than one shard, read replicas, an
+      `EventLogDO`, or a shard registry. It signs the internal control channel
+      between Durable Objects. Read replicas, `EventLogDO` and the shard registry
+      refuse every request without it; the relay alone falls back to trusting any
+      caller inside the Durable Object namespace.
 - [ ] Generated secrets are strong. `lunora env generate` mints 32-byte-hex
       values for everything locally generatable; provider keys (Resend,
       Stripe, …) come from the provider dashboard.
@@ -59,18 +78,63 @@ data export/import, migrations, the Studio, scheduled-job admin.
 - [ ] It is stored only in your secret manager/CI, never in `wrangler.jsonc`
       `vars` or the repo. Rotating it also invalidates every outstanding
       ephemeral WS sub-token, so rotation is your kill switch.
+- [ ] **CI jobs and teammates use named admin tokens, not the root token.**
+      `lunora admin-token create ci-deploy --prod --url …` (or Settings → Admin
+      tokens in the Studio) prints a `lnat.<name>.<secret>` bearer once; the
+      worker stores only its SHA-256. A named token works for the HTTP admin
+      API operations that are not root-only (CLI `--token`, the MCP server), and
+      the shard audit log records its name. The root-only operations listed
+      below need `LUNORA_ADMIN_TOKEN`. A pipeline that runs `deploy --migrate`
+      runs `migrate apply` as its first step: give that pipeline a token minted
+      with `--scope migrations`, which runs only additive SQL, and keep the root
+      token for a file that drops or rewrites rows or adds a unique index (a
+      `.unique()` field generates one). Revoke one with
+      `lunora admin-token revoke <name>`: the revoking isolate refuses it at once,
+      and every other isolate within 30 seconds (its verification cache); an
+      expiring token stops at its expiry everywhere. Anything that would outlive
+      a revocation needs the root token: managing tokens, admin WebSockets and WS
+      sub-tokens (so the Studio's live panels), `pitrRestore`, `runAs`, storage
+      signed URLs (so `lunora import` of a blob above the verified-upload cap),
+      the auth jurisdiction copy and purge, every auth admin op except the
+      reads and the ones that only take access away (ban, revoke a session or
+      invitation). Named tokens
+      require `LUNORA_ADMIN_TOKEN` to be set (the worker signs its hop to the
+      shard with it), but rotating it does not revoke them — revoke each by name.
+      Token digests live in a reserved table no SQL console, data browser or
+      export can read, for any caller. A malformed `lnat.` bearer is refused
+      before any lookup, and each isolate allows only a small burst of lookups
+      for names it has not confirmed. Once that burst is spent, the isolate asks
+      the store for the list of real token names (at most once every few
+      seconds) instead of looking up each invented one, so a flood cannot hammer
+      the default shard or lock out a real token. A token created in the last few
+      seconds can be refused once on another isolate during such a flood; retry.
+      Revocations are recorded in a small Durable Object of their own
+      (`AdminRevocationDO`, bound as `ADMIN_REVOCATIONS`) before the token row is
+      deleted, and checked whenever a token is verified, so restoring the default
+      shard to a point before a revocation (`pitrRestore`) cannot bring a revoked
+      token back. A Vite-first app gets the binding and its migration
+      automatically. A hand-written worker entry must export the class
+      (`export { AdminRevocationDO } from "./lunora/_generated/adminRevocations.js"`),
+      bind it, and call `.adminRevocations((env) => env.ADMIN_REVOCATIONS)`;
+      without it no named token can be created and any that exist are refused,
+      leaving the root token as the only admin credential.
 - [ ] **Ephemeral WS tokens stay enforced.** A browser WebSocket cannot set an
       `Authorization` header, so admin sockets authenticate via `?token=`,
       which lands in access logs and browser history. Instead of the raw
       master token, the worker mints a short-lived (60s) HMAC-signed sub-token
       via `POST /_lunora/admin/ws-token` (itself gated by the master token in
-      the `Authorization` header). Enforcement is **on by default**: the WS
-      admin gate (worker and Durable Objects both) rejects the raw master
-      token in `?token=`; only minted sub-tokens (or the master token in the
-      `Authorization` header, which never leaks via URLs) authorize. The Studio
-      mints sub-tokens itself and never falls back to the master token. There
-      is no opt-out. The sub-token itself still rides the URL for up to 60
-      seconds, so proxy and access logs can record it.
+      the `Authorization` header). The worker accepts only a minted sub-token in
+      `?token=`, never the master token. It forwards the request as it arrived, and
+      the Durable Object refuses a raw master token or raw session bearer in
+      `?token=`. Only minted sub-tokens (or the master token in the `Authorization`
+      header, which never leaks via URLs) authorize. The Studio mints sub-tokens
+      itself and never falls back to the master token. There is no opt-out.
+      The sub-token itself still rides the URL for up to 60 seconds, so proxy
+      and access logs can record it.
+- [ ] **The session bearer stays out of the URL.** When `LUNORA_WS_BEARER` is set,
+      a client sends it in the `connect` frame, never in `?token=`, so it is
+      not recorded on every reconnect. A socket that does not present it is
+      closed with `4003`. See [protocol §6](https://github.com/anolilab/lunora/blob/alpha/protocol/README.md).
 
 ## Rate limiting and abuse
 
@@ -89,7 +153,7 @@ data export/import, migrations, the Studio, scheduled-job admin.
 - [ ] `authAdmin` is set if you use the Studio's auth panel (the deprecated
       `authIntrospector` option is gone; see the
       [upgrade guide](/docs/migrating/from-alpha)).
-- [ ] Tables holding user data have [RLS](/docs/concepts/rls) policies, and
+- [ ] Tables holding user data have [row-level security (RLS)](/docs/concepts/rls) policies, and
       fields that must never reach other users are
       [masked](/docs/concepts/masking).
 - [ ] The secure-by-default edge (CORS allowlist, CSRF guard, security
@@ -103,12 +167,20 @@ data export/import, migrations, the Studio, scheduled-job admin.
 Lunora has two migration surfaces; see [Migrations](/docs/concepts/migrations).
 
 - [ ] **D1 schema migrations** for `.global()` tables are generated
-      (`lunora migrate generate`) and committed as a review artifact. Nothing
-      applies them: the runtime provisions global tables from the schema on
-      first use (`CREATE TABLE IF NOT EXISTS` + additive `ADD COLUMN`), so any
-      hand-written SQL in a generated file must be applied yourself
-      (`wrangler d1 execute <DB> --remote --file=…`) before the deploy.
-- [ ] **Data migrations** (`lunora migrate create --table …`, run with
+      (`lunora migrate generate`) and committed as a review artifact. The
+      runtime provisions additive changes on first use, so the drops and
+      hand-written SQL in a generated file are run with
+      `lunora migrate apply --url <worker> --yes` before the deploy that depends
+      on them. `lunora deploy --migrate` runs them after the new code is live,
+      so it is not a substitute for a change the new code needs. A project that
+      predates this tracking records the files that already ran with
+      `lunora migrate apply --baseline`, or `--baseline-through <file>` when a
+      later file has not run yet, before its first deploy (see Migrations).
+      `migrate apply` needs the root admin token, or a token minted with
+      `--scope migrations`, which runs only additive files (a new table or index,
+      an added column) and refuses anything else. `lunora migrate status --sql`
+      shows what has run.
+- [ ] **Data migrations** (`lunora migrate create <name> --table <table>`, run with
       `lunora migrate up`) have been dry-run against a copy where the change
       is destructive. Runs are admin-gated: set `LUNORA_ADMIN_TOKEN` or pass
       `--token`.
@@ -186,8 +258,10 @@ Checklist:
 ## Limits
 
 - [ ] You've read [Limits](/docs/limits) and know which Cloudflare ceiling
-      you'll hit first: DO SQLite size and per-DO request rate are the usual
+      you'll hit first: Durable Object (DO) SQLite size and per-DO request rate are the usual
       sharding signals, subrequest counts bound fan-out reads.
+- [ ] A large app's startup stays well under Cloudflare's 1 s CPU limit
+      (`npx wrangler check startup`); past it the deploy fails with error 10021. See [Worker startup CPU limit](/docs/startup-cpu-limit).
 
 ## Advisors as the final gate
 

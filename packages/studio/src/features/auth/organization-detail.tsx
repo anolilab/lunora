@@ -1,10 +1,10 @@
-import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { useClientQuery } from "../../hooks/use-admin-query";
-import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import { settlePolls, useAutoRefresh } from "../../hooks/use-auto-refresh";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 import { AuthPager, useOwnedOffset } from "./auth-pager";
@@ -44,7 +44,7 @@ interface OrganizationDetailProps {
  * is HTTP-only with no live channel.
  */
 export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled }: OrganizationDetailProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     const [dialog, setDialog] = useState<DialogState>(null);
@@ -80,24 +80,34 @@ export const OrganizationDetail = ({ organizationId, rolesEnabled, teamsEnabled 
 
     const error = membersQuery.error ?? invitationsQuery.error ?? teamsQuery.error ?? rolesQuery.error ?? teamMembersQuery.error;
 
-    const refetchAll = (): void => {
-        membersQuery.refetch();
-        invitationsQuery.refetch();
+    const pollAll = (): Promise<void> => {
+        const polls: Promise<void>[] = [membersQuery.poll(), invitationsQuery.poll()];
 
         if (teamsEnabled) {
-            teamsQuery.refetch();
+            polls.push(teamsQuery.poll());
         }
 
         if (rolesEnabled) {
-            rolesQuery.refetch();
+            polls.push(rolesQuery.poll());
         }
 
         if (selectedTeam !== null) {
-            teamMembersQuery.refetch();
+            polls.push(teamMembersQuery.poll());
         }
+
+        return settlePolls(polls);
     };
 
-    useAutoRefresh(refetchAll, true);
+    const refetchAll = (): void => {
+        fireAndForget(pollAll());
+    };
+
+    // One timer per read: a failing team read backs off only itself, not the members or invitations lists.
+    useAutoRefresh(() => membersQuery.poll(), true);
+    useAutoRefresh(() => invitationsQuery.poll(), true);
+    useAutoRefresh(() => teamsQuery.poll(), teamsEnabled);
+    useAutoRefresh(() => rolesQuery.poll(), rolesEnabled);
+    useAutoRefresh(() => teamMembersQuery.poll(), selectedTeam !== null);
 
     const closeDialog = (): void => {
         setDialog(null);

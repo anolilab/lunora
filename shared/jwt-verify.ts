@@ -1,0 +1,375 @@
+/**
+ * The JWT verify step `@lunora/jwt-auth` and `@lunora/cloudflare-access` share:
+ * token sources, a cached remote key set, OIDC discovery, and verification with
+ * the expired-but-genuine branch.
+ *
+ * It is not a package so the Stable-tier Access adapter takes no runtime edge on
+ * the Experimental `jwt-auth`; each package inlines its own copy. Being in
+ * `shared/`, it cannot import `jose` (not hoisted where this file resolves) or
+ * `@lunora/errors`: {@link createJwtVerification} takes both from the caller.
+ * See AGENTS.md → "Top-level `shared/` — bundler-inlined source".
+ */
+
+const WHITESPACE = /\s+/u;
+const SCHEME = /^https?:\/\//iu;
+
+/**
+ * Seconds a token's `iat` may lie ahead of the worker's clock whatever
+ * `clockTolerance` says: an issuer whose clock runs slightly fast mints tokens
+ * that are genuine from the first second, and the default tolerance is 0.
+ */
+const IAT_SKEW_SECONDS = 60;
+
+/** OIDC discovery gives up after this long, as `jose`'s remote key-set fetch does: a hung lookup stays cached until it settles. */
+const DISCOVERY_TIMEOUT_MS = 5000;
+
+/** Algorithms accepted when `algorithms` is not set: asymmetric only, so an `alg: none` or HMAC forgery never verifies against a public key set. */
+const DEFAULT_ALGORITHMS = ["RS256", "RS384", "RS512", "PS256", "PS384", "PS512", "ES256", "ES384", "ES512", "EdDSA"];
+
+/** Where a verifier reads the raw token from. Return `null`/`undefined` for "no token" (anonymous). */
+type TokenSource = (request: Request) => string | null | undefined;
+
+/** The claims `jose` returns: the verifier reads `iat`, everything else passes through. */
+interface JwtClaims {
+    [claim: string]: unknown;
+    iat?: number;
+}
+
+interface JoseVerifyOptions {
+    algorithms: string[];
+    audience?: string | string[];
+    clockTolerance: number;
+    issuer?: string[];
+    requiredClaims: string[];
+}
+
+/** The slice of `jose` the verifier calls. */
+interface JoseApi<Key, Claims extends JwtClaims> {
+    createRemoteJWKSet: (url: URL) => Key;
+    errors: {
+        JWTClaimValidationFailed: new (message: string, payload: Claims, claim: string, reason: string) => Error;
+        JWTExpired: abstract new (...args: never[]) => Error & { claim: string; payload: Claims };
+    };
+    jwtVerify: (token: string, key: Key, options: JoseVerifyOptions) => Promise<{ payload: Claims }>;
+}
+
+interface JwtVerifierOptionsOf<Key> {
+    /**
+     * Allowed signing algorithms. Defaults to every asymmetric JOSE algorithm;
+     * pin it to what your provider signs with (the presets do).
+     */
+    algorithms?: string[];
+
+    /**
+     * Expected `aud`. Verified only when set — set it whenever your provider
+     * issues one (Auth0's API identifier, Supabase's `authenticated`): without
+     * it, any token the issuer minted for another application verifies too.
+     */
+    audience?: string | string[];
+
+    /** Seconds of clock skew tolerated on `exp` / `nbf` / `iat`. */
+    clockTolerance?: number;
+
+    /**
+     * Expected `iss`. Required unless `jwksUrl` or `keySet` is set, in which case
+     * it is still strongly recommended. When neither is set the key set is
+     * discovered from `<issuer>/.well-known/openid-configuration` of the FIRST
+     * issuer listed; that issuer must be https and the discovery document must
+     * name it as its `issuer`.
+     */
+    issuer?: string | string[];
+
+    /** URL of the provider's JSON Web Key Set. */
+    jwksUrl?: string | URL;
+
+    /** A key used instead of fetching one (a PEM public key imported with `importSPKI`, a local JWKS, or a test key). */
+    keySet?: Key;
+
+    /** Observe a present-but-invalid token (bad signature, wrong issuer…). Never fires for a missing token. Throws are swallowed. */
+    onError?: (error: unknown, request: Request) => void;
+
+    /** Claims the token must carry. Defaults to `["exp"]`: a token without an expiry would stay valid forever. */
+    requiredClaims?: string[];
+
+    /** Where to read the token. Defaults to {@link bearerToken}. */
+    token?: TokenSource;
+}
+
+/** A verified token. `expired` is set when its ONLY fault is a past `exp`. */
+interface VerifiedJwtOf<Claims> {
+    expired: boolean;
+    payload: Claims;
+}
+
+/** Reads the request's token and verifies it; `undefined` for no token or a token that failed verification. */
+type JwtVerifierOf<Claims> = (request: Request) => Promise<VerifiedJwtOf<Claims> | undefined>;
+
+/** The identity keys the runtime reads an expiry from (`expiresAtMs` first). */
+const EXPIRY_CLAIMS = new Set(["exp", "expiresAtMs"]);
+
+/**
+ * Mapped identity claims without the expiry keys: only the verified token's own `exp` may set them, or a mapper
+ * returning a later `expiresAtMs` would keep a lapsed token authenticated.
+ */
+const withoutExpiryClaims = (claims: Record<string, unknown>): Record<string, unknown> =>
+    Object.fromEntries(Object.entries(claims).filter(([key]) => !EXPIRY_CLAIMS.has(key)));
+
+/** Narrow a claim to a non-empty string; `""` and anything that is not a string are absent. */
+const nonEmpty = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 ? value : undefined);
+
+/** The named header's value, verbatim. */
+const headerToken =
+    (name: string): TokenSource =>
+    (request) =>
+        nonEmpty(request.headers.get(name));
+
+/** The `Authorization: Bearer <token>` value, or `undefined`. */
+const bearerToken: TokenSource = (request) => {
+    const header = request.headers.get("authorization");
+
+    if (header === null) {
+        return undefined;
+    }
+
+    const [scheme, value] = header.trim().split(WHITESPACE, 2);
+
+    return scheme?.toLowerCase() === "bearer" ? nonEmpty(value) : undefined;
+};
+
+/** A token source reading the named cookie. */
+const cookieToken =
+    (name: string): TokenSource =>
+    (request) => {
+        const cookieHeader = request.headers.get("cookie");
+
+        if (cookieHeader === null) {
+            return undefined;
+        }
+
+        for (const part of cookieHeader.split(";")) {
+            const eq = part.indexOf("=");
+
+            if (eq !== -1 && part.slice(0, eq).trim() === name) {
+                return nonEmpty(part.slice(eq + 1).trim());
+            }
+        }
+
+        return undefined;
+    };
+
+/** First source that yields a token wins. `firstToken(bearerToken, cookieToken("__session"))`. */
+const firstToken =
+    (...sources: TokenSource[]): TokenSource =>
+    (request) => {
+        for (const source of sources) {
+            const token = source(request);
+
+            if (token) {
+                return token;
+            }
+        }
+
+        return undefined;
+    };
+
+/**
+ * OIDC discovery, cached per issuer; a failed lookup is dropped so the next
+ * request retries. The document must name the configured issuer exactly (OIDC
+ * Discovery §4.3), so a document served for another issuer cannot hand over its keys.
+ */
+const discoveries = new Map<string, Promise<string>>();
+
+const discoverJwksUrl = (issuer: string): Promise<string> => {
+    let pending = discoveries.get(issuer);
+
+    if (pending === undefined) {
+        pending = (async () => {
+            const response = await fetch(new URL(".well-known/openid-configuration", issuer.endsWith("/") ? issuer : `${issuer}/`), {
+                signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+            });
+
+            if (!response.ok) {
+                throw new Error(`OIDC discovery for ${issuer} failed with HTTP ${String(response.status)}`);
+            }
+
+            const body: unknown = await response.json();
+            const document = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+
+            if (document.issuer !== issuer) {
+                throw new Error(`OIDC discovery for ${issuer} returned a document for issuer ${JSON.stringify(document.issuer)}`);
+            }
+
+            const jwksUri = document["jwks_uri"];
+
+            if (typeof jwksUri !== "string" || !jwksUri.startsWith("https://")) {
+                throw new Error(`OIDC discovery for ${issuer} returned no https jwks_uri`);
+            }
+
+            return jwksUri;
+        })();
+
+        discoveries.set(issuer, pending);
+        pending.catch(() => discoveries.delete(issuer));
+    }
+
+    return pending;
+};
+
+const issuerList = (issuer: string | string[] | undefined): string[] =>
+    (Array.isArray(issuer) ? issuer : [issuer]).filter((value): value is string => nonEmpty(value) !== undefined);
+
+/** Parses as an `https:` URL: a scheme check alone lets `https://[bad` through to fail on every request instead of at wiring. */
+const isHttpsUrl = (value: string): boolean => {
+    try {
+        return new URL(value).protocol === "https:";
+    } catch {
+        return false;
+    }
+};
+
+interface JwtVerification<Key, Claims> {
+    /** The `https://` origin of a configured host or URL (`acme.auth0.com`, `https://clerk.example.com/`), throwing when it is empty. */
+    httpsOrigin: (value: string, name: string) => string;
+
+    /**
+     * Create the verify step every Lunora JWT adapter shares: read the token from
+     * the request, verify it with `verifyJwt`, and report the outcome without
+     * throwing. No token, or a token that fails verification, yields `undefined`;
+     * `onError` observes the failure.
+     *
+     * The one failure that still yields the payload is a past `exp`: `jose` checks
+     * the signature, `iss` and `aud` before `exp`, so such a token is a genuine
+     * credential that lapsed. It comes back with `expired: true` so a caller can
+     * answer `TOKEN_EXPIRED` (the client refreshes) instead of running the request
+     * anonymous — or refuse it, as an admin gate does.
+     *
+     * Misconfiguration throws here, at wiring time: an unset env var must not boot a
+     * worker that resolves every caller to anonymous with no signal.
+     */
+    jwtVerifier: (options: JwtVerifierOptionsOf<Key>) => JwtVerifierOf<Claims>;
+
+    /**
+     * Verify one compact JWT and return its payload, throwing `jose`'s error on any
+     * failure. Checks the signature against `keySet`, `jwksUrl` or the key set OIDC
+     * discovery finds for the first `issuer`, then `iss`, `aud`, `alg`, the
+     * `requiredClaims`, `exp` / `nbf`, and that `iat` is not over a minute in the
+     * future (`jose` checks `iat` only together with `maxTokenAge`).
+     */
+    verifyJwt: (token: string, options: Omit<JwtVerifierOptionsOf<Key>, "onError" | "token">) => Promise<Claims>;
+}
+
+/**
+ * Bind the verify step to the caller's `jose` and error type. `name` prefixes
+ * the misconfiguration errors (`@lunora/jwt-auth: set \`issuer\`…`).
+ */
+const createJwtVerification = <Key, Claims extends JwtClaims>({
+    fail,
+    jose,
+    name,
+}: {
+    fail: (message: string) => Error;
+    jose: JoseApi<Key, Claims>;
+    name: string;
+}): JwtVerification<Key, Claims> => {
+    /**
+     * One remote key set per URL for the life of the isolate. `jose`'s getter
+     * caches the fetched keys and refetches (with a cooldown) when a token names a
+     * `kid` it does not hold — which is exactly key rotation — so a single shared
+     * instance is correct and re-creating it per request would defeat that cache.
+     */
+    const remoteKeySets = new Map<string, Key>();
+
+    const remoteKeySet = (url: string): Key => {
+        let keySet = remoteKeySets.get(url);
+
+        if (keySet === undefined) {
+            keySet = jose.createRemoteJWKSet(new URL(url));
+            remoteKeySets.set(url, keySet);
+        }
+
+        return keySet;
+    };
+
+    const httpsOrigin = (value: string, optionName: string): string => {
+        const trimmed = value.trim();
+
+        if (trimmed.length === 0) {
+            throw fail(`\`${optionName}\` is empty — check that the env var holding it is set`);
+        }
+
+        return new URL(SCHEME.test(trimmed) ? trimmed : `https://${trimmed}`).origin;
+    };
+
+    /** Where the keys come from must be configured, and over https; `verifyJwt` is public, so it checks too, not only `jwtVerifier`. */
+    const assertKeySource = (options: Omit<JwtVerifierOptionsOf<Key>, "onError" | "token">): void => {
+        const issuers = issuerList(options.issuer);
+        const jwksUrl = options.jwksUrl === undefined ? undefined : String(options.jwksUrl);
+
+        if (issuers.length === 0 && nonEmpty(jwksUrl) === undefined && options.keySet === undefined) {
+            throw fail(`${name}: set \`issuer\` (OIDC discovery) or \`jwksUrl\` — check that the env var holding it is set`);
+        }
+
+        if (jwksUrl !== undefined && !isHttpsUrl(jwksUrl)) {
+            throw fail(`${name}: \`jwksUrl\` must be an https URL, got "${jwksUrl}"`);
+        }
+
+        if (jwksUrl === undefined && options.keySet === undefined && !isHttpsUrl(issuers[0] ?? "")) {
+            throw fail(`${name}: OIDC discovery needs an https \`issuer\`, got "${issuers[0] ?? ""}"`);
+        }
+    };
+
+    const verifyJwt = async (token: string, options: Omit<JwtVerifierOptionsOf<Key>, "onError" | "token">): Promise<Claims> => {
+        assertKeySource(options);
+
+        const issuers = issuerList(options.issuer);
+        const jwksUrl = options.jwksUrl === undefined ? undefined : String(options.jwksUrl);
+        const keySet = options.keySet ?? remoteKeySet(jwksUrl ?? (await discoverJwksUrl(issuers[0] ?? "")));
+        const clockTolerance = options.clockTolerance ?? 0;
+
+        const { payload } = await jose.jwtVerify(token, keySet, {
+            algorithms: options.algorithms ?? DEFAULT_ALGORITHMS,
+            audience: options.audience,
+            clockTolerance,
+            issuer: issuers.length > 0 ? issuers : undefined,
+            requiredClaims: options.requiredClaims ?? ["exp"],
+        });
+
+        if (typeof payload.iat === "number" && payload.iat > Date.now() / 1000 + Math.max(clockTolerance, IAT_SKEW_SECONDS)) {
+            throw new jose.errors.JWTClaimValidationFailed('"iat" claim timestamp check failed (it should be in the past)', payload, "iat", "check_failed");
+        }
+
+        return payload;
+    };
+
+    const jwtVerifier = (options: JwtVerifierOptionsOf<Key>): JwtVerifierOf<Claims> => {
+        assertKeySource(options);
+
+        const readToken = options.token ?? bearerToken;
+
+        return async (request) => {
+            // A custom token source that throws is a failed request credential, not a failed request.
+            try {
+                const token = readToken(request);
+
+                if (!token) {
+                    return undefined;
+                }
+
+                return { expired: false, payload: await verifyJwt(token, options) };
+            } catch (error) {
+                try {
+                    options.onError?.(error, request);
+                } catch {
+                    /* an observer must not turn a verification failure into a request error */
+                }
+
+                return error instanceof jose.errors.JWTExpired && error.claim === "exp" ? { expired: true, payload: error.payload } : undefined;
+            }
+        };
+    };
+
+    return { httpsOrigin, jwtVerifier, verifyJwt };
+};
+
+export type { JwtVerifierOf, JwtVerifierOptionsOf, TokenSource, VerifiedJwtOf };
+export { bearerToken, cookieToken, createJwtVerification, firstToken, headerToken, nonEmpty, withoutExpiryClaims };

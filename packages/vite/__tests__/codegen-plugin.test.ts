@@ -2,8 +2,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES } from "@lunora/codegen";
-import { runPostCodegenHook } from "@lunora/config";
+import { createCodegenProject, findTsconfig, PROJECT_CONFIG_FILENAMES, runCodegen } from "@lunora/codegen";
+import type { DiscoveryCache } from "@lunora/config";
+import { createDiscoveryCache, runPostCodegenHook } from "@lunora/config";
+import { pendingBindingChanges } from "@lunora/config/cloudflare";
+import { consumeStudioWrite } from "@lunora/config/studio-host";
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
@@ -22,7 +25,16 @@ vi.mock(import("@lunora/codegen"), async (importOriginal) => {
         ...actual,
         createCodegenProject: vi.fn<typeof actual.createCodegenProject>(actual.createCodegenProject),
         findTsconfig: vi.fn<typeof actual.findTsconfig>(actual.findTsconfig),
+        runCodegen: vi.fn<typeof actual.runCodegen>(actual.runCodegen),
     };
+});
+
+// Whether a watcher event is the echo of a studio handler's write is
+// `@lunora/config`'s to decide and test; here a test only says which answer it gets.
+vi.mock(import("@lunora/config/studio-host"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, consumeStudioWrite: vi.fn<typeof actual.consumeStudioWrite>(actual.consumeStudioWrite) };
 });
 
 // The plugin's contract with the hook is "call it after a run that produced
@@ -35,6 +47,14 @@ vi.mock(import("@lunora/config"), async (importOriginal) => {
     const actual = await importOriginal();
 
     return { ...actual, runPostCodegenHook: vi.fn<typeof actual.runPostCodegenHook>(actual.runPostCodegenHook) };
+});
+
+// What the binding scan answers is `@lunora/config`'s to test; here a test only
+// says which pending changes a save finds. Defaults to the real scan.
+vi.mock(import("@lunora/config/cloudflare"), async (importOriginal) => {
+    const actual = await importOriginal();
+
+    return { ...actual, pendingBindingChanges: vi.fn<typeof actual.pendingBindingChanges>(actual.pendingBindingChanges) };
 });
 
 const CRONS_SOURCE = `import { cronJobs } from "@lunora/scheduler";
@@ -95,6 +115,7 @@ const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
         allowUnauthenticatedShardAccess: false,
         apiSpec: "openapi",
         cloudflare: false,
+        lazyFunctions: false,
         studio: false,
         generatedDir: "lunora/_generated",
         overlay: false,
@@ -122,6 +143,22 @@ describe("codegen-plugin", () => {
     });
 
     describe("codegenPlugin", () => {
+        it("emits lazy function modules when the resolved option opts in", () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), lazyFunctions: true });
+            (plugin.configResolved as (this: unknown) => void).call(undefined);
+
+            const generatedDirectory = join(workdir, "lunora", "_generated");
+            const functions = readFileSync(join(generatedDirectory, "functions.ts"), "utf8");
+
+            expect(functions).toContain("export const LUNORA_FUNCTION_MANIFEST");
+            expect(functions).not.toContain('import * as lunora_messages_0 from "../messages.js"');
+            expect(existsSync(join(generatedDirectory, "fn", "lunora_messages_0.ts"))).toBe(true);
+        });
+
         it("buildStart runs codegen and emits the three generated files", () => {
             // 9 runtime assertions; the expectTypeOf below is a compile-time check and isn't counted.
             expect.assertions(9);
@@ -222,9 +259,10 @@ describe("codegen-plugin", () => {
             (plugin.configureServer as (this: unknown, s: unknown) => void).call(undefined, server);
 
             // The config-drift watcher (wrangler.jsonc / lunora.json → restart) is a
-            // separate registration further down `configureServer` and must survive:
-            // only the codegen handlers go. Enabled, "change" is registered twice.
-            expect(handlers.filter((event) => event === "change")).toHaveLength(1);
+            // separate registration further down `configureServer` and must survive,
+            // beside the binding-drift listener that replaces codegen's. Only the
+            // codegen handlers go: enabled, "unlink" also carries the tsconfig one.
+            expect(handlers.filter((event) => event === "unlink")).toHaveLength(2);
             expect(logged.join(" ")).toContain("codegen watch disabled");
 
             // Positive control: with codegen on, the same call registers the codegen
@@ -243,7 +281,7 @@ describe("codegen-plugin", () => {
                 },
             });
 
-            expect(enabledHandlers.filter((event) => event === "change")).toHaveLength(2);
+            expect(enabledHandlers.filter((event) => event === "unlink")).toHaveLength(4);
         });
 
         it("build: LUNORA_CODEGEN=0 is ignored, so the ERROR-advisory gate still fails the build", async () => {
@@ -269,6 +307,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -303,6 +343,8 @@ describe("codegen-plugin", () => {
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -311,6 +353,58 @@ describe("codegen-plugin", () => {
             await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).rejects.toThrow(
                 /ERROR-level.*index_references_unknown_field/u,
             );
+        });
+
+        // A directory where the marker file goes makes the write throw (EISDIR) after codegen has already written its output.
+        const blockMarker = (root: string): void => {
+            mkdirSync(join(root, ".lunora", "api-spec.json"), { recursive: true });
+        };
+
+        it("vite build fails when the API spec marker cannot be written, since the CLI reads it", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            blockMarker(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+
+            const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            };
+
+            await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).rejects.toThrow(
+                /could not write the API spec marker/u,
+            );
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(true);
+        });
+
+        it("vite dev logs a marker that cannot be written and still runs the post-codegen hook", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            blockMarker(workdir);
+            vi.mocked(runPostCodegenHook).mockClear();
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "serve" });
+
+            const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            };
+
+            await expect((plugin.buildStart as (this: typeof buildContext) => Promise<void>).call(buildContext)).resolves.toBeUndefined();
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
         });
 
         it("vite dev only logs the same ERROR-level advisory (never throws)", async () => {
@@ -463,7 +557,8 @@ describe("codegen-plugin", () => {
     const getConfigChangeListener = (server: import("vite").ViteDevServer): ((file: string) => void) => {
         const changeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.filter((args) => args[0] === "change");
 
-        return changeCalls[1]?.[1] as (file: string) => void;
+        // Registered last, after codegen's and the binding-drift one.
+        return changeCalls.at(-1)?.[1] as (file: string) => void;
     };
 
     /**
@@ -533,8 +628,9 @@ describe("codegen-plugin", () => {
             // `server.close()`, regardless of middleware mode.
             (plugin.buildEnd as (this: { environment: unknown }) => void).call({ environment: server.environments.client });
 
+            // Every listener `configureServer` registered comes off again, the binding-drift ones included.
             // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
-            expect(server.watcher.off).toHaveBeenCalledTimes(7);
+            expect(server.watcher.off).toHaveBeenCalledTimes((server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.length);
 
             // The pending debounce fires after close but must no-op (closed guard).
             await vi.runAllTimersAsync();
@@ -574,8 +670,9 @@ describe("codegen-plugin", () => {
             closeListeners[0]?.();
             closeListeners[0]?.();
 
+            // Every listener `configureServer` registered comes off again, the binding-drift ones included.
             // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's watcher; no `this` binding to lose
-            expect(server.watcher.off).toHaveBeenCalledTimes(7);
+            expect(server.watcher.off).toHaveBeenCalledTimes((server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.length);
         });
     });
 
@@ -721,6 +818,228 @@ export const schema = defineSchema({
             expect(send.mock.calls.some((call) => (call[0] as { type?: string }).type === "full-reload")).toBe(false);
         });
 
+        it("a save that needs a binding the worker was not started with says so once, after the client is told", async () => {
+            expect.assertions(4);
+
+            writeFixture(workdir);
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            const restartHints = (): string[] =>
+                warn.mock.calls.map(([message]) => message).filter((message) => message.includes("not in the running worker yet"));
+
+            vi.mocked(pendingBindingChanges)
+                .mockResolvedValueOnce(["QUEUE_EMAILS (Queue)"])
+                .mockResolvedValueOnce(["QUEUE_EMAILS (Queue)", "KV (KV namespace)"]);
+
+            wireServer(plugin, server);
+
+            const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as (
+                file: string,
+            ) => void;
+
+            changeListener(schemaPath);
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).toHaveBeenCalledTimes(1);
+            expect(restartHints()).toStrictEqual([
+                expect.stringContaining("QUEUE_EMAILS (Queue) — not in the running worker yet. Restart the dev server to write it"),
+            ]);
+
+            // The second save finds the queue again plus a new KV binding: only the KV one is news.
+            changeListener(schemaPath);
+            await vi.runAllTimersAsync();
+
+            expect(restartHints()).toHaveLength(2);
+            expect(restartHints()[1]).toMatch(/KV \(KV namespace\) — not in the running worker yet/u);
+        });
+
+        it("with codegen watch off, a save that needs a new binding still says so, without regenerating", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+            vi.stubEnv("LUNORA_CODEGEN", "0");
+
+            const schemaPath = join(workdir, "lunora", "schema.ts");
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValueOnce(["QUEUE_EMAILS (Queue)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(schemaPath);
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("QUEUE_EMAILS (Queue) — not in the running worker yet"));
+        });
+
+        it("a src/ save that needs a new binding says so, without regenerating", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValueOnce(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "src", "worker.ts"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
+        });
+
+        it("gives a non-.ts schema source, which codegen does not regenerate from, the restart hint", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValueOnce(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "lunora", "helpers.js"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(clientSend).not.toHaveBeenCalled();
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
+        });
+
+        it("says nothing about binding drift for a worker that runs a custom configPath", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), cloudflare: { configPath: "wrangler.custom.jsonc" } });
+            const { server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValue(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "src", "worker.ts"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("not in the running worker yet"));
+        });
+
+        it("still gives the drift hint when configPath names the project's own wrangler.jsonc", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), cloudflare: { configPath: "./wrangler.jsonc" } });
+            const { server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValue(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+
+            for (const [event, listener] of (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls as [string, (file: string) => void][]) {
+                if (event === "change") {
+                    listener(join(workdir, "src", "worker.ts"));
+                }
+            }
+
+            await vi.runAllTimersAsync();
+
+            expect(warn).toHaveBeenCalledWith(expect.stringContaining("DB (D1 database) — not in the running worker yet"));
+        });
+
+        it("checks a save the restart window suppressed once the restart ends", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const wranglerPath = join(workdir, "wrangler.jsonc");
+
+            writeFileSync(wranglerPath, '{ "name": "app" }\n', "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { restart, server } = makeStubServer();
+            const warn = vi.fn<(message: string) => void>();
+            let finishRestart: (() => void) | undefined;
+
+            restart.mockImplementation(async () => {
+                await new Promise<void>((resolve) => {
+                    finishRestart = resolve;
+                });
+            });
+            server.config.logger.warn = warn;
+            vi.mocked(pendingBindingChanges).mockResolvedValue(["DB (D1 database)"]);
+
+            wireServer(plugin, server);
+            await settleConfigBaseline(plugin);
+
+            const changeListeners = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls
+                .filter((args) => args[0] === "change")
+                .map((args) => args[1] as (file: string) => void);
+
+            writeFileSync(wranglerPath, '{ "name": "app", "d1_databases": [{ "binding": "DB", "database_name": "app" }] }\n', "utf8");
+            changeListeners.at(-1)?.(wranglerPath);
+
+            expect(restart).toHaveBeenCalledTimes(1);
+
+            // A source save lands while the restart is still running: its scan is suppressed.
+            for (const listener of changeListeners.slice(0, -1)) {
+                listener(join(workdir, "src", "worker.ts"));
+            }
+
+            await vi.runAllTimersAsync();
+
+            const hints = (): unknown[] => warn.mock.calls.filter(([message]) => message.includes("not in the running worker yet"));
+
+            expect(hints()).toHaveLength(0);
+
+            finishRestart?.();
+            await vi.runAllTimersAsync();
+
+            expect(hints()).toHaveLength(1);
+        });
+
         it("failure then success → recovery reloads the client once (clears overlay), still evicts the worker", async () => {
             expect.assertions(6);
 
@@ -787,6 +1106,8 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
 
             const buildContext = {
+                // Vite runs a build's hooks within an environment.
+                environment: { name: "client" },
                 error: (message: string): never => {
                     throw new Error(message);
                 },
@@ -993,6 +1314,24 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             expect(getConfigChangeListener(server)).toBeTypeOf("function");
         });
 
+        it("watches a lunora.config above a nested schema directory, which codegen reads too", () => {
+            expect.assertions(1);
+
+            // The schema directory is `web/lunora`, so the config codegen reads may sit in `web/`,
+            // not the root. Only the root candidates are named by the project root, so this one
+            // is watched only through the schema directory's own walk.
+            mkdirSync(join(workdir, "web", "lunora"), { recursive: true });
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), schemaDir: "web/lunora" });
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const added = (server.watcher.add as ReturnType<typeof vi.fn>).mock.calls.flat().map(String);
+
+            expect(added).toContain(join(workdir, "web", "lunora.config.ts"));
+        });
+
         it("external wrangler binding edit restarts the dev server in place", async () => {
             expect.assertions(2);
 
@@ -1162,6 +1501,33 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             vi.useRealTimers();
         });
 
+        it("the first save refreshes configResolved's Project instead of building another", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            (plugin.config as (this: unknown, config: object, env: object) => void).call(undefined, {}, { command: "serve", mode: "development" });
+            (plugin.configResolved as (this: unknown) => void).call(undefined);
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            wireServer(plugin, server);
+
+            const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as (
+                file: string,
+            ) => void;
+
+            changeListener(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+        });
+
         it("a root tsconfig.json save drops the cached Project — the next codegen run builds a fresh one", async () => {
             expect.assertions(4);
 
@@ -1200,6 +1566,79 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             // The NEXT schema-dir save proves the drop actually happened: it
             // rebuilds a fresh Project rather than reusing the old one.
             changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 2);
+        });
+
+        it("a lunora.config.ts save drops the cached Project without regenerating — the next save seeds a fresh one", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The config save does not regenerate: a binding-relevant save restarts the server
+            // instead, and a pass here would race that restart.
+            changeListener!(join(workdir, "lunora.config.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The next schema save builds the fresh Project, seeded from the saved config.
+            changeListener!(join(workdir, "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 2);
+        });
+
+        it("a web/lunora.config.ts save above a nested schema directory drops the cached Project too", async () => {
+            expect.assertions(3);
+
+            // Schema under `web/lunora`, with its config one level up in `web/`. A missing
+            // `schema.ts` makes codegen skip, and a skipped pass drops the cache by itself,
+            // which would hide the save this test is about.
+            mkdirSync(join(workdir, "web", "lunora"), { recursive: true });
+            writeFileSync(join(workdir, "web", "lunora", "schema.ts"), SCHEMA_SOURCE, "utf8");
+            writeFileSync(join(workdir, "web", "lunora", "messages.ts"), MESSAGES_SOURCE, "utf8");
+
+            const plugin = codegenPlugin({ ...makeOptions(workdir), schemaDir: "web/lunora" });
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const changeListener = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls.find((args) => args[0] === "change")?.[1] as
+                | ((file: string) => void)
+                | undefined;
+            const createCalls = createCodegenProject as ReturnType<typeof vi.fn>;
+            const before = createCalls.mock.calls.length;
+
+            changeListener!(join(workdir, "web", "lunora", "messages.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // The nested config save invalidates the cache, without regenerating.
+            changeListener!(join(workdir, "web", "lunora.config.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(createCalls).toHaveBeenCalledTimes(before + 1);
+
+            // So the next schema save builds a fresh Project.
+            changeListener!(join(workdir, "web", "lunora", "messages.ts"));
             await vi.runAllTimersAsync();
 
             expect(createCalls).toHaveBeenCalledTimes(before + 2);
@@ -1318,6 +1757,109 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
             await vi.runAllTimersAsync();
 
             expect(findTsconfigCalls).toHaveBeenCalledWith(join(workdir, "lunora"));
+        });
+    });
+
+    describe("vite build environments", () => {
+        it("generates once for all environments, and none starts before the shared postcodegen finished", async () => {
+            expect.assertions(4);
+
+            // One instance serving both environments, as with plugins passed
+            // inline; `@cloudflare/vite-plugin` builds worker environments
+            // concurrently, so both `buildStart`s run at once.
+            writeFixture(workdir);
+            vi.mocked(runCodegen).mockClear();
+            vi.mocked(runPostCodegenHook).mockClear();
+
+            let finishHook: (() => void) | undefined;
+            const order: string[] = [];
+
+            vi.mocked(runPostCodegenHook).mockImplementationOnce(
+                async () =>
+                    new Promise((resolve) => {
+                        finishHook = () => {
+                            order.push("hook");
+                            resolve({ ran: false });
+                        };
+                    }),
+            );
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const buildStart = plugin.buildStart as (this: object) => Promise<void>;
+            const contextFor = (name: string) => {
+                return {
+                    environment: { name },
+                    error: (message: string): never => {
+                        throw new Error(message);
+                    },
+                };
+            };
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+            await (plugin.configResolved as (this: unknown) => Promise<void>).call(undefined);
+
+            const starts = [buildStart.call(contextFor("client")), buildStart.call(contextFor("worker"))].map(async (start) => {
+                await start;
+                order.push("start");
+            });
+
+            await vi.waitFor(() => {
+                expect(finishHook).toBeDefined();
+            });
+
+            finishHook?.();
+            await Promise.all(starts);
+
+            // A start that did not wait for the shared hook would have settled before it.
+            expect(order).toStrictEqual(["hook", "start", "start"]);
+
+            expect(runCodegen).toHaveBeenCalledTimes(1);
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+        });
+    });
+
+    describe("startup discovery cache", () => {
+        it("drops the scans a postcodegen hook may have invalidated before reconciling bindings", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const events: string[] = [];
+            const cache = createDiscoveryCache();
+            const discovery: DiscoveryCache = {
+                clear: () => {
+                    events.push("clear");
+                    cache.clear();
+                },
+                memo: (key, compute) => {
+                    events.push("memo");
+
+                    return cache.memo(key, compute);
+                },
+            };
+
+            vi.mocked(runPostCodegenHook).mockImplementationOnce(async () => {
+                events.push("hook");
+
+                return { ran: true };
+            });
+
+            const plugin = codegenPlugin(makeOptions(workdir), discovery);
+
+            (plugin.config as (userConfig: unknown, env: { command: "build" | "serve" }) => void)(undefined, { command: "build" });
+            await (plugin.configResolved as (this: unknown) => Promise<void>).call(undefined);
+            await (plugin.buildStart as (this: object) => Promise<void>).call({
+                environment: { name: "client" },
+                error: (message: string): never => {
+                    throw new Error(message);
+                },
+            });
+
+            const afterHook = events.slice(events.indexOf("hook") + 1);
+
+            // The reconcile consults the cache after the hook, and only once it has been cleared.
+            expect(afterHook).toContain("memo");
+            expect(afterHook.indexOf("clear")).toBeLessThan(afterHook.indexOf("memo"));
         });
     });
 
@@ -1558,6 +2100,55 @@ export const archive = mutation({
             const warnings = (server.config.logger.warn as ReturnType<typeof vi.fn>).mock.calls.map((call) => String(call[0]));
 
             expect(warnings.join("\n")).toContain("keeps rewriting the schema sources");
+        });
+
+        it("runs everything after codegen, but not codegen, for a studio handler's own write", async () => {
+            expect.assertions(4);
+
+            // The studio handler regenerates in its own request, so the watcher's
+            // codegen would only repeat it. Everything after codegen is the
+            // watcher's alone: the project's `postcodegen`, invalidating
+            // `_generated/` and the reload that tells the worker and the client.
+            writeFixture(workdir);
+            vi.mocked(runPostCodegenHook).mockResolvedValue({ ran: true });
+            vi.mocked(consumeStudioWrite).mockReturnValueOnce(true);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { clientSend, server, workerSend } = makeStubServer();
+
+            wireServer(plugin, server);
+            vi.mocked(runCodegen).mockClear();
+
+            changeListenerFor(server)(join(workdir, "lunora", "schema.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runCodegen).not.toHaveBeenCalled();
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
+            expect(workerSend.mock.calls[0]?.[0]).toMatchObject({ path: "*", type: "full-reload" });
+            expect(clientSend.mock.calls[0]?.[0]).toMatchObject({ event: "lunora:api-updated", type: "custom" });
+        });
+
+        it("still runs codegen when a real save lands in the same burst as a studio write", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+            vi.mocked(runPostCodegenHook).mockResolvedValue({ ran: true });
+            vi.mocked(consumeStudioWrite).mockReturnValueOnce(false).mockReturnValueOnce(true);
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { server } = makeStubServer();
+
+            wireServer(plugin, server);
+            vi.mocked(runCodegen).mockClear();
+
+            const onChange = changeListenerFor(server);
+
+            onChange(join(workdir, "lunora", "messages.ts"));
+            onChange(join(workdir, "lunora", "schema.ts"));
+            await vi.runAllTimersAsync();
+
+            expect(runCodegen).toHaveBeenCalledTimes(1);
+            expect(runPostCodegenHook).toHaveBeenCalledTimes(1);
         });
 
         it("resumes regenerating once the settle window has passed", async () => {

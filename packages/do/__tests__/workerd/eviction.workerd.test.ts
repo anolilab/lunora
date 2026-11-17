@@ -12,7 +12,7 @@
  * introduced them was pinned here when the package was still named
  * `vitest-pool-workers`; the capability is what matters, and pinning a version to
  * a package that has since been renamed only rots.) Eviction tears down the instance — resetting in-memory state (the
- * `subMemos` WeakMap, the per-instance subscriber bookkeeping, the migration
+ * subscription memo index (`SocketTableIndex`), the per-instance subscriber bookkeeping, the migration
  * latch) while preserving durable storage — so what survives is only what was
  * persisted. With `webSockets: "hibernate"` (the default) the hibernatable
  * socket is reattached on wake; with `webSockets: "close"` it is torn down and
@@ -184,7 +184,7 @@ describe("sync engine eviction lifecycle (workerd e2e)", () => {
         socket.received.length = 0;
 
         // Default `webSockets: "hibernate"`: the client stays connected, the
-        // server socket hibernates, and the in-memory `subMemos`/registry are
+        // server socket hibernates, and the in-memory memo index and registry are
         // wiped. The subscription survives only as the socket's attachment.
         await evictDurableObject(stub);
 

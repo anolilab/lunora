@@ -1,3 +1,1381 @@
+## @lunora/sql-store [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.236...@lunora/sql-store@1.0.0-alpha.237) (2026-11-09)
+
+- feat(cli): apply generated SQL migrations per stage (#1516)
+
+## @lunora/sql-store [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.235...@lunora/sql-store@1.0.0-alpha.236) (2026-11-05)
+
+- feat(d1): refuse unconfirmed destructive migration sql; fix the add-column race (#1489)
+
+## @lunora/sql-store [1.0.0-alpha.235](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.234...@lunora/sql-store@1.0.0-alpha.235) (2026-11-05)
+
+- feat(shard-engine): accept endCursor on findMany for reactive pages (#1485)
+
+## @lunora/sql-store [1.0.0-alpha.234](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.233...@lunora/sql-store@1.0.0-alpha.234) (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
+## @lunora/sql-store 1.0.0-alpha.234 (2026-11-03)
+
+- fix: resolve open review defects across agent, client, codegen and SDKs (#1460)
+
+## @lunora/sql-store [1.0.0-alpha.233](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.232...@lunora/sql-store@1.0.0-alpha.233) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.186
+* **@lunora/do:** upgraded to 1.0.0-alpha.280
+
+## @lunora/sql-store [1.0.0-alpha.232](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.231...@lunora/sql-store@1.0.0-alpha.232) (2026-11-03)
+
+### Bug Fixes
+
+* **sql-store:** let global reads ask for the primary ([#1449](https://github.com/anolilab/lunora/issues/1449)) ([490a8fa](https://github.com/anolilab/lunora/commit/490a8fa203fe2f170e62d71239ca5d54b0b28051))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.185
+* **@lunora/do:** upgraded to 1.0.0-alpha.279
+
+## @lunora/sql-store [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.230...@lunora/sql-store@1.0.0-alpha.231) (2026-11-02)
+
+### Bug Fixes
+
+* stop held queue copies stalling; page unlimited global findMany under the read cap ([#1443](https://github.com/anolilab/lunora/issues/1443)) ([12e6675](https://github.com/anolilab/lunora/commit/12e66757340c955af552e8eab16df3e9ec736b6e))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.183
+* **@lunora/do:** upgraded to 1.0.0-alpha.276
+
+## @lunora/sql-store [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.229...@lunora/sql-store@1.0.0-alpha.230) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.182
+* **@lunora/do:** upgraded to 1.0.0-alpha.275
+
+## @lunora/sql-store [1.0.0-alpha.229](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.228...@lunora/sql-store@1.0.0-alpha.229) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.181
+* **@lunora/do:** upgraded to 1.0.0-alpha.274
+
+## @lunora/sql-store [1.0.0-alpha.228](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.227...@lunora/sql-store@1.0.0-alpha.228) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.180
+* **@lunora/do:** upgraded to 1.0.0-alpha.273
+
+## @lunora/sql-store [1.0.0-alpha.227](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.226...@lunora/sql-store@1.0.0-alpha.227) (2026-10-31)
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** `lunora deploy --preview` is refused on every target.
+`DeployRequest.preview` (@lunora/config) and `DeployedIdentity.preview` (the
+`--format json` deployment block) are removed, and the scaffolded CI job is
+renamed from `preview` to `check`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(cli): add import/restore modes with a plan and safe replace
+
+`lunora import` and `backup restore` could only append (or, with `--replace`,
+overwrite matching `_id`s), so restoring into a populated deployment silently
+mixed old and new rows. `--mode` now chooses:
+
+- append: insert, an existing `_id` is a conflict (import default)
+- upsert: overwrite an existing `_id` (the old `--replace`)
+- replace: upsert, then delete the stored rows of the file's tables the
+  file lacks; tables the file does not name are never touched
+- require-empty: refuse unless those tables are empty (restore default)
+
+Every mode but append first reads the target's rows for the file's tables
+through the admin export route and prints a per-table plan (add / overwrite /
+delete). `--dry-run` stops there. Overwriting or deleting asks on a TTY and
+needs `--yes` otherwise.
+
+replace never clears first: it writes every file row, and deletes only after
+that write came back clean, via new `op: "delete"` import rows that route to
+the shard their doc names. A failed run leaves old rows plus what was
+written, never fewer, and re-running converges. Deletes are hard and an
+already-gone `_id` is a no-op. The shard plane (@lunora/shard-engine) and the
+global plane (@lunora/sql-store, so D1 and Hyperdrive) both apply delete rows;
+the runtime refuses global deletes unless `importGlobalsSupportsDelete` is
+set, which the emitted worker options now do. The import route is
+host-neutral, so Cloudflare, Node and celld behave the same.
+* **cli:** `lunora import --replace` and `lunora backup restore
+--replace` are removed; use `--mode upsert`. `backup restore` now defaults to
+`--mode require-empty`. `ImportShardResult`, the sql-store `ImportResult`
+and the admin import response gain a `deleted` count.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(cli): let the drift gate check stored rows before blocking
+
+The deploy gate judged schema files only: it blocked a tightening the data
+already satisfied, `--update-schema-baseline` accepted one the data broke, and
+the identity `up` that `lunora migrate create` scaffolds cleared the gate the
+moment it existed.
+
+`lunora deploy` now reads the stored rows of each table a blocking change
+touches, through the runtime's admin export (every shard and the global
+plane; the same route on Cloudflare and celld), and runs the new validators
+from the codegen IR on the changed fields. Every row fits: the change passes
+and the baseline advances on success. A row does not fit: the gate stays
+blocked and names up to ten rows by table, _id, field and reason, never a
+stored value, shard key or record key. The target is the env-guarded `--migrate-url` or the
+project link plus LUNORA_ADMIN_TOKEN; without one the block stands.
+
+A check that cannot be completed never passes: unique columns and indexes,
+TTLs, field constraints, refinements other than a literal `.max(n)`,
+unresolved validators, a repointed `v.id()`/`v.storage()`, and a missing
+target or failed read all keep the gate's answer.
+`--update-schema-baseline` now runs the same check for every
+change rows can settle and refuses otherwise; changes rows cannot settle (an
+index, a call site) it still accepts. With `--allow-schema-drift` as well,
+the run ships but the baseline advances only if the rows confirm it.
+Codegen marks a migration whose `up`
+returns its document unchanged as `identity`, and such a migration covers
+nothing. `DriftChange` gains the `field` it concerns, `SchemaDriftDecision`
+the `uncovered` changes, and `CodegenResult` the parsed `schemaTables`.
+* **cli:** `lunora prepare --update-schema-baseline` refuses a change only
+stored rows can confirm (it reads no deployment) and points at `lunora deploy`.
+`lunora deploy --update-schema-baseline` refuses while a stored row does not
+fit or the rows cannot be read. An identity `defineMigration` no longer covers
+a breaking change. `runSchemaDriftGate` is async. `@lunora/wire` moves to the
+CLI's runtime dependencies.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record import modes and the row-checked drift gate
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): take drift-gate row evidence only from the deploy target
+
+The stored-row check read whatever `--migrate-url` or the link named, so a
+local dev worker, or another environment's worker whose rows happened to
+fit, could clear a tightening that then shipped to a production whose rows
+do not. The URL now has to be the deployment this run ships to: a local or
+private address is refused, a URL other than the one linked for this `--env`
+is refused, and a `*.workers.dev` URL must carry the Worker name Wrangler
+deploys for the `--env`. A refused URL keeps the gate blocked and the
+message names it and why.
+
+The scaffolded production CI job now runs `lunora deploy --migrate-url` with
+LUNORA_DEPLOY_URL and LUNORA_ADMIN_TOKEN from the provider's secrets, so the
+row check can run there, and drops the preceding `lunora prepare`, which
+blocked before the deploy could check (deploy runs the same gates).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(cli): share the overwrite predicate and drop row-check casts
+
+Move `overwrites` into import-plan so reportPlan and planDestroysRows use it
+instead of spelling the same mode check twice more. isRowCheckable is now a
+type guard, so planCheck no longer casts table/field, and the unused
+StoredRowFailure type export is gone.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(cli): drop --preview from the deploy synopsis and skill
+
+The deploy synopsis and the deploy skill still listed `--preview`, which the CLI now refuses, and
+the environments page promised per-pull-request isolation the scaffolded pipeline does not do.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): tie the row-check target to its path, env and routes
+
+The drift gate's row source was compared with the link by origin only, ignored a link recorded for
+another env, and took any custom domain on trust. Two paths on one host can be two Workers, so the
+path now counts; a URL linked to another env is refused; and a custom domain must match a
+`route`/`routes` pattern the deploying env declares in the Wrangler config, and is refused when it
+matches another env's route. A project with no routes at all still has nothing to compare with.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): check record keys in the stored-row check
+
+The row check validated a changed `v.record()` field's values but never its keys, so tightening the
+key validator passed rows whose keys the new schema rejects. Keys are now checked against `keyType`
+and reported as `[*]`, never by name.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): keep stored text out of export read errors
+
+The export reader's errors quoted the HTTP error body, a slice of a non-row line and, through
+`JSON.parse`, a fragment of a malformed line. The drift gate prints those messages, so stored values
+could reach CI logs. They now name only the status, line number and line length.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(runtime): honour delete import rows only under ?deletes=true
+
+The admin import endpoint treated any line carrying `op: "delete"` as a hard delete, and the CLI
+forwards file lines unchanged, so a change-feed dump imported under the default append mode could
+remove stored rows with no plan and no prompt. A delete row now counts only on a request that sets
+`?deletes=true`, which only the `--mode replace` prune sends; anywhere else it is a BAD_ROW.
+* **cli:** an admin import that sends `op: "delete"` rows must add `?deletes=true`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(shard-engine): prune import deletes without onDelete actions
+
+An import's delete row went through the full ORM delete, so `--mode replace` with a partial file
+cascaded or nulled holder rows in tables the file never names, and a global row with shardBy holders
+failed outright. The writer's delete takes `skipOnDelete`, which both import planes now pass: the
+row goes, triggers still fire, and no other row changes. The docs say a holder outside the file
+keeps its reference.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* chore(api): record the import delete option
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): hold the replace prune behind --verify and fresh file rows
+
+The prune ran before `--verify`'s parity and storage checks, so a run those checks fail could still
+delete the planned rows. They now run first and block the prune. The write pass also indexes the
+rows it sends, and the prune skips any planned deletion the file now carries, so a file that changed
+between the passes never loses its newer row.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(shard-engine): refuse unknown import ops and failed delete probes
+
+The direct shard import RPC dropped an `op` other than "delete", so a misspelt delete was inserted
+as a document; it is now kept and refused as a BAD_ROW. A delete row whose ownership probe threw
+counted as already absent, so a replace prune could report a clean run over a row it never removed;
+the probe failure is now the row's error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): check geoPoint ranges and refuse unknown kinds in the row check
+
+A stored geoPoint passed with any finite lat and lng, though `v.geoPoint()` limits them to ±90 and
+±180. A validator kind the checker has no rule for now makes the check inconclusive at planning,
+instead of failing every row it reads.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): resolve the row-check URL like the deploy and refuse mapped IPv6
+
+The row check read `--migrate-url` raw, so an empty value was refused as a URL and the link for the
+`--env` never stood in for a missing one. It now resolves the URL the way the deploy's migrate step
+does. An IPv4-mapped IPv6 host (`[::ffff:127.0.0.1]`) is checked as the IPv4 address it carries, so
+a loopback or private address in that form is refused.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(codegen): see an identity migration through wrapping parentheses
+
+`up: ((doc) => doc)` was not recognised as an identity, so the scaffold-style empty migration could
+still cover its table in the drift gate. The initializer is unwrapped before the check.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(cli): say a replace prune still fires delete triggers
+
+The prune skips `onDelete` actions, not triggers, and import inserts fire theirs too. The docs and
+the writer option's comment claimed no other row could change; they now say a trigger still runs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(cli): tell restores to stop writes to the target
+
+`require-empty` and `replace` act on a read of the target taken before the write, so a row
+written in between can slip past either. The docs now say to stop writes while a restore runs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(cli): skip the upsert plan read under --yes
+
+An upsert read every stored row of the file's tables only to count `_id` matches for its prompt, so
+`--mode upsert --yes` (and `migrate … --replace`) paid a full export, which can exceed the export
+route's per-shard memory on a large table. With `--yes` and no `--dry-run` it now plans nothing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): pass --format to the import a backup restore runs
+
+`backup restore` called the import without its output format, so the import's json guard never
+fired: a `--format json` restore on a TTY that needed confirmation drew the prompt on the stdout the
+json summary owns. It now refuses there and asks for `--yes`, like `lunora import`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): accept an unlisted custom domain only when no env has routes
+
+An env without routes of its own accepted any custom domain as the row-check target even when other
+envs declared routes. Only a project that declares no routes anywhere now takes a custom domain
+as given, as the docs say.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): dry-run a replace's deletes before writing anything
+
+The worker probe only checked that deletes are reported, not that every planned delete is taken. A
+worker whose `.global()` importer cannot delete passed it, the shard deletes landed and the prune
+stopped at the first global batch on every re-run. The planned deletes now go through a dry run
+first, and a refusal stops the import before any row is written.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(codegen): mark a v.object whose shape could not be read
+
+An unresolved v.object(expr) (built at runtime, a cyclic or unreadable
+spread, or no argument) parsed to an empty shape, which the stored-row
+check treated as a real empty object. An old `{}` value then passed the
+drift gate although the runtime shape requires properties.
+
+Add `unresolvedShape` to the validator IR and make the row check report
+such a field as inconclusive instead of validating it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): reject an export that ends inside a row
+
+The export reader delivered whatever text remained at end of stream as a
+final row. The runtime newline-terminates every row, so a parseable
+remainder is a response cut off mid-row, yet the row check or import
+plan treated the export as complete. Throw instead.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(shard-engine): require the deletes opt-in on the shard import RPC
+
+The `?deletes=true` opt-in was enforced only by the runtime NDJSON
+parser. A direct `__lunora_admin__:importShard` call (the batch path
+Studio uses) hard-deleted any row tagged `op: "delete"` without it.
+
+Carry a `deletes` flag from the import request through the fan-out to
+the shard, and refuse delete rows as BAD_ROW, checked or not, unless it
+is set.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): stop saying deploy --preview runs the drift gate
+
+The deploy skill still described `lunora deploy --preview` as running
+the schema-drift gate, but the flag is refused. A non-live version can
+only come from `wrangler versions upload`, which skips the gate.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(api): record the string-typed import row op
+
+ImportRow.op widened to string so a misspelt op is refused rather than
+read as an insert; the snapshot still pinned the literal "delete".
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): never trust a workers.dev row-check target on its name
+
+A *.workers.dev host passed the row-check target test when its first label
+matched the Worker name, but the account subdomain after it cannot be read
+from the config, so a same-named Worker in another account passed and was
+sent the admin bearer. Such a target is now accepted only when the project
+link for the deploy's env names it; otherwise the check is inconclusive
+and the message says how to link or confirm the drift.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(cli)!: end every export with a row-count marker
+
+A response or file cut on a row boundary is still valid NDJSON that reads
+as a smaller export, so a short export passed as complete to the drift
+gate, the import plan and a restore.
+
+Every export now ends with `{"end":true,"rows":N}`. The runtime export and
+the scheduled backup write it; `lunora export`, the row reads, `lunora
+import` of an NDJSON file and Studio's shard import refuse a stream with no
+marker, a count that differs from the rows read, or anything after it,
+before any row is written. The runtime import endpoint applies the same
+check when a body carries a marker. `lunora seed` and Studio's export write
+it too.
+* **cli:** NDJSON files without the end marker (older exports and
+backups, hand-written files) no longer import until a marker line is added.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): say a replace import needs writes stopped, and why
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(sql-store): prune global rows on a replace import
+
+prepareRow called deleteOneRow with a writer, dialect and args it does not
+have, and returned its promise as a prepared row. Every delete row for a
+.global() table on D1 or Hyperdrive threw a ReferenceError, so a replace
+restore could not prune them.
+
+Prepare a delete as its own entry and apply it in the import loop, where
+the writer is in scope, so it is counted as deleted and a dry run writes
+nothing.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): count a repeated _id in the import plan as an overwrite
+
+The plan counted every source row but deduplicated source ids, so each
+repeat of an _id raised the add count and lowered the overwrite count,
+although the importer inserts the first copy and overwrites it with the
+next. Track repeats per table and count them as overwrites.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): let rows confirm a bigint literal field
+
+A v.literal(1n) source text stayed the string "1n", which never equals a
+stored bigint, so every row of a changed bigint literal field was listed
+as a failure and the gate stayed blocked. Read it as a bigint.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): say what the scaffolded CI gate can and cannot read
+
+.lunora/ is not committed, so CI has no project link and a *.workers.dev
+target is not read there. Say so in the scaffolded pipelines and the
+docs, add the end-marker rewrite step to the migration skill, and cover
+that a compatible change passes a dry-run with no URL or token.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(runtime): expect the export end marker in the workerd backup test
+
+The scheduled backup now ends its NDJSON with the end marker readers use to tell a complete export
+from a truncated one, so the R2 object holds the two rows and then {"end":true,"rows":2}. Assert
+the marker instead of a two-line file.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): keep GitLab production secrets out of merge-request pipelines
+
+The scaffold asked for masked variables only, so a merge-request pipeline,
+which runs the project's own code, could read the admin token. Ask for
+Masked and Protected variables scoped to the production environment, have
+the deploy job declare environment: production, and pin that the check job
+references none of them.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): say how to make a pre-marker export importable
+
+A file without an end marker is refused with a message saying it predates
+the marker (or was cut short) and how to append one after checking it is
+complete; the backups page and the alpha migration guide say the same.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(studio): offer the import modes, plan and prune in the import panel
+
+Studio only sent onConflict, so replace and require-empty and the prune of
+rows the file lacks were CLI-only. Add the same four modes for the shard,
+a plan that writes nothing, and the replace prune through the shard RPC:
+the deletes are checked first, sent with deletes: true, and run only after
+every file row is written.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(studio): record the import modes in the api snapshot
+
+The import result gains an optional `deleted` count and the import panel its mode, plan and
+delete messages.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): make replace refuse what it cannot do safely
+
+The delete check ignored shards it could not reach, so a replace wrote the file
+and pruned only the reachable shards. Rows with no _id were written under new
+ids on every run while the prune deleted the previous run's copies, so replace
+now refuses them. The overwrite confirmation counted a file repeating its own
+_id as an overwrite of stored rows, a dry run kept every planned delete in
+memory, and the plan took a bare JSON.parse of its own line.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): carry the restore plan in backup restore's json result
+
+backup restore --dry-run --format json computed the per-table plan in the import
+leg and then dropped it. Put it in the result document.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): read NULL in a removed global column as unset
+
+A .global() column that was never set is stored and exported as SQL NULL, so
+dropping it listed every row as still holding it and kept the deploy blocked.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): tie the row-check target to its route path and the current config
+
+Routes on one host that differ only by path (example.com/prod/* and
+example.com/staging/*) were one route, so another env's URL passed. A project
+link also vouched for its URL without being held against the Worker name and
+routes Wrangler deploys now. Compare the path, and check a linked URL against
+the current config.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(runtime): count the end marker against the scheduled backup cap
+
+A snapshot whose rows ended within a marker's length of the cap was stored over
+it. Check the size again after the marker, before anything is written.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(studio): report a failed prune as one, and keep the plan and labels honest
+
+A delete failing after every file row was sent showed the file-row resume text,
+which points at a line already sent. Say the file is written and the prune
+failed. Drop a shown plan when the file, shard or mode changes, word the upsert
+option for what it does, and stop the upsert confirmation mentioning deletes.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* docs(cli): say a worker must be redeployed before the CLI that needs its marker
+
+A worker from before the end marker does not write it, so the new CLI refuses its
+export until it is redeployed; the deploy skill also overstated that every
+non-live version skipped the drift gate.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(studio): assert the upsert option exists, format the import, refresh ai knowledge
+
+The upsert wording test compared an element to `true`, so it could never pass; it now checks the
+element it found. `admin-export-import.ts` gets its Prettier formatting, and the generated
+`shared/ai-knowledge-data.ts` is rebuilt from the current docs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(cli): compare hosts in one spelling and hold a linked domain to its routes
+
+A hostname with a trailing dot (app.acme.workers.dev., localhost.) is the same host
+in DNS but missed every suffix and equality test, so an unlinked workers.dev
+target or a local address passed as a custom domain. Canonicalise the host once
+before any comparison. A linked custom domain is now also checked against the
+routes the current env deploys, so a link kept after a route moved cannot vouch
+for the old URL.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): treat a v.literal it cannot evaluate as uncheckable
+
+A literal whose source is a constant, an expression, a template with a
+substitution or a numeric form like 1_000 was compared as raw text, failing
+every row or passing a row that spelt the source. Resolve plain literals and
+report the rest as inconclusive.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): validate the plan's parsed line without casts, pin the mixed-decision block
+
+Read the wire row through a plain-object guard instead of a cast, and pin that
+conforming rows never clear a decision that also holds a change rows cannot
+decide unless --update-schema-baseline is passed.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* test(d1): assert the delete test removes the row, add workerd coverage for replace pruning
+
+The dry-run delete test now checks the real run removes the row. A workerd test
+drives a replace restore on real D1: overwrite, then a checked, counted and
+repeatable prune.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(cli)!: remove --update-schema-baseline, settle its two cases in the gate
+
+The flag accepted a new baseline on the operator's word, including changes no
+stored row could confirm. The two cases it existed for are now handled by the
+gate itself:
+
+- A dropped index (unique or not), or an index reshaped without becoming
+  unique, is safe: it cannot invalidate a stored row. The baseline advances
+  with the deploy.
+- A new unique index, an index that becomes unique, or a field that becomes
+  unique is verified against the table's stored rows. The deploy is refused,
+  naming the repeating rows by _id and never printing a value, while any
+  value repeats or the rows cannot be read. NULLs never repeat and a
+  .shardBy() table is compared per shard.
+
+--allow-schema-drift remains the one-run override: it checks nothing and
+leaves the baseline unchanged. `lunora prepare` reads no deployment, so for
+a change only stored rows can confirm it refuses and points at `lunora
+deploy`. An unreadable baseline now says to fix or delete it. The codegen
+`updateSchemaBaseline` option and the dead gate paths are gone.
+* **cli:** `lunora deploy` and `lunora prepare` no longer accept
+--update-schema-baseline (it is an unknown-option error), and
+CodegenOptions.updateSchemaBaseline is removed. DriftChange gains an
+optional `uniqueOn`; a removed index is now a safe change.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(cli)!: classify schema drift by what it can do to stored data
+
+Nothing the gate cannot verify is left needing a baseline reset. Changes that
+cannot make a stored row invalid no longer block, and warn instead:
+
+- a dropped table (its rows are left in place), a dropped relation, a TTL
+  added, moved or shortened (with the count of rows the next sweep deletes
+  when the deployed worker can be read) and .commitOrdered() turned off;
+- a dropped index, which is refused only while a function still names it
+  through withIndex (codegen now returns every withIndex read), with the
+  function named.
+
+A shard-mode flip, a table turned .memory() and a jurisdiction change still
+block, because they move or empty data, and now clear once a new migration
+accompanies them; the message shows an export/import example. A migration
+whose up is a named identity function is treated as the no-op it is, and one
+that cannot be resolved as a real transform.
+* **cli:** DriftChange gains warning, expiry and index; CodegenResult
+gains indexReferences; the removed table, relation, TTL and commit-ordering
+changes are safe instead of breaking.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): key unique constraints as SQLite does, and accept an absent v.any()
+
+A unique key now treats true and 1 as one value, as SQLite's index does, and is
+a JSON typed tuple so no value can imitate a separator. A required v.any()
+field no longer fails every row that lacks it, as the runtime accepts it.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): pick the most specific route when tying a target to its env
+
+Cover all of fe80::/10, not inherit the top level's routes into an env that
+declares an empty list, tell the top level from env.production, choose the
+most specific route a URL matches instead of any other env's, and compare
+paths before another env's link refuses a URL.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): confirm an overwrite only when a stored row is matched
+
+Count the stored rows an _id of the file matches separately from repeats within
+the file, and ask for confirmation on that count.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(sql-store): report a delete whose companion write failed as landed
+
+A hard delete removes the row before its companion and after-delete trigger
+writes run. A failure there is now marked post-commit, so the import says the
+row was deleted instead of reporting a plain failure.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(studio): reject keyless rows in replace, drop stale plans, split the card
+
+Replace refuses rows with no _id, a plan that settles after the mode, shard,
+file or CSV table changed is not shown, and the import half of the panel is its
+own component with the failure reporting in a helper.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(server)!: clear data-moving drift only for a migration that names it
+
+A shard-mode flip, a table turned .memory() and a jurisdiction change moved
+or emptied data, and any new migration on the table (or, for a jurisdiction
+change, any migration at all) cleared them. An unrelated migration no longer
+does.
+
+defineMigration takes a typed `covers` declaration, read statically by
+codegen: `{ table, shardMode }`, `{ table, memory: true }` or
+`{ jurisdiction }`. The gate clears such a change only when some new
+migration's `covers` matches it exactly (the mode a table moves to, or the
+jurisdiction the schema moves to, `none` when removed). Where a table is
+involved the migration must also iterate it with an `up` that rewrites rows;
+a jurisdiction change has no table, so `covers` alone is the acknowledgement.
+A missing, different or unreadable `covers` keeps the block, and the message
+names what to declare, with an example.
+* **cli:** a shard-mode flip, .memory() and a jurisdiction change are no
+longer cleared by a migration that does not declare `covers`. DriftChange
+gains `coverage`; MigrationIR gains `covers`; MigrationDefinition gains
+`covers`.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* fix(cli): refuse 0/8, 100.64/10 and 198.18/15, and keep a wildcard route off its apex
+
+A mapped 0.0.0.0, a carrier-grade NAT address or the benchmarking range passed the
+target check and so received the admin bearer. They are private now. A route for
+*.x.com matched x.com itself, but Cloudflare matches subdomains only, so the apex
+could be classed as this env's route.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* feat(server)!: block a new or shorter TTL until a migration declares it
+
+A new, moved or shorter TTL deletes the rows already past the cutoff on the next
+sweep, which a warning let through. It now blocks like a shard-mode flip: a new
+migration clears it by declaring covers: { table, ttl: { field, after } } and
+rewriting rows on that table. The blocked message counts the stored rows the sweep
+would delete when lunora deploy can read the worker, and says so when it cannot.
+A longer or removed TTL keeps every row and only warns.
+
+Turning .commitOrdered() on is backfilled by a migration that returns each row
+unchanged, because rewriting stamps the sequence, so the identity placeholder is no
+longer called a no-op for it.
+* **cli:** a TTL added, moved or shortened blocks until a migration declares
+it in covers. MigrationCovers gains ttl; DriftCoverage gains ttl; DriftChange gains
+identityRewrites.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+
+* chore(lunora): update the api snapshot for MigrationCovers
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **cli:** row-checked drift gate, import modes, refuse shared-state previews ([#1399](https://github.com/anolilab/lunora/issues/1399)) ([958c9c7](https://github.com/anolilab/lunora/commit/958c9c7735d1cb79e42c78ca4c21a40cfface288))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.179
+* **@lunora/do:** upgraded to 1.0.0-alpha.272
+
+## @lunora/sql-store [1.0.0-alpha.226](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.225...@lunora/sql-store@1.0.0-alpha.226) (2026-10-31)
+
+### Features
+
+* **sql-store:** atomic .global() writes, statement deadlines, fewer round trips ([#1395](https://github.com/anolilab/lunora/issues/1395)) ([1d7524c](https://github.com/anolilab/lunora/commit/1d7524c8bc1a2b3b5bec345cfab861c4bd310f68))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.178
+* **@lunora/do:** upgraded to 1.0.0-alpha.271
+
+## @lunora/sql-store [1.0.0-alpha.225](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.224...@lunora/sql-store@1.0.0-alpha.225) (2026-10-30)
+
+### Bug Fixes
+
+* **sql-store:** require the table for global by-id calls ([#1428](https://github.com/anolilab/lunora/issues/1428)) ([5680500](https://github.com/anolilab/lunora/commit/56805003af8612bd8f437cefb9a5cce882e4e008))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.177
+* **@lunora/do:** upgraded to 1.0.0-alpha.269
+
+## @lunora/sql-store [1.0.0-alpha.224](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.223...@lunora/sql-store@1.0.0-alpha.224) (2026-10-30)
+
+### Bug Fixes
+
+* **deps:** require the errors release that defines the duplicate-rows code ([#1429](https://github.com/anolilab/lunora/issues/1429)) ([fe5d405](https://github.com/anolilab/lunora/commit/fe5d40505851942c8734f094ec904b075b96f6d8))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.175
+* **@lunora/do:** upgraded to 1.0.0-alpha.267
+
+## @lunora/sql-store [1.0.0-alpha.223](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.222...@lunora/sql-store@1.0.0-alpha.223) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.174
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+* **@lunora/do:** upgraded to 1.0.0-alpha.265
+
+## @lunora/sql-store [1.0.0-alpha.221](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.220...@lunora/sql-store@1.0.0-alpha.221) (2026-10-30)
+
+### Performance Improvements
+
+* **sql-store:** batch import id probes, one catalog read per studio page ([#1386](https://github.com/anolilab/lunora/issues/1386)) ([2984272](https://github.com/anolilab/lunora/commit/2984272957df66c2a6b4ef67195b69839daef751))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.172
+* **@lunora/do:** upgraded to 1.0.0-alpha.263
+
+## @lunora/sql-store [1.0.0-alpha.220](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.219...@lunora/sql-store@1.0.0-alpha.220) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.171
+* **@lunora/do:** upgraded to 1.0.0-alpha.262
+
+## @lunora/sql-store [1.0.0-alpha.219](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.218...@lunora/sql-store@1.0.0-alpha.219) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.170
+* **@lunora/do:** upgraded to 1.0.0-alpha.261
+
+## @lunora/sql-store [1.0.0-alpha.218](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.217...@lunora/sql-store@1.0.0-alpha.218) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.169
+* **@lunora/do:** upgraded to 1.0.0-alpha.260
+
+## @lunora/sql-store [1.0.0-alpha.217](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.216...@lunora/sql-store@1.0.0-alpha.217) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.168
+* **@lunora/do:** upgraded to 1.0.0-alpha.259
+
+## @lunora/sql-store [1.0.0-alpha.216](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.215...@lunora/sql-store@1.0.0-alpha.216) (2026-10-29)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** Mysql2Like now requires query(text, params) instead of
+execute(text, params). A real mysql2/promise connection or pool has both,
+so only hand-written doubles need renaming.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind pgvector id lists and metadata as json text
+
+createPgVectorIndex broke on postgres.js, the driver its docs show. With
+fetch_types: false (Hyperdrive's recommended setting) postgres.js knows no
+array types, so the id array bound to ANY($1::text[]) went over as the
+malformed literal "a,b,c" and getByIds/deleteByIds threw. And because
+postgres.js types each parameter from the server's Describe, a bare
+$n::jsonb parameter had the already-serialised metadata JSON-encoded a
+second time: metadata was stored as a string and filters never matched.
+
+Id lists now bind as one JSON text parameter expanded with
+jsonb_array_elements_text, and every JSON parameter is cast ::text::jsonb.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind mysql2 array and object params as one value
+
+mysql2's query() interpolates values client-side and expands an array
+into a comma list and a plain object into `key = value` pairs, so since
+the switch from execute() such a param changed the statement's shape
+instead of binding one value. execute()'s binary protocol sent them as
+JSON text. fromMysql2 and buildMysqlExec now normalise every param: an
+array or object becomes its JSON text, an ArrayBuffer becomes bytes,
+scalars, dates and byte views pass through, and undefined throws, as it
+did under execute(), instead of silently binding NULL.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* perf(hyperdrive): run postgres.js statements as prepared statements
+
+fromPostgresJs called client.unsafe(text, params), and unsafe defaults to
+prepare: false. Cloudflare warns against that under Hyperdrive: its
+transaction pooling does not reliably support unnamed statements (queries
+can hang or fail), and each one pays a Parse/Describe round trip before
+Bind/Execute. The adapter now passes { prepare: true }; a client built
+with prepare: false still wins.
+
+Prepared reads are cacheable by Hyperdrive, which is safe for .global()
+only because its config now has caching disabled (the deploy and docs
+change that requires it). The docs, skills, registry item and the config
+remediation build postgres.js with Cloudflare's recommended
+{ fetch_types: false, max: 5 }, with the caveat that array params then
+need binding as JSON text, and the .global() snippets go through
+fromPostgresJs instead of calling sql.unsafe directly.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): state that mysql needs backslash escapes enabled
+
+Since MySQL statements go over as text, mysql2 escapes string values
+client-side and writes a quote as \'. On a server whose sql_mode includes
+NO_BACKSLASH_ESCAPES that sequence ends the literal, so a stored string
+could break out of it. The mode is off in MySQL's default sql_mode; the
+docs, the global setup skill and the adapter JSDoc now mark it
+unsupported.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* refactor(hyperdrive): rename Mysql2Execute to Mysql2Client
+
+The mysql2 adapters call query() now, so the execute-based name no longer
+describes the type. The snapshot also picks up the multi-line formatting of
+PostgresJsLike.unsafe's options.
+* **hyperdrive:** the exported `Mysql2Execute` type from `@lunora/hyperdrive/global`
+is now `Mysql2Client`.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(codegen): pass postgres.js options in hyperdrive examples
+
+The generated hyperdriveGlobal JSDoc and the ctx.sql missing-binding diagnostic
+now show postgres(cs, { fetch_types: false, max: 5 }), matching the docs.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): quote mysql strings so no sql_mode can end the literal
+
+mysql2's query() escapes a quote as \', which closes the literal when the server's
+sql_mode has NO_BACKSLASH_ESCAPES and lets a bound string inject SQL. Strings (and
+the JSON text of arrays and objects) are now rendered by toMysqlParams with ''
+for a quote and \\ for a backslash, which keeps every value inside its literal
+under any mode. A hex _utf8mb4 literal was rejected: it takes the charset's
+default collation and comparing it with a plain literal fails.
+
+That mode stays unsupported because backslashes come back doubled under it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* feat(cli): warn when a bound hyperdrive config still caches queries
+
+An app with .global({ backend: "hyperdrive" }) tables needs query caching off, but
+deploy only turned it off on configs it created or reused by name. A binding whose
+id was set by hand or by an earlier deploy kept caching on silently. With API
+credentials present, deploy now reads each such config and warns with the
+`wrangler hyperdrive update <id> --caching-disabled` command. It never changes a
+config the user picked.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): keep the hyperdrive caching check from blocking a deploy
+
+The cache-status GET for an already-bound config is advisory, but a network
+failure or timeout rejected out of provisionHyperdrive and aborted the deploy.
+It now logs the same "could not check" warning and carries on.
+
+A schema that exists but can't be read used to leave caching on. Since it may
+declare .global({ backend: "hyperdrive" }) tables, configs are now set up with
+caching off and the parse error is logged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* docs(hyperdrive): note how mysql2 reads ? and ?? in query text
+
+mysql2's client-side formatter skips a ? inside a quoted string or comment, but
+reads ?? as an identifier placeholder. A real-MySQL test pins the literal case.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(hyperdrive): bind a mysql string to ?? as its identifier again
+
+mysql2's ?? escaper reads String(value) and never toSqlString, so the quoted-
+literal wrapper toMysqlParams returns for strings came out as `[object Object]`.
+The wrapper now also has toString returning the raw text.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* test(hyperdrive): pin multi-command postgres.js statements without params
+
+postgres.js sends a statement with no params over the simple protocol even with
+prepare: true, so semicolon-separated commands keep working.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(sql-store): cast search token rows ::text::json on postgres
+
+postgres.js types a bare $n::json parameter from the server and JSON-encodes the
+already-serialised token rows again, so json_to_recordset got a scalar and every
+search-indexed .global() write through fromPostgresJs failed. A postgres.js wire
+test inserts and searches such a table.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+* fix(cli): skip the hyperdrive caching check on a dry run
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+### Bug Fixes
+
+* **hyperdrive:** safe caching, mysql text protocol, prepared postgres.js ([#1394](https://github.com/anolilab/lunora/issues/1394)) ([ad59bcf](https://github.com/anolilab/lunora/commit/ad59bcf85763e3ee9853c101fa377d00b9d0c63f))
+
+## @lunora/sql-store [1.0.0-alpha.215](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.214...@lunora/sql-store@1.0.0-alpha.215) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **hyperdrive:** `runMigrateToHyperdriveCommand` is now `runMigrateBackendCommand`
+and requires a `direction`.
+* **hyperdrive:** ImportShardResult and the global ImportResult gain a required
+`replaced` count; `streamingImport` takes an `onConflict` argument.
+* **storage,search-core:** countSearchTokens takes (document, index) instead of
+(text, analyzer).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01TzYLd1V9AaVcVwmJaonqgh
+
+### Features
+
+* **hyperdrive:** wire the admin global plane, add replace imports and migrate hyperdrive-to-d1 ([#1360](https://github.com/anolilab/lunora/issues/1360)) ([f25b400](https://github.com/anolilab/lunora/commit/f25b400a13fbf76d19e5e587f4d20f00242a7ece)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+### Performance Improvements
+
+* **storage,search-core:** signing key reuse, parallel chunk reads, linear dedup ([#1376](https://github.com/anolilab/lunora/issues/1376)) ([ececf5e](https://github.com/anolilab/lunora/commit/ececf5e579b8e142c88033c0dd3d86ea522a5376))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.167
+* **@lunora/do:** upgraded to 1.0.0-alpha.256
+
+## @lunora/sql-store [1.0.0-alpha.214](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.213...@lunora/sql-store@1.0.0-alpha.214) (2026-10-27)
+
+### Performance Improvements
+
+* **sql-store:** cut per-request rebuilds, pinned-write probes and cdc log scans ([#1362](https://github.com/anolilab/lunora/issues/1362)) ([4d44ab4](https://github.com/anolilab/lunora/commit/4d44ab4d1d27d77c1f4521fefc9722b540b948b9)), closes [#1372](https://github.com/anolilab/lunora/issues/1372) [#1367](https://github.com/anolilab/lunora/issues/1367)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.165
+* **@lunora/do:** upgraded to 1.0.0-alpha.254
+
+## @lunora/sql-store [1.0.0-alpha.213](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.212...@lunora/sql-store@1.0.0-alpha.213) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.164
+* **@lunora/do:** upgraded to 1.0.0-alpha.253
+
+## @lunora/sql-store [1.0.0-alpha.212](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.211...@lunora/sql-store@1.0.0-alpha.212) (2026-10-26)
+
+### Features
+
+* **server:** require the table for ctx.db by-id reads and writes ([#1344](https://github.com/anolilab/lunora/issues/1344)) ([97244c5](https://github.com/anolilab/lunora/commit/97244c5eae27fb0c9ab19a71e7e0b50b02b13782))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.163
+* **@lunora/do:** upgraded to 1.0.0-alpha.251
+
+## @lunora/sql-store [1.0.0-alpha.211](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.210...@lunora/sql-store@1.0.0-alpha.211) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.162
+* **@lunora/do:** upgraded to 1.0.0-alpha.250
+
+## @lunora/sql-store [1.0.0-alpha.210](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.209...@lunora/sql-store@1.0.0-alpha.210) (2026-10-26)
+
+### Features
+
+* **server:** require the table in ctx.db.get(table, id) ([#1342](https://github.com/anolilab/lunora/issues/1342)) ([92cca06](https://github.com/anolilab/lunora/commit/92cca0604d33fc93db2ad49530572e8b99508f3b))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.161
+* **@lunora/do:** upgraded to 1.0.0-alpha.249
+
+## @lunora/sql-store [1.0.0-alpha.209](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.208...@lunora/sql-store@1.0.0-alpha.209) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.160
+* **@lunora/do:** upgraded to 1.0.0-alpha.248
+
+## @lunora/sql-store [1.0.0-alpha.208](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.207...@lunora/sql-store@1.0.0-alpha.208) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.159
+* **@lunora/do:** upgraded to 1.0.0-alpha.247
+
+## @lunora/sql-store [1.0.0-alpha.207](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.206...@lunora/sql-store@1.0.0-alpha.207) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.158
+* **@lunora/do:** upgraded to 1.0.0-alpha.246
+
+## @lunora/sql-store [1.0.0-alpha.206](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.205...@lunora/sql-store@1.0.0-alpha.206) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.157
+* **@lunora/do:** upgraded to 1.0.0-alpha.244
+
+## @lunora/sql-store [1.0.0-alpha.205](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.204...@lunora/sql-store@1.0.0-alpha.205) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.156
+* **@lunora/do:** upgraded to 1.0.0-alpha.243
+
+## @lunora/sql-store [1.0.0-alpha.204](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.203...@lunora/sql-store@1.0.0-alpha.204) (2026-10-23)
+
+### Bug Fixes
+
+* **sql-store:** probe only the pinned table on a by-id get ([#1313](https://github.com/anolilab/lunora/issues/1313)) ([4c98434](https://github.com/anolilab/lunora/commit/4c98434b8aa19fe9fbe39b6efbc6f5dfaa59ae93))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.155
+* **@lunora/do:** upgraded to 1.0.0-alpha.242
+
+## @lunora/sql-store [1.0.0-alpha.203](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.202...@lunora/sql-store@1.0.0-alpha.203) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.154
+* **@lunora/do:** upgraded to 1.0.0-alpha.241
+
+## @lunora/sql-store [1.0.0-alpha.202](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.201...@lunora/sql-store@1.0.0-alpha.202) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.153
+* **@lunora/do:** upgraded to 1.0.0-alpha.240
+
+## @lunora/sql-store [1.0.0-alpha.201](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.200...@lunora/sql-store@1.0.0-alpha.201) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.152
+* **@lunora/do:** upgraded to 1.0.0-alpha.239
+
+## @lunora/sql-store [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.199...@lunora/sql-store@1.0.0-alpha.200) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.151
+* **@lunora/do:** upgraded to 1.0.0-alpha.238
+* **drizzle-orm:** ^0.45.3 → 1.0.0-rc.5
+
+## @lunora/sql-store [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.198...@lunora/sql-store@1.0.0-alpha.199) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.150
+* **@lunora/do:** upgraded to 1.0.0-alpha.237
+
+## @lunora/sql-store [1.0.0-alpha.198](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.197...@lunora/sql-store@1.0.0-alpha.198) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.149
+* **@lunora/do:** upgraded to 1.0.0-alpha.236
+
+## @lunora/sql-store [1.0.0-alpha.197](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.196...@lunora/sql-store@1.0.0-alpha.197) (2026-10-20)
+
+### Bug Fixes
+
+* **shard-engine:** correct unique-index, rank, FK and parsed-write handling ([#1264](https://github.com/anolilab/lunora/issues/1264)) ([067708e](https://github.com/anolilab/lunora/commit/067708e4c8f823a363d77809a77d4386041efdfc))
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.148
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/do:** upgraded to 1.0.0-alpha.235
+
+## @lunora/sql-store [1.0.0-alpha.196](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.195...@lunora/sql-store@1.0.0-alpha.196) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.147
+* **@lunora/do:** upgraded to 1.0.0-alpha.234
+
+## @lunora/sql-store [1.0.0-alpha.195](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.194...@lunora/sql-store@1.0.0-alpha.195) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.146
+* **@lunora/do:** upgraded to 1.0.0-alpha.233
+
+## @lunora/sql-store [1.0.0-alpha.194](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.193...@lunora/sql-store@1.0.0-alpha.194) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.145
+* **@lunora/do:** upgraded to 1.0.0-alpha.232
+
+## @lunora/sql-store [1.0.0-alpha.193](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.192...@lunora/sql-store@1.0.0-alpha.193) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.144
+* **@lunora/do:** upgraded to 1.0.0-alpha.231
+
+## @lunora/sql-store [1.0.0-alpha.192](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.191...@lunora/sql-store@1.0.0-alpha.192) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.143
+* **@lunora/do:** upgraded to 1.0.0-alpha.230
+
+## @lunora/sql-store [1.0.0-alpha.191](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.190...@lunora/sql-store@1.0.0-alpha.191) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.141
+* **@lunora/do:** upgraded to 1.0.0-alpha.228
+
+## @lunora/sql-store [1.0.0-alpha.190](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.189...@lunora/sql-store@1.0.0-alpha.190) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.140
+* **@lunora/do:** upgraded to 1.0.0-alpha.227
+
+## @lunora/sql-store [1.0.0-alpha.189](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.188...@lunora/sql-store@1.0.0-alpha.189) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.139
+* **@lunora/do:** upgraded to 1.0.0-alpha.226
+
+## @lunora/sql-store [1.0.0-alpha.188](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.187...@lunora/sql-store@1.0.0-alpha.188) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.138
+* **@lunora/do:** upgraded to 1.0.0-alpha.225
+
+## @lunora/sql-store [1.0.0-alpha.187](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.186...@lunora/sql-store@1.0.0-alpha.187) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.137
+* **@lunora/do:** upgraded to 1.0.0-alpha.224
+
+## @lunora/sql-store [1.0.0-alpha.186](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.185...@lunora/sql-store@1.0.0-alpha.186) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.135
+* **@lunora/do:** upgraded to 1.0.0-alpha.221
+
+## @lunora/sql-store [1.0.0-alpha.185](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.184...@lunora/sql-store@1.0.0-alpha.185) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.134
+* **@lunora/do:** upgraded to 1.0.0-alpha.220
+
+## @lunora/sql-store [1.0.0-alpha.184](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.183...@lunora/sql-store@1.0.0-alpha.184) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/shard-engine:** upgraded to 1.0.0-alpha.133
+* **@lunora/do:** upgraded to 1.0.0-alpha.219
+
 ## @lunora/sql-store [1.0.0-alpha.183](https://github.com/anolilab/lunora/compare/@lunora/sql-store@1.0.0-alpha.182...@lunora/sql-store@1.0.0-alpha.183) (2026-10-15)
 
 

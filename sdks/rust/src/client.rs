@@ -1,14 +1,18 @@
 //! The RPC and WebSocket transport, ported from `shared`'s reference client.
 
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::fmt;
 use std::sync::mpsc::{channel, Receiver};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
 
-use crate::offline::{random_id, same_shard, token_stamp, Identity, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED};
+use crate::delta::{resolve_delta, Resolved};
+use crate::offline::{
+    random_id, same_shard, token_stamp, Identity, OfflineQueue, SettledHandler, CODE_PAYLOAD_TOO_LARGE, CODE_WIRE_DECODE_FAILED, MAX_RETRY_AFTER_MS,
+};
 use crate::optimistic::{drop_confirmed_layers, fold, OptimisticState};
 pub use crate::submit::MutationSettled;
 use crate::submit::{args_key, matches};
@@ -53,6 +57,10 @@ pub struct ApiError {
     /// from one. A coded envelope never sets it, whatever its HTTP status: its
     /// code is the verdict. [`crate::submit::is_transient`] reads it.
     pub transient: bool,
+    /// The transport failure an online-only write was refused over. Set only by
+    /// the `OFFLINE_NOT_QUEUED` refusal of a send that got no reply; exposed as
+    /// the error's [`std::error::Error::source`].
+    pub source: Option<TransportError>,
 }
 
 impl fmt::Display for ApiError {
@@ -61,7 +69,24 @@ impl fmt::Display for ApiError {
     }
 }
 
-impl std::error::Error for ApiError {}
+impl std::error::Error for ApiError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_ref().map(|cause| cause as &(dyn std::error::Error + 'static))
+    }
+}
+
+/// The transport failure that stopped a request before any HTTP reply: the
+/// injected poster returned an error (connection refused, DNS failure, timeout).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TransportError(pub String);
+
+impl fmt::Display for TransportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for TransportError {}
 
 /// A subscription-scoped error the server pushed.
 #[derive(Clone, Debug, PartialEq)]
@@ -91,7 +116,16 @@ impl fmt::Display for ClientError {
     }
 }
 
-impl std::error::Error for ClientError {}
+impl std::error::Error for ClientError {
+    /// A coded error's cause is the transport failure it was refused over, if any.
+    /// Set on the `Api` variant only: the `Transport` variant is itself the cause.
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ClientError::Api(inner) => inner.source(),
+            ClientError::Wire(_) | ClientError::Transport(_) => None,
+        }
+    }
+}
 
 impl From<WireError> for ClientError {
     fn from(error: WireError) -> Self {
@@ -111,6 +145,37 @@ pub type HttpPoster = Box<dyn Fn(&str, &HashMap<String, String>, &[u8]) -> Resul
 /// crate stays free of a socket dependency.
 pub type FrameSender = Box<dyn Fn(&Value) + Send>;
 
+/// Receives each whisper delivered on a topic the listener joined.
+pub type WhisperHandler = Box<dyn Fn(&WireValue) + Send>;
+
+/// Runs when the server signals that the session credential is expired or refused.
+pub type TokenExpiredHandler = Box<dyn Fn() + Send>;
+
+/// Names one registered listener, so it can be removed. Returned by
+/// [`Client::on_token_expired`] and [`Client::whisper_subscribe`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ListenerId(u64);
+
+/// A joined room. Made by [`Client::connect_room`]; it holds no socket of its own,
+/// so [`Room::send`] and [`Room::close`] take the client.
+#[derive(Debug)]
+pub struct Room {
+    topic: String,
+    listener: ListenerId,
+}
+
+impl Room {
+    /// Relays `message` to the room's other members. See [`Client::whisper`].
+    pub fn send(&self, client: &Client, message: &WireValue) -> bool {
+        client.whisper(&self.topic, message)
+    }
+
+    /// Leaves the room. Consumes the handle, so a second close cannot be written.
+    pub fn close(self, client: &mut Client) {
+        client.whisper_unsubscribe(self.listener);
+    }
+}
+
 /// Receives each result a live query produces.
 /// One item delivered by [`Client::stream`]: a value, or the subscription error
 /// the server pushed.
@@ -119,7 +184,7 @@ pub type FrameSender = Box<dyn Fn(&Value) + Send>;
 /// a consumer selecting over two receivers can read them out of order, and the
 /// whole point of a stream is that what arrived first is delivered first.
 #[derive(Clone, Debug, PartialEq)]
-pub enum StreamEvent {
+pub enum WatchEvent {
     Value(WireValue),
     Error(SubscriptionError),
 }
@@ -182,6 +247,7 @@ pub(crate) fn rpc_result(body: &Value, status: u16) -> Result<&Value, ClientErro
             // (`crate::submit::is_transient`), on the single-call path and the
             // batch path alike.
             transient: false,
+            source: None,
         })));
     }
 
@@ -210,6 +276,7 @@ pub(crate) fn envelopeless_error(status: u16) -> ApiError {
             data: None,
             message: "HTTP 413 without an error envelope".to_string(),
             transient: false,
+            source: None,
         };
     }
 
@@ -218,14 +285,23 @@ pub(crate) fn envelopeless_error(status: u16) -> ApiError {
         data: None,
         message: format!("HTTP {status} without a readable Lunora response"),
         transient: true,
+        source: None,
     }
 }
 
-pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>) -> Value {
+/// The one-shot frame sent first on every socket open. `token` is the session
+/// credential: it rides here, never in the socket URL, and is omitted when
+/// absent or empty.
+pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>, token: Option<&str>) -> Value {
     let mut frame = Map::new();
 
     frame.insert("id".into(), json!("connect"));
     frame.insert("type".into(), json!("connect"));
+
+    // `pageDelta` lets the server send a row change instead of a full snapshot; this
+    // client merges it (see `crate::delta`). `refreshBatch` is NOT announced: batchStart/
+    // batchEnd frames are not handled here.
+    frame.insert("caps".into(), json!(["pageDelta"]));
 
     if let Some(id) = client_id {
         frame.insert("clientId".into(), json!(id));
@@ -235,7 +311,25 @@ pub fn build_connect_frame(client_id: Option<&str>, context: Option<&Value>) -> 
         frame.insert("context".into(), inner.clone());
     }
 
+    // Empty is absent, matching `ws_url` and `build_rpc_body`.
+    if let Some(value) = token.filter(|value| !value.is_empty()) {
+        frame.insert("token".into(), json!(value));
+    }
+
     Value::Object(frame)
+}
+
+pub fn build_whisper_subscribe_frame(topic: &str) -> Value {
+    json!({ "topic": topic, "type": "whisper_subscribe" })
+}
+
+pub fn build_whisper_unsubscribe_frame(topic: &str) -> Value {
+    json!({ "topic": topic, "type": "whisper_unsubscribe" })
+}
+
+/// Relays `data` to a topic. The data is wire-encoded, as every value is.
+pub fn build_whisper_frame(topic: &str, data: &WireValue) -> Result<Value, WireError> {
+    Ok(json!({ "data": encode_wire(data)?, "topic": topic, "type": "whisper" }))
 }
 
 pub fn build_subscribe_frame(
@@ -315,6 +409,19 @@ pub(crate) struct Subscription {
     on_error: ErrorHandler,
     cursor: Option<Value>,
     epoch: Option<Value>,
+    /// Whether a value has been adopted from the server yet. A row change merges
+    /// into a base only once there is one; before that it is held like any other
+    /// unmergeable change.
+    has_base: bool,
+    /// Set when a row change could not be merged and was dropped. While set, delta
+    /// frames are ignored whole, so a later frame's cursor cannot move the resume
+    /// position past the dropped change. A `data` frame or a resubscribe clears it.
+    poisoned: bool,
+    /// The merged payload of a delta run still waiting for its last frame (`more: false`).
+    /// Later frames of the run merge onto it rather than onto the committed base, and nothing
+    /// is published or advanced until the run ends, so a reconnect mid-run resumes from the
+    /// cursor before the run and the server replays all of it.
+    pending_run: Option<WireValue>,
     /// The displayed value and its optimistic overlays. See `crate::optimistic`.
     pub(crate) state: OptimisticState,
 }
@@ -457,8 +564,24 @@ pub struct Client {
     /// came back rate-limited and the envelope named a delay. [`Instant`] rather
     /// than a wall clock, so an NTP correction cannot strand a queue for hours.
     pub(crate) flush_not_before: Option<Instant>,
+    /// The monotonic deadline of the one re-subscribe a retry hint asked for, per query
+    /// subscription id. See [`Client::retry_due_subscriptions`].
+    pending_retries: HashMap<String, Instant>,
     pub(crate) closed: bool,
     pub(crate) settled_listeners: Vec<SettledHandler>,
+    /// The WebSocket session credential, sent as `connect.token` on every open.
+    /// Not the RPC bearer, and never in a URL. See [`Client::set_session_token`].
+    session_token: Option<String>,
+    /// Advances each time the session credential changes. A refusal notifies once per generation.
+    credential_generation: u64,
+    /// The generation the attached socket opened under; `None` while no socket is attached.
+    socket_generation: Option<u64>,
+    /// The generation whose refusal last notified the token-expired listeners.
+    refused_generation: Option<u64>,
+    token_expired_listeners: Vec<(ListenerId, TokenExpiredHandler)>,
+    /// Joined whisper topics, ordered so every reconnect rejoins them in the same order.
+    whispers: BTreeMap<String, Vec<(ListenerId, WhisperHandler)>>,
+    next_listener_id: u64,
 }
 
 /// By hand rather than derived: a derived `Debug` would print `auth_token`, a
@@ -469,6 +592,7 @@ impl fmt::Debug for Client {
             .debug_struct("Client")
             .field("base_url", &self.base_url)
             .field("auth_token", &self.auth_token.as_ref().map(|_| "<redacted>"))
+            .field("session_token", &self.session_token.as_ref().map(|_| "<redacted>"))
             .field("client_id", &self.client_id)
             .field("identity", &self.identity)
             .finish_non_exhaustive()
@@ -483,6 +607,7 @@ impl Client {
             client_id: format!("client-{}", random_id()),
             closed: false,
             flush_not_before: None,
+            pending_retries: HashMap::new(),
             identity: None,
             next_id: 0,
             next_shape_id: 0,
@@ -492,27 +617,207 @@ impl Client {
             post,
             send: None,
             settled_listeners: Vec::new(),
+            session_token: None,
+            credential_generation: 0,
+            socket_generation: None,
+            refused_generation: None,
+            token_expired_listeners: Vec::new(),
+            whispers: BTreeMap::new(),
+            next_listener_id: 0,
             shapes: HashMap::new(),
             subscriptions: HashMap::new(),
             was_ever_connected: false,
         }
     }
 
-    /// Registers the sender used for subscription frames. Call once the socket
-    /// is open.
+    /// Opens the subscription channel on a freshly opened socket.
+    ///
+    /// It sends `connect` as the first frame: the client id, `context` when one is
+    /// given, and the session credential when one is set. It then rejoins every
+    /// whisper topic, and only after both does `send` carry later frames. Call
+    /// [`Client::resend_subscriptions`] after this, so the subscriptions follow
+    /// `connect`.
+    ///
+    /// `send` cannot report a failed write, so the caller's sender shuts the socket
+    /// down on failure, as the README's reconnect loop does.
     ///
     /// It also latches "has connected at least once", which is what the write
     /// queue gates on: a write made before the FIRST connect fails fast by
     /// default, so a misconfigured endpoint surfaces on the first write instead
     /// of silently filling a queue that will never flush.
-    pub fn attach_socket(&mut self, send: FrameSender) {
+    pub fn attach_socket(&mut self, send: FrameSender, context: Option<&Value>) {
+        // Until this open has written its frames, nothing routes to the new socket.
+        self.send = None;
+        self.pending_retries.clear();
+        // A run is one socket's stream; a failed open never delivered the rest of it.
+        self.discard_pending_runs();
+
+        send(&build_connect_frame(Some(self.client_id.as_str()), context, self.session_token.as_deref()));
+
+        for topic in self.whispers.keys() {
+            send(&build_whisper_subscribe_frame(topic));
+        }
+
+        self.socket_generation = Some(self.credential_generation);
         self.send = Some(send);
         self.was_ever_connected = true;
     }
 
-    /// Forgets the sender, so subsequent writes queue rather than fail.
-    pub fn detach_socket(&mut self) {
+    /// Forgets the sender, so subsequent writes queue rather than fail, and
+    /// classifies the close that ended the socket.
+    ///
+    /// `close_code` is `None` when no close frame arrived. A 4001 always notifies
+    /// the token-expired listeners. A 4003 refuses the session credential, and
+    /// notifies once per credential generation, but only for a socket that opened
+    /// under the credential in force: a socket opened under an earlier one refused a
+    /// credential no longer in use. A 4003 whose `reason` is exactly
+    /// `connect deadline` refuses no credential. Any other close notifies nothing.
+    ///
+    /// The client is offline before any listener runs. A listener that panics
+    /// unwinds out of this call, as every other callback here does.
+    pub fn detach_socket(&mut self, close_code: Option<u16>, reason: Option<&str>) {
         self.send = None;
+        self.pending_retries.clear();
+        self.discard_pending_runs();
+
+        let opened = self.socket_generation.take();
+
+        let expired = match close_code {
+            Some(4001) => true,
+            Some(4003) if reason != Some("connect deadline") => match opened {
+                Some(generation) if generation == self.credential_generation && self.refused_generation != Some(generation) => {
+                    self.refused_generation = Some(generation);
+
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+
+        if expired {
+            self.notify_token_expired();
+        }
+    }
+
+    /// Registers a listener for token expiry: a 4001 close, a refused session
+    /// credential (once per credential), and a `TOKEN_EXPIRED` error frame. The
+    /// listener runs inside `detach_socket` or `handle_frame`, which hold the
+    /// client, so it cannot reach the client itself. It should signal its owner
+    /// (a flag or a channel), and the owner calls [`Client::set_session_token`]
+    /// once it has the fresh credential. Returns the id that removes it.
+    pub fn on_token_expired(&mut self, listener: TokenExpiredHandler) -> ListenerId {
+        let id = self.next_listener();
+
+        self.token_expired_listeners.push((id, listener));
+
+        id
+    }
+
+    /// Removes a listener from [`Client::on_token_expired`].
+    pub fn remove_token_expired_listener(&mut self, id: ListenerId) {
+        self.token_expired_listeners.retain(|(listener, _)| *listener != id);
+    }
+
+    fn notify_token_expired(&self) {
+        for (_, listener) in &self.token_expired_listeners {
+            listener();
+        }
+    }
+
+    fn next_listener(&mut self) -> ListenerId {
+        self.next_listener_id += 1;
+
+        ListenerId(self.next_listener_id)
+    }
+
+    /// The WebSocket session credential, as last set by [`Client::set_session_token`].
+    pub fn session_token(&self) -> Option<&str> {
+        self.session_token.as_deref()
+    }
+
+    /// Sets the WebSocket session credential (`connect.token`). It is sent in the
+    /// `connect` frame of each socket opened after this call. It is not the RPC
+    /// bearer, so [`Client::set_auth_token`] does not change it, and it never rides
+    /// a URL.
+    ///
+    /// A new value starts a new credential generation, so a refusal of the old one
+    /// notifies the token-expired listeners again. Setting the value already held
+    /// changes nothing. `None` and an empty string both clear it.
+    pub fn set_session_token(&mut self, token: Option<String>) {
+        let token = token.filter(|value| !value.is_empty());
+
+        if token != self.session_token {
+            self.session_token = token;
+            self.credential_generation += 1;
+        }
+    }
+
+    /// Joins `topic` and delivers its whispers to `listener`. The first listener on
+    /// a topic sends `whisper_subscribe` when a socket is attached, and every
+    /// [`Client::attach_socket`] rejoins each topic. Returns the id that removes
+    /// this listener.
+    pub fn whisper_subscribe(&mut self, topic: &str, listener: WhisperHandler) -> ListenerId {
+        let id = self.next_listener();
+        let listeners = self.whispers.entry(topic.to_string()).or_default();
+        let joining = listeners.is_empty();
+
+        listeners.push((id, listener));
+
+        if let (true, Some(send)) = (joining, &self.send) {
+            send(&build_whisper_subscribe_frame(topic));
+        }
+
+        id
+    }
+
+    /// Removes a listener from [`Client::whisper_subscribe`]. Removing a topic's last
+    /// listener forgets the topic and sends `whisper_unsubscribe` when attached.
+    pub fn whisper_unsubscribe(&mut self, id: ListenerId) {
+        let Some(topic) = self
+            .whispers
+            .iter()
+            .find_map(|(topic, listeners)| listeners.iter().any(|(listener, _)| *listener == id).then(|| topic.clone()))
+        else {
+            return;
+        };
+
+        if let Some(listeners) = self.whispers.get_mut(&topic) {
+            listeners.retain(|(listener, _)| *listener != id);
+
+            if !listeners.is_empty() {
+                return;
+            }
+        }
+
+        self.whispers.remove(&topic);
+
+        if let Some(send) = &self.send {
+            send(&build_whisper_unsubscribe_frame(&topic));
+        }
+    }
+
+    /// Relays `data` to the other members of `topic`. Nothing is queued: returns
+    /// `false`, and sends nothing, when no socket is attached or `data` will not
+    /// encode. `true` means the frame went to the socket sender.
+    pub fn whisper(&self, topic: &str, data: &WireValue) -> bool {
+        match (&self.send, build_whisper_frame(topic, data)) {
+            (Some(send), Ok(frame)) => {
+                send(&frame);
+
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Joins the room `room:<name>` and delivers its whispers to `listener`. A room
+    /// join is never acknowledged, so [`Room::send`] may be called straight away.
+    pub fn connect_room(&mut self, name: &str, listener: WhisperHandler) -> Room {
+        let topic = format!("room:{name}");
+        let listener = self.whisper_subscribe(&topic, listener);
+
+        Room { topic, listener }
     }
 
     /// Whether a socket is currently attached.
@@ -541,9 +846,11 @@ impl Client {
 
         self.report_discarded(discarded);
         self.subscriptions.clear();
+        self.pending_retries.clear();
         self.shapes.clear();
         self.pokes.clear();
         self.poke_order.clear();
+        self.whispers.clear();
     }
 
     /// Who is signed in, as last set by [`Client::set_identity`].
@@ -613,11 +920,21 @@ impl Client {
         }
     }
 
+    fn discard_pending_runs(&mut self) {
+        for entry in self.subscriptions.values_mut() {
+            entry.pending_run = None;
+        }
+    }
+
     /// Drops every resume cursor, epoch and shape row, telling each shape view.
     fn evict_session(&mut self) {
         for entry in self.subscriptions.values_mut() {
             entry.cursor = None;
             entry.epoch = None;
+            entry.poisoned = false;
+            // A cached base belongs to the previous identity; a row change must not merge into it.
+            entry.has_base = false;
+            entry.pending_run = None;
         }
 
         // A poke half-received under the previous session must not land on the
@@ -697,6 +1014,12 @@ impl Client {
         let (result, _commit_cursor) = self.rpc_raw(function_path, args, shard_key, mutation_id, None, self.auth_token())?;
 
         Ok(decode_wire(&result)?)
+    }
+
+    /// Whether an HTTP poster is configured. Without one a send fails before it
+    /// is attempted, which is not a transport failure.
+    pub(crate) fn has_poster(&self) -> bool {
+        self.post.is_some()
     }
 
     /// One round-trip, returning `(raw result, commit_cursor)`, UNDECODED.
@@ -816,6 +1139,9 @@ impl Client {
                 cursor: None,
                 epoch: None,
                 function_path: function_path.to_string(),
+                has_base: false,
+                pending_run: None,
+                poisoned: false,
                 on_data,
                 on_error,
                 shard_key: shard_key.map(str::to_string),
@@ -840,8 +1166,8 @@ impl Client {
     /// consumer; the trade is that one which stops reading without unsubscribing
     /// grows the buffer. `std::sync::mpsc` is the only channel in the standard
     /// library, and this crate takes no dependency for one.
-    pub fn stream(&mut self, function_path: &str, args: WireValue, shard_key: Option<&str>) -> (Receiver<StreamEvent>, String) {
-        let (sender, receiver) = channel::<StreamEvent>();
+    pub fn watch(&mut self, function_path: &str, args: WireValue, shard_key: Option<&str>) -> (Receiver<WatchEvent>, String) {
+        let (sender, receiver) = channel::<WatchEvent>();
         let errors = sender.clone();
         let id = self.subscribe_on_shard(
             function_path,
@@ -850,10 +1176,10 @@ impl Client {
                 // A closed receiver is a consumer that has gone away, which is
                 // not an error here: the subscription simply has nowhere to
                 // deliver until it is unsubscribed.
-                let _ = sender.send(StreamEvent::Value(value.clone()));
+                let _ = sender.send(WatchEvent::Value(value.clone()));
             })),
             Some(Box::new(move |error: &SubscriptionError| {
-                let _ = errors.send(StreamEvent::Error(error.clone()));
+                let _ = errors.send(WatchEvent::Error(error.clone()));
             })),
             shard_key,
         );
@@ -867,7 +1193,7 @@ impl Client {
     /// BOTH registries. A resend that walked only the queries left every shape
     /// view subscribed to a socket that no longer exists — silently, and for the
     /// rest of the process's life.
-    pub fn resend_subscriptions(&self) -> Result<(), ClientError> {
+    pub fn resend_subscriptions(&mut self) -> Result<(), ClientError> {
         let Some(send) = &self.send else {
             return Ok(());
         };
@@ -877,7 +1203,13 @@ impl Client {
         // half re-subscribed.
         let mut frames = Vec::with_capacity(self.subscriptions.len() + self.shapes.len());
 
-        for (id, entry) in &self.subscriptions {
+        for (id, entry) in &mut self.subscriptions {
+            // The resend replays from the old cursor, which re-applies the dropped
+            // change; if it is still unmergeable the flag is set again.
+            entry.poisoned = false;
+            // The resend resumes from the cursor before the run, so the server replays it.
+            entry.pending_run = None;
+
             frames.push(build_subscribe_frame(
                 id,
                 &entry.function_path,
@@ -905,8 +1237,57 @@ impl Client {
         Ok(())
     }
 
+    /// Re-subscribes every subscription whose retry hint has elapsed, and returns how many
+    /// frames it sent. With no socket attached it sends nothing and returns 0; attaching or
+    /// detaching a socket cancels every pending retry, since the reconnect's resend
+    /// re-subscribes everything.
+    ///
+    /// Each re-subscribe is cold: the hint asks for a fresh snapshot, so the stored resume
+    /// cursor and epoch are cleared first.
+    pub fn retry_due_subscriptions(&mut self, now: Instant) -> Result<usize, ClientError> {
+        let Some(send) = &self.send else {
+            return Ok(0);
+        };
+
+        let due: Vec<String> = self
+            .pending_retries
+            .iter()
+            .filter(|(_, deadline)| **deadline <= now)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        let mut frames = Vec::with_capacity(due.len());
+
+        for id in due {
+            self.pending_retries.remove(&id);
+
+            let Some(entry) = self.subscriptions.get_mut(&id) else {
+                continue;
+            };
+
+            entry.cursor = None;
+            entry.epoch = None;
+            // A write confirmed before the fresh snapshot must not be checked against the old position.
+            entry.state.server_cursor = None;
+            frames.push(build_subscribe_frame(&id, &entry.function_path, &entry.args, None, None, None)?);
+        }
+
+        for frame in &frames {
+            send(frame);
+        }
+
+        Ok(frames.len())
+    }
+
+    /// The earliest pending retry deadline, or `None` when none is pending. The caller
+    /// calls [`Client::retry_due_subscriptions`] at or after it.
+    pub fn next_subscription_retry_at(&self) -> Option<Instant> {
+        self.pending_retries.values().min().copied()
+    }
+
     pub fn unsubscribe(&mut self, id: &str) {
         self.subscriptions.remove(id);
+        self.pending_retries.remove(id);
 
         if let Some(send) = &self.send {
             send(&build_unsubscribe_frame(id));
@@ -958,11 +1339,18 @@ impl Client {
         let kind = frame.get("type").and_then(Value::as_str).unwrap_or("").to_string();
         let id = frame.get("id").and_then(Value::as_str).unwrap_or("").to_string();
 
+        // The server answered, so a retry this subscription was waiting on is moot. A `data`,
+        // `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot be
+        // applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
+        if kind == "ack" {
+            self.pending_retries.remove(&id);
+        }
+
         match kind.as_str() {
             "data" | "delta" => {
-                let payload = match frame.get("data") {
-                    Some(Value::Null) | None => frame.get("delta").unwrap_or(&Value::Null),
-                    Some(inner) => inner,
+                let (payload, is_row_change_candidate) = match frame.get("data") {
+                    Some(Value::Null) | None => (frame.get("delta").unwrap_or(&Value::Null), true),
+                    Some(inner) => (inner, false),
                 };
                 let value = match decode_wire(payload) {
                     Ok(decoded) => decoded,
@@ -971,13 +1359,30 @@ impl Client {
                         // callback, not on the socket read loop's stack. Letting
                         // it escape here ended that loop — and with it every
                         // OTHER subscription on this client — over one bad frame.
-                        let reported = SubscriptionError {
+                        let mut reported = SubscriptionError {
                             code: Some(CODE_INVALID_FRAME.to_string()),
                             message: error.to_string(),
                         };
+                        let mut already_frozen = false;
 
-                        if let Some(handler) = self.subscriptions.get(&id).and_then(|entry| entry.on_error.as_ref()) {
-                            handler(&reported);
+                        if let Some(entry) = self.subscriptions.get_mut(&id) {
+                            // A partly held run can no longer complete on this base.
+                            entry.pending_run = None;
+
+                            // A refused delta frame would otherwise let a later one commit against a
+                            // base missing it: freeze, as an unmergeable row change does.
+                            if kind == "delta" {
+                                reported.code = Some(CODE_WIRE_DECODE_FAILED.to_string());
+                                already_frozen = entry.poisoned;
+                                entry.poisoned = true;
+                            }
+                        }
+
+                        // A frozen subscription ignores delta frames, so the refusal is already reported.
+                        if !already_frozen {
+                            if let Some(handler) = self.subscriptions.get(&id).and_then(|entry| entry.on_error.as_ref()) {
+                                handler(&reported);
+                            }
                         }
 
                         return Ok(Some("error".to_string()));
@@ -985,7 +1390,57 @@ impl Client {
                 };
 
                 if let Some(entry) = self.subscriptions.get_mut(&id) {
+                    // A snapshot is authoritative, so it ends a poisoning.
+                    if kind == "data" {
+                        entry.poisoned = false;
+                        entry.pending_run = None;
+                    }
+
+                    // A `data` frame replaces the base. A `delta` frame is merged into
+                    // the SERVER base, not the displayed value, which may carry an
+                    // optimistic overlay that is re-folded below.
+                    let value = if is_row_change_candidate {
+                        if entry.poisoned {
+                            return Ok(Some(kind));
+                        }
+
+                        // A run's later frames merge onto the frames before them, not the committed base.
+                        let base = entry.pending_run.as_ref().or(entry.has_base.then_some(&entry.state.server_base));
+
+                        match resolve_delta(value, base) {
+                            Resolved::Adopt(adopted) if kind == "delta" && frame.get("more").and_then(Value::as_bool) == Some(true) => {
+                                // Held: committing, publishing and the cursor wait for the run's last frame.
+                                entry.pending_run = Some(adopted);
+
+                                return Ok(Some(kind));
+                            }
+                            Resolved::Adopt(adopted) => adopted,
+                            // Only the last frame of a run carries the cursor, so a
+                            // later frame would advance the resume position past the
+                            // dropped change. Freeze until a snapshot or a resubscribe.
+                            Resolved::Keep => {
+                                entry.poisoned = true;
+                                entry.pending_run = None;
+
+                                // Reported once, when the freeze starts: an app that stays silent shows a stale list.
+                                if let Some(handler) = &entry.on_error {
+                                    handler(&SubscriptionError {
+                                        code: Some("delta_unmergeable".to_string()),
+                                        message: "row change could not be merged; subscription frozen until a snapshot or resubscribe".to_string(),
+                                    });
+                                }
+
+                                return Ok(Some(kind));
+                            }
+                        }
+                    } else {
+                        value
+                    };
+
+                    self.pending_retries.remove(&id);
+                    entry.pending_run = None;
                     advance(entry, &frame);
+                    entry.has_base = true;
                     entry.state.server_base = value;
 
                     // `cursor` is OPTIONAL on a data/delta frame. Advance the
@@ -1013,6 +1468,27 @@ impl Client {
             }
             "resume" | "settled" => {
                 if let Some(entry) = self.subscriptions.get_mut(&id) {
+                    // A poisoned subscription ignores these frames too: their cursor would
+                    // move the resume position past the dropped row change.
+                    if entry.poisoned {
+                        return Ok(Some(kind));
+                    }
+
+                    // A resume answers from the cursor the run began after, so a run cut off before it is void.
+                    if kind == "resume" {
+                        entry.pending_run = None;
+                    }
+
+                    // A settled mid-run means the run was cut off: its tail never arrives, so the
+                    // cursor stays before the run and a resubscribe replays it whole. Freeze, or a
+                    // later delta would commit against a base missing the run.
+                    if kind == "settled" && entry.pending_run.take().is_some() {
+                        entry.poisoned = true;
+
+                        return Ok(Some(kind));
+                    }
+
+                    self.pending_retries.remove(&id);
                     advance(entry, &frame);
 
                     // A resume/settled frame advances the cursor without a value
@@ -1036,9 +1512,22 @@ impl Client {
                 }
             }
             "error" => {
+                // The hint counts from arrival, not from whenever the error handlers return.
+                let received = Instant::now();
                 let envelope = frame.get("error");
+                let code = envelope.and_then(|inner| inner.get("code")).and_then(Value::as_str);
+
+                // The server asking for a fresh credential, not a verdict on any
+                // subscription. Checked before the id lookup, as in the reference,
+                // so it notifies even without an id and is never routed to one.
+                if code == Some("TOKEN_EXPIRED") {
+                    self.notify_token_expired();
+
+                    return Ok(Some("error".to_string()));
+                }
+
                 let error = SubscriptionError {
-                    code: envelope.and_then(|inner| inner.get("code")).and_then(Value::as_str).map(str::to_string),
+                    code: code.map(str::to_string),
                     message: frame
                         .get("message")
                         .and_then(Value::as_str)
@@ -1053,6 +1542,21 @@ impl Client {
 
                 if let Some(handler) = self.shapes.get(&id).and_then(|shape| shape.on_error.as_ref()) {
                     handler(&error);
+                }
+
+                if self.subscriptions.contains_key(&id) {
+                    match retry_after(envelope) {
+                        // A late frame from a detached or closed socket must not arm a retry no sender can fire.
+                        Some(delay) => {
+                            if self.send.is_some() {
+                                self.pending_retries.insert(id.clone(), received + delay);
+                            }
+                        }
+                        // A hint-less error is how the server ends a subscription, so a retry an earlier hint scheduled is cancelled.
+                        None => {
+                            self.pending_retries.remove(&id);
+                        }
+                    }
                 }
             }
             "complete" => {
@@ -1095,6 +1599,20 @@ impl Client {
             }
             "pokePart" => self.buffer_poke_part(&frame),
             "pokeEnd" => self.apply_poke(&frame),
+            "whisper" => {
+                // A frame whose topic is not a non-empty string, or whose data will not
+                // decode, is dropped: it has no listener to reach.
+                let topic = frame.get("topic").and_then(Value::as_str).filter(|topic| !topic.is_empty());
+
+                if let (Some(topic), Some(payload)) = (topic, frame.get("data")) {
+                    if let (Ok(value), Some(listeners)) = (decode_wire(payload), self.whispers.get(topic)) {
+                        for (_, listener) in listeners {
+                            listener(&value);
+                        }
+                    }
+                }
+            }
+            // `whisper_subscribed` and `identity` need no action: this client never waits on a join.
             _ => {}
         }
 
@@ -1243,8 +1761,10 @@ impl Client {
     }
 
     /// The socket URL: the origin with its scheme swapped, plus the shard and
-    /// credential query parameters when present.
-    pub fn ws_url(&self, shard_key: Option<&str>, token: Option<&str>) -> String {
+    /// admin-ticket query parameters when present. `ws_ticket` is the ephemeral
+    /// admin sub-token; the session credential never rides the URL —
+    /// [`build_connect_frame`] carries it.
+    pub fn ws_url(&self, shard_key: Option<&str>, ws_ticket: Option<&str>) -> String {
         let joined = self.join(WS_PATH);
         let endpoint = if let Some(rest) = joined.strip_prefix("https://") {
             format!("wss://{rest}")
@@ -1261,7 +1781,7 @@ impl Client {
             params.push(format!("shard={}", percent_encode(key)));
         }
 
-        if let Some(value) = token {
+        if let Some(value) = ws_ticket {
             params.push(format!("token={}", percent_encode(value)));
         }
 
@@ -1305,6 +1825,13 @@ fn decode_poke_ops(operations: &[Value]) -> Result<Vec<PokeOp>, WireError> {
     }
 
     Ok(ops)
+}
+
+/// The server's retry hint on a subscription error, or `None` when it sent none this client can honour.
+fn retry_after(envelope: Option<&Value>) -> Option<Duration> {
+    let delay = envelope?.get("retryAfterMs")?.as_f64()?;
+
+    (delay.is_finite() && delay >= 0.0).then(|| Duration::from_secs_f64(delay.min(MAX_RETRY_AFTER_MS as f64) / 1000.0))
 }
 
 fn advance(entry: &mut Subscription, frame: &Value) {

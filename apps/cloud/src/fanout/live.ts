@@ -44,7 +44,7 @@ export const readLiveDeployments = async (environment: { DB?: unknown }): Promis
 export const servingDeployments = async (store: ControlPlaneStore, rows: ReadonlyArray<LiveDeploymentRow>, now: number): Promise<LiveDeploymentRow[]> => {
     const organizationIds = [...new Set(rows.flatMap((row) => (row.organizationId === undefined ? [] : [row.organizationId])))];
     const organizations = await Promise.all(
-        organizationIds.map(async (id) => [id, (await store.get(id, "organizations").catch(() => null)) as AdmissionRow | null] as const),
+        organizationIds.map(async (id) => [id, (await store.get("organizations", id).catch(() => null)) as AdmissionRow | null] as const),
     );
     const serving = new Set(organizations.filter(([, row]) => organizationServing(row, now)).map(([id]) => id));
 

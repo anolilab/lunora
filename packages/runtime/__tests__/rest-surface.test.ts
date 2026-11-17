@@ -119,7 +119,7 @@ describe("createWorker — opt-in public REST surface", () => {
 
         expect(response.status).toBe(403);
 
-        expect(authorizeShard).toHaveBeenCalledWith({ identity: null, shardKey: "__root__" });
+        expect(authorizeShard).toHaveBeenCalledWith({ functionPath: "messages:list", identity: null, shardKey: "__root__" });
     });
 
     it("forwards resolved identity to the shard (so ctx.auth / RLS apply)", async () => {

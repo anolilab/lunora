@@ -1,6 +1,8 @@
+import { LunoraError } from "@lunora/errors";
+import { encodeWire } from "@lunora/wire";
 import { describe, expect, it } from "vitest";
 
-import { decodeErrorDetail, encodeErrorDetail } from "../../../shared/error-detail";
+import { decodeErrorDetail, describeInternal, encodeErrorDetail } from "../../../shared/error-detail";
 import { parseStackFrames, toError } from "../src/error-reporting";
 
 const STACK = ["TypeError: db down", "    at load (src/server/index.js:12:5)", "    at Array.map (<anonymous>)", "    at src/server/index.js:40:9"].join("\n");
@@ -60,5 +62,63 @@ describe(encodeErrorDetail, () => {
         expect(encoded.length).toBeLessThanOrEqual(16_384);
         expect(decoded).not.toHaveProperty("stack");
         expect(decoded?.message).toHaveLength(1024);
+    });
+});
+
+describe(describeInternal, () => {
+    it("returns the internal context of a LunoraError", () => {
+        expect.assertions(1);
+
+        expect(describeInternal(new LunoraError("INTERNAL", "boom", { internal: { shard: "7" } }))).toStrictEqual({ shard: "7" });
+    });
+
+    it("returns undefined for a value with no internal context, or a non-Error throw", () => {
+        expect.assertions(2);
+
+        expect(describeInternal(new LunoraError("INTERNAL", "boom"))).toBeUndefined();
+        expect(describeInternal({ internal: { shard: "7" } })).toBeUndefined();
+    });
+
+    it("drops internal context that JSON cannot carry, so the header encode never throws", () => {
+        expect.assertions(2);
+
+        const cyclic: Record<string, unknown> = {};
+
+        cyclic.self = cyclic;
+
+        expect(describeInternal(new LunoraError("INTERNAL", "boom", { internal: cyclic }))).toBeUndefined();
+        expect(describeInternal(new LunoraError("INTERNAL", "boom", { internal: { big: 1n } }))).toBeUndefined();
+    });
+});
+
+describe("a LunoraError embedded in a wire payload never carries internal", () => {
+    it("encodes client-visible fields, including why, and drops the operator-only internal context", () => {
+        expect.assertions(3);
+
+        const SENTINEL = "INTERNAL_CONTEXT_SENTINEL_7f3a";
+        const encoded = JSON.stringify(encodeWire({ failure: new LunoraError("CONFLICT", "stale", { internal: { query: SENTINEL }, why: "row moved" }) }));
+
+        expect(encoded).not.toContain(SENTINEL);
+        expect(encoded).toContain("row moved");
+        expect(encoded).toContain("CONFLICT");
+    });
+});
+
+describe("error detail header carries internal, and decode rejects a malformed one", () => {
+    it("round-trips internal through the header encoding", () => {
+        expect.assertions(1);
+
+        const detail = { internal: { shard: "7" }, message: "boom", name: "LunoraError" };
+
+        expect(decodeErrorDetail(encodeErrorDetail(detail))).toStrictEqual(detail);
+    });
+
+    it("drops a non-object internal and keeps the rest of the detail", () => {
+        expect.assertions(2);
+
+        const encoded = encodeURIComponent(JSON.stringify({ internal: "not-an-object", message: "boom", name: "LunoraError" }));
+
+        expect(decodeErrorDetail(encoded)).toStrictEqual({ message: "boom", name: "LunoraError" });
+        expect(decodeErrorDetail(encodeURIComponent(JSON.stringify({ internal: [1], message: "boom", name: "E" })))).not.toHaveProperty("internal");
     });
 });

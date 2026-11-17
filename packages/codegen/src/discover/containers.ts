@@ -25,11 +25,22 @@ import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "../diagnostics";
 import type { ContainerImageIR, ContainerIR, DefaultScheduledContainerIR, DurableObjectScheduledContainerIR } from "../ir";
-import { findObjectProperty, isWriteTarget, outermostValueWrapper, propertyKeyName, stringPropertyFor, symbolConstInitializer } from "./ast";
+import {
+    declarationLineOf,
+    descendantsOfKind,
+    findObjectProperty,
+    isWriteTarget,
+    outermostValueWrapper,
+    propertyKeyName,
+    stringPropertyFor,
+    symbolConstInitializer,
+} from "./ast";
 import { addressableExportNameOf } from "./attribution";
 
 /** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
 const CONTAINERS_FILENAME = "containers.ts";
+/** The same module as {@link CONTAINERS_FILENAME}, lunora-relative without its extension. */
+const CONTAINERS_MODULE = CONTAINERS_FILENAME.replace(/\.ts$/u, "");
 
 /**
  * Decide whether a callee identifier refers to `defineContainer` from
@@ -133,7 +144,7 @@ const unwrapTypeOnly = (expression: Expression): Expression => {
  * would put a different number in wrangler.jsonc than the one the app runs.
  */
 const isWrittenThrough = (symbol: TsSymbol, sourceFile: SourceFile): boolean =>
-    sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).some((identifier) => {
+    descendantsOfKind(sourceFile, SyntaxKind.Identifier).some((identifier) => {
         if (identifier.getSymbol() !== symbol) {
             return false;
         }
@@ -609,7 +620,13 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
     const entries = staticEntries(argument, STATIC_KEYS, `container "${exportName}"`);
     const schedulingPolicy = schedulingPolicyOf(entries, exportName);
     const target = {
-        base: { bindingName: containerBindingName(exportName), className: containerClassName(exportName), exportName } as ContainerBaseIR,
+        base: {
+            bindingName: containerBindingName(exportName),
+            className: containerClassName(exportName),
+            exportName,
+            file: CONTAINERS_MODULE,
+            line: declarationLineOf(call),
+        } as ContainerBaseIR,
         policy: {} as PolicyFieldsIR,
         scheduled: schedulingPolicy !== undefined,
     };

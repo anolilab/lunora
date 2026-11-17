@@ -1,3 +1,1290 @@
+## @lunora/rspack [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.150...@lunora/rspack@1.0.0-alpha.151) (2026-11-05)
+
+- feat(vite): dev-loop hints, binding-drift notice and env.ts check (#1494)
+
+## @lunora/rspack [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.149...@lunora/rspack@1.0.0-alpha.150) (2026-11-05)
+
+- feat(config): security and cache headers for static assets, scoped run_worker_first (#1487)
+
+## @lunora/rspack [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.148...@lunora/rspack@1.0.0-alpha.149) (2026-11-04)
+
+- Release 1.0.0-alpha.149. Commit a2f1851 set this version and it was never published, so it is released from HEAD.
+
+## @lunora/rspack [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.147...@lunora/rspack@1.0.0-alpha.148) (2026-11-03)
+
+### Build System
+
+* **typecheck:** check lint:types with tsrs instead of tsc ([#1450](https://github.com/anolilab/lunora/issues/1450)) ([34dab36](https://github.com/anolilab/lunora/commit/34dab36db2d19fdfa95dcedf470994fa660002b4))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.396
+* **@lunora/config:** upgraded to 1.0.0-alpha.452
+* **@lunora/studio:** upgraded to 1.0.0-alpha.375
+
+## @lunora/rspack [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.146...@lunora/rspack@1.0.0-alpha.147) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.395
+* **@lunora/config:** upgraded to 1.0.0-alpha.451
+* **@lunora/studio:** upgraded to 1.0.0-alpha.374
+
+## @lunora/rspack [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.145...@lunora/rspack@1.0.0-alpha.146) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.393
+* **@lunora/config:** upgraded to 1.0.0-alpha.450
+
+## @lunora/rspack [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.144...@lunora/rspack@1.0.0-alpha.145) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.392
+* **@lunora/config:** upgraded to 1.0.0-alpha.449
+
+## @lunora/rspack [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.143...@lunora/rspack@1.0.0-alpha.144) (2026-11-02)
+
+### Bug Fixes
+
+* **codegen:** read lazy functions where codegen reads excludes ([#1444](https://github.com/anolilab/lunora/issues/1444)) ([d4f9d49](https://github.com/anolilab/lunora/commit/d4f9d490a7c04cf93a5f451319fef03da7354f4c))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.391
+* **@lunora/config:** upgraded to 1.0.0-alpha.448
+
+## @lunora/rspack [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.142...@lunora/rspack@1.0.0-alpha.143) (2026-11-02)
+
+### ⚠ BREAKING CHANGES
+
+* **codegen:** the `lazyFunctions` option is removed from `lunora()`
+(@lunora/vite) and the Rspack/Rsbuild plugin options (@lunora/rspack). Set
+`codegen: { lazyFunctions: true }` in lunora.config.ts instead.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(vite): re-read codegen.lazyFunctions on config save
+
+The vite and rspack plugins refuse the removed `lazyFunctions` option with
+an error that points at `codegen.lazyFunctions` in lunora.config. Before,
+a plugin that still passed it regenerated the eager registry silently.
+
+The codegen watcher now regenerates when a config save flips
+`codegen.lazyFunctions`, since that flag decides the shape of _generated/.
+Other config saves still do not regenerate.
+
+A non-boolean `codegen.lazyFunctions` warns once per config version, not on
+every codegen run.
+* **codegen:** the `lazyFunctions` option of the vite and rspack plugins is
+removed. Set `codegen: { lazyFunctions: true }` in lunora.config, or pass
+--lazy-functions for one run.
+
+Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>
+
+### Bug Fixes
+
+* **codegen:** read lazyFunctions from lunora.config in every entry point ([#1414](https://github.com/anolilab/lunora/issues/1414)) ([485a3d5](https://github.com/anolilab/lunora/commit/485a3d57d596c9b1fbe98cf58e50a274a6148d60))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.390
+* **@lunora/config:** upgraded to 1.0.0-alpha.447
+
+## @lunora/rspack [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.141...@lunora/rspack@1.0.0-alpha.142) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.389
+* **@lunora/config:** upgraded to 1.0.0-alpha.446
+* **@lunora/studio:** upgraded to 1.0.0-alpha.373
+
+## @lunora/rspack [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.140...@lunora/rspack@1.0.0-alpha.141) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.388
+* **@lunora/config:** upgraded to 1.0.0-alpha.445
+* **@lunora/studio:** upgraded to 1.0.0-alpha.372
+
+## @lunora/rspack [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.139...@lunora/rspack@1.0.0-alpha.140) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.444
+* **@lunora/studio:** upgraded to 1.0.0-alpha.371
+
+## @lunora/rspack [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.138...@lunora/rspack@1.0.0-alpha.139) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.385
+* **@lunora/config:** upgraded to 1.0.0-alpha.442
+* **@lunora/studio:** upgraded to 1.0.0-alpha.370
+
+## @lunora/rspack [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.137...@lunora/rspack@1.0.0-alpha.138) (2026-11-01)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.441
+* **@lunora/studio:** upgraded to 1.0.0-alpha.369
+
+## @lunora/rspack [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.136...@lunora/rspack@1.0.0-alpha.137) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.440
+
+## @lunora/rspack [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.135...@lunora/rspack@1.0.0-alpha.136) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.384
+* **@lunora/config:** upgraded to 1.0.0-alpha.439
+* **@lunora/studio:** upgraded to 1.0.0-alpha.368
+
+## @lunora/rspack [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.134...@lunora/rspack@1.0.0-alpha.135) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.383
+* **@lunora/config:** upgraded to 1.0.0-alpha.438
+* **@lunora/studio:** upgraded to 1.0.0-alpha.367
+
+## @lunora/rspack [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.133...@lunora/rspack@1.0.0-alpha.134) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.382
+* **@lunora/config:** upgraded to 1.0.0-alpha.437
+* **@lunora/studio:** upgraded to 1.0.0-alpha.366
+
+## @lunora/rspack [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.132...@lunora/rspack@1.0.0-alpha.133) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.381
+* **@lunora/config:** upgraded to 1.0.0-alpha.436
+* **@lunora/studio:** upgraded to 1.0.0-alpha.365
+
+## @lunora/rspack [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.131...@lunora/rspack@1.0.0-alpha.132) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.435
+* **@lunora/studio:** upgraded to 1.0.0-alpha.364
+
+## @lunora/rspack [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.130...@lunora/rspack@1.0.0-alpha.131) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.379
+* **@lunora/config:** upgraded to 1.0.0-alpha.434
+* **@lunora/studio:** upgraded to 1.0.0-alpha.363
+
+## @lunora/rspack [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.129...@lunora/rspack@1.0.0-alpha.130) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.378
+* **@lunora/config:** upgraded to 1.0.0-alpha.433
+* **@lunora/studio:** upgraded to 1.0.0-alpha.362
+
+## @lunora/rspack [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.128...@lunora/rspack@1.0.0-alpha.129) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.377
+* **@lunora/config:** upgraded to 1.0.0-alpha.432
+* **@lunora/studio:** upgraded to 1.0.0-alpha.361
+
+## @lunora/rspack [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.127...@lunora/rspack@1.0.0-alpha.128) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.431
+* **@lunora/studio:** upgraded to 1.0.0-alpha.360
+
+## @lunora/rspack [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.126...@lunora/rspack@1.0.0-alpha.127) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.430
+* **@lunora/studio:** upgraded to 1.0.0-alpha.359
+
+## @lunora/rspack [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.125...@lunora/rspack@1.0.0-alpha.126) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.374
+* **@lunora/config:** upgraded to 1.0.0-alpha.429
+* **@lunora/studio:** upgraded to 1.0.0-alpha.358
+
+## @lunora/rspack [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.124...@lunora/rspack@1.0.0-alpha.125) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.373
+* **@lunora/config:** upgraded to 1.0.0-alpha.428
+* **@lunora/studio:** upgraded to 1.0.0-alpha.357
+
+## @lunora/rspack [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.123...@lunora/rspack@1.0.0-alpha.124) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.372
+* **@lunora/config:** upgraded to 1.0.0-alpha.427
+
+## @lunora/rspack [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.122...@lunora/rspack@1.0.0-alpha.123) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.371
+* **@lunora/config:** upgraded to 1.0.0-alpha.426
+* **@lunora/studio:** upgraded to 1.0.0-alpha.356
+
+## @lunora/rspack [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.121...@lunora/rspack@1.0.0-alpha.122) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.370
+* **@lunora/config:** upgraded to 1.0.0-alpha.425
+* **@lunora/studio:** upgraded to 1.0.0-alpha.355
+
+## @lunora/rspack [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.120...@lunora/rspack@1.0.0-alpha.121) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.369
+* **@lunora/config:** upgraded to 1.0.0-alpha.424
+* **@lunora/studio:** upgraded to 1.0.0-alpha.354
+
+## @lunora/rspack [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.119...@lunora/rspack@1.0.0-alpha.120) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.368
+* **@lunora/config:** upgraded to 1.0.0-alpha.423
+
+## @lunora/rspack [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.118...@lunora/rspack@1.0.0-alpha.119) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.367
+* **@lunora/config:** upgraded to 1.0.0-alpha.422
+* **@lunora/studio:** upgraded to 1.0.0-alpha.353
+
+## @lunora/rspack [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.117...@lunora/rspack@1.0.0-alpha.118) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.366
+* **@lunora/config:** upgraded to 1.0.0-alpha.421
+* **@lunora/studio:** upgraded to 1.0.0-alpha.352
+
+## @lunora/rspack [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.116...@lunora/rspack@1.0.0-alpha.117) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.365
+* **@lunora/config:** upgraded to 1.0.0-alpha.420
+* **@lunora/studio:** upgraded to 1.0.0-alpha.351
+
+## @lunora/rspack [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.115...@lunora/rspack@1.0.0-alpha.116) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.364
+* **@lunora/config:** upgraded to 1.0.0-alpha.419
+* **@lunora/studio:** upgraded to 1.0.0-alpha.350
+
+## @lunora/rspack [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.114...@lunora/rspack@1.0.0-alpha.115) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.363
+* **@lunora/config:** upgraded to 1.0.0-alpha.418
+* **@lunora/studio:** upgraded to 1.0.0-alpha.349
+
+## @lunora/rspack [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.113...@lunora/rspack@1.0.0-alpha.114) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.417
+
+## @lunora/rspack [1.0.0-alpha.113](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.112...@lunora/rspack@1.0.0-alpha.113) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.416
+* **@lunora/studio:** upgraded to 1.0.0-alpha.348
+
+## @lunora/rspack [1.0.0-alpha.112](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.111...@lunora/rspack@1.0.0-alpha.112) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.361
+* **@lunora/config:** upgraded to 1.0.0-alpha.415
+* **@lunora/studio:** upgraded to 1.0.0-alpha.347
+
+## @lunora/rspack [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.110...@lunora/rspack@1.0.0-alpha.111) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.360
+* **@lunora/config:** upgraded to 1.0.0-alpha.414
+
+## @lunora/rspack [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.109...@lunora/rspack@1.0.0-alpha.110) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.359
+* **@lunora/config:** upgraded to 1.0.0-alpha.413
+
+## @lunora/rspack [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.108...@lunora/rspack@1.0.0-alpha.109) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.358
+* **@lunora/config:** upgraded to 1.0.0-alpha.412
+* **@lunora/studio:** upgraded to 1.0.0-alpha.346
+
+## @lunora/rspack [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.107...@lunora/rspack@1.0.0-alpha.108) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.357
+* **@lunora/config:** upgraded to 1.0.0-alpha.411
+* **@lunora/studio:** upgraded to 1.0.0-alpha.345
+
+## @lunora/rspack [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.106...@lunora/rspack@1.0.0-alpha.107) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.410
+
+## @lunora/rspack [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.105...@lunora/rspack@1.0.0-alpha.106) (2026-10-26)
+
+### Performance Improvements
+
+* **rspack:** skip untouched rebuilds and defer studio-host ([#1341](https://github.com/anolilab/lunora/issues/1341)) ([badfe93](https://github.com/anolilab/lunora/commit/badfe938486840ca1c4e099052a704c62e438f51))
+
+## @lunora/rspack [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.104...@lunora/rspack@1.0.0-alpha.105) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.355
+* **@lunora/config:** upgraded to 1.0.0-alpha.409
+* **@lunora/studio:** upgraded to 1.0.0-alpha.344
+
+## @lunora/rspack [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.103...@lunora/rspack@1.0.0-alpha.104) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.354
+* **@lunora/config:** upgraded to 1.0.0-alpha.408
+* **@lunora/studio:** upgraded to 1.0.0-alpha.343
+
+## @lunora/rspack [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.102...@lunora/rspack@1.0.0-alpha.103) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.353
+* **@lunora/config:** upgraded to 1.0.0-alpha.407
+* **@lunora/studio:** upgraded to 1.0.0-alpha.342
+
+## @lunora/rspack [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.101...@lunora/rspack@1.0.0-alpha.102) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.352
+* **@lunora/config:** upgraded to 1.0.0-alpha.406
+* **@lunora/studio:** upgraded to 1.0.0-alpha.341
+
+## @lunora/rspack [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.100...@lunora/rspack@1.0.0-alpha.101) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.405
+* **@lunora/studio:** upgraded to 1.0.0-alpha.340
+
+## @lunora/rspack [1.0.0-alpha.100](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.99...@lunora/rspack@1.0.0-alpha.100) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.351
+* **@lunora/config:** upgraded to 1.0.0-alpha.404
+* **@lunora/studio:** upgraded to 1.0.0-alpha.339
+
+## @lunora/rspack [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.98...@lunora/rspack@1.0.0-alpha.99) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.350
+* **@lunora/config:** upgraded to 1.0.0-alpha.403
+* **@lunora/studio:** upgraded to 1.0.0-alpha.338
+
+## @lunora/rspack [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.97...@lunora/rspack@1.0.0-alpha.98) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.402
+* **@lunora/studio:** upgraded to 1.0.0-alpha.337
+
+## @lunora/rspack [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.96...@lunora/rspack@1.0.0-alpha.97) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.349
+* **@lunora/config:** upgraded to 1.0.0-alpha.401
+* **@lunora/studio:** upgraded to 1.0.0-alpha.336
+
+## @lunora/rspack [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.95...@lunora/rspack@1.0.0-alpha.96) (2026-10-23)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.348
+* **@lunora/config:** upgraded to 1.0.0-alpha.400
+* **@lunora/studio:** upgraded to 1.0.0-alpha.335
+
+## @lunora/rspack [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.94...@lunora/rspack@1.0.0-alpha.95) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.347
+* **@lunora/config:** upgraded to 1.0.0-alpha.399
+* **@lunora/studio:** upgraded to 1.0.0-alpha.334
+
+## @lunora/rspack [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.93...@lunora/rspack@1.0.0-alpha.94) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.398
+
+## @lunora/rspack [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.92...@lunora/rspack@1.0.0-alpha.93) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.345
+* **@lunora/config:** upgraded to 1.0.0-alpha.397
+
+## @lunora/rspack [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.91...@lunora/rspack@1.0.0-alpha.92) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.344
+* **@lunora/config:** upgraded to 1.0.0-alpha.396
+
+## @lunora/rspack [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.90...@lunora/rspack@1.0.0-alpha.91) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.395
+
+## @lunora/rspack [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.89...@lunora/rspack@1.0.0-alpha.90) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.343
+* **@lunora/config:** upgraded to 1.0.0-alpha.394
+* **@lunora/studio:** upgraded to 1.0.0-alpha.332
+
+## @lunora/rspack [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.88...@lunora/rspack@1.0.0-alpha.89) (2026-10-22)
+
+### Features
+
+* **vite:** write the server bundle's metafile for lunora build ([#1290](https://github.com/anolilab/lunora/issues/1290)) ([9f88e40](https://github.com/anolilab/lunora/commit/9f88e407777daaecec07363ddf733219327c7b73))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.393
+
+## @lunora/rspack [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.87...@lunora/rspack@1.0.0-alpha.88) (2026-10-21)
+
+### Features
+
+* **cli:** run the vite or rsbuild build before lunora build ([#1289](https://github.com/anolilab/lunora/issues/1289)) ([5a93210](https://github.com/anolilab/lunora/commit/5a9321020df6c55a50805745177e903fa90a4570))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.392
+
+## @lunora/rspack [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.86...@lunora/rspack@1.0.0-alpha.87) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.340
+* **@lunora/config:** upgraded to 1.0.0-alpha.391
+* **@lunora/studio:** upgraded to 1.0.0-alpha.331
+
+## @lunora/rspack [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.85...@lunora/rspack@1.0.0-alpha.86) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.339
+* **@lunora/config:** upgraded to 1.0.0-alpha.390
+* **@lunora/studio:** upgraded to 1.0.0-alpha.330
+
+## @lunora/rspack [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.84...@lunora/rspack@1.0.0-alpha.85) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.389
+* **@lunora/studio:** upgraded to 1.0.0-alpha.329
+
+## @lunora/rspack [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.83...@lunora/rspack@1.0.0-alpha.84) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.338
+* **@lunora/config:** upgraded to 1.0.0-alpha.388
+* **@lunora/studio:** upgraded to 1.0.0-alpha.328
+
+## @lunora/rspack [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.82...@lunora/rspack@1.0.0-alpha.83) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.337
+* **@lunora/config:** upgraded to 1.0.0-alpha.387
+* **@lunora/studio:** upgraded to 1.0.0-alpha.327
+
+## @lunora/rspack [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.81...@lunora/rspack@1.0.0-alpha.82) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.336
+* **@lunora/config:** upgraded to 1.0.0-alpha.386
+* **@lunora/studio:** upgraded to 1.0.0-alpha.326
+
+## @lunora/rspack [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.80...@lunora/rspack@1.0.0-alpha.81) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.335
+* **@lunora/config:** upgraded to 1.0.0-alpha.385
+* **@lunora/studio:** upgraded to 1.0.0-alpha.325
+
+## @lunora/rspack [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.79...@lunora/rspack@1.0.0-alpha.80) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.384
+* **@lunora/studio:** upgraded to 1.0.0-alpha.324
+
+## @lunora/rspack [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.78...@lunora/rspack@1.0.0-alpha.79) (2026-10-19)
+
+### Bug Fixes
+
+* **rspack:** re-read target when the dev worker starts ([#1279](https://github.com/anolilab/lunora/issues/1279)) ([66e0ee1](https://github.com/anolilab/lunora/commit/66e0ee114e4d444c8291001219c56e5b51de61c5))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.334
+* **@lunora/config:** upgraded to 1.0.0-alpha.383
+* **@lunora/studio:** upgraded to 1.0.0-alpha.323
+
+## @lunora/rspack [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.77...@lunora/rspack@1.0.0-alpha.78) (2026-10-19)
+
+### Performance Improvements
+
+* **codegen:** seed the type program from lunora/ and its global declarations ([#1259](https://github.com/anolilab/lunora/issues/1259)) ([1003c51](https://github.com/anolilab/lunora/commit/1003c518ef0f2e24660995fe4b9aa22eebb8ec10))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.333
+* **@lunora/config:** upgraded to 1.0.0-alpha.382
+* **@lunora/studio:** upgraded to 1.0.0-alpha.322
+
+## @lunora/rspack [1.0.0-alpha.77](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.76...@lunora/rspack@1.0.0-alpha.77) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.331
+* **@lunora/config:** upgraded to 1.0.0-alpha.381
+* **@lunora/studio:** upgraded to 1.0.0-alpha.321
+
+## @lunora/rspack [1.0.0-alpha.76](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.75...@lunora/rspack@1.0.0-alpha.76) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.330
+* **@lunora/config:** upgraded to 1.0.0-alpha.380
+* **@lunora/studio:** upgraded to 1.0.0-alpha.320
+
+## @lunora/rspack [1.0.0-alpha.75](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.74...@lunora/rspack@1.0.0-alpha.75) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.329
+* **@lunora/config:** upgraded to 1.0.0-alpha.379
+* **@lunora/studio:** upgraded to 1.0.0-alpha.319
+
+## @lunora/rspack [1.0.0-alpha.74](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.73...@lunora/rspack@1.0.0-alpha.74) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.328
+* **@lunora/config:** upgraded to 1.0.0-alpha.378
+
+## @lunora/rspack [1.0.0-alpha.73](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.72...@lunora/rspack@1.0.0-alpha.73) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.327
+* **@lunora/config:** upgraded to 1.0.0-alpha.377
+* **@lunora/studio:** upgraded to 1.0.0-alpha.318
+
+## @lunora/rspack [1.0.0-alpha.72](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.71...@lunora/rspack@1.0.0-alpha.72) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.376
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([eafd564](https://github.com/anolilab/lunora/commit/eafd564ad5b1ad706b4a43b54cad274cf6b8e9ee))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7996c8b](https://github.com/anolilab/lunora/commit/7996c8bf1f4080a944bd82211e0697fae7559d21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d766d8d](https://github.com/anolilab/lunora/commit/d766d8d17dcb9bd5528cd63638b86a7999f1c605))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5761fec](https://github.com/anolilab/lunora/commit/5761fec02d5ee0a9cf08b321edad9850d58ba223))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([33c389f](https://github.com/anolilab/lunora/commit/33c389f676418ff3c3ed3f7db5aa14fba44dd78d))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([fd0255c](https://github.com/anolilab/lunora/commit/fd0255c0ca024b25df14c498dffedb4936ec490e))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b8b0c3c](https://github.com/anolilab/lunora/commit/b8b0c3cde32574418aaff5a79144b6fce47c17cc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b421024](https://github.com/anolilab/lunora/commit/b4210243982fea07bd6acb5f0c3ed96ec1375790))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a301be9](https://github.com/anolilab/lunora/commit/a301be9efd521b5831384168a16bb274b420e2a2))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7996c8b](https://github.com/anolilab/lunora/commit/7996c8bf1f4080a944bd82211e0697fae7559d21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d766d8d](https://github.com/anolilab/lunora/commit/d766d8d17dcb9bd5528cd63638b86a7999f1c605))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5761fec](https://github.com/anolilab/lunora/commit/5761fec02d5ee0a9cf08b321edad9850d58ba223))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([33c389f](https://github.com/anolilab/lunora/commit/33c389f676418ff3c3ed3f7db5aa14fba44dd78d))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([fd0255c](https://github.com/anolilab/lunora/commit/fd0255c0ca024b25df14c498dffedb4936ec490e))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b8b0c3c](https://github.com/anolilab/lunora/commit/b8b0c3cde32574418aaff5a79144b6fce47c17cc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b421024](https://github.com/anolilab/lunora/commit/b4210243982fea07bd6acb5f0c3ed96ec1375790))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a301be9](https://github.com/anolilab/lunora/commit/a301be9efd521b5831384168a16bb274b420e2a2))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.375
+* **@lunora/studio:** upgraded to 1.0.0-alpha.317
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d766d8d](https://github.com/anolilab/lunora/commit/d766d8d17dcb9bd5528cd63638b86a7999f1c605))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5761fec](https://github.com/anolilab/lunora/commit/5761fec02d5ee0a9cf08b321edad9850d58ba223))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([33c389f](https://github.com/anolilab/lunora/commit/33c389f676418ff3c3ed3f7db5aa14fba44dd78d))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([fd0255c](https://github.com/anolilab/lunora/commit/fd0255c0ca024b25df14c498dffedb4936ec490e))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b8b0c3c](https://github.com/anolilab/lunora/commit/b8b0c3cde32574418aaff5a79144b6fce47c17cc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b421024](https://github.com/anolilab/lunora/commit/b4210243982fea07bd6acb5f0c3ed96ec1375790))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a301be9](https://github.com/anolilab/lunora/commit/a301be9efd521b5831384168a16bb274b420e2a2))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.326
+* **@lunora/config:** upgraded to 1.0.0-alpha.374
+* **@lunora/studio:** upgraded to 1.0.0-alpha.316
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5761fec](https://github.com/anolilab/lunora/commit/5761fec02d5ee0a9cf08b321edad9850d58ba223))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([33c389f](https://github.com/anolilab/lunora/commit/33c389f676418ff3c3ed3f7db5aa14fba44dd78d))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([fd0255c](https://github.com/anolilab/lunora/commit/fd0255c0ca024b25df14c498dffedb4936ec490e))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b8b0c3c](https://github.com/anolilab/lunora/commit/b8b0c3cde32574418aaff5a79144b6fce47c17cc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b421024](https://github.com/anolilab/lunora/commit/b4210243982fea07bd6acb5f0c3ed96ec1375790))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a301be9](https://github.com/anolilab/lunora/commit/a301be9efd521b5831384168a16bb274b420e2a2))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.325
+* **@lunora/config:** upgraded to 1.0.0-alpha.373
+* **@lunora/studio:** upgraded to 1.0.0-alpha.315
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([33c389f](https://github.com/anolilab/lunora/commit/33c389f676418ff3c3ed3f7db5aa14fba44dd78d))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([fd0255c](https://github.com/anolilab/lunora/commit/fd0255c0ca024b25df14c498dffedb4936ec490e))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b8b0c3c](https://github.com/anolilab/lunora/commit/b8b0c3cde32574418aaff5a79144b6fce47c17cc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b421024](https://github.com/anolilab/lunora/commit/b4210243982fea07bd6acb5f0c3ed96ec1375790))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a301be9](https://github.com/anolilab/lunora/commit/a301be9efd521b5831384168a16bb274b420e2a2))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.324
+* **@lunora/config:** upgraded to 1.0.0-alpha.372
+* **@lunora/studio:** upgraded to 1.0.0-alpha.314
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([fd0255c](https://github.com/anolilab/lunora/commit/fd0255c0ca024b25df14c498dffedb4936ec490e))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b8b0c3c](https://github.com/anolilab/lunora/commit/b8b0c3cde32574418aaff5a79144b6fce47c17cc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b421024](https://github.com/anolilab/lunora/commit/b4210243982fea07bd6acb5f0c3ed96ec1375790))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a301be9](https://github.com/anolilab/lunora/commit/a301be9efd521b5831384168a16bb274b420e2a2))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.323
+* **@lunora/config:** upgraded to 1.0.0-alpha.371
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b8b0c3c](https://github.com/anolilab/lunora/commit/b8b0c3cde32574418aaff5a79144b6fce47c17cc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b421024](https://github.com/anolilab/lunora/commit/b4210243982fea07bd6acb5f0c3ed96ec1375790))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a301be9](https://github.com/anolilab/lunora/commit/a301be9efd521b5831384168a16bb274b420e2a2))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.322
+* **@lunora/config:** upgraded to 1.0.0-alpha.370
+* **@lunora/studio:** upgraded to 1.0.0-alpha.313
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+### Bug Fixes
+
+* **codegen:** address review of the lazy function registry ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([#1239](https://github.com/anolilab/lunora/issues/1239)) ([424449a](https://github.com/anolilab/lunora/commit/424449a14263e4714fb19185c323cbb3892ac901))
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([b421024](https://github.com/anolilab/lunora/commit/b4210243982fea07bd6acb5f0c3ed96ec1375790))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a301be9](https://github.com/anolilab/lunora/commit/a301be9efd521b5831384168a16bb274b420e2a2))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.321
+* **@lunora/config:** upgraded to 1.0.0-alpha.369
+* **@lunora/studio:** upgraded to 1.0.0-alpha.312
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Features
+
+* **codegen:** load procedure modules on demand ([#1236](https://github.com/anolilab/lunora/issues/1236)) ([655247d](https://github.com/anolilab/lunora/commit/655247d2c806433e656aec35ec69e2fa5133071c))
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a301be9](https://github.com/anolilab/lunora/commit/a301be9efd521b5831384168a16bb274b420e2a2))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.320
+* **@lunora/config:** upgraded to 1.0.0-alpha.368
+* **@lunora/studio:** upgraded to 1.0.0-alpha.311
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-18)
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a254b25](https://github.com/anolilab/lunora/commit/a254b2503cf16066dc593dd9fba8dc069f4f1a83))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.319
+* **@lunora/config:** upgraded to 1.0.0-alpha.367
+* **@lunora/studio:** upgraded to 1.0.0-alpha.310
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-17)
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([19457cc](https://github.com/anolilab/lunora/commit/19457cc9e4faff6bfcbcc50df97d0f11a1aba343))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.318
+* **@lunora/config:** upgraded to 1.0.0-alpha.366
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-17)
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([40a856b](https://github.com/anolilab/lunora/commit/40a856be45f24824b2eb4746d38f2565dd8c0b21))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.317
+* **@lunora/config:** upgraded to 1.0.0-alpha.365
+* **@lunora/studio:** upgraded to 1.0.0-alpha.309
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-17)
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([3c410bc](https://github.com/anolilab/lunora/commit/3c410bc034bc801370c650bce709026f32c26ddd))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.316
+* **@lunora/config:** upgraded to 1.0.0-alpha.364
+* **@lunora/studio:** upgraded to 1.0.0-alpha.308
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-16)
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([5e26143](https://github.com/anolilab/lunora/commit/5e26143dba35e03aebe6713c66cf25936ab04400))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.315
+* **@lunora/config:** upgraded to 1.0.0-alpha.363
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-16)
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([15ca8c0](https://github.com/anolilab/lunora/commit/15ca8c04dcf6fd80d8b7457c7d39d8fe328f23fc))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.314
+* **@lunora/config:** upgraded to 1.0.0-alpha.362
+* **@lunora/studio:** upgraded to 1.0.0-alpha.307
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-16)
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([77d66e0](https://github.com/anolilab/lunora/commit/77d66e0ee2d71b6ec2ebaa7eaf3ebf29cb8c0670))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/config:** upgraded to 1.0.0-alpha.361
+* **@lunora/studio:** upgraded to 1.0.0-alpha.306
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-16)
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([9d21f07](https://github.com/anolilab/lunora/commit/9d21f078c84db8f2498df6091807b794a8f527c3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.313
+* **@lunora/config:** upgraded to 1.0.0-alpha.360
+
+## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-16)
+
+### Miscellaneous Chores
+
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([96dc17d](https://github.com/anolilab/lunora/commit/96dc17d4d50cb1c136bfc12f9f6358900eafce22))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([a07546f](https://github.com/anolilab/lunora/commit/a07546f0c7031704b64476aaf7503405d6c65293))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([8734598](https://github.com/anolilab/lunora/commit/8734598bf4a9645c4c739ac14373ebb8931cfda0))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([d6e5b11](https://github.com/anolilab/lunora/commit/d6e5b11dd06be570947cfcaf427e223e064a8dd3))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([e41eb69](https://github.com/anolilab/lunora/commit/e41eb693bf452f03231228ff96f4a4deed6f3422))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([701ca03](https://github.com/anolilab/lunora/commit/701ca0345ed769be86b1a57df58cbca75fed7a0c))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([7cbb242](https://github.com/anolilab/lunora/commit/7cbb242b32e13a5c4dfe95a2fd2eb8aefb7929fa))
+* **release:** @lunora/rspack@1.0.0-alpha.71 [skip ci] ([084ec04](https://github.com/anolilab/lunora/commit/084ec04c59dc22597b4d7ac02fda337faea87896))
+
+
+### Dependencies
+
+* **@lunora/codegen:** upgraded to 1.0.0-alpha.312
+* **@lunora/config:** upgraded to 1.0.0-alpha.359
+* **@lunora/studio:** upgraded to 1.0.0-alpha.305
+
 ## @lunora/rspack [1.0.0-alpha.71](https://github.com/anolilab/lunora/compare/@lunora/rspack@1.0.0-alpha.70...@lunora/rspack@1.0.0-alpha.71) (2026-10-15)
 
 ### Miscellaneous Chores

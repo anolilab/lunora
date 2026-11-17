@@ -43,4 +43,4 @@ If you change folding, stopwords, the token-length cap, or (one day) stemming, b
 
 ## License
 
-FSL-1.1-Apache-2.0
+Apache-2.0

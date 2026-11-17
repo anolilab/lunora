@@ -1,16 +1,19 @@
 /**
  * Stripe adapter.
  *
- * Takes a `Stripe` client by injection — `stripe` is an optional peer dependency, so pass
- * `new Stripe(key, { httpClient: Stripe.createFetchHttpClient() })` from the app (the fetch HTTP
- * client is required on workerd). The public `client` is typed as the small structural
- * {@link StripeClientLike} (a real `Stripe` instance satisfies it, no cast) to keep the published
- * declarations lean; internally it is used as the real `Stripe` type so every call is checked
- * against the SDK, and webhooks are verified with the SDK's own `webhooks.constructEventAsync`.
- * Stripe amounts are already integer minor units (zero-decimal currencies included), matching money 1:1.
+ * Takes a loader for the `Stripe` client — `stripe` is an optional peer dependency, so the app passes
+ * `async () => { const { default: Stripe } = await import("stripe"); return new Stripe(key, {
+ * httpClient: Stripe.createFetchHttpClient() }); }` (the fetch HTTP client is required on workerd).
+ * The loader runs on the first provider call and its client is reused, so the SDK stays out of the
+ * Worker's startup graph; a failed load rejects that call and the next one retries. The loaded
+ * client is typed as the small structural {@link StripeClientLike} (a real `Stripe` instance
+ * satisfies it, no cast) to keep the published declarations lean; internally it is used as the real
+ * `Stripe` type so every call is checked against the SDK, and webhooks are verified with the SDK's
+ * own `webhooks.constructEventAsync`. Stripe amounts are already integer minor units (zero-decimal currencies included), matching money 1:1.
  */
 import type { Stripe } from "stripe";
 
+import { lazyValue } from "../../../../shared/lazy-value";
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { LunoraPaymentError } from "../errors";
 import { idempotencyKey } from "../idempotency";
@@ -54,7 +57,7 @@ interface StripeClientLike {
 }
 
 interface StripeAdapterOptions {
-    readonly client: StripeClientLike;
+    readonly client: () => Promise<StripeClientLike> | StripeClientLike;
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
@@ -234,6 +237,13 @@ const checkoutSessionAction = ({ base, currency, object }: StripeEvent): Webhook
             subscriptionId: readString(object, "subscription"),
             type: paid ? "subscription.active" : "subscription.updated",
         };
+    }
+
+    // Only a payment-mode session moves money. A setup session (saving a card) has no PaymentIntent
+    // and settles as `no_payment_required`, so it would otherwise be recorded as a captured
+    // payment with no amount. Stripe sets `mode` on every Checkout Session.
+    if (readString(object, "mode") !== "payment") {
+        return { ...base, type: "unhandled" };
     }
 
     const paymentIntentId = readString(object, "payment_intent");
@@ -416,20 +426,30 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
     }
 };
 
+// Checkout keys are derived from the request, so a repeat of a finished checkout inside Stripe's
+// idempotency window can be answered with that earlier session. Only an `open` session is payable,
+// so the session's current `status` (typed by the SDK, read fresh) identifies it; the replay header
+// is not relied on.
+const isFinishedSession = (session: Stripe.Checkout.Session): boolean => session.status === "complete" || session.status === "expired";
+
 export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapter => {
     const { webhookSecret } = options;
-    // Use the injected client as the real `Stripe` internally so every call below is checked against
+    // Use the loaded client as the real `Stripe` internally so every call below is checked against
     // the SDK (drift-proof), while the public `client` param stays the lean structural shim.
-    const client = options.client as unknown as Stripe;
+    const loadClient = lazyValue(async () => (await options.client()) as unknown as Stripe);
 
     return {
         cancelPayment: async (sessionId, paymentOptions) => {
+            const client = await loadClient();
+
             const intent = await client.paymentIntents.cancel(sessionId, undefined, { idempotencyKey: paymentOptions?.idempotencyKey });
 
             return intentToSession(intent);
         },
 
         cancelSubscription: async (subscriptionId, cancelOptions) => {
+            const client = await loadClient();
+
             const subscription = cancelOptions?.atPeriodEnd
                 ? await client.subscriptions.update(subscriptionId, { cancel_at_period_end: true }, { idempotencyKey: cancelOptions.idempotencyKey })
                 : await client.subscriptions.cancel(subscriptionId, undefined, { idempotencyKey: cancelOptions?.idempotencyKey });
@@ -437,9 +457,11 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
             return subscriptionFromStripe(subscription);
         },
 
-        capabilities: { merchantOfRecord: false, portal: true, usageMetering: true },
+        capabilities: { checkoutExpiry: true, merchantOfRecord: false, portal: true, usageMetering: true },
 
         capturePayment: async (input: CaptureInput) => {
+            const client = await loadClient();
+
             const intent = await client.paymentIntents.capture(
                 input.sessionId,
                 input.amount ? { amount_to_capture: Number(input.amount.minorUnits) } : undefined,
@@ -450,34 +472,55 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
-            const session = await client.checkout.sessions.create(
-                {
-                    cancel_url: input.cancelUrl,
-                    client_reference_id: input.referenceId,
-                    customer: input.customerId,
-                    line_items: [{ price: input.priceId, quantity: input.quantity ?? 1 }],
-                    // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
-                    metadata: { ...input.metadata, referenceId: input.referenceId },
-                    mode: input.mode,
-                    // The PaymentIntent needs the reference too: `payment_intent.succeeded` can land
-                    // before `checkout.session.completed` and is mapped from the intent alone.
-                    payment_intent_data: input.mode === "payment" ? { metadata: { ...input.metadata, referenceId: input.referenceId } } : undefined,
-                    subscription_data: input.mode === "subscription" ? { metadata: { referenceId: input.referenceId } } : undefined,
-                    success_url: input.successUrl,
-                },
-                { idempotencyKey: input.idempotencyKey },
-            );
+            const client = await loadClient();
+
+            const params: Stripe.Checkout.SessionCreateParams = {
+                cancel_url: input.cancelUrl,
+                client_reference_id: input.referenceId,
+                customer: input.customerId,
+                expires_at: input.expiresAt === undefined ? undefined : Math.floor(input.expiresAt / 1000),
+                line_items: [{ price: input.priceId, quantity: input.quantity ?? 1 }],
+                // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
+                metadata: { ...input.metadata, referenceId: input.referenceId },
+                mode: input.mode,
+                // The PaymentIntent needs the reference too: `payment_intent.succeeded` can land
+                // before `checkout.session.completed` and is mapped from the intent alone.
+                payment_intent_data: input.mode === "payment" ? { metadata: { ...input.metadata, referenceId: input.referenceId } } : undefined,
+                subscription_data: input.mode === "subscription" ? { metadata: { referenceId: input.referenceId } } : undefined,
+                success_url: input.successUrl,
+            };
+
+            let session = await client.checkout.sessions.create(params, { idempotencyKey: input.idempotencyKey });
+
+            // A replay returns the body Stripe stored at creation, whose status is still `open`
+            // after the customer finished; only a fresh read shows the session's current status.
+            if (input.idempotencyKey !== undefined && isFinishedSession(await client.checkout.sessions.retrieve(session.id))) {
+                // The retry key embeds the replayed session id: a double-click after the first session
+                // finished still collapses onto one new session, and no clock is needed.
+                session = await client.checkout.sessions.create(params, { idempotencyKey: `${input.idempotencyKey}:${session.id}` });
+
+                if (isFinishedSession(await client.checkout.sessions.retrieve(session.id))) {
+                    throw new LunoraPaymentError(
+                        "PROVIDER_ERROR",
+                        "stripe replayed a finished checkout session for this request twice; pass a distinct idempotencyKey to start a new one",
+                    );
+                }
+            }
 
             return { id: session.id, provider: "stripe", url: session.url ?? "" };
         },
 
         createPortalSession: async (input: PortalInput) => {
+            const client = await loadClient();
+
             const session = await client.billingPortal.sessions.create({ customer: input.customerId, return_url: input.returnUrl });
 
             return { url: session.url };
         },
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
+            const client = await loadClient();
+
             const customer = await client.customers.create(
                 { email: ref.email, metadata: { ...ref.metadata, referenceId: ref.referenceId } },
                 { idempotencyKey: idempotencyKey("customer", "stripe", ref.referenceId) },
@@ -486,9 +529,15 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
             return { createdAt: Date.now(), email: customer.email ?? undefined, id: customer.id, provider: "stripe", referenceId: ref.referenceId };
         },
 
-        getPaymentStatus: async (sessionId) => intentToSession(await client.paymentIntents.retrieve(sessionId)),
+        getPaymentStatus: async (sessionId) => {
+            const client = await loadClient();
+
+            return intentToSession(await client.paymentIntents.retrieve(sessionId));
+        },
 
         getSubscriptionStatus: async (subscriptionId) => {
+            const client = await loadClient();
+
             const raw = await client.subscriptions.retrieve(subscriptionId);
             const subscription = subscriptionFromStripe(raw);
 
@@ -520,6 +569,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
             // `STRIPE_WEBHOOK_SECRET` would verify against an attacker-known zero-length key.
             assertWebhookSecret(webhookSecret);
 
+            const client = await loadClient();
             const signatureHeader = headers.get("stripe-signature") ?? "";
 
             let event: Stripe.Event;
@@ -540,6 +590,8 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         refundPayment: async (input: RefundInput) => {
+            const client = await loadClient();
+
             const refund = await client.refunds.create(
                 {
                     amount: input.amount ? Number(input.amount.minorUnits) : undefined,
@@ -574,13 +626,25 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         reportUsage: async (input: ReportUsageInput) => {
+            // Stripe attributes a meter event only by `stripe_customer_id`; with no customer the event cannot
+            // be billed to anyone, and the facade marks any forwarded row reported, so refuse before the call
+            // and leave the row for a later sweep.
+            if (input.customerId === undefined || input.customerId.trim() === "") {
+                throw new LunoraPaymentError(
+                    "NOT_FOUND",
+                    `stripe usage for reference "${input.referenceId}" has no Stripe customer to bill; it stays unreported until one exists`,
+                );
+            }
+
+            const client = await loadClient();
+
             // Stripe v2 Meter Events: `event_name` is the meter, `value` a string, `identifier`
             // dedupes within the meter's aggregation window. Keyed on the Stripe customer id.
             await client.billing.meterEvents.create(
                 {
                     event_name: input.featureId,
                     identifier: input.idempotencyKey,
-                    payload: { stripe_customer_id: input.customerId ?? "", value: String(input.quantity) },
+                    payload: { stripe_customer_id: input.customerId, value: String(input.quantity) },
                     timestamp: input.timestamp === undefined ? undefined : Math.floor(input.timestamp / 1000),
                 },
                 { idempotencyKey: input.idempotencyKey },
@@ -588,6 +652,8 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         resumeSubscription: async (subscriptionId, resumeOptions) => {
+            const client = await loadClient();
+
             // No derived default key: this sets absolute state, so a plain retry is already idempotent,
             // while a stable key would make cancel → resume → cancel → resume inside Stripe's 24h window
             // replay the first resume's cached response and silently leave the second cancel standing.
@@ -601,6 +667,8 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
         },
 
         updateSubscription: async (subscriptionId, patch: SubscriptionPatch) => {
+            const client = await loadClient();
+
             // Stripe updates price/quantity on the subscription ITEM, not the subscription root. Carry the
             // current item id so a plan-only or quantity-only patch updates the existing item in place.
             const parameters: Stripe.SubscriptionUpdateParams = {};

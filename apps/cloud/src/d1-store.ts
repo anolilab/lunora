@@ -13,7 +13,7 @@ import type { ControlPlaneDatabase } from "./store";
 
 /** A {@link ControlPlaneDatabase} that can also read one row by id — what the real ctx-db offers. */
 export type ControlPlaneStore = ControlPlaneDatabase & {
-    get: (id: string, table?: string) => Promise<unknown>;
+    get: (table: string, id: string) => Promise<unknown>;
 };
 
 /** Adapt the raw D1 binding to `@lunora/d1`'s `D1Exec`. */

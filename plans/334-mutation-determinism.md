@@ -1,7 +1,7 @@
 # Plan 334 — Runtime determinism for query/mutation bodies
 
 - **Category**: correctness (silent nondeterminism in a replayable path)
-- **Status**: DESIGN — a global-swap implementation was built, proven unsound under concurrency, and reverted
+- **Status**: PARTIAL — steps 2 (`ctx.random`) and 3 (`ctx.fetch` refused in query/mutation, including the mutation view composed from an action) landed; step 1 and step 4 remain open research. A global-swap implementation was built, proven unsound under concurrency, and reverted
 - **Related**: `nondeterministic_query_mutation` advisor lint, `ctx.now`
 
 ## The gap
@@ -56,16 +56,30 @@ Per-context injection, not global mutation:
 1. **`ctx.now` already exists** and is frozen per dispatch. The remaining gap is
    code that calls ambient `Date.now()` — which only a lint or a bundler-level
    transform can see.
-2. **`ctx.random`** as a seeded PRNG on the mutation context, so a handler that
-   wants replay-stable randomness has a supported way to get it.
+2. **`ctx.random`** as a seeded PRNG, so a handler that wants replay-stable
+   randomness has a supported way to get it. _Landed_: `createStableRandomFactory`
+   in `@lunora/do` derives each value from the same replay key and scope as
+   `ctx.newId()`, with its own domain tag so a value is not a function of the id
+   at the same index. Without a replay key it is `Math.random()`. The values are
+   derived, not random, so secrets keep `crypto.getRandomValues`. The advisor's
+   `Math.random` remedy in a mutation now points here. Queries and actions get it
+   too, but only a keyed mutation reproduces it: a query re-run is not replay-stable.
 3. **`ctx.fetch` refused in query/mutation.** This one IS sound per-context and is
    the Convex-equivalent rule (network I/O belongs in an action). It needs a
    codegen change: the emitted `buildCtx` already knows the dispatch mode, so it
    can install a throwing `fetch` for the non-action modes without touching
    `globalThis`. Note it is a breaking change for any mutation using `ctx.fetch`.
+   _Landed_: `refuseFetch` in `packages/codegen/src/emit/shard-context.ts` throws
+   `FORBIDDEN` for `query` and `mutation` ctx. A query view composed from an action
+   gets it too, and so does a mutation view built by `ctx.runMutation` from an
+   action, which is copied from the action's ctx and overrides its `fetch`.
 4. An `AsyncLocalStorage`-backed scope would cover ambient calls soundly, but
    `node:async_hooks` availability on workerd (and its cost per dispatch) needs
-   measuring before that is promised.
+   measuring before that is promised. _Finding_: the shard DO does not have it.
+   `packages/do/src/shard-do.ts` documents that workerd enables ALS only under
+   `nodejs_compat`, and shard DOs run the `sqlite_compat` profile without it. So a
+   scope there would need a wrapper around `globalThis`, which is the design this
+   plan rejected. Open: whether to pursue that, and at what dispatch cost.
 
-Ordering: (3) is small, sound, and independently useful; (2) is additive; (1) and
-(4) are the open research.
+Ordering: (3) and (2) have landed. (1) and (4) are the open research; (4) is
+blocked on the workerd ALS finding above.

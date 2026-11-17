@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { validateEvent, WebhookVerificationError } from "@polar-sh/sdk/webhooks";
 import { describe, expect, it } from "vitest";
 
+import { LunoraPaymentError } from "../../src/errors";
 import { money } from "../../src/money";
 import type { PolarClientLike } from "../../src/providers/polar";
 import { createPolarAdapter } from "../../src/providers/polar";
@@ -42,13 +43,18 @@ interface RecordedCall {
     name: string;
 }
 
-const makeClient = (created: Record<string, unknown>[] = [], calls: RecordedCall[] = []): PolarClientLike => {
+/** `seatsFor` decides what Polar reports back as the checkout's seats; by default it echoes the request. */
+const makeClient = (
+    created: Record<string, unknown>[] = [],
+    calls: RecordedCall[] = [],
+    seatsFor: (requested: unknown) => null | number = (requested) => (typeof requested === "number" ? requested : null),
+): PolarClientLike => {
     return {
         checkouts: {
             create: async (parameters: Record<string, unknown>) => {
                 created.push(parameters);
 
-                return { id: "co_1", url: "https://polar.test/co_1" };
+                return { id: "co_1", seats: seatsFor(parameters.seats), url: "https://polar.test/co_1" };
             },
         },
         customerSessions: {
@@ -129,7 +135,7 @@ describe("polar adapter", () => {
     it("is a merchant-of-record and rejects manual capture", () => {
         expect.assertions(2);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         expect(adapter.capabilities.merchantOfRecord).toBe(true);
         expect(() => adapter.capturePayment({ sessionId: "x" })).toThrow(/does not support/);
@@ -139,7 +145,7 @@ describe("polar adapter", () => {
         expect.assertions(3);
 
         const created: Record<string, unknown>[] = [];
-        const adapter = createPolarAdapter({ client: makeClient(created), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
 
         const result = await adapter.createCheckout({
             cancelUrl: "https://x/cancel",
@@ -154,11 +160,105 @@ describe("polar adapter", () => {
         expect(created[0]?.products).toEqual(["prod_1"]);
     });
 
+    it("sends a checkout quantity to Polar as seats", async () => {
+        expect.assertions(1);
+
+        const created: Record<string, unknown>[] = [];
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
+
+        await adapter.createCheckout({
+            cancelUrl: "https://x/cancel",
+            mode: "subscription",
+            priceId: "prod_1",
+            quantity: 5,
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        expect(created[0]?.seats).toBe(5);
+    });
+
+    it.each([0, -1, 2.5, Number.NaN])("refuses a checkout quantity of %s before calling Polar", async (quantity) => {
+        expect.assertions(2);
+
+        const created: Record<string, unknown>[] = [];
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
+
+        await expect(
+            adapter.createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "subscription",
+                priceId: "prod_1",
+                quantity,
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+        expect(created).toHaveLength(0);
+    });
+
+    it("reports an invalid quantity even when the Polar client cannot load", async () => {
+        expect.assertions(1);
+
+        const adapter = createPolarAdapter({
+            client: () => {
+                throw new Error("client unavailable");
+            },
+            webhookSecret: SECRET,
+        });
+
+        await expect(
+            adapter.createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "subscription",
+                priceId: "prod_1",
+                quantity: 0,
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            }),
+        ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    });
+
+    it("omits seats for a single-unit checkout so non-seat products are unchanged", async () => {
+        expect.assertions(2);
+
+        const created: Record<string, unknown>[] = [];
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
+        const base = { cancelUrl: "https://x/cancel", mode: "subscription" as const, priceId: "prod_1", referenceId: "user_1", successUrl: "https://x/ok" };
+
+        await adapter.createCheckout(base);
+        await adapter.createCheckout({ ...base, quantity: 1 });
+
+        expect("seats" in (created[0] ?? {})).toBe(false);
+        expect("seats" in (created[1] ?? {})).toBe(false);
+    });
+
+    it("rejects a checkout when Polar does not apply the requested seat count", async () => {
+        expect.assertions(2);
+
+        // A non-seat price answers `seats: null`; the checkout must not look like a successful 5-seat sale.
+        const adapter = createPolarAdapter({ client: () => makeClient([], [], () => null), webhookSecret: SECRET });
+
+        const error = await adapter
+            .createCheckout({
+                cancelUrl: "https://x/cancel",
+                mode: "subscription",
+                priceId: "prod_1",
+                quantity: 5,
+                referenceId: "user_1",
+                successUrl: "https://x/ok",
+            })
+            .catch((error_: unknown) => error_);
+
+        expect(error).toBeInstanceOf(LunoraPaymentError);
+        expect(error).toMatchObject({ code: "PROVIDER_ERROR" });
+    });
+
     it("binds the checkout to the reference's customer instead of orphaning it", async () => {
         expect.assertions(4);
 
         const created: Record<string, unknown>[] = [];
-        const adapter = createPolarAdapter({ client: makeClient(created), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
 
         // The facade passes the stored/minted customer id; the adapter must attach it (else Polar mints a
         // second orphan customer at completion, leaving the stored customer with no subscription).
@@ -190,7 +290,7 @@ describe("polar adapter", () => {
                 return { currency: "usd", id: "ord_1", metadata: { referenceId: "user_1" }, status: "paid", totalAmount: 2500 };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         const session = await adapter.getPaymentStatus("ord_1");
 
@@ -200,7 +300,7 @@ describe("polar adapter", () => {
     it("normalizes a verified order.paid webhook (Standard Webhooks scheme)", async () => {
         expect.assertions(6);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const payload = JSON.stringify({
             data: { currency: "usd", customer_id: "pcus_1", id: "ord_1", metadata: { referenceId: "user_1" }, subscription_id: "sub_1", total_amount: 2500 },
@@ -221,8 +321,9 @@ describe("polar adapter", () => {
         expect.assertions(4);
 
         // A dashboard-generated secret carries the `polar_whs_` prefix and is not base64 at all.
+        // pragma: allowlist nextline secret
         for (const secret of [SECRET, "polar_whs_3kL9xQ2mV7pR4tY8wZ1nB6cD5fG0hJ"]) {
-            const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: secret });
+            const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: secret });
             const payload = JSON.stringify({ data: { id: "sub_1", metadata: { referenceId: "user_1" }, status: "canceled" }, type: "subscription.revoked" });
             const timestamp = String(Math.floor(Date.now() / 1000));
             const signature = signWith(secret, "msg_sdk", timestamp, payload);
@@ -240,7 +341,7 @@ describe("polar adapter", () => {
     it("rejects a delivery signed with the base64-decoded secret, as Polar's SDK does", async () => {
         expect.assertions(2);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({ data: { id: "sub_1", status: "canceled" }, type: "subscription.revoked" });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const wrongKey = `v1,${createHmac("sha256", Buffer.from(SECRET, "base64")).update(`msg_b64.${timestamp}.${payload}`).digest("base64")}`;
@@ -256,7 +357,7 @@ describe("polar adapter", () => {
     it("maps subscription.revoked to a cancellation", async () => {
         expect.assertions(2);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const payload = JSON.stringify({ data: { id: "sub_1", metadata: { referenceId: "user_1" }, status: "canceled" }, type: "subscription.revoked" });
         const timestamp = String(Math.floor(Date.now() / 1000));
@@ -269,7 +370,7 @@ describe("polar adapter", () => {
     it("maps an `incomplete` subscription to a non-entitling state, not an active grant (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const payload = JSON.stringify({ data: { id: "sub_1", metadata: { referenceId: "user_1" }, status: "incomplete" }, type: "subscription.created" });
         const timestamp = String(Math.floor(Date.now() / 1000));
@@ -283,7 +384,7 @@ describe("polar adapter", () => {
     it("does not capture a still-pending order.created (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const payload = JSON.stringify({
             data: { currency: "usd", id: "ord_2", metadata: { referenceId: "user_1" }, status: "pending", total_amount: 2500 },
@@ -299,7 +400,7 @@ describe("polar adapter", () => {
     it("re-activates a subscription on subscription.uncanceled (regression)", async () => {
         expect.assertions(2);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const payload = JSON.stringify({
             data: { cancel_at_period_end: false, id: "sub_1", metadata: { referenceId: "user_1" }, status: "active" },
@@ -317,7 +418,7 @@ describe("polar adapter", () => {
         expect.assertions(4);
 
         const created: Record<string, unknown>[] = [];
-        const adapter = createPolarAdapter({ client: makeClient(created), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(created), webhookSecret: SECRET });
 
         await adapter.reportUsage?.({ featureId: "api_calls", idempotencyKey: "usage_1", quantity: 3, referenceId: "user_1" });
 
@@ -334,7 +435,7 @@ describe("polar adapter", () => {
     it("rejects a bad signature", async () => {
         expect.assertions(1);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
 
         await expect(adapter.parseWebhook({ headers: headersFor("msg_3", timestamp, "v1,not-a-valid-signature"), payload: "{}" })).rejects.toMatchObject({
@@ -346,7 +447,7 @@ describe("polar adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         const subscription = await adapter.cancelSubscription("sub_1");
 
@@ -360,7 +461,7 @@ describe("polar adapter", () => {
         expect.assertions(4);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         const subscription = await adapter.cancelSubscription("sub_1", { atPeriodEnd: true });
 
@@ -378,7 +479,7 @@ describe("polar adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         const subscription = await adapter.resumeSubscription("sub_1");
 
@@ -393,7 +494,7 @@ describe("polar adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         const subscription = await adapter.updateSubscription("sub_1", { priceId: "prod_enterprise" });
 
@@ -407,7 +508,7 @@ describe("polar adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         const subscription = await adapter.updateSubscription("sub_1", { quantity: 5 });
 
@@ -421,7 +522,7 @@ describe("polar adapter", () => {
     it("reads the seat count from a seat-based subscription webhook, and keeps a non-seat one at quantity 1", async () => {
         expect.assertions(2);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const deliver = async (id: string, seats: number | null) => {
             const payload = JSON.stringify({
                 data: { id: "sub_1", metadata: { referenceId: "user_1" }, product_id: "prod_pro", seats, status: "active" },
@@ -442,7 +543,7 @@ describe("polar adapter", () => {
     it("reads a non-seat subscription as quantity 1", async () => {
         expect.assertions(1);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
 
         const subscription = await adapter.getSubscriptionStatus("sub_1");
 
@@ -453,7 +554,7 @@ describe("polar adapter", () => {
         expect.assertions(3);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         await expect(adapter.updateSubscription("sub_1", { quantity: -1 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
         await expect(adapter.updateSubscription("sub_1", { quantity: 1.5 })).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
@@ -473,7 +574,7 @@ describe("polar adapter", () => {
                 return { id: "sub_1", metadata: { referenceId: "user_1" }, seats: null, status: "active" };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         await expect(adapter.updateSubscription("sub_1", { quantity: 5 })).rejects.toMatchObject({ code: "PROVIDER_ERROR" });
     });
@@ -482,7 +583,7 @@ describe("polar adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         const subscription = await adapter.updateSubscription("sub_1", { idempotencyKey: "k_1" });
 
@@ -494,7 +595,7 @@ describe("polar adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         await expect(adapter.updateSubscription("sub_1", { priceId: "prod_enterprise", quantity: 5 })).rejects.toThrow(/plan and the quantity/);
         expect(calls.some((entry) => entry.name === "sub.update")).toBe(false);
@@ -504,7 +605,7 @@ describe("polar adapter", () => {
         expect.assertions(5);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         const session = await adapter.refundPayment({ sessionId: "ord_1" });
 
@@ -525,7 +626,7 @@ describe("polar adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         const session = await adapter.refundPayment({ amount: money(500n, "usd"), sessionId: "ord_1" });
 
@@ -565,7 +666,7 @@ describe("polar adapter", () => {
                 return { amount: parameters.amount, id: "ref_1", status: "succeeded", taxAmount: Math.round(parameters.amount * 0.2) };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         // Full: send the net refundable remainder (not the gross total), book what Polar refunded incl. tax.
         const full = await adapter.refundPayment({ sessionId: "ord_1" });
@@ -589,7 +690,7 @@ describe("polar adapter", () => {
                 return { currency: "usd", id: "ord_1", refundedAmount: 1000, refundedTaxAmount: 200, status: "partially_refunded", totalAmount: 12_000 };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: { amount: 1000, currency: "usd", id: "ref_1", order_id: "ord_1", status: "succeeded", tax_amount: 200 },
             timestamp: "2026-01-02T03:04:05Z",
@@ -606,7 +707,7 @@ describe("polar adapter", () => {
         expect.assertions(2);
 
         const calls: RecordedCall[] = [];
-        const adapter = createPolarAdapter({ client: makeClient([], calls), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient([], calls), webhookSecret: SECRET });
 
         await adapter.refundPayment({ reason: "requested_by_customer", sessionId: "ord_1" });
 
@@ -634,7 +735,7 @@ describe("polar adapter", () => {
                 return { email: "a@b.test", id: "pcus_existing" };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).resolves.toMatchObject({ id: "pcus_existing" });
         // Matched on OUR external id — never on the (shareable) email.
@@ -654,7 +755,7 @@ describe("polar adapter", () => {
                 throw new Error("not found");
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).rejects.toThrow("already exists");
     });
@@ -675,7 +776,7 @@ describe("polar adapter", () => {
                 return { email: "a@b.test", id: "pcus_existing" };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         await expect(adapter.getOrCreateCustomer({ email: "a@b.test", referenceId: "user_1" })).rejects.toThrow("unauthorized");
         expect(lookups).toEqual([]);
@@ -707,7 +808,7 @@ describe("polar adapter", () => {
                 return { amount: parameters.amount, id: "ref_1", status: "succeeded", taxAmount: 60 };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         // Gross 1200 is net 1000 at the order's ratio, but only 300 net is still refundable.
         const session = await adapter.refundPayment({ amount: money(1200n, "usd"), sessionId: "ord_1" });
@@ -719,7 +820,7 @@ describe("polar adapter", () => {
     it("maps subscription.paused / resumed / past_due and carries occurredAt and periods (regression)", async () => {
         expect.assertions(5);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const deliver = async (id: string, type: string, status: string) => {
             const payload = JSON.stringify({
@@ -743,7 +844,7 @@ describe("polar adapter", () => {
     it("fails closed on an unknown status in the webhook path (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: { id: "sub_1", metadata: { referenceId: "user_1" }, status: "some_future_status" },
             type: "subscription.updated",
@@ -758,7 +859,7 @@ describe("polar adapter", () => {
     it("normalizes a refund.created webhook, keeping the refund id apart from the order id", async () => {
         expect.assertions(3);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({ data: { amount: 300, currency: "usd", id: "ref_1", order_id: "ord_1", status: "succeeded" }, type: "refund.created" });
         const timestamp = String(Math.floor(Date.now() / 1000));
         const action = await adapter.parseWebhook({ headers: headersFor("evt_ref", timestamp, sign("evt_ref", timestamp, payload)), payload });
@@ -783,7 +884,7 @@ describe("polar adapter", () => {
                 return { currency: "usd", id: "ord_1", refundedAmount: 4000, status: "partially_refunded", totalAmount: 10_000 };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         const session = await adapter.getPaymentStatus("ord_1");
 
@@ -802,7 +903,7 @@ describe("polar adapter", () => {
                 return { currency: "usd", id: "ord_1", status: "refunded", totalAmount: 2500 };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         await expect(adapter.getPaymentStatus("ord_1").then((session) => session.refundedAmount.minorUnits)).resolves.toBe(2500n);
     });
@@ -813,7 +914,7 @@ describe("polar adapter", () => {
         // Polar sends `refund.created` "regardless of status" (its own SDK says so), and `RefundStatus`
         // is pending | succeeded | failed | canceled. Booking a pending one leaves the ledger claiming a
         // refund the customer never got — and the facade's over-refund guard then blocks issuing it.
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: { amount: 300, currency: "usd", id: "ref_1", order_id: "ord_1", status: "pending" },
             type: "refund.created",
@@ -829,7 +930,7 @@ describe("polar adapter", () => {
 
         // `refund.updated` is the only event carrying the pending → succeeded step, so without it a
         // refund that starts pending would never reach the ledger at all.
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: { amount: 300, currency: "usd", id: "ref_1", order_id: "ord_1", status: "succeeded" },
             type: "refund.updated",
@@ -852,7 +953,7 @@ describe("polar adapter", () => {
                 return { amount: 500, id: "ref_1", status: "pending", taxAmount: 0 };
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         const session = await adapter.refundPayment({ amount: money(500n, "usd"), sessionId: "ord_1" });
 
@@ -865,7 +966,7 @@ describe("polar adapter", () => {
     it("rejects a fractional webhook amount as a payment error, not a raw RangeError (regression)", async () => {
         expect.assertions(1);
 
-        const adapter = createPolarAdapter({ client: makeClient(), webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => makeClient(), webhookSecret: SECRET });
         const payload = JSON.stringify({
             data: { amount: 25.5, currency: "usd", id: "ref_1", order_id: "ord_1", status: "succeeded" },
             type: "refund.created",
@@ -889,7 +990,7 @@ describe("polar adapter", () => {
                 },
             },
         };
-        const adapter = createPolarAdapter({ client, webhookSecret: SECRET });
+        const adapter = createPolarAdapter({ client: () => client, webhookSecret: SECRET });
 
         const subscription = await adapter.getSubscriptionStatus("sub_1");
 

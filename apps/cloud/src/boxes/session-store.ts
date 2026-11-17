@@ -33,7 +33,7 @@ export interface StoredBox {
 export const SEEN_WRITE_INTERVAL_MS = 60_000;
 
 export const loadBox = async (database: ControlPlaneStore, boxId: string): Promise<null | StoredBox> =>
-    (await database.get(boxId, "boxes")) as null | StoredBox;
+    (await database.get("boxes", boxId)) as null | StoredBox;
 
 /** The identity half of a box, as the handshake checks it. */
 export const sessionBoxOf = (box: null | StoredBox): null | SessionBox =>
@@ -57,17 +57,13 @@ export const recordHello = async (
         return;
     }
 
-    await database.patch(
-        boxId,
-        {
-            ...(hello.fleets === undefined ? {} : { fleets: normaliseFleets(hello.fleets) }),
-            lastSeenAt: now,
-            resources: hello.resources,
-            status: "online",
-            versions: hello.versions,
-        },
-        "boxes",
-    );
+    await database.patch("boxes", boxId, {
+        ...(hello.fleets === undefined ? {} : { fleets: normaliseFleets(hello.fleets) }),
+        lastSeenAt: now,
+        resources: hello.resources,
+        status: "online",
+        versions: hello.versions,
+    });
 };
 
 /**
@@ -89,13 +85,13 @@ export const updateFleets = async (
     const next = update(box.fleets ?? []);
 
     if (next !== undefined) {
-        await database.patch(boxId, { fleets: next }, "boxes");
+        await database.patch("boxes", boxId, { fleets: next });
     }
 };
 
 /** Record that an authenticated box is still there. */
 export const markSeen = async (database: ControlPlaneStore, boxId: string, now: number): Promise<void> => {
-    await database.patch(boxId, { lastSeenAt: now }, "boxes");
+    await database.patch("boxes", boxId, { lastSeenAt: now });
 };
 
 /** Record that a box's session ended: an `online` box is offline until it authenticates again. Any other status stays. */
@@ -106,7 +102,7 @@ export const markOffline = async (database: ControlPlaneStore, boxId: string): P
         return;
     }
 
-    await database.patch(boxId, { status: "offline" }, "boxes");
+    await database.patch("boxes", boxId, { status: "offline" });
 };
 
 /**
@@ -171,7 +167,7 @@ export const boxProjects = async (database: ControlPlaneStore, boxId: string, no
     const organizationIds = [...new Set(projects.map((project) => project.organizationId))];
     // An organization whose row cannot be read is treated as not serving: unknown state fails closed,
     // and the next push (the suspension sweep retries every minute) reads it again.
-    const rows = await Promise.all(organizationIds.map(async (id) => (await database.get(id, "organizations").catch(() => null)) as AdmissionRow | null));
+    const rows = await Promise.all(organizationIds.map(async (id) => (await database.get("organizations", id).catch(() => null)) as AdmissionRow | null));
     const withheld = new Set(organizationIds.filter((_id, index) => !organizationServing(rows[index] ?? null, now)));
 
     return { serving: projects.filter((project) => !withheld.has(project.organizationId)), withheld: [...withheld].toSorted((a, b) => a.localeCompare(b)) };

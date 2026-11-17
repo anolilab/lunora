@@ -1,6 +1,6 @@
 /** The options `lunora dev` takes and the plan it builds — shared by the planner, the supervisor and the package API. */
-import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession } from "@lunora/config";
-import type { materializeDevWranglerConfig, materializeServiceDevConfigs } from "@lunora/config/cloudflare";
+import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCelldDevSession, writeCelldDevProjection } from "@lunora/config";
+import type { materializeDevWranglerConfig, materializeServiceDevConfigs, RemotePlan, startLocalHyperdrive } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
 import type { startCodegenWatch } from "../../util/codegen-watch";
@@ -60,6 +60,7 @@ interface DevCommandOptions {
      * fatal, since a named path means something is waiting on it.
      */
     emitBindings?: string;
+
     /** Injection seam for tests — defaults to the real `.dev.vars` scaffolder. */
     ensureEnv?: typeof ensureDevVariables;
     /** Injection seam for tests — defaults to the real `.dev.vars.example` package-aware scaffolder. */
@@ -82,6 +83,9 @@ interface DevCommandOptions {
      */
     jsonLogs?: boolean;
 
+    /** Opt into per-module lazy function loading for CLI codegen. */
+    lazyFunctions?: boolean;
+
     /** Pass `--local` to `wrangler dev`: no remote proxy session, so a binding with no local mode (`ai`) cannot stop the session from starting. */
     local?: boolean;
     logger: Logger;
@@ -99,6 +103,8 @@ interface DevCommandOptions {
     startCelldSession?: typeof startCelldDevSession;
     /** Injection seam for tests — defaults to the real codegen watcher. */
     startCodegen?: typeof startCodegenWatch;
+    /** Injection seam for tests — defaults to the embedded Postgres behind a Hyperdrive binding. */
+    startHyperdrive?: typeof startLocalHyperdrive;
     /** Injection seam for tests — defaults to the real studio server. */
     startStudio?: typeof startStudioServer;
     /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
@@ -125,24 +131,8 @@ interface DevCommandOptions {
     worker?: boolean;
     /** `wrangler dev` port. */
     workerPort?: number;
-}
-
-interface DevRemotePlan {
-    /** Short binding labels remoted (e.g. `"DB (D1)"`), for the banner. */
-    bindings: string[];
-
-    /**
-     * Removes the generated temp wrangler config when dev exits. Always present
-     * and idempotent — a no-op when remote mode is off or nothing was
-     * materialized. The dev loop calls it on every shutdown path.
-     */
-    cleanup: () => void;
-    /** Whether remote mode was requested. */
-    enabled: boolean;
-    /** Why remote mode didn't take effect despite being requested, for logging. */
-    reason?: string;
-    /** `ai` bindings a session left out for lack of Cloudflare credentials, for the banner warning. */
-    withheld: string[];
+    /** Writes the celld projection for a `--no-worker` run; injected in tests. */
+    writeCelldProjection?: typeof writeCelldDevProjection;
 }
 
 interface DevCommandPlan {
@@ -175,7 +165,7 @@ interface DevCommandPlan {
     ipv4LoopbackForced: boolean;
 
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
-    remote: DevRemotePlan;
+    remote: RemotePlan;
     runsCodegenWatch: boolean;
 
     /**
@@ -215,4 +205,4 @@ interface DevCommandPlan {
     wrangler: SpawnDescriptor & { tag: string };
 }
 
-export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, DevTunnelRequest, LongLivedDescriptor, LongLivedSpawner, WorkerProcess, WorkerSpawner };
+export type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, LongLivedDescriptor, LongLivedSpawner, WorkerProcess, WorkerSpawner };

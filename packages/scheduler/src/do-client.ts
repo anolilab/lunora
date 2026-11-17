@@ -63,7 +63,66 @@ const raiseDOFailure = (path: string, status: number, text: string): never => {
     throw new LunoraError("INTERNAL", `@lunora/scheduler: SchedulerDO ${path} failed (${String(status)}): ${text}`);
 };
 
+/** The instance that holds the pause flag and the registry when none is configured. */
+const DEFAULT_INSTANCE = "default";
+
+/**
+ * Names already registered, per namespace, by this isolate. Registration is
+ * idempotent, so a cold isolate only repeats it; the memo keeps the common call
+ * from paying a second round trip.
+ */
+const registered = new WeakMap<object, Set<string>>();
+
+/**
+ * Register a named instance with the primary one the first time it is addressed,
+ * and bring it to the deployment's pause state. The primary answers under the
+ * same input gate that serialises a pause, so an instance registered before a
+ * pause is reached by that pause's fan-out and one registered after it is told
+ * here. Nothing is memoised on failure, and the failure is raised: running an
+ * unregistered instance would let a later pause miss its jobs.
+ */
+const ensureRegistered = async (options: LunoraSchedulerOptions): Promise<void> => {
+    const name = options.instanceName ?? DEFAULT_INSTANCE;
+    const primary = options.primaryInstanceName ?? DEFAULT_INSTANCE;
+
+    if (name === primary) {
+        return;
+    }
+
+    const known = registered.get(options.namespace) ?? new Set<string>();
+
+    registered.set(options.namespace, known);
+
+    if (known.has(name)) {
+        return;
+    }
+
+    const namespace = applyJurisdiction(options.namespace, options.jurisdiction);
+    const post = async <T>(instance: string, path: string, body: unknown): Promise<T> => {
+        const response = await namespace.get(namespace.idFromName(instance)).fetch(`https://scheduler.internal${path}`, {
+            body: JSON.stringify(body),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+
+        if (!response.ok) {
+            raiseDOFailure(path, response.status, await response.text());
+        }
+
+        return await response.json();
+    };
+    const state = await post<{ paused?: boolean; reason?: string }>(primary, "/instances/register", { name });
+
+    if (state.paused === true) {
+        await post(name, "/pause", { paused: true, ...(state.reason === undefined ? {} : { reason: state.reason }) });
+    }
+
+    known.add(name);
+};
+
 const requestDO = async <T>(options: LunoraSchedulerOptions, path: string, init: RequestInit): Promise<T> => {
+    await ensureRegistered(options);
+
     const stub = schedulerStub(options);
     const response = await stub.fetch(`https://scheduler.internal${path}`, init);
 

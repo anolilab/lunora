@@ -92,6 +92,10 @@ so with defaults you can also just run both commands as-is.
 ```bash
 # 1. Deploy the Lunora worker first (get its URL)
 pnpm deploy:lunora
+# If the Lunora step stops at the open-shard gate, the demo flag is still set. Replace it with a
+# shard gate (see lunora/server.ts), or deliberately deploy open shards with the override:
+#   pnpm run deploy:lunora -- --allow-open-shards
+# `pnpm deploy` runs both steps and cannot pass the flag to the Lunora step.
 #   → https://{{name}}-lunora.workers.dev
 
 # 2. Build and deploy the Next.js SSR worker (env var is inlined at build time)

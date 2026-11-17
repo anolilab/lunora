@@ -19,7 +19,7 @@ export interface DeliverRowsDeps {
 
 /** The owners' and admins' addresses for one `alerts` row; empty when the row or its organization cannot be read. */
 const recipientsOf = async (database: ControlPlaneDatabase, delivery: AlertDelivery, deps: DeliverRowsDeps): Promise<string[]> => {
-    const row = (await (database as ControlPlaneStore).get(delivery.id, "alerts").catch(() => null)) as null | { organizationId?: string };
+    const row = (await (database as ControlPlaneStore).get("alerts", delivery.id).catch(() => null)) as null | { organizationId?: string };
 
     return row?.organizationId === undefined ? [] : deps.adminEmails(row.organizationId).catch(() => []);
 };
@@ -40,7 +40,7 @@ export const deliverAlertRows = async (
             );
 
             await database
-                .patch(delivery.id, { ...(delivered ? { deliveredAt: now } : {}), status: delivered ? "delivered" : "failed", updatedAt: now }, "alerts")
+                .patch("alerts", delivery.id, { ...(delivered ? { deliveredAt: now } : {}), status: delivered ? "delivered" : "failed", updatedAt: now })
                 .catch(() => undefined);
         }),
     );

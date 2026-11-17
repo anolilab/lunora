@@ -156,7 +156,7 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
                 </div>
             </div>
 
-            {error !== null && <ErrorAlert error={errorSource} testId="fs-error" />}
+            {error !== null && <ErrorAlert error={errorSource} shardKey={queryShardKey} testId="fs-error" />}
 
             {stats !== null && sorted.length === 0 && error === null && (
                 <EmptyState

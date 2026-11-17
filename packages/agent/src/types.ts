@@ -19,6 +19,14 @@ export interface AgentFunctionReference {
  */
 export interface AgentRunOptions {
     /**
+     * Route the call to this shard instead of the default one. Pass
+     * {@link AgentToolContext.shardKey} when the target reads `.shardBy(...)` tables —
+     * `functionTool` does — and leave it unset for the agent's own `agents:*`
+     * functions, whose threads, state and secrets live on the default shard.
+     */
+    shardKey?: string;
+
+    /**
      * Abort the dispatch after this many ms, overriding the runner's 30s
      * default (`DEFAULT_DISPATCH_TIMEOUT_MS`).
      *
@@ -108,6 +116,13 @@ export interface AgentToolContext {
     idempotencyKey: string;
 
     /**
+     * The workflow instance (the run) this tool call belongs to. A provider-issued
+     * tool-call id can repeat across runs, so a secret request is claimed by this
+     * id, not by the call id alone.
+     */
+    instanceId: string;
+
+    /**
      * Verified owner of the thread this run belongs to (the loop copies it off
      * {@link AgentRunInput.owner}); `undefined` on an anonymous/single-tenant
      * thread. `agent.asTool` forwards it to the CHILD run, so a sub-agent thread
@@ -128,7 +143,10 @@ export interface AgentToolContext {
      */
     reportProgress: (data: unknown) => void;
 
-    /** Dispatch a Lunora function (the workflow `ctx.run`). */
+    /**
+     * Dispatch a Lunora function (the workflow `ctx.run`). Calls go to the default
+     * shard unless they pass {@link AgentRunOptions.shardKey}.
+     */
     run: AgentRunFunction;
 
     /**
@@ -153,6 +171,13 @@ export interface AgentToolContext {
      * skip the write when it is already present.
      */
     setState: (state: Record<string, unknown>) => Promise<void>;
+
+    /**
+     * The shard the run was started on ({@link AgentRunInput.shardKey}); `undefined`
+     * for the default shard. Pass it as {@link AgentRunOptions.shardKey} to reach the
+     * tenant's `.shardBy(...)` data from a hand-written tool.
+     */
+    shardKey?: string;
 
     /**
      * The durable-step handle (`step.do`/`waitForEvent`). ALWAYS present:
@@ -235,6 +260,15 @@ export interface AgentToolDefinition<Input = unknown, Output = unknown> {
      * {@link AgentApprovalContext}.
      */
     needsApproval?: ((input: Input, context: AgentApprovalContext) => boolean | Promise<boolean>) | boolean;
+
+    /**
+     * Set by `requestSecretTool`. The loop never calls `execute` on such a tool: it
+     * pauses the run until a human supplies (or declines) a value and records
+     * `{ secretRef }` as the tool result, where `secretRef` is the request's
+     * slot, `<turn>:<tool-call id>`. The client answers the pause with the tool-call id it sees on it. `consumer` names the only tool
+     * that may read the value. The value never reaches the loop, the thread or the model.
+     */
+    secretRequest?: { consumer: string };
 }
 
 /**
@@ -370,14 +404,32 @@ export interface AgentMemorySource extends AgentMemoryOptions {
 }
 
 /**
- * Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names.
+ * Cumulative or per-turn token usage — AI SDK `LanguageModelUsage` field names, plus
+ * the cache and reasoning breakdowns. The breakdowns are subsets of the totals they
+ * sit under (`cacheReadTokens` and `cacheWriteTokens` are part of `inputTokens`,
+ * `reasoningTokens` is part of `outputTokens`), so they are never added on top.
+ * Each is omitted when the provider reported none.
  * @experimental
  */
 export interface AgentUsage {
-    /** Prompt (input) tokens. */
+    /** Input tokens served from the provider's prompt cache. */
+    cacheReadTokens?: number;
+    /** Input tokens written to the provider's prompt cache. */
+    cacheWriteTokens?: number;
+    /** Prompt (input) tokens, including any cache-read and cache-write tokens. */
     inputTokens?: number;
-    /** Completion (output) tokens. */
+    /** Completion (output) tokens, including any reasoning tokens. */
     outputTokens?: number;
+    /** Output tokens spent on hidden reasoning. */
+    reasoningTokens?: number;
+
+    /**
+     * Whether the provider's report covers every bucket it should carry: `complete` when all
+     * of it was reported, `partial` when some was, `unavailable` when none was. A run's total
+     * is `partial` as soon as one of its turns was not complete. Absent on a value written
+     * before this field existed; that row cannot say whether it was complete, so it reads as unknown.
+     */
+    status?: "complete" | "partial" | "unavailable";
     /** Input + output tokens. */
     totalTokens?: number;
 }
@@ -622,6 +674,58 @@ export interface AgentEmailRun {
  */
 export type AgentEmailMapper = (email: InboundEmail) => AgentEmailRun | null | Promise<AgentEmailRun | null | undefined> | undefined;
 
+/**
+ * Pick the shard an inbound-triggered run's tools use: the app maps a verified identity
+ * to a tenant shard. Return `undefined` for the default shard.
+ *
+ * This is the only way an inbound run gets a shard. A `shardKey` in the mapped run is
+ * dropped, because the mapper's output is built from attacker-written content. The hook
+ * runs after the sender or signature gate and after the mapper claimed the message, and
+ * it is handed only what the platform verified ({@link AgentEmailShardInput},
+ * {@link AgentChannelShardInput}). Returning a shard is an authorization decision, since
+ * the run's tools dispatch past `authorizeShard`: look the identity up in a table you
+ * trust. A throw fails the delivery rather than falling back to the default shard.
+ * @experimental
+ */
+export type AgentInboundShardResolver<Input> = (input: Input) => Promise<string | undefined> | string | undefined;
+
+/**
+ * What `resolveEmailShard` gets.
+ * @experimental
+ */
+export interface AgentEmailShardInput {
+    /**
+     * The parsed message, for context only. Its headers are sender-written: `email.to`
+     * is the `To:` header, which any sender can set to another tenant's address, and
+     * `email.from` is only as good as the authentication verdicts. Never derive the
+     * shard from it.
+     */
+    email: InboundEmail;
+
+    /**
+     * The SMTP envelope recipient Cloudflare Email Routing delivered this message to.
+     * Routing only delivers to addresses you configured, so this is the field to map
+     * to a tenant.
+     */
+    envelopeTo: string;
+}
+
+/**
+ * What `onInbound.resolveShard` gets: the channel and the workspace the signed payload
+ * belongs to, never the event's message content.
+ * @experimental
+ */
+export interface AgentChannelShardInput {
+    channel: AgentInboundChannelKind;
+
+    /**
+     * The provider-set tenant id from the signature-verified body: Slack `team_id`,
+     * GitHub `installation.id`, Discord `guild_id`. `undefined` when the payload carries
+     * none (a DM interaction, a GitHub event outside an app installation).
+     */
+    workspaceId: string | undefined;
+}
+
 /** The inbound webhook channels an agent can be triggered from — see `@lunora/agent/channels`. */
 export type AgentInboundChannelKind = "discord" | "github" | "slack";
 
@@ -664,6 +768,9 @@ export interface AgentInboundChannel {
     channel: AgentInboundChannelKind;
     /** Map a verified event to a run (or `null` to decline). */
     map: AgentChannelMapper;
+
+    /** The shard a claimed event's run uses — see {@link AgentInboundShardResolver}. Default shard when absent. */
+    resolveShard?: AgentInboundShardResolver<AgentChannelShardInput>;
 
     /**
      * The verification credential, from `env`: an env-var NAME (string) or an
@@ -834,6 +941,13 @@ export interface AgentConfig {
      * unknown-tool-name recovery as the only repair path.
      */
     repairToolCall?: ToolCallRepairFunction<ToolSet>;
+
+    /**
+     * The shard an `onEmail` run's tools use — see {@link AgentInboundShardResolver}. Map
+     * `envelopeTo`, the routed recipient; the parsed headers are sender-written. Default
+     * shard when absent.
+     */
+    resolveEmailShard?: AgentInboundShardResolver<AgentEmailShardInput>;
 
     /**
      * Reusable {@link SkillDefinition}s to compose in — each contributes an
@@ -1012,7 +1126,9 @@ export interface AgentDefinition extends AgentConfig {
  * @experimental
  */
 export type EnsureThreadOutcome =
-    { outcome: "completed" | "continued" | "created" } | { outcome: "queued"; position: number } | { outcome: "replaced"; priorInstanceId: string };
+    | { outcome: "completed" | "continued" | "created" }
+    | { outcome: "queued"; position: number }
+    | { outcome: "replaced"; priorInstanceId: string };
 
 /**
  * Params of one agent run (the compiled workflow's payload).
@@ -1042,6 +1158,15 @@ export interface AgentRunInput {
     owner?: string;
     /** Where a triggered run sends its answer — see {@link AgentReplyRef}. */
     replyRef?: AgentReplyRef;
+
+    /**
+     * The shard whose app data the run's tools read and write. Set only by the boundary
+     * that starts the run, from a source it trusts: `ctx.agents.<name>.run` uses the
+     * shard of the mutation or action that calls it, a scheduled run the scheduling
+     * shard, an inbound run the app's `resolveEmailShard` / `resolveShard` hook. A
+     * value in the input is always overwritten, since the input may be a client's.
+     */
+    shardKey?: string;
     /** The thread key — reuse to continue a conversation. */
     threadKey: string;
     /** Optional thread title, set on first creation. */
@@ -1079,6 +1204,12 @@ export interface AgentFunctionPaths {
     appendMessage: string;
 
     /**
+     * The internal `agents:agentApprovalGranted` query the loop dispatches from
+     * inside a tool's approval-gate step: whether the tool is granted for the thread.
+     */
+    approvalGranted: string;
+
+    /**
      * The internal `agents:agentCompleteRun` mutation the loop dispatches at the
      * end of a run: it writes the terminal status AND hands the thread to the
      * next queued run in the same mutation.
@@ -1090,6 +1221,8 @@ export interface AgentFunctionPaths {
      * retire the HITL approval marker once the decision has landed.
      */
     deleteMessage: string;
+    /** The internal `agents:agentDiscardSecret` mutation a secret-consuming tool dispatches after it has used the value. */
+    discardSecret: string;
     ensureThread: string;
     /** The internal `agents:agentEpisodeRecall` query the loop dispatches for an episodic-kind read. */
     episodeRecall: string;
@@ -1106,6 +1239,9 @@ export interface AgentFunctionPaths {
      */
     history: string;
     listMessages: string;
+    /** The internal `agents:agentOpenSecretRequest` mutation that writes the pending request row when a run pauses. */
+    openSecretRequest: string;
+
     patchThread: string;
 
     /**
@@ -1116,24 +1252,31 @@ export interface AgentFunctionPaths {
     run: string;
     /** The internal `agents:agentSetState` mutation the loop dispatches for `setState`. */
     setState: string;
+    /** The internal `agents:agentSettleSecretRequest` mutation that reads a paused request's outcome once its wait ends. */
+    settleSecretRequest: string;
     /** The public owner-gated `agents:agentState` query (`getState` + `useAgentState`). */
     state: string;
+    /** The internal `agents:agentTakeSecret` mutation a secret-consuming tool dispatches to read a supplied value. */
+    takeSecret: string;
 }
 
 /**
  * Approval lifecycle marker on a message: `"awaiting_approval"` on the
  * placeholder written while a run pauses on a gated tool, then `"approved"` /
- * `"rejected"` on the tool result once a client resolves it. Absent on ordinary
- * messages. `"awaiting_approval"` rows are filtered out of the model prompt.
+ * `"rejected"` on the tool result once a client resolves it. `"awaiting_secret"`
+ * is the same pause for a {@link AgentToolDefinition.secretRequest} tool. Absent
+ * on ordinary messages. Both pause markers are filtered out of the model prompt.
  * @experimental
  */
-export type AgentMessageStatus = "approved" | "awaiting_approval" | "rejected";
+export type AgentMessageStatus = "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
 
 /**
  * One persisted thread message, as the loop reads it back.
  * @experimental
  */
 export interface AgentMessageRow {
+    /** On an approved tool result: `"thread"` when the approval also granted the tool for the rest of the thread. */
+    approvalScope?: "thread";
     content: string;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;

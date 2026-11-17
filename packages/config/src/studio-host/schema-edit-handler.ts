@@ -41,6 +41,8 @@ interface SchemaEditRequest {
     readonly apiSpec?: CodegenOptions["apiSpec"];
     /** Parsed JSON body for a `POST`; ignored for `GET`. */
     readonly body?: unknown;
+    /** Lazy function mode the host runs codegen with; forwarded to the regeneration. */
+    readonly lazyFunctions?: CodegenOptions["lazyFunctions"];
     /** HTTP method (`GET` / `POST`). */
     readonly method: string;
     /** Project root containing the `lunora/` directory. */
@@ -150,7 +152,7 @@ const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditR
     let diagnostics: ReadonlyArray<string>;
 
     try {
-        diagnostics = runStudioCodegen(request);
+        diagnostics = runStudioCodegen(request, { path: schemaPath, text: applied.text });
     } catch (error: unknown) {
         return { body: { error: error instanceof Error ? error.message : String(error), ok: false }, status: 500 };
     }

@@ -1,10 +1,10 @@
 import type { AuthCapabilities, AuthConfigInfo } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent } from "../../components/ui/card";
 import { useClientQuery } from "../../hooks/use-admin-query";
+import useStudioClient from "../../hooks/use-studio-client";
 import type { MessageId } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
 
@@ -15,6 +15,7 @@ import { useT } from "../../i18n/i18n-context";
  */
 const CAPABILITY_ROWS: ReadonlyArray<{ key: keyof AuthCapabilities; label: MessageId }> = [
     { key: "accounts", label: "Accounts" },
+    { key: "apiKey", label: "API keys" },
     { key: "admin", label: "Admin" },
     { key: "organization", label: "Organizations" },
     { key: "passkey", label: "Passkeys" },
@@ -70,7 +71,7 @@ const KeyValue = ({ label, value }: { label: string; value: ReactNode }): ReactE
  * The note points at the Mail tab for email output.
  */
 const AuthConfigPanel = (): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
 
     // The config is HTTP-only (no admin-RPC path), so it's a one-shot

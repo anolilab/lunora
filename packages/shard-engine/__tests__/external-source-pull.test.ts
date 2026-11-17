@@ -207,7 +207,7 @@ describe("pullExternalSourceTick", () => {
         const result = await pullExternalSourceTick(harness.sql, writer, client, "documents", source, "tenant-a");
 
         expect(result.applied).toBe(1);
-        await expect(writer.get("d1")).resolves.toMatchObject({ seq: "42", updated_at: "2026-07-17T12:00:00.000Z" });
+        await expect(writer.get("documents", "d1")).resolves.toMatchObject({ seq: "42", updated_at: "2026-07-17T12:00:00.000Z" });
 
         // A repeat tick with the identical Date/bigint values is a steady-state
         // no-op — proves the normalized values also compare byte-identical

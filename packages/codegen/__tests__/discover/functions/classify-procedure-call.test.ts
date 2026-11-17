@@ -54,6 +54,24 @@ describe("classifyProcedureCall", () => {
         });
     });
 
+    it("tags `defineRoom` as an internal mutation on the room channel, not a lifecycle moment", () => {
+        expect.assertions(1);
+
+        // A room handler writes room state to the shard's SQLite, so it must be a
+        // MUTATION (transaction-wrapped) and internal (never a client RPC path). It
+        // is reached by its channel, so it carries no lifecycle moment.
+        expect(
+            classify(
+                `export const chat = defineRoom({ name: "chat", message: v.object({}), onMessage: () => null });`,
+                `import { defineRoom } from "@lunora/server";`,
+            ),
+        ).toStrictEqual({
+            channel: "room",
+            kind: "mutation",
+            visibility: "internal",
+        });
+    });
+
     it("resolves an aliased import to the exported factory name, not the local alias", () => {
         expect.assertions(1);
 

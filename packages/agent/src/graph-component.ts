@@ -292,7 +292,7 @@ const graphComponent = (): GraphComponentFunctions => {
 
                 if (existing) {
                     if (type !== undefined && existing["type"] === undefined) {
-                        await context.db.patch(existing["_id"] as never, { type, updatedAt: now });
+                        await context.db.patch(ENTITIES_TABLE, existing["_id"] as never, { type, updatedAt: now });
                     }
 
                     return name;
@@ -334,7 +334,7 @@ const graphComponent = (): GraphComponentFunctions => {
                 if (existing) {
                     const priorWeight = (existing["weight"] as number | undefined) ?? 1;
 
-                    await context.db.patch(existing["_id"] as never, { updatedAt: now, weight: Math.max(priorWeight, confidence) });
+                    await context.db.patch(EDGES_TABLE, existing["_id"] as never, { updatedAt: now, weight: Math.max(priorWeight, confidence) });
                 } else {
                     await context.db.insert(EDGES_TABLE, {
                         createdAt: now,

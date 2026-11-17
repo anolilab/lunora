@@ -10,8 +10,7 @@ related:
 
 `@lunora/replica` provides a local-first replica runtime and local SQLite mirror for
 Lunora. It combines an append-only event log, a type-safe reducer-based state
-derivation engine (`EventSource`), a typed `EventEmitter`, a `Durable
-Object`-backed event log for persistence in the Cloudflare environment, and a
+derivation engine (`EventSource`), a typed `EventEmitter`, a Durable Object (DO)-backed event log for persistence in the Cloudflare environment, and a
 local SQLite mirror (`LocalMirror`) that applies typed row-level diffs in
 browser/Node.js.
 
@@ -88,7 +87,7 @@ source.emitter.on("state-changed", ({ entry, state }) => {
 const entry = source.applyEvent("item-created", { id: "abc", name: "foo" });
 
 // Replay from a persisted log on startup:
-await source.replayFromLog(persistedLog);
+source.replayFromLog(persistedLog);
 
 // Reset and re-replay from a snapshot:
 source.reset(snapshotState);
@@ -119,7 +118,7 @@ interface MyEvents {
 const emitter = new EventEmitter<MyEvents>();
 
 // `on` is keyed to the map, so an unknown event name is a compile error.
-// It returns an unsubscribe function; `off(event, handler)` is the same thing.
+// It returns an unsubscribe function; `off(event, handler)` removes a handler explicitly.
 const unsubscribe = emitter.on("data", (payload) => console.log(payload.id));
 
 emitter.emit("data", { id: "abc", value: 42 });
@@ -188,17 +187,22 @@ first statement:
 }
 ```
 
-`EventLogDOClient` wraps the DO's `fetch()` RPC surface. Its only option is
-`fetch` — the function that dispatches a request to the instance you want, which
-is where the namespace and instance id are chosen:
+`EventLogDOClient` wraps the DO's `fetch()` RPC surface. `fetch` is the function that dispatches a request to the
+instance you want, which is where the namespace and instance id are chosen.
+Every route of the DO requires a signed request. The client signs each request with `LUNORA_RELAY_SECRET`,
+read from the `env` you pass, and construction throws when that secret is not set. The DO must hold the same secret:
 
 ```ts
+const id = env.EVENT_LOG_DO.idFromName("my-app");
 const client = new EventLogDOClient({
-    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+    env,
+    fetch: (request) => env.EVENT_LOG_DO.get(id).fetch(request),
+    instance: id.toString(),
 });
 
 // `append` takes an ARRAY and returns the entries with their assigned `seq`s.
-// Pass `{ batchId }` to make a retry idempotent.
+// Pass `{ batchId }` to make a retry idempotent. Without one the client mints a
+// fresh key per call, so a captured append cannot be replayed into a duplicate.
 const [entry] = await client.append([{ type: "order.placed", payload: { orderId: "123" } }], { batchId: "order-123" });
 
 // The log is append-only and ordered, so reads are by sequence number — there
@@ -244,12 +248,16 @@ one member, `ctx.events`, which is the client itself — so `append` takes the
 same **array** of input events as `client.append`.
 
 ```ts
+import { env } from "cloudflare:workers";
 import { EventLogDOClient, eventsContext } from "@lunora/replica";
 
 import { action, v } from "@/lunora/_generated/server";
 
+const id = env.EVENT_LOG_DO.idFromName("my-app");
 const client = new EventLogDOClient({
-    fetch: (request) => env.EVENT_LOG_DO.get(env.EVENT_LOG_DO.idFromName("my-app")).fetch(request),
+    env,
+    fetch: (request) => env.EVENT_LOG_DO.get(id).fetch(request),
+    instance: id.toString(),
 });
 
 export const myAction = action

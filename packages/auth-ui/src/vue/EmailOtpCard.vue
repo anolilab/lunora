@@ -33,7 +33,7 @@ const { actions, state } = useController(createEmailOtpController);
         <form class="lunora-auth-form" novalidate @submit.prevent="actions.sendCode">
             <FormBanner :error="state.formError" :success="state.successMessage" />
             <Field :field="state.email" :label="t.emailLabel" name="email" type="email" autoComplete="email" @change="actions.setEmail" />
-            <SubmitButton :pending="state.status === 'submitting'">{{ t.emailOtp }}</SubmitButton>
+            <SubmitButton :available-at="state.resendAvailableAt" :pending="state.status === 'submitting'">{{ t.emailOtp }}</SubmitButton>
         </form>
     </AuthCard>
 </template>

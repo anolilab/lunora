@@ -1,6 +1,6 @@
 {
     "name": "@lunora/nuxt",
-    "version": "1.0.0-alpha.234",
+    "version": "1.0.0-alpha.305",
     "description": "Nuxt module for Lunora — single-worker composition (mounts /_lunora/* into Nitro) plus reactive-loader server helpers",
     "keywords": [
         "cloudflare",
@@ -15,7 +15,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -55,9 +55,7 @@
         "build:prod": "packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "fallow:audit": "fallow audit",
@@ -65,8 +63,9 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/client": "1.0.0-alpha.213",
-        "@lunora/runtime": "1.0.0-alpha.205",
+        "@lunora/client": "^1.0.0-alpha.297",
+        "@lunora/config": "^1.0.0-alpha.458",
+        "@lunora/runtime": "^1.0.0-alpha.279",
         "@nuxt/kit": "catalog:frontend"
     },
     "devDependencies": {

@@ -247,8 +247,8 @@ describe.each(ENGINES)("ctx-db search — $label", (engine) => {
             const morphId = await writer.insert("docs", { body: "stale", channel: "x", title: "morph" });
             const dropId = await writer.insert("docs", { body: "keeper", channel: "x", title: "drop" });
 
-            await writer.patch(morphId, { body: "keeper now" });
-            await writer.delete(dropId);
+            await writer.patch("docs", morphId, { body: "keeper now" });
+            await writer.delete("docs", dropId);
 
             const results = await writer
                 .query("docs")
@@ -600,7 +600,7 @@ describe.each(ENGINES)("ctx-db search — $label", (engine) => {
 
             await writer.insert("docs", { body: "hello world" });
             await writer.insert("docs", { body: "hello there" });
-            await writer.delete("d2", "docs");
+            await writer.delete("docs", "d2");
 
             const results = await writer
                 .query("docs")
@@ -613,7 +613,7 @@ describe.each(ENGINES)("ctx-db search — $label", (engine) => {
             expect(results.map((document) => document["_id"])).toStrictEqual(["d1"]);
 
             // And a hard delete removes it from both.
-            await writer.delete("d1", "docs", { hard: true });
+            await writer.delete("docs", "d1", { hard: true });
 
             await expect(
                 writer

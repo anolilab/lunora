@@ -4,20 +4,28 @@
     "main": "src/server/index.ts",
     "compatibility_date": "2026-10-01",
     "compatibility_flags": ["nodejs_compat"],
+    "d1_databases": [
+        // The sign-in tables (better-auth's user, session, account) live in D1, outside the shard. Erasure
+        // reaches them only from the workflow, through `ctx.env.DB`.
+        { "binding": "DB", "database_name": "lunora-example-privacy", "database_id": "<replace-with-d1-create-id>" },
+    ],
     "durable_objects": {
         "bindings": [
             { "name": "SHARD", "class_name": "ShardDO" },
             // The erasure tombstones, kept out of the shard so a point-in-time restore of the shard cannot delete them.
             { "name": "PRIVACY_TOMBSTONES", "class_name": "PrivacyTombstonesDO" },
+            { "name": "ADMIN_REVOCATIONS", "class_name": "AdminRevocationDO" },
         ],
     },
     "migrations": [
         { "tag": "v1", "new_sqlite_classes": ["ShardDO"] },
         { "tag": "v2", "new_sqlite_classes": ["PrivacyTombstonesDO"] },
+        { "tag": "v3", "new_sqlite_classes": ["AdminRevocationDO"] },
     ],
     "observability": {
         "enabled": true,
         "head_sampling_rate": 1,
+        "redact_query_string": true,
     },
     "upload_source_maps": true,
     "exports": {

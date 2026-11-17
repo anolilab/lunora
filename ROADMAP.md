@@ -22,17 +22,18 @@ We know a pre-1.0 framework asks for trust. Here is what backs it:
   ([`api-snapshots/`](./api-snapshots), `pnpm api:check`). After 1.0, a breaking
   change **fails a required check** — it cannot ship as a patch by accident. The
   full program is tracked in [`plans/135-stable-1.0-roadmap.md`](./plans/135-stable-1.0-roadmap.md).
-- **No rug-pull on licensing.** Lunora is **FSL-1.1-Apache-2.0**
-  ([Functional Source License](./LICENSE.md)): source-available today, and every
-  release **automatically converts to Apache 2.0 two years after it ships**. The
-  code you build on becomes fully open — that outcome is written into the license,
-  not our goodwill.
+- **Open licensing.** Lunora is **Apache-2.0** ([LICENSE.md](./LICENSE.md)), so
+  the framework can be used, modified and redistributed without a commercial
+  restriction. The hosted Lunora Cloud service in
+  [`apps/cloud/`](./apps/cloud) stays under
+  **FSL-1.1-Apache-2.0** ([LICENSE.md](./apps/cloud/LICENSE.md)), which converts to
+  Apache 2.0 two years after each release.
 - **The runtime is verified where it runs.** The real Cloudflare `workerd`
   runtime — the entire point of the product — runs on a **required merge gate**,
   not just on laptops. Coverage floors, a nightly full-matrix run, and an
   end-to-end `init → codegen → deploy` smoke back every release.
 - **We ship in the open.** Every change is planned in [`plans/`](./plans) and
-  driven by Conventional Commits and independent per-package semantic-release.
+  driven by Conventional Commits and independent per-package releases.
   The "Recently shipped" list below is regenerated from real merged work.
 
 ---
@@ -55,8 +56,8 @@ deliberate, and mostly a set of go/no-go decisions:
       `bindings`, `hyperdrive`, `cloudflare-access`, `queue`, `workflow`, `flags`,
       `fingerprint`, `dispatch`, `payment`, `x402`.
     - **Experimental (excluded from the 1.0 promise, iterating on their own track):**
-      `agent`, `replica`, `react-native`, `angular`, `ai`, `browser`, `container`,
-      `platform-celld`, `platform-node`, `privacy`, `rspack`.
+      `agent`, `replica`, `react-native`, `angular`, `ai`, `browser`, `container`, `jwt-auth`,
+      `platform-celld`, `platform-node`, `privacy`, `rspack`, `saas-ui`.
 - **Cut the beta channel.** Feature-freeze the Core + Stable-adapter tiers and
   promote `alpha → beta`; the experimental tier keeps iterating on `alpha`.
 - **Bake and dogfood.** Run a real application (the playground plus at least one
@@ -136,16 +137,19 @@ Where the tier stands today:
 
 | Package          | 1. Snapshotted (untracked `@experimental` exports) | 2. Verified on workerd                                                                                                                                                     |
 | ---------------- | -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent`          | yes (183)                                          | no                                                                                                                                                                         |
-| `ai`             | yes (63)                                           | no                                                                                                                                                                         |
-| `angular`        | yes (80)                                           | n/a — runs in the browser                                                                                                                                                  |
+| `agent`          | yes (254)                                          | partial — the `workerd` project covers the approvals inbox, secret requests and summary storage on a real Durable Object; the agent loop itself is unverified              |
+| `ai`             | yes (91)                                           | no                                                                                                                                                                         |
+| `angular`        | yes (82)                                           | n/a — runs in the browser                                                                                                                                                  |
 | `browser`        | yes (0 — fully tracked)                            | partial — blocked on a live Browser Run check: `route.fetch` inside a real session, and the service-worker, prerender and WebRTC paths, are unverified on the real service |
 | `container`      | yes (0 — fully tracked)                            | partial — starting a container needs Docker, so lifecycle and `exec` are unverified                                                                                        |
+| `jwt-auth`       | yes (0 — fully tracked)                            | no                                                                                                                                                                         |
 | `platform-celld` | yes (0)                                            | n/a — verified by the `test:celld` TCK                                                                                                                                     |
 | `platform-node`  | yes (0)                                            | n/a — a Node host                                                                                                                                                          |
+| `privacy`        | yes (0 — fully tracked)                            | partial — a `workerd` project runs the package suite on a real Durable Object; legal review open (plan 468)                                                                |
 | `react-native`   | yes (5)                                            | n/a — runs on device                                                                                                                                                       |
-| `replica`        | yes (69)                                           | no                                                                                                                                                                         |
+| `replica`        | yes (69)                                           | partial — the `workerd` project covers `EventLogDO`; client wiring is unverified (plan 466)                                                                                |
 | `rspack`         | yes (0)                                            | n/a — a bundler plugin                                                                                                                                                     |
+| `saas-ui`        | yes (0 — fully tracked)                            | n/a — runs in the browser                                                                                                                                                  |
 
 `payment` and `x402` graduated to Stable adapter (audit, workerd suite, no `@experimental`
 exports). `browser` has no tagged exports and a workerd suite against a fake binding, but stays

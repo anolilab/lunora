@@ -1,0 +1,14 @@
+// The app `celld-services.test.ts` runs under `celld dev`. Kept apart from the
+// main TCK worker because celld resolves a service binding from the service's
+// deployment record: the parser service (parser.wrangler.jsonc) is booted into
+// this directory's local state first, and the app is started on that state.
+{
+    "name": "lunora-celld-services",
+    "main": "worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "services": [
+        { "binding": "PARSER", "service": "lunora-celld-parser" },
+        { "binding": "MATH", "service": "lunora-celld-parser", "entrypoint": "TckMath" },
+    ],
+}

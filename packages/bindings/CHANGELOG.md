@@ -1,3 +1,263 @@
+## @lunora/bindings [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.150...@lunora/bindings@1.0.0-alpha.151) (2026-11-03)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.80
+
+## @lunora/bindings [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.149...@lunora/bindings@1.0.0-alpha.150) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+* **@lunora/platform:** upgraded to 1.0.0-alpha.79
+
+## @lunora/bindings [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.148...@lunora/bindings@1.0.0-alpha.149) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+
+## @lunora/bindings [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.147...@lunora/bindings@1.0.0-alpha.148) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/platform:** upgraded to 1.0.0-alpha.78
+
+## @lunora/bindings [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.146...@lunora/bindings@1.0.0-alpha.147) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+
+## @lunora/bindings [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.145...@lunora/bindings@1.0.0-alpha.146) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+
+## @lunora/bindings [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.144...@lunora/bindings@1.0.0-alpha.145) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/platform:** upgraded to 1.0.0-alpha.77
+
+## @lunora/bindings [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.143...@lunora/bindings@1.0.0-alpha.144) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+
+## @lunora/bindings [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.142...@lunora/bindings@1.0.0-alpha.143) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+
+## @lunora/bindings [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.140...@lunora/bindings@1.0.0-alpha.141) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.76
+
+## @lunora/bindings [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.139...@lunora/bindings@1.0.0-alpha.140) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.76
+
+## @lunora/bindings [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.138...@lunora/bindings@1.0.0-alpha.139) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.75
+
+## @lunora/bindings [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.137...@lunora/bindings@1.0.0-alpha.138) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
+## @lunora/bindings [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.136...@lunora/bindings@1.0.0-alpha.137) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+
+## @lunora/bindings [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.135...@lunora/bindings@1.0.0-alpha.136) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
+## @lunora/bindings [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.134...@lunora/bindings@1.0.0-alpha.135) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/bindings [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.133...@lunora/bindings@1.0.0-alpha.134) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.75
+
+## @lunora/bindings [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.132...@lunora/bindings@1.0.0-alpha.133) (2026-10-25)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+
+## @lunora/bindings [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.131...@lunora/bindings@1.0.0-alpha.132) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+
+## @lunora/bindings [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.130...@lunora/bindings@1.0.0-alpha.131) (2026-10-22)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.74
+
+## @lunora/bindings [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.129...@lunora/bindings@1.0.0-alpha.130) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+
+## @lunora/bindings [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.128...@lunora/bindings@1.0.0-alpha.129) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.73
+
+## @lunora/bindings [1.0.0-alpha.128](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.127...@lunora/bindings@1.0.0-alpha.128) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/platform:** upgraded to 1.0.0-alpha.72
+
+## @lunora/bindings [1.0.0-alpha.127](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.126...@lunora/bindings@1.0.0-alpha.127) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/platform:** upgraded to 1.0.0-alpha.71
+
+## @lunora/bindings [1.0.0-alpha.126](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.125...@lunora/bindings@1.0.0-alpha.126) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+
+## @lunora/bindings [1.0.0-alpha.125](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.124...@lunora/bindings@1.0.0-alpha.125) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+
+## @lunora/bindings [1.0.0-alpha.124](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.123...@lunora/bindings@1.0.0-alpha.124) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/platform:** upgraded to 1.0.0-alpha.70
+
+## @lunora/bindings [1.0.0-alpha.123](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.122...@lunora/bindings@1.0.0-alpha.123) (2026-10-18)
+
+### Features
+
+* **config:** write the Artifacts binding and leave it out when logged out ([#1243](https://github.com/anolilab/lunora/issues/1243)) ([5e7f80f](https://github.com/anolilab/lunora/commit/5e7f80fb9b3f28868606455d9f48a05000e45162))
+
+## @lunora/bindings [1.0.0-alpha.122](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.121...@lunora/bindings@1.0.0-alpha.122) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/platform:** upgraded to 1.0.0-alpha.69
+
+## @lunora/bindings [1.0.0-alpha.121](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.120...@lunora/bindings@1.0.0-alpha.121) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+
+## @lunora/bindings [1.0.0-alpha.120](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.119...@lunora/bindings@1.0.0-alpha.120) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/platform:** upgraded to 1.0.0-alpha.68
+
+## @lunora/bindings [1.0.0-alpha.119](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.118...@lunora/bindings@1.0.0-alpha.119) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.67
+
+## @lunora/bindings [1.0.0-alpha.118](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.117...@lunora/bindings@1.0.0-alpha.118) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+
+## @lunora/bindings [1.0.0-alpha.117](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.116...@lunora/bindings@1.0.0-alpha.117) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+
+## @lunora/bindings [1.0.0-alpha.116](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.115...@lunora/bindings@1.0.0-alpha.116) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/platform:** upgraded to 1.0.0-alpha.66
+
+## @lunora/bindings [1.0.0-alpha.115](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.114...@lunora/bindings@1.0.0-alpha.115) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.57
+* **@lunora/platform:** upgraded to 1.0.0-alpha.65
+
 ## @lunora/bindings [1.0.0-alpha.114](https://github.com/anolilab/lunora/compare/@lunora/bindings@1.0.0-alpha.113...@lunora/bindings@1.0.0-alpha.114) (2026-10-15)
 
 

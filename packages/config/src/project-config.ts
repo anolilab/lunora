@@ -13,12 +13,17 @@
  * because the CLI could not read TypeScript. It can now: `@lunora/codegen` owns
  * one `jiti`-backed loader for the file, and this module reads `remote` off it.
  *
- * The file is entirely optional and best-effort: a missing file, a config that
- * throws, or an unexpected `remote` value all degrade to "no project preference"
- * rather than throwing, so a typo never breaks `lunora dev`.
+ * The file is optional, and these readers never throw: a missing file, a config
+ * that throws, or a `remote` they cannot read degrades to "no project
+ * preference". Typos are not left to that fallback: `runCodegen`, which every
+ * dev server, build and deploy runs first, refuses an unknown key or a literal
+ * of the wrong type (`@lunora/codegen`'s `project-config-validate.ts`).
  */
+
 import { readProjectConfigLiterals, readProjectTarget as readCodegenProjectTarget } from "@lunora/codegen";
 
+import canonicalPath from "./canonical-path";
+import { BUILD_ROOT_ENV, BUILD_TARGET_ENV } from "./codegen-env";
 import { DEFAULT_DEPLOY_TARGET, resolveDeployDriver } from "./driver-registry";
 
 /**
@@ -110,5 +115,31 @@ const resolveTargetOrThrow = (projectRoot: string, explicit?: string): string =>
     return target;
 };
 
+/**
+ * Refuse a plugin-resolved target that differs from the one the CLI resolved
+ * for this run. The CLI's `--target` guard only sees the config file, so a target set
+ * in a plugin's options would otherwise slip past it. A no-op outside a CLI build,
+ * where {@link BUILD_TARGET_ENV} is unset.
+ * @param target The target the plugin resolved.
+ * @throws when the CLI resolved a different target.
+ */
+const assertBuildTargetMatches = (target: string, projectRoot: string): void => {
+    const expected = process.env[BUILD_TARGET_ENV];
+
+    // The CLI's target is for the project it builds. A build script can start a Vite build for another project, and that build
+    // inherits the variable, so only the plugin for the CLI's own root checks it.
+    const buildRoot = process.env[BUILD_ROOT_ENV];
+
+    if (buildRoot === undefined || buildRoot === "" || canonicalPath(buildRoot) !== canonicalPath(projectRoot)) {
+        return;
+    }
+
+    if (expected !== undefined && expected !== "" && expected !== target) {
+        throw new Error(
+            `the plugin resolves target "${target}" but the CLI resolved "${expected}" for this run; set the same target in the plugin options and the project config`,
+        );
+    }
+};
+
 export type { RemotePreference };
-export { interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };
+export { assertBuildTargetMatches, interpretRemote, readProjectRemotePreference, readProjectTarget, resolveProjectTarget, resolveTargetOrThrow };

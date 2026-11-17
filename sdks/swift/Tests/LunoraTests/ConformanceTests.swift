@@ -126,6 +126,16 @@ final class ConformanceTests: XCTestCase {
             case "offline_write_held_for_credential_replays_after_token_refresh":
                 try caseOfflineWriteHeldForCredentialReplaysAfterTokenRefresh()
             case "offline_unset_identity_stamps_token_digest": try caseOfflineUnsetIdentityStampsTokenDigest()
+            case "offline_online_only_refused_when_disconnected": try caseOfflineOnlineOnlyRefusedWhenDisconnected()
+            case "offline_online_only_sends_when_connected": try caseOfflineOnlineOnlySendsWhenConnected()
+            case "offline_online_only_transport_failure_refused": try caseOfflineOnlineOnlyTransportFailureRefused()
+            case "offline_online_only_leaves_normal_writes_queued": try caseOfflineOnlineOnlyLeavesNormalWritesQueued()
+            case "connect_frame_first_and_carries_session_token": try testConnectFrameFirstAndCarriesSessionToken()
+            case "ws_url_carries_only_the_admin_ticket": try testWSURLCarriesOnlyTheAdminTicket()
+            case "attach_socket_carries_connection_context": try testAttachSocketCarriesConnectionContext()
+            case "close_codes_drive_token_expiry": try testCloseCodesDriveTokenExpiry()
+            case "whisper_frames_join_send_and_deliver": try testWhisperFramesJoinSendAndDeliver()
+            case "whisper_topics_rejoin_after_reconnect": try testWhisperTopicsRejoinAfterReconnect()
             default:
                 XCTFail("protocol/conformance-cases.json requires case \(name), which this suite does not implement")
             }
@@ -526,6 +536,8 @@ final class ConformanceTests: XCTestCase {
             var resent: [[String: Any]] = []
 
             client.attachSocket { resent.append($0) }
+            // The connect frame that opens the socket is not a resend.
+            resent.removeAll()
             client.resendSubscriptions()
 
             let query = try XCTUnwrap(resent.first?["query"] as? [String: Any])
@@ -535,8 +547,22 @@ final class ConformanceTests: XCTestCase {
         }
     }
 
+    /// A connect golden plus the capability the port announces on every open. The
+    /// fixture carries no pageDelta form of the token/context goldens, and the port
+    /// always adds it, so the expectation is derived rather than duplicated.
+    func withPageDeltaCaps(_ golden: Any?) -> [String: Any] {
+        var out = golden as? [String: Any] ?? [:]
+        out["caps"] = ["pageDelta"]
+        return out
+    }
+
     func caseClientFrameBuilders() throws {
         let frames = try XCTUnwrap(fixture("ws-frames.json")["clientFrames"] as? [String: Any])
+
+        XCTAssertEqual(
+            canonical(LunoraClient.buildConnectFrame(clientID: "client-test", caps: ["pageDelta"])),
+            canonical(frames["connect-with-page-delta-caps"])
+        )
 
         XCTAssertEqual(canonical(LunoraClient.buildConnectFrame(clientID: "client-test")), canonical(frames["connect"]))
         XCTAssertEqual(
@@ -608,17 +634,189 @@ final class ConformanceTests: XCTestCase {
         // A conditional assertion that never runs is worse than none: without
         // this, renaming the fixture key would leave every suite green.
         XCTAssertEqual(cancellations, 1, "serverFrames must carry one cancelling case")
+
+        try casePageDeltaFrames()
+    }
+
+    /// Row-change deltas merge into the server base; see `pageDeltaFrames`.
+    func casePageDeltaFrames() throws {
+        let cases = try XCTUnwrap(fixture("ws-frames.json")["pageDeltaFrames"] as? [[String: Any]])
+
+        XCTAssertEqual(cases.count, 9, "pageDeltaFrames must carry its nine cases")
+
+        func feed(_ client: LunoraClient, _ frame: Any?) throws {
+            let raw = try JSONSerialization.data(withJSONObject: try XCTUnwrap(frame))
+            client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        }
+
+        for testCase in cases {
+            let name = testCase["name"] as? String ?? "?"
+            let client = LunoraClient(url: "https://app.example")
+            client.attachSocket { _ in }
+
+            var seen: [Any] = []
+            client.subscribe("messages:list", args: ["channel": "general"], onData: { seen.append($0) }, onError: { _ in })
+
+            let frame = try XCTUnwrap(testCase["frame"] as? [String: Any])
+            try feed(client, ["id": frame["id"] as Any, "type": "data", "data": testCase["baseWire"] as Any])
+            try feed(client, frame)
+
+            let expect = try XCTUnwrap(testCase["expect"] as? [String: Any])
+
+            XCTAssertEqual(seen.count, 2, "\(name): base then merged value")
+            XCTAssertEqual(canonical(try Wire.encode(seen.last)), canonical(expect["valueWire"]), name)
+        }
+
+        // No base: the row change cannot merge into nothing, so it is held. Nothing is
+        // published, and an unmergeable list keeps the previous value.
+        let envelope: [String: Any] = ["key": "m1", "op": "delete", "table": "messages"]
+        let bare = LunoraClient(url: "https://app.example")
+        bare.attachSocket { _ in }
+        var bareSeen: [Any] = []
+        bare.subscribe("messages:list", args: ["channel": "general"], onData: { bareSeen.append($0) }, onError: { _ in })
+        try feed(bare, ["id": "sub_1", "type": "delta", "delta": envelope])
+        XCTAssertTrue(bareSeen.isEmpty, "no base holds the delta: nothing is published")
+
+        let gap = LunoraClient(url: "https://app.example")
+        gap.attachSocket { _ in }
+        var gapSeen: [Any] = []
+        gap.subscribe("messages:list", args: ["channel": "general"], onData: { gapSeen.append($0) }, onError: { _ in })
+        let rows: [[String: Any]] = [["text": "no id"]]
+        try feed(gap, ["id": "sub_1", "type": "data", "data": rows])
+        try feed(gap, ["id": "sub_1", "type": "delta", "delta": envelope])
+        XCTAssertEqual(gapSeen.count, 1, "an unmergeable delta publishes nothing")
+
+        try casePageDeltaPoison()
+    }
+
+    /// An unmergeable row change freezes the resume cursor until a data frame or a
+    /// resubscribe; see `pageDeltaPoisonCases`.
+    func casePageDeltaPoison() throws {
+        try runDeltaFrameCases("pageDeltaPoisonCases", count: 3)
+        try runDeltaFrameCases("identityChangeEvictionCases", count: 2)
+        try runDeltaFrameCases("pageDeltaRunCases", count: 5)
+        try runDeltaFrameCases("undecodableDeltaRunCases", count: 2)
+    }
+
+    /// Drives one fixture list of `seedFrame` + `steps` cases against a fresh client.
+    ///
+    /// One loop for every list so a step means the same thing in each: a frame with the
+    /// publishes (and errors) it must cause, or a resume checked against the resend query.
+    /// `identityChange` and `freezeFrame` are optional preambles between seed and steps.
+    func runDeltaFrameCases(_ key: String, count: Int) throws {
+        let cases = try XCTUnwrap(fixture("ws-frames.json")[key] as? [[String: Any]])
+
+        XCTAssertEqual(cases.count, count, "\(key) must carry its \(count) cases")
+
+        for testCase in cases {
+            let name = testCase["name"] as? String ?? "?"
+            let client = LunoraClient(url: "https://app.example")
+            var sent: [[String: Any]] = []
+            let change = testCase["identityChange"] as? [String: Any]
+
+            // The identity is set before anything is cached: a first sign-in evicts nothing.
+            if let change { client.identity = change["from"] as? String }
+
+            client.attachSocket { sent.append($0) }
+
+            var seen: [Any] = []
+            var errors: [String] = []
+            client.subscribe(
+                "messages:list", args: ["channel": "general"], onData: { seen.append($0) },
+                onError: { errors.append($0.code ?? "") }
+            )
+
+            func feed(_ frame: Any?) throws {
+                let raw = try JSONSerialization.data(withJSONObject: try XCTUnwrap(frame))
+                client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+            }
+
+            try feed(testCase["seedFrame"])
+            // Only a data frame publishes a value; a resume seed leaves the subscription with no base.
+            let seedPublishes = ((testCase["seedFrame"] as? [String: Any])?["type"] as? String) == "data" ? 1 : 0
+            XCTAssertEqual(seen.count, seedPublishes, "\(name): the seed publishes \(seedPublishes)")
+
+            if let freeze = testCase["freezeFrame"] {
+                try feed(freeze)
+                XCTAssertEqual(errors, testCase["freezeErrors"] as? [String] ?? [], "\(name): freeze errors")
+                errors.removeAll()
+            }
+
+            if let change { client.identity = change["to"] as? String }
+
+            for (index, step) in try XCTUnwrap(testCase["steps"] as? [[String: Any]]).enumerated() {
+                let label = "\(name) step \(index + 1)"
+
+                if let resume = step["resume"] as? [String: Any] {
+                    sent.removeAll()
+                    client.resendSubscriptions()
+
+                    let subscribe = try XCTUnwrap(sent.first { $0["type"] as? String == "subscribe" }, label)
+
+                    let query = try XCTUnwrap(subscribe["query"] as? [String: Any], label)
+
+                    XCTAssertEqual(query["sinceSeq"] as? Int, resume["sinceSeq"] as? Int, label)
+                    XCTAssertEqual(query["sinceEpoch"] as? String, resume["sinceEpoch"] as? String, label)
+                    continue
+                }
+
+                let before = seen.count
+
+                errors.removeAll()
+                try feed(step["frame"])
+                XCTAssertEqual(seen.count - before, step["publishes"] as? Int, label)
+
+                if let expected = step["errors"] as? [String] {
+                    XCTAssertEqual(errors, expected, "\(label): errors")
+                }
+
+                if let wire = step["valueWire"] {
+                    XCTAssertEqual(canonical(try Wire.encode(seen.last)), canonical(wire), label)
+                }
+            }
+        }
+    }
+
+    /// A resend that cannot build a subscription's frame leaves it frozen: its resume
+    /// cursor still sits before the dropped change, so a later frame must not move it.
+    func testAFailedResendKeepsThePoison() throws {
+        let client = LunoraClient(url: "https://app.example")
+        var sent: [[String: Any]] = []
+        client.attachSocket { sent.append($0) }
+
+        var seen: [Any] = []
+        // An object outside the wire codec: the subscribe frame can never be built.
+        client.subscribe("messages:list", args: ["bad": NSObject()], onData: { seen.append($0) })
+
+        func feed(_ frame: [String: Any]) throws {
+            let raw = try JSONSerialization.data(withJSONObject: frame)
+            client.handleFrame(try XCTUnwrap(String(data: raw, encoding: .utf8)))
+        }
+
+        let row: [String: Any] = ["_id": "m1", "_creationTime": 1001, "text": "one"]
+        let changed: [String: Any] = ["_id": "m1", "_creationTime": 1001, "text": "ONE"]
+
+        try feed(["id": "sub_1", "type": "data", "data": [row], "cursor": 5, "epoch": "e1"])
+        try feed(["id": "sub_1", "type": "delta", "delta": ["key": "m1", "op": "update", "table": "messages"]])
+        XCTAssertEqual(seen.count, 1, "the unmergeable change publishes nothing")
+
+        sent.removeAll()
+        client.resendSubscriptions()
+        XCTAssertTrue(sent.isEmpty, "the frame that cannot be built is not sent")
+
+        try feed(["id": "sub_1", "type": "delta", "delta": ["key": "m1", "op": "update", "row": changed, "table": "messages"], "cursor": 9, "epoch": "e1"])
+        XCTAssertEqual(seen.count, 1, "still frozen: the dropped change was never replayed")
     }
 
     /// The `AsyncStream` form of a live query: same subscription, same decode,
     /// same order as the callback form.
     func caseSubscriptionStreamYieldsFrameValuesInOrder() throws {
-        let testCase = try XCTUnwrap(fixture("ws-frames.json")["stream"] as? [String: Any])
+        let testCase = try XCTUnwrap(fixture("ws-frames.json")["watch"] as? [String: Any])
         let frames = try XCTUnwrap(testCase["frames"] as? [Any])
         let client = LunoraClient(url: "https://app.example")
         client.attachSocket { _ in }
 
-        let events = client.stream("messages:list", args: ["channel": "general"])
+        let events = client.watch("messages:list", args: ["channel": "general"])
         var iterator = events.makeAsyncIterator()
         var seen: [Any] = []
 
@@ -643,13 +841,13 @@ final class ConformanceTests: XCTestCase {
     /// then the `for await` loop finishes instead of waiting forever on a client
     /// that will never deliver again.
     func caseSubscriptionStreamEndsOnClose() throws {
-        let testCase = try XCTUnwrap(fixture("ws-frames.json")["stream"] as? [String: Any])
+        let testCase = try XCTUnwrap(fixture("ws-frames.json")["watch"] as? [String: Any])
         let frame = try XCTUnwrap((testCase["frames"] as? [Any])?.first)
         let client = LunoraClient(url: "https://app.example")
 
         client.attachSocket { _ in }
 
-        var iterator = client.stream("messages:list", args: ["channel": "general"]).makeAsyncIterator()
+        var iterator = client.watch("messages:list", args: ["channel": "general"]).makeAsyncIterator()
 
         client.handleFrame(frameText(frame))
 
@@ -731,6 +929,8 @@ final class ConformanceTests: XCTestCase {
         var resent: [[String: Any]] = []
 
         client.attachSocket { resent.append($0) }
+        // The connect frame that opens the socket is not a resend.
+        resent.removeAll()
         client.resendSubscriptions()
 
         XCTAssertEqual(resent.map { $0["type"] as? String }, ["subscribe", "shape_subscribe"])
@@ -969,7 +1169,7 @@ final class ConformanceTests: XCTestCase {
 
     /// The bearer token never reaches a printed or dumped client.
     func caseAuthTokenRedactedWhenPrinted() {
-        let token = "lunora-secret-7f3a9c"
+        let token = "lunora-secret-7f3a9c"  // secret-scanner:allow -- test fixture
         let client = LunoraClient(url: "https://app.example", authToken: token)
         var dumped = ""
 
@@ -1140,6 +1340,54 @@ final class ConformanceTests: XCTestCase {
         XCTAssertEqual(rows[1]["note"] as? String, "n")
     }
 
+    // The session credential must never ride the socket URL: not on the first
+    // open, not on a reconnect, and not when the value comes from a provider that
+    // is re-resolved on every open. The URL is built from the ticket alone; the
+    // session is read only into the connect frame.
+    func testSessionCredentialNeverRidesTheURL() {
+        let session = "sess-secret-123"
+        // The URL percent-encodes the hyphens, so a leak can show up in either form.
+        let encoded = "sess%2Dsecret%2D123"
+        let client = LunoraClient(url: "https://app.example")
+        var resolved = 0
+        // `provider` stands in for an app-supplied resolver, called fresh on every open.
+        let provider: () -> String = {
+            resolved += 1
+            return session
+        }
+
+        // The first open, then two reconnects.
+        for open in 0..<3 {
+            let value = provider()
+            for url in [client.wsURL(shardKey: "tenant_a", wsTicket: "ticket-abc"), client.wsURL()] {
+                XCTAssertFalse(url.contains(session), "open \(open): URL \(url) carries the session credential")
+                XCTAssertFalse(url.contains(encoded), "open \(open): URL \(url) carries the encoded session credential")
+            }
+            let frame = LunoraClient.buildConnectFrame(clientID: "client-test", token: value)
+            XCTAssertEqual(frame["token"] as? String, session, "open \(open): connect token")
+        }
+
+        XCTAssertEqual(resolved, 3, "the provider resolves once per open")
+    }
+
+    // The connect envelope carries the session credential as `token`, and omits
+    // the key entirely when none is held (nil or empty).
+    func testConnectFrameCarriesSessionToken() {
+        XCTAssertEqual(LunoraClient.buildConnectFrame(clientID: "client-test", token: "sess-abc")["token"] as? String, "sess-abc")
+        XCTAssertNil(LunoraClient.buildConnectFrame(clientID: "client-test", token: nil)["token"])
+        XCTAssertNil(LunoraClient.buildConnectFrame(clientID: "client-test", token: "")["token"])
+    }
+
+    // The ticket is the only thing in `?token=`, and it is that ticket exactly.
+    func testWSURLTicketIsTheOnlyToken() throws {
+        let client = LunoraClient(url: "https://app.example")
+        let url = client.wsURL(shardKey: "tenant_a", wsTicket: "ticket-abc")
+        let query = try XCTUnwrap(URLComponents(string: url)?.queryItems)
+
+        XCTAssertEqual(query.filter { $0.name == "token" }.map(\.value), ["ticket-abc"])
+        XCTAssertFalse(client.wsURL().contains("token="), "no ticket means no token parameter")
+    }
+
     // MARK: - Concurrency
 
     /// The topology every real consumer has: a socket read loop on one thread,
@@ -1176,7 +1424,10 @@ final class ConformanceTests: XCTestCase {
         // Attached only now, so the count below sees resend frames alone.
         let resent = ResentCounter()
 
-        client.attachSocket { _ in resent.increment() }
+        // Only the resent subscribe frames count: the connect frame that opens the socket is not one.
+        client.attachSocket { frame in
+            if frame["type"] as? String == "subscribe" { resent.increment() }
+        }
         client.resendSubscriptions()
 
         XCTAssertEqual(resent.value, threads * perThread, "every concurrent subscribe survived with a distinct id")

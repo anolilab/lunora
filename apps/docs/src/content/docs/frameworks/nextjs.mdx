@@ -11,7 +11,7 @@ related:
 Next.js is supported through a **two-worker split**: Next.js deploys to
 Cloudflare via the OpenNext adapter and owns page rendering, while a standalone
 Lunora worker owns `/_lunora/*` and the Durable Objects. A React Server
-Component resolves data during the server render, and the client hydrates that
+Component (RSC) resolves data during the server render, and the client hydrates that
 result into a live subscription, so your RSC load is live.
 
 ```bash
@@ -118,7 +118,7 @@ export function MessageFeed({ preloaded }: { preloaded: Preloaded<Doc<"messages"
 ```
 
 Forwarding the request cookie is what makes the server load run **as the
-signed-in user**, so [RLS](/docs/concepts/rls) applies on the server render the
+signed-in user**, so row-level security ([RLS](/docs/concepts/rls)) applies on the server render the
 same way it does on the client.
 
 ### The prefetch alternative

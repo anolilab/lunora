@@ -1,10 +1,25 @@
+import type { SecurityHeadersOptions } from "../../../../shared/security-headers";
 import type { AppMethodFacet, CapabilityKey } from "../capabilities";
 import { APP_METHOD_CAPABILITIES } from "../capabilities";
-import type { IdentityIR, JurisdictionIR, TableIR } from "../ir";
+import type { IdentityIR, JurisdictionIR, LiveStreamIR, TableIR } from "../ir";
 import { isShardByTable } from "../ir";
 
 /** Which capability methods the generated `defineApp` builder exposes — one flag per package-backed feature the app actually uses. */
 interface EmitAppOptions {
+    /**
+     * Every agent's generated workflow class name → wire `options.agentWorkflows`, so a
+     * scheduled agent job takes its run shard from the scheduler record instead of its
+     * args. Empty/absent ⇒ no wiring, byte-identical output for agent-free projects.
+     */
+    agentWorkflows?: ReadonlyArray<string>;
+
+    /**
+     * App-declared user columns the session forwards as identity claims (`user.additionalFields`
+     * of `.auth()`). Passed to both the D1 resolver and the object route. Empty/absent ⇒ the
+     * calls keep their no-claims form, byte-identical output for apps that declare none.
+     */
+    authClaims?: ReadonlyArray<string>;
+
     /**
      * The package-backed capabilities the app uses (post platform gate). Every
      * used row of the `CAPABILITIES` table with an `appMethod` gets its fluent
@@ -25,12 +40,24 @@ interface EmitAppOptions {
     emailAgents?: ReadonlyArray<{ className: string; exportName: string }>;
     /** App depends on `@lunora/cloudflare-access` → emit `.access()` (wire the Cloudflare Access `resolveIdentity`, composed ahead of `@lunora/auth` when both are present). */
     hasAccess: boolean;
+    /** The target backs named admin tokens' revocation store → emit `.adminRevocations()`. Absent counts as true. */
+    hasAdminRevocations?: boolean;
+
     /** App depends on `@lunora/auth` → emit `.auth()` + the lazy build/migrate dance. */
     hasAuth: boolean;
+
+    /**
+     * `false` withholds the `.deliveryAuthorization(...)` builder method and its
+     * `createShardDO` config plumbing — the verdict of the platform gate for the
+     * target's matrix, not the app's usage. Absent means emitted, as before the
+     * gate existed.
+     */
+    hasDeliveryAuthorization?: boolean;
     /** App depends on a worker-composition framework adapter (`@lunora/astro`/`@lunora/svelte`/`@lunora/vue`), or hand-composes one in `src/worker.ts` → emit `.buildFrameworkWorker(host)`. */
     hasFramework: boolean;
     /** Schema declares **D1-backed** `.global()` tables → emit `.global()` (D1 ctx-db + studio introspector + cross-shard relations). */
     hasGlobal: boolean;
+
     /** Schema declares **Hyperdrive-backed** `.global({ backend: "hyperdrive" })` tables → emit `.hyperdriveGlobal()` (reactive Postgres/MySQL ctx-db over Hyperdrive). */
     hasHyperdriveGlobal: boolean;
 
@@ -47,8 +74,10 @@ interface EmitAppOptions {
     hasKvIntrospector: boolean;
     /** App declares `lunora/notify.ts` (`@lunora/notify`) → wire `options.notifySubscriptionStore` so the studio Notifications page can read registered devices. */
     hasNotify: boolean;
+
     /** App declares push queues (`defineQueue`) → wire `LUNORA_QUEUE_REGISTRY` into the worker's `queue()` consumer entry. */
     hasQueue: boolean;
+
     /** App imports `@lunora/scheduler` / declares crons → emit `.scheduler()`. */
     hasScheduler: boolean;
 
@@ -77,8 +106,10 @@ interface EmitAppOptions {
      * alone then decides, as it did before the gate existed.
      */
     hasVectors?: boolean;
+
     /** App declares Cloudflare Workflows (`defineWorkflow`) → wire `options.workflowsClient` so the studio's workflow-instance proxy can reach the CF REST API. */
     hasWorkflow: boolean;
+
     /** The single `defineIdentity(...)` contract in `lunora/identity.ts` (Plan 080) → import it as a VALUE and wire `options.identity`, so the runtime trust boundary validates every resolved identity before it becomes `ctx.auth`. `undefined` ⇒ no wiring, byte-identical output. */
     identity?: IdentityIR;
     /** Schema declares `.jurisdiction("…")` → pin every DO the worker reaches (shards, fan-out, scheduler, containers, voice sessions, DO-backed auth, `@lunora/mail` shard RPC) to the Cloudflare data-residency jurisdiction. */
@@ -90,6 +121,47 @@ interface EmitAppOptions {
      * auth object (codegen refuses a project it can see doing that).
      */
     jurisdictionPinsAuth?: boolean;
+
+    /**
+     * The lazy function registry is selected (`--lazy-functions`). The modules the
+     * worker reaches only from an event entry — the push-queue registry and the
+     * `onEmail` agent definitions — then load with `import()` on that event instead
+     * of at isolate startup. Absent or `false` keeps the eager output unchanged.
+     */
+    lazyFunctions?: boolean;
+
+    /**
+     * Every `defineLiveStream` the app declares, read from its literals. With `liveStreams` set, the worker mounts
+     * each stream's connect and control routes itself (`liveStreamRouter`), so the app mounts none.
+     */
+    liveStreamDeclarations?: ReadonlyArray<LiveStreamIR>;
+
+    /**
+     * The app declares a `defineLiveStream` the target serves (post platform gate) →
+     * the queue consumer forwards the runtime's publisher as `ctx.live`. Absent or
+     * `false` leaves the consumer without `ctx.live`.
+     */
+    liveStreams?: boolean;
+
+    /**
+     * The target withholds live streams (`PlatformGateResult.liveStreamsWithheld`).
+     * Emitted as `liveStreams: false` on `createWorker`, so the HTTP context carries
+     * no `ctx.live`. Absent or `false` leaves the emitted options unchanged.
+     */
+    liveStreamsWithheld?: boolean;
+
+    /**
+     * `lunora.config`'s `security.headers`, already validated. Emitted as
+     * `LUNORA_SECURITY_HEADERS` and applied by `buildWorkerOptions` when code
+     * set no `security.headers` of its own; `undefined` emits `undefined`, so the
+     * runtime keeps its defaults.
+     */
+    securityHeaders?: boolean | SecurityHeadersOptions;
+
+    /** Wrangler's assets bindings for a single-page app → `spaAssets`; absent or empty emits nothing. See `RunCodegenOptions.spaAssetsBindings`. */
+    spaAssetsBindings?: ReadonlyArray<string>;
+    /** Studio's documents ship as assets read through this binding (see `RunCodegenOptions.studioAssets`); absent `import()`s them. */
+    studioAssetsBinding?: string;
 
     /**
      * Every table the schema declares, with its shard mode. Emitted as a literal
@@ -161,6 +233,9 @@ const hasEmailAgents = (options: ResolvedAppOptions): boolean => (options.emailA
 /** The schema declares at least one `.shardBy()` table, so the app can wire a shard registry. */
 const hasShardedTables = (options: ResolvedAppOptions): boolean => options.tables.some((table) => isShardByTable(table));
 
+/** The worker mounts live-stream routes: the target serves live streams and the app declares at least one. */
+const hasLiveStreamMounts = (options: ResolvedAppOptions): boolean => options.liveStreams === true && (options.liveStreamDeclarations?.length ?? 0) > 0;
+
 /**
  * The scheduler resolver — one private builder method shared by every consumer.
  *
@@ -203,12 +278,16 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
      * declared.
      */
     private makeStorage(env: Env, declaration: StorageDeclaration<Env>, bucket: R2BucketLike, bucketName: string, origin?: string): Storage {
+        const publicBaseUrl = declaration.publicBaseUrl?.(env) ?? origin;
+        const s3 = declaration.s3?.(env);
+        const signingSecret = declaration.signingSecret?.(env);
+
         return createStorage({
             bucket,
             bucketName,
-            publicBaseUrl: declaration.publicBaseUrl?.(env) ?? origin,
-            s3: declaration.s3?.(env),
-            signingSecret: declaration.signingSecret?.(env),
+            ...(publicBaseUrl === undefined ? {} : { publicBaseUrl }),
+            ...(s3 === undefined ? {} : { s3 }),
+            ...(signingSecret === undefined ? {} : { signingSecret }),
         });
     }
 
@@ -288,10 +367,10 @@ const buildStorageHelpers = (hasStorage: boolean): string =>
             storageDownload: (key: string, opts?: { bucket?: string }) => pick(opts?.bucket).download(key),
             storageList: (prefix?: string, opts?: { bucket?: string; cursor?: string; limit?: number }) => pick(opts?.bucket).list(prefix, opts),
             storageMultipartUpload: (key: string, opts?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string> }) => pick(opts?.bucket).createMultipartUpload(key, opts),
-            storageSignedUrl: hasSigning
-                ? (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT"; origin?: string }) =>
-                      pick(opts?.bucket, opts?.origin).getSignedUrl(key, { contentType: opts?.contentType, expiresInSeconds: opts?.expiresInSeconds, method: opts?.method })
-                : undefined,
+            ...(hasSigning ? {
+                storageSignedUrl: (key: string, opts?: { bucket?: string; contentType?: string; expiresInSeconds?: number; method?: "GET" | "PUT"; origin?: string }) =>
+                    pick(opts?.bucket, opts?.origin).getSignedUrl(key, opts),
+            } : {}),
             storageUpload: (key: string, body: ArrayBuffer, opts?: { bucket?: string; contentType?: string; customMetadata?: Record<string, string>; sha256?: string }) => pick(opts?.bucket).upload(key, body, opts),
         };
     }
@@ -325,22 +404,14 @@ const buildGlobalHelpers = (hasGlobal: boolean): string =>
  * deployed; the dashboard's own metric is per-database and can't name the query.
  * The emit is best-effort — instrumentation must never fail a served query.
  */
-const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+const buildSessionExec = (database: D1DatabaseLike, constraint: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
     // Real D1 always exposes \`withSession\`; guarded the same way as \`batch\`
     // below so a hand-rolled test double that omits it keeps working via
-    // \`prepare()\` straight on the raw binding — today's behaviour. With no
-    // inbound bookmark, \`"first-unconstrained"\` is the documented no-op
-    // equivalent (lowest latency, may read any replica) — see \`D1Client.withSession\`.
-    const session = typeof database.withSession === "function" ? database.withSession(bookmark ?? "first-unconstrained") : undefined;
+    // \`prepare()\` straight on the raw binding — today's behaviour. \`constraint\`
+    // is the Sessions API constraint the session opens with (see \`buildExec\`).
+    const session = typeof database.withSession === "function" ? database.withSession(constraint) : undefined;
     const target = session ?? database;
     const batchFn = target.batch;
-    const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
-        try {
-            emitD1QueryCost(sql, meta);
-        } catch {
-            // Best-effort: never let cost accounting fail the query it measures.
-        }
-    };
 
     return retryingExec({
         all: async (sql, parameters) => {
@@ -377,29 +448,29 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
         // \`target\`, so the real workerd \`D1Database\`/session doesn't throw
         // \`TypeError: Illegal invocation\` the way a detached
         // \`const fn = target.batch; fn(...)\` capture would.
-        batch: batchFn
-            ? async (statements) => {
-                  const results = await batchFn.call(
-                      target,
-                      statements.map(({ params, sql }) => target.prepare(sql).bind(...params)),
-                  );
+        ...(batchFn ? {
+            batch: async (statements) => {
+                const results = await batchFn.call(
+                    target,
+                    statements.map(({ params, sql }) => target.prepare(sql).bind(...params)),
+                );
 
-                  // Meter each leg. D1 returns one result per statement, in
-                  // order, each with its own \`meta\` — and a batch is where the
-                  // expensive writes live (\`@lunora/sql-store\` runs its
-                  // backfills through here), so discarding it left exactly the
-                  // statements worth costing unaccounted. Guarded on the array
-                  // because \`batch\` is optional in the structural type and a
-                  // test double may resolve to anything.
-                  if (Array.isArray(results)) {
-                      for (const [index, statement] of statements.entries()) {
-                          meter(statement.sql, (results[index] as { meta?: Record<string, unknown> } | undefined)?.meta);
-                      }
-                  }
+                // Meter each leg. D1 returns one result per statement, in
+                // order, each with its own \`meta\` — and a batch is where the
+                // expensive writes live (\`@lunora/sql-store\` runs its
+                // backfills through here), so discarding it left exactly the
+                // statements worth costing unaccounted. Guarded on the array
+                // because \`batch\` is optional in the structural type and a
+                // test double may resolve to anything.
+                if (Array.isArray(results)) {
+                    for (const [index, statement] of statements.entries()) {
+                        meter(statement.sql, (results[index] as { meta?: Record<string, unknown> } | undefined)?.meta);
+                    }
+                }
 
-                  onBookmark?.(session?.getBookmark() ?? undefined);
-              }
-            : undefined,
+                onBookmark?.(session?.getBookmark() ?? undefined);
+            },
+        } : {}),
         run: async (sql, parameters) => {
             const result = await target
                 .prepare(sql)
@@ -410,6 +481,56 @@ const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bo
             onBookmark?.(session?.getBookmark() ?? undefined);
         },
     });
+};
+
+const meter = (sql: string, meta: Record<string, unknown> | undefined): void => {
+    try {
+        emitD1QueryCost(sql, meta);
+    } catch {
+        // Best-effort: never let cost accounting fail the query it measures.
+    }
+};
+
+/**
+ * The primary exec, for a read that must see every committed write (a policy check on a write
+ * path). Every statement opens its own \`"first-primary"\` session, and so does every retry:
+ * that constraint covers only a session's first read, so one session shared by two reads, or by
+ * a retry, can serve the later read from a replica that has not caught up. It reports no
+ * bookmark: the sink keeps the last value it is given, and a later replica read reports an older
+ * one, which would move the client's bookmark backwards.
+ */
+const buildPrimaryExec = (database: D1DatabaseLike): D1Exec => {
+    const statement = (sql: string, parameters: ReadonlyArray<unknown>) =>
+        (typeof database.withSession === "function" ? database.withSession("first-primary") : database).prepare(sql).bind(...parameters);
+
+    return retryingExec({
+        all: async (sql, parameters) => {
+            const result = await statement(sql, parameters).all<Record<string, unknown>>();
+
+            meter(sql, result.meta);
+
+            return result.results;
+        },
+        run: async (sql, parameters) => {
+            const result = await statement(sql, parameters).run();
+
+            meter(sql, result.meta);
+        },
+    });
+};
+
+/**
+ * The replica exec reads at the caller's bookmark, or \`"first-unconstrained"\` (lowest latency,
+ * any replica) without one. \`primary\` is the per-statement primary exec (see \`buildPrimaryExec\`).
+ */
+const buildExec = (database: D1DatabaseLike, bookmark?: string, onBookmark?: (bookmark: string | undefined) => void): D1Exec => {
+    const replica = buildSessionExec(database, bookmark ?? "first-unconstrained", onBookmark);
+
+    if (typeof database.withSession !== "function") {
+        return replica;
+    }
+
+    return { ...replica, primary: buildPrimaryExec(database) };
 };
 
 /** Introspect \`.global()\` (D1-backed) tables for the studio's global data browser. */
@@ -436,20 +557,24 @@ const buildGlobalIntrospector = (database: D1DatabaseLike): GlobalIntrospector =
  * shard-local ones it filtered out before calling here — a single
  * \`startLine\` plus positional counting would mis-attribute every row after
  * the first gap. \`importGlobalRows\` prefers \`row.line\` when present and
- * falls back to the position-derived count otherwise.
+ * falls back to the position-derived count otherwise. A dry run is passed through and writes nothing;
+ * \`onConflict: "replace"\` overwrites a row whose \`_id\` already exists instead of reporting a conflict, and a row's
+ * \`op: "delete"\` removes the stored row it names.
  */
 const buildGlobalImporter =
     (database: D1DatabaseLike, cdc: boolean) =>
-    (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => {
+    (request: { dryRun?: boolean; onConflict?: "replace" | "skip"; rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; op?: "delete"; table: string }>; startLine?: number }) => {
         const exec = buildExec(database);
         // Same reason the PITR applier carries it: a bulk import that skips the
         // changelog restores rows no downstream consumer is ever told about.
         const writer = createD1CtxDb({ cdc, exec, schema: schema as unknown as D1CtxDbOptions["schema"] });
 
         return importGlobalRows(writer, schema as unknown as D1CtxDbOptions["schema"], {
+            dryRun: request.dryRun === true,
             exec,
-            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, table: row.table })),
-            startLine: request.startLine,
+            onConflict: request.onConflict ?? "skip",
+            rows: request.rows.map((row) => ({ doc: row.doc, line: row.line, ...(row.op === undefined ? {} : { op: row.op }), table: row.table })),
+            ...(request.startLine === undefined ? {} : { startLine: request.startLine }),
         });
     };
 
@@ -516,7 +641,7 @@ const buildGlobalCdcSync =
             return { changes: [], cursor: request.sinceSeq };
         }
 
-        const page = await readD1CdcChanges(exec, { limit: request.limit, sinceSeq: request.sinceSeq });
+        const page = await readD1CdcChanges(exec, request);
 
         // \`as unknown as\`, because \`CdcChange\` is an interface and interfaces carry
         // no implicit index signature — the shapes are otherwise identical.
@@ -552,5 +677,14 @@ const buildGlobalCdcApplier =
 `
         : "";
 
-export { buildGlobalHelpers, buildSchedulerHelper, buildStorageHelpers, hasEmailAgents, hasShardedTables, hasShardExtras, shardExtrasMethods };
+export {
+    buildGlobalHelpers,
+    buildSchedulerHelper,
+    buildStorageHelpers,
+    hasEmailAgents,
+    hasLiveStreamMounts,
+    hasShardedTables,
+    hasShardExtras,
+    shardExtrasMethods,
+};
 export type { EmitAppOptions, ResolvedAppOptions };

@@ -159,6 +159,18 @@ describe("key derivation", () => {
 
         await expect(limiter.limit("a:b")).resolves.toMatchObject({ ok: true });
     });
+
+    it("gives a key with a lone surrogate its own budget, apart from every look-alike", async () => {
+        expect.assertions(4);
+
+        const limiter = new RateLimiter({ config: { a: { kind: "fixed window", period: 1000, rate: 1 } }, now: () => 0 });
+
+        await expect(limiter.limit("a", { key: "x\uD800" })).resolves.toMatchObject({ ok: true });
+        // U+FFFD is what UTF-8 makes of the lone surrogate; the escape text is what a naive encoding would emit.
+        await expect(limiter.limit("a", { key: "x\uFFFD" })).resolves.toMatchObject({ ok: true });
+        await expect(limiter.limit("a", { key: "x%uD800" })).resolves.toMatchObject({ ok: true });
+        await expect(limiter.limit("a", { key: "x\uD800" })).resolves.toMatchObject({ ok: false });
+    });
 });
 
 describe("reset", () => {

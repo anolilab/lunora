@@ -3,7 +3,7 @@ import { ADMIN_FUNCTIONS, createShardCtxDb as createShardContextDatabase, runSha
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { RunShardWriteArgs, RunShardWriteResult, ShardDOState } from "../src/shard-do";
-import { ShardDO } from "../src/shard-do";
+import { ShardDO, TTL_SWEEP_INTERVAL_MS } from "../src/shard-do";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -51,7 +51,7 @@ class TtlShard extends ShardDO {
             sql: this.sql as never,
         });
 
-        await writer.delete(args.id ?? "", args.table);
+        await writer.delete(args.table, args.id ?? "");
 
         return { id: args.id ?? null, op: args.op };
     }
@@ -122,7 +122,7 @@ describe("ttl sweep", () => {
             await writer.insert("otps", { _id: "o1", code: "a", expiresAt: NOW - 1000 }, { allowExplicitId: true });
             await writer.insert("otps", { _id: "o2", code: "b", expiresAt: NOW - 1000 }, { allowExplicitId: true });
             // Soft-delete o1: it must NOT be re-selected by the sweep.
-            await writer.delete("o1", "otps");
+            await writer.delete("otps", "o1");
 
             const { ids } = selectExpiredIds(harness.sql, { field: "expiresAt", softDeleteField: "deletedAt", table: "otps" }, NOW, 100);
 
@@ -165,10 +165,219 @@ describe("ttl sweep", () => {
             expect(liveOtps.map((row) => row["_id"])).toStrictEqual(["o_future"]);
 
             // …but the expired otp is only soft-deleted — still physically present with its marker set.
-            const softDeleted = await writer.get("o_past");
+            const softDeleted = await writer.get("otps", "o_past");
 
             expect(softDeleted).not.toBeNull();
             expect(softDeleted?.["deletedAt"]).toStrictEqual(expect.any(Number));
+        });
+    });
+
+    describe("alarm target", () => {
+        /** `TtlShard` with its protected TTL tier and write flush reachable from the test. */
+        class ArmingTtlShard extends TtlShard {
+            public runPollTtlSweeps(): Promise<number | undefined> {
+                return this.pollTtlSweeps();
+            }
+
+            /** What a committed write does: the writer reports the table, then the dispatch flushes. */
+            public flushWrite(table: string): Promise<void> {
+                this.recordChangedTable(table);
+
+                return this.flushMigrationProgress();
+            }
+        }
+
+        const makeShard = (armed: number[]): ArmingTtlShard =>
+            new ArmingTtlShard(
+                {
+                    acceptWebSocket() {},
+                    getWebSockets() {
+                        return [];
+                    },
+                    storage: {
+                        setAlarm(at: Date | number) {
+                            armed.push(typeof at === "number" ? at : at.getTime());
+
+                            return Promise.resolve();
+                        },
+                        sql: harness.sql as unknown as ShardDOState["storage"]["sql"],
+                    },
+                },
+                {},
+            );
+
+        it("arms just past the earliest live expiry and goes idle once no row carries a ttl", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+            const soon = Date.now() + HOUR;
+
+            await writer.insert("sessions", { _id: "s1", expiresAt: soon + HOUR, token: "later" }, { allowExplicitId: true });
+            await writer.insert("otps", { _id: "o1", code: "a", expiresAt: soon }, { allowExplicitId: true });
+            // A tombstone's earlier expiry is not live, so it must not pull the alarm in.
+            await writer.insert("otps", { _id: "o2", code: "b", expiresAt: soon - 1000 }, { allowExplicitId: true });
+            await writer.delete("otps", "o2");
+
+            const shard = makeShard([]);
+
+            await expect(shard.runPollTtlSweeps()).resolves.toBe(soon + 1);
+
+            await writer.delete("sessions", "s1");
+            await writer.delete("otps", "o1");
+
+            await expect(shard.runPollTtlSweeps()).resolves.toBeUndefined();
+        });
+
+        it("re-arms from a write only when the new row expires before the pending alarm", async () => {
+            expect.assertions(4);
+
+            const writer = setupWriter();
+            const armed: number[] = [];
+            const shard = makeShard(armed);
+            const later = Date.now() + 2 * HOUR;
+            const sooner = Date.now() + HOUR;
+
+            // Empty tables: the sweep arms nothing.
+            await shard.alarm();
+
+            expect(armed).toStrictEqual([]);
+
+            await writer.insert("sessions", { _id: "s1", expiresAt: later, token: "a" }, { allowExplicitId: true });
+            await shard.flushWrite("sessions");
+            await writer.insert("sessions", { _id: "s2", expiresAt: later + HOUR, token: "b" }, { allowExplicitId: true });
+            await shard.flushWrite("sessions");
+
+            expect(armed).toStrictEqual([later + 1]);
+
+            await writer.insert("otps", { _id: "o1", code: "c", expiresAt: sooner }, { allowExplicitId: true });
+            await shard.flushWrite("otps");
+
+            expect(armed).toStrictEqual([later + 1, sooner + 1]);
+
+            // Already expired: swept on the coarse cadence, not in a due-now loop.
+            const before = Date.now();
+
+            await writer.insert("sessions", { _id: "s3", expiresAt: before - 1000, token: "d" }, { allowExplicitId: true });
+            await shard.flushWrite("sessions");
+
+            expect(armed.at(-1)).toBeGreaterThanOrEqual(before + TTL_SWEEP_INTERVAL_MS);
+        });
+    });
+
+    describe("a row refreshed while the sweep awaits an earlier delete", () => {
+        /**
+         * Two expired rows on a table whose delete trigger awaits a gate the test
+         * holds — the stand-in for a trigger doing real I/O, the one place the
+         * sweep yields to another request between paging the ids and deleting
+         * them. While the first delete is parked, the "other" row's TTL field is
+         * refreshed the way a presence heartbeat would.
+         */
+        const raceSchema = (onDeleteTrigger: (id: string) => Promise<void>): SchemaLike => {
+            const triggerMap = {
+                parkOnDelete: { handler: async (_context: unknown, event: { id: string }) => onDeleteTrigger(event.id), op: "delete", timing: "after" },
+            } as const;
+
+            return {
+                tables: {
+                    beats: { indexes: [], shape: { lastSeen: { kind: "number" } }, triggerMap, ttlPolicy: { after: 30_000, field: "lastSeen" } },
+                    presence: {
+                        indexes: [],
+                        shape: { deletedAt: { kind: "number" }, lastSeen: { kind: "number" } },
+                        softDeleteMode: { field: "deletedAt" },
+                        triggerMap,
+                        ttlPolicy: { after: 30_000, field: "lastSeen" },
+                    },
+                },
+            };
+        };
+
+        class RaceShard extends ShardDO {
+            public readonly broadcastKeys: string[] = [];
+
+            public constructor(
+                state: ShardDOState,
+                private readonly schema: SchemaLike,
+                private readonly spec: TtlSweepSpec,
+            ) {
+                super(state, {});
+            }
+
+            // eslint-disable-next-line class-methods-use-this -- override stub; RPCs never dispatch in this test
+            public override handleRpc(): Promise<unknown> {
+                return Promise.reject(new Error("handleRpc must not run"));
+            }
+
+            protected override async runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
+                const writer = createShardContextDatabase({
+                    broadcast: (delta) => {
+                        this.broadcastKeys.push(delta.key);
+                        this.recordChangedTable(delta.table);
+                    },
+                    schema: this.schema,
+                    sql: this.sql as never,
+                });
+
+                await writer.delete(args.table, args.id ?? "");
+
+                return { id: args.id ?? null, op: args.op };
+            }
+
+            protected override ttlSweeps(): ReadonlyArray<TtlSweepSpec> {
+                return [this.spec];
+            }
+        }
+
+        it.each([
+            { softDeleteField: undefined, table: "beats" },
+            { softDeleteField: "deletedAt", table: "presence" },
+        ])("keeps the refreshed row alive on $table", async ({ softDeleteField, table }) => {
+            expect.assertions(4);
+
+            const entered = Promise.withResolvers<string>();
+            const gate = Promise.withResolvers<undefined>();
+            let parked = false;
+            const schema = raceSchema(async (id) => {
+                // Park only the sweep's first delete; the refresh below is a patch, not a delete.
+                if (!parked) {
+                    parked = true;
+                    entered.resolve(id);
+                    await gate.promise;
+                }
+            });
+
+            runShardMigrations(harness.sql, schema);
+
+            const writer = createShardContextDatabase({ schema, sql: harness.sql });
+            const stale = Date.now() - 60_000;
+
+            await writer.insert(table, { _id: "a", lastSeen: stale }, { allowExplicitId: true });
+            await writer.insert(table, { _id: "b", lastSeen: stale }, { allowExplicitId: true });
+
+            const state: ShardDOState = {
+                acceptWebSocket() {},
+                getWebSockets() {
+                    return [];
+                },
+                storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
+            };
+            const shard = new RaceShard(state, schema, { after: 30_000, field: "lastSeen", softDeleteField, table });
+            const sweep = shard.alarm();
+
+            const swept = await entered.promise;
+            const refreshed = swept === "a" ? "b" : "a";
+
+            await writer.patch(table, refreshed, { lastSeen: Date.now() });
+            gate.resolve(undefined);
+            await sweep;
+
+            const survivor = await writer.get(table, refreshed);
+            const remaining = await writer.query(table).collect();
+
+            expect(survivor).not.toBeNull();
+            expect(survivor?.["deletedAt"] ?? null).toBeNull();
+            // The swept row went through the writer; the skipped one was never touched or announced.
+            expect(shard.broadcastKeys).toStrictEqual([swept]);
+            expect(remaining.map((row) => row["_id"])).toStrictEqual([refreshed]);
         });
     });
 
@@ -217,7 +426,7 @@ describe("ttl sweep", () => {
                     sql: this.sql as never,
                 });
 
-                await writer.delete(args.id ?? "", args.table);
+                await writer.delete(args.table, args.id ?? "");
 
                 return { id: args.id ?? null, op: args.op };
             }
@@ -278,6 +487,36 @@ describe("ttl sweep", () => {
 
             expect(response.status).toBe(200);
             expect(body.result.entries).toContainEqual(expect.objectContaining({ functionPath: "ttl:sweep", level: "warn" }));
+        });
+
+        it("does not tell a sweep that fills its batch that the transaction will fail", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            for (let index = 0; index < 10; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- deterministic seed order
+                await writer.insert("sessions", { _id: `s${String(index)}`, expiresAt: NOW - 1000, token: `t${String(index)}` }, { allowExplicitId: true });
+            }
+
+            const shard = new MeteredTtlShard(
+                {
+                    acceptWebSocket() {},
+                    getWebSockets() {
+                        return [];
+                    },
+                    storage: { sql: harness.sql as unknown as ShardDOState["storage"]["sql"] },
+                },
+                { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN },
+            );
+
+            await shard.runPollTtlSweeps();
+
+            const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}, ADMIN_TOKEN));
+            const body = await response.json<{ result: { entries: { message: string }[] } }>();
+
+            expect(response.status).toBe(200);
+            expect(body.result.entries.filter((entry) => entry.message.startsWith("transaction reached"))).toStrictEqual([]);
         });
     });
 });

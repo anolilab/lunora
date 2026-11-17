@@ -1,0 +1,67 @@
+---
+title: Is Lunora the right backend?
+description: A decision guide for choosing Lunora over Convex, Supabase, Firebase, Appwrite, or raw Cloudflare, including the cases where Lunora is the wrong choice.
+---
+
+Pick Lunora when you want a typed, reactive backend that runs on a Cloudflare
+account you own. Pick something else when you need a mature product today, a
+native mobile SDK, or a managed service you do not want to operate. This page
+gives the test for each case, and the comparison pages go deeper on each rival.
+
+## Choose Lunora when
+
+- **You want to own where the data and the bill live.** Lunora runs as Workers
+  and Durable Objects on your Cloudflare account, and it is open source under
+  Apache-2.0. Self-hosting is the default, not an upgrade path.
+- **Your app is web or TypeScript, and reads should stay live.** Queries are
+  typed end to end, and `useQuery` updates when the rows it read change.
+- **You want low cost while traffic is small.** An app that fits the Cloudflare
+  free plan costs nothing to run. See [what Lunora costs to run](/docs/cost).
+- **You are on Cloudflare already**, or you want the edge to be your default
+  location for compute and state.
+
+## Choose something else when
+
+- **You need production stability today.** Lunora is alpha, and breaking changes
+  are expected before the first stable release. Convex, Supabase, and Firebase
+  are mature. See the [overview](/docs/overview#where-its-rough).
+- **You ship a native mobile app and need native SDKs or push notifications.**
+  Lunora has no native iOS or Android SDK, so mobile apps use the JavaScript
+  client. Firebase has native mobile SDKs and push.
+- **You need built-in breadth without assembling it.** Convex, Supabase, and
+  Firebase ship auth, storage, and scheduling as built-ins. Lunora ships search
+  as a schema index (`.searchIndex`) and has the others as add-ons, some still
+  alpha.
+- **You want a hosted service with no infrastructure to think about.** Convex and
+  Firebase run as managed services. Lunora runs on your Cloudflare account, so
+  you own the Cloudflare side. [Lunora Cloud](/docs/overview#self-host-or-use-lunora-cloud)
+  is planned but not available yet.
+- **You need arbitrary SQL or ad-hoc joins across datasets.** Lunora's data
+  model is typed tables with indexes, not general-purpose SQL. See
+  [non-goals](/docs/non-goals).
+
+## Against each alternative
+
+| If you are weighing                        | Lunora wins on                                          | The other one wins on                       |
+| ------------------------------------------ | ------------------------------------------------------- | ------------------------------------------- |
+| [Convex](/compare)                         | Runs on your Cloudflare account, open source            | Maturity, breadth, a hosted dashboard       |
+| [Supabase](/compare)                       | Typed, reactive functions on Durable Objects            | SQL, Postgres, a broad managed product      |
+| [Firebase](/compare)                       | Typed schema, open source, self-hostable                | Native mobile SDKs, push, maturity          |
+| [Appwrite](/compare)                       | Serverless on Workers, reactive queries by default      | Broad, mature, self-hosted BaaS with Docker |
+| Raw Cloudflare Workers and Durable Objects | Typed functions, live sync, codegen, the sharding model | Full control, no framework to learn         |
+
+The table is a summary. Each comparison page lists the cells in full, and
+states where the rival wins.
+
+## Check these before you commit
+
+1. **Can your app stay within one shard for its first months?** A new app runs
+   on one Durable Object. Splitting tables with `.shardBy()` is available later,
+   and [sharding](/docs/concepts/sharding) explains the cost.
+2. **Does the app need arbitrary SQL?** If yes, a Postgres-backed product fits
+   better.
+3. **Can your team accept alpha?** Pin the version and read the release notes
+   before each upgrade.
+
+If all three answers suit you, start with the [quickstart](/docs/quickstarts)
+or the [tutorial](/docs/tutorial/realtime-chat).

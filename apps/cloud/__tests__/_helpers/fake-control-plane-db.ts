@@ -118,8 +118,7 @@ const fakeControlPlaneDb = (
 
     return {
         delete: () => Promise.resolve(undefined),
-        get: (id, table) =>
-            Promise.resolve(((table === undefined ? Object.values(pages).flat() : (pages[table] ?? [])) as Row[]).find((row) => row["_id"] === id) ?? null),
+        get: (table, id) => Promise.resolve(((pages[table] ?? []) as Row[]).find((row) => row["_id"] === id) ?? null),
         findMany: (table, args) => {
             const all = ordered((pages[table] ?? []) as Row[], args?.orderBy);
             const filtered = args?.where ? all.filter((row) => matches(row, args.where as Row)) : all;
@@ -136,7 +135,7 @@ const fakeControlPlaneDb = (
             return Promise.resolve({ continueCursor: isDone ? null : String(next), isDone, page });
         },
         insert: () => Promise.resolve("row_id"),
-        patch: (_id, patch) => {
+        patch: (_table, _id, patch) => {
             assertNoExplicitUndefined(patch);
 
             return Promise.resolve(undefined);

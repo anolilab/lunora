@@ -231,11 +231,458 @@ private fun emptyShardKeyIsOmitted() {
     val client = Client("https://app.example", null)
 
     for (absent in listOf(null, "")) {
-        check(!client.wsUrl(absent, null).contains("shard="), "shard key $absent must not name a shard on the socket")
+        check(!client.wsUrl(absent).contains("shard="), "shard key $absent must not name a shard on the socket")
     }
 
-    check(client.wsUrl("", null) == client.wsUrl(null, null), "an empty shard key is byte-identical to sending none")
-    check(client.wsUrl("room-1", null).contains("shard="), "a real shard key still rides the socket URL")
+    check(client.wsUrl("") == client.wsUrl(null), "an empty shard key is byte-identical to sending none")
+    check(client.wsUrl("room-1").contains("shard="), "a real shard key still rides the socket URL")
+}
+
+/**
+ * The session credential rides the `connect` frame and never the socket URL, which
+ * carries only the admin ticket. `connect` is what every open sends first, so a
+ * reconnect re-presents the credential resolved at that moment. Each assertion
+ * here fails if the session value is appended to the URL.
+ */
+private fun socketCredentialsStayOutOfTheUrl() {
+    var session = "session-one"
+    val client = Client("https://app.example", null)
+
+    client.wsToken = { session }
+    client.wsTicket = { "ticket-one" }
+
+    val first = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { first.add(it) }
+
+    check(first[0]["type"] == "connect", "connect must be the first frame an open sends")
+    check(first[0]["token"] == "session-one", "connect must carry the session credential as token")
+    check(first[0]["clientId"] == client.clientId, "attachSocket's connect must carry the client id")
+    check(
+        client.wsUrl("room-1") == "wss://app.example/_lunora/ws?shard=room-1&token=ticket-one",
+        "the ticket must be the only thing in the socket URL's token parameter",
+    )
+    check(!client.wsUrl("room-1").contains("session-one"), "the session credential must not appear in the socket URL on the first open")
+
+    session = "session-two"
+
+    val reconnect = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { reconnect.add(it) }
+
+    check(
+        reconnect[0]["type"] == "connect" && reconnect[0]["token"] == "session-two",
+        "a reconnect must send connect first, with the freshly resolved credential",
+    )
+    check(
+        !client.wsUrl("room-1").contains("session-two") && !client.wsUrl("room-1").contains("session-one"),
+        "the session credential must not appear in the socket URL on a reconnect",
+    )
+
+    val withContext = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket(mapOf("tenant" to "acme")) { withContext.add(it) }
+
+    check(withContext[0]["context"] == mapOf("tenant" to "acme"), "attachSocket's connect must carry the connection context")
+
+    // A detach made while a replacement socket's connect frame is going out must stand.
+    val detached = Client("https://app.example", null)
+
+    detached.attachSocket { }
+    detached.attachSocket { frame ->
+        if (frame["type"] == "connect") {
+            detached.detachSocket()
+        }
+    }
+
+    check(!detached.online(), "a detach during the replacement's connect must not be undone by that attach")
+
+    // A write made while a replacement socket's connect frame is going out must not reach the socket it replaces.
+    val replaced = mutableListOf<Map<String, Any?>>()
+    val racing = Client("https://app.example", null)
+
+    racing.attachSocket { replaced.add(it) }
+
+    val beforeReplacement = replaced.size
+
+    racing.attachSocket { frame ->
+        if (frame["type"] == "connect") {
+            racing.subscribe("messages:list", WireValue.Obj(emptyList()), null)
+        }
+    }
+
+    check(
+        replaced.size == beforeReplacement,
+        "a write during the replacement's connect must not reach the replaced socket",
+    )
+
+    val bare = Client("https://app.example", null)
+    val unset = mutableListOf<Map<String, Any?>>()
+
+    bare.attachSocket { unset.add(it) }
+
+    check(
+        unset[0]["type"] == "connect" && !unset[0].containsKey("token"),
+        "connect must omit token when no session credential is held",
+    )
+    check(bare.wsUrl(null) == "wss://app.example/_lunora/ws", "with no ticket the socket URL carries no token parameter")
+}
+
+/** The golden connect frame plus the `caps` this client announces now that it merges row deltas. */
+private fun withPageDeltaCaps(golden: Any?): Map<String, Any?> =
+    LinkedHashMap<String, Any?>((golden as Map<*, *>).entries.associate { it.key.toString() to it.value }).also {
+        it["caps"] = listOf("pageDelta")
+    }
+
+private fun connectFrameFirstAndCarriesSessionToken() {
+    covers("connect_frame_first_and_carries_session_token")
+
+    val golden = fixture("ws-frames.json")["clientFrames"] as Map<*, *>
+    val client = Client("https://app.example", null, authToken = "rpc-bearer")
+
+    client.clientId = "client-test"
+    client.wsToken = { "session-token" }
+    client.subscribe("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))), null)
+    client.whisperSubscribe("room:general") { }
+
+    val sent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { sent.add(it) }
+    client.resendSubscriptions()
+
+    check(sent[0]["type"] == "connect", "frame 0 of an open must be connect, got ${sent[0]["type"]}")
+    check(
+        canonical(sent[0]) == canonical(withPageDeltaCaps(golden["connect-with-token"])),
+        "the connect frame must match connect-with-token, announcing pageDelta",
+    )
+    check(sent[1]["type"] == "whisper_subscribe", "a topic registered before attach must rejoin right after connect")
+    check(sent[2]["type"] == "subscribe" && sent[2]["id"] == "sub_1", "a subscription registered before attach must follow connect")
+    check(
+        canonical(Client.buildConnectFrame("client-test", mapOf("roomId" to "general"), "session-token")) ==
+            canonical(golden["connect-with-token-and-context"]),
+        "connect-with-token-and-context",
+    )
+    check(!client.wsUrl("room-1").contains("session-token"), "the session credential must not appear in the socket URL")
+    check(!client.wsUrl("room-1").contains("rpc-bearer"), "the RPC bearer must not appear in the socket URL")
+
+    // The RPC bearer is a different credential: with no session credential set, connect
+    // omits token rather than falling back to it.
+    val bearerOnly = Client("https://app.example", null, authToken = "rpc-bearer")
+    val bearerFrames = mutableListOf<Map<String, Any?>>()
+
+    bearerOnly.clientId = "client-test"
+    bearerOnly.attachSocket { bearerFrames.add(it) }
+
+    check(
+        canonical(bearerFrames[0]) == canonical(golden["connect-with-page-delta-caps"]),
+        "with no session credential connect must omit token and announce only pageDelta",
+    )
+    check(!bearerFrames[0].containsKey("token"), "the RPC bearer must never travel as connect.token")
+}
+
+private fun wsUrlCarriesOnlyTheAdminTicket() {
+    covers("ws_url_carries_only_the_admin_ticket")
+
+    val client = Client("https://app.example", null, authToken = "rpc-bearer")
+
+    client.wsToken = { "session-token" }
+    client.wsTicket = { "ticket-one" }
+
+    val url = client.wsUrl("room-1")
+
+    check(url == "wss://app.example/_lunora/ws?shard=room-1&token=ticket-one", "the ticket is the only token parameter: $url")
+    check(!url.contains("session-token") && !url.contains("rpc-bearer"), "no other credential may reach the URL: $url")
+
+    client.wsTicket = { null }
+
+    check(client.wsUrl(null) == "wss://app.example/_lunora/ws", "with no ticket the URL carries no token parameter: ${client.wsUrl(null)}")
+}
+
+private fun attachSocketCarriesConnectionContext() {
+    covers("attach_socket_carries_connection_context")
+
+    val golden = fixture("ws-frames.json")["clientFrames"] as Map<*, *>
+    val client = Client("https://app.example")
+
+    client.clientId = "client-test"
+
+    val withContext = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket(mapOf("roomId" to "general")) { withContext.add(it) }
+
+    check(
+        canonical(withContext[0]) == canonical(withPageDeltaCaps(golden["connect-with-context"])),
+        "connect must carry the context in the connect-with-context shape, announcing pageDelta",
+    )
+
+    val without = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { without.add(it) }
+
+    check(
+        canonical(without[0]) == canonical(golden["connect-with-page-delta-caps"]),
+        "connect without a context must match the bare pageDelta connect shape",
+    )
+    check(!without[0].containsKey("context"), "connect must omit context when none is given")
+}
+
+private fun closeCodesDriveTokenExpiry() {
+    covers("close_codes_drive_token_expiry")
+
+    val cases = (fixture("ws-frames.json")["closeSequences"] as Map<*, *>)["cases"] as List<*>
+
+    // The fixture's full set. A shorter list means cases were dropped, not that the run is faster.
+    check(cases.size == 10, "closeSequences must carry its full case set, got ${cases.size}")
+
+    var casesWithErrors = 0
+
+    for (entry in cases) {
+        val testCase = entry as Map<*, *>
+        val name = testCase["name"]
+        val client = Client("https://app.example")
+        val sent = mutableListOf<Map<String, Any?>>()
+        val errors = mutableListOf<SubscriptionError>()
+        var credential = 0
+        var notified = 0
+
+        client.wsToken = { "session-$credential" }
+
+        // Registered first: an observer that throws must neither stop the count nor break detach or frame handling.
+        client.onTokenExpired { throw IllegalStateException("a failing observer") }
+        client.onTokenExpired { notified++ }
+        client.subscribe("messages:list", WireValue.Obj(emptyList()), null, { errors.add(it) })
+
+        for (step in testCase["steps"] as List<*>) {
+            val action = step as Map<*, *>
+
+            when {
+                action.containsKey("attach") -> {
+                    val before = sent.size
+
+                    client.attachSocket { sent.add(it) }
+
+                    check(sent[before]["type"] == "connect", "an open must send connect first ($name)")
+                }
+
+                action.containsKey("close") -> {
+                    val close = action["close"] as Map<*, *>
+
+                    client.detachSocket(count(close["code"]), close["reason"] as String)
+
+                    check(!client.online(), "every close leaves the client offline ($name)")
+                }
+
+                action.containsKey("frame") -> client.handleFrame(Json.write(action["frame"]))
+
+                action.containsKey("credentialChange") -> {
+                    credential++
+                    client.wsToken = { "session-$credential" }
+                }
+
+                else -> throw AssertionError("unknown step in $name: $action")
+            }
+        }
+
+        check(notified == count(testCase["tokenExpiredNotifications"]), "token-expired notifications for $name: $notified")
+
+        if (testCase.containsKey("subscriptionErrors")) {
+            casesWithErrors++
+
+            check(errors.size == count(testCase["subscriptionErrors"]), "subscription errors for $name: ${errors.size}")
+        }
+    }
+
+    // A guard against a renamed key: without it, dropping subscriptionErrors from the fixture would pass.
+    check(casesWithErrors == 2, "closeSequences must carry two cases that assert subscriptionErrors, got $casesWithErrors")
+}
+
+private fun whisperFramesJoinSendAndDeliver() {
+    covers("whisper_frames_join_send_and_deliver")
+
+    val golden = fixture("ws-frames.json")
+    val clientFrames = golden["clientFrames"] as Map<*, *>
+    val whisper = golden["whisperFrames"] as Map<*, *>
+    val payload = WireValue.Obj(listOf("text" to WireValue.Text("hi")))
+
+    check(canonical(Client.buildWhisperSubscribeFrame("room:general")) == canonical(clientFrames["whisper-subscribe"]), "whisper-subscribe")
+    check(canonical(Client.buildWhisperUnsubscribeFrame("room:general")) == canonical(clientFrames["whisper-unsubscribe"]), "whisper-unsubscribe")
+    check(canonical(Client.buildWhisperFrame("room:general", payload)) == canonical(clientFrames["whisper-send"]), "whisper-send")
+
+    // No socket attached: a send is refused, not queued.
+    check(!Client("https://app.example").whisper("room:general", payload), "whisper must report false without a socket")
+
+    val client = Client("https://app.example")
+    val sent = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { sent.add(it) }
+
+    val leave = client.whisperSubscribe("room:general") { }
+
+    check(canonical(sent.last()) == canonical(clientFrames["whisper-subscribe"]), "joining an attached topic sends whisper_subscribe")
+
+    val room = client.connectRoom("general") { }
+
+    check(sent.count { it["type"] == "whisper_subscribe" } == 1, "a second listener on a topic must not join it again")
+    check(room.send(payload), "a room send over an attached socket must succeed")
+    check(canonical(sent.last()) == canonical(clientFrames["whisper-send"]), "a room send must match whisper-send")
+
+    room.close()
+
+    check(sent.none { it["type"] == "whisper_unsubscribe" }, "leaving while another listener remains must not unsubscribe")
+
+    leave()
+
+    check(canonical(sent.last()) == canonical(clientFrames["whisper-unsubscribe"]), "the last listener leaving sends whisper_unsubscribe")
+
+    val frameCount = sent.size
+
+    leave()
+
+    check(sent.size == frameCount, "a second leave is a no-op")
+
+    for (entry in whisper["serverFrames"] as List<*>) {
+        val testCase = entry as Map<*, *>
+        val receiver = Client("https://app.example")
+        val delivered = mutableListOf<Pair<String, WireValue>>()
+
+        receiver.attachSocket { }
+        receiver.whisperSubscribe("room:general") { delivered.add("room:general" to it) }
+        receiver.handleFrame(Json.write(testCase["frame"]))
+
+        val expected = testCase["delivered"] as List<*>
+
+        check(delivered.size == expected.size, "delivered count for ${testCase["name"]}: ${delivered.size}")
+
+        for ((index, want) in expected.withIndex()) {
+            val wanted = want as Map<*, *>
+
+            check(delivered[index].first == wanted["topic"], "delivered topic for ${testCase["name"]}")
+            check(canonical(Wire.encode(delivered[index].second)) == canonical(wanted["value"]), "delivered value for ${testCase["name"]}")
+        }
+    }
+
+    // A topic's frames reach its own listeners only.
+    val routed = Client("https://app.example")
+    val general = mutableListOf<WireValue>()
+    val other = mutableListOf<WireValue>()
+    val otherFrame = (whisper["serverFrames"] as List<*>).first { (it as Map<*, *>)["name"] == "other_topic_not_delivered" } as Map<*, *>
+
+    routed.attachSocket { }
+    routed.whisperSubscribe("room:general") { general.add(it) }
+    routed.whisperSubscribe("room:other") { other.add(it) }
+    routed.handleFrame(Json.write(otherFrame["frame"]))
+
+    check(general.isEmpty() && other.size == 1, "room:other frames must reach only room:other's listeners: ${general.size}/${other.size}")
+}
+
+private fun supersededAttachStopsWritingJoins() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    val client = Client("https://app.example")
+
+    client.clientId = "client-test"
+    client.whisperSubscribe("room:a") { }
+    client.whisperSubscribe("room:b") { }
+    client.attachSocket { frame ->
+        sent.add(frame)
+
+        if (frame["type"] == "whisper_subscribe") client.detachSocket()
+    }
+
+    check(sent.count { it["type"] == "whisper_subscribe" } == 1, "a detach during the joins must stop the remaining joins")
+}
+
+private fun failedWhisperUnsubscribeCanBeRetried() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    var refuse = true
+    val client = Client("https://app.example")
+
+    client.attachSocket { frame ->
+        if (frame["type"] == "whisper_unsubscribe" && refuse) {
+            refuse = false
+            throw IllegalStateException("write refused")
+        }
+
+        sent.add(frame)
+    }
+
+    val leave = client.whisperSubscribe("room:general") { }
+    val refused = runCatching { leave() }.isFailure
+
+    check(refused, "the refused unsubscribe must surface to the caller")
+
+    leave()
+
+    check(sent.any { it["type"] == "whisper_unsubscribe" }, "the retried leave must write whisper_unsubscribe")
+}
+
+private fun duplicateTokenExpiryRegistrationsUnregisterSeparately() {
+    var notified = 0
+    val listener: () -> Unit = { notified++ }
+    val client = Client("https://app.example")
+
+    val first = client.onTokenExpired(listener)
+
+    client.onTokenExpired(listener)
+    first()
+    first()
+    client.attachSocket { }
+    client.detachSocket(4001, null)
+
+    check(notified == 1, "a second registration of the same function must survive the first handle being called twice")
+}
+
+private fun closedRoomRefusesSends() {
+    val sent = mutableListOf<Map<String, Any?>>()
+    val client = Client("https://app.example")
+
+    client.clientId = "client-test"
+    client.attachSocket { sent.add(it) }
+
+    val room = client.connectRoom("general") { }
+
+    client.whisperSubscribe("room:general") { }
+    room.close()
+
+    check(!room.send(WireValue.Text("after close")), "a closed room must report its send as not sent")
+    check(sent.none { it["type"] == "whisper" }, "and must write no whisper frame after close")
+}
+
+private fun whisperTopicsRejoinAfterReconnect() {
+    covers("whisper_topics_rejoin_after_reconnect")
+
+    val rejoin = (fixture("ws-frames.json")["whisperFrames"] as Map<*, *>)["rejoinOnReconnect"] as List<*>
+    val client = Client("https://app.example")
+
+    client.whisperSubscribe("room:general") { }
+
+    val opens = mutableListOf<List<Map<String, Any?>>>()
+
+    repeat(2) {
+        val sent = mutableListOf<Map<String, Any?>>()
+
+        client.attachSocket { sent.add(it) }
+        client.detachSocket()
+        opens.add(sent)
+    }
+
+    for (sent in opens) {
+        check(sent[0]["type"] == "connect", "connect opens every socket")
+        check(
+            sent.drop(1).map { canonical(it) } == rejoin.map { canonical(Client.buildWhisperSubscribeFrame(it as String)) },
+            "every open joins each registered topic right after connect",
+        )
+    }
+
+    // A topic whose last listener left is forgotten, so the next open does not rejoin it.
+    val leave = client.whisperSubscribe("room:quiet") { }
+
+    leave()
+
+    val afterLeave = mutableListOf<Map<String, Any?>>()
+
+    client.attachSocket { afterLeave.add(it) }
+
+    check(afterLeave.none { it["topic"] == "room:quiet" }, "a topic left by its last listener must not rejoin")
 }
 
 private fun depthCapEnforced() {
@@ -446,6 +893,214 @@ private fun clientFrameBuilders() {
     check(canonical(Client.buildUnsubscribeFrame("sub_1")) == canonical(frames["unsubscribe"]), "unsubscribe")
 }
 
+/**
+ * A row-change `delta` merges into the subscription's server base instead of reaching the
+ * caller as the value; the golden cases seed a base with a `data` frame first.
+ */
+private fun rowDeltaFramesMergeIntoTheBase() {
+    covers("row_delta_frames_merge_into_the_base")
+
+    val cases = fixture("ws-frames.json")["pageDeltaFrames"] as List<*>
+
+    check(cases.size == 9, "pageDeltaFrames must carry 9 cases, got ${cases.size}")
+
+    for (entry in cases) {
+        val testCase = entry as Map<*, *>
+        val name = testCase["name"]
+        val frame = testCase["frame"] as Map<*, *>
+        val client = Client("https://app.example")
+        val seen = mutableListOf<WireValue>()
+
+        client.attachSocket { }
+        client.subscribe("messages:list", null, { seen.add(it) })
+        client.handleFrame(Json.write(mapOf("id" to frame["id"], "type" to "data", "data" to testCase["baseWire"])))
+        seen.clear()
+
+        val kind = client.handleFrame(Json.write(frame))
+        val expect = testCase["expect"] as Map<*, *>
+
+        check(kind == expect["kind"], "kind for $name")
+        check(seen.size == 1, "onData should fire once for $name")
+        check(canonical(Wire.encode(seen[0])) == canonical(expect["valueWire"]), "value for $name")
+    }
+
+    // A delta that cannot merge (a row without _id) keeps the previous value; with no base
+    // the row change cannot merge into nothing, so it is held too.
+    val client = Client("https://app.example")
+    val seen = mutableListOf<WireValue>()
+    val change = mapOf("key" to "m1", "op" to "update", "row" to mapOf("text" to "x"), "table" to "messages")
+
+    client.attachSocket { }
+    client.subscribe("messages:list", null, { seen.add(it) })
+    client.handleFrame(Json.write(mapOf("id" to "sub_1", "type" to "delta", "delta" to change)))
+    check(seen.isEmpty(), "a delta with no base is held, not published")
+
+    seen.clear()
+    client.handleFrame(Json.write(mapOf("id" to "sub_1", "type" to "data", "data" to listOf(mapOf("text" to "no id")))))
+    seen.clear()
+    client.handleFrame(Json.write(mapOf("id" to "sub_1", "type" to "delta", "delta" to change)))
+    check(seen.none { canonical(Wire.encode(it)) == canonical(change) }, "an unmergeable row change must not reach the caller")
+}
+
+/**
+ * Drives one fixture case's `steps` against a subscribed client. A step is a frame with the number
+ * of values it publishes, a `resume` checked against the resend query, or both kinds mixed.
+ *
+ * A step's `errors` is the exact list of subscription error codes that frame raises; a step without
+ * it asserts nothing about errors, because the fixture only states the notice where it matters.
+ */
+private fun runDeltaSteps(name: Any?, client: Client, steps: List<*>, seen: MutableList<WireValue>, errors: MutableList<String?>) {
+    for ((index, stepEntry) in steps.withIndex()) {
+        val step = stepEntry as Map<*, *>
+        val label = "$name step ${index + 1}"
+        val resume = step["resume"] as? Map<*, *>
+
+        if (resume != null) {
+            val resent = mutableListOf<Map<String, Any?>>()
+
+            client.attachSocket { resent.add(it) }
+            client.resendSubscriptions()
+
+            val query = resent.first { it["type"] == "subscribe" }["query"] as Map<*, *>
+
+            check(number(query["sinceSeq"]) == number(resume["sinceSeq"]), "$label: sinceSeq ${query["sinceSeq"]}")
+            check(query["sinceEpoch"] == resume["sinceEpoch"], "$label: sinceEpoch ${query["sinceEpoch"]}")
+
+            continue
+        }
+
+        seen.clear()
+        errors.clear()
+        client.handleFrame(Json.write(step["frame"]))
+        check(seen.size == number(step["publishes"])?.toInt(), "$label: publishes ${seen.size}")
+
+        if (step.containsKey("errors")) {
+            check(errors == step["errors"], "$label: error codes $errors")
+        }
+
+        if (step.containsKey("valueWire")) {
+            check(canonical(Wire.encode(seen[0])) == canonical(step["valueWire"]), "$label: valueWire")
+        }
+    }
+}
+
+/** Subscribes `messages:list` on a fresh client and delivers the case's snapshot. */
+private fun seededClient(seedFrame: Any?, identity: String? = null): Triple<Client, MutableList<WireValue>, MutableList<String?>> {
+    val client = Client("https://app.example", identity = identity)
+    val seen = mutableListOf<WireValue>()
+    val errors = mutableListOf<String?>()
+
+    client.attachSocket { }
+    client.subscribe("messages:list", null, { seen.add(it) }, { errors.add(it.code) })
+    client.handleFrame(Json.write(seedFrame))
+    seen.clear()
+
+    return Triple(client, seen, errors)
+}
+
+/** Runs every case under `ws-frames.json`'s [key]: a seed snapshot, then [runDeltaSteps]. */
+private fun runDeltaCases(key: String, expected: Int) {
+    val cases = fixture("ws-frames.json")[key] as List<*>
+
+    check(cases.size == expected, "$key must carry $expected cases, got ${cases.size}")
+
+    for (entry in cases) {
+        val testCase = entry as Map<*, *>
+        val (client, seen, errors) = seededClient(testCase["seedFrame"])
+
+        runDeltaSteps(testCase["name"], client, testCase["steps"] as List<*>, seen, errors)
+    }
+}
+
+/**
+ * An unmergeable row change poisons the subscription: later deltas neither publish nor move the
+ * resume cursor, and only a `data` frame or a resubscribe clears it.
+ */
+private fun unmergeableRowChangeFreezesTheCursor() {
+    covers("unmergeable_row_change_freezes_the_cursor")
+    runDeltaCases("pageDeltaPoisonCases", 3)
+}
+
+/**
+ * A resend that fails to send leaves the subscription frozen: nothing replayed the dropped change,
+ * so a later delta must not publish or move the resume cursor past it.
+ */
+private fun failedResendKeepsTheSubscriptionFrozen() {
+    val poison = (fixture("ws-frames.json")["pageDeltaPoisonCases"] as List<*>)[0] as Map<*, *>
+    val steps = poison["steps"] as List<*>
+    val (client, seen, errors) = seededClient(poison["seedFrame"])
+
+    client.handleFrame(Json.write((steps[0] as Map<*, *>)["frame"]))
+    check(errors == listOf<String?>("delta_unmergeable"), "the unmergeable change must freeze, got $errors")
+
+    var closed = false
+
+    client.attachSocket { if (closed) throw IllegalStateException("socket closed") }
+    closed = true
+
+    var failed = false
+
+    try {
+        client.resendSubscriptions()
+    } catch (expected: IllegalStateException) {
+        failed = true
+    }
+
+    check(failed, "the failed send must surface")
+
+    client.handleFrame(Json.write((steps[1] as Map<*, *>)["frame"]))
+    check(seen.isEmpty(), "a delta after a failed resend must not publish, got ${seen.size}")
+
+    val query = resent(client).first { it["type"] == "subscribe" }["query"] as Map<*, *>
+
+    check(number(query["sinceSeq"]) == 5.0, "the cursor must stay at 5, sent ${query["sinceSeq"]}")
+}
+
+/** A run of `more: true` deltas is held and publishes once, on its last frame. */
+private fun deltaRunsCommitOnTheirLastFrame() {
+    runDeltaCases("pageDeltaRunCases", 5)
+    runDeltaCases("undecodableDeltaRunCases", 2)
+}
+
+/** Attaching a socket over a live one voids every held run: the old socket's rest of it is not coming. */
+private fun attachingASocketDiscardsHeldRuns() {
+    val run = ((fixture("ws-frames.json")["pageDeltaRunCases"] as List<*>)[0] as Map<*, *>)
+    val steps = run["steps"] as List<*>
+    val (client, seen, _) = seededClient(run["seedFrame"])
+
+    client.handleFrame(Json.write((steps[0] as Map<*, *>)["frame"]))
+    client.handleFrame(Json.write((steps[1] as Map<*, *>)["frame"]))
+    client.attachSocket { }
+    client.handleFrame(Json.write((steps[2] as Map<*, *>)["frame"]))
+    check(seen.size == 1, "the final frame publishes once, published ${seen.size}")
+    check(canonical(Wire.encode(seen[0])) != canonical((steps[2] as Map<*, *>)["valueWire"]), "rows held before the attach must not be committed")
+}
+
+/**
+ * A change of identity drops the previous session's cached base and its freeze with it: the
+ * base was what that identity was shown, and a freeze guards a resume cursor that is gone.
+ */
+private fun identityChangeEvictsTheDeltaState() {
+    val cases = fixture("ws-frames.json")["identityChangeEvictionCases"] as List<*>
+
+    check(cases.size == 2, "identityChangeEvictionCases must carry 2 cases, got ${cases.size}")
+
+    for (entry in cases) {
+        val testCase = entry as Map<*, *>
+        val name = testCase["name"]
+        val change = testCase["identityChange"] as Map<*, *>
+        val (client, seen, errors) = seededClient(testCase["seedFrame"], change["from"] as String?)
+
+        testCase["freezeFrame"]?.let { freeze ->
+            client.handleFrame(Json.write(freeze))
+            check(errors == testCase["freezeErrors"], "$name: the freeze raises ${testCase["freezeErrors"]}, got $errors")
+        }
+
+        client.identity = change["to"] as String?
+        runDeltaSteps(name, client, testCase["steps"] as List<*>, seen, errors)
+    }
+}
+
 private fun serverFrameConsumer() {
     covers("server_frame_consumer")
     covers("complete_frame_cancels_without_dropping_the_subscription")
@@ -513,14 +1168,14 @@ private fun serverFrameConsumer() {
 private fun subscriptionStreamYieldsFrameValuesInOrder() {
     covers("subscription_stream_yields_frame_values_in_order")
 
-    val case = fixture("ws-frames.json")["stream"] as Map<*, *>
+    val case = fixture("ws-frames.json")["watch"] as Map<*, *>
     val client = Client("https://app.example")
 
     client.attachSocket { }
 
     // Closed at the end rather than in a `use { }`: the frames are fed from this
     // same thread, so the loop has to be driven one `next()` at a time.
-    val stream = client.stream("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))))
+    val stream = client.watch("messages:list", WireValue.Obj(listOf("channel" to WireValue.Text("general"))))
     val events = stream.iterator()
     val seen = mutableListOf<WireValue>()
 
@@ -580,6 +1235,7 @@ private fun shapeSubscriptionsResendAfterReconnect() {
 
     client.attachSocket { resent.add(it) }
     client.resendSubscriptions()
+    check(resent.removeAt(0)["type"] == "connect", "connect opens the socket")
 
     check(resent.map { it["type"] } == listOf("subscribe", "shape_subscribe"), "both registries resend, queries first")
     check(((resent[0]["query"] as Map<*, *>)["sinceSeq"] as Number).toInt() == 9, "the query resumes from its tracked cursor")
@@ -787,13 +1443,13 @@ private fun concurrentSubscribeAndHandleFrame() {
     workers.forEach { it.join() }
     reader.join()
 
-    // Attached only now, so the count below sees resend frames alone.
+    // Attached only now; the count is the attach's connect frame plus one subscribe per call.
     val resent = java.util.concurrent.atomic.AtomicInteger()
 
     client.attachSocket { resent.incrementAndGet() }
     client.resendSubscriptions()
 
-    check(resent.get() == threads * perThread, "every concurrent subscribe survived with a distinct id")
+    check(resent.get() == threads * perThread + 1, "every concurrent subscribe survived with a distinct id")
 }
 
 /** A frame fixture delivered as the raw text a socket read loop hands [Client.handleFrame]. */
@@ -807,6 +1463,7 @@ private fun resent(client: Client): List<Map<String, Any?>> {
 
     client.attachSocket { frames.add(it) }
     client.resendSubscriptions()
+    check(frames.removeAt(0)["type"] == "connect", "connect opens the socket")
 
     return frames
 }
@@ -1047,7 +1704,7 @@ private fun subscriptionStreamEndsOnClose() {
 
     client.attachSocket { }
 
-    val stream = client.stream("messages:list")
+    val stream = client.watch("messages:list")
     val yielded = java.util.Collections.synchronizedList(mutableListOf<WireValue?>())
     val consumer = Thread { for (event in stream) yielded.add(event.value) }
 
@@ -1113,7 +1770,7 @@ private fun identityChangeEvictsPreviousSession() {
 private fun authTokenRedactedWhenPrinted() {
     covers("auth_token_redacted_when_printed")
 
-    val token = "lunora-secret-7f3a9c"
+    val token = "lunora-secret-7f3a9c" // secret-scanner:allow -- test fixture
     val client = Client("https://app.example", authToken = token)
     val options = SubmitOptions("messages:send")
 
@@ -1134,11 +1791,28 @@ fun main() {
     keyOrderMatchesUtf16()
     stringEscapingMatchesJsonStringify()
     emptyShardKeyIsOmitted()
+    socketCredentialsStayOutOfTheUrl()
+    connectFrameFirstAndCarriesSessionToken()
+    wsUrlCarriesOnlyTheAdminTicket()
+    attachSocketCarriesConnectionContext()
+    closeCodesDriveTokenExpiry()
+    whisperFramesJoinSendAndDeliver()
+    whisperTopicsRejoinAfterReconnect()
+    closedRoomRefusesSends()
+    duplicateTokenExpiryRegistrationsUnregisterSeparately()
+    failedWhisperUnsubscribeCanBeRetried()
+    supersededAttachStopsWritingJoins()
     rpcRequestBodies()
     rpcResponses()
     non2xxWithoutEnvelopeThrows()
     clientFrameBuilders()
     serverFrameConsumer()
+    rowDeltaFramesMergeIntoTheBase()
+    unmergeableRowChangeFreezesTheCursor()
+    failedResendKeepsTheSubscriptionFrozen()
+    identityChangeEvictsTheDeltaState()
+    deltaRunsCommitOnTheirLastFrame()
+    attachingASocketDiscardsHeldRuns()
     subscriptionStreamYieldsFrameValuesInOrder()
     shapeSubscribeFrame()
     shapeSubscriptionsResendAfterReconnect()
@@ -1159,6 +1833,10 @@ fun main() {
     // The optimistic-layer and offline-queue cases, in their own file so this one
     // stays the wire-protocol suite it has always been.
     runOptimisticOfflineCases()
+
+    // The subscription-retry cases (the live-query retry hint), in their own file for the same
+    // reason.
+    runSubscriptionRetryCases()
 
     assertManifestCovered()
 

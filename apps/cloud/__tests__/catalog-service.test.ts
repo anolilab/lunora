@@ -167,7 +167,7 @@ const indexStateDb = (): { rows: IndexStateRow[]; store: IndexStateStore } => {
 
                 return Promise.resolve(id);
             },
-            patch: (id: string, patch: Partial<IndexStateRow>) => {
+            patch: (_table: string, id: string, patch: Partial<IndexStateRow>) => {
                 Object.assign(rows.find((row) => row._id === id) ?? {}, patch);
 
                 return Promise.resolve();

@@ -28,15 +28,24 @@ import preparedStatement from "./prepared-statement";
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
- * How many times a throwing alarm handler is re-delivered before the wakeup is
- * abandoned, and the first backoff step. workerd retries a Durable Object's
- * `alarm()` with exponential backoff and gives up after a bounded number of
- * attempts; this host mirrors the shape, not the constants — its backoff starts
- * an order of magnitude shorter because a redelivery here is a `setTimeout` in
- * a process that is already warm, not a cold object wake.
+ * How many times a throwing alarm handler is re-delivered, and how many times an
+ * alarm claim that hits a locked database is retried, before the wakeup is
+ * abandoned. workerd retries a Durable Object's `alarm()` with exponential
+ * backoff and gives up after a bounded number of attempts; this host mirrors the
+ * shape, not the constants — its backoff starts an order of magnitude shorter
+ * because a redelivery here is a `setTimeout` in a process that is already warm,
+ * not a cold object wake.
  */
 const ALARM_RETRY_LIMIT = 6;
 const ALARM_RETRY_BASE_MS = 100;
+
+/**
+ * How long an alarm timer waits before looking again when a transaction is open
+ * on the connection. The timer is not a boundary, so its statements would join
+ * that `BEGIN`, and a rollback would restore a row the alarm had already
+ * consumed and delivered.
+ */
+const FOREIGN_TRANSACTION_RETRY_MS = 10;
 
 /**
  * A `better-sqlite3` binding value. `null` (not `undefined`) is the native
@@ -83,57 +92,65 @@ const createSql = (database: Database.Database, assertOwnTurn: (action: string) 
             const statement = preparedStatement(database, query);
             const normalized = bindings.map((value) => normalizeBinding(value));
 
-            const rows = (
-                statement.reader
-                    ? statement.all(...normalized)
-                    : ((): unknown[] => {
-                          statement.run(...normalized);
+            // A read-only statement is left unrun until `raw()` streams it, which the SQL console does so its row cap can stop a
+            // large result early. Every other access buffers on first use: an iterator over a live better-sqlite3 statement would
+            // keep the connection busy, so engine code that writes inside a loop over a read would fail. Writers (and `RETURNING`,
+            // which must not be re-run) still execute now.
+            const lazy = statement.reader && statement.readonly;
+            let rows: Row[] | undefined;
 
-                          return [];
-                      })()
-            ) as Row[];
+            const materialize = (): Row[] => {
+                if (rows === undefined) {
+                    // A deferred read runs when the caller consumes it, which can be after another task opened a transaction.
+                    assertOwnTurn("run SQL");
+
+                    if (statement.reader) {
+                        rows = statement.all(...normalized) as Row[];
+                    } else {
+                        statement.run(...normalized);
+                        rows = [];
+                    }
+                }
+
+                return rows;
+            };
+
+            if (!lazy) {
+                materialize();
+            }
+
+            // The statement is shared through the cache, so positional mode lasts only as long as this read, and ends even when the caller
+            // stops early.
+            const positionalRows = function* (): Generator<unknown[]> {
+                // Runs on the first `next()`, so the check applies to the consumer's turn, not the `exec` call.
+                assertOwnTurn("run SQL");
+                statement.raw(true);
+
+                try {
+                    yield* statement.iterate(...normalized) as Iterable<unknown[]>;
+                } finally {
+                    statement.raw(false);
+                }
+            };
 
             return {
-                // Both optional cursor capabilities are LAZY, and both are
-                // answered only for a reader: `columns()` throws outright on a
-                // statement that returns no data, and positional rows are
-                // meaningless for one. A caller that never asks pays nothing —
-                // this is the engine's hot path, and the buffered object rows
-                // above stay exactly as they were.
-                //
-                // `raw()` re-runs the statement in better-sqlite3's positional
-                // mode rather than re-deriving arrays from the objects it
-                // already has, because the objects are precisely what loses the
-                // information (two result columns named `id` collapse to one
-                // key). The contract says a caller consumes `raw` OR `toArray`,
-                // so in practice this is still one execution; it is safe to
-                // repeat because only a reader reaches it and the whole
-                // `exec` runs inside the host's own serialized turn.
+                // Both optional cursor capabilities are answered only for a reader, since `columns()` throws on a statement that returns
+                // no data. `columnNames` runs nothing; `raw` streams, and is offered only where it can run the statement once.
                 get columnNames(): string[] | undefined {
                     return statement.reader ? statement.columns().map((column) => column.name) : undefined;
                 },
-                [Symbol.iterator]: () => rows[Symbol.iterator](),
+                [Symbol.iterator]: () => materialize()[Symbol.iterator](),
                 one: () => {
-                    if (rows.length !== 1) {
-                        throw new Error(`expected exactly one row, got ${String(rows.length)}`);
+                    const all = materialize();
+
+                    if (all.length !== 1) {
+                        throw new Error(`expected exactly one row, got ${String(all.length)}`);
                     }
 
-                    return rows[0] as Row;
+                    return all[0] as Row;
                 },
-                ...(statement.reader
-                    ? {
-                          // The statement is shared through the cache, so positional
-                          // mode must not outlive this call.
-                          raw: (): IterableIterator<unknown[]> => {
-                              try {
-                                  return (statement.raw(true).all(...normalized) as unknown[][])[Symbol.iterator]();
-                              } finally {
-                                  statement.raw(false);
-                              }
-                          },
-                      }
-                    : {}),
-                toArray: () => [...rows],
+                ...(lazy ? { raw: positionalRows } : {}),
+                toArray: () => [...materialize()],
             };
         },
     };
@@ -190,21 +207,200 @@ const createAlarms = (
 
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_alarm (id INTEGER PRIMARY KEY CHECK (id = 0), scheduled_for INTEGER NOT NULL)");
 
+    // Prepared after the `CREATE TABLE` above, which they need to compile against.
+    const deleteAlarm = database.prepare("DELETE FROM _lunora_alarm WHERE id = 0");
+    const upsertAlarm = database.prepare<[number]>(
+        "INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO UPDATE SET scheduled_for = excluded.scheduled_for",
+    );
+    const insertAlarmIfEmpty = database.prepare<[number]>("INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO NOTHING");
+    const selectAlarm = database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm WHERE id = 0");
+    const deleteFiredAlarm = database.prepare<[number]>("DELETE FROM _lunora_alarm WHERE id = 0 AND scheduled_for = ?");
+
     const persist = (timestamp: number | undefined): void => {
         if (timestamp === undefined) {
-            database.prepare("DELETE FROM _lunora_alarm WHERE id = 0").run();
+            deleteAlarm.run();
         } else {
-            database
-                .prepare("INSERT INTO _lunora_alarm (id, scheduled_for) VALUES (0, ?) ON CONFLICT (id) DO UPDATE SET scheduled_for = excluded.scheduled_for")
-                .run(timestamp);
+            upsertAlarm.run(timestamp);
         }
     };
+
+    const persistIfEmpty = (timestamp: number): boolean => insertAlarmIfEmpty.run(timestamp).changes > 0;
+
+    /**
+     * Claim the alarm that just fired by deleting its row, and report whether
+     * this call is the one that did. The delete is conditional on the timestamp
+     * and atomic in SQLite, so when two processes share one database file and
+     * both re-armed the same row, exactly one sees `changes === 1` and delivers.
+     */
+    const consume = (firedAt: number): boolean => deleteFiredAlarm.run(firedAt).changes > 0;
+
+    /**
+     * Set while the armed timer is only waiting for another task's transaction to
+     * end, so a rollback can deliver straight away instead of waiting it out.
+     */
+    let waitingOnTransaction = false;
+    let resyncTimeout: ReturnType<typeof setTimeout> | undefined;
 
     const clearAlarmTimeout = (): void => {
         if (alarmTimeout !== undefined) {
             clearTimeout(alarmTimeout);
             alarmTimeout = undefined;
         }
+
+        waitingOnTransaction = false;
+    };
+
+    /**
+     * Hold `step` in the alarm timer slot until the open transaction ends. A
+     * fresh `set` or `delete` replaces the wait, and either one owns the next
+     * wakeup instead.
+     */
+    const afterTransaction = (step: () => void): void => {
+        alarmTimeout = setTimeout(() => {
+            alarmTimeout = undefined;
+            waitingOnTransaction = false;
+            step();
+        }, FOREIGN_TRANSACTION_RETRY_MS);
+        waitingOnTransaction = true;
+    };
+
+    /** Arm the timer for whatever alarm the durable row holds, if it holds one. */
+    const armFromRow = (): void => {
+        const durable = selectAlarm.get();
+
+        if (durable !== undefined) {
+            alarmAt = durable.scheduled_for;
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `arm` and the delivery steps are mutually recursive (a delivery re-arms, an arm delivers)
+            arm(durable.scheduled_for);
+        }
+    };
+
+    /**
+     * Re-arm a consumed alarm whose handler threw, with backoff. A throwing
+     * handler must not become an unhandled rejection that takes the process
+     * down, but it must not lose the wakeup either. workerd isolates a throwing
+     * `alarm()` AND re-delivers it with backoff; a host that only isolated it
+     * deleted the row before delivery and then swallowed the rejection, so
+     * nothing re-armed and the loop that alarm drives (a TTL sweep, a
+     * global-shape poll, a scheduler GC) stopped for good.
+     */
+    const retryFailedDelivery = (): void => {
+        if (!database.open || alarmAt !== undefined) {
+            // Nothing to retry against, or the handler rescheduled
+            // before it failed — that alarm owns the next wakeup.
+            return;
+        }
+
+        // A retry row written inside another task's transaction would vanish
+        // with its rollback, and the wakeup with it.
+        if (database.inTransaction) {
+            afterTransaction(retryFailedDelivery);
+
+            return;
+        }
+
+        attempts += 1;
+
+        if (attempts > ALARM_RETRY_LIMIT) {
+            attempts = 0;
+
+            return;
+        }
+
+        const retryAt = Date.now() + ALARM_RETRY_BASE_MS * 2 ** (attempts - 1);
+
+        // Only into an empty slot: another process over this file may have
+        // scheduled a newer alarm since this one was consumed, and its timer
+        // delivers only while the row still holds its timestamp. That alarm
+        // owns the next wakeup, so follow it instead of overwriting it.
+        if (persistIfEmpty(retryAt)) {
+            alarmAt = retryAt;
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `arm` and the delivery steps are mutually recursive (a delivery re-arms, an arm delivers)
+            arm(retryAt);
+
+            return;
+        }
+
+        attempts = 0;
+        armFromRow();
+    };
+
+    /**
+     * Deliver the alarm armed for `ms`, once no other task holds a transaction
+     * open. `claimFailures` counts claims of this same timestamp that threw.
+     */
+    const fire = (ms: number, claimFailures = 0): void => {
+        // The timer is not a boundary, so the consume below would join an open
+        // `BEGIN`: delivered now, then restored by that transaction's rollback
+        // and delivered again.
+        if (database.open && database.inTransaction) {
+            afterTransaction(() => {
+                fire(ms, claimFailures);
+            });
+
+            return;
+        }
+
+        alarmAt = undefined;
+
+        // A caller may close the database before this timer fires — e.g.
+        // it set a future alarm, then tore the platform down (process
+        // shutdown, test cleanup). `persist` runs a prepared statement
+        // against `database`; on a closed better-sqlite3 connection that
+        // throws synchronously *inside* the `setTimeout` callback, which
+        // is an uncaught exception Node has no way to route back to a
+        // caller's try/catch — it crashes the process. Guard on the
+        // connection's own open/closed state rather than trying to track
+        // "did dispose() already run" separately, since `close()` is the
+        // one fact that actually determines whether `.run()` is safe.
+        if (!database.open) {
+            return;
+        }
+
+        // Clear the durable row BEFORE delivering. An `onAlarm` that throws
+        // (or that itself schedules the next alarm, which is the normal
+        // pattern) must not race a stale row: the timestamp this timer just
+        // consumed is spent either way, and leaving it behind would re-fire
+        // it on the next construction over this database. Conditional on
+        // the timestamp: a transaction may have persisted a newer alarm
+        // while this timer was still armed, and that row is not ours.
+        try {
+            if (!consume(ms)) {
+                // Another process over this file claimed the row first (or a
+                // newer alarm replaced it); delivering again would fire it twice.
+                // A replacing alarm is armed by its own commit, but a timer that
+                // was armed for it may have been dropped, so re-arm from the row.
+                armFromRow();
+
+                return;
+            }
+        } catch {
+            // Another process holds the file's lock (`SQLITE_BUSY`) during the
+            // claim or the row lookup. A throw here is uncaught in a timer
+            // callback and ends the process.
+            // The failed delete left the row in place, so back off and claim it
+            // again; past the limit the row stays for the next construction.
+            alarmAt = ms;
+
+            if (claimFailures < ALARM_RETRY_LIMIT) {
+                alarmTimeout = setTimeout(
+                    () => {
+                        alarmTimeout = undefined;
+                        fire(ms, claimFailures + 1);
+                    },
+                    ALARM_RETRY_BASE_MS * 2 ** claimFailures,
+                );
+            }
+
+            return;
+        }
+
+        (async (): Promise<void> => {
+            await onAlarm?.();
+            attempts = 0;
+        })().catch(() => {
+            retryFailedDelivery();
+        });
     };
 
     /**
@@ -231,61 +427,8 @@ const createAlarms = (
         }
 
         alarmTimeout = setTimeout(() => {
-            alarmAt = undefined;
             alarmTimeout = undefined;
-
-            // A caller may close the database before this timer fires — e.g.
-            // it set a future alarm, then tore the platform down (process
-            // shutdown, test cleanup). `persist` runs a prepared statement
-            // against `database`; on a closed better-sqlite3 connection that
-            // throws synchronously *inside* the `setTimeout` callback, which
-            // is an uncaught exception Node has no way to route back to a
-            // caller's try/catch — it crashes the process. Guard on the
-            // connection's own open/closed state rather than trying to track
-            // "did dispose() already run" separately, since `close()` is the
-            // one fact that actually determines whether `.run()` is safe.
-            if (!database.open) {
-                return;
-            }
-
-            // Clear the durable row BEFORE delivering. An `onAlarm` that throws
-            // (or that itself schedules the next alarm, which is the normal
-            // pattern) must not race a stale row: the timestamp this timer just
-            // consumed is spent either way, and leaving it behind would re-fire
-            // it on the next construction over this database.
-            persist(undefined);
-
-            (async (): Promise<void> => {
-                await onAlarm?.();
-                attempts = 0;
-            })().catch(() => {
-                // A throwing handler must not become an unhandled rejection
-                // that takes the process down — but it must not lose the wakeup
-                // either. workerd isolates a throwing `alarm()` AND re-delivers
-                // it with backoff; a host that only isolated it deleted the row
-                // before delivery and then swallowed the rejection, so nothing
-                // re-armed and the loop that alarm drives (a TTL sweep, a
-                // global-shape poll, a scheduler GC) stopped for good.
-                if (!database.open || alarmAt !== undefined) {
-                    // Nothing to retry against, or the handler rescheduled
-                    // before it failed — that alarm owns the next wakeup.
-                    return;
-                }
-
-                attempts += 1;
-
-                if (attempts > ALARM_RETRY_LIMIT) {
-                    attempts = 0;
-
-                    return;
-                }
-
-                const retryAt = Date.now() + ALARM_RETRY_BASE_MS * 2 ** (attempts - 1);
-
-                alarmAt = retryAt;
-                persist(retryAt);
-                arm(retryAt);
-            });
+            fire(ms);
         }, delay);
     };
 
@@ -363,25 +506,60 @@ const createAlarms = (
     };
 
     /**
-     * Discard an alarm mutation whose transaction rolled back. The durable row
-     * rolled back with it and the in-memory state was never touched, so
-     * dropping the pending value is the whole undo.
+     * Re-sync the timer with the durable row a rollback restored. A timer that
+     * came due while the transaction was open is waiting it out, and only the
+     * restored row says whether the alarm is still due.
      */
+    const resync = (): void => {
+        resyncTimeout = undefined;
+
+        if (!database.open) {
+            return;
+        }
+
+        // Still inside a transaction (a failed `ROLLBACK`, or another `BEGIN` on
+        // the connection): the row read here would be its uncommitted view.
+        if (database.inTransaction) {
+            resyncTimeout = setTimeout(resync, FOREIGN_TRANSACTION_RETRY_MS);
+
+            return;
+        }
+
+        const durable = selectAlarm.get();
+
+        // A timer waiting out the transaction is re-armed too, so the alarm is delivered now that it has ended.
+        if (durable !== undefined && (alarmTimeout === undefined || waitingOnTransaction || alarmAt !== durable.scheduled_for)) {
+            alarmAt = durable.scheduled_for;
+            arm(durable.scheduled_for);
+        }
+    };
+
+    /** Discard an alarm mutation whose transaction rolled back. Called after the `ROLLBACK`. */
     const rollback = (): void => {
         pending = undefined;
+
+        if (resyncTimeout !== undefined) {
+            clearTimeout(resyncTimeout);
+        }
+
+        resync();
+    };
+
+    const dispose = (): void => {
+        clearAlarmTimeout();
+
+        if (resyncTimeout !== undefined) {
+            clearTimeout(resyncTimeout);
+            resyncTimeout = undefined;
+        }
     };
 
     // Re-arm whatever the last process left behind. `Math.max(0, …)` inside
     // `arm` means an alarm whose time passed while nothing was running fires on
     // the next tick rather than never — late, but delivered.
-    const restored = database.prepare<[], { scheduled_for: number }>("SELECT scheduled_for FROM _lunora_alarm WHERE id = 0").get();
+    armFromRow();
 
-    if (restored !== undefined) {
-        alarmAt = restored.scheduled_for;
-        arm(restored.scheduled_for);
-    }
-
-    return { alarms, commit, dispose: clearAlarmTimeout, rollback };
+    return { alarms, commit, dispose, rollback };
 };
 
 /** Options for {@link createNodeShardHost}. */
@@ -619,7 +797,6 @@ const createNodeShardHost = (
             return result;
         } catch (error) {
             transactionOpen = false;
-            rollbackAlarms();
 
             try {
                 database.exec("ROLLBACK");
@@ -630,6 +807,9 @@ const createNodeShardHost = (
                 // needs the real failure, not the cleanup's. `@lunora/testing`'s
                 // harness copy of this guards it; the two host copies did not.
             }
+
+            // After the ROLLBACK, so it re-syncs the timer with the restored row.
+            rollbackAlarms();
 
             throw error;
         }

@@ -110,18 +110,16 @@ const buildWriter = async (): Promise<{ counting: CountingExec; writer: Database
 let warm: { counting: CountingExec; writer: DatabaseWriterLike };
 let warmSeq = 0;
 
-describe("d1 write — sync existence cache", () => {
-    // Build + prime the warm writer in beforeAll: CodSpeed's instrumented runner
-    // does not pick up module-top-level await state (async migrations + the
-    // warmup insert), so the warm bench would otherwise run against an
-    // unprimed/absent writer. beforeAll is honored by both the plain `vitest
-    // bench` runner and CodSpeed's analysis runner.
-    beforeAll(async () => {
-        warm = await buildWriter();
-        await warm.writer.insert("todos", { _id: "warmup", priority: "medium", projectId: "p0", seq: -1 }, { allowExplicitId: true });
-        warm.counting.reset();
-    });
+// Build + prime the warm writer in a file-level beforeAll. CodSpeed's instrumented runner does not pick up
+// module-top-level await state, and vitest's own bench runner skips hooks registered inside a `describe`, which
+// left the warm arm throwing on an undefined writer and recording no samples. A file-level hook runs under both.
+beforeAll(async () => {
+    warm = await buildWriter();
+    await warm.writer.insert("todos", { _id: "warmup", priority: "medium", projectId: "p0", seq: -1 }, { allowExplicitId: true });
+    warm.counting.reset();
+});
 
+describe("d1 write — sync existence cache", () => {
     bench("warm insert (cached existence — zero sqlite_master probes)", async () => {
         warmSeq += 1;
         await warm.writer.insert("todos", { _id: `w${String(warmSeq)}`, priority: "medium", projectId: "p1", seq: warmSeq }, { allowExplicitId: true });

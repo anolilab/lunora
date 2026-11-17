@@ -1,4 +1,4 @@
-import { decodeWire, encodeWire } from "@lunora/wire";
+import { encodeWire, parseWire } from "@lunora/wire";
 
 import type { Preloaded } from "../types";
 
@@ -29,9 +29,9 @@ export const serializePreloaded = <T>(preloaded: Preloaded<T>): string => JSON.s
 /**
  * Inverse of {@link serializePreloaded}: parse a serialized token back into a
  * {@link Preloaded} value on the client, running the parsed payload back
- * through {@link decodeWire} so `bigint` / `ArrayBuffer` / typed-array leaves
+ * through {@link parseWire} so `bigint` / `ArrayBuffer` / typed-array leaves
  * are restored rather than left in their tagged form. The `<` escape from
  * serialization is transparent to `JSON.parse`, so no un-escaping step is
  * needed.
  */
-export const deserializePreloaded = <T = unknown>(serialized: string): Preloaded<T> => decodeWire(JSON.parse(serialized)) as Preloaded<T>;
+export const deserializePreloaded = <T = unknown>(serialized: string): Preloaded<T> => parseWire(serialized) as Preloaded<T>;

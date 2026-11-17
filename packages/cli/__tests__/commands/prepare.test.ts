@@ -176,7 +176,7 @@ describe("lunora prepare", () => {
     });
 
     it("blocks on a D1 placeholder id, exactly as deploy does", async () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         // This asserted the opposite until `prepare` and `deploy` were made one
         // pipeline: prepare reported "project is ready to deploy" for a project
@@ -209,6 +209,7 @@ describe("lunora prepare", () => {
         // And it names the fix, rather than leaving the user to discover it at
         // deploy time.
         expect(result.error).toContain("wrangler d1 create");
+        expect(result.error).toContain("lunora doctor --fix");
         // Worded for the command the operator actually ran. These checks are
         // shared with `deploy`, and a blocked `prepare` naming a command nobody
         // typed reads as a bug in the tool rather than a problem in the project.
@@ -291,12 +292,10 @@ export default crons;
         expect(errors).toBeInstanceOf(Array);
     });
 
-    // `--update-schema-baseline` is the documented way to refresh a stale
-    // `lunora/.lunora-schema.json`, and nothing exercised it end to end: the
-    // gate's unit tests stop at the `rebless` thunk, so a break anywhere between
-    // the flag and the file on disk went unnoticed by this suite.
-    it("re-blesses a stale schema baseline that would otherwise block, under --update-schema-baseline", async () => {
-        expect.assertions(4);
+    // The gate's unit tests stop at the `rebless` thunk, so a break anywhere between
+    // the gate and the file on disk would go unnoticed without this end-to-end run.
+    it("will not re-bless a stale baseline when only stored rows could confirm it", async () => {
+        expect.assertions(3);
 
         writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 
@@ -319,10 +318,8 @@ export default crons;
         expect(blocked.code).toBe(EXIT_CODE.USAGE);
         expect(blocked.schemaDrift?.blocked).toBe(true);
 
-        const reblessed = await runPrepareCommand({ cwd: workdir, logger, updateSchemaBaseline: true });
-
-        expect(reblessed.code).toBe(0);
-        expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeDefined();
+        // A required field's presence is a question about stored rows, which prepare cannot read: the baseline stays where it was.
+        expect(JSON.parse(readFileSync(baselinePath, "utf8")).tables.users.fields.role).toBeUndefined();
     });
 
     describe("advisory gate", () => {

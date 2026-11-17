@@ -60,8 +60,8 @@ const fakeDatabase = (tables: Record<string, Row[]>): ControlPlaneDatabase & { r
 
             return Promise.resolve(undefined);
         },
-        patch: (id, patch, table) => {
-            const row = (tables[table ?? ""] ?? []).find((candidate) => candidate._id === id);
+        patch: (table, id, patch) => {
+            const row = (tables[table] ?? []).find((candidate) => candidate._id === id);
 
             Object.assign(row ?? {}, patch);
 
@@ -99,7 +99,7 @@ describe(expireUnverifiedDomains, () => {
     const expiringDatabase = (rows: Row[]) => {
         const remaining = [...rows];
         const database: ControlPlaneDatabase = {
-            delete: (id) => {
+            delete: (_table, id) => {
                 const index = remaining.findIndex((row) => row._id === id);
 
                 if (index !== -1) {

@@ -147,7 +147,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     // The trigger patches the row mid-flight, so this update's CAS
                     // matches nothing. A host whose SQL cannot report `changes()`
                     // silently loses the whole guarantee, which is why it is here.
-                    await expect(database.patch("i1", { title: "second" })).rejects.toBeInstanceOf(ConflictError);
+                    await expect(database.patch("items", "i1", { title: "second" })).rejects.toBeInstanceOf(ConflictError);
                 } finally {
                     close?.();
                 }
@@ -169,7 +169,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     let raised: unknown;
 
                     try {
-                        await database.patch("i1", { title: "second" });
+                        await database.patch("items", "i1", { title: "second" });
                     } catch (error) {
                         raised = error;
                     }
@@ -201,7 +201,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     await database.insert("items", { _id: "i1", title: "first", version: 1 }, { allowExplicitId: true });
 
                     try {
-                        await database.patch("i1", { title: "second" });
+                        await database.patch("items", "i1", { title: "second" });
                     } catch {
                         // expected — asserted above
                     }
@@ -213,7 +213,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     // (`version`) and the losing one landed not at all (`title`).
                     // Checking only `title` would pass on a host that dropped
                     // both writes.
-                    const stored = (await database.get("i1")) as Record<string, unknown> | undefined;
+                    const stored = (await database.get("items", "i1")) as Record<string, unknown> | undefined;
 
                     expect(stored?.["title"]).toBe("first");
                     expect(stored?.["version"]).toBe(99);
@@ -249,10 +249,10 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                                 triggerMap: {
                                     recurse: {
                                         handler: async (
-                                            context: { db: { patch: (id: string, patch: Record<string, unknown>) => Promise<unknown> } },
+                                            context: { db: { patch: (table: string, id: string, patch: Record<string, unknown>) => Promise<unknown> } },
                                             event: { doc: Record<string, unknown> },
                                         ) => {
-                                            await context.db.patch(event.doc["_id"] as string, { version: 99 });
+                                            await context.db.patch("items", event.doc["_id"] as string, { version: 99 });
                                         },
                                         op: "update",
                                         timing: "before",
@@ -271,7 +271,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     let raised: unknown;
 
                     try {
-                        await database.patch("i1", { title: "second" });
+                        await database.patch("items", "i1", { title: "second" });
                     } catch (error) {
                         raised = error;
                     }
@@ -311,7 +311,12 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
              * routing pokes through the op-log fails loudly here instead of
              * quietly passing on work the relay tier is supposed to avoid.
              */
-            const relayFor = (sockets: SocketHost, sql: SqlExec, seeds: ReadonlyArray<{ cursor: number; epoch?: string; frames: string[] }>) => {
+            const relayFor = (
+                sockets: SocketHost,
+                sql: SqlExec,
+                seeds: ReadonlyArray<{ cursor: number; epoch?: string; frames: string[] }>,
+                lapsedConnections: ReadonlySet<string> = new Set(),
+            ) => {
                 let pokeId = 0;
                 let seedIndex = 0;
                 const unreachable = (member: string) => () => {
@@ -357,6 +362,8 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     computeOpLogShapeSeed: unreachable("computeOpLogShapeSeed"),
                     currentCdcEpoch: unreachable("currentCdcEpoch"),
                     deliverWhisperLocal: unreachable("deliverWhisperLocal"),
+                    // The host's own lapse check: a subscriber past its deadline is reported lapsed (and closed) rather than poked.
+                    dropIfLapsed: (ws: ShardSocketLike) => lapsedConnections.has((ws.deserializeAttachment?.() as SocketAttachment).connectionId ?? ""),
                     doName: () => relayName(OWNER_KEY, 0),
                     env: () => {
                         return { SHARD: namespace };
@@ -482,6 +489,40 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     const aliceAfterResend = await readFrames(alice);
 
                     expect(aliceAfterResend.length).toBe(3);
+                } finally {
+                    close?.();
+                }
+            });
+
+            it("pokes no subscriber the host reports lapsed, and still pokes the others", async () => {
+                const { close, createSocket, host, readFrames, sockets } = factory();
+
+                try {
+                    const lapsed = new Set<string>();
+                    const relay = relayFor(
+                        sockets,
+                        host.sql,
+                        [
+                            { cursor: 10, epoch: "e1", frames: [] },
+                            { cursor: 10, epoch: "e1", frames: [] },
+                        ],
+                        lapsed,
+                    );
+                    const alice = acceptSubscriber(sockets, createSocket, "c-alice", "s1");
+                    const bob = acceptSubscriber(sockets, createSocket, "c-bob", "s2");
+
+                    await seedSocket(relay, alice, "s1");
+                    await seedSocket(relay, bob, "s2");
+
+                    // Bob's credential or window passes before the poke arrives.
+                    lapsed.add("c-bob");
+                    await relay.handleControl(poke());
+
+                    const aliceFrames = await readFrames(alice);
+                    const bobFrames = await readFrames(bob);
+
+                    expect(aliceFrames.length).toBe(3);
+                    expect(bobFrames.length).toBe(0);
                 } finally {
                     close?.();
                 }
@@ -670,6 +711,7 @@ const defineEngineContractSuite = (name: string, factory: EngineHostFactory, vit
                     },
                     currentCdcEpoch: () => "e1",
                     deliverWhisperLocal: () => 0,
+                    dropIfLapsed: () => false,
                     doName: () => OWNER_KEY,
                     env: () => {
                         return { SHARD: { get: () => stub, getByName: () => stub, idFromName: (id: string) => id } };

@@ -11,6 +11,9 @@
  * This package is internal: consumers depend on `@lunora/d1` or
  * `@lunora/hyperdrive`, which assemble the concrete dialect and wrap the core.
  */
+export type { ExportGlobalArgs, ExportRow, ImportError, ImportGlobalArgs, ImportResult, PreparedGlobalImportRow } from "./admin-export-import";
+export { exportSqlGlobalRows, importSqlGlobalRows, prepareGlobalImportRow, selectGlobalTables } from "./admin-export-import";
+export { globalColumnBackfill } from "./column-provisioning";
 export type { SqlCtxDbOptions, SqlCtxExec } from "./ctx-db";
 export {
     createSqlCtxDb,
@@ -27,4 +30,16 @@ export type { SqlSearchBackfillResult } from "./ctx-db-search";
 export { backfillSqlSearchIndexes, runSqlSearchMigrations } from "./ctx-db-search";
 export { migrateSearchState, SEARCH_STATE_TABLE } from "./ctx-db-search-state";
 export type { SqlDialect, SqlExec, SqlRunResult } from "./dialect";
+export type {
+    FacetGlobalColumnOptions,
+    GlobalFacetResult,
+    GlobalFacetValue,
+    GlobalFilterClause,
+    GlobalTableInfo,
+    GlobalTablePage,
+    ReadGlobalTablePageOptions,
+} from "./introspect";
+export { facetSqlGlobalColumn, listSqlGlobalTables, readSqlGlobalTablePage } from "./introspect";
+export type { QueryTimer } from "./query-timeout";
+export { DEFAULT_QUERY_TIMEOUT_MS, SqlQueryTimeoutError } from "./query-timeout";
 export { decodeBigint, effectiveColumnKind, sqliteDecode, sqliteEncode, tryJsonParse } from "./value-codec";

@@ -1,6 +1,6 @@
 import type { FunctionReference } from "@lunora/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { effectScope } from "vue";
+import { effectScope, isReactive, nextTick, ref } from "vue";
 
 import type { UseStreamResult } from "../src/use-stream";
 import { useStream } from "../src/use-stream";
@@ -50,6 +50,25 @@ describe(useStream, () => {
         scope.stop();
     });
 
+    it("holds chunks as-is, without reactive proxies", async () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const scope = effectScope();
+        const result = scope.run(() => fake.provide((): UseStreamResult<unknown> => useStream(makeStreamRef(TICK_REF), { since: 0 })))!;
+        const chunk = { delta: { text: "hi" } };
+
+        fake.pushStream(TICK_REF, { since: 0 }, chunk);
+        await fake.flush();
+
+        // Chunks are appended by replacing the array; deep proxies would make each
+        // nested read of a long stream pay a proxy trap for nothing.
+        expect(result.chunks.value[0]).toBe(chunk);
+        expect(isReactive(result.chunks.value)).toBe(false);
+
+        scope.stop();
+    });
+
     it("forwards `durable` to the client so a reconnect resumes the run", () => {
         expect.hasAssertions();
 
@@ -67,6 +86,30 @@ describe(useStream, () => {
         scope.stop();
     });
 
+    it("opens the stream with the args the watch key was computed from, even when a getter changes between reads", () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const scope = effectScope();
+        let reads = 0;
+
+        // An impure getter: every read returns new content.
+        scope.run(() =>
+            fake.provide(() =>
+                useStream(makeStreamRef(TICK_REF), () => {
+                    reads += 1;
+
+                    return { since: reads };
+                }),
+            ),
+        );
+
+        // The key came from the first read, so the stream must open with that read's value.
+        expect(fake.streamCalls[0]?.args).toStrictEqual({ since: 1 });
+
+        scope.stop();
+    });
+
     it('"skip" keeps the composable mounted without opening a stream', () => {
         expect.hasAssertions();
 
@@ -77,6 +120,60 @@ describe(useStream, () => {
         expect(fake.streamCalls).toHaveLength(0);
         expect(result.status.value).toBe("idle");
         expect(result.chunks.value).toStrictEqual([]);
+
+        scope.stop();
+    });
+
+    it("keeps the stream open when a reactive args source re-emits equal content", async () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        // `Math.min(limit, 10)` clamps 15 and 20 to the same 10: the getter re-runs
+        // and builds a fresh object, but the args it produces are unchanged.
+        const limit = ref(15);
+        const scope = effectScope();
+        const result = scope.run(() =>
+            fake.provide((): UseStreamResult<unknown> =>
+                useStream(makeStreamRef(TICK_REF), () => {
+                    return { limit: Math.min(limit.value, 10) };
+                }),
+            ),
+        )!;
+
+        fake.pushStream(TICK_REF, { limit: 10 }, { tick: 1 });
+        await fake.flush();
+
+        limit.value = 20;
+        await nextTick();
+
+        expect(fake.streamCalls).toHaveLength(1);
+        expect(fake.streamCalls[0]?.onCancel).not.toHaveBeenCalled();
+        expect(result.chunks.value).toStrictEqual([{ tick: 1 }]);
+
+        scope.stop();
+    });
+
+    it("restarts the stream when the reactive args content changes", async () => {
+        expect.hasAssertions();
+
+        const fake = createFakeClient();
+        const since = ref(0);
+        const scope = effectScope();
+
+        scope.run(() =>
+            fake.provide(() =>
+                useStream(makeStreamRef(TICK_REF), () => {
+                    return { since: since.value };
+                }),
+            ),
+        );
+
+        since.value = 5;
+        await nextTick();
+
+        expect(fake.streamCalls).toHaveLength(2);
+        expect(fake.streamCalls[0]?.onCancel).toHaveBeenCalledWith();
+        expect(fake.streamCalls[1]?.args).toStrictEqual({ since: 5 });
 
         scope.stop();
     });

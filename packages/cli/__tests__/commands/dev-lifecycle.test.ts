@@ -34,6 +34,7 @@ describe("lunora dev lifecycle", () => {
     });
 
     afterEach(() => {
+        vi.unstubAllEnvs();
         vi.restoreAllMocks();
         rmSync(workdir, { force: true, recursive: true });
     });
@@ -356,6 +357,72 @@ describe("lunora dev lifecycle", () => {
             // the default way to lose the flag.
             expect(args).toContain("--target");
             expect(args?.[(args.indexOf("--target") ?? 0) + 1]).toBe("aws");
+        });
+
+        it.each([
+            ["vite", { "@lunora/vite": "1.0.0" }],
+            ["wrangler", {}],
+        ])("forwards lazy functions only when enabled for %s", async (flavor, dependencies) => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies, name: "app" }), "utf8");
+
+            const seen: ReadonlyArray<string>[] = [];
+            const environments: (Record<string, string | undefined> | undefined)[] = [];
+            const run = (options: { command: { args: ReadonlyArray<string> }; env?: Record<string, string | undefined> }): Promise<{ code: number }> => {
+                seen.push(options.command.args);
+                environments.push(options.env);
+
+                return Promise.resolve({ code: 0 });
+            };
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: { lazyFunctions: true } as DevOptions,
+                remote: false,
+                run,
+            });
+
+            clearDevServerState(workdir, process.pid);
+
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run,
+            });
+
+            expect(environments[0]?.LUNORA_LAZY_FUNCTIONS).toBe(flavor === "vite" ? "1" : undefined);
+            expect(environments[1]?.LUNORA_LAZY_FUNCTIONS).toBeUndefined();
+            expect(seen[0]?.includes("--lazy-functions")).toBe(flavor === "wrangler");
+            expect(seen[1]).not.toContain("--lazy-functions");
+        });
+
+        it.each([
+            ["vite", { "@lunora/vite": "1.0.0" }],
+            ["wrangler", {}],
+        ])("forwards the lazy environment opt-in to the %s background child", async (flavor, dependencies) => {
+            expect.assertions(2);
+
+            vi.stubEnv("LUNORA_LAZY_FUNCTIONS", " True ");
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies, name: "app" }));
+            await startBackground({
+                cwd: workdir,
+                jsonLogs: false,
+                logger: recordingLogger().logger,
+                options: {} as DevOptions,
+                remote: false,
+                run: (options) => {
+                    expect(options.env?.LUNORA_LAZY_FUNCTIONS).toBe(flavor === "vite" ? "1" : undefined);
+                    expect(options.command.args.includes("--lazy-functions")).toBe(flavor === "wrangler");
+
+                    return Promise.resolve({ code: 0 });
+                },
+            });
         });
 
         it("forwards --inspector-port to the daemon, and omits it when unset", async () => {

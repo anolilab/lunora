@@ -16,7 +16,9 @@
  * `module`: at module scope.
  */
 export type AdvisorCallSiteScope =
-    { callers: ReadonlyArray<string>; kind: "helper"; name: string; untracked?: true } | { kind: "export"; name: string } | { kind: "module" };
+    | { callers: ReadonlyArray<string>; kind: "helper"; name: string; untracked?: true }
+    | { kind: "export"; name: string }
+    | { kind: "module" };
 
 /** The exported functions a site runs on behalf of: its export, its helper's known callers, or none. */
 export const callSiteCallers = (scope: AdvisorCallSiteScope): ReadonlyArray<string> => {

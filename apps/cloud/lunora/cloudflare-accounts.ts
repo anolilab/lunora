@@ -137,7 +137,7 @@ export const connect = internalMutation
         const accounts = cloudflareAccountStore(context.db.cloudflareAccounts);
 
         if (id !== undefined) {
-            await assertRowInOrg(context, id, organizationId, "Cloudflare account");
+            await assertRowInOrg(context, "cloudflareAccounts", id, organizationId, "Cloudflare account");
 
             const row = (await accounts.lookup(id)) as CloudflareAccountRow;
 
@@ -148,7 +148,7 @@ export const connect = internalMutation
                 );
             }
 
-            await context.db.patch(id, { ...fields, ...(label.trim() === "" ? {} : { label: label.trim() }) });
+            await context.db.patch("cloudflareAccounts", id, { ...fields, ...(label.trim() === "" ? {} : { label: label.trim() }) });
             await context.db.insert("auditLog", {
                 action: "cloudflare_account.rotate",
                 actorUserId: member.userId,
@@ -168,7 +168,7 @@ export const connect = internalMutation
 
         await assertWithinQuota(context, organizationId, "cloudflareAccounts", connected.length);
 
-        const organization = (await context.db.get(organizationId)) as { cellId: Id<"cells"> } | null;
+        const organization = (await context.db.get("organizations", organizationId)) as { cellId: Id<"cells"> } | null;
 
         if (organization === null) {
             throw new LunoraError("NOT_FOUND", "organization not found");
@@ -211,7 +211,7 @@ export const disconnect = mutation
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "Cloudflare account");
+        await assertRowInOrg(context, "cloudflareAccounts", id, organizationId, "Cloudflare account");
 
         const row = (await cloudflareAccountStore(context.db.cloudflareAccounts).lookup(id)) as CloudflareAccountRow;
         const users = await usersOf(context, organizationId, id);
@@ -223,7 +223,7 @@ export const disconnect = mutation
             );
         }
 
-        await context.db.delete(id);
+        await context.db.delete("cloudflareAccounts", id);
         await context.db.insert("auditLog", {
             action: "cloudflare_account.disconnect",
             actorUserId: member.userId,

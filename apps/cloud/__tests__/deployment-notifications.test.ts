@@ -34,7 +34,7 @@ const makeCtx = (
     const database = {
         delete: () => Promise.resolve(),
         deployments: { findMany: (args?: { where?: Row }) => Promise.resolve(filtered(rows, args)) },
-        get: (id: string) => Promise.resolve(rows.find((row) => row["_id"] === id) ?? (id === project["_id"] ? project : null)),
+        get: (_table: string, id: string) => Promise.resolve(rows.find((row) => row["_id"] === id) ?? (id === project["_id"] ? project : null)),
         insert: (table: string, doc: Row) => {
             inserted.push({ doc, table });
 
@@ -44,7 +44,7 @@ const makeCtx = (
         catalogInstalls: { findMany: () => Promise.resolve({ page: [] }) },
         members: { findMany: (args?: { where?: Row }) => Promise.resolve(filtered(members, args)) },
         notificationChannels: { findMany: (args?: { where?: Row }) => Promise.resolve(filtered(channels, args)) },
-        patch: (id: string, patch: Row) => {
+        patch: (_table: string, id: string, patch: Row) => {
             patched.push({ id, patch });
 
             return Promise.resolve();

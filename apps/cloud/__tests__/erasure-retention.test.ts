@@ -157,7 +157,7 @@ describe("erasure: tenant backups", () => {
     const sweep = async (tables: Record<string, unknown[]>, options: { failPrimary?: boolean } = {}) => {
         const events: string[] = [];
         const database = fakeControlPlaneDb(tables, {
-            delete: async (id) => {
+            delete: async (_table, id) => {
                 events.push(`row:${id}`);
             },
         });

@@ -43,6 +43,13 @@ export interface ValidatorIR {
     literalValue?: string;
     /** For `v.union(a, b, ...)`. */
     members?: ValidatorIR[];
+
+    /**
+     * `true` when the validator is wrapped in `v.sensitive(...)`. The kind and the
+     * accepted values are the wrapped validator's; the flag only changes what the
+     * request log, the client's offline queue and the JSON Schema do with the value.
+     */
+    sensitive?: boolean;
     /** For `v.object({...})`. */
     shape?: Record<string, ValidatorIR>;
     /** Verbatim source text — used in emitted code when we can't reconstruct from AST. */
@@ -74,12 +81,31 @@ export interface ValidatorIR {
      * flag, because compiling it would silently skip the predicate.
      */
     unmodelledRefinement?: boolean;
+
+    /**
+     * `true` on a `v.object(...)` whose `shape` is not the whole validator: the
+     * argument is built at runtime, spreads something unreadable, or is absent. An
+     * empty `shape` then stands for "unknown", not "no properties".
+     */
+    unresolvedShape?: boolean;
     valueType?: ValidatorIR;
+}
+
+/**
+ * Where a schema object is declared: the file relative to `lunora/` without its extension, and the 1-based start line of
+ * the node (leading comments excluded). Absent for an object with no source under `lunora/`, such as one contributed by an
+ * installed package's extension.
+ */
+export interface DeclarationSiteIR {
+    file: string;
+    line: number;
 }
 
 export interface IndexIR {
     fields: ReadonlyArray<string>;
     name: string;
+    /** Where the `.index(...)` call's method name is declared. */
+    site?: DeclarationSiteIR;
     unique?: boolean;
 }
 
@@ -91,6 +117,8 @@ export interface SearchIndexIR {
     /** Text-analysis profile (accent folding + that language's stopwords). */
     language?: string;
     name: string;
+    /** Where the `.searchIndex(...)` call's method name is declared. */
+    site?: DeclarationSiteIR;
     /** Skip the migration-time backfill of the search companion (large tables index out-of-band). */
     staged?: boolean;
     /** `"native"` opts into the engine's own full-text index where it has one (Postgres). */
@@ -104,6 +132,8 @@ export interface GeoIndexIR {
     name: string;
     /** Geohash precision (characters) maintained on the companion; omitted ⇒ the runtime default. */
     precision?: number;
+    /** Where the `.geoIndex(...)` call's method name is declared. */
+    site?: DeclarationSiteIR;
 }
 
 /** A `.ttl(field, { after? })` declaration — declarative table-level auto-expiry. */
@@ -122,6 +152,8 @@ export interface VectorIndexIR {
     metadata?: ReadonlyArray<string>;
     metric?: "cosine" | "dot-product" | "euclidean";
     name: string;
+    /** Where the inline `.vectorize(...)` call's method name, or a standalone (Shape B) `defineVectorIndex(...)` call, is declared. */
+    site?: DeclarationSiteIR;
     /** Owning table the vectors are sourced from. */
     table: string;
 }
@@ -145,6 +177,8 @@ export interface RankIndexIR {
     name: string;
     /** Columns scoping each ranking; omitted ⇒ one global rank over the table. */
     partitionBy?: ReadonlyArray<string>;
+    /** Where the `.rankIndex(...)` call's method name is declared. */
+    site?: DeclarationSiteIR;
     /** Ordered sort keys driving the rank. */
     sortBy: ReadonlyArray<RankSortKeyIR>;
 }
@@ -160,6 +194,8 @@ export interface KeyedRelationIR {
     onDelete?: "cascade" | "restrict" | "set null";
     /** Referenced column (defaults to `_id`). */
     references: string;
+    /** Where the relation's property in the `.relations(...)` object is declared. */
+    site?: DeclarationSiteIR;
     /** Target table name. */
     table: string;
     through?: never;
@@ -170,6 +206,8 @@ export interface ThroughRelationIR {
     kind: "many";
     /** Accessor name the relation is loaded under (the `with` key). */
     name: string;
+    /** Where the relation's property in the `.relations(...)` object is declared. */
+    site?: DeclarationSiteIR;
     /** Target table name. */
     table: string;
     /** The join table and its two keys: `from` points at the declaring table, `to` at `table`. */
@@ -294,6 +332,7 @@ export interface TableIR {
      * to `false`.
      */
     memory?: boolean;
+
     name: string;
     /** Rank indexes declared inline via `.rankIndex(name, …)`. */
     rankIndexes: ReadonlyArray<RankIndexIR>;
@@ -302,6 +341,12 @@ export interface TableIR {
     searchIndexes: ReadonlyArray<SearchIndexIR>;
     shape: Record<string, ValidatorIR>;
     shardMode: "global" | "root" | { field: string; kind: "shardBy" };
+
+    /**
+     * Where the table is declared: its `defineTable(...)` call, or the `defineSchema({...})` property when the table is
+     * not written as a `defineTable` chain. Absent for a table whose declaration is not under `lunora/`.
+     */
+    site?: DeclarationSiteIR;
     /** Set when the chain carried `.softDelete()` — the marker column's name (default `deletedAt`). The column is injected into `shape` so `Doc_*` carries it. */
     softDelete?: { field: string };
     /** Set when the chain carried `.ttl(field, { after? })` — the declarative auto-expiry policy read by the DO alarm sweep. */
@@ -348,6 +393,7 @@ export interface SchemaIR {
  * `.expose({ cache: … })` object.
  */
 export interface ExposeCacheIR {
+    credentialHeaders?: ReadonlyArray<string>;
     maxAge?: number;
     scope?: "private" | "public";
     staleWhileRevalidate?: number;
@@ -364,12 +410,24 @@ export interface ExposeCacheIR {
  * tables with breaking drift, so a migration left at `""` covers nothing.
  */
 export interface MigrationIR {
+    /**
+     * The change this migration declares it accounts for, read from `covers: { … }` when every value is a literal. The drift gate
+     * clears a shard-mode flip, a table turned `.memory()` or a jurisdiction change only for a migration naming exactly that change.
+     */
+    covers?: { jurisdiction?: string; memory?: true; shardMode?: string; table?: string; ttl?: { after?: number; field: string } };
     /** Export binding name, used to reference the module member in generated imports. */
     exportName: string;
     /** Path relative to `<projectRoot>/lunora/` without extension, e.g. "migrations". */
     filePath: string;
     /** Stable migration id — the registry key and per-shard run-state key. */
     id: string;
+
+    /**
+     * `true` when `up` returns its document unchanged (`(document) => document`, the
+     * shape `lunora migrate create` scaffolds). Such a migration rewrites no row, so it
+     * cannot by itself account for a schema change on its table.
+     */
+    identity?: true;
     /** Table the migration iterates; `""` when not a static string literal. */
     table: string;
 }

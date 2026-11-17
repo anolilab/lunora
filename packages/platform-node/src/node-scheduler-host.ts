@@ -35,18 +35,26 @@
  * live in `wrangler.jsonc` and are reconciled at build time, so there is no
  * runtime call that could add one — and `SchedulerHost.cron`'s docstring is
  * explicit that presence is a host's declaration that dynamic cron works. On
- * Node it does: expressions are parsed by `@visulima/cron-parser` (the same
- * dependency `@lunora/scheduler` validates with, so one grammar stays
- * authoritative across the repo) and re-armed from the durable table on
- * construction exactly like one-shot jobs.
+ * Node it does: expressions are parsed by `@visulima/cron-parser`'s `cloudflare`
+ * entry (the dialect `@lunora/scheduler` validates with, so one grammar stays
+ * authoritative across the repo: the default dialect reads weekday 1 as Monday,
+ * Cloudflare as Sunday) and re-armed from the durable table on
+ * construction exactly like one-shot jobs. The sixth, seconds-leading field the
+ * host contract's conformance suite registers stays accepted (`seconds:
+ * "optional"`, as `@lunora/scheduler` does); a five-field expression keeps the
+ * Cloudflare weekday numbering.
  */
 
 import { randomUUID } from "node:crypto";
 import { deserialize, serialize } from "node:v8";
 
-import type { ScheduledJob, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
-import { parse } from "@visulima/cron-parser";
+import { LunoraError } from "@lunora/errors";
+import type { ScheduledJob, ScheduledJobRecord, ScheduledJobStatus, ScheduleOptions, SchedulerHost } from "@lunora/platform";
+import { parse } from "@visulima/cron-parser/cloudflare";
 import type Database from "better-sqlite3";
+
+/** The `cloudflare` entry fixes the dialect; `seconds` keeps the optional leading seconds field working. */
+const CRON_PARSE_OPTIONS = { seconds: "optional" } as const;
 
 /**
  * Retry policy applied when a caller supplies none. `ScheduleOptions.retry`
@@ -69,15 +77,49 @@ const DEFAULT_RETRY = {
  */
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
+/**
+ * How long a claimed job stays invisible to other processes sharing the
+ * database file. A claimer that dies mid-dispatch leaves its row claimed; once
+ * the lease lapses the next construction (or a waiting process's re-arm)
+ * delivers it again, which is the at-least-once contract.
+ */
+const CLAIM_LEASE_MS = 60_000;
+// Renewed well inside the lease, so a handler that runs past it keeps the row.
+const CLAIM_RENEW_MS = CLAIM_LEASE_MS / 3;
+// A claim that throws (SQLITE_BUSY while another process holds the write lock) is retried after this.
+const CLAIM_RETRY_MS = 1000;
+
+// Migrating a database written by an older build: a locked file is retried with back-off, bounded.
+const MIGRATION_RETRY_LIMIT = 5;
+const MIGRATION_RETRY_BASE_MS = 20;
+
+/**
+ * How long a timer-driven statement waits before looking again when another
+ * task holds a transaction open on the shared connection. The shard host's
+ * single-writer lock does not cover these timers, so a claim, renewal or
+ * settlement run then would join that `BEGIN` and be undone by its rollback
+ * while this host's claim stamp had already moved on.
+ */
+const FOREIGN_TRANSACTION_RETRY_MS = 10;
+
+/**
+ * How long a `succeeded` or `canceled` row keeps answering `get()` before it is
+ * deleted — the same seven days `SchedulerDO` keeps its terminal records, so
+ * the answer to "did my job run?" does not depend on the host.
+ */
+const TERMINAL_RETENTION_MS = 604_800_000;
+
 /** Row shape of `_lunora_scheduler_jobs`. */
 interface JobRow {
     args: Buffer;
     attempts: number;
+    claimed_at: number | null;
+    completed_at: number | null;
     function_path: string;
     id: string;
     retry: Buffer | null;
     scheduled_for: number;
-    state: "dead" | "pending";
+    state: "canceled" | "dead" | "pending" | "succeeded";
 }
 
 /** Row shape of `_lunora_scheduler_crons`. */
@@ -97,15 +139,19 @@ interface NodeSchedulerHostOptions {
      * A handler that **throws** marks the delivery failed, which is what drives
      * the retry/dead-letter machinery: the job's `attempts` increments and it is
      * either re-armed with backoff or parked. A handler that resolves marks the
-     * job delivered and removes it.
+     * job `succeeded`.
      *
      * Omitting it makes every delivery trivially succeed, which means a caller
      * who forgets to pass one gets a scheduler that quietly drops work — the
      * precise failure plan 267 caught. Supply one in anything real; the
      * conformance host supplies one purely so the TCK can tell a delivery apart
      * from an expired timer.
+     *
+     * `job.scheduledFor` is the due time (a cron tick's planned fire time).
+     * Forwarding it as the dispatch body's `scheduledFor` is what lets the shard
+     * record the `scheduler.lag_ms` metric, as the Worker dispatch path does.
      */
-    onDispatch?: (functionPath: string, args: Record<string, unknown>, job: { attempts: number; id: string }) => Promise<void> | void;
+    onDispatch?: (functionPath: string, args: Record<string, unknown>, job: { attempts: number; id: string; scheduledFor: number }) => Promise<void> | void;
 }
 
 /**
@@ -162,6 +208,53 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             state TEXT NOT NULL DEFAULT 'pending'
         )`,
     );
+
+    // Databases created by an older build lack the later columns.
+    const hasColumn = (name: string): boolean =>
+        database
+            .prepare<[], { name: string }>("PRAGMA table_info(_lunora_scheduler_jobs)")
+            .all()
+            .some((column) => column.name === name);
+
+    // Construction is synchronous, so the back-off blocks the thread for the wait: bounded, and short.
+    const sleepSync = (ms: number): void => {
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    };
+
+    const addColumn = (name: string): void => {
+        for (let attempt = 0; ; attempt += 1) {
+            try {
+                database.exec(`ALTER TABLE _lunora_scheduler_jobs ADD COLUMN ${name} INTEGER`);
+
+                return;
+            } catch (error) {
+                // Another process sharing the file added it between our check and
+                // our ALTER: nothing left to do.
+                if (hasColumn(name)) {
+                    return;
+                }
+
+                // A lock held by a process still migrating is transient; anything else is a real failure.
+                const busy = error instanceof Error && "code" in error && error.code === "SQLITE_BUSY";
+
+                if (!busy || attempt >= MIGRATION_RETRY_LIMIT) {
+                    throw error;
+                }
+
+                sleepSync(MIGRATION_RETRY_BASE_MS * 2 ** attempt);
+            }
+        }
+    };
+
+    for (const column of ["claimed_at", "completed_at"]) {
+        if (!hasColumn(column)) {
+            addColumn(column);
+        }
+    }
+
+    // Finished rows stay for the retention window, so the per-completion sweep and the pending scans need this.
+    database.exec("CREATE INDEX IF NOT EXISTS _lunora_scheduler_jobs_state_completed ON _lunora_scheduler_jobs (state, completed_at)");
+
     database.exec(
         `CREATE TABLE IF NOT EXISTS _lunora_scheduler_crons (
             key TEXT PRIMARY KEY,
@@ -176,12 +269,38 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     );
     const selectJob = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE id = ?");
     const selectByState = database.prepare<[string], JobRow>("SELECT * FROM _lunora_scheduler_jobs WHERE state = ? ORDER BY scheduled_for");
-    const deleteJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ?");
-    const deletePendingJob = database.prepare<[string]>("DELETE FROM _lunora_scheduler_jobs WHERE id = ? AND state = 'pending'");
-    const updateAttempt = database.prepare<[number, number, string]>("UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ? WHERE id = ?");
-    const parkJob = database.prepare<[number, string]>("UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ? WHERE id = ?");
+    // `claimed_at` survives a cancel that lands mid-dispatch: if that attempt then
+    // succeeds, the job ran, and `succeedClaimedJob` (keyed on the claim) records so.
+    const cancelPendingJob = database.prepare<[number, string]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'canceled', completed_at = ? WHERE id = ? AND state = 'pending'",
+    );
+    const parkJob = database.prepare<[number, number, string]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, completed_at = ?, claimed_at = NULL WHERE id = ?",
+    );
+    const sweepTerminal = database.prepare<[number]>("DELETE FROM _lunora_scheduler_jobs WHERE state IN ('succeeded', 'canceled') AND completed_at <= ?");
+    // Settlement and renewal are conditional on still holding the claim: a handler
+    // that outlived its lease must not delete or re-arm a row another host took.
+    const succeedClaimedJob = database.prepare<[number, number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'succeeded', attempts = ?, completed_at = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ?",
+    );
+    const renewClaimedJob = database.prepare<[number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND claimed_at = ? AND state = 'pending'",
+    );
+    const updateClaimedAttempt = database.prepare<[number, number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET attempts = ?, scheduled_for = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ? AND state = 'pending'",
+    );
+    const parkClaimedJob = database.prepare<[number, number, string, number]>(
+        "UPDATE _lunora_scheduler_jobs SET state = 'dead', attempts = ?, completed_at = ?, claimed_at = NULL WHERE id = ? AND claimed_at = ? AND state = 'pending'",
+    );
+    // One statement, so two processes on one file cannot both take the row: the
+    // loser's WHERE no longer matches and it gets zero rows back. `scheduled_for`
+    // is checked too: another process's retry may have pushed the row past the
+    // time this host's timer was armed for.
+    const claimJob = database.prepare<[number, string, number, number], JobRow>(
+        "UPDATE _lunora_scheduler_jobs SET claimed_at = ? WHERE id = ? AND state = 'pending' AND scheduled_for <= ? AND (claimed_at IS NULL OR claimed_at < ?) RETURNING *",
+    );
     const requeueJob = database.prepare<[number, string]>(
-        "UPDATE _lunora_scheduler_jobs SET state = 'pending', attempts = 0, scheduled_for = ? WHERE id = ? AND state = 'dead'",
+        "UPDATE _lunora_scheduler_jobs SET state = 'pending', attempts = 0, completed_at = NULL, scheduled_for = ? WHERE id = ? AND state = 'dead'",
     );
     const upsertCron = database.prepare<[string, string, string, Buffer]>(
         `INSERT INTO _lunora_scheduler_crons (key, expression, function_path, args) VALUES (?, ?, ?, ?)
@@ -201,6 +320,9 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      */
     const isOpen = (): boolean => database.open;
 
+    /** Whether any task holds a transaction open on the shared connection, read live for the same reason as {@link isOpen}. */
+    const inTransaction = (): boolean => database.inTransaction;
+
     /**
      * Decode a job's stored retry policy. `null` is SQLite's own NULL arriving
      * through better-sqlite3's nullable-column mapping, not a value this
@@ -219,6 +341,23 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * keeps the connection open for other work.
      */
     let closed = false;
+
+    /**
+     * Resolve once no transaction is open on the shared connection, or the host
+     * shut down while waiting. Unref'd, so a wait cut short by `dispose()` never
+     * holds the process open.
+     */
+    const outsideForeignTransaction = async (): Promise<void> => {
+        if (closed || !isOpen() || !inTransaction()) {
+            return;
+        }
+
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, FOREIGN_TRANSACTION_RETRY_MS).unref();
+        });
+
+        await outsideForeignTransaction();
+    };
 
     /** Armed one-shot job timers, keyed by job id. */
     const jobTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -275,14 +414,109 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     };
 
     /**
-     * Deliver one job, then settle its row: removed on success, re-armed with
+     * Re-arm a job this host failed to claim. It is gone, not pending, not yet
+     * due, or held by another process. Held: wait out its lease so a claimer that
+     * died does not strand the row. Not yet due (another process rescheduled a
+     * retry): wait for its new time.
+     */
+    const followUnclaimedJob = (id: string): void => {
+        const held = selectJob.get(id);
+
+        if (!closed && held?.state === "pending") {
+            armJob(id, held.claimed_at === null ? held.scheduled_for : held.claimed_at + CLAIM_LEASE_MS);
+        }
+    };
+
+    /**
+     * Claim a job whose timer just fired, or re-arm it and answer `undefined`
+     * when this host cannot take it right now.
+     */
+    const claimDue = (id: string, now: number): JobRow | undefined => {
+        if (inTransaction()) {
+            if (!closed) {
+                armJob(id, now + FOREIGN_TRANSACTION_RETRY_MS);
+            }
+
+            return undefined;
+        }
+
+        try {
+            const row = claimJob.get(now, id, now, now - CLAIM_LEASE_MS);
+
+            if (row === undefined) {
+                followUnclaimedJob(id);
+            }
+
+            return row;
+        } catch {
+            // The timer is already spent and the row is still pending, so without a re-arm nothing
+            // would run it again until the next construction.
+            if (!closed && isOpen()) {
+                armJob(id, Date.now() + CLAIM_RETRY_MS);
+            }
+
+            return undefined;
+        }
+    };
+
+    /**
+     * Keep this host's claim on `id` alive while its handler runs, renewing well
+     * inside the lease. Every settlement is conditional on the stamp this
+     * returns. A renewal that comes due while another task holds a transaction
+     * open waits for it to end: run inside it, a rollback would revert the
+     * renewal after the stamp had moved, and no settlement would match the row.
+     */
+    const holdClaim = (id: string, claimedAt: number): { release: () => void; stamp: () => number } => {
+        let claimStamp = claimedAt;
+        let renewTimer: ReturnType<typeof setTimeout> | undefined;
+
+        const renewAfter = (ms: number): void => {
+            renewTimer = setTimeout(() => {
+                if (!isOpen()) {
+                    return;
+                }
+
+                if (inTransaction()) {
+                    renewAfter(FOREIGN_TRANSACTION_RETRY_MS);
+
+                    return;
+                }
+
+                const renewedAt = Date.now();
+
+                try {
+                    if (renewClaimedJob.run(renewedAt, id, claimStamp).changes === 1) {
+                        claimStamp = renewedAt;
+                    }
+                } catch {
+                    // A thrown renewal is a missed tick, not a lost claim: the next tick retries before the lease expires.
+                }
+
+                renewAfter(CLAIM_RENEW_MS);
+            }, ms);
+            renewTimer.unref();
+        };
+
+        renewAfter(CLAIM_RENEW_MS);
+
+        return {
+            release: () => {
+                clearTimeout(renewTimer);
+            },
+            stamp: () => claimStamp,
+        };
+    };
+
+    /**
+     * Deliver one job, then settle its row: marked `succeeded` on success, re-armed with
      * backoff while attempts remain, parked in `dead` once they are exhausted.
      *
      * Every database touch is guarded on `database.open`, because a timer can
      * outlive a `close()` the caller made in between (shutdown, test cleanup)
      * and a statement against a closed better-sqlite3 connection throws
      * synchronously inside the timer callback, where no caller's try/catch can
-     * reach it.
+     * reach it. None of them runs while another task holds a transaction open
+     * either; see {@link FOREIGN_TRANSACTION_RETRY_MS}.
      */
     const deliver = async (id: string): Promise<void> => {
         jobTimers.delete(id);
@@ -291,22 +525,30 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             return;
         }
 
-        const row = selectJob.get(id);
+        const now = Date.now();
+        const row = claimDue(id, now);
 
-        if (row?.state !== "pending") {
+        if (row === undefined) {
             return;
         }
 
         const attempts = row.attempts + 1;
         const retry = decodeRetry(row.retry);
+        const claim = holdClaim(id, now);
 
         try {
-            await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts, id });
+            await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts, id, scheduledFor: row.scheduled_for });
+            await outsideForeignTransaction();
 
-            if (isOpen()) {
-                deleteJob.run(id);
+            if (isOpen() && !inTransaction()) {
+                const completedAt = Date.now();
+
+                succeedClaimedJob.run(attempts, completedAt, id, claim.stamp());
+                sweepTerminal.run(completedAt - TERMINAL_RETENTION_MS);
             }
         } catch {
+            await outsideForeignTransaction();
+
             // Delivery failed. The catch is bare because *why* it failed is the
             // handler's business; all this loop decides is whether any budget is
             // left. `closed` is checked too: `dispose()` cleared `jobTimers` and
@@ -319,15 +561,18 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             const maxAttempts = retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts;
 
             if (attempts >= maxAttempts) {
-                parkJob.run(attempts, id);
+                parkClaimedJob.run(attempts, Date.now(), id, claim.stamp());
 
                 return;
             }
 
             const nextAt = Date.now() + backoffFor(attempts, retry);
 
-            updateAttempt.run(attempts, nextAt, id);
-            armJob(id, nextAt);
+            if (updateClaimedAttempt.run(attempts, nextAt, id, claim.stamp()).changes === 1) {
+                armJob(id, nextAt);
+            }
+        } finally {
+            claim.release();
         }
     };
 
@@ -355,7 +600,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         let nextAt: number;
 
         try {
-            nextAt = parse(row.expression).next().getTime();
+            nextAt = parse(row.expression, CRON_PARSE_OPTIONS).next().getTime();
         } catch {
             // An unparseable expression is a permanent condition, not a transient
             // one — re-arming would spin. `cron()` validates before it ever
@@ -382,7 +627,12 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             (async (): Promise<void> => {
                 try {
-                    await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, { attempts: 0, id: row.key });
+                    await options.onDispatch?.(row.function_path, deserialize(row.args) as Record<string, unknown>, {
+                        attempts: 0,
+                        // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
+                        id: `${row.key}:${String(nextAt)}`,
+                        scheduledFor: nextAt,
+                    });
                 } catch {
                     // See the docstring: a dropped tick must not stop the schedule.
                 }
@@ -419,7 +669,14 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             // `false`. A dead-lettered job is no longer on its way — answering
             // `true` would tell a caller it stopped a delivery that had already
             // permanently failed.
-            return deletePendingJob.run(id).changes > 0;
+            const now = Date.now();
+            const cancelled = cancelPendingJob.run(now, id).changes > 0;
+
+            // A host that only cancels never completes a job or restarts, the other
+            // two places finished rows are reclaimed.
+            sweepTerminal.run(now - TERMINAL_RETENTION_MS);
+
+            return cancelled;
         },
 
         // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
@@ -430,7 +687,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             // Parse before writing: an invalid expression must fail the caller's
             // await rather than land a row that can never be armed.
-            parse(expression);
+            parse(expression, CRON_PARSE_OPTIONS);
 
             const row: CronRow = {
                 args: serialize(args ?? {}),
@@ -472,6 +729,27 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             },
         },
 
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `cancel`
+        get: async (id) => {
+            const row = closed || !isOpen() ? undefined : selectJob.get(id);
+
+            if (row === undefined || (row.completed_at !== null && row.state !== "dead" && row.completed_at <= Date.now() - TERMINAL_RETENTION_MS)) {
+                // eslint-disable-next-line unicorn/no-null -- the contract answers `null` for an unknown or forgotten id
+                return null;
+            }
+
+            const states = { canceled: "canceled", dead: "failed", pending: "pending", succeeded: "succeeded" } as const;
+            // A live claim is a delivery in flight; one past its lease belongs to a claimer that died and is waiting to be retaken.
+            const running = row.state === "pending" && row.claimed_at !== null && row.claimed_at >= Date.now() - CLAIM_LEASE_MS;
+            const record: ScheduledJobRecord = { ...toStatus(row), state: running ? "running" : states[row.state] };
+
+            if (row.completed_at !== null) {
+                record.completedAt = row.completed_at;
+            }
+
+            return record;
+        },
+
         // Empty after `dispose()` rather than a query against a possibly-closed
         // connection: a disposed host has nothing on its way, and teardown code
         // that lists during shutdown must not get a `TypeError` from better-sqlite3.
@@ -482,6 +760,13 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         schedule: async (functionPath, args, scheduleOptions) => {
             if (closed) {
                 throw new Error("platform closed: cannot schedule a job");
+            }
+
+            // Refused before the row is written or a timer armed, and as INVALID_INPUT: a
+            // shard outbox treats that code as a deterministic refusal and parks the call,
+            // where an uncatalogued throw would be re-offered every half hour for good.
+            if (scheduleOptions?.retry?.forever === true) {
+                throw new LunoraError("INVALID_INPUT", "retry.forever is not supported by the Node scheduler host; set a finite retry.maxAttempts");
             }
 
             // A UUID rather than a per-process counter: the counter restarted
@@ -507,6 +792,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             return job;
         },
     };
+
+    sweepTerminal.run(Date.now() - TERMINAL_RETENTION_MS);
 
     // Re-arm everything the last process left behind. This is the loop that
     // makes the durability claim true rather than aspirational — without it the
@@ -546,7 +833,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             const retry = decodeRetry(row.retry);
 
-            parkJob.run((retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts) + 1, id);
+            parkJob.run((retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts) + 1, Date.now(), id);
 
             return true;
         },

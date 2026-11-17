@@ -1,0 +1,11 @@
+{
+    // The `workerd` vitest project's own program: the package config plus
+    // Cloudflare's ambient globals, which `../../tsconfig.json` keeps away from
+    // `src/`. ESLint's project service picks this file up for everything here.
+    "extends": "../../tsconfig.json",
+    "compilerOptions": {
+        "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types", "node"]
+    },
+    "include": ["./**/*"],
+    "exclude": []
+}

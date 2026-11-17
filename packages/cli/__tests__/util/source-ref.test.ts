@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Logger } from "../../src/util/logger";
-import { isImmutableRef, resolveDistTag, resolvePinnedSourceRef, resolveSourceRef, resolveVersionRef } from "../../src/util/source-ref";
+import { isImmutableRef, resolveDistTag, resolvePinnedSourceRef, resolveSourceRef, resolveVersionRef, sourceGitRemote } from "../../src/util/source-ref";
 
 /** A recording logger so the pin / warn provenance lines can be asserted. */
 const recordingLogger = (): { infos: string[]; logger: Logger; warnings: string[] } => {
@@ -328,5 +328,25 @@ describe("resolvePinnedSourceRef", () => {
 
         expect(resolved).toBe("v2.0.0");
         expect(fetchMock).not.toHaveBeenCalled();
+    });
+});
+
+describe("sourceGitRemote", () => {
+    it.each([
+        ["gh:someone/fork/sdks", "https://github.com/someone/fork"],
+        ["github:someone/fork", "https://github.com/someone/fork"],
+        ["bitbucket:team/repo/sdks", "https://bitbucket.org/team/repo"],
+        ["sourcehut:someone/repo/sdks", "https://git.sr.ht/~someone/repo"],
+        ["gitlab:group/sub/repo::sdks", "https://gitlab.com/group/sub/repo"],
+    ])("maps %s to the repository giget fetches from", (source, remote) => {
+        expect.assertions(1);
+
+        expect(sourceGitRemote(source)).toBe(remote);
+    });
+
+    it.each(["https://example.com/sdks.tar.gz", "file:/tmp/sdks", "gh:"])("names no repository for %s", (source) => {
+        expect.assertions(1);
+
+        expect(sourceGitRemote(source)).toBeUndefined();
     });
 });

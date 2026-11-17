@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -163,7 +164,46 @@ type Client struct {
 	wasEverConnected bool
 	closed           bool
 	settledListeners []func(MutationSettled)
+
+	// pendingRetries holds the deadline of the one cold re-subscribe a retry hint
+	// asked for, per query subscription id. Guarded by mu; a nil map reads as empty.
+	pendingRetries map[string]time.Time
+
+	// attachGeneration changes on every attach, detach and close, so a retry batch
+	// sent outside mu can tell that the socket it captured is gone. Guarded by mu.
+	attachGeneration int
+
+	// sessionToken is the WS session credential, sent as connect.token on every
+	// socket open. It is not the RPC bearer (authToken), and it never rides a URL.
+	// See SessionToken/SetSessionToken.
+	sessionToken string
+	// credentialGeneration advances each time sessionToken changes. A refusal
+	// notifies once per generation, so a new credential gets its own notice.
+	credentialGeneration int
+	// socketGeneration is the credentialGeneration the attached socket opened under.
+	socketGeneration int
+	// refusedGeneration is the generation of the last 4003 refusal that notified; it
+	// means nothing until refusalNotified is set, because generation 0 is real.
+	refusalNotified       bool
+	refusedGeneration     int
+	tokenExpiredListeners []func()
+	// whispers holds each joined topic's listeners, oldest first. A topic is present
+	// exactly while it has a listener, and is joined with the server exactly then.
+	whispers map[string][]whisperListener
+	// unjoined holds the topics whose last join write failed, so the next listener sends the join again.
+	unjoined      map[string]bool
+	nextWhisperID int
 }
+
+// whisperListener is one WhisperSubscribe registration, keyed by id so its
+// unsubscribe can remove it without disturbing its neighbours.
+type whisperListener struct {
+	id     int
+	handle WhisperHandler
+}
+
+// WhisperHandler receives each decoded whisper delivered on a topic.
+type WhisperHandler func(value any)
 
 // shapeSubscription is a partially-replicated keyed view maintained by pokes.
 type shapeSubscription struct {
@@ -220,6 +260,17 @@ type subscription struct {
 	onError  ErrorHandler
 	cursor   any
 	epoch    any
+	// poisoned is set when a row change could not be merged into the held base.
+	// The change is dropped, and a later frame of the same run carries the resume
+	// cursor, so honouring it would move the resume point past the dropped change
+	// and a reconnect would never replay it. While set, delta frames are ignored;
+	// a data frame (an authoritative snapshot) or a resubscribe clears it.
+	poisoned bool
+	// pending is the value of a delta run held so far (frames marked more). A run commits only
+	// on its last frame, so the held frames never move the cursor, and a run cut off by a
+	// reconnect leaves the resume point before it: the server replays the whole run.
+	pending    any
+	hasPending bool
 	// state carries the displayed value and its optimistic overlays. See
 	// optimistic.go.
 	state OptimisticState
@@ -236,6 +287,7 @@ func NewClient(baseURL string, post HTTPPoster) *Client {
 		pokes:         map[string]*pokeBuffer{},
 		shapes:        map[string]*shapeSubscription{},
 		subscriptions: map[string]*subscription{},
+		whispers:      map[string][]whisperListener{},
 	}
 }
 
@@ -346,6 +398,29 @@ func (c *Client) SetAuthToken(token string) {
 	runDeferred(deferred)
 }
 
+// SessionToken returns the WS session credential connect carries; "" means none.
+func (c *Client) SessionToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.sessionToken
+}
+
+// SetSessionToken replaces the WS session credential (connect.token). It is sent
+// in the connect frame of each socket opened after this call, never in the URL,
+// and it is not the RPC bearer: SetAuthToken does not change it. A new value starts
+// a new credential generation, so a refusal of the old one notifies OnTokenExpired
+// listeners again. Setting the value already held changes nothing.
+func (c *Client) SetSessionToken(token string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if token != c.sessionToken {
+		c.sessionToken = token
+		c.credentialGeneration++
+	}
+}
+
 // identityFingerprintLocked is who a write queued now belongs to: the identity
 // when set, else TokenStamp of the bearer token, else SignedOut — the
 // reference's identityFingerprint. Without the digest branch every write made
@@ -371,6 +446,9 @@ func (c *Client) evictSessionLocked(deferred *[]func()) {
 	for _, entry := range c.subscriptions {
 		entry.cursor = nil
 		entry.epoch = nil
+		// A freeze belongs to the previous identity, as its cached base does.
+		entry.poisoned = false
+		entry.discardRun()
 		entry.state.ServerBase = nil
 		entry.state.ServerCursor = nil
 		NotifySubscription(&entry.state, FoldOptimistic(nil, entry.state.Layers), deferred)
@@ -388,28 +466,254 @@ func (c *Client) evictSessionLocked(deferred *[]func()) {
 	}
 }
 
-// AttachSocket registers the sender used for subscription frames. Call it once
-// the socket is open; buffered subscriptions are (re)sent by ResendSubscriptions.
+// AttachSocket opens the subscription channel on a freshly opened socket. It sends
+// `connect` first (clientID, context when non-nil, and the session credential when
+// one is set), then `whisper_subscribe` for every joined topic, and only then makes
+// send the channel later frames go out on. Call it before ResendSubscriptions,
+// which sends the subscriptions after connect.
 //
-// It also latches "has connected at least once", which is what the write queue
-// gates on: a write made before the FIRST connect fails fast by default, so a
-// misconfigured endpoint surfaces on the first write instead of silently filling
-// a queue that will never flush.
-func (c *Client) AttachSocket(send FrameSender) {
+// The connect write and the rejoins run under mu, so a Subscribe or Whisper on
+// another goroutine cannot write ahead of connect. That holds the lock across the
+// sender, which is safe because a FrameSender is a socket write and never calls
+// back into the client. A failed write leaves the client offline (Online reports
+// false), and the caller should drop the socket.
+//
+// A successful attach also latches "has connected at least once", which is what
+// the write queue gates on: a write made before the FIRST connect fails fast by
+// default, so a misconfigured endpoint surfaces on the first write instead of
+// silently filling a queue that will never flush.
+func (c *Client) AttachSocket(send FrameSender, context map[string]any) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	// A new socket replaces the previous one; until this attach succeeds, nothing
+	// is attached, and no credential generation belongs to the socket yet, so a close of a
+	// socket whose connect failed is never a refusal of the current credential.
+	c.send = nil
+	c.socketGeneration = -1
+	c.attachGeneration++
+	clear(c.pendingRetries)
+	// A run held on the previous socket never finishes on this one.
+	c.discardRunsLocked()
+
+	if send(BuildConnectFrame(c.clientID, context, c.sessionToken, PageDeltaCapability)) != nil {
+		return
+	}
+
+	topics := make([]string, 0, len(c.whispers))
+	for topic := range c.whispers {
+		topics = append(topics, topic)
+	}
+
+	sort.Strings(topics)
+
+	for _, topic := range topics {
+		if send(BuildWhisperSubscribeFrame(topic)) != nil {
+			return
+		}
+	}
 
 	c.send = send
+	c.socketGeneration = c.credentialGeneration
 	c.wasEverConnected = true
+	c.unjoined = nil
 }
 
-// DetachSocket forgets the sender, so subsequent writes queue rather than fail.
-// Call it when the socket closes.
-func (c *Client) DetachSocket() {
+// DetachSocket forgets the sender, so subsequent writes queue rather than fail, and
+// classifies the close that ended the socket. closeCode 0 means no close frame.
+//
+//   - 4001 is token expiry: OnTokenExpired listeners are notified.
+//   - 4003 is a refused session credential, unless its reason is exactly
+//     "connect deadline" (a socket that never sent connect, which refuses no
+//     credential). It notifies only when the socket opened under the credential in
+//     force, and only once per credential generation. A socket that opened under an
+//     earlier generation refused a credential no longer in use, so it is silent.
+//   - Anything else notifies nothing.
+func (c *Client) DetachSocket(closeCode int, reason string) {
+	c.mu.Lock()
+	c.send = nil
+	c.attachGeneration++
+	clear(c.pendingRetries)
+	c.discardRunsLocked()
+
+	expired := closeCode == 4001
+
+	current := c.socketGeneration == c.credentialGeneration
+	notified := c.refusalNotified && c.refusedGeneration == c.socketGeneration
+
+	if closeCode == 4003 && reason != "connect deadline" && current && !notified {
+		c.refusalNotified = true
+		c.refusedGeneration = c.socketGeneration
+		expired = true
+	}
+
+	c.mu.Unlock()
+
+	if expired {
+		c.notifyTokenExpired()
+	}
+}
+
+// OnTokenExpired registers a listener for the token-expiry signals: a 4001 close, a
+// TOKEN_EXPIRED error frame, and a refused session credential (once per credential).
+// The listener is expected to refresh the credential, and to call SetSessionToken
+// with the result. It returns the func that unregisters it.
+func (c *Client) OnTokenExpired(listener func()) func() {
+	c.mu.Lock()
+	index := len(c.tokenExpiredListeners)
+	c.tokenExpiredListeners = append(c.tokenExpiredListeners, listener)
+	c.mu.Unlock()
+
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		if index < len(c.tokenExpiredListeners) {
+			c.tokenExpiredListeners[index] = nil
+		}
+	}
+}
+
+// notifyTokenExpired runs the OnTokenExpired listeners outside mu, so a listener
+// that calls SetSessionToken does not deadlock.
+func (c *Client) notifyTokenExpired() {
+	c.mu.Lock()
+	listeners := make([]func(), 0, len(c.tokenExpiredListeners))
+
+	for _, listener := range c.tokenExpiredListeners {
+		if listener != nil {
+			listeners = append(listeners, listener)
+		}
+	}
+
+	c.mu.Unlock()
+
+	for _, listener := range listeners {
+		notifyTokenExpiredListener(listener)
+	}
+}
+
+// notifyTokenExpiredListener isolates one listener's panic. A listener must not stop
+// a socket close or a frame from being handled, nor the next listener from being told.
+func notifyTokenExpiredListener(listener func()) {
+	defer func() { _ = recover() }()
+
+	listener()
+}
+
+// WhisperSubscribe listens on topic. The first listener on a topic sends
+// whisper_subscribe when a socket is attached, and AttachSocket rejoins every joined
+// topic on each open. The returned Unsubscribe removes this listener; removing the
+// last one sends whisper_unsubscribe (when attached) and forgets the topic.
+func (c *Client) WhisperSubscribe(topic string, listener WhisperHandler) Unsubscribe {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.send = nil
+	if c.whispers == nil {
+		// A literal-constructed Client has a nil map, as Subscribe allows for.
+		c.whispers = map[string][]whisperListener{}
+	}
+
+	c.nextWhisperID++
+	id := c.nextWhisperID
+	joining := len(c.whispers[topic]) == 0 || c.unjoined[topic]
+	c.whispers[topic] = append(c.whispers[topic], whisperListener{id: id, handle: listener})
+
+	// The join is written under the lock, in the order the listener state changes, so a leave cannot
+	// overtake it. A join that fails is retried by the next listener on the topic.
+	if joining && c.send != nil {
+		if c.send(BuildWhisperSubscribeFrame(topic)) != nil {
+			c.markUnjoined(topic)
+		} else {
+			delete(c.unjoined, topic)
+		}
+	}
+
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+
+		remaining := make([]whisperListener, 0, len(c.whispers[topic]))
+
+		for _, entry := range c.whispers[topic] {
+			if entry.id != id {
+				remaining = append(remaining, entry)
+			}
+		}
+
+		if len(remaining) == len(c.whispers[topic]) {
+			return
+		}
+
+		if len(remaining) > 0 {
+			c.whispers[topic] = remaining
+
+			return
+		}
+
+		delete(c.whispers, topic)
+		delete(c.unjoined, topic)
+
+		if c.send != nil {
+			_ = c.send(BuildWhisperUnsubscribeFrame(topic))
+		}
+	}
+}
+
+// markUnjoined records that a topic's join was not written, so the next listener on it sends the join
+// again. Caller holds c.mu.
+func (c *Client) markUnjoined(topic string) {
+	if c.unjoined == nil {
+		c.unjoined = map[string]bool{}
+	}
+
+	c.unjoined[topic] = true
+}
+
+// Whisper relays data to the other members of topic. It is not queued: it reports
+// false when no socket is attached, when data will not encode, or when the write
+// fails, and nothing is sent in those cases.
+func (c *Client) Whisper(topic string, data any) bool {
+	frame, err := BuildWhisperFrame(topic, data)
+	if err != nil {
+		return false
+	}
+
+	// The write is under the lock, so a detach or a replacing attach cannot land between the sender
+	// check and the write: the frame goes to the socket that is attached, or to none.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.send == nil {
+		return false
+	}
+
+	return c.send(frame) == nil
+}
+
+// Room is a joined room. See ConnectRoom.
+type Room struct {
+	client *Client
+	topic  string
+	leave  Unsubscribe
+}
+
+// ConnectRoom joins the room topic "room:" + name and delivers its messages to
+// listener. A room join is never acknowledged, so Send may be called straight away.
+func (c *Client) ConnectRoom(name string, listener WhisperHandler) *Room {
+	topic := "room:" + name
+
+	return &Room{client: c, topic: topic, leave: c.WhisperSubscribe(topic, listener)}
+}
+
+// Send relays message to the room's other members. See Whisper.
+func (r *Room) Send(message any) bool {
+	return r.client.Whisper(r.topic, message)
+}
+
+// Close leaves the room. It is idempotent.
+func (r *Room) Close() {
+	r.leave()
 }
 
 // Online reports whether a socket is currently attached.
@@ -421,12 +725,14 @@ func (c *Client) Online() bool {
 }
 
 // Close rejects every queued write so no caller waits on a dead client, and ends
-// every open [Client.Stream]. Durable storage is untouched: the next session
+// every open [Client.Watch]. Durable storage is untouched: the next session
 // restores those writes.
 func (c *Client) Close() {
 	c.mu.Lock()
 	c.closed = true
 	c.send = nil
+	c.attachGeneration++
+	clear(c.pendingRetries)
 	discarded := c.offline.Clear()
 
 	streams := make([]func(), 0, len(c.streams))
@@ -775,7 +1081,10 @@ func Call[T any](c *Client, verb Verb, functionPath string, args any, shardKey s
 }
 
 // BuildConnectFrame is the one-shot frame sent first on every socket open.
-func BuildConnectFrame(clientID string, context map[string]any) map[string]any {
+// token is the session credential; it rides here and never in the socket URL,
+// and is omitted when empty. caps announces optional server behaviours; the port
+// announces only what it handles (pageDelta, never refreshBatch).
+func BuildConnectFrame(clientID string, context map[string]any, token string, caps ...string) map[string]any {
 	frame := map[string]any{"id": "connect", "type": "connect"}
 	if clientID != "" {
 		frame["clientId"] = clientID
@@ -783,6 +1092,14 @@ func BuildConnectFrame(clientID string, context map[string]any) map[string]any {
 
 	if context != nil {
 		frame["context"] = context
+	}
+
+	if token != "" {
+		frame["token"] = token
+	}
+
+	if len(caps) > 0 {
+		frame["caps"] = caps
 	}
 
 	return frame
@@ -852,6 +1169,26 @@ func BuildUnsubscribeFrame(id string) map[string]any {
 	return map[string]any{"id": id, "type": "unsubscribe"}
 }
 
+// BuildWhisperSubscribeFrame joins a whisper topic.
+func BuildWhisperSubscribeFrame(topic string) map[string]any {
+	return map[string]any{"topic": topic, "type": "whisper_subscribe"}
+}
+
+// BuildWhisperUnsubscribeFrame leaves a whisper topic.
+func BuildWhisperUnsubscribeFrame(topic string) map[string]any {
+	return map[string]any{"topic": topic, "type": "whisper_unsubscribe"}
+}
+
+// BuildWhisperFrame relays data to topic. data is wire-encoded, as every value is.
+func BuildWhisperFrame(topic string, data any) (map[string]any, error) {
+	encoded, err := EncodeWire(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return map[string]any{"data": encoded, "topic": topic, "type": "whisper"}, nil
+}
+
 // Subscribe opens a live query. The returned Unsubscribe stops delivery and
 // tells the server to drop it.
 //
@@ -905,6 +1242,7 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 	return func() {
 		c.mu.Lock()
 		delete(c.subscriptions, id)
+		delete(c.pendingRetries, id)
 		sender := c.send
 		c.mu.Unlock()
 
@@ -914,13 +1252,13 @@ func (c *Client) Subscribe(functionPath string, args any, onData DataHandler, on
 	}
 }
 
-// StreamEvent is one item delivered by [Client.Stream]: a value, or the
+// WatchEvent is one item delivered by [Client.Watch]: a value, or the
 // subscription error that ended it.
 //
 // One channel carrying both, rather than a value channel plus an error channel:
 // a consumer selecting on two channels can read them out of order, and the whole
 // point of a stream is that what arrived first is delivered first.
-type StreamEvent struct {
+type WatchEvent struct {
 	Value any
 	Err   error
 }
@@ -939,8 +1277,8 @@ type StreamEvent struct {
 //
 // [Client.Close] ends every open stream too: the channel closes, so a `range`
 // over it returns rather than waiting on a client that will never send again.
-func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan StreamEvent, Unsubscribe) {
-	events := make(chan StreamEvent, streamBufferSize)
+func (c *Client) Watch(functionPath string, args any, shardKey string) (<-chan WatchEvent, Unsubscribe) {
+	events := make(chan WatchEvent, streamBufferSize)
 	done := make(chan struct{})
 
 	// sending is held (shared) for the whole of every send and taken exclusively
@@ -955,7 +1293,7 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 		closed  bool
 	)
 
-	emit := func(event StreamEvent) {
+	emit := func(event WatchEvent) {
 		sending.RLock()
 		defer sending.RUnlock()
 
@@ -972,8 +1310,8 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 	unsubscribe := c.Subscribe(
 		functionPath,
 		args,
-		func(value any) { emit(StreamEvent{Value: value}) },
-		func(err SubscriptionError) { emit(StreamEvent{Err: err}) },
+		func(value any) { emit(WatchEvent{Value: value}) },
+		func(err SubscriptionError) { emit(WatchEvent{Err: err}) },
 		shardKey,
 	)
 
@@ -1017,7 +1355,7 @@ func (c *Client) Stream(functionPath string, args any, shardKey string) (<-chan 
 	return events, end
 }
 
-// streamBufferSize is how many values [Client.Stream] holds before its sends
+// streamBufferSize is how many values [Client.Watch] holds before its sends
 // block. Big enough that an ordinary consumer never sees backpressure, small
 // enough that a stalled one is noticed rather than growing without bound.
 const streamBufferSize = 64
@@ -1075,6 +1413,7 @@ func (c *Client) ResendSubscriptions() error {
 		args   any
 		cursor any
 		epoch  any
+		sub    *subscription
 	}
 
 	c.mu.Lock()
@@ -1083,6 +1422,7 @@ func (c *Client) ResendSubscriptions() error {
 
 	for id, entry := range c.subscriptions {
 		entries = append(entries, resumePoint{
+			sub:    entry,
 			args:   entry.args,
 			cursor: entry.cursor,
 			epoch:  entry.epoch,
@@ -1113,13 +1453,29 @@ func (c *Client) ResendSubscriptions() error {
 		return nil
 	}
 
+	// The replay re-applies a dropped change from the frozen cursor, so the poison clears
+	// for each send. A poisoned subscription would ignore that replay. A failed build or
+	// send leaves the subscription frozen again.
 	for _, entry := range entries {
 		frame, err := BuildSubscribeFrame(entry.id, entry.name, entry.args, "", entry.cursor, entry.epoch)
 		if err != nil {
 			return err
 		}
 
+		c.mu.Lock()
+		wasPoisoned := entry.sub.poisoned
+		entry.sub.poisoned = false
+		// The replay re-sends the whole run from the cursor before it.
+		entry.sub.discardRun()
+		c.mu.Unlock()
+
 		if err := send(frame); err != nil {
+			if wasPoisoned {
+				c.mu.Lock()
+				entry.sub.poisoned = true
+				c.mu.Unlock()
+			}
+
 			return err
 		}
 	}
@@ -1136,6 +1492,140 @@ func (c *Client) ResendSubscriptions() error {
 	}
 
 	return nil
+}
+
+// RetryDueSubscriptions re-subscribes, cold, every query whose retry hint has come
+// due at now, and returns how many frames it wrote. Nothing is sent while no socket is
+// attached. A failed write stops the batch and is returned, as ResendSubscriptions
+// does, so the caller can drop the socket; the retries not yet written stay due. A
+// subscription whose args cannot be encoded is skipped and its error returned. The
+// caller arms its own timer for [Client.NextSubscriptionRetryAt].
+func (c *Client) RetryDueSubscriptions(now time.Time) (int, error) {
+	type retryFrame struct {
+		id    string
+		frame map[string]any
+	}
+
+	// Built under the lock: each cold frame reads the entry the frame handler writes.
+	c.mu.Lock()
+
+	if c.send == nil {
+		c.mu.Unlock()
+
+		return 0, nil
+	}
+
+	send := c.send
+	generation := c.attachGeneration
+	batch := make([]retryFrame, 0, len(c.pendingRetries))
+
+	var buildErr error
+
+	for id, deadline := range c.pendingRetries {
+		if deadline.After(now) {
+			continue
+		}
+
+		delete(c.pendingRetries, id)
+
+		entry := c.subscriptions[id]
+		if entry == nil {
+			continue
+		}
+
+		frame, err := BuildSubscribeFrame(id, entry.functionPath, entry.args, "", nil, nil)
+		if err != nil {
+			if buildErr == nil {
+				buildErr = err
+			}
+
+			continue
+		}
+
+		// A retry asks for a fresh snapshot, so it carries no resume cursor.
+		entry.cursor = nil
+		entry.epoch = nil
+		batch = append(batch, retryFrame{id: id, frame: frame})
+	}
+
+	c.mu.Unlock()
+
+	sent := 0
+
+	// Sent outside the lock, as Subscribe does: the FrameSender is socket I/O. Each
+	// write first checks that the socket the batch captured is still the attached one.
+	for index, retry := range batch {
+		c.mu.Lock()
+		current := c.attachGeneration == generation
+		registered := c.subscriptions[retry.id] != nil
+		c.mu.Unlock()
+
+		if !current {
+			break
+		}
+
+		if !registered {
+			continue
+		}
+
+		if err := send(retry.frame); err != nil {
+			c.mu.Lock()
+
+			// Unless the socket has changed since, which cancels every retry, the frames
+			// not written stay due; a newer hint for one of them is kept.
+			if c.attachGeneration == generation {
+				for _, unsent := range batch[index:] {
+					if _, pending := c.pendingRetries[unsent.id]; !pending && c.subscriptions[unsent.id] != nil {
+						if c.pendingRetries == nil {
+							c.pendingRetries = map[string]time.Time{}
+						}
+
+						c.pendingRetries[unsent.id] = now
+					}
+				}
+			}
+
+			c.mu.Unlock()
+
+			return sent, err
+		}
+
+		sent++
+	}
+
+	return sent, buildErr
+}
+
+// NextSubscriptionRetryAt reports the earliest pending retry deadline, and false when
+// none is pending.
+func (c *Client) NextSubscriptionRetryAt() (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var earliest time.Time
+
+	found := false
+
+	for _, deadline := range c.pendingRetries {
+		if !found || deadline.Before(earliest) {
+			earliest = deadline
+			found = true
+		}
+	}
+
+	return earliest, found
+}
+
+// retryHint reads an error envelope's retryAfterMs, clamped at MaxRetryAfterMs. It
+// reports false for a missing, non-numeric, negative or non-finite value. encoding/json
+// decodes every number as float64, so a bool or a string fails the assertion here.
+func retryHint(envelope map[string]any) (time.Duration, bool) {
+	value, ok := envelope["retryAfterMs"].(float64)
+	if !ok || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0, false
+	}
+
+	return time.Duration(math.Min(value, MaxRetryAfterMs) * float64(time.Millisecond)), true
 }
 
 // HandleFrame applies one server frame, invoking the relevant callbacks. It
@@ -1160,6 +1650,14 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 	c.mu.Lock()
 	entry := c.subscriptions[id]
 	shape := c.shapes[id]
+
+	// The server answered this subscription, so a retry an earlier hint scheduled is moot. A
+	// `data`, `delta`, `resume` or `settled` cancels it only once applied, below: one that cannot
+	// be applied answers nothing, and the retry's snapshot is what unfreezes the subscription.
+	if kind == "ack" {
+		delete(c.pendingRetries, id)
+	}
+
 	c.mu.Unlock()
 
 	switch kind {
@@ -1177,6 +1675,29 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			// not on the socket read loop's stack. Returning it ended the caller's
 			// loop — and with it every other subscription on this client — over one
 			// bad frame.
+			if entry != nil && kind == "delta" {
+				// A run that lost a frame cannot complete, and a later frame would commit against
+				// a base missing it: drop the run and freeze, as an unmergeable row change does.
+				c.mu.Lock()
+				frozen := entry.poisoned
+				entry.poisoned = true
+				entry.discardRun()
+				c.mu.Unlock()
+
+				// A frozen subscription ignores delta frames, so the refusal is already reported.
+				if !frozen && entry.onError != nil {
+					entry.onError(SubscriptionError{Code: CodeWireDecodeFailed, Message: err.Error()})
+				}
+
+				return "error", nil
+			}
+
+			if entry != nil {
+				c.mu.Lock()
+				entry.discardRun()
+				c.mu.Unlock()
+			}
+
 			if entry != nil && entry.onError != nil {
 				entry.onError(SubscriptionError{Code: "INVALID_FRAME", Message: err.Error()})
 			}
@@ -1188,8 +1709,54 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			var deferred []func()
 
 			c.mu.Lock()
+
+			// A row-change delta merges into the server base, not into what the user
+			// sees: the overlay is re-folded onto the merged base below.
+			if kind == "data" {
+				entry.poisoned = false
+				// A snapshot is authoritative: held frames are not merged onto it.
+				entry.discardRun()
+			} else if entry.poisoned {
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
+			// A run's later frames merge onto the frames before them, not the committed base.
+			base := entry.state.ServerBase
+			if entry.hasPending {
+				base = entry.pending
+			}
+
+			merged, publish := resolveDataPayload(kind, base, value)
+			if !publish {
+				entry.poisoned = true
+				entry.discardRun()
+				notice := entry.onError
+				c.mu.Unlock()
+
+				// Reported once, when the freeze starts: an app that stays silent shows a stale list.
+				if notice != nil {
+					notice(SubscriptionError{Code: "delta_unmergeable", Message: "row change could not be merged; subscription frozen until a snapshot or resubscribe"})
+				}
+
+				return kind, nil
+			}
+
+			// A non-final frame of a run is held: no publish, and no cursor, epoch or overlay
+			// movement until the run's last frame commits it.
+			if kind == "delta" && frame["more"] == true {
+				entry.pending = merged
+				entry.hasPending = true
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
+			entry.discardRun()
+			delete(c.pendingRetries, id)
 			c.advanceLocked(entry, frame)
-			entry.state.ServerBase = value
+			entry.state.ServerBase = merged
 
 			// `cursor` is OPTIONAL on a data/delta frame, and one that omits it
 			// must LEAVE the tracked cursor where it was. Nulling it strands every
@@ -1219,6 +1786,32 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 			var deferred []func()
 
 			c.mu.Lock()
+
+			// The cached value is current as of the cursor it resumed from, so a run cut off
+			// before it is void.
+			if kind == "resume" {
+				entry.discardRun()
+			}
+
+			// A settled mid-run is not the run's last frame: its cursor would move the resume
+			// position past frames that were never applied, so drop the run and hold the cursor.
+			if kind == "settled" && entry.hasPending {
+				entry.discardRun()
+				entry.poisoned = true
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
+			// A poisoned subscription ignores these frames too: their cursor would move
+			// the resume position past the dropped row change.
+			if entry.poisoned {
+				c.mu.Unlock()
+
+				return kind, nil
+			}
+
+			delete(c.pendingRetries, id)
 			c.advanceLocked(entry, frame)
 
 			// A resume/settled frame advances the cursor without a value change —
@@ -1257,6 +1850,36 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 		if message, ok := frame["message"].(string); ok && message != "" {
 			subscriptionError.Message = message
 		}
+
+		// Token expiry is a session signal, not a subscription failure: it notifies
+		// whether or not the frame names a subscription, and is not routed to one.
+		if subscriptionError.Code == "TOKEN_EXPIRED" {
+			c.notifyTokenExpired()
+
+			return kind, nil
+		}
+
+		// A hint schedules one cold re-subscribe of a query; a hint-less error ends
+		// the query, so an earlier hint's retry is dropped. Shapes never retry here.
+		envelope, _ := frame["error"].(map[string]any)
+		delay, hasHint := retryHint(envelope)
+
+		c.mu.Lock()
+
+		if c.subscriptions[id] != nil {
+			// A late frame from a detached or closed socket must not arm a retry no sender can fire.
+			if hasHint && c.send != nil {
+				if c.pendingRetries == nil {
+					c.pendingRetries = map[string]time.Time{}
+				}
+
+				c.pendingRetries[id] = time.Now().Add(delay)
+			} else if !hasHint {
+				delete(c.pendingRetries, id)
+			}
+		}
+
+		c.mu.Unlock()
 
 		// BOTH registries: an error frame is addressed by subscription id, and a
 		// shape id is one. Looking only in the query registry made every
@@ -1318,6 +1941,29 @@ func (c *Client) HandleFrame(raw []byte) (string, error) {
 		return kind, nil
 	case "pokeEnd":
 		c.applyPoke(frame)
+
+		return kind, nil
+	case "whisper":
+		// A topic that is not a non-empty string, or data that will not decode, is
+		// dropped: a frame that cannot be routed or read reaches no listener.
+		topic, _ := frame["topic"].(string)
+		if topic == "" {
+			return kind, nil
+		}
+
+		value, err := DecodeWire(frame["data"])
+		if err != nil {
+			return kind, nil
+		}
+
+		c.mu.Lock()
+		listeners := append([]whisperListener(nil), c.whispers[topic]...)
+		c.mu.Unlock()
+
+		// Listeners run outside the mutex, for the same reason as data handlers.
+		for _, entry := range listeners {
+			entry.handle(value)
+		}
 
 		return kind, nil
 	default:
@@ -1575,6 +2221,20 @@ func removeKey(keys []string, key string) []string {
 	return keys
 }
 
+// discardRun drops a held delta run; call with mu held.
+func (s *subscription) discardRun() {
+	s.pending = nil
+	s.hasPending = false
+}
+
+// discardRunsLocked drops every held run, for a socket that ended or never opened; call
+// with mu held.
+func (c *Client) discardRunsLocked() {
+	for _, entry := range c.subscriptions {
+		entry.discardRun()
+	}
+}
+
 // advanceLocked moves the resume point. The caller holds the mutex: every frame
 // path has to update the resume point and the optimistic state in one critical
 // section so a concurrent frame cannot interleave between them.
@@ -1598,8 +2258,10 @@ func runDeferred(deferred []func()) {
 }
 
 // WSURL derives the socket URL: the origin with the scheme swapped, plus the
-// shard and credential query parameters when present.
-func (c *Client) WSURL(shardKey string, token string) string {
+// shard and admin-ticket query parameters when present. wsTicket is the
+// ephemeral admin sub-token (POST /_lunora/admin/ws-token); the session
+// credential never rides the URL — the connect frame AttachSocket sends carries it.
+func (c *Client) WSURL(shardKey string, wsTicket string) string {
 	endpoint := joinURL(c.BaseURL, WSPath)
 
 	switch {
@@ -1614,8 +2276,8 @@ func (c *Client) WSURL(shardKey string, token string) string {
 		params = append(params, "shard="+url.QueryEscape(shardKey))
 	}
 
-	if token != "" {
-		params = append(params, "token="+url.QueryEscape(token))
+	if wsTicket != "" {
+		params = append(params, "token="+url.QueryEscape(wsTicket))
 	}
 
 	if len(params) == 0 {

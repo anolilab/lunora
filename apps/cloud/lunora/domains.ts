@@ -52,7 +52,7 @@ const isRedirectTarget = (value: string): boolean => {
  * @throws {LunoraError} `FORBIDDEN` while the organization is suspended or over its cap.
  */
 const assertServing = async (context: QueryContext, organizationId: Id<"organizations">): Promise<void> => {
-    const organization = (await context.db.get(organizationId)) as AdmissionRow | null;
+    const organization = (await context.db.get("organizations", organizationId)) as AdmissionRow | null;
 
     if (!organizationServing(organization, context.now)) {
         throw new LunoraError("FORBIDDEN", "this organization is suspended; custom domains cannot be added or verified until it recovers");
@@ -71,7 +71,7 @@ export const add = mutation
     .mutation(async ({ ctx: context, args: arguments_ }): Promise<{ id: Id<"domains">; txtName: string; txtToken: string }> => {
         const member = await assertMember(context, arguments_.organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, arguments_.projectId, arguments_.organizationId, "project");
+        await assertRowInOrg(context, "projects", arguments_.projectId, arguments_.organizationId, "project");
         await assertServing(context, member.organizationId);
 
         // Custom domains are a plan feature (GAPS.md B1) — enforce the
@@ -125,7 +125,7 @@ export const list = query
     .input({ organizationId: v.id("organizations"), projectId: v.id("projects") })
     .query(async ({ ctx: context, args: { organizationId, projectId } }): Promise<DomainRow[]> => {
         await assertMember(context, organizationId);
-        await assertRowInOrg(context, projectId, organizationId, "project");
+        await assertRowInOrg(context, "projects", projectId, organizationId, "project");
 
         const { page } = await context.db.domains.findMany({ where: { organizationId, projectId } });
 
@@ -144,10 +144,10 @@ export const verifyTarget = internalQuery
     .query(async ({ ctx: context, args: { id, organizationId } }): Promise<{ domain: DomainRow; organizationId: Id<"organizations"> }> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, member.organizationId, "domain");
+        await assertRowInOrg(context, "domains", id, member.organizationId, "domain");
         await assertServing(context, member.organizationId);
 
-        return { domain: (await context.db.get(id)) as DomainRow, organizationId: member.organizationId };
+        return { domain: (await context.db.get("domains", id)) as DomainRow, organizationId: member.organizationId };
     });
 
 /**
@@ -165,9 +165,9 @@ export const removalTarget = internalQuery
             args: { id, organizationId },
         }): Promise<{ certificateIssuer?: TargetId; certificateScope?: string; customHostnameId?: string; hostname: string; projectId: Id<"projects"> }> => {
             await assertMember(context, organizationId, ["owner", "admin"]);
-            await assertRowInOrg(context, id, organizationId, "domain");
+            await assertRowInOrg(context, "domains", id, organizationId, "domain");
 
-            const domain = (await context.db.get(id)) as DomainRow;
+            const domain = (await context.db.get("domains", id)) as DomainRow;
 
             return {
                 ...(domain.certificateIssuer == null ? {} : { certificateIssuer: domain.certificateIssuer }),
@@ -190,11 +190,11 @@ export const remove = internalMutation
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "domain");
+        await assertRowInOrg(context, "domains", id, organizationId, "domain");
 
-        const domain = await context.db.get(id);
+        const domain = await context.db.get("domains", id);
 
-        await context.db.delete(id);
+        await context.db.delete("domains", id);
         await context.db.insert("auditLog", {
             action: "domain.remove",
             actorUserId: member.userId,
@@ -258,11 +258,11 @@ export const markVerified = internalMutation
         verified: v.boolean(),
     })
     .mutation(async ({ ctx: context, args: { id, organizationId, verified } }): Promise<void> => {
-        await assertRowInOrg(context, id, organizationId, "domain");
+        await assertRowInOrg(context, "domains", id, organizationId, "domain");
 
-        const existing = await context.db.get(id);
+        const existing = await context.db.get("domains", id);
 
-        await context.db.patch(id, {
+        await context.db.patch("domains", id, {
             lastCheckedAt: context.now,
             updatedAt: context.now,
             // `null`, not `undefined`: the store refuses an explicitly-undefined patch
@@ -284,7 +284,7 @@ export const markVerified = internalMutation
         }
 
         if (event !== null) {
-            const project = (await context.db.get(existing.projectId)) as null | { name?: string };
+            const project = (await context.db.get("projects", existing.projectId)) as null | { name?: string };
 
             await enqueueNotification(context, existing.organizationId, event, {
                 detail: domainNotificationDetail(event, existing.hostname),
@@ -311,13 +311,13 @@ export const recordCertificate = internalMutation
         sslStatus: boundedString(LIMITS.name),
     })
     .mutation(async ({ ctx: context, args: { customHostnameId, error, id, issuer, organizationId, scope, sslStatus } }): Promise<void> => {
-        await assertRowInOrg(context, id, organizationId, "domain");
+        await assertRowInOrg(context, "domains", id, organizationId, "domain");
 
         if (customHostnameId !== undefined && (issuer === undefined || scope === undefined)) {
             throw new LunoraError("BAD_REQUEST", "an issued certificate is recorded with its issuer and scope");
         }
 
-        await context.db.patch(id, {
+        await context.db.patch("domains", id, {
             certificateError: error ?? null,
             certificateStatus: sslStatus,
             ...(customHostnameId === undefined || issuer === undefined || scope === undefined
@@ -360,7 +360,7 @@ export const routeForHostname = query
                 return { redirectStatusCode: domain.redirectStatusCode ?? 308, redirectTo: domain.redirectTo };
             }
 
-            const project = await context.db.get(domain.projectId);
+            const project = await context.db.get("projects", domain.projectId);
 
             // The project must be the domain's organization's: a row that disagrees routes nowhere.
             return project?.activeScriptName && project.organizationId === domain.organizationId ? { scriptName: project.activeScriptName } : null;
@@ -388,7 +388,7 @@ export const get = query
     .query(async ({ ctx: context, args: { id, organizationId } }): Promise<DomainRow | null> => {
         await assertMember(context, organizationId);
 
-        const domain = await context.db.get(id);
+        const domain = await context.db.get("domains", id);
 
         return domain?.organizationId === organizationId ? domain : null;
     });

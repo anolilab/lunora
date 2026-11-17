@@ -8,10 +8,10 @@ import type { SchemaInfo } from "./schema-info";
 const ARTIFACTS_NAMESPACES_ENDPOINT = "https://api.cloudflare.com/client/v4/accounts/<ACCOUNT_ID>/artifacts/namespaces";
 
 /**
- * How to add the `ARTIFACTS` binding for a schema pinned to `jurisdiction`.
- * Never an auto-write: the first `create()` against a missing namespace creates
- * it unrestricted, and its jurisdiction can't change afterwards. So a pinned
- * schema is told to create the namespace over REST with the matching
+ * How to add the `ARTIFACTS` binding by hand, for a project reconcile cannot write it
+ * into (no wrangler config, or a non-Cloudflare target). The first `create()` against a
+ * missing namespace creates it unrestricted, and its jurisdiction can't change afterwards.
+ * So a pinned schema is told to create the namespace over REST with the matching
  * jurisdiction FIRST (wrangler has no `namespaces create`). `fedramp` takes the
  * same path: Cloudflare's API definition lists it as a namespace jurisdiction even
  * though the public docs name only `eu` / `us`.
@@ -27,7 +27,8 @@ const artifactsBindingHint = (jurisdiction: SchemaInfo["jurisdiction"]): string 
     return (
         `ctx.artifacts is used and the schema pins data to "${jurisdiction}"; create the namespace in that jurisdiction BEFORE the first repo, ` +
         `with POST ${ARTIFACTS_NAMESPACES_ENDPOINT} and body { "namespace": "<name>", "jurisdiction": "${jurisdiction}" }, ` +
-        `then ${binding}. A namespace's jurisdiction cannot be changed, and one created implicitly by the first repo create() is unrestricted.`
+        `then ${binding}. A namespace's jurisdiction cannot be changed, and one created implicitly by the first repo create() is unrestricted. ` +
+        `With CLOUDFLARE_API_TOKEN set, \`lunora deploy\` creates a missing namespace in that jurisdiction for a binding you have added.`
     );
 };
 

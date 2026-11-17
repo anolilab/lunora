@@ -7,8 +7,9 @@ import type { Project } from "ts-morph";
 import type { ArchitectureManifest } from "../../../shared/architecture-manifest";
 import type { SchemaSnapshot } from "../../../shared/schema-snapshot";
 import { createCodegenProject, refreshCodegenProject } from "./codegen-project";
-import type { AgentIR, ContainerIR, MigrationIR, QueueIR, WorkflowIR, WranglerQueueProducerIR, WranglerVariableIR } from "./ir";
+import type { AgentIR, ContainerIR, MigrationIR, QueueIR, TableIR, WorkflowIR, WranglerQueueProducerIR, WranglerVariableIR } from "./ir";
 import type { PlatformDiagnostic } from "./platform-target";
+import type { IndexReference } from "./schema-drift";
 
 export interface CodegenOptions {
     /**
@@ -31,6 +32,13 @@ export interface CodegenOptions {
      * `outputDirectory` is still the path that *would* have been written.
      */
     dryRun?: boolean;
+
+    /**
+     * Emit a per-module lazy function registry when explicitly set to `true`.
+     * `codegen.lazyFunctions: true` in `lunora.config.*` enables it too, and
+     * `false` here does not override that; with neither, the registry is eager.
+     */
+    lazyFunctions?: boolean;
 
     /**
      * Run the static schema advisor (unindexed FKs, …) during codegen.
@@ -57,6 +65,29 @@ export interface CodegenOptions {
     projectRoot: string;
 
     /**
+     * Wrangler's `assets.binding` of each `assets` block (top level and every
+     * `env.<name>`) that falls back to a single-page app (`not_found_handling:
+     * "single-page-application"`). `@lunora/config` then routes every path to the
+     * Worker first, and the generated worker passes what no route serves to the
+     * first of these bindings the deployment has (`spaAssets`). Produced by
+     * `@lunora/config`, which reads `wrangler.jsonc`; absent or empty for any other
+     * app, whose output is unchanged.
+     */
+    spaAssetsBindings?: ReadonlyArray<string>;
+
+    /**
+     * Ship Studio's documents (the OpenAPI / OpenRPC specs and the architecture
+     * manifest) as Workers Static Assets: codegen writes each one to
+     * `<directory>/_lunora/studio/<name>.json` (relative to the project root) and
+     * the generated worker reads it through `env[binding]` on its admin route,
+     * so the Worker script no longer carries it. Produced by `@lunora/config`,
+     * which sets it only for a Cloudflare Worker wrangler bundles, with no
+     * `assets` block of its own; absent keeps the documents in the bundle as
+     * modules the admin routes `import()`. Ignored for any target but `"cloudflare"`.
+     */
+    studioAssets?: { binding: string; directory: string };
+
+    /**
      * The deploy target codegen tailors the emitted `ctx.*` surface to.
      * Defaults to `"cloudflare"` — whose capability matrix marks every feature
      * native or emulated, so the default output is unchanged (byte-identical
@@ -67,15 +98,6 @@ export interface CodegenOptions {
      * `platform_unknown_target` diagnostic.
      */
     target?: string;
-
-    /**
-     * Re-bless the committed schema-drift baseline (`lunora/.lunora-schema.json`)
-     * with the current structural snapshot. The baseline is ALWAYS written on
-     * first capture (when the file is absent); set this to overwrite an existing
-     * one — e.g. after the developer has added the data migration that justifies
-     * a breaking change. Ignored when `dryRun` is true.
-     */
-    updateSchemaBaseline?: boolean;
 
     /**
      * Every `queues.producers[]` entry of `wrangler.jsonc`, top level and each
@@ -150,11 +172,18 @@ export interface CodegenResult {
     cronTriggers: ReadonlyArray<string>;
 
     generated: {
+        /**
+         * Studio-only advisor procedure document, written to `_generated/advisor-procedures.json`. A `lint: false`
+         * run carries the `analysis: "disabled"` marker instead of an empty roster.
+         */
+        advisorProceduresJson: string;
         /** WorkflowEntrypoint classes for declared agents (`_generated/agents.ts`); `""` (and not written) when no agents are declared. */
         agents: string;
         api: string;
         /** Fluent worker-composition builder (`_generated/app.ts`) — `defineApp()`. Always written. */
         app: string;
+        /** The `@lunora/auth` exports the worker uses (`_generated/authModule.ts`), loaded by `app.ts` with `import()`; `""` (and not written) without `@lunora/auth`. */
+        authModule: string;
         /** Partial-replication collection factories (`_generated/collections.ts`); `""` (and not written) unless the project declares shapes and installs `@lunora/db`. */
         collections: string;
         /** Container DO classes (`_generated/containers.ts`); `""` (and not written) when no containers are declared. */
@@ -163,25 +192,31 @@ export interface CodegenResult {
         dataModel: string;
         drizzleGlobal: string;
         drizzleShard: string;
+        /** Per-module lazy import shims, keyed by file name under `_generated/fn/`; empty when the eager registry is selected. */
+        functionModules: Record<string, string>;
         functions: string;
         /** `internal.*` references to the internal functions (`_generated/internal.ts`), kept out of `api.ts` so a client bundle never carries them. */
         internal: string;
+        /** Typed live-topic references (`_generated/live.ts`); `""` (and not written) when no live stream is declared. */
+        live: string;
+
         /** OpenAPI 3.1.0 document (`_generated/openapi.json`), pretty-printed JSON. */
         openApi: string;
 
         /**
          * OpenAPI document as an importable TS module (`_generated/openapi.ts`) —
-         * `export const openApiSpec`, the worker imports it for
+         * `export const openApiSpec`, the worker loads it with `import()` behind
          * `createWorker({ openApiSpec })`. Same document as `openApi`. Written
          * alongside `openapi.json` whenever `apiSpec` includes `openapi`.
          */
         openApiModule: string;
+
         /** OpenRPC 1.x document (`_generated/openrpc.json`), pretty-printed JSON. Always computed; written only when `apiSpec` includes `openrpc`. */
         openRpc: string;
 
         /**
          * OpenRPC document as an importable TS module (`_generated/openrpc.ts`) —
-         * `export const openRpcSpec`, for `createWorker({ openRpcSpec })`. Same
+         * `export const openRpcSpec`, loaded behind `createWorker({ openRpcSpec })`. Same
          * document as `openRpc`. Written alongside `openrpc.json` whenever
          * `apiSpec` includes `openrpc`.
          */
@@ -199,12 +234,19 @@ export interface CodegenResult {
     };
 
     /**
+     * Every `.withIndex(name)` the application's functions make, so the drift gate can refuse to drop an index a
+     * query still names. Computed on every run, lint or not: the gate must not depend on an advisory opt-out.
+     */
+    indexReferences: ReadonlyArray<IndexReference>;
+
+    /**
      * Data migrations discovered from `defineMigration` exports under `lunora/`,
      * each with the table it iterates. The drift gate matches a NEW id against
      * its table so a backfill only excuses breaking drift on the table it
      * actually visits. Empty when the project declares none.
      */
     migrations: ReadonlyArray<MigrationIR>;
+
     outputDirectory: string;
 
     /**
@@ -235,6 +277,13 @@ export interface CodegenResult {
 
     /** Absolute path of the committed baseline file (`lunora/.lunora-schema.json`). */
     schemaSnapshotPath: string;
+
+    /**
+     * The parsed tables this run's snapshot was built from. The snapshot keeps a
+     * field's kind but not whether its validator was resolvable, so a caller that
+     * checks stored rows against the schema reads the validators here.
+     */
+    schemaTables: ReadonlyArray<TableIR>;
 
     /**
      * Workflows discovered from `defineWorkflow` exports in

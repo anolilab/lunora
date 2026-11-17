@@ -1,5 +1,5 @@
 import { LunoraError } from "@lunora/errors";
-import type { CallExpression, Expression, Identifier, ObjectLiteralExpression, SpreadAssignment } from "ts-morph";
+import type { CallExpression, Expression, Identifier, ObjectLiteralExpression } from "ts-morph";
 import { Node, VariableDeclarationKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
@@ -349,7 +349,8 @@ const parseValidator = (expression: Expression): ValidatorIR => {
 };
 
 /**
- * The fields `{ ...sharedArgs }` contributes, or `{}` when it cannot be read.
+ * The fields `{ ...sharedArgs }` or `v.object(sharedFields)` names, or `{}` when
+ * they cannot be read.
  *
  * Unreadable is deliberately NOT fatal. `defineSchema({ ...authTables(options) })`
  * is the documented way to consume `@lunora/auth`, and the record it spreads is
@@ -362,8 +363,8 @@ const parseValidator = (expression: Expression): ValidatorIR => {
  * the alias guard is released before the shape is parsed, so without it the two
  * literals recurse into each other until the stack gives out.
  */
-const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorIR> => {
-    const spread = resolveObjectLiteral(property.getExpression());
+const parseResolvedShape = (expression: Expression): Record<string, ValidatorIR> => {
+    const spread = resolveObjectLiteral(expression);
 
     if (spread === undefined || spreadingShapes.has(spread)) {
         return {};
@@ -379,6 +380,44 @@ const parseSpreadShape = (property: SpreadAssignment): Record<string, ValidatorI
     }
 };
 
+/**
+ * Whether `parseResolvedShape` read every member of the shape `expression` names.
+ * It reads `{}` for a shape it could not resolve, which is indistinguishable from
+ * a real empty shape; a consumer that must not mistake one for the other (the
+ * deploy-time stored-row check) reads this instead.
+ */
+const isCompleteShape = (expression: Expression, visiting: Set<ObjectLiteralExpression> = new Set()): boolean => {
+    const literal = resolveObjectLiteral(expression);
+
+    if (literal === undefined || visiting.has(literal)) {
+        return false;
+    }
+
+    visiting.add(literal);
+
+    try {
+        return literal
+            .getProperties()
+            .every((property) =>
+                Node.isSpreadAssignment(property)
+                    ? isCompleteShape(property.getExpression(), visiting)
+                    : Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property),
+            );
+    } finally {
+        visiting.delete(literal);
+    }
+};
+
+const parseObjectValidator = (argument: Node | undefined): ValidatorIR => {
+    if (argument === undefined || !Node.isExpression(argument)) {
+        return { kind: "object", shape: {}, unresolvedShape: true };
+    }
+
+    const shape = parseResolvedShape(argument);
+
+    return isCompleteShape(argument) ? { kind: "object", shape } : { kind: "object", shape, unresolvedShape: true };
+};
+
 const unresolvableKey = (nameNode: Node): never => {
     throw diagnosticAt(nameNode, `computed property name ${nameNode.getText()} must be a string literal — codegen resolves object keys statically.`);
 };
@@ -390,7 +429,7 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
         // Merged in source order, so spread semantics hold: a key written after
         // the spread wins, one written before it loses.
         if (Node.isSpreadAssignment(property)) {
-            Object.assign(out, parseSpreadShape(property));
+            Object.assign(out, parseResolvedShape(property.getExpression()));
 
             continue;
         }
@@ -436,6 +475,21 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
 /** Parse an argument node as a nested validator, or fall back when it isn't an expression. */
 const parseArgument = (argument: Node | undefined, fallback: ValidatorIR): ValidatorIR =>
     argument && Node.isExpression(argument) ? parseValidator(argument) : fallback;
+
+/**
+ * True when the IR tree rooted at `validator` holds a `v.sensitive(...)` marker
+ * anywhere. Mirrors `containsSensitive` in `@lunora/values` on the build-time side:
+ * an argument with a secret inside it is treated as a secret as a whole.
+ */
+const validatorContainsSensitive = (validator: ValidatorIR): boolean => {
+    if (validator.sensitive === true) {
+        return true;
+    }
+
+    const children = [validator.inner, validator.keyType, validator.valueType, ...(validator.members ?? []), ...Object.values(validator.shape ?? {})];
+
+    return children.some((child) => child !== undefined && validatorContainsSensitive(child));
+};
 
 /**
  * Render a `v.literal(...)` argument as the IR's `literalValue` source text.
@@ -527,7 +581,7 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
         }
 
         case "object": {
-            return first && Node.isObjectLiteralExpression(first) ? { kind: "object", shape: parseObjectShape(first) } : { kind: "object", shape: {} };
+            return parseObjectValidator(first);
         }
 
         case "optional": {
@@ -540,6 +594,12 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>, call: Cal
                 kind: "record",
                 valueType: parseArgument(second, { kind: "any" }),
             };
+        }
+
+        case "sensitive": {
+            // The inner kind is kept, so the compiled parser, the arg types and the
+            // schema are the wrapped validator's; the marker only rides along.
+            return { ...parseArgument(first, { kind: "any" }), sensitive: true };
         }
 
         case "storage": {
@@ -639,5 +699,6 @@ export {
     REFINEMENT_MODIFIERS,
     resolveObjectLiteral,
     setStandardTypeResolver,
+    validatorContainsSensitive,
 };
 export type { StandardTypeResolver };

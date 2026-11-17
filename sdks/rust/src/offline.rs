@@ -46,6 +46,8 @@ use crate::wire::WireValue;
 pub const CODE_OFFLINE_QUEUE_OVERFLOW: &str = "OFFLINE_QUEUE_OVERFLOW";
 /// The write's precondition no longer held when the flush reached it.
 pub const CODE_OFFLINE_PRECONDITION_FAILED: &str = "OFFLINE_PRECONDITION_FAILED";
+/// An online-only write was refused because the connection is not live. Nothing was queued.
+pub const CODE_OFFLINE_NOT_QUEUED: &str = "OFFLINE_NOT_QUEUED";
 /// The write was queued under a different identity than the one now in effect.
 pub const CODE_OFFLINE_IDENTITY_CHANGED: &str = "OFFLINE_IDENTITY_CHANGED";
 /// The write's args cannot be wire-encoded, so it can never replay.
@@ -65,7 +67,7 @@ pub const CODE_WIRE_DECODE_FAILED: &str = "WIRE_DECODE_FAILED";
 /// idempotency key is expected to succeed later, and dropping the write would
 /// lose it to a transient condition. Every other coded error IS a verdict:
 /// replaying it would only re-trigger the same failure, a poison-message loop.
-pub const TRANSIENT_ERROR_CODES: [&str; 2] = ["SHARD_ERROR", "SHARD_UNAVAILABLE"];
+pub const TRANSIENT_ERROR_CODES: [&str; 3] = ["DELIVERY_FENCED", "SHARD_ERROR", "SHARD_UNAVAILABLE"];
 
 /// The coded errors that say "not now" rather than "no".
 ///

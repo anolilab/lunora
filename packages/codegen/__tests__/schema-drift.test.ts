@@ -130,6 +130,7 @@ describe("schema-drift", () => {
 
             expect(safe.changes).toStrictEqual([
                 {
+                    field: "bio",
                     remediation: "none",
                     scope: "table",
                     severity: "safe",
@@ -170,6 +171,7 @@ describe("schema-drift", () => {
 
             expect(widened.changes).toStrictEqual([
                 {
+                    field: "name",
                     remediation: "none",
                     scope: "table",
                     severity: "safe",
@@ -205,7 +207,7 @@ describe("schema-drift", () => {
             expect(unique.changes.some((c) => c.type === "addedIndex" && c.severity === "breaking" && c.remediation === "backfill")).toBe(true);
         });
 
-        it("flags a dropped table, removed index, removed relation, and changed shard mode as breaking", () => {
+        it("flags a changed shard mode as breaking, and a dropped table, relation and index as safe", () => {
             expect.assertions(4);
 
             const withExtras = buildSchemaSnapshot(
@@ -229,9 +231,9 @@ describe("schema-drift", () => {
                 buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: { field: "tenantId", kind: "shardBy" } })]), []),
             );
 
-            expect(dropped.changes.some((c) => c.type === "removedTable" && c.severity === "breaking")).toBe(true);
-            expect(dropped.changes.some((c) => c.type === "removedIndex" && c.severity === "breaking")).toBe(true);
-            expect(dropped.changes.some((c) => c.type === "removedRelation" && c.severity === "breaking")).toBe(true);
+            expect(dropped.changes.some((c) => c.type === "removedTable" && c.severity === "safe")).toBe(true);
+            expect(dropped.changes.some((c) => c.type === "removedIndex" && c.severity === "safe")).toBe(true);
+            expect(dropped.changes.some((c) => c.type === "removedRelation" && c.severity === "safe")).toBe(true);
             expect(reshard.changes.some((c) => c.type === "changedShardMode" && c.severity === "breaking")).toBe(true);
         });
     });
@@ -260,24 +262,18 @@ describe("schema-drift", () => {
             expect(decision.reason).toContain("changed type");
         });
 
-        it("names the command that ran, not `deploy`, and offers only the flags that command accepts", () => {
-            expect.assertions(4);
+        it("names the command that ran, not `deploy`", () => {
+            expect.assertions(3);
 
             // `lunora build` reaches this gate through `runDeployCommand({ dryRun: true })`.
             // It used to report "deploy blocked:" — sending the operator to look for a
-            // deployment that was never attempted — and to offer
-            // `--update-schema-baseline`, which `build` rejects with a raw
-            // `Found unknown option` stack trace. Both halves of its own advice failed.
+            // deployment that was never attempted.
             const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
             const decision = evaluateSchemaDrift({ baseline, command: "build", current, migrations: [] });
 
             expect(decision.blocked).toBe(true);
             expect(decision.reason).toContain("build blocked");
             expect(decision.reason).not.toContain("deploy blocked");
-
-            // `build` publishes nothing, so re-blessing a baseline from it would
-            // advance past a breaking change that never shipped.
-            expect(decision.reason).toContain("`lunora build` does not take that flag");
         });
 
         it("passes breaking drift when a NEW migration covers the affected table", () => {
@@ -289,6 +285,17 @@ describe("schema-drift", () => {
             expect(decision.blocked).toBe(false);
             expect(decision.newMigrationIds).toStrictEqual(["fix-name-type"]);
             expect(decision.reason).toContain("covered by");
+        });
+
+        it("blocks when the only covering migration is an identity, names it, and reports the change as uncovered", () => {
+            expect.assertions(3);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["placeholder"]);
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "placeholder", identity: true, table: "users" }] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("Migration(s) placeholder return each document unchanged");
+            expect(decision.uncovered.map((change) => [change.type, change.table, change.field])).toStrictEqual([["changedFieldKind", "users", "name"]]);
         });
 
         it("blocks when the NEW migration targets a DIFFERENT table than the breaking change", () => {
@@ -318,60 +325,308 @@ describe("schema-drift", () => {
             expect(decision.reason).toContain("Migration(s) dynamic declare a non-literal `table`");
         });
 
-        it("a shard-mode change stays blocked even with a migration on that very table", () => {
-            // `defineMigration` runs inside one shard and can only replace the row
-            // it was handed, so it can never re-home rows. The studio cites this
-            // block to justify not shipping a stranded-rows detector.
-            expect.assertions(3);
+        it("a shard-mode change stays blocked, and the message names the migration path with a concrete example", () => {
+            expect.assertions(5);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: { field: "tenantId", kind: "shardBy" } })]), []);
+            const decision = evaluateSchemaDrift({ baseline, current, migrations: [] });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("lunora export --tables users --out users.ndjson");
+            expect(decision.reason).toContain(
+                'defineMigration({ id: "rehome_users", table: "users", covers: { shardMode: "shardBy:tenantId", table: "users" }',
+            );
+            expect(decision.reason).toContain("lunora import users.ndjson");
+            expect(decision.reason).toContain('covers: { shardMode: "shardBy:tenantId", table: "users" }');
+        });
+
+        it("a shard-mode flip needs a migration whose `covers` names that table and the mode it moves to", () => {
+            expect.assertions(6);
 
             const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: { field: "tenantId", kind: "shardBy" } })]), [
                 "rehome-users",
             ]);
-            const decision = evaluateSchemaDrift({ baseline, current, migrations: [{ id: "rehome-users", table: "users" }] });
+            const covering = { id: "rehome-users", table: "users" };
+            const run = (migration: Partial<{ covers: Record<string, unknown>; identity: true; table: string }>) =>
+                evaluateSchemaDrift({ baseline, current, migrations: [{ ...covering, ...migration }] });
 
-            expect(decision.blocked).toBe(true);
-            // …and it must not name the tool that cannot work — neither as a
-            // scaffold line nor as the bullet above it.
-            expect(decision.reason).not.toContain("lunora migrate create");
-            expect(decision.reason).not.toContain("defineMigration");
+            expect(run({}).blocked).toBe(true);
+            expect(run({ covers: { shardMode: "shardBy:tenantId", table: "users" } }).blocked).toBe(false);
+            // An unrelated migration on the table, a wrong mode, a wrong table and an identity `up` all keep the block.
+            expect(run({ covers: { shardMode: "global", table: "users" } }).blocked).toBe(true);
+            expect(run({ covers: { shardMode: "shardBy:tenantId", table: "messages" } }).blocked).toBe(true);
+            expect(run({ covers: { shardMode: "shardBy:tenantId", table: "users" }, identity: true }).blocked).toBe(true);
+            expect(run({ covers: { shardMode: "shardBy:tenantId", table: "users" }, table: "messages" }).blocked).toBe(true);
         });
 
-        it("a dropped index stays blocked even with a migration on that very table", () => {
-            // Rewriting rows cannot repair a query that named the index. Letting a
-            // same-table migration excuse it would ship a deploy whose callers
-            // still fail at runtime — the flags are the honest escape.
+        it("the blocked message names what the migration must declare, with a one-line example", () => {
+            expect.assertions(3);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: "global" })]), []);
+            const { reason } = evaluateSchemaDrift({ baseline, current, migrations: [] });
+
+            expect(reason).toContain('covers: { shardMode: "global:d1", table: "users" }');
+            expect(reason).toContain("lunora export --tables users --out users.ndjson");
+            expect(reason).toContain('defineMigration({ id: "rehome_users", table: "users", covers: { shardMode: "global:d1", table: "users" }');
+        });
+
+        it("`global` in covers matches a global table whichever backend it moves to", () => {
             expect.assertions(2);
 
-            const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
-            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), ["touch-users"]);
-            const decision = evaluateSchemaDrift({ baseline: indexed, current, migrations: [{ id: "touch-users", table: "users" }] });
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: "global" })]), ["g"]);
+            const decision = (shardMode: string) =>
+                evaluateSchemaDrift({ baseline, current, migrations: [{ covers: { shardMode, table: "users" }, id: "g", table: "users" }] });
 
-            expect(decision.blocked).toBe(true);
-            expect(decision.reason).toContain("removed index byName");
+            expect(decision("global").blocked).toBe(false);
+            expect(decision("global:hyperdrive").blocked).toBe(true);
         });
 
-        it("offers no migration for a dropped index — that is a code change, not a backfill", () => {
-            // A row transform cannot restore DDL. Offering `migrate create` here
-            // sends the operator to the one tool guaranteed not to work.
+        it("a jurisdiction change is cleared only by a migration whose `covers` names the jurisdiction it moves to", () => {
+            expect.assertions(5);
+
+            const before = buildSchemaSnapshot({ jurisdiction: "eu", tables: [table("users", { name: stringField })], vectorIndexes: [] }, []);
+            const after = buildSchemaSnapshot({ jurisdiction: "us", tables: [table("users", { name: stringField })], vectorIndexes: [] }, ["move-region"]);
+            const run = (migration: Record<string, unknown>) =>
+                evaluateSchemaDrift({ baseline: before, current: after, migrations: [{ id: "move-region", table: "users", ...migration }] });
+
+            expect(evaluateSchemaDrift({ baseline: before, current: after, migrations: [] }).blocked).toBe(true);
+            // An unrelated migration, even a real transform on a table, does not clear it.
+            expect(run({}).blocked).toBe(true);
+            expect(run({ covers: { jurisdiction: "eu" } }).blocked).toBe(true);
+            expect(run({ covers: { jurisdiction: "us" } }).blocked).toBe(false);
+            // No table is involved, so an identity `up` is no obstacle: `covers` alone is the acknowledgement.
+            expect(run({ covers: { jurisdiction: "us" }, identity: true }).blocked).toBe(false);
+        });
+
+        it('removing the jurisdiction is covered by `jurisdiction: "none"`', () => {
+            expect.assertions(2);
+
+            const before = buildSchemaSnapshot({ jurisdiction: "eu", tables: [table("users", { name: stringField })], vectorIndexes: [] }, []);
+            const after = buildSchemaSnapshot({ tables: [table("users", { name: stringField })], vectorIndexes: [] }, ["m"]);
+
+            expect(
+                evaluateSchemaDrift({ baseline: before, current: after, migrations: [{ covers: { jurisdiction: "none" }, id: "m", table: "" }] }).blocked,
+            ).toBe(false);
+            expect(
+                evaluateSchemaDrift({ baseline: before, current: after, migrations: [{ covers: { jurisdiction: "us" }, id: "m", table: "" }] }).blocked,
+            ).toBe(true);
+        });
+
+        it("a table turning .memory() needs a migration whose `covers` says so, on that table", () => {
             expect.assertions(3);
+
+            const plain = buildSchemaSnapshot(schema([table("users", { name: stringField }, { memory: false })]), []);
+            const memory = buildSchemaSnapshot(schema([table("users", { name: stringField }, { memory: true })]), ["wipe-ok"]);
+            const run = (migration: Record<string, unknown>) =>
+                evaluateSchemaDrift({ baseline: plain, current: memory, migrations: [{ id: "wipe-ok", table: "users", ...migration }] });
+
+            expect(run({}).blocked).toBe(true);
+            expect(run({ covers: { table: "users" } }).blocked).toBe(true);
+            expect(run({ covers: { memory: true, table: "users" } }).blocked).toBe(false);
+        });
+
+        it("a dropped table passes, with a warning that says its rows are left in place", () => {
+            expect.assertions(4);
+
+            const both = buildSchemaSnapshot(schema([table("users", { name: stringField }), table("posts", { title: stringField })]), []);
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
+            const decision = evaluateSchemaDrift({ baseline: both, current, migrations: [] });
+            const dropped = decision.changes.find((change) => change.type === "removedTable");
+
+            expect(decision.blocked).toBe(false);
+            expect(dropped?.table).toBe("posts");
+            expect(dropped?.warning).toBe(true);
+            expect(dropped?.summary).toContain("left in place");
+        });
+
+        it("a dropped relation passes with a warning", () => {
+            expect.assertions(3);
+
+            const related = buildSchemaSnapshot(
+                schema([
+                    table(
+                        "users",
+                        { name: stringField },
+                        { relations: [{ field: "authorId", kind: "many", name: "posts", references: "_id", table: "posts" }] },
+                    ),
+                    table("posts", { title: stringField }),
+                ]),
+                [],
+            );
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField }), table("posts", { title: stringField })]), []);
+            const decision = evaluateSchemaDrift({ baseline: related, current, migrations: [] });
+
+            expect(decision.blocked).toBe(false);
+            expect(decision.changes.find((change) => change.type === "removedRelation")?.warning).toBe(true);
+            expect(decision.changes.find((change) => change.type === "removedRelation")?.summary).toContain("stay in place");
+        });
+
+        describe("a TTL", () => {
+            const withTtl = (ttl: { after?: number; field: string } | undefined, migrationIds: string[] = []) =>
+                buildSchemaSnapshot(
+                    schema([table("sessions", { endsAt: numberField, expiresAt: numberField }, ttl === undefined ? {} : { ttl })]),
+                    migrationIds,
+                );
+            const covering = (covers: Record<string, unknown>, identity = false) => [
+                { covers, id: "ttl-ok", ...(identity ? { identity: true as const } : {}), table: "sessions" },
+            ];
+
+            it.each([
+                ["a new TTL", undefined, { after: 1000, field: "expiresAt" }],
+                ["a shorter TTL", { after: 5000, field: "expiresAt" }, { after: 1000, field: "expiresAt" }],
+                ["a TTL moved to another column", { after: 1000, field: "expiresAt" }, { after: 1000, field: "endsAt" }],
+            ])("%s blocks, carrying the policy so the rows it would delete can be counted", (_label, from, to) => {
+                expect.assertions(4);
+
+                const decision = evaluateSchemaDrift({ baseline: withTtl(from), current: withTtl(to), migrations: [] });
+                const change = decision.uncovered.find((entry) => entry.type === "changedTtlPolicy");
+
+                expect(decision.blocked).toBe(true);
+                expect(change?.expiry?.field).toBe(to.field);
+                expect(decision.reason).toContain(
+                    `covers: { table: "sessions", ttl: { ${"after" in to ? `after: ${String(to.after)}, ` : ""}field: "${to.field}" } }`,
+                );
+                expect(decision.reason).toContain("refresh");
+            });
+
+            it("is cleared by a migration whose `covers` names that table and TTL, and by nothing else", () => {
+                expect.assertions(6);
+
+                const run = (covers: Record<string, unknown>, identity = false) =>
+                    evaluateSchemaDrift({
+                        baseline: withTtl(undefined),
+                        current: withTtl({ after: 1000, field: "expiresAt" }, ["ttl-ok"]),
+                        migrations: covering(covers, identity),
+                    }).blocked;
+
+                expect(run({ table: "sessions", ttl: { after: 1000, field: "expiresAt" } })).toBe(false);
+                // Unrelated, a different offset, a different column and an identity `up` all keep the block.
+                expect(run({ table: "sessions" })).toBe(true);
+                expect(run({ table: "sessions", ttl: { after: 2000, field: "expiresAt" } })).toBe(true);
+                expect(run({ table: "sessions", ttl: { after: 1000, field: "endsAt" } })).toBe(true);
+                expect(run({ table: "sessions", ttl: { after: 1000, field: "expiresAt" } }, true)).toBe(true);
+                expect(run({ table: "events", ttl: { after: 1000, field: "expiresAt" } })).toBe(true);
+            });
+
+            it("treats an absent `after` as 0 when matching `covers`", () => {
+                expect.assertions(1);
+
+                const decision = evaluateSchemaDrift({
+                    baseline: withTtl(undefined),
+                    current: withTtl({ field: "expiresAt" }, ["ttl-ok"]),
+                    migrations: covering({ table: "sessions", ttl: { after: 0, field: "expiresAt" } }),
+                });
+
+                expect(decision.blocked).toBe(false);
+            });
+
+            it.each([
+                ["a longer TTL", { after: 1000, field: "expiresAt" }, { after: 5000, field: "expiresAt" }],
+                ["a removed TTL", { after: 1000, field: "expiresAt" }, undefined],
+            ])("%s keeps every row, so it passes with a warning", (_label, from, to) => {
+                expect.assertions(2);
+
+                const decision = evaluateSchemaDrift({ baseline: withTtl(from), current: withTtl(to), migrations: [] });
+
+                expect(decision.blocked).toBe(false);
+                expect(decision.changes.find((entry) => entry.type === "changedTtlPolicy")?.warning).toBe(true);
+            });
+        });
+
+        it("turning .commitOrdered() on is backfilled by a migration that returns each row unchanged, because rewriting stamps the sequence", () => {
+            expect.assertions(3);
+
+            const off = buildSchemaSnapshot(schema([table("rows", { n: numberField }, { commitOrdered: false })]), []);
+            const on = buildSchemaSnapshot(schema([table("rows", { n: numberField }, { commitOrdered: true })]), ["stamp"]);
+            const run = (migration: Record<string, unknown>) =>
+                evaluateSchemaDrift({ baseline: off, current: on, migrations: [{ id: "stamp", table: "rows", ...migration }] });
+
+            expect(run({ identity: true }).blocked).toBe(false);
+            expect(run({ identity: true, table: "other" }).blocked).toBe(true);
+            // The placeholder is not called a no-op when it is exactly the backfill that is owed.
+            expect(
+                evaluateSchemaDrift({
+                    baseline: off,
+                    current: buildSchemaSnapshot(schema([table("rows", { n: numberField }, { commitOrdered: true })]), []),
+                    migrations: [],
+                }).reason,
+            ).not.toContain("cover nothing");
+        });
+
+        it("a dropped index is refused while a query still names it, naming the function, and passes once nothing does", () => {
+            expect.assertions(5);
 
             const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
             const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
-            const { blocked, reason } = evaluateSchemaDrift({ baseline: indexed, current, migrations: [] });
+            const uses = { file: "users", function: "findByName", index: "byName", line: 12, table: "users" };
+            const refused = evaluateSchemaDrift({ baseline: indexed, current, indexReferences: [uses], migrations: [] });
+            const unrelated = evaluateSchemaDrift({
+                baseline: indexed,
+                current,
+                indexReferences: [
+                    { ...uses, index: "other" },
+                    { ...uses, table: "posts" },
+                ],
+                migrations: [],
+            });
+            const dynamic = evaluateSchemaDrift({ baseline: indexed, current, indexReferences: [{ ...uses, index: undefined }], migrations: [] });
 
-            expect(blocked).toBe(true);
-            expect(reason).toContain("removed index byName");
-            expect(reason).not.toContain("lunora migrate create");
+            expect(refused.blocked).toBe(true);
+            expect(refused.reason).toContain("findByName (users:12)");
+            expect(unrelated.blocked).toBe(false);
+            expect(dynamic.blocked).toBe(true);
+            expect(evaluateSchemaDrift({ baseline: indexed, current, migrations: [] }).blocked).toBe(false);
         });
 
-        it("offers no migration for a dropped table — its rows are unreachable, not transformable", () => {
-            expect.assertions(2);
+        it("a dropped index, unique or not, is safe: it cannot invalidate a stored row", () => {
+            expect.assertions(4);
 
-            const current = buildSchemaSnapshot(schema([table("messages", { body: stringField })]), []);
-            const { blocked, reason } = evaluateSchemaDrift({ baseline, current, migrations: [] });
+            const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
+            const unique = buildSchemaSnapshot(
+                schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName", unique: true }] })]),
+                [],
+            );
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
 
-            expect(blocked).toBe(true);
-            expect(reason).not.toContain("lunora migrate create");
+            for (const from of [indexed, unique]) {
+                const decision = evaluateSchemaDrift({ baseline: from, current, migrations: [] });
+
+                expect(decision.blocked).toBe(false);
+                expect(decision.reason).toContain("removed index byName");
+            }
+        });
+
+        it("a new unique index, and an index that becomes unique, are row-checkable constraints that name their fields", () => {
+            expect.assertions(4);
+
+            const plain = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
+            const indexed = buildSchemaSnapshot(schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]), []);
+            const unique = buildSchemaSnapshot(
+                schema([table("users", { name: stringField }, { indexes: [{ fields: ["name"], name: "byName", unique: true }] })]),
+                [],
+            );
+            const added = evaluateSchemaDrift({ baseline: plain, current: unique, migrations: [] });
+            const tightened = evaluateSchemaDrift({ baseline: indexed, current: unique, migrations: [] });
+
+            expect(added.blocked).toBe(true);
+            expect(added.uncovered[0]?.uniqueOn).toStrictEqual(["name"]);
+            expect(tightened.blocked).toBe(true);
+            expect(tightened.uncovered[0]?.uniqueOn).toStrictEqual(["name"]);
+        });
+
+        it("an index that is reshaped but not unique stays safe", () => {
+            expect.assertions(1);
+
+            const before = buildSchemaSnapshot(
+                schema([table("users", { age: numberField, name: stringField }, { indexes: [{ fields: ["name"], name: "byName" }] })]),
+                [],
+            );
+            const after = buildSchemaSnapshot(
+                schema([table("users", { age: numberField, name: stringField }, { indexes: [{ fields: ["name", "age"], name: "byName" }] })]),
+                [],
+            );
+
+            expect(evaluateSchemaDrift({ baseline: before, current: after, migrations: [] }).blocked).toBe(false);
         });
 
         it("prints a paste-ready scaffold command for each table still owed a backfill", () => {
@@ -442,40 +697,17 @@ describe("schema-drift", () => {
             expect(decision.reason).toContain("overridden by --allow-schema-drift");
         });
 
-        describe("remediation names only the flags the printing command accepts", () => {
-            // The message used to list both flags unconditionally, so following it
-            // verbatim failed: `build` accepts neither and `verify` accepts only
-            // `--allow-schema-drift`. This is the message a first-time deployer
-            // hits, and half its own advice did not work.
-            const breaking = (): ReturnType<typeof buildSchemaSnapshot> => buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
+        it("offers the one-run override on every command and no longer offers a baseline flag", () => {
+            expect.assertions(10);
 
-            it("offers both flags on deploy", () => {
-                expect.assertions(2);
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
 
-                const { reason } = evaluateSchemaDrift({ baseline, command: "deploy", current: breaking(), migrations: [] });
+            for (const command of ["deploy", "prepare", "build", "verify", undefined]) {
+                const { reason } = evaluateSchemaDrift({ baseline, command, current, migrations: [] });
 
-                expect(reason).toContain("--allow-schema-drift");
-                expect(reason).toContain("--update-schema-baseline");
-            });
-
-            it("offers only --allow-schema-drift on verify, and points at prepare for the other", () => {
-                expect.assertions(3);
-
-                const { reason } = evaluateSchemaDrift({ baseline, command: "verify", current: breaking(), migrations: [] });
-
-                expect(reason).toContain("pass `--allow-schema-drift`");
-                expect(reason).toContain("lunora prepare --update-schema-baseline");
-                expect(reason).toContain("`lunora verify` does not take that flag");
-            });
-
-            it("falls back to listing both when the caller is unknown", () => {
-                expect.assertions(2);
-
-                const { reason } = evaluateSchemaDrift({ baseline, current: breaking(), migrations: [] });
-
-                expect(reason).toContain("--allow-schema-drift");
-                expect(reason).toContain("--update-schema-baseline");
-            });
+                expect(reason).toContain("`--allow-schema-drift`");
+                expect(reason).not.toContain("update-schema-baseline");
+            }
         });
 
         it("never blocks a first-ever capture (no baseline)", () => {
@@ -623,6 +855,209 @@ describe("schema-drift", () => {
             expect(changes[0]).toMatchObject({ remediation: "backfill", severity: "breaking", type: "changedFieldShape" });
             expect(changes[0]?.summary).toContain("id(users) → id(orgs)");
             expect([hashMoved, serializationMoved]).toStrictEqual([true, true]);
+        });
+
+        it("reports only a safe refresh when a baseline object recorded no fields, before its spread shape was resolved", () => {
+            expect.assertions(2);
+
+            const { changes } = compare({ profile: { kind: "object", shape: {} } }, { profile: { kind: "object", shape: { name: optionalString } } });
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ remediation: "none", severity: "safe", type: "widenedFieldShape" });
+        });
+
+        it("keeps a breaking change when a literal empty object gains a required field", () => {
+            expect.assertions(2);
+
+            const { changes } = compare({ profile: { kind: "object", shape: {} } }, { profile: { kind: "object", shape: { name: { kind: "string" } } } });
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+        });
+
+        it("sees a `v.from()` schema whose inferred output type changed", () => {
+            expect.assertions(4);
+
+            const { changes, hashMoved } = compare({ score: { kind: "from", tsType: "string" } }, { score: { kind: "from", tsType: "number" } });
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ remediation: "backfill", severity: "breaking", type: "changedFieldShape" });
+            expect(changes[0]?.summary).toContain("from(string) → from(number)");
+            expect(hashMoved).toBe(true);
+        });
+
+        it("does not report drift when only one side could resolve a `v.from()` output type", () => {
+            expect.assertions(2);
+
+            // A baseline written before the output type was recorded, or one built
+            // where the type checker could not resolve it, says nothing about it.
+            const { changes: gained } = compare({ score: { kind: "from" } }, { score: { kind: "from", tsType: "number" } });
+            const { changes: lost } = compare({ score: { kind: "from", tsType: "number" } }, { score: { kind: "from" } });
+
+            expect(gained).toStrictEqual([]);
+            expect(lost).toStrictEqual([]);
+        });
+
+        it("does not report drift when a `v.from()` nested in a container lacks a recorded output type on one side", () => {
+            expect.assertions(8);
+
+            const recorded = { kind: "from", tsType: "number" } as const;
+            const unrecorded = { kind: "from" } as const;
+            const containers: ((inner: TableIR["shape"][string]) => TableIR["shape"][string])[] = [
+                (inner) => {
+                    return { inner, kind: "array" };
+                },
+                (inner) => {
+                    return { kind: "object", shape: { score: inner } };
+                },
+                (inner) => {
+                    return { inner, kind: "optional" };
+                },
+                (inner) => {
+                    return { kind: "record", keyType: { kind: "string" }, valueType: inner };
+                },
+                (inner) => {
+                    return { kind: "union", members: [{ kind: "string" }, inner] };
+                },
+            ];
+
+            for (const wrap of containers) {
+                const { changes: gained } = compare({ score: wrap(unrecorded) }, { score: wrap(recorded) });
+                const { changes: lost } = compare({ score: wrap(recorded) }, { score: wrap(unrecorded) });
+
+                expect([gained, lost]).toStrictEqual([[], []]);
+            }
+
+            // Mixed shapes: one resolved and one unresolved `v.from()` side by side.
+            const pair = (first: typeof recorded | typeof unrecorded, second: typeof recorded | typeof unrecorded) => {
+                return {
+                    kind: "object" as const,
+                    shape: { first, second },
+                };
+            };
+
+            expect(compare({ score: pair(unrecorded, recorded) }, { score: pair(recorded, recorded) }).changes).toStrictEqual([]);
+            expect(compare({ score: pair(recorded, recorded) }, { score: pair(recorded, unrecorded) }).changes).toStrictEqual([]);
+            expect(
+                compare(
+                    { score: { kind: "union", members: [{ kind: "string" }, { kind: "from", tsType: "a" }, unrecorded] } },
+                    { score: { kind: "union", members: [{ kind: "string" }, { kind: "from", tsType: "a" }, { kind: "from", tsType: "b" }] } },
+                ).changes,
+            ).toStrictEqual([]);
+        });
+
+        it("still flags a nested `v.from()` whose output type changed when both sides recorded it", () => {
+            expect.assertions(4);
+
+            const from = (tsType: string) => ({ kind: "from", tsType }) as const;
+
+            const { changes: inArray } = compare({ score: { inner: from("string"), kind: "array" } }, { score: { inner: from("number"), kind: "array" } });
+            const { changes: inObject } = compare(
+                { score: { kind: "object", shape: { a: from("string") } } },
+                { score: { kind: "object", shape: { a: from("number") } } },
+            );
+
+            expect(inArray).toHaveLength(1);
+            expect(inArray[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(inObject).toHaveLength(1);
+            expect(inObject[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+        });
+
+        it("flags a union member whose recorded output changed next to a member with none", () => {
+            expect.assertions(3);
+
+            const from = (tsType?: string) => (tsType === undefined ? { kind: "from" as const } : { kind: "from" as const, tsType });
+
+            const { changes } = compare(
+                { score: { kind: "union", members: [{ kind: "string" }, from("string"), from()] } },
+                { score: { kind: "union", members: [{ kind: "string" }, from("number"), from()] } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(changes[0]?.summary).toContain("from(number)");
+        });
+
+        it("does not flag a union whose baseline recorded none of its member outputs", () => {
+            expect.assertions(2);
+
+            const from = (tsType?: string) => (tsType === undefined ? { kind: "from" as const } : { kind: "from" as const, tsType });
+            const wrapped = (inner: ReturnType<typeof from>) => {
+                return { kind: "object" as const, shape: { a: inner } };
+            };
+
+            const { changes: sibling } = compare(
+                { score: { kind: "union", members: [from(), wrapped(from())] } },
+                { score: { kind: "union", members: [from("string"), wrapped(from("number"))] } },
+            );
+            const { changes: lost } = compare(
+                { score: { kind: "union", members: [from("string"), wrapped(from("number"))] } },
+                { score: { kind: "union", members: [from(), wrapped(from())] } },
+            );
+
+            expect(sibling).toStrictEqual([]);
+            expect(lost).toStrictEqual([]);
+        });
+
+        it("reads a widening to a union as safe when the old column recorded no output type", () => {
+            expect.assertions(2);
+
+            const { changes } = compare(
+                { score: { kind: "from" } },
+                { score: { kind: "union", members: [{ kind: "from", tsType: "number" }, { kind: "string" }] } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "safe", type: "widenedFieldShape" });
+        });
+
+        it("does not record a `v.from()` output type that names a file path", () => {
+            expect.assertions(2);
+
+            const snapshot = buildSchemaSnapshot(
+                schema([
+                    table("users", { score: { kind: "from", tsType: 'import("/Users/ci/work/app/schemas").Score' }, tag: { kind: "from", tsType: "string" } }),
+                ]),
+                [],
+            );
+            const fields = snapshot.tables.users?.fields;
+
+            expect(fields?.score).not.toHaveProperty("output");
+            expect(fields?.tag).toMatchObject({ output: "string" });
+        });
+
+        it("records a package-qualified output type and sees it change", () => {
+            expect.assertions(4);
+
+            const snapshot = buildSchemaSnapshot(schema([table("users", { score: { kind: "from", tsType: 'import("@acme/schema").OldScore' } })]), []);
+
+            expect(snapshot.tables.users?.fields?.score).toMatchObject({ output: 'import("@acme/schema").OldScore' });
+
+            const { changes, hashMoved } = compare(
+                { score: { kind: "from", tsType: 'import("@acme/schema").OldScore' } },
+                { score: { kind: "from", tsType: 'import("@acme/schema").NewScore' } },
+            );
+
+            expect(changes).toHaveLength(1);
+            expect(changes[0]).toMatchObject({ severity: "breaking", type: "changedFieldShape" });
+            expect(hashMoved).toBe(true);
+        });
+
+        it("still skips a Windows drive path and a UNC path", () => {
+            expect.assertions(2);
+
+            const snapshot = buildSchemaSnapshot(
+                schema([
+                    table("users", {
+                        a: { kind: "from", tsType: String.raw`import("C:\work\app\schemas").Score` },
+                        b: { kind: "from", tsType: String.raw`import("\\host\share\schemas").Score` },
+                    }),
+                ]),
+                [],
+            );
+
+            expect(snapshot.tables.users?.fields?.a).not.toHaveProperty("output");
+            expect(snapshot.tables.users?.fields?.b).not.toHaveProperty("output");
         });
 
         it("sees an array element type change (it moves the storage projection)", () => {

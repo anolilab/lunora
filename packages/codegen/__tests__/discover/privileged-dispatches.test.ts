@@ -183,4 +183,109 @@ export const welcome = defineSubscription(signups, {
 
         expect(discover()).toHaveLength(0);
     });
+
+    it("flags a workflow dispatch in a method-shorthand handler", () => {
+        expect.assertions(2);
+
+        write(
+            "method.ts",
+            `export const w = defineWorkflow({
+    async handler(context) {
+        await context.run(api.docs.create, { ownerId: context.params.ownerId });
+    },
+});`,
+        );
+
+        const found = discover();
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ dispatchKind: "workflow", scope: { kind: "export", name: "w" }, targetExport: "create", targetFile: "docs" });
+    });
+
+    it("flags a workflow dispatch in a handler named by a same-file const", () => {
+        expect.assertions(2);
+
+        write(
+            "named.ts",
+            `const onboardHandler = async (context) => context.run(api.docs.create, { ownerId: context.params.ownerId });
+export const w = defineWorkflow({ handler: onboardHandler });`,
+        );
+
+        const found = discover();
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ dispatchKind: "workflow", targetExport: "create", targetFile: "docs" });
+    });
+
+    it("flags a workflow dispatch through a destructured run and params", () => {
+        expect.assertions(2);
+
+        write("destructured.ts", `export const w = defineWorkflow({ handler: async ({ params, run }) => run(api.docs.create, { ownerId: params.ownerId }) });`);
+
+        const found = discover();
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ dispatchKind: "workflow", targetExport: "create", targetFile: "docs" });
+    });
+
+    it("flags a queue dispatch forwarding a message body from a destructured messages batch", () => {
+        expect.assertions(2);
+
+        write(
+            "destructured-queue.ts",
+            `export const q = defineQueue({
+    handler: async (ctx, { messages }) => {
+        for (const m of messages) {
+            await ctx.run(api.docs.create, { ownerId: m.body.ownerId });
+        }
+    },
+});`,
+        );
+
+        const found = discover();
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ dispatchKind: "queue", targetExport: "create", targetFile: "docs" });
+    });
+
+    it("flags a queue dispatch forwarding a message body from a forEach callback", () => {
+        expect.assertions(2);
+
+        write(
+            "foreach.ts",
+            `export const q = defineQueue({
+    handler: async (ctx, batch) => {
+        batch.messages.forEach((m) => ctx.run(api.docs.create, { ownerId: m.body.ownerId }));
+    },
+});`,
+        );
+
+        const found = discover();
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ dispatchKind: "queue", targetExport: "create", targetFile: "docs" });
+    });
+
+    it("ignores a destructured run dispatch whose args are all literal", () => {
+        expect.assertions(1);
+
+        write("fixed-destructured.ts", `export const w = defineWorkflow({ handler: async ({ params, run }) => run(api.docs.create, { ownerId: "fixed" }) });`);
+
+        expect(discover()).toHaveLength(0);
+    });
+
+    it("ignores a forEach dispatch whose args are all literal", () => {
+        expect.assertions(1);
+
+        write(
+            "fixed-foreach.ts",
+            `export const q = defineQueue({
+    handler: async (ctx, batch) => {
+        batch.messages.forEach((m) => ctx.run(api.docs.create, { ownerId: "fixed" }));
+    },
+});`,
+        );
+
+        expect(discover()).toHaveLength(0);
+    });
 });

@@ -1,0 +1,163 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import collectIntegrationModules from "../../src/util/integration-modules";
+
+describe(collectIntegrationModules, () => {
+    let cwd: string;
+
+    const write = (path: string, content: string): void => {
+        mkdirSync(dirname(join(cwd, path)), { recursive: true });
+        writeFileSync(join(cwd, path), content);
+    };
+
+    const install = (...names: string[]): void => {
+        for (const name of names) {
+            write(join("node_modules", name, "package.json"), JSON.stringify({ name }));
+        }
+    };
+
+    beforeEach(() => {
+        cwd = mkdtempSync(join(tmpdir(), "lunora-integration-modules-"));
+    });
+
+    afterEach(() => {
+        rmSync(cwd, { force: true, recursive: true });
+    });
+
+    it("finds the package import()s in the files the entry loads, through the generated registry", () => {
+        expect.assertions(1);
+
+        install("@cloudflare/playwright", "mysql2", "postgres", "stripe");
+        write(
+            "src/server/index.ts",
+            'import { wire } from "./wire.js";\nimport { app } from "../../lunora/_generated/app.js";\nexport { mysql } from "./db";\nexport default { app, wire };\n',
+        );
+        write("lunora/_generated/app.ts", 'export { functions as app } from "./functions.js";\nexport const auth = () => import("stripe");\n');
+        write("lunora/_generated/functions.ts", 'export const functions = { integrations: () => import("../integrations.js") };\n');
+        write(
+            "src/server/wire.ts",
+            'export const wire = { playwright: () => import("@cloudflare/playwright"), client: async () => (await import("stripe")).default };\n',
+        );
+        write("src/server/db/index.ts", 'export const mysql = async () => (await import("mysql2/promise")).createPool({});\n');
+        write("lunora/integrations.ts", 'export const load = () => import("postgres");\n');
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual([
+            "@cloudflare/playwright",
+            "mysql2/promise",
+            "postgres",
+            "stripe",
+        ]);
+    });
+
+    it("scans the generated registry and the project config when the entry is a virtual module", () => {
+        expect.assertions(1);
+
+        install("postgres", "stripe");
+        write("lunora/_generated/functions.ts", 'export const functions = { integrations: () => import("../integrations.js") };\n');
+        write("lunora/integrations.ts", 'export const load = () => import("postgres");\n');
+        write("lunora.config.ts", 'export default { app: () => import("stripe") };\n');
+
+        expect(collectIntegrationModules(cwd, "virtual:lunora/worker", "lunora")).toStrictEqual(["postgres", "stripe"]);
+    });
+
+    it("follows package.json subpath imports such as #lunora/*", () => {
+        expect.assertions(1);
+
+        install("stripe");
+        write("package.json", JSON.stringify({ imports: { "#lunora/*": "./lunora/*" } }));
+        write("src/server/index.ts", 'import { payment } from "#lunora/payment";\nexport default payment;\n');
+        write("lunora/payment/index.ts", 'export const payment = { client: () => import("stripe") };\n');
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual(["stripe"]);
+    });
+
+    it("substitutes every * in a subpath import target, as Node does", () => {
+        expect.assertions(1);
+
+        install("stripe");
+        write("package.json", JSON.stringify({ imports: { "#features/*": "./features/*/*.ts" } }));
+        write("src/server/index.ts", 'import { payment } from "#features/payment";\nexport default payment;\n');
+        write("features/payment/payment.ts", 'export const payment = { client: () => import("stripe") };\n');
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual(["stripe"]);
+    });
+
+    it("inserts a subpath containing $ patterns literally", () => {
+        expect.assertions(1);
+
+        install("stripe");
+        write("package.json", JSON.stringify({ imports: { "#lunora/*": "./lunora/*.ts" } }));
+        write("src/server/index.ts", 'import { payment } from "#lunora/pay$&ment";\nexport default payment;\n');
+        write("lunora/pay$&ment.ts", 'export const payment = { client: () => import("stripe") };\n');
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual(["stripe"]);
+    });
+
+    it("resolves an exact imports key before a pattern declared ahead of it", () => {
+        expect.assertions(1);
+
+        install("stripe");
+        write("package.json", JSON.stringify({ imports: { "#lunora/*": "./other/*.ts", "#lunora/payment": "./lunora/payment.ts" } }));
+        write("src/server/index.ts", 'import { payment } from "#lunora/payment";\nexport default payment;\n');
+        write("lunora/payment.ts", 'export const payment = { client: () => import("stripe") };\n');
+        write("other/payment.ts", "export const payment = {};\n");
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual(["stripe"]);
+    });
+
+    it("follows the runtime condition of an imports target, not its types file", () => {
+        expect.assertions(1);
+
+        install("stripe");
+        write("package.json", JSON.stringify({ imports: { "#payment": { types: "./lunora/payment.d.ts", default: "./lunora/payment.ts" } } }));
+        write("src/server/index.ts", 'import { payment } from "#payment";\nexport default payment;\n');
+        write("lunora/payment.d.ts", "export declare const payment: object;\n");
+        write("lunora/payment.ts", 'export const payment = { client: () => import("stripe") };\n');
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual(["stripe"]);
+    });
+
+    it("skips an import whose names are all types, unless the project keeps imports as written", () => {
+        expect.assertions(2);
+
+        install("stripe");
+        write("src/server/index.ts", 'import { type Payment } from "./payment";\nexport type { Payment } from "./payment";\nexport default 1;\n');
+        write("src/server/payment.ts", 'export type Payment = object;\nexport const load = () => import("stripe");\n');
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual([]);
+
+        write("tsconfig.json", JSON.stringify({ compilerOptions: { verbatimModuleSyntax: true } }));
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual(["stripe"]);
+    });
+
+    it("leaves out files the Worker never loads, runtime modules, generated output and uninstalled packages", () => {
+        expect.assertions(1);
+
+        install("stripe", "react-dom", "vitest");
+        write(
+            "src/server/index.ts",
+            'import type { Client } from "../client/app";\nexport const run = async () => [await import("node:crypto"), await import("cloudflare:workers"), await import("missing-sdk")];\n',
+        );
+        write("src/client/app.ts", 'export const render = () => import("react-dom");\n');
+        write("lunora/_generated/app.ts", 'export const load = () => import("stripe");\n');
+        // A colocated test sits in the schema directory, but nothing the Worker loads imports it.
+        write("lunora/posts.test.ts", 'export const mocked = () => import("vitest");\n');
+
+        expect(collectIntegrationModules(cwd, "src/server/index.ts", "lunora")).toStrictEqual([]);
+    });
+
+    it("follows a relative import() into the module that loads the SDK", () => {
+        expect.assertions(1);
+
+        install("stripe");
+        write("src/index.ts", 'export const later = () => import("./billing.js");\n');
+        write("src/billing.ts", 'export const client = () => import("stripe");\n');
+
+        expect(collectIntegrationModules(cwd, "src/index.ts", "lunora")).toStrictEqual(["stripe"]);
+    });
+});

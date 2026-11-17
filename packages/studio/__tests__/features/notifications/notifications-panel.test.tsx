@@ -1,29 +1,27 @@
 import { LunoraProvider } from "@lunora/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
 import NotificationsPanel from "../../../src/features/notifications/notifications-panel";
-import type { PushSubscriptionDevice } from "../../../src/lib/admin";
+import type { PushSubscriptionDevice, PushSubscriptionsResult } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
 import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
-const DEVICES: PushSubscriptionDevice[] = [
-    { createdAt: 1, endpoint: "https://push.example/ep-web", id: "web:1", kind: "web-push", lastSeenAt: 2, lastStatus: "ok", userId: "user-1" },
-    { createdAt: 3, id: "fcm:1", kind: "fcm", lastError: "UNREGISTERED", lastSeenAt: 4, lastStatus: "failed", userId: "user-2" },
+const device = (overrides: Partial<PushSubscriptionDevice> & Pick<PushSubscriptionDevice, "id" | "kind">): PushSubscriptionDevice => {
+    return {
+        createdAt: 0,
+        lastSeenAt: 0,
+        ...overrides,
+    };
+};
+
+const subscriptions: PushSubscriptionDevice[] = [
+    device({ endpoint: "https://push.example/ok", id: "wp-ok", kind: "web-push", lastStatus: "ok" }),
+    device({ endpoint: "https://push.example/bad", id: "wp-bad", kind: "web-push", lastStatus: "failed" }),
+    device({ id: "fcm-ok-token", kind: "fcm", lastStatus: "ok" }),
 ];
-
-const createClient = (subscriptions: PushSubscriptionDevice[] = DEVICES): MockClientHooks =>
-    createMockClient({
-        query: (reference): unknown => {
-            if (reference === ADMIN_FUNCTIONS.listPushSubscriptions) {
-                return { subscriptions };
-            }
-
-            return undefined;
-        },
-    });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
     <LunoraProvider client={mock.asClient}>
@@ -31,40 +29,58 @@ const renderPanel = (mock: MockClientHooks): ReactElement => (
     </LunoraProvider>
 );
 
+const clientWith = (result: PushSubscriptionsResult) =>
+    createMockClient({
+        query: (reference): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listPushSubscriptions) {
+                return result;
+            }
+
+            throw new Error(`unexpected ${reference}`);
+        },
+    });
+
 describe("notificationsPanel", () => {
-    it("renders the fetched registered devices with their endpoint and last-send status", async () => {
-        expect.assertions(4);
+    it("lists every device and counts the failing ones", async () => {
+        expect.assertions(2);
 
-        render(renderPanel(createClient()));
+        render(renderPanel(clientWith({ subscriptions })));
 
-        const rows = await screen.findAllByTestId("nt-row");
+        await screen.findByTestId("nt-failing-filter");
 
-        expect(rows).toHaveLength(2);
-        expect(screen.getByText("https://push.example/ep-web").textContent).toBe("https://push.example/ep-web");
-        // The delivery-error column surfaces the FCM failure reason…
-        expect(screen.getByText("UNREGISTERED").textContent).toBe("UNREGISTERED");
-        // …and the per-device status badge reflects each device's last outcome.
-        expect(screen.getByTestId("nt-status-fcm:1").textContent).toBe("failed");
+        expect(screen.getByTestId("nt-count").textContent).toBe("3 devices");
+        expect(screen.getByTestId("nt-failing-filter").textContent).toBe("1 failing");
     });
 
-    it("filters devices by kind client-side", async () => {
-        expect.assertions(1);
+    it("narrows to the failing devices when the failing filter is pressed", async () => {
+        expect.assertions(2);
 
-        render(renderPanel(createClient()));
+        render(renderPanel(clientWith({ subscriptions })));
 
-        await screen.findAllByTestId("nt-row");
-        fireEvent.click(screen.getByTestId("nt-kind-fcm"));
+        fireEvent.click(await screen.findByTestId("nt-failing-filter"));
 
-        expect(screen.getAllByTestId("nt-row")).toHaveLength(1);
+        await waitFor(() => {
+            expect(screen.getByTestId("nt-failing-filter").getAttribute("aria-pressed")).toBe("true");
+        });
+
+        expect(screen.queryByTestId("nt-status-wp-ok")).toBeNull();
     });
 
-    it("shows the empty state when no devices are registered", async () => {
+    it("says no device matches when a search finds none, not that the registry is empty", async () => {
         expect.assertions(1);
 
-        render(renderPanel(createClient([])));
+        render(renderPanel(clientWith({ subscriptions })));
 
-        const empty = await screen.findByTestId("nt-empty");
+        fireEvent.change(await screen.findByTestId("nt-search"), { target: { value: "nobody-by-this-name" } });
 
-        expect(empty.dataset["testid"]).toBe("nt-empty");
+        await expect(screen.findByText("No matching devices.")).resolves.toBeDefined();
+    });
+
+    it("shows the registration guidance for an empty registry", async () => {
+        expect.assertions(1);
+
+        render(renderPanel(clientWith({ subscriptions: [] })));
+
+        await expect(screen.findByText("No registered devices.")).resolves.toBeDefined();
     });
 });

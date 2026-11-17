@@ -85,7 +85,7 @@ describe(runBoxSuspensionSweep, () => {
         const store = world({ routesWithheld: [] }, {});
         const { get } = store;
 
-        store.get = async (id, table) => (id === "org_1" ? Promise.reject(new Error("D1 timeout")) : get(id, table));
+        store.get = async (table, id) => (id === "org_1" ? Promise.reject(new Error("D1 timeout")) : get(table, id));
 
         const { push } = await sweep(store);
 

@@ -31,8 +31,8 @@ export const setStatus = mutation
     .input({ id: v.id("issues"), organizationId: v.id("organizations"), status: issueStatus })
     .mutation(async ({ ctx: context, args: { id, organizationId, status } }): Promise<Id<"issues">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "issue");
-        await context.db.patch(id, { status, updatedAt: context.now });
+        await assertRowInOrg(context, "issues", id, organizationId, "issue");
+        await context.db.patch("issues", id, { status, updatedAt: context.now });
 
         return id;
     });

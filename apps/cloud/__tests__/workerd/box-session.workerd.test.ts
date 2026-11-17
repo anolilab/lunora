@@ -128,7 +128,7 @@ describe("the box session object in workerd", () => {
 
         expect(config.telemetry?.endpoint).toBe(env.LUNORA_OTLP_ENDPOINT);
         expect(keys).toMatchObject([{ capability: "ingest", organizationId: "org_1" }]);
-        await expect(database.get(boxId, "boxes")).resolves.toMatchObject({ status: "online", versions: HELLO.versions });
+        await expect(database.get("boxes", boxId)).resolves.toMatchObject({ status: "online", versions: HELLO.versions });
 
         const lines: string[] = [];
         const running = boxSession(env.BOX_SESSION, boxId).dispatch({ kind: "diagnose" }, { onProgress: (line) => lines.push(line) });
@@ -156,7 +156,7 @@ describe("the box session object in workerd", () => {
         socket.send(JSON.stringify({ signature: await intruder.sign(challengeSigningPayload(challenge.nonce, boxId)), type: "auth" }));
 
         await expect(next("error")).resolves.toMatchObject({ code: "AUTH_FAILED", type: "error" });
-        await expect(database.get(boxId, "boxes")).resolves.toMatchObject({ status: "pending" });
+        await expect(database.get("boxes", boxId)).resolves.toMatchObject({ status: "pending" });
     });
 
     it("fails a dispatch fast when no box is connected", async () => {

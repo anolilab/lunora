@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -67,19 +67,25 @@ pnpm add mysql2     # mysql2        → fromMysql2
 
 ## Setup
 
-1. Create the Hyperdrive config and mint its id (Lunora can't fabricate the remote id):
+Importing `@lunora/hyperdrive` (or reading `ctx.sql`) is enough: `lunora dev` and `lunora deploy` add a `HYPERDRIVE` binding to `wrangler.jsonc` for you, with a placeholder `id`.
+
+- **In dev**, `ctx.sql` runs against an embedded Postgres ([PGlite](https://pglite.dev)) with its data in `.wrangler/state/lunora-pglite`, under `lunora dev`, `vite dev` and `vite preview`. It needs two optional packages (`lunora dev` says so when they are missing):
 
     ```sh
-    wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host:5432/db" # gitleaks:allow -- placeholder, not a real secret
+    pnpm add -D @electric-sql/pglite @electric-sql/pglite-socket
     ```
 
-2. Add the binding to `wrangler.jsonc` (use `localConnectionString` for local dev):
+    To use your own database, set `CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_HYPERDRIVE` (the last part is the binding name) or `localConnectionString` on the binding. The embedded database speaks PostgreSQL: a project whose only SQL driver is `mysql2` gets a warning and must set that variable to a local MySQL of its own. A plain `wrangler dev` that Lunora does not start has no embedded database either: set the variable (or `localConnectionString`) there too.
 
-    ```jsonc
-    {
-        "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<id from step 1>", "localConnectionString": "postgres://user:pass@localhost:5432/db" }], // gitleaks:allow -- placeholder, not a real secret
-    }
+- **On deploy**, set the origin's connection string and a token that may edit Hyperdrive (`CLOUDFLARE_API_TOKEN` with _Hyperdrive: Edit_, plus `CLOUDFLARE_ACCOUNT_ID`):
+
+    ```sh
+    LUNORA_HYPERDRIVE_URL="postgres://user:pass@host:5432/db" lunora deploy # gitleaks:allow -- placeholder, not a real secret
     ```
+
+    The variable is `LUNORA_<BINDING>_URL`. Lunora creates a config named after the deployed Worker (so `--env staging` gets its own) and the binding, or reuses one with that name that reaches the same database, and writes its `id` into `wrangler.jsonc`. A same-named config for another database stops the deploy. The connection string is only sent to Cloudflare, never written to a file or logged.
+
+Prefer to manage it yourself? Run `wrangler hyperdrive create my-db --connection-string=...` and put the `id` in the binding; Lunora then leaves it alone.
 
 ## Usage
 
@@ -89,17 +95,24 @@ pnpm add mysql2     # mysql2        → fromMysql2
 // src/server/index.ts
 import type { HyperdriveLike } from "@lunora/hyperdrive";
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
 
 import { defineApp } from "../../lunora/_generated/app";
 
 const app = defineApp<Env>()
     .shard((env) => env.SHARD)
-    .hyperdrive((env) => fromPostgresJs(postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString)))
+    .hyperdrive((env) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres(createHyperdrive(env.HYPERDRIVE as HyperdriveLike).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 
 export const ShardDO = app.ShardDO;
 ```
+
+The adapter takes a loader, not a driver: it runs on the first query and the client is reused, so the driver stays out of the Worker's startup graph. A static `import postgres from "postgres"` in the entry is evaluated at startup and defeats this. A failed load rejects that query; the next one retries. For `pg`, the loader may `await client.connect()` before returning.
 
 Hand-composing the worker instead? The same thunk is `createShardDO({ sql: (env) => … })`. Without it, every `ctx.sql` method throws a message pointing back at this wiring.
 
@@ -151,7 +164,13 @@ Supply the driver once, on the app builder — required, or every tick records `
 ```ts
 export default defineApp<Env>()
     .shard((env) => env.SHARD)
-    .sourceClient((env, binding) => fromPostgresJs(postgres((env[binding] as { connectionString: string }).connectionString)))
+    .sourceClient((env, binding) =>
+        fromPostgresJs(async () => {
+            const { default: postgres } = await import("postgres");
+
+            return postgres((env[binding] as { connectionString: string }).connectionString, { fetch_types: false, max: 5 });
+        }),
+    )
     .build();
 ```
 
@@ -170,14 +189,22 @@ Three things to know before you build on it:
 The `@lunora/hyperdrive/global` subpath is the opposite trade-off: Lunora **owns** the schema and a `.global()` table gets a real column-per-field layout on your Postgres/MySQL, with every write routed through the shared store core. Live queries stay reactive — identical to D1 — because the writer drives the same broadcast hook. Build the writer inside the Durable Object that hosts the `.global()` store and inject it as `globalDb`:
 
 ```ts
+import { fromPostgresJs } from "@lunora/hyperdrive";
 import { createPostgresGlobalCtxDb } from "@lunora/hyperdrive/global";
-import postgres from "postgres";
 
-// `sql` is a postgres.js client built from the HYPERDRIVE binding's connection string.
-const globalDb = createPostgresGlobalCtxDb({ query: (text, params) => sql.unsafe(text, params) }, { schema });
+const globalDb = createPostgresGlobalCtxDb(
+    fromPostgresJs(async () => {
+        const { default: postgres } = await import("postgres");
+
+        return postgres(env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 });
+    }),
+    { schema },
+);
 ```
 
-For MySQL use `createMysqlGlobalCtxDb` with a `mysql2/promise` pool created with `flags: ["FOUND_ROWS"]` — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
+For MySQL use `createMysqlGlobalCtxDb` with a loader returning a `mysql2/promise` pool created with `disableEval: true` (required on Workers) and `flags: ["FOUND_ROWS"]` (`import()` the driver inside it, as with `fromMysql2`) — without `CLIENT_FOUND_ROWS` the affected-rows OCC guard sees changed (not matched) rows and raises spurious conflicts. Lower-level building blocks (`buildPgExec`, `buildMysqlExec`, `postgresDialect`, `mysqlDialect`, `createHyperdriveGlobalCtxDb`) are exported for custom wiring.
+
+The Hyperdrive config behind `.global()` must have **query caching disabled** (`wrangler hyperdrive create … --caching-disabled`, or `wrangler hyperdrive update <id> --caching-disabled`). Hyperdrive caches reads for up to 75 s by default and writes don't invalidate them, so the store's OCC re-reads, change-log polls and live-query re-runs would see stale rows. `lunora deploy` sets this on the configs it creates when the schema has `.global({ backend: "hyperdrive" })` tables, and warns about an already-bound config that still caches (when Cloudflare API credentials are set).
 
 > This README covers the basics. For the full API and the determinism/realtime rationale, see the **[documentation](https://lunora.sh/docs/packages/hyperdrive)**.
 
@@ -216,11 +243,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora hyperdrive package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora hyperdrive package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/hyperdrive?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/hyperdrive

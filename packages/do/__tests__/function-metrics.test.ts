@@ -432,7 +432,7 @@ describe("shardDO persisted metrics", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_METRICS_FLUSH_EVERY: "1" });
 
             await shard.fetch(userRequest("messages:list"));
 
@@ -495,6 +495,13 @@ describe("shardDO persisted metrics", () => {
             }
 
             return { database, shard: new ClockShard(makeState(database), env) };
+        };
+
+        const dispatchTimes = async (shard: ClockShard, count: number): Promise<void> => {
+            if (count > 0) {
+                await shard.fetch(userRequest("messages:list"));
+                await dispatchTimes(shard, count - 1);
+            }
         };
 
         afterEach(() => {
@@ -785,15 +792,37 @@ describe("shardDO persisted metrics", () => {
             }
         });
 
-        it.each(["abc", "0", "2.5", "-3", ""])("treats %j as an invalid flush-every value (behaves as 1)", async (value) => {
-            expect.assertions(1);
+        it.each(["abc", "0", "2.5", "-3", ""])("treats %j as an invalid flush-every value (behaves as the default of 8)", async (value) => {
+            expect.assertions(2);
 
             const { database, shard } = setup(value);
 
             try {
+                await dispatchTimes(shard, 7);
+
+                expect(readFunctionMetrics(database.sql)).toEqual([]);
+
                 await shard.fetch(userRequest("messages:list"));
 
-                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 1 }]);
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 8 }]);
+            } finally {
+                database.close();
+            }
+        });
+
+        it("flushes on the 8th dispatch when the flush-every setting is unset", async () => {
+            expect.assertions(2);
+
+            const { database, shard } = setup();
+
+            try {
+                await dispatchTimes(shard, 7);
+
+                expect(readFunctionMetrics(database.sql)).toEqual([]);
+
+                await shard.fetch(userRequest("messages:list"));
+
+                expect(readFunctionMetrics(database.sql)).toMatchObject([{ calls: 8 }]);
             } finally {
                 database.close();
             }

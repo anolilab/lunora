@@ -38,7 +38,7 @@ const makeCtx = (userId: null | string, tables: Record<string, Row[]>): QueryCtx
     return {
         auth: { getIdentity: () => Promise.resolve(userId ? { subject: userId } : null), userId },
         db: {
-            get: (id: string) => Promise.resolve((tables["organizations"] ?? []).find((row) => row["_id"] === id) ?? null),
+            get: (_table: string, id: string) => Promise.resolve((tables["organizations"] ?? []).find((row) => row["_id"] === id) ?? null),
             members: { findMany: findMany("members") },
             organizations: { findMany: findMany("organizations") },
             payment_subscriptions: { findMany: findMany("payment_subscriptions") },

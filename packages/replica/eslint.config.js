@@ -28,6 +28,9 @@ export default createConfig(
             // linting can't parse them — don't lint doc snippets as source.
             "**/*.md/**",
             "**/vitest.config.ts",
+            // The workerd suite is typed by its own tsconfig (workers types, which conflict with the Node Request type used here), and
+            // `lint:types` checks it. The typed ESLint parser reads only tsconfig.json, so these files cannot be linted with type info.
+            "**/__tests__/workerd/**",
             "**/vitest.bench.config.ts",
             "**/packem.config.ts",
             "**/package.json",

@@ -128,8 +128,8 @@ const placementOf = async (deployment: DeploymentRow, read: RowReader): Promise<
 
 /** The name of the cell an organization is placed on, or `undefined` for none. */
 const organizationCell = async (database: ControlPlaneStore, organizationId: string): Promise<string | undefined> => {
-    const organization = (await database.get(organizationId, "organizations")) as null | { cellId?: null | string };
-    const cell = organization?.cellId == null ? null : ((await database.get(organization.cellId, "cells")) as null | { name?: null | string });
+    const organization = (await database.get("organizations", organizationId)) as null | { cellId?: null | string };
+    const cell = organization?.cellId == null ? null : ((await database.get("cells", organization.cellId)) as null | { name?: null | string });
 
     return cell?.name ?? undefined;
 };
@@ -146,7 +146,7 @@ export const organizationsOnCell =
  * organization is placed on this control plane's cell.
  */
 const projectPlacement = async (deps: HaltConvergeDeps, organizationId: string, projectId: string): Promise<Placement> => {
-    const project = (await deps.database.get(projectId, "projects")) as null | { organizationId: string; placementRef?: null | string; target?: null | string };
+    const project = (await deps.database.get("projects", projectId)) as null | { organizationId: string; placementRef?: null | string; target?: null | string };
 
     if (project?.organizationId !== organizationId) {
         throw new LunoraError("NOT_FOUND", "project not found in this organization");
@@ -275,10 +275,10 @@ const resumeTarget = (row: HaltRow, aliasRows: { live: DeploymentRow | undefined
 /** The catalog install badge over the control-plane store (`src/catalog/install-badge.ts` holds the rule). */
 const installBadgeOf = (database: ControlPlaneStore): InstallBadgeStore => {
     return {
-        delete: (id) => database.delete(id, "catalogInstalls"),
+        delete: (id) => database.delete("catalogInstalls", id),
         insert: async (row) => (await database.insert("catalogInstalls", row)) as string,
         installsOf: (projectId) => drainTable<BadgeInstall>(database, "catalogInstalls", { where: { projectId } }),
-        patch: (id, values) => database.patch(id, values, "catalogInstalls"),
+        patch: (id, values) => database.patch("catalogInstalls", id, values),
     };
 };
 
@@ -296,16 +296,16 @@ const recordResumedOnto = async (deps: HaltConvergeDeps, target: DeploymentRow, 
     }
 
     if (live !== undefined && live._id !== target._id) {
-        await deps.database.patch(live._id, { status: "superseded", supersededAt: now, updatedAt: now }, "deployments");
+        await deps.database.patch("deployments", live._id, { status: "superseded", supersededAt: now, updatedAt: now });
         await endInstallBadge(badge, live);
     }
 
     if (live?._id !== target._id) {
-        await deps.database.patch(target._id, { liveAt: now, status: "live", updatedAt: now }, "deployments");
+        await deps.database.patch("deployments", target._id, { liveAt: now, status: "live", updatedAt: now });
         await restoreInstallBadge(badge, target, now);
 
         if (target.kind === "production") {
-            await deps.database.patch(target.projectId, { activeDeploymentId: target._id, activeScriptName: target.scriptName }, "projects");
+            await deps.database.patch("projects", target.projectId, { activeDeploymentId: target._id, activeScriptName: target.scriptName });
         }
     }
 };

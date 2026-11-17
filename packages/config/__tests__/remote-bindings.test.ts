@@ -12,6 +12,7 @@ import {
     planRemoteBindings,
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,
+    toRemotePlan,
 } from "../src/cloudflare/remote-bindings";
 
 // A config covering every eligible kind (D1/KV/R2 arrays, Vectorize/Services
@@ -136,10 +137,18 @@ describe("planRemoteBindings", () => {
         expect(plans[0]).toMatchObject({ binding: "DB", kind: "D1", path: [1] });
     });
 
+    it("leaves an id-less KV namespace out of the remote plan, since there is no deployed one to proxy to", () => {
+        expect.assertions(1);
+
+        const plans = planRemoteBindings({ kv_namespaces: [{ binding: "KV" }, { binding: "CACHE", id: "abc" }] });
+
+        expect(plans.map((plan) => plan.binding)).toStrictEqual(["CACHE"]);
+    });
+
     it("labels a binding with no name by its index so logging stays meaningful", () => {
         expect.assertions(1);
 
-        const plans = planRemoteBindings({ kv_namespaces: [{}] });
+        const plans = planRemoteBindings({ kv_namespaces: [{ id: "abc" }] });
 
         expect(plans[0]?.binding).toBe("#0");
     });
@@ -178,6 +187,36 @@ describe("injectRemoteFlags", () => {
     });
 });
 
+describe("toRemotePlan", () => {
+    it("labels each remoted binding `NAME (kind)` and keeps the rest of the materialization", () => {
+        expect.assertions(1);
+
+        const cleanup = (): void => {};
+
+        expect(
+            toRemotePlan(
+                {
+                    cleanup,
+                    configPath: "/app/.wrangler.dev.jsonc",
+                    remoteBindings: [
+                        { binding: "DB", kind: "D1", path: [0], section: "d1_databases" },
+                        { binding: "FILES", kind: "R2", path: [0], section: "r2_buckets" },
+                    ],
+                    withheld: [],
+                },
+                true,
+            ),
+        ).toStrictEqual({
+            bindings: ["DB (D1)", "FILES (R2)"],
+            cleanup,
+            configPath: "/app/.wrangler.dev.jsonc",
+            enabled: true,
+            reason: undefined,
+            withheld: [],
+        });
+    });
+});
+
 describe("isRemoteEnvEnabled", () => {
     it.each([
         ["1", true],
@@ -207,6 +246,40 @@ describe("materializeDevWranglerConfig with remote off", () => {
         rmSync(root, { force: true, recursive: true });
     });
 
+    it("writes a copy without the artifacts binding when there is no Cloudflare login, keeping the rest", () => {
+        expect.assertions(4);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{ "name": "app", "kv_namespaces": [{ "binding": "CACHE", "id": "abc" }], "artifacts": [{ "binding": "ARTIFACTS", "namespace": "app" }] }`,
+            "utf8",
+        );
+
+        const result = materializeDevWranglerConfig({ remote: false, hasCredentials: () => false, projectRoot: root });
+
+        expect(result.withheld).toStrictEqual([{ binding: "ARTIFACTS", kind: "artifacts" }]);
+
+        const text = readFileSync(result.configPath!, "utf8");
+
+        expect(readJsonc(text).artifacts).toBeUndefined();
+        expect(readJsonc(text).kv_namespaces).toStrictEqual([{ binding: "CACHE", id: "abc" }]);
+        // The user's own file is never touched.
+        expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toContain('"artifacts"');
+
+        result.cleanup();
+    });
+
+    it("leaves the artifacts binding in place when logged in", () => {
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "artifacts": [{ "binding": "ARTIFACTS", "namespace": "app" }] }`, "utf8");
+
+        const result = materializeDevWranglerConfig({ remote: false, hasCredentials: () => true, projectRoot: root });
+
+        expect(result.withheld).toStrictEqual([]);
+        expect(result.configPath).toBeUndefined();
+    });
+
     it("writes a copy without the AI binding when there is no Cloudflare login", () => {
         expect.assertions(6);
 
@@ -214,7 +287,7 @@ describe("materializeDevWranglerConfig with remote off", () => {
 
         const result = materializeDevWranglerConfig({ remote: false, hasCredentials: () => false, projectRoot: root });
 
-        expect(result.withheld).toStrictEqual(["AI"]);
+        expect(result.withheld).toStrictEqual([{ binding: "AI", kind: "ai" }]);
         expect(result.configPath).toBeDefined();
 
         const text = readFileSync(result.configPath!, "utf8");
@@ -485,7 +558,7 @@ describe("remote mode without Cloudflare credentials", () => {
 
         const result = materializeDevWranglerConfig({ remote: true, hasCredentials: () => false, projectRoot: root });
 
-        expect(result.withheld).toStrictEqual(["AI"]);
+        expect(result.withheld).toStrictEqual([{ binding: "AI", kind: "ai" }]);
         expect(result.remoteBindings.map((plan) => plan.binding)).not.toContain("AI");
         expect(result.configPath).toBeDefined();
 

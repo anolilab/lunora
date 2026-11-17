@@ -43,9 +43,9 @@ export const remove = mutation
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         const caller = await assertMember(context, organizationId, ["owner", "admin"]);
 
-        await assertRowInOrg(context, id, organizationId, "member");
+        await assertRowInOrg(context, "members", id, organizationId, "member");
 
-        const target = await context.db.get(id);
+        const target = await context.db.get("members", id);
 
         // Removing an owner is an owner's decision, and the org must keep one owner.
         if (target?.role === "owner") {
@@ -60,7 +60,7 @@ export const remove = mutation
             }
         }
 
-        await context.db.delete(id);
+        await context.db.delete("members", id);
     });
 
 /**
@@ -101,7 +101,7 @@ export const setRole = mutation
     })
     .mutation(async ({ ctx: context, args: { id, organizationId, role: newRole } }): Promise<void> => {
         const caller = await assertMember(context, organizationId, ["owner"]);
-        const target = await context.db.get(id);
+        const target = await context.db.get("members", id);
 
         if (target?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "member not found in this organization");
@@ -116,7 +116,7 @@ export const setRole = mutation
             }
         }
 
-        await context.db.patch(id, { role: newRole });
+        await context.db.patch("members", id, { role: newRole });
         await context.db.insert("auditLog", {
             action: "member.set-role",
             actorUserId: caller.userId,
@@ -160,7 +160,7 @@ export const operatorPromoteOwner = internalMutation
             return { memberId: membership._id, promoted: false };
         }
 
-        await context.db.patch(membership._id, { role: "owner" });
+        await context.db.patch("members", membership._id, { role: "owner" });
         await context.db.insert("auditLog", {
             action: "member.set-role",
             actorUserId: OPERATOR_ACTOR,

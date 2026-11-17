@@ -6,10 +6,12 @@ description: Implement SqliteAdapter for any SQLite runtime (React Native, bun:s
 `@lunora/replica` ships adapters for [sql.js](/docs/packages/replica),
 [better-sqlite3](/docs/packages/replica), and the
 [official SQLite WASM](/docs/packages/replica). If your runtime uses a different
-SQLite backend (React Native's `expo-sqlite`, `bun:sqlite`, `capataz`), you can
+SQLite backend (React Native's `expo-sqlite`, `bun:sqlite`), you can
 write a custom adapter.
 
 ## The `SqliteAdapter` interface
+
+An adapter implements the four members of `SqliteAdapter`, which `packages/replica/src/adapters/types.ts:9` defines:
 
 ```ts
 interface SqliteAdapter {
@@ -93,6 +95,9 @@ export const createExpoSqliteAdapter = (database: SQLiteDatabase): SqliteAdapter
 Pass your adapter to `LocalMirror`:
 
 ```ts
+import { Database } from "bun:sqlite";
+import { LocalMirror } from "@lunora/replica";
+
 const adapter = createBunSqliteAdapter(new Database(":memory:"));
 const mirror = new LocalMirror({ db: adapter });
 ```

@@ -176,7 +176,8 @@ const priorBuild = async (
         return undefined;
     }
 
-    const deployment = build.deploymentId == null ? null : ((await context.db.get(build.deploymentId as Id<"deployments">)) as null | { status: string });
+    const deployment =
+        build.deploymentId == null ? null : ((await context.db.get("deployments", build.deploymentId as Id<"deployments">)) as null | { status: string });
 
     return { build, deployment };
 };
@@ -201,7 +202,7 @@ const isRedelivery = async (context: MutationContext, deliveryId: string): Promi
 
     for (const row of expired) {
         // eslint-disable-next-line no-await-in-loop -- a bounded batch
-        await context.db.delete(row._id);
+        await context.db.delete("githubDeliveries", row._id);
     }
 
     return false;
@@ -421,7 +422,7 @@ export const claimNext = internalMutation.input({ runnerId: v.string() }).mutati
         return null;
     }
 
-    await context.db.patch(next._id, {
+    await context.db.patch("builds", next._id, {
         buildingAt: now,
         processingBy: runnerId,
         processingStartedAt: now,
@@ -454,7 +455,7 @@ const assertLease = (build: BuildRow | null, runnerId: string): BuildRow => {
 export const appendLog = internalMutation
     .input({ buildId: v.id("builds"), level: v.union(v.literal("info"), v.literal("error")), line: v.string(), runnerId: v.string() })
     .mutation(async ({ ctx: context, args: { buildId, level, line, runnerId } }): Promise<void> => {
-        const build = assertLease(await context.db.get(buildId), runnerId);
+        const build = assertLease(await context.db.get("builds", buildId), runnerId);
 
         await context.db.insert("buildLogs", { buildId, createdAt: context.now, level, line, organizationId: build.organizationId });
     });
@@ -482,14 +483,14 @@ export const recordAdvisory = internalMutation
         runnerId: v.string(),
     })
     .mutation(async ({ ctx: context, args: { advisory, buildId, runnerId } }): Promise<void> => {
-        const build = assertLease(await context.db.get(buildId), runnerId);
+        const build = assertLease(await context.db.get("builds", buildId), runnerId);
         const recorded = build.advisories ?? [];
 
         if (recorded.length >= MAX_BUILD_ADVISORIES || recorded.some((entry) => entry.cacheKey === advisory.cacheKey)) {
             return;
         }
 
-        await context.db.patch(buildId, { advisories: [...recorded, advisory] });
+        await context.db.patch("builds", buildId, { advisories: [...recorded, advisory] });
     });
 
 /** Beyond this many workspace packages the set is not stored, and pushes build without the path check. */
@@ -512,12 +513,15 @@ export const complete = internalMutation
         workspacePackages: v.optional(v.array(boundedString(LIMITS.token))),
     })
     .mutation(async ({ ctx: context, args: { buildId, bundleHash, deploymentId, runnerId, workspacePackages } }): Promise<void> => {
-        const build = assertLease(await context.db.get(buildId), runnerId);
+        const build = assertLease(await context.db.get("builds", buildId), runnerId);
 
         const { now } = context;
 
         if (build.trigger === "push") {
-            const project = (await context.db.get(build.projectId)) as null | { runtime?: "worker" | null; workspacePackages?: { builtAt: number } | null };
+            const project = (await context.db.get("projects", build.projectId)) as null | {
+                runtime?: "worker" | null;
+                workspacePackages?: { builtAt: number } | null;
+            };
 
             // A build of the runtime the project has since left describes a
             // workspace the next push will not build, so it records nothing.
@@ -528,14 +532,14 @@ export const complete = internalMutation
                 // the older one: a stale set reads as complete, and a change to a package it
                 // misses would skip a deploy. With no set, every push builds.
                 if (recorded || project.workspacePackages) {
-                    await context.db.patch(build.projectId, {
+                    await context.db.patch("projects", build.projectId, {
                         workspacePackages: recorded ? { builtAt: build.createdAt, paths: workspacePackages, rootDirectory: build.rootDirectory ?? "" } : null,
                     });
                 }
             }
         }
 
-        await context.db.patch(buildId, {
+        await context.db.patch("builds", buildId, {
             bundleHash,
             ...(deploymentId === undefined ? {} : { deploymentId }),
             processingBy: null,
@@ -561,11 +565,11 @@ export const complete = internalMutation
 export const fail = internalMutation
     .input({ buildId: v.id("builds"), error: v.string(), runnerId: v.string() })
     .mutation(async ({ ctx: context, args: { buildId, error, runnerId } }): Promise<void> => {
-        const build = assertLease(await context.db.get(buildId), runnerId);
+        const build = assertLease(await context.db.get("builds", buildId), runnerId);
 
         const { now } = context;
 
-        await context.db.patch(buildId, {
+        await context.db.patch("builds", buildId, {
             error,
             failedAt: now,
             processingBy: null,
@@ -581,7 +585,7 @@ export const fail = internalMutation
             return;
         }
 
-        const project = (await context.db.get(build.projectId)) as null | { name: string };
+        const project = (await context.db.get("projects", build.projectId)) as null | { name: string };
 
         await fireDeployAlerts(context, build.organizationId, `build:${buildId}`, {
             detail: error,
@@ -608,13 +612,13 @@ export const fail = internalMutation
 export const reportTarget = internalQuery
     .input({ buildId: v.id("builds") })
     .query(async ({ ctx: context, args: { buildId } }): Promise<null | { commitSha: string; installationId: number; repository: string }> => {
-        const build = await context.db.get(buildId);
+        const build = await context.db.get("builds", buildId);
 
         if (!build) {
             return null;
         }
 
-        const project = (await context.db.get(build.projectId)) as null | ProjectRow;
+        const project = (await context.db.get("projects", build.projectId)) as null | ProjectRow;
 
         if (!project?.githubRepo) {
             return null;
@@ -641,13 +645,13 @@ export const reportTarget = internalQuery
 export const releaseTarget = internalQuery
     .input({ buildId: v.id("builds") })
     .query(async ({ ctx: context, args: { buildId } }): Promise<BuildReleaseTarget | null> => {
-        const build = await context.db.get(buildId);
+        const build = await context.db.get("builds", buildId);
 
         if (!build) {
             return null;
         }
 
-        const project = (await context.db.get(build.projectId)) as null | ProjectRow;
+        const project = (await context.db.get("projects", build.projectId)) as null | ProjectRow;
 
         if (project?.organizationId !== build.organizationId) {
             return null;
@@ -686,19 +690,22 @@ export interface ReusableRelease {
 export const reusableRelease = internalQuery
     .input({ buildId: v.id("builds") })
     .query(async ({ ctx: context, args: { buildId } }): Promise<null | ReusableRelease> => {
-        const build = await context.db.get(buildId);
+        const build = await context.db.get("builds", buildId);
 
         if (build?.reusesBuildId == null) {
             return null;
         }
 
-        const earlier = await context.db.get(build.reusesBuildId);
+        const earlier = await context.db.get("builds", build.reusesBuildId);
 
         if (earlier?.projectId !== build.projectId || earlier.deploymentId == null || earlier.bundleHash == null) {
             return null;
         }
 
-        const deployment = (await context.db.get(earlier.deploymentId as Id<"deployments">)) as null | { cronSpecs?: null | string[]; projectId: string };
+        const deployment = (await context.db.get("deployments", earlier.deploymentId as Id<"deployments">)) as null | {
+            cronSpecs?: null | string[];
+            projectId: string;
+        };
 
         if (deployment?.projectId !== build.projectId) {
             return null;
@@ -740,7 +747,7 @@ export const advisories = query
     .query(async ({ ctx: context, args: { buildId, organizationId } }): Promise<BuildAdvisory[]> => {
         await assertMember(context, organizationId);
 
-        const build = await context.db.get(buildId);
+        const build = await context.db.get("builds", buildId);
 
         if (build?.organizationId !== organizationId) {
             throw new LunoraError("NOT_FOUND", "build not found in this organization");
@@ -762,7 +769,7 @@ export const logs = query
         }): Promise<{ createdAt: number; level: "error" | "info"; line: string }[]> => {
             await assertMember(context, organizationId);
 
-            const build = await context.db.get(buildId);
+            const build = await context.db.get("builds", buildId);
 
             if (build?.organizationId !== organizationId) {
                 throw new LunoraError("NOT_FOUND", "build not found in this organization");
@@ -798,7 +805,7 @@ export const expireStale = internalMutation.mutation(async ({ ctx: context }): P
 
     for (const build of stale) {
         // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-        await context.db.patch(build._id, {
+        await context.db.patch("builds", build._id, {
             error: build.status === "pending" ? "no build runner picked this up within 24h" : "build lease expired without completion",
             failedAt: now,
             processingBy: null,

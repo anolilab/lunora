@@ -28,7 +28,7 @@ const makeCtx = (rows: Row[]): { ctx: MutationCtx; patched: { id: string; patch:
             },
             get: () => Promise.resolve(null),
             notificationChannels: { findMany: () => Promise.resolve({ page: [] }) },
-            patch: (id: string, patch: Row) => {
+            patch: (_table: string, id: string, patch: Row) => {
                 patched.push({ id, patch });
 
                 return Promise.resolve();
@@ -137,7 +137,7 @@ describe("deployments.planForScript", () => {
             db: {
                 aliasOwnership: { findMany: () => page(world.ledger ?? []) },
                 deployments: { findMany: () => page(world.deployments ?? [live]) },
-                get: (id: string) => Promise.resolve(rows.find((row) => row["_id"] === id) ?? null),
+                get: (_table: string, id: string) => Promise.resolve(rows.find((row) => row["_id"] === id) ?? null),
                 payment_subscriptions: { findMany: () => page([]) },
             },
             now: Date.now(),

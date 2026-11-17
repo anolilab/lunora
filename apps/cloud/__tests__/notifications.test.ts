@@ -182,7 +182,7 @@ const fakeDatabase = (tables: Record<string, Row[]>): ControlPlaneDatabase & { r
     const matches = (row: Row, where: Record<string, unknown> = {}): boolean => Object.entries(where).every(([key, value]) => row[key] === value);
 
     return {
-        delete: (id, table) => {
+        delete: (table, id) => {
             // eslint-disable-next-line no-param-reassign -- the fake's state is the record the test passed in and reads back
             tables[table ?? ""] = (tables[table ?? ""] ?? []).filter((row) => row._id !== id);
 
@@ -198,8 +198,8 @@ const fakeDatabase = (tables: Record<string, Row[]>): ControlPlaneDatabase & { r
             return Promise.resolve({ page: args?.limit === undefined ? rows : rows.slice(0, args.limit) });
         },
         insert: () => Promise.resolve(undefined),
-        patch: (id, patch, table) => {
-            const row = (tables[table ?? ""] ?? []).find((candidate) => candidate._id === id);
+        patch: (table, id, patch) => {
+            const row = (tables[table] ?? []).find((candidate) => candidate._id === id);
 
             Object.assign(row ?? {}, patch);
 

@@ -20,9 +20,9 @@ ignore_pr_labels = ["do-not-merge", "skip-review"]
 
 [review_agent]
 comments_location_policy = "both"
-# Inline only for High + Medium; Low stays in the summary so files-changed
-# does not fill with nits. Formatting, lint and type errors are CI gates.
-inline_comments_severity_threshold = 2
+# Inline for every severity, Low included. Formatting, lint and type errors are CI gates, so the
+# guidelines below keep the nits out. Qodo has no option to order comments, so they stay in Qodo's order.
+inline_comments_severity_threshold = 1
 enable_incremental_review = true
 enable_commitable_suggestions = true
 publish_blast_radius_labels = true

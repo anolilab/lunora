@@ -131,7 +131,7 @@ describe("applyAdditiveEdit", () => {
     });
 
     it("rejects a validator that is not a v.* expression (code injection)", () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         // The classic CSRF payload: a comma expression that runs arbitrary code
         // before yielding a real validator.
@@ -148,6 +148,10 @@ describe("applyAdditiveEdit", () => {
         expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "x", kind: "addOptionalColumn", table: "todos", validator: "evil()" }))).toBe("invalid-validator");
         // A smuggled second statement must not slip past on the structural check.
         expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "x", kind: "addOptionalColumn", table: "todos", validator: "v.string()); evil((" }))).toBe(
+            "invalid-validator",
+        );
+        // A parse error (unbalanced parens) fails the syntactic check.
+        expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "x", kind: "addOptionalColumn", table: "todos", validator: "v.string(" }))).toBe(
             "invalid-validator",
         );
     });

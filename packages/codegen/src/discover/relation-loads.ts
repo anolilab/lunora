@@ -2,7 +2,7 @@ import type { Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { RelationLoadIR } from "../ir";
-import { listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, propertyKeyName } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath, propertyInitializer, propertyKeyName } from "./ast";
 import { exportedNameOf, exportedVariableDeclarationsOf } from "./attribution";
 import { readTargetOf } from "./database-calls";
 import { classifyProcedureCall } from "./functions/classify-procedure-call";
@@ -52,7 +52,7 @@ const relationLoadsInDeclaration = (declaration: TsNode, relativePath: string): 
 
     const rows: RelationLoadIR[] = [];
 
-    for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+    for (const call of descendantsOfKind(declaration, SyntaxKind.CallExpression)) {
         const target = readTargetOf(call);
 
         if (target === undefined) {

@@ -28,7 +28,7 @@ export default defineSchema({
 }).extend(paymentExtension);
 ```
 
-The tables ship with `@lunora/payment` and merge namespaced as `payment_customers`, `payment_events`, `payment_sessions`, `payment_subscriptions` and `payment_usageEvents`. Codegen reads them from the installed package, so upgrading `@lunora/payment` brings new columns and indexes with no schema edit.
+The tables ship with `@lunora/payment` and merge namespaced as `payment_customers`, `payment_events`, `payment_referenceRevisions`, `payment_sessions`, `payment_subscriptions` and `payment_usageEvents`. Codegen reads them from the installed package, so upgrading `@lunora/payment` brings new columns and indexes with no schema edit.
 
 ## 2. Wire the adapter
 
@@ -36,12 +36,16 @@ In your Worker entry's `createShardDO({ … })` call. Note that `createStripeAda
 
 ```ts
 import { createStripeAdapter } from "@lunora/payment/stripe";
-import Stripe from "stripe";
 
 createShardDO({
     payment: (env) => ({
         adapter: createStripeAdapter({
-            client: new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() }),
+            // Loaded on the first provider call, which keeps `stripe` out of the Worker's startup graph.
+            client: async () => {
+                const { default: Stripe } = await import("stripe");
+
+                return new Stripe(env.STRIPE_SECRET_KEY, { httpClient: Stripe.createFetchHttpClient() });
+            },
             webhookSecret: env.STRIPE_WEBHOOK_SECRET,
         }),
         entitlements: { plans: { pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["price_xxx"] } } },
@@ -54,7 +58,7 @@ createShardDO({
 `processWebhook` is an `internalAction`, so it runs inside the shard where `ctx.payments` and its store exist. The HTTP route at the Worker edge forwards the raw body and the signature headers to it:
 
 ```ts
-import { webhookResponse } from "@lunora/payment";
+import { readWebhookBody, webhookResponse } from "@lunora/payment";
 
 // Which header carries the signature is the provider's choice — `stripe-signature`,
 // `creem-signature`, the Standard-Webhooks `webhook-*` trio (Polar, Dodo Payments), or `svix-*`
@@ -74,7 +78,9 @@ const SIGNATURE_HEADERS = [
 app.post(
     "/payment/webhook",
     httpAction(async (ctx, request) => {
-        const body = await request.text();
+        // Capped (413 past 1 MiB): the route is public and the body is read before its signature can be checked.
+        const body = await readWebhookBody(request);
+
         const headers = Object.fromEntries(
             SIGNATURE_HEADERS.flatMap((name) => {
                 const value = request.headers.get(name);

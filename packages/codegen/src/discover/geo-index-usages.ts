@@ -2,7 +2,7 @@ import type { AdvisorGeoIndexUsage } from "@lunora/advisor";
 import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listLunoraSourceFiles, lunoraRelativePath } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles, lunoraRelativePath } from "./ast";
 
 /**
  * True for a `.withGeoIndex(name, build)` call — the geo-query read entry point
@@ -38,7 +38,7 @@ const discoverGeoIndexUsages = (project: Project, lunoraDirectory: string): Advi
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
         const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
-        for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
             if (!isWithGeoIndexCall(call)) {
                 continue;
             }

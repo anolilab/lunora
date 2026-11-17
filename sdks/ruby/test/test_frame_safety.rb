@@ -63,6 +63,7 @@ class TestFrameSafety < Minitest::Test
     # based past them: the view drops, tells the callback, and re-seeds cold.
     sent = []
     client.attach_socket(->(sent_frame) { sent << sent_frame })
+    sent.clear # attach sends connect first; this asserts only what the gap triggers
     fired = delivered.length
     feed(client, shape["gapPokeSequence"])
 
@@ -234,7 +235,7 @@ class TestFrameSafety < Minitest::Test
     ConformanceManifest.covers("subscription_stream_ends_on_close")
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})
-    values, _stop = client.stream("messages:list", {})
+    values, _stop = client.watch("messages:list", {})
     client.handle_frame(JSON.generate({ "type" => "data", "id" => "sub_1", "data" => { "n" => 1 } }))
 
     client.close
@@ -245,9 +246,42 @@ class TestFrameSafety < Minitest::Test
     end
   end
 
+  # A loop that exits early must unsubscribe without the caller holding `stop`: the
+  # enumerator owns the subscription it opened.
+  def test_breaking_out_of_a_watch_loop_unsubscribes
+    frames = []
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(frame) { frames << frame })
+    values, _stop = client.watch("messages:list", {})
+    client.handle_frame(JSON.generate({ "type" => "data", "id" => "sub_1", "data" => { "n" => 1 } }))
+
+    values.first
+
+    unsubscribed = frames.select { |frame| frame["type"] == "unsubscribe" }
+
+    ids = unsubscribed.map { |frame| frame["id"] }
+
+    assert_equal ["sub_1"], ids
+  end
+
+  def test_raising_out_of_a_watch_loop_unsubscribes
+    frames = []
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(frame) { frames << frame })
+    values, _stop = client.watch("messages:list", {})
+    client.handle_frame(JSON.generate({ "type" => "data", "id" => "sub_1", "data" => { "n" => 1 } }))
+
+    assert_raises(RuntimeError) { values.each { |value| raise "consumer failed after #{value}" if value } }
+
+    unsubscribed = frames.select { |frame| frame["type"] == "unsubscribe" }
+    ids = unsubscribed.map { |frame| frame["id"] }
+
+    assert_equal ["sub_1"], ids
+  end
+
   def test_the_auth_token_is_redacted_when_printed
     ConformanceManifest.covers("auth_token_redacted_when_printed")
-    secret = "lunora-secret-7f3a9c"
+    secret = "lunora-secret-7f3a9c" # secret-scanner:allow -- test fixture
     client = Lunora::Client.new("https://app.example", auth_token: secret)
 
     printed = capture_io do

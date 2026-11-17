@@ -55,11 +55,11 @@ export const setStatus = mutation
     .input({ id: v.id("incidents"), organizationId: v.id("organizations"), status: incidentStatus })
     .mutation(async ({ ctx: context, args: { id, organizationId, status } }): Promise<Id<"incidents">> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "incident");
+        await assertRowInOrg(context, "incidents", id, organizationId, "incident");
 
         const { now } = context;
 
-        await context.db.patch(id, status === "resolved" ? { closedAt: now, status, updatedAt: now } : { closedAt: null, status, updatedAt: now });
+        await context.db.patch("incidents", id, status === "resolved" ? { closedAt: now, status, updatedAt: now } : { closedAt: null, status, updatedAt: now });
 
         return id;
     });
@@ -125,7 +125,7 @@ export const triage = action
     .input({ id: v.id("incidents"), organizationId: v.id("organizations") })
     .action(async ({ ctx: context, args: { id, organizationId } }): Promise<{ summary: string }> => {
         await assertMember(context, organizationId, ["owner", "admin", "member"]);
-        await assertRowInOrg(context, id, organizationId, "incident");
+        await assertRowInOrg(context, "incidents", id, organizationId, "incident");
 
         const entitlements = await orgEntitlements(context, organizationId);
 
@@ -133,7 +133,7 @@ export const triage = action
             throw new LunoraError("FORBIDDEN", "AI triage requires a plan with the logStreams feature");
         }
 
-        const incident = (await context.db.get(id)) as IncidentDocument | null;
+        const incident = (await context.db.get("incidents", id)) as IncidentDocument | null;
 
         if (!incident) {
             throw new LunoraError("NOT_FOUND", "incident not found");
@@ -226,7 +226,7 @@ export const investigate = action
     .input({ id: v.id("incidents"), organizationId: v.id("organizations") })
     .action(async ({ ctx: context, args: { id, organizationId } }): Promise<InvestigationView> => {
         await assertMember(context, organizationId, ["owner", "admin", "member"]);
-        await assertRowInOrg(context, id, organizationId, "incident");
+        await assertRowInOrg(context, "incidents", id, organizationId, "incident");
 
         const entitlements = await orgEntitlements(context, organizationId);
 
@@ -234,7 +234,7 @@ export const investigate = action
             throw new LunoraError("FORBIDDEN", "AI investigation requires a plan with the logStreams feature");
         }
 
-        const incident = (await context.db.get(id)) as IncidentDocument | null;
+        const incident = (await context.db.get("incidents", id)) as IncidentDocument | null;
 
         if (!incident) {
             throw new LunoraError("NOT_FOUND", "incident not found");
@@ -269,7 +269,7 @@ export const investigate = action
 
         const now = Date.now();
 
-        await context.db.patch(id, {
+        await context.db.patch("incidents", id, {
             investigatedAt: now,
             investigation: {
                 by: result.by,

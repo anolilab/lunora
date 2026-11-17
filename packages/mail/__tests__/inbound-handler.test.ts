@@ -23,6 +23,7 @@ const fakeMessage = (overrides: Partial<ForwardableEmailMessageLike> = {}): Forw
         from: "alice@example.com",
         headers: new Headers(),
         raw: new ReadableStream<Uint8Array>(),
+        rawSize: 1024,
         reply: vi.fn<ForwardableEmailMessageLike["reply"]>(async () => undefined),
         setReject: vi.fn<ForwardableEmailMessageLike["setReject"]>(),
         to: "bob@example.test",
@@ -31,6 +32,78 @@ const fakeMessage = (overrides: Partial<ForwardableEmailMessageLike> = {}): Forw
 };
 
 describe("createInboundEmailHandler", () => {
+    describe("size guard", () => {
+        const TEN_MIB = 10 * 1024 * 1024;
+
+        it("refuses a message over the default 10 MiB through the reject path, without reading or parsing it", async () => {
+            expect.assertions(3);
+
+            const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const parse = vi.fn<() => Promise<InboundEmail>>(async () => fixture);
+            const dispatch = vi.fn<() => Promise<void>>(async () => undefined);
+            const message = fakeMessage({ rawSize: TEN_MIB + 1 });
+
+            await createInboundEmailHandler({ dispatch, parse })(message, {}, undefined);
+
+            consoleError.mockRestore();
+
+            expect(parse).not.toHaveBeenCalled();
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        });
+
+        it("parses a message at exactly the limit", async () => {
+            expect.assertions(2);
+
+            const parse = vi.fn<() => Promise<InboundEmail>>(async () => fixture);
+            const message = fakeMessage({ rawSize: TEN_MIB });
+
+            await createInboundEmailHandler({ dispatch: async () => undefined, parse })(message, {}, undefined);
+
+            expect(parse).toHaveBeenCalledTimes(1);
+            expect(message.setReject).not.toHaveBeenCalled();
+        });
+
+        it("honours a custom maxRawBytes and hands the refusal to a custom onError", async () => {
+            expect.assertions(3);
+
+            const parse = vi.fn<() => Promise<InboundEmail>>(async () => fixture);
+            const onError = vi.fn<(error: unknown) => void>();
+            const message = fakeMessage({ rawSize: 2048 });
+
+            await createInboundEmailHandler({ dispatch: async () => undefined, maxRawBytes: 1024, onError, parse })(message, {}, undefined);
+
+            expect(parse).not.toHaveBeenCalled();
+            expect(onError).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining("maxRawBytes") }), expect.anything());
+            expect(message.setReject).not.toHaveBeenCalled();
+        });
+
+        it("refuses a message whose size it cannot read rather than parsing it unbounded", async () => {
+            expect.assertions(2);
+
+            const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const parse = vi.fn<() => Promise<InboundEmail>>(async () => fixture);
+            // A host message reaching the handler through a cast, without the field.
+            const message = { ...fakeMessage(), rawSize: undefined } as unknown as ForwardableEmailMessageLike;
+
+            await createInboundEmailHandler({ dispatch: async () => undefined, parse })(message, {}, undefined);
+
+            consoleError.mockRestore();
+
+            expect(parse).not.toHaveBeenCalled();
+            expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        });
+
+        it.each([Number.NaN, 0, -1, Number.POSITIVE_INFINITY])(
+            "rejects a maxRawBytes of %s, which would open the guard or bounce every message",
+            (maxRawBytes) => {
+                expect.assertions(1);
+
+                expect(() => createInboundEmailHandler({ dispatch: async () => undefined, maxRawBytes, parse: async () => fixture })).toThrow(/maxRawBytes/u);
+            },
+        );
+    });
+
     it("reads raw, parses, and dispatches the parsed message", async () => {
         expect.assertions(4);
 
@@ -469,6 +542,77 @@ describe("dispatchToLunoraFunction", () => {
 
         expect(attachment?.content).toBe(Buffer.from(bytes).toString("base64"));
         expect([...Buffer.from(attachment?.content ?? "", "base64")]).toStrictEqual([...bytes]);
+    });
+
+    it("drops binary content past the forwarded attachment byte budget and marks it truncated", async () => {
+        expect.assertions(5);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        const large = new Uint8Array(5 * 1024 * 1024);
+        const small = new Uint8Array(1024).fill(7);
+        const withAttachments: InboundEmail = {
+            ...fixture,
+            attachments: [
+                { content: large, disposition: "attachment", filename: "large.bin", mimeType: "application/octet-stream" },
+                { content: small, disposition: "attachment", filename: "small.bin", mimeType: "application/octet-stream" },
+            ],
+        };
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
+
+        await dispatch(withAttachments, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+        const envelope = JSON.parse(init.body) as { args: { attachments: { content: string; encoding: string; truncated?: boolean }[] } };
+        const [dropped, kept] = envelope.args.attachments;
+
+        expect(dropped?.content).toBe("");
+        expect(dropped?.truncated).toBe(true);
+        expect(kept?.truncated).toBeUndefined();
+        expect(kept?.encoding).toBe("base64");
+        expect(kept?.content).toBe(Buffer.from(small).toString("base64"));
+    });
+
+    it("counts string-valued attachments against the forwarded byte budget", async () => {
+        expect.assertions(4);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        // 4 base64 chars decode to 3 bytes, so this string decodes to ~5 MiB and is over budget.
+        const oversizedBase64 = "QUFB".repeat(Math.ceil((5 * 1024 * 1024) / 3));
+        const oversizedText = "x".repeat(5 * 1024 * 1024);
+        const withAttachments: InboundEmail = {
+            ...fixture,
+            attachments: [
+                { content: oversizedBase64, disposition: "attachment", encoding: "base64", filename: "big.b64", mimeType: "text/plain" },
+                { content: oversizedText, disposition: "attachment", encoding: "utf8", filename: "big.txt", mimeType: "text/plain" },
+                { content: "hello", disposition: "attachment", encoding: "utf8", filename: "small.txt", mimeType: "text/plain" },
+            ],
+        };
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
+
+        await dispatch(withAttachments, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+        const envelope = JSON.parse(init.body) as { args: { attachments: { content: string; encoding: string; truncated?: boolean }[] } };
+        const [base64Part, textPart, small] = envelope.args.attachments;
+
+        expect(base64Part).toMatchObject({ content: "", encoding: "base64", truncated: true });
+        expect(textPart).toMatchObject({ content: "", encoding: "base64", truncated: true });
+        expect(small?.truncated).toBeUndefined();
+        expect(small?.content).toBe("hello");
     });
 
     it("honours a custom shardKey and resolveArgs", async () => {

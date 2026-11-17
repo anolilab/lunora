@@ -2,7 +2,7 @@ import type { Injector, Signal } from "@angular/core";
 import { computed, DestroyRef, inject, signal } from "@angular/core";
 import type { FunctionReference, LunoraClient, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
-import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
+import { applyLoadMore, classifyPageFailure, derivePaginationStatus, headPage, initialPages, isHeadPage, rebalance } from "@lunora/client/pagination";
 import { stableWireKey } from "@lunora/wire";
 
 import { resolveLunoraClient } from "./client";
@@ -78,6 +78,9 @@ const usePaginatedCore = <F extends FunctionReference>(
     const status = signal<PaginationStatus>("LoadingFirstPage");
     const error = signal<SubscriptionError | undefined>(undefined);
 
+    /** Set by a silent `INVALID_CURSOR` restart, cleared by the next frame for a page past the head. */
+    let restartedSinceLoad = false;
+
     /**
      * Each active subscription entry, keyed in `activeSubs` by the page key it
      * was opened under. `loadMore` re-keys a pinned page by closing the old
@@ -93,10 +96,29 @@ const usePaginatedCore = <F extends FunctionReference>(
     const resultsByKey = new Map<string, PaginationResult<PageItemOf<F>>>();
     const pendingPageKeys = new Set<string>();
 
+    /**
+     * Each page's key, derived once per `Page` object. Every frame on any page
+     * rebuilds `pageResults` for the whole feed, so re-serialising each page's
+     * args per frame would cost one full `stableWireKey` pass per loaded
+     * page. `narrowedArgs` is fixed for this core's lifetime.
+     */
+    const pageKeys = new WeakMap<Page, string>();
+
+    const pageKeyOf = (page: Page): string => {
+        let key = pageKeys.get(page);
+
+        if (key === undefined) {
+            key = buildPageKey(functionPath, buildPageArgs(page, narrowedArgs));
+            pageKeys.set(page, key);
+        }
+
+        return key;
+    };
+
     const doRebuildPageResults = (): void => {
         const currentPages = pages();
         const items = currentPages.map((page) => {
-            const key = buildPageKey(functionPath, buildPageArgs(page, narrowedArgs));
+            const key = pageKeyOf(page);
             return resultsByKey.get(key);
         });
         pageResults.set(items);
@@ -111,10 +133,8 @@ const usePaginatedCore = <F extends FunctionReference>(
      * results to the new keys so visible data is preserved.
      */
     const migrateResultsForRebalance = (oldPages: Page[], newPages: Page[]): void => {
-        const keyOf = (page: Page): string => buildPageKey(functionPath, buildPageArgs(page, narrowedArgs));
-
         for (const newPage of newPages) {
-            const newKey = keyOf(newPage);
+            const newKey = pageKeyOf(newPage);
 
             if (resultsByKey.has(newKey)) {
                 continue;
@@ -123,7 +143,7 @@ const usePaginatedCore = <F extends FunctionReference>(
             const donor = oldPages.find((op) => op.lower === newPage.lower);
 
             if (donor) {
-                const carried = resultsByKey.get(keyOf(donor));
+                const carried = resultsByKey.get(pageKeyOf(donor));
 
                 if (carried) {
                     resultsByKey.set(newKey, carried);
@@ -136,7 +156,7 @@ const usePaginatedCore = <F extends FunctionReference>(
         const wantedKeys = new Set<string>();
 
         for (const page of currentPages) {
-            wantedKeys.add(buildPageKey(functionPath, buildPageArgs(page, narrowedArgs)));
+            wantedKeys.add(pageKeyOf(page));
         }
 
         // Close stale subscriptions.
@@ -153,7 +173,7 @@ const usePaginatedCore = <F extends FunctionReference>(
 
         for (const page of currentPages) {
             const pageArgs = buildPageArgs(page, narrowedArgs);
-            const key = buildPageKey(functionPath, pageArgs);
+            const key = pageKeyOf(page);
 
             if (coveredKeys.has(key)) {
                 continue;
@@ -171,6 +191,11 @@ const usePaginatedCore = <F extends FunctionReference>(
                 pageArgs as never,
                 (value) => {
                     resultsByKey.set(entry.currentKey, value as PaginationResult<PageItemOf<F>>);
+
+                    if (restartedSinceLoad && pages().some((candidate) => !isHeadPage(candidate) && pageKeyOf(candidate) === entry.currentKey)) {
+                        restartedSinceLoad = false;
+                    }
+
                     pendingPageKeys.delete(entry.currentKey);
                     error.set(undefined);
 
@@ -193,6 +218,22 @@ const usePaginatedCore = <F extends FunctionReference>(
                 {
                     onError: (subscriptionError) => {
                         pendingPageKeys.delete(key);
+
+                        const failure = classifyPageFailure(pages(), (candidate) => pageKeyOf(candidate) === key, subscriptionError, restartedSinceLoad);
+
+                        if (failure === "restart") {
+                            // A sibling feed's head page still carries the refused build's `continueCursor`:
+                            // ask for a fresh snapshot of it before this feed subscribes to it again.
+                            client.resnapshot(reference, buildPageArgs(headPage(initialNumItems), narrowedArgs) as never, { shardKey });
+                            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after restart is defined
+                            restart();
+                            restartedSinceLoad = true;
+                        }
+
+                        if (failure !== "surface") {
+                            return;
+                        }
+
                         error.set(subscriptionError);
 
                         // A tail that fails before its first frame is dropped so
@@ -202,7 +243,7 @@ const usePaginatedCore = <F extends FunctionReference>(
                         const current = pages();
                         const tail = current.at(-1);
 
-                        if (current.length > 1 && tail && !resultsByKey.has(key) && buildPageKey(functionPath, buildPageArgs(tail, narrowedArgs)) === key) {
+                        if (current.length > 1 && tail && !resultsByKey.has(key) && pageKeyOf(tail) === key) {
                             pages.set(current.slice(0, -1));
                             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- runs inside a deferred subscription callback, after syncSubscriptions is defined
                             syncSubscriptions(pages());
@@ -275,6 +316,16 @@ const usePaginatedCore = <F extends FunctionReference>(
         resultsByKey.clear();
     };
 
+    /** Drop every page and subscribe to the first page again. */
+    const restart = (): void => {
+        teardown();
+        pendingPageKeys.clear();
+        pages.set(initialPages(initialNumItems));
+        error.set(undefined);
+        syncSubscriptions(pages());
+        doRebuildPageResults();
+    };
+
     // A reactive generation registers with its own collector so the wrapper can
     // dispose it on an args change; the DI path registers with the owning
     // component's `DestroyRef`.
@@ -309,8 +360,8 @@ const usePaginatedCore = <F extends FunctionReference>(
         const newPinnedPage = next.at(-2);
 
         if (oldTail && newPinnedPage) {
-            const oldKey = buildPageKey(functionPath, buildPageArgs(oldTail, narrowedArgs));
-            const newKey = buildPageKey(functionPath, buildPageArgs(newPinnedPage, narrowedArgs));
+            const oldKey = pageKeyOf(oldTail);
+            const newKey = pageKeyOf(newPinnedPage);
             const entry = activeSubs.get(oldKey);
 
             if (entry && oldKey !== newKey) {

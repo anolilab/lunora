@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { LunoraClient } from "../src/lunora-client";
+import { LunoraAdminClient } from "../src/admin/admin-client";
 
 describe("lunoraClient auth admin calls on a closed client", () => {
     it.each([
@@ -53,7 +53,7 @@ describe("lunoraClient auth admin calls on a closed client", () => {
         expect.assertions(2);
 
         const fetchMock = vi.fn<typeof fetch>();
-        const client = new LunoraClient({
+        const client = new LunoraAdminClient({
             fetch: fetchMock,
             url: "https://app.example",
             WebSocket: vi.fn<() => void>() as unknown as typeof WebSocket,

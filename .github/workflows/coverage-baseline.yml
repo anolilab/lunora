@@ -4,9 +4,8 @@
 # was producing one.
 #
 # `test.yml` runs on `pull_request` and `merge_group` only — never `push`, by
-# design — and its upload step is additionally gated on those two events. The
-# merge queue is not in use (every recent `Tests` run is a `pull_request`), so no
-# run has ever uploaded a report for an `alpha` commit. The baseline froze at
+# design — and uploads coverage from `pull_request` alone, so no `Tests` run
+# uploads a report for an `alpha` commit. The baseline froze at
 # `95d33d67` on 2026-08-08, and by 2026-08-27 every PR comment was diffing today's
 # tree against a snapshot 1177 commits behind: a reported ~11% coverage "drop"
 # that was really 140 files added in the interim.
@@ -37,27 +36,26 @@
         "timeout-minutes": 60
         "steps":
             - "name": "Harden Runner"
-              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
               "with":
                   "egress-policy": "audit"
 
             - "name": "Git checkout"
-              "uses": "anolilab/workflows/step/checkout-with-retry@6c16895f4c3b5273b373656988505d1a8264e78b" # main
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
                   "fetch-depth": "0"
 
-            # 22.15 to match the leg that uploads from `test.yml`, so the base and the
-            # PR reports are produced by the same runtime. That leg's `node:sqlite` has
-            # no FTS5 (added in 22.16.0), so the FTS5 suites skip in both — the base is
-            # comparable to what a PR uploads rather than richer than it.
+            # 22.22 to match the leg that uploads from `test.yml`, so the base and the
+            # PR reports are produced by the same runtime.
             - "name": "Setup resources and environment"
-              "uses": "anolilab/workflows/step/node@acba5fb15ac98ad23dec1ad233e40e1bb79c1dae" # v19.0.4
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
               "with":
-                  "node-version": "22.15"
+                  "node-version": "22.22"
                   "cache-prefix": "coverage"
                   "install-node-gyp": "true"
                   "skip-playwright": "true"
                   "enable-nx-cache": "false"
+                  "npm-version": "11"
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
@@ -83,7 +81,7 @@
             # the base where it already was.
             - "name": "Upload coverage to Codecov"
               "continue-on-error": true
-              "uses": "codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac" # v5.5.5
+              "uses": "codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5" # v7.1.1
               "with":
                   "token": "${{ secrets.CODECOV_TOKEN }}"
                   "fail_ci_if_error": false

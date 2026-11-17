@@ -40,6 +40,8 @@ import type { FeatureItem } from "../add/features";
 import { detectAuthUiItem, isReactNativeProject } from "../add/features";
 import { runAddCommand } from "../registry/commands";
 import describeDownloadFailure from "./download-failure";
+import type { AuthChoice } from "./external-auth";
+import { parseAuthChoice, wireExternalAuth } from "./external-auth";
 import { emitMascot, emitStep } from "./flow";
 import type { InitOptions } from "./index";
 import type { FeatureApply, OfferDeps } from "./offer-extras";
@@ -69,8 +71,8 @@ type Template =
     | "expo"
     | "next"
     | "nuxt"
-    | "react-router"
     | "rspack-react"
+    | "saas"
     | "solid-v2"
     | "standalone"
     | "sveltekit"
@@ -96,6 +98,13 @@ interface InitCommandOptions {
      * pulled without the caller opting in.
      */
     allowUnsafeSource?: boolean;
+
+    /**
+     * The auth choice (the `--auth` flag): `lunora` (better-auth), `clerk`,
+     * `workos`, `auth0` or `none`. Skips the interactive auth question; without a
+     * TTY it is applied with its shipped defaults.
+     */
+    auth?: string;
     /** When set, also scaffold a CI deploy pipeline for the given provider. */
     ci?: CiProvider;
 
@@ -167,7 +176,7 @@ interface InitCommandOptions {
      * interactive regardless of TTY, and these drive the feature multi-select,
      * the auth-provider sub-select, and the storage bucket-name text input.
      */
-    prompt?: Pick<OfferDeps, "multiSelect" | "select" | "text">;
+    prompt?: Partial<Pick<OfferDeps, "selectAuth">> & Pick<OfferDeps, "multiSelect" | "select" | "text">;
 
     /**
      * Override the git ref (branch, tag, or commit) the default template source
@@ -1340,7 +1349,10 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 
         // --dry-run: report what would be added without touching the project.
         if (options.dryRun === true) {
-            logWould(options.logger, `add ${plans.map((plan) => plan.label).join(", ")}`);
+            logWould(
+                options.logger,
+                `add ${plans.map((plan) => (plan.externalAuth === undefined ? plan.label : `${plan.label} (and wire resolveIdentity)`)).join(", ")}`,
+            );
 
             return true;
         }
@@ -1391,11 +1403,27 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
             options.logger[level](message);
         }
 
+        // An external provider's registry item scaffolds the resolver; wiring it
+        // into the Worker and the client edits project files the item cannot know.
+        for (const [index, plan] of plans.entries()) {
+            if (plan.externalAuth !== undefined && results[index]?.code === 0) {
+                wireExternalAuth(projectDirectory, plan.externalAuth, options.logger);
+            }
+        }
+
         return results.every((result) => result.code === 0);
     };
 
+    const auth: AuthChoice | undefined =
+        options.auth === undefined
+            ? undefined
+            : parseAuthChoice(options.auth, (message) => {
+                  options.logger.warn(message);
+              });
+
     const deps: OfferDeps = {
         applyAll,
+        auth,
         interactive,
         logger: options.logger,
         multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => tuiMultiSelect(message, choices, { ...settings, badge: BADGES.add })),
@@ -1419,11 +1447,16 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
         select:
             options.prompt?.select ??
             ((message, choices, settings): Promise<FeatureItem | undefined> => tuiSelect(message, choices, { ...settings, badge: BADGES.add })),
+        // Injected prompts (tests) without an auth answer decline auth rather than reaching for a TTY.
+        selectAuth:
+            options.prompt === undefined
+                ? (message, choices, settings): Promise<AuthChoice | undefined> => tuiSelect(message, choices, { ...settings, badge: BADGES.add })
+                : (options.prompt.selectAuth ?? (() => Promise.resolve("none" as const))),
         text: options.prompt?.text ?? ((message, settings) => tuiText(message, { ...settings, badge: BADGES.add })),
     };
 
-    // `--add` applies its features directly (no headline, no multi-select).
-    if (preselected.length > 0) {
+    // `--add` applies its features directly (no headline, no multi-select), as does `--auth` without a TTY.
+    if (preselected.length > 0 || (auth !== undefined && !interactive)) {
         const added = await offerRegistryExtras(deps);
 
         await offerLintIgnores(projectDirectory, interactive, options);
@@ -1471,10 +1504,13 @@ const FRAMEWORK_CHOICES: ReadonlyArray<{ description: string; label: string; val
         label: "TanStack Start · React · Rsbuild",
         value: "tanstack-start-react-rspack",
     },
+    // The only template that is an application rather than a starting point: it
+    // scaffolds with the SaaS kit already composed (organizations, projects,
+    // activity, admin), so `lunora dev` opens a running multi-tenant app.
+    { description: "SaaS kit — multi-tenant app on TanStack Start: organizations, projects, activity, admin", label: "SaaS kit", value: "saas" },
     { description: "TanStack Start (Solid)", label: "TanStack Start · Solid", value: "tanstack-start-solid" },
     { description: "Next.js App Router on Vite (vinext) — composed into the Lunora worker (experimental)", label: "vinext · App Router", value: "vinext" },
     { description: "Next.js Pages Router on Vite (vinext) — composed into one worker (experimental)", label: "vinext · Pages Router", value: "vinext-pages" },
-    { description: "React Router (v7, framework mode) — SSR composed into the Lunora worker", label: "React Router", value: "react-router" },
     { description: "Astro (islands) — single-worker, Lunora composed into the adapter worker", label: "Astro", value: "astro" },
     { description: "AnalogJS (Angular) — single-worker, Lunora mounted in Nitro", label: "Analog", value: "analog" },
     { description: "Nuxt (Vue) — single-worker, Lunora mounted in Nitro", label: "Nuxt", value: "nuxt" },
@@ -2026,6 +2062,7 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
 
     return runInitCommand({
         add: options.add,
+        auth: options.auth,
         allowUnsafeSource: options.allowUnsafeSource === true,
         cwd,
         ci: resolveCiProvider(options.ci, logger),

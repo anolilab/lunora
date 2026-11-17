@@ -190,7 +190,7 @@ describe("the class record each converge writes", () => {
             fakeDriver({
                 deploy: async () => {
                     // A concurrent read-modify-write of the ownership row lost this converge's pending entry.
-                    await store.patch("ao_app", { pendingClasses: [] });
+                    await store.patch("aliasOwnership", "ao_app", { pendingClasses: [] });
 
                     return { url: "https://app.test" };
                 },
@@ -208,7 +208,7 @@ describe("the class record each converge writes", () => {
             contextOf(new Set(), store),
             fakeDriver({
                 deploy: async () => {
-                    await store.patch("ao_app", { pendingClasses: [] });
+                    await store.patch("aliasOwnership", "ao_app", { pendingClasses: [] });
 
                     throw new Error("alchemy deploy of lunora-worker-app failed with exit code 1");
                 },

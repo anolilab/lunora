@@ -12,6 +12,7 @@ vi.mock(import("../src/serve-stateless"), async (importOriginal) => {
 
 /** The worker-level x402 charge vocabulary shared by every paid tool. */
 const charge = {
+    facilitator: { url: "https://facilitator.example/x402" },
     network: "base",
     recipient: { evm: "0x1111111111111111111111111111111111111111" },
 } as const;
@@ -76,6 +77,9 @@ const callBody = (name: string): unknown => {
     return { id: 2, jsonrpc: "2.0", method: "tools/call", params: { arguments: {}, name } };
 };
 
+/** A keyword `ToolInputSchema` does not type, which the validator throws on when it runs the schema. */
+const UNRESOLVABLE_REF: Record<string, unknown> = { $ref: "#/definitions/missing" };
+
 const text = (value: string): ToolResult => {
     return { content: [{ text: value, type: "text" }] };
 };
@@ -93,7 +97,10 @@ describe("createPaidMcpServer", () => {
         const handler = vi.fn<() => ToolResult>(() => text("secret report"));
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.paidTool({ description: "the paid report", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, handler);
+        mcp.paidTool(
+            { description: "the paid report", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" },
+            handler,
+        );
 
         const response = await mcp.fetchHandler(mcpRequest(callBody("premium_report")));
 
@@ -110,7 +117,7 @@ describe("createPaidMcpServer", () => {
         const fetchMock = stubFacilitator();
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+        mcp.tool({ description: "echo", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
 
         // Handshake first, then the free-tool call; a fresh stateless server per request.
         await mcp.fetchHandler(mcpRequest(initializeBody));
@@ -131,8 +138,11 @@ describe("createPaidMcpServer", () => {
         stubFacilitator();
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
-        mcp.paidTool({ description: "the paid report", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+        mcp.tool({ description: "echo", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+        mcp.paidTool(
+            { description: "the paid report", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" },
+            () => text("secret"),
+        );
 
         await mcp.fetchHandler(mcpRequest(initializeBody));
         const response = await mcp.fetchHandler(mcpRequest({ id: 3, jsonrpc: "2.0", method: "tools/list", params: {} }));
@@ -150,7 +160,9 @@ describe("createPaidMcpServer", () => {
         const fetchMock = stubFacilitator();
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+        mcp.paidTool({ description: "paid", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () =>
+            text("secret"),
+        );
 
         const response = await mcp.fetchHandler(mcpRequest(initializeBody));
 
@@ -164,7 +176,9 @@ describe("createPaidMcpServer", () => {
         const fetchMock = stubFacilitator();
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+        mcp.paidTool({ description: "paid", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () =>
+            text("secret"),
+        );
 
         const response = await mcp.fetchHandler(mcpRequest([callBody("premium_report")]));
 
@@ -179,7 +193,9 @@ describe("createPaidMcpServer", () => {
         const fetchMock = stubFacilitator();
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+        mcp.paidTool({ description: "paid", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () =>
+            text("secret"),
+        );
 
         const response = await mcp.fetchHandler(rawMcpRequest("{not json"));
 
@@ -198,7 +214,7 @@ describe("createPaidMcpServer", () => {
         stubFacilitator();
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+        mcp.tool({ description: "echo", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
 
         const response = await mcp.fetchHandler(rawMcpRequest("{not json"));
 
@@ -214,7 +230,9 @@ describe("createPaidMcpServer", () => {
         const fetchMock = stubFacilitator();
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.paidTool({ description: "paid", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () => text("secret"));
+        mcp.paidTool({ description: "paid", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, () =>
+            text("secret"),
+        );
 
         // Declared oversize: refused on the header, before the body is read.
         const response = await mcp.fetchHandler(rawMcpRequest("{}", { "content-length": String(64 * 1024 * 1024) }));
@@ -230,7 +248,7 @@ describe("createPaidMcpServer", () => {
         stubFacilitator();
 
         const mcp = createPaidMcpServer({ charge, maxRequestBytes: 16 });
-        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+        mcp.tool({ description: "echo", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
 
         const response = await mcp.fetchHandler(mcpRequest(callBody("ping")));
 
@@ -242,7 +260,7 @@ describe("createPaidMcpServer", () => {
         expect.assertions(3);
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.tool({ description: "boom", inputSchema: NO_INPUT, name: "explode" }, () => {
+        mcp.tool({ description: "boom", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "explode" }, () => {
             throw new Error("handler blew up");
         });
 
@@ -254,7 +272,7 @@ describe("createPaidMcpServer", () => {
         // results, and the model is shown nothing for its money.
         expect(payload.error).toBeUndefined();
         expect(payload.result?.isError).toBe(true);
-        expect(payload.result?.content[0]?.text).toContain("handler blew up");
+        expect(payload.result?.content[0]?.text).toBe("INTERNAL: the tool call failed unexpectedly");
     });
 
     describe("with a facilitator that verifies and settles", () => {
@@ -307,7 +325,10 @@ describe("createPaidMcpServer", () => {
             const handler = vi.fn<() => ToolResult>(() => text("secret report"));
             const mcp = createPaidMcpServer({ charge });
 
-            mcp.paidTool({ description: "the paid report", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, handler);
+            mcp.paidTool(
+                { description: "the paid report", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" },
+                handler,
+            );
 
             const payment = await paymentFor(mcp, "premium_report");
             const response = await mcp.fetchHandler(mcpRequest(callBody("premium_report"), { "payment-signature": payment }));
@@ -335,7 +356,10 @@ describe("createPaidMcpServer", () => {
             const handler = vi.fn<() => ToolResult>(() => text("secret report"));
             const mcp = createPaidMcpServer({ charge });
 
-            mcp.paidTool({ description: "the paid report", inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" }, handler);
+            mcp.paidTool(
+                { description: "the paid report", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "premium_report", price: "$0.05" },
+                handler,
+            );
 
             const payment = await paymentFor(mcp, "premium_report");
             const response = await mcp.fetchHandler(mcpRequest(body, { ...headers, "payment-signature": payment }));
@@ -371,7 +395,10 @@ describe("createPaidMcpServer", () => {
             const handler = vi.fn<() => ToolResult>(() => text("secret report"));
             const mcp = createPaidMcpServer({ charge });
 
-            mcp.paidTool({ description: "the paid report", inputSchema: REPORT_INPUT, name: "premium_report", price: "$0.05" }, handler);
+            mcp.paidTool(
+                { description: "the paid report", annotations: { readOnlyHint: true }, inputSchema: REPORT_INPUT, name: "premium_report", price: "$0.05" },
+                handler,
+            );
 
             const payment = await paymentFor(mcp, "premium_report", argsCall({ quarter: 1 }));
             const response = await mcp.fetchHandler(mcpRequest(argsCall(arguments_), { "payment-signature": payment }));
@@ -380,7 +407,7 @@ describe("createPaidMcpServer", () => {
             expect(response.status).toBe(200);
             expect(response.headers.get("payment-response")).toBeNull();
             expect(payload.result?.isError).toBe(true);
-            expect(payload.result?.content[0]?.text).toMatch(/^invalid arguments for tool "premium_report": /);
+            expect(payload.result?.content[0]?.text).toMatch(/^BAD_REQUEST: invalid arguments for tool "premium_report": /);
             expect(handler).not.toHaveBeenCalled();
             expect(calls.filter((call) => call === "verify" || call === "settle")).toStrictEqual([]);
         });
@@ -392,7 +419,10 @@ describe("createPaidMcpServer", () => {
             const handler = vi.fn<(arguments_: Record<string, unknown>) => ToolResult>(() => text("secret report"));
             const mcp = createPaidMcpServer({ charge });
 
-            mcp.paidTool({ description: "the paid report", inputSchema: REPORT_INPUT, name: "premium_report", price: "$0.05" }, handler);
+            mcp.paidTool(
+                { description: "the paid report", annotations: { readOnlyHint: true }, inputSchema: REPORT_INPUT, name: "premium_report", price: "$0.05" },
+                handler,
+            );
 
             const payment = await paymentFor(mcp, "premium_report", argsCall({ quarter: 2 }));
             const response = await mcp.fetchHandler(mcpRequest(argsCall({ quarter: 2 }), { "payment-signature": payment }));
@@ -411,13 +441,40 @@ describe("createPaidMcpServer", () => {
         const handler = vi.fn<() => ToolResult>(() => text("pong"));
         const mcp = createPaidMcpServer({ charge });
 
-        mcp.tool({ description: "echo", inputSchema: { properties: { n: { type: "number" } }, required: ["n"], type: "object" }, name: "ping" }, handler);
+        mcp.tool(
+            {
+                description: "echo",
+                annotations: { readOnlyHint: true },
+                inputSchema: { properties: { n: { type: "number" } }, required: ["n"], type: "object" },
+                name: "ping",
+            },
+            handler,
+        );
 
         const response = await mcp.fetchHandler(mcpRequest(callBody("ping")));
         const payload = (await response.json()) as { result?: { content: { text: string }[]; isError?: boolean } };
 
         expect(payload.result?.isError).toBe(true);
-        expect(payload.result?.content[0]?.text).toMatch(/^invalid arguments for tool "ping": /);
+        expect(payload.result?.content[0]?.text).toMatch(/^BAD_REQUEST: invalid arguments for tool "ping": /);
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("returns a schema the validator cannot run as an isError result, not a protocol error", async () => {
+        expect.assertions(3);
+
+        const handler = vi.fn<() => ToolResult>(() => text("pong"));
+        const mcp = createPaidMcpServer({ charge });
+
+        mcp.tool(
+            { description: "echo", annotations: { readOnlyHint: true }, inputSchema: { ...UNRESOLVABLE_REF, properties: {}, type: "object" }, name: "ping" },
+            handler,
+        );
+
+        const response = await mcp.fetchHandler(mcpRequest(callBody("ping")));
+        const payload = (await response.json()) as { error?: unknown; result?: { isError?: boolean } };
+
+        expect(payload.error).toBeUndefined();
+        expect(payload.result?.isError).toBe(true);
         expect(handler).not.toHaveBeenCalled();
     });
 
@@ -425,10 +482,10 @@ describe("createPaidMcpServer", () => {
         expect.assertions(1);
 
         const mcp = createPaidMcpServer({ charge });
-        mcp.tool({ description: "echo", inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
+        mcp.tool({ description: "echo", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "ping" }, () => text("pong"));
 
         expect(() => {
-            mcp.paidTool({ description: "clash", inputSchema: NO_INPUT, name: "ping", price: "$0.01" }, () => text("x"));
+            mcp.paidTool({ description: "clash", annotations: { readOnlyHint: true }, inputSchema: NO_INPUT, name: "ping", price: "$0.01" }, () => text("x"));
         }).toThrow(/already registered/);
     });
 });

@@ -143,7 +143,7 @@ const ReactorsPanel = ({ initialShardKey = "" }: ReactorsPanelProps): ReactEleme
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-reactors-panel">
-            {error !== null && <ErrorAlert error={errorSource} testId="reactors-error" />}
+            {error !== null && <ErrorAlert error={errorSource} shardKey={initialShardKey} testId="reactors-error" />}
 
             <p className="text-sm text-muted-foreground">
                 {t(

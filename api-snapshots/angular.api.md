@@ -15,6 +15,15 @@ SemVer promise until the package graduates.
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
+### `AgentApprovalGrant` (interface)
+
+```ts
+interface AgentApprovalGrant {
+    createdAt: number;
+    toolName: string;
+}
+```
+
 ### `AgentChatApi` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
@@ -156,6 +165,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `LiveQueryOptions` (interface)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `LiveTopicOptions` (interface)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
@@ -320,6 +333,10 @@ _Tagged `@experimental` — signature not tracked; churn here does not fail the 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 
 ### `liveQuery` (const)
+
+_Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
+
+### `liveTopic` (const)
 
 _Tagged `@experimental` — signature not tracked; churn here does not fail the gate._
 

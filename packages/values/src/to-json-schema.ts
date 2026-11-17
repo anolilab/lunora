@@ -36,6 +36,7 @@ const validatorReader: SchemaNodeReader<Validator> = {
         return typeof value === "bigint" ? { const: value.toString(), format: "int64", type: "string" } : { const: value };
     },
     members: (validator) => metaOf(validator).members as ReadonlyArray<Validator>,
+    sensitive: (validator) => metaOf(validator).sensitive === true,
     shape: (validator) => metaOf(validator).shape as Record<string, Validator>,
     tableName: (validator) => metaOf(validator).tableName,
     valueChild: (validator) => metaOf(validator).valueValidator as Validator | undefined,

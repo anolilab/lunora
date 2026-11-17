@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createWorkflowContext, defineWorkflow } from "@lunora/workflow";
+import { branch, createWorkflowContext, defineWorkflow } from "@lunora/workflow";
 import type { WorkflowStore } from "@visulima/workflow";
 import { MemoryStore } from "@visulima/workflow";
 import Database from "better-sqlite3";
@@ -535,6 +535,47 @@ describe.each(STORES)("createNodeWorkflowHost — $name", ({ make: freshStore })
         const childInstance = await host.bindings.child.get(status.output as string);
 
         await expect(childInstance.status()).resolves.toMatchObject({ output: 42, status: "complete" });
+    });
+
+    it("joins ctx.parallel branches that finished inside create()", async () => {
+        expect.hasAssertions();
+
+        const double = defineWorkflow<{ n: number }, number>({
+            handler: async (ctx) => ctx.params.n * 2,
+        });
+        const parent = defineWorkflow<Record<string, never>, number[]>({
+            handler: async (ctx) => ctx.parallel([branch<number>("double", { n: 1 }), branch<number>("double", { n: 2 })]),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { double, parent } });
+        const instance = await host.bindings.parent.create({});
+
+        // The Node host runs each child to completion inside `create()`, before
+        // the parent could wait — the join must read the child's status instead.
+        await expect(instance.status()).resolves.toMatchObject({ output: [2, 4], status: "complete" });
+    });
+
+    it("reports a ctx.parallel branch error when the branch finished inside create()", async () => {
+        expect.hasAssertions();
+
+        const ok = defineWorkflow<Record<string, never>, string>({
+            handler: async () => "ok",
+        });
+        const boom = defineWorkflow<Record<string, never>, string>({
+            handler: async () => {
+                throw new Error("branch exploded");
+            },
+        });
+        const parent = defineWorkflow<Record<string, never>, string[]>({
+            handler: async (ctx) => ctx.parallel([branch<string>("ok"), branch<string>("boom")]),
+        });
+
+        const host = createNodeWorkflowHost({ store: freshStore(), workflows: { boom, ok, parent } });
+        const instance = await host.bindings.parent.create({});
+        const status = await instance.status();
+
+        expect(status.status).toBe("errored");
+        expect(status.error?.message).toContain("branch exploded");
     });
 
     it("rejects non-finite sleep durations rather than passing them to the engine", async () => {

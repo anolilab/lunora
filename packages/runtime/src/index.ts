@@ -73,7 +73,7 @@ export type {
     VectorQueryMatch,
     WorkerOptions,
 } from "./create-worker";
-export type { KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./create-worker";
+export type { AdminTokenSummary, AiRunBinding, CreatedAdminToken, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult } from "./create-worker";
 export {
     composeIdentityResolvers,
     composeWorker,
@@ -88,6 +88,7 @@ export {
 export type { CrossShardCounter, CrossShardReader, CrossShardRelationCapabilities, CrossShardRelationOptions } from "./cross-shard-relations";
 export { createCrossShardRelationCapabilities } from "./cross-shard-relations";
 export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry";
+export type { ShardRegistryRpc } from "./dynamic-shard-registry";
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
 export type { ReportedError, StackFrame } from "./error-reporting";
 export { parseStackFrames, toError } from "./error-reporting";
@@ -115,6 +116,8 @@ export type {
     TraceSamplingConfig,
 } from "./observability";
 export { emitLogEvent, emitRpcEvent } from "./observability";
+export type { SinkEnricher, SinkEvent, SinkRouteOptions, SinkSignalKind } from "./observability-routing";
+export { enrichSink, filterSink } from "./observability-routing";
 export type {
     AnalyticsEngineDataPointLike,
     AnalyticsEngineDatasetLike,
@@ -178,7 +181,7 @@ export { applyRestCache, requestCarriesCredentials, restCacheHeaders } from "./r
 export type { RateLimiterLike, RestInvoke, RestRateLimit, RestRegistryEntry, RestRegistryLike, RestRoute, RestRouteDeps } from "./rest-routes";
 export { argsFromQuery, buildRestRoutes, createRestRateLimit, restSurfaceFromRegistry } from "./rest-routes";
 export type { BackupRetentionPreview, PrunedBackups } from "./scheduled-backup";
-export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
+export type { CorsOptions, CrossOriginOpenerPolicy, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
 export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 export type {
     ShardCallArgs,
@@ -190,7 +193,10 @@ export type {
     ShardFunctionReference,
 } from "./shard-client";
 export { createShardClient } from "./shard-client";
+export type { AssetsFetcherLike } from "./spa-assets";
 export { STORAGE_UPLOAD_MAX_BODY_BYTES } from "./storage-admin-routes";
+export type { StudioDocumentName } from "./studio-documents";
+export { loadStudioDocument } from "./studio-documents";
 export type { TraceTrustSignal, TrustInboundTraceContext } from "./trace-trust";
 
 export const VERSION: string = "0.0.0";

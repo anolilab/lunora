@@ -32,6 +32,11 @@ export type ProviderId = "autumn" | "creem" | "dodopayments" | "polar" | "stripe
  * What a provider can do — encoded in types so tax/UX assumptions aren't tribal knowledge.
  */
 export interface ProviderCapabilities {
+    /**
+     * Honours `CheckoutRequest.expiresAt`, so a hosted checkout stops being payable at a time the
+     * caller sets. Optional so an adapter written before it still compiles; absent reads as `false`.
+     */
+    readonly checkoutExpiry?: boolean;
     /** True for Polar / Lemon Squeezy / Paddle; false for Stripe (PSP) and Autumn (runs on your own Stripe). Drives tax/invoice ownership. */
     readonly merchantOfRecord: boolean;
     /** Native hosted customer/billing portal. */
@@ -69,6 +74,8 @@ export interface PaymentSession {
     readonly provider: ProviderId;
     readonly referenceId: string;
     readonly refundedAmount: Money;
+    /** Store-maintained write counter, absent on rows written before it existed. Ignored on write. */
+    readonly revision?: number;
     readonly state: PaymentState;
 
     /**
@@ -108,6 +115,8 @@ export interface Subscription {
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
+    /** Store-maintained write counter, absent on rows written before it existed. Ignored on write. */
+    readonly revision?: number;
     readonly state: SubscriptionState;
     readonly updatedAt: number;
 }
@@ -131,6 +140,17 @@ export interface CheckoutRequest {
      * providers (e.g. Dodo Payments) require an email to mint a customer, so pass it on first checkout.
      */
     readonly email?: string;
+
+    /**
+     * When the hosted checkout stops being payable (epoch ms). Stripe accepts 30 minutes to 24
+     * hours from creation. Refused with `PROVIDER_ERROR` on an adapter whose
+     * `capabilities.checkoutExpiry` is false: a caller that bounds the session is relying on it.
+     *
+     * Part of the derived idempotency key, because the provider refuses a replayed key whose
+     * parameters differ. An expiry computed from the clock therefore makes every call a new
+     * request; pass your own `idempotencyKey` to collapse a retry onto the first session.
+     */
+    readonly expiresAt?: number;
     /** Outbound idempotency key for the provider call; auto-derived when omitted. */
     readonly idempotencyKey?: string;
     readonly metadata?: Record<string, string>;
@@ -198,6 +218,15 @@ export interface UsageEvent {
     readonly referenceId: string;
     /** Whether the event was successfully forwarded to the provider's metering API. */
     readonly reportedToProvider: boolean;
+
+    /**
+     * Epoch ms from which the reconcile sweep may retry the forward. A store stamps it when it
+     * records the event (`createdAt` for an event that owes a forward, `USAGE_NEVER_DUE` for
+     * one that never does), and a failed retry pushes it later, so an event that keeps failing
+     * (a reference with no provider customer) steps aside for others. Absent on an event
+     * recorded before stores stamped it, which the sweep treats as due from `createdAt`.
+     */
+    readonly reportRetryAt?: number;
 }
 
 /**
@@ -453,5 +482,14 @@ export interface WebhookAction {
  */
 export interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "orphaned" | "stale" | "unhandled" | "unstorable";
+    readonly reason?:
+        | "duplicate"
+        | "duplicate_subscription"
+        | "illegal_transition"
+        | "invalid_refund_amount"
+        | "ok"
+        | "orphaned"
+        | "stale"
+        | "unhandled"
+        | "unstorable";
 }

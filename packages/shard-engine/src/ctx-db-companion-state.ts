@@ -15,8 +15,8 @@
  * delta after it. While the rebuild ran once per ctx-db, a write that bypassed
  * the writer was healed by the next dispatch. Now nothing heals it: the
  * companion stays wrong until its definition changes. A path that has to write
- * a source table some other way must call {@link clearCompanionSignatures} so
- * the next touch rebuilds.
+ * a source table some other way must call {@link clearCompanionSignatures} (and
+ * invalidate its host's {@link CompanionMemo}) so the next touch rebuilds.
  *
  * Markers for companions the schema no longer declares are pruned on every cold
  * start: while an index is undeclared nothing maintains its companion, so
@@ -130,11 +130,29 @@ const writeCompanionSignature = (sql: SqlExec, companion: string, signature: str
 /**
  * Drop every marker, so each companion rebuilds on its next touch. Creates the
  * table first: the `rebuildCompanions` admin op may reach a shard whose base
- * class never migrated a schema.
+ * class never migrated a schema. A host holding a {@link CompanionMemo} must
+ * invalidate it too: the memo would otherwise keep reporting the companions as
+ * verified and skip the rebuild.
  */
 const clearCompanionSignatures = (sql: SqlExec): void => {
     createStateTable(sql);
     runDrizzle(sql, dsql`DELETE FROM ${dsql.identifier(COMPANION_STATE_TABLE)}`);
 };
 
-export { aggregateSignature, clearCompanionSignatures, migrateCompanionState, rankSignature, readCompanionSignature, writeCompanionSignature };
+/**
+ * Companions already verified against their durable marker, kept by a host that
+ * builds a ctx-db per dispatch so only the first touch per host lifetime pays the
+ * marker lookup. Whatever can change a marker or a companion behind the memo — a
+ * migration, a rolled-back transaction, a marker reset — must call
+ * {@link CompanionMemo.invalidate}, or the next write trusts a companion it
+ * should re-check.
+ */
+class CompanionMemo {
+    public readonly verified = new Set<string>();
+
+    public invalidate(): void {
+        this.verified.clear();
+    }
+}
+
+export { aggregateSignature, clearCompanionSignatures, CompanionMemo, migrateCompanionState, rankSignature, readCompanionSignature, writeCompanionSignature };

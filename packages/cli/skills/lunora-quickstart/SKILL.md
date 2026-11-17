@@ -55,7 +55,6 @@ accepted as an alias for the same overlay.
 | `tanstack-start-react-rspack` | TanStack Start (React) on Rsbuild, one worker                    |
 | `rspack-react`                | React SPA on Rsbuild (`@lunora/rspack`)                          |
 | `solid-v2`                    | Solid 2.0 SPA (`@solidjs/web`, `vite-plugin-solid` 3)            |
-| `react-router`                | React Router v7 framework mode, SSR in the Lunora worker         |
 | `astro`                       | Astro, Lunora composed into the adapter worker                   |
 | `sveltekit`                   | SvelteKit, Lunora composed into the adapter worker               |
 | `nuxt`                        | Nuxt (Vue), Lunora mounted in Nitro                              |

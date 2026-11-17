@@ -19,9 +19,10 @@ import type { IndexHit, IssueSeverity, IssueStatus, LogEntry, TraceAnchor } from
 import { ISSUE_SEVERITIES, ISSUE_STATUSES } from "@lunora/observability";
 import type {
     CdcChange,
-    ExportRow,
     FilterClause,
     FilterOperator,
+    ImportConflictMode,
+    ImportRow,
     MigrationDirection,
     OrderByClause,
     QueueMessageOutcome,
@@ -46,7 +47,7 @@ const CONTAINER_EXIT_CODE_PATTERN = /\(exit (\d+)\)/;
 type ContainerLogEntry = LogEntry & { functionPath: string };
 
 /** The structured-filter operators accepted over the wire (mirrors `FilterOperator`). */
-const FILTER_OPERATORS: ReadonlySet<string> = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
+const FILTER_OPERATORS: ReadonlySet<string> = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "has", "lt", "lte", "ne"]);
 
 /** Cloudflare Queues accepts 1–100 messages per `sendBatch` call (a 0 or >100 batch is a `BatchCountOutOfBounds` error). */
 const MAX_QUEUE_SEND_BATCH = 100;
@@ -60,6 +61,7 @@ const WORKFLOW_INSTANCE_STATES: ReadonlySet<string> = new Set<WorkflowInstanceSt
     "errored",
     "paused",
     "queued",
+    "rollingBack",
     "running",
     "terminated",
     "unknown",
@@ -89,11 +91,17 @@ interface RunShardExportArgs {
 
 /** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface RunShardImportArgs {
+    /** Honour rows tagged `op: "delete"`. See `ImportShardArgs.deletes` in `@lunora/shard-engine`. */
+    deletes?: boolean;
+    /** Check the rows and report their shape errors, writing nothing. See `ImportShardArgs.dryRun` in `@lunora/shard-engine`. */
+    dryRun?: boolean;
     /** Replace prune: the `_id`s kept besides `rows`' own (see `@lunora/shard-engine`'s `ImportShardArgs`). */
     keepIds?: ReadonlySet<string>;
+    /** What a row whose `_id` already exists does. See `ImportConflictMode` in `@lunora/shard-engine`. */
+    onConflict?: ImportConflictMode;
     /** Replace mode: rows of these tables overwrite by `_id` (see `@lunora/shard-engine`'s `ImportShardArgs`). */
     replaceTables?: ReadonlyArray<string>;
-    rows: ReadonlyArray<ExportRow>;
+    rows: ReadonlyArray<ImportRow>;
     startLine?: number;
 }
 
@@ -394,11 +402,13 @@ const parseSeverityArgument = (args: Record<string, unknown>): IssueSeverity | n
 /**
  * Minimal structural shape of a created/fetched workflow instance handle, mirrored
  * from `@lunora/workflow`'s WorkflowInstanceLike so `@lunora/do` stays free of a
- * dependency on the workflow package. Only the members the admin ops touch (`id`
- * and `status()`) are modelled.
+ * dependency on the workflow package. Only the members the admin ops touch (`id`,
+ * `status()` and `sendEvent()`) are modelled. `sendEvent` is optional because the
+ * binding check only vouches for `create`/`get`.
  */
 interface WorkflowInstanceHandle {
     id: string;
+    sendEvent?: (event: { payload?: unknown; type: string }) => Promise<void>;
     status: () => Promise<{ error?: { message?: unknown; name?: unknown }; output?: unknown; status?: unknown }>;
 }
 
@@ -431,7 +441,9 @@ const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateW
         throw new LunoraError("BAD_REQUEST", "createWorkflowInstance: `exportName` is required");
     }
 
-    const id = typeof args["id"] === "string" && args["id"] !== "" ? args["id"] : undefined;
+    // Trimmed like the status and send-event parses, so the id a create returns is the one the others look up.
+    const trimmedId = typeof args["id"] === "string" ? args["id"].trim() : "";
+    const id = trimmedId === "" ? undefined : trimmedId;
 
     // Admin-token-gated, but reject the reserved workflow branch-marker key for
     // uniformity with every other create surface — a forged marker could
@@ -470,6 +482,57 @@ const parseGetWorkflowInstanceStatusArgs = (args: Record<string, unknown>): GetW
     return { exportName, id };
 };
 
+/** Parsed `sendWorkflowEvent` admin-RPC payload: which instance of which declared workflow, and the event to deliver. */
+interface SendWorkflowEventArgs {
+    exportName: string;
+    id: string;
+    payload?: unknown;
+    type: string;
+}
+
+/**
+ * The event-type namespace `@lunora/workflow` reserves for its own events
+ * (`RESERVED_EVENT_TYPE_PREFIX` there; `@lunora/do` has no dependency on that
+ * package). `ctx.parallel` children report their outcome to the parent as a
+ * `lunora:branch:*` event, so an admin-sent one could forge a branch result.
+ */
+const RESERVED_WORKFLOW_EVENT_PREFIX = "lunora:";
+
+/**
+ * Validate the `sendWorkflowEvent` admin-RPC payload. Requires non-empty
+ * `exportName`, `id` and `type`, and refuses a reserved `lunora:` type. Only the shape is
+ * checked here: `payload` is returned as received, and `ShardDO.handleSendWorkflowEvent`
+ * validates it against the type's `defineWorkflowEvent` definition before sending. Throws a
+ * 400 `LunoraError` on a bad shape.
+ */
+const parseSendWorkflowEventArgs = (args: Record<string, unknown>): SendWorkflowEventArgs => {
+    const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
+    const id = typeof args["id"] === "string" ? args["id"].trim() : "";
+    // Untrimmed: delivery matches the type a workflow waits for byte for byte, so only emptiness is judged on the trimmed value.
+    const type = typeof args["type"] === "string" ? args["type"] : "";
+
+    if (exportName === "") {
+        throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `exportName` is required");
+    }
+
+    if (id === "") {
+        throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `id` is required");
+    }
+
+    if (type.trim() === "") {
+        throw new LunoraError("BAD_REQUEST", "sendWorkflowEvent: `type` is required");
+    }
+
+    if (type.startsWith(RESERVED_WORKFLOW_EVENT_PREFIX)) {
+        throw new LunoraError(
+            "BAD_REQUEST",
+            `sendWorkflowEvent: event type "${type}" is reserved — the "${RESERVED_WORKFLOW_EVENT_PREFIX}" prefix is used by the framework's own events`,
+        );
+    }
+
+    return { exportName, id, payload: args["payload"], type };
+};
+
 /** Coerce an unknown `status()` payload field into a known instance state, defaulting to `"unknown"`. */
 const toWorkflowInstanceState = (raw: unknown): WorkflowInstanceStatusResult["status"] =>
     typeof raw === "string" && WORKFLOW_INSTANCE_STATES.has(raw) ? (raw as WorkflowInstanceStatusResult["status"]) : "unknown";
@@ -489,6 +552,28 @@ const toWorkflowInstanceError = (raw: unknown): WorkflowInstanceStatusResult["er
 };
 
 /**
+ * The nested `path` of a filter clause: an absent key or an empty list means the
+ * field itself; `null` or any non-list is refused.
+ * @returns the field names under the column, or `undefined` when the clause is not nested
+ * @throws LunoraError `BAD_REQUEST` when `raw` is present but is not a list of strings
+ */
+const parseClausePath = (column: string, raw: unknown): string[] | undefined => {
+    // Only an absent key means "no path". An explicit `null` is a request for a
+    // nested field the caller failed to name, and dropping it would test the
+    // parent column instead — under "delete matching", that deletes rows the
+    // caller never asked for.
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(raw) || !raw.every((segment): segment is string => typeof segment === "string")) {
+        throw new LunoraError("BAD_REQUEST", `the path for ${column} must be a list of field names`);
+    }
+
+    return raw.length === 0 ? undefined : raw;
+};
+
+/**
  * Parse the loosely-typed `filters` admin arg into validated {@link FilterClause}s,
  * dropping any malformed entry (non-object, missing/blank column, unknown
  * operator) and any clause that constrains nothing ({@link isVacuousFilterClause}
@@ -496,7 +581,12 @@ const toWorkflowInstanceError = (raw: unknown): WorkflowInstanceStatusResult["er
  * Returns `undefined` when nothing valid remains so `readTablePage` takes its
  * no-predicate fast path — and so `deleteRows`' predicate guard sees an empty
  * `contains` for what it is.
+ *
+ * A malformed `path` throws instead of being skipped: dropping the path would
+ * keep the clause and test the parent field, and under "delete matching" that
+ * widens the delete.
  * @returns the validated filter clauses, or `undefined` when no valid clauses remain
+ * @throws LunoraError `BAD_REQUEST` when a clause carries a `path` that is not a list of field names
  */
 const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
     if (!Array.isArray(raw)) {
@@ -517,7 +607,8 @@ const parseTablePageFilters = (raw: unknown): FilterClause[] | undefined => {
             continue;
         }
 
-        const clause: FilterClause = { column, operator: operator as FilterOperator, value: record["value"] };
+        const path = parseClausePath(column, record["path"]);
+        const clause: FilterClause = { column, operator: operator as FilterOperator, value: record["value"], ...(path === undefined ? {} : { path }) };
 
         if (!isVacuousFilterClause(clause)) {
             clauses.push(clause);
@@ -1094,6 +1185,20 @@ const parseReplayQueueMessageArgs = (args: Record<string, unknown>): { id: strin
     const target = typeof args["target"] === "string" && args["target"].trim() !== "" ? args["target"].trim() : undefined;
 
     return { id, target };
+};
+
+/**
+ * Validate the `dropOutboxEntry` / `retryOutboxEntry` payload: the outbox
+ * entry's job id. Throws a 400 `LunoraError` when it is missing.
+ */
+const parseScheduleOutboxEntryArgs = (op: string, args: Record<string, unknown>): { id: string } => {
+    const id = typeof args["id"] === "string" ? args["id"].trim() : "";
+
+    if (id === "") {
+        throw new LunoraError("BAD_REQUEST", `${op}: \`id\` is required`);
+    }
+
+    return { id };
 };
 
 /**
@@ -1678,7 +1783,9 @@ export {
     parseRunMigrationArgs,
     parseSampleErrorsHeader,
     parseSampleRate,
+    parseScheduleOutboxEntryArgs,
     parseSendQueueMessageArgs,
+    parseSendWorkflowEventArgs,
     parseSeverityArgument,
     parseTablePageFilters,
     parseTablePageOrderBy,

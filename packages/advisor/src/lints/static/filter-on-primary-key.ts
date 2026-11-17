@@ -7,7 +7,7 @@ import { callSiteFields, queryReadLocation } from "../helpers";
  * that is directly addressable.
  *
  * Unlike `filter_without_index`, this is never a judgement call. `_id` is the
- * primary key: `ctx.db.get(x)` fetches the row by rowid, while the filter form
+ * primary key: `ctx.db.get(table, x)` fetches the row by rowid, while the filter form
  * walks the table comparing every `_id` until it matches. There is no schema
  * shape, table size, or access pattern under which the scan is the right
  * choice, so the fix is mechanical and the finding needs no triage.
@@ -24,12 +24,12 @@ import { callSiteFields, queryReadLocation } from "../helpers";
 const filterOnPrimaryKey: Lint = {
     categories: ["PERFORMANCE"],
     description:
-        "A query filters on `_id`, the primary key. That walks the table comparing every row's id, when `ctx.db.get(id)` fetches the row directly. There is no case where the scan is preferable.",
+        "A query filters on `_id`, the primary key. That walks the table comparing every row's id, when `ctx.db.get(table, id)` fetches the row directly. There is no case where the scan is preferable.",
     facing: "EXTERNAL",
     level: "WARN",
     name: "filter_on_primary_key",
     remediation:
-        'Replace `ctx.db.query("table").filter((d) => d._id === id).first()` with `ctx.db.get(id)`. Passing a typed `Id<"table">` also narrows the result to that table\'s `Doc`, where the scan form returns the shared row type.',
+        'Replace `ctx.db.query("table").filter((d) => d._id === id).first()` with `ctx.db.get("table", id)`. Passing a typed `Id<"table">` also narrows the result to that table\'s `Doc`, where the scan form returns the shared row type.',
     run: (context) =>
         (context.queries ?? [])
             .filter((read) => read.filtersPrimaryKey === true && read.table !== "")
@@ -38,7 +38,7 @@ const filterOnPrimaryKey: Lint = {
 
                 return emit(filterOnPrimaryKey, {
                     cacheKey: `filter_on_primary_key:${read.file}:${read.line.toString()}:${read.table}`,
-                    detail: `Query on "${read.table}" at ${location} filters on \`_id\` — it scans "${read.table}" to find a row \`ctx.db.get(id)\` addresses directly.`,
+                    detail: `Query on "${read.table}" at ${location} filters on \`_id\` — it scans "${read.table}" to find a row \`ctx.db.get(table, id)\` addresses directly.`,
                     metadata: { ...callSiteFields(read), table: read.table },
                 });
             }),

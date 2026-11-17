@@ -3,7 +3,7 @@
  * database handle, so it reaches the app's ports through one internal mutation. This module is
  * both ends of that hop. The internal mutation, which has `ctx.db`, takes `{ method, payload }`
  * and returns `dispatchPort(privacyConfig, localPorts(ctx), method, payload)`. The workflow's ports
- * are `remotePorts((call) => ctx.run(internal.privacy.privacyPort, call))`.
+ * are `remotePorts((call, options) => ctx.run(internal.privacy.privacyPort, call, options))`.
  *
  * Both ends read one codec per port method from {@link PORT_CODECS}: `encode` turns the call's
  * arguments into the wire tuple and `decode` turns the tuple back into the arguments the app's port
@@ -15,13 +15,14 @@
 import { randomUUID } from "node:crypto";
 
 import { LunoraError } from "@lunora/errors";
-import { decodeWire, encodeWire } from "@lunora/wire";
+import { encodeWire, parseWire } from "@lunora/wire";
 
 import type { Dataset } from "./dataset";
 import type { PrivacyConfig } from "./define";
 import type { RowDisposition } from "./erasure";
 import { dispositionForPresets } from "./erasure";
 import type { PrivacyPorts } from "./ports";
+import { unboundPortMessage } from "./ports";
 
 /** The ports a workflow reaches over the wire. The clock and the id source stay on the caller's side. */
 type RemotePort = Exclude<keyof PrivacyPorts, "newId" | "now">;
@@ -84,7 +85,7 @@ const PORT_CODECS: CodecTable = {
     },
     files: { delete: asIs(), list: asIs(), put: asIs(), read: asIs(), signedUrl: asIs() },
     store: { addEvent: asIs(), claim: asIs(), findOpen: asIs(), get: asIs(), insert: asIs(), listForSubject: asIs(), listOpen: asIs(), update: asIs() },
-    tombstones: { add: asIs(), keys: asIs() },
+    tombstones: { add: asIs(), has: asIs(), keys: asIs() },
 };
 
 /** A codec once its method is chosen at run time by name. */
@@ -108,7 +109,7 @@ const codecOf = (name: string): { readonly codec: ErasedCodec; readonly method: 
 
 const toText = (value: unknown): string => JSON.stringify(encodeWire(value));
 
-const fromText = (text: string): unknown => decodeWire(JSON.parse(text));
+const fromText = (text: string): unknown => parseWire(text);
 
 /** Call a method on a port object by name. The name was checked against {@link PORT_CODECS}. */
 const callPort = async (target: object, method: string, args: ReadonlyArray<unknown>): Promise<unknown> => {
@@ -143,7 +144,7 @@ const dispatchPort = async (
     const target = ports[call.port];
 
     if (target === undefined) {
-        throw new LunoraError("BAD_REQUEST", `The privacy port "${call.port}" is not bound for this call.`);
+        throw new LunoraError("BAD_REQUEST", unboundPortMessage(call.port));
     }
 
     const context: DecodeContext = {
@@ -162,8 +163,17 @@ const dispatchPort = async (
     return toText(await callPort(target, call.method, call.codec.decode(wire, context)));
 };
 
-/** Send one encoded port call across the hop and resolve to the encoded result text. */
-type PortTransport = (call: { readonly method: string; readonly payload: string }) => Promise<unknown>;
+/**
+ * Send one encoded port call across the hop and resolve to the encoded result text. `options` carries
+ * a fresh `dedupId` for this call only: the workflow's positional ids are not safe here, since a
+ * replayed step is served from its journal and the calls it made vanish, shifting every later id onto
+ * another call's cached result. A new id per call means a re-run applies again rather than collides;
+ * the port writes are idempotent by design (tombstones upsert, erase drains, claims are conditional).
+ * Every `store.addEvent` follows the status write that the step reads first, so a retried step finds
+ * the status moved and does not write the event again. `addEvent` is not idempotent per workflow
+ * instance, request and kind, so an event whose write failed before it committed is not repeated by a retry.
+ */
+type PortTransport = (call: { readonly method: string; readonly payload: string }, options: { readonly dedupId: string }) => Promise<unknown>;
 
 /**
  * The ports for a workflow step: every method is one call through `send`, which the app points at
@@ -174,7 +184,7 @@ type PortTransport = (call: { readonly method: string; readonly payload: string 
 const remotePorts = (send: PortTransport): Required<PrivacyPorts> => {
     const call = async (name: string, args: ReadonlyArray<unknown>): Promise<unknown> => {
         const { codec } = codecOf(name);
-        const text = await send({ method: name, payload: toText(codec.encode(args)) });
+        const text = await send({ method: name, payload: toText(codec.encode(args)) }, { dedupId: randomUUID() });
 
         if (typeof text !== "string") {
             throw new LunoraError("INTERNAL", `The privacy port call "${name}" returned no result.`);

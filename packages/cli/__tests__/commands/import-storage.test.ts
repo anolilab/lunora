@@ -79,8 +79,12 @@ const fakeWorker = (): FakeWorker => {
         };
     };
 
-    /** `POST /_lunora/admin/import` — record the rows and report them inserted. */
-    const handleImport = (body: string | Uint8Array | undefined) => {
+    /** `POST /_lunora/admin/import` — record the rows and report them inserted. A `dryRun` POST is a check and records nothing. */
+    const handleImport = (body: string | Uint8Array | undefined, dryRun: boolean) => {
+        if (dryRun) {
+            return json({ conflicts: 0, dryRun: true, errors: [], inserted: {}, received: 0 });
+        }
+
         const inserted: Record<string, number> = {};
 
         for (const line of (typeof body === "string" ? body : "").split("\n").filter((entry) => entry.trim().length > 0)) {
@@ -138,7 +142,7 @@ const fakeWorker = (): FakeWorker => {
         const method = init?.method ?? "GET";
 
         if (url.pathname === "/_lunora/admin/import") {
-            return handleImport(init?.body);
+            return handleImport(init?.body, url.searchParams.get("dryRun") === "true");
         }
 
         // The signed-URL minter, and the app-served endpoint the minted URL
@@ -263,6 +267,74 @@ describe("lunora import --with-storage", () => {
         expect(worker.bucket.get(avatarHash)?.bytes).toBe("avatar-bytes");
         expect(worker.imported.find((row) => row.table === "users")?.doc).toStrictEqual({ _id: "u1", avatarId: avatarHash });
         expect(worker.imported.find((row) => row.table === "posts")?.doc).toStrictEqual({ _id: "p1", cover: coverHash, title: "hello" });
+    });
+
+    it("checks the whole file before any blob moves, and uploads each blob once when the check passes", async () => {
+        expect.assertions(6);
+
+        const hash = sha256Hex("bytes");
+        const root = writeConvexExport({ kg_a: "bytes" }, { files: [{ _id: "f1", blob: { $storage: "kg_a" } }] });
+        const worker = fakeWorker();
+        const checkedBodies: string[] = [];
+        let refusing = true;
+
+        // A worker whose check refuses the row while `refusing` is set, and otherwise behaves as `fakeWorker`.
+        const fetchImpl: StreamingFetchLike = async (input, init) => {
+            const url = new URL(input);
+
+            if (url.pathname === "/_lunora/admin/import" && url.searchParams.get("dryRun") === "true") {
+                // The blank-line probe that precedes the check is not a check of the rows.
+                if (String(init?.body).trim() !== "") {
+                    checkedBodies.push(String(init?.body));
+                }
+
+                if (refusing) {
+                    return {
+                        body: null,
+                        json: async () => {
+                            return {
+                                conflicts: 0,
+                                dryRun: true,
+                                errors: [{ code: "INVALID", line: 1, message: "refused", table: "files" }],
+                                inserted: {},
+                                received: 0,
+                            };
+                        },
+                        ok: true,
+                        status: 200,
+                        text: async () => "",
+                    };
+                }
+            }
+
+            return worker.fetchImpl(input, init);
+        };
+
+        const run = async () =>
+            runImportCommand({
+                cwd: workDir,
+                fetchImpl,
+                file: root,
+                logger: capturingLogger().logger,
+                token: "t",
+                url: "http://localhost:8787",
+                withStorage: true,
+            });
+
+        const refused = await run();
+
+        expect(refused.code).toBe(1);
+        expect(worker.uploads).toStrictEqual([]);
+
+        refusing = false;
+
+        const accepted = await run();
+
+        expect(accepted.code).toBe(0);
+        expect(worker.uploads).toStrictEqual([hash]);
+        // The check must see the same rows the real pass sends: the `$storage` reference already rewritten to its blob's key.
+        expect(checkedBodies[0]).toContain(`"blob":"${hash}"`);
+        expect(checkedBodies[0]).not.toContain("$storage");
     });
 
     it("stops telling the operator to upload blobs by hand once it has uploaded them", async () => {
@@ -416,6 +488,31 @@ describe("lunora import --with-storage", () => {
         expect(result.code).toBe(1);
         expect(logs.warn.some((line) => line.includes("unmigrated storage reference posts.cover: kg_missing"))).toBe(true);
         expect(logs.error.some((line) => line.includes("resolved to no migrated blob"))).toBe(true);
+    });
+
+    it("refuses a file with an unresolved storage reference under --verify before any blob or row is written", async () => {
+        expect.assertions(5);
+
+        const root = writeConvexExport({ kg_a: "bytes" }, { posts: [{ _id: "p1", cover: { $storage: "kg_missing" } }] });
+        const worker = fakeWorker();
+        const { logger, logs } = capturingLogger();
+
+        const result = await runImportCommand({
+            cwd: workDir,
+            fetchImpl: worker.fetchImpl,
+            file: root,
+            logger,
+            token: "t",
+            url: "http://localhost:8787",
+            verify: true,
+            withStorage: true,
+        });
+
+        expect(result.code).toBe(1);
+        expect(result.error).toContain("1 storage reference(s) resolve to no exported blob");
+        expect(worker.imported).toHaveLength(0);
+        expect(worker.uploads).toHaveLength(0);
+        expect(logs.warn.some((line) => line.includes("unmigrated storage reference posts.cover: kg_missing"))).toBe(true);
     });
 
     it("leaves plain strings alone when there is no mapping file", async () => {
@@ -984,7 +1081,7 @@ describe("lunora import --with-storage", () => {
 
             // A worker that swallows one row per batch: parity is what catches it.
             const lossyFetch: StreamingFetchLike = async (input, init) => {
-                if (new URL(input).pathname === "/_lunora/admin/import") {
+                if (new URL(input).pathname === "/_lunora/admin/import" && new URL(input).searchParams.get("dryRun") !== "true") {
                     return {
                         body: null,
                         json: async () => {
@@ -1070,7 +1167,7 @@ describe("lunora import --with-storage", () => {
             });
 
             expect(result.code).toBe(1);
-            expect(worker.imported[0]?.doc["avatarId"]).toBe("kg_deleted");
+            expect(worker.imported).toHaveLength(0);
             expect(logs.warn.join("\n")).toContain("unmigrated storage reference users.avatarId: kg_deleted");
         });
 
@@ -1083,7 +1180,7 @@ describe("lunora import --with-storage", () => {
             const root = writeConvexExport({}, { users: [{ _id: "u1" }, { _id: "u2" }] });
 
             const conflictingFetch: StreamingFetchLike = async (input, init) => {
-                if (new URL(input).pathname === "/_lunora/admin/import") {
+                if (new URL(input).pathname === "/_lunora/admin/import" && new URL(input).searchParams.get("dryRun") !== "true") {
                     return {
                         body: null,
                         json: async () => {

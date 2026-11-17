@@ -107,6 +107,22 @@ describe(materializeServiceDevConfigs, () => {
         cleanup();
     });
 
+    it("writes a copy without the artifacts binding when the session has no Cloudflare login", () => {
+        expect.assertions(3);
+
+        const path = join(workdir, "wrangler.jsonc");
+
+        writeFileSync(path, `{ "name": "svc", "main": "src/index.ts", "artifacts": [{ "binding": "ARTIFACTS", "namespace": "svc" }] }`, "utf8");
+
+        const { cleanup, configPaths, withheld } = materializeServiceDevConfigs([path], { hasCredentials: () => false, projectRoot: workdir });
+
+        expect(withheld).toStrictEqual([{ binding: "ARTIFACTS", kind: "artifacts" }]);
+        expect(configPaths[0]).not.toBe(path);
+        expect(parseJsonc(readFileSync(configPaths[0]!, "utf8")).artifacts).toBeUndefined();
+
+        cleanup();
+    });
+
     it("writes a copy without the ai binding when the session has no Cloudflare login", () => {
         expect.assertions(3);
 
@@ -116,7 +132,7 @@ describe(materializeServiceDevConfigs, () => {
 
         const { cleanup, configPaths, withheld } = materializeServiceDevConfigs([path], { hasCredentials: () => false, projectRoot: workdir });
 
-        expect(withheld).toStrictEqual(["AI"]);
+        expect(withheld).toStrictEqual([{ binding: "AI", kind: "ai" }]);
         expect(configPaths[0]).not.toBe(path);
         expect(parseJsonc(readFileSync(configPaths[0]!, "utf8")).ai).toBeUndefined();
 

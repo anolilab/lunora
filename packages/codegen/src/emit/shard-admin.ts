@@ -38,7 +38,7 @@ const adminWriterMethod = `        /**
                     this.recordChangedTable(delta.table, delta.indexKeys);
                 },
                 cdc: config.cdc ?? false,
-                headroom,
+                ...(headroom === undefined ? {} : { headroom }),
                 // Live predicate, same as the user-facing ctx — see \`databaseOptions\`.
                 inTransaction: () => this.isInTransaction(),
                 scheduler,
@@ -70,19 +70,25 @@ const ADMIN_WRITE_METHODS: string = `${adminWriterMethod}
 
 ${adminWriterPrelude()}
 
-            return runDataMigration({
-                batchSize: args.batchSize,
-                direction: args.direction,
-                dryRun: args.dryRun,
-                maxBatches: args.maxBatches,
-                migration: migration as unknown as DataMigrationLike,
-                // Flush after each batch so live migrationStatus subscribers see
-                // progress mid-run (the base method records the reserved state
-                // table the raw-SQL progress write is invisible to the tracker).
-                onBatch: () => this.flushMigrationProgress(),
-                sql: this.sql as SqlExec,
-                writer,
-            });
+            try {
+                return await runDataMigration({
+                    ...(args.batchSize === undefined ? {} : { batchSize: args.batchSize }),
+                    ...(args.direction === undefined ? {} : { direction: args.direction }),
+                    ...(args.dryRun === undefined ? {} : { dryRun: args.dryRun }),
+                    ...(args.maxBatches === undefined ? {} : { maxBatches: args.maxBatches }),
+                    migration: migration as unknown as DataMigrationLike,
+                    // Flush after each batch so live migrationStatus subscribers see
+                    // progress mid-run (the base method records the reserved state
+                    // table the raw-SQL progress write is invisible to the tracker).
+                    onBatch: () => this.flushMigrationProgress(),
+                    sql: this.sql as SqlExec,
+                    writer,
+                });
+            } finally {
+                // The de-dup that unblocks a deferred UNIQUE index runs through here;
+                // let the next call rebuild it now instead of after the retry interval.
+                this.migrationRetryAt = 0;
+            }
         }
 
         protected override async runShardWrite(args: RunShardWriteArgs, headroom?: TransactionHeadroomTracker): Promise<RunShardWriteResult> {
@@ -121,18 +127,18 @@ ${adminWriterPrelude("headroom ?? this.transactionHeadroom()")}
             // A single-row \`writeRow\` delete never carries it, so it keeps the
             // table's declared \`.softDelete()\` behaviour.
             if (args.op === "delete") {
-                await writer.delete(args.id ?? "", args.table, { hard: args.hard === true });
+                await writer.delete(args.table, args.id ?? "", { hard: args.hard === true });
 
                 return { id: args.id ?? null, op: "delete" };
             }
 
             if (args.op === "replace") {
-                await writer.replace(args.id ?? "", args.doc ?? {}, args.table);
+                await writer.replace(args.table, args.id ?? "", args.doc ?? {});
 
                 return { id: args.id ?? null, op: "replace" };
             }
 
-            await writer.patch(args.id ?? "", args.doc ?? {}, args.table);
+            await writer.patch(args.table, args.id ?? "", args.doc ?? {});
 
             return { id: args.id ?? null, op: "patch" };
         }
@@ -163,7 +169,7 @@ ${adminWriterPrelude()}
             // \`exportShardRows\` walks in keyset batches so a large table does not
             // materialize at once inside the generator; the admin RPC's response
             // is a single array, so it is collected here rather than streamed.
-            for await (const row of exportShardRows(writer, schema as unknown as SchemaLike, { batchSize: args.batchSize, tables: args.tables })) {
+            for await (const row of exportShardRows(writer, schema as unknown as SchemaLike, args)) {
                 rows.push(row);
             }
 
@@ -171,7 +177,10 @@ ${adminWriterPrelude()}
         }
 
         protected override async runShardImport(args: RunShardImportArgs): Promise<ImportShardResult> {
-            this.ensureMigrated();
+            // A dry run checks row shapes and never writes. Migrating first would write the schema ledger and create tables on a cold shard.
+            if (args.dryRun !== true) {
+                this.ensureMigrated();
+            }
 
 ${adminWriterPrelude()}
 
@@ -180,12 +189,7 @@ ${adminWriterPrelude()}
             // referencing them stays valid without a second remapping pass. A
             // staged replace's commit (\`replaceTables\` / \`keepIds\`) arrives inside
             // the base class's transaction.
-            return importShardRows(writer, schema as unknown as SchemaLike, {
-                keepIds: args.keepIds,
-                replaceTables: args.replaceTables,
-                rows: args.rows,
-                startLine: args.startLine,
-            });
+            return importShardRows(writer, schema as unknown as SchemaLike, args);
         }
 
         protected override async runShardRankBefore(args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
@@ -220,7 +224,7 @@ ${adminWriterPrelude()}
 
             return writer.related(
                 { id: args.id, table: args.table },
-                { cursor: args.cursor, depth: args.depth, direction: args.direction, edges: args.edges, limit: args.limit },
+                args,
             );
         }
 
@@ -238,10 +242,10 @@ ${adminWriterPrelude()}
             }
 
             return writer.rankPageRows(args.table, args.index, {
-                after: args.after,
-                cursor: args.cursor,
-                partitionKey: args.partitionKey,
-                take: args.take,
+                ...(args.after === undefined ? {} : { after: args.after }),
+                ...(args.cursor === undefined ? {} : { cursor: args.cursor }),
+                ...(args.partitionKey === undefined ? {} : { partitionKey: args.partitionKey }),
+                ...(args.take === undefined ? {} : { take: args.take }),
             });
         }
 

@@ -316,7 +316,7 @@ const SHOP = { hostname: "shop.lunora.app", projectId: "p1", rowId: "dep1", sour
 const store = (tables: Record<string, unknown[]>, spies: Partial<ControlPlaneDatabase> = {}) => {
     return {
         ...fakeControlPlaneDb(tables, spies),
-        get: (id: string, table?: string) => Promise.resolve((tables[table ?? ""] ?? []).find((row) => (row as { _id: string })._id === id) ?? null),
+        get: (table: string, id: string) => Promise.resolve((tables[table] ?? []).find((row) => (row as { _id: string })._id === id) ?? null),
     };
 };
 
@@ -349,9 +349,9 @@ describe(runEdgeRuleSweep, () => {
 
         await expect(runEdgeRuleSweep(store(orgTables(edgeRow()), { insert, patch }), options(zone.fetch))).resolves.toStrictEqual({ applied: 1 });
         expect(patch).toHaveBeenCalledWith(
+            "edgeRules",
             "edge1",
             expect.objectContaining({ applied: true, cloudflareRuleId: "rule_1", targets: [SHOP], status: "applied" }),
-            "edgeRules",
         );
         expect(insert).toHaveBeenCalledWith("auditLog", expect.objectContaining({ action: "edge.ddos_l7.applied", organizationId: "org1" }));
         expect(zone.phases.get("ddos_l7")?.rules).toHaveLength(1);
@@ -364,11 +364,11 @@ describe(runEdgeRuleSweep, () => {
 
         await runEdgeRuleSweep(store(orgTables(edgeRow()), { insert, patch }), options(zone.fetch));
 
-        expect(patch).toHaveBeenCalledWith("edge1", expect.not.objectContaining({ applied: expect.anything() }), "edgeRules");
+        expect(patch).toHaveBeenCalledWith("edgeRules", "edge1", expect.not.objectContaining({ applied: expect.anything() }));
         expect(patch).toHaveBeenCalledWith(
+            "edgeRules",
             "edge1",
             expect.objectContaining({ attempts: 1, lastError: expect.stringContaining("upstream exploded"), status: "failed" }),
-            "edgeRules",
         );
         expect(insert).toHaveBeenCalledWith("auditLog", expect.objectContaining({ action: "edge.ddos_l7.failed" }));
     });
@@ -390,9 +390,9 @@ describe(runEdgeRuleSweep, () => {
 
         expect(zone.calls).toStrictEqual([]);
         expect(patch).toHaveBeenCalledWith(
+            "edgeRules",
             "edge1",
             expect.objectContaining({ lastError: "ddos_l7 rules are not enabled on this cell", status: "unavailable" }),
-            "edgeRules",
         );
     });
 
@@ -414,8 +414,8 @@ describe(runEdgeRuleSweep, () => {
 
         await runEdgeRuleSweep(store(orgTables(edgeRow({ applied: true, sensitivity: "default" })), { patch }), options(globalThis.fetch, { edge: undefined }));
 
-        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ status: "unavailable" }), "edgeRules");
-        expect(patch).not.toHaveBeenCalledWith("edge1", expect.objectContaining({ applied: false }), "edgeRules");
+        expect(patch).toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ status: "unavailable" }));
+        expect(patch).not.toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ applied: false }));
     });
 
     it("takes a deleting organization's rule off the zone", async () => {
@@ -473,7 +473,7 @@ describe(runEdgeRuleSweep, () => {
         await runEdgeRuleSweep(store(tables, { patch }), options(zone.fetch));
 
         expect(zone.calls.find((call) => call.method === "PATCH")?.body).toMatchObject({ expression: '(http.host in {"shop.lunora.app"})', ref: ourRef });
-        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ targets: [SHOP] }), "edgeRules");
+        expect(patch).toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ targets: [SHOP] }));
     });
 
     it("treats a deleted-then-re-added hostname as a different row, and re-binds only to the org's own", async () => {
@@ -487,7 +487,7 @@ describe(runEdgeRuleSweep, () => {
 
         await runEdgeRuleSweep(store(tables, { patch }), options(zone.fetch));
 
-        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ targets: [SHOP] }), "edgeRules");
+        expect(patch).toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ targets: [SHOP] }));
     });
 
     it("re-applies when the same hostname comes back as a new row of the same org", async () => {
@@ -500,7 +500,7 @@ describe(runEdgeRuleSweep, () => {
 
         await runEdgeRuleSweep(store(tables, { patch }), options(zone.fetch));
 
-        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ targets: [expect.objectContaining({ rowId: "dom2" }), SHOP] }), "edgeRules");
+        expect(patch).toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ targets: [expect.objectContaining({ rowId: "dom2" }), SHOP] }));
     });
 
     it("never writes to a stale Cloudflare id on the row: the rule is found by ref on a fresh read", async () => {
@@ -524,9 +524,9 @@ describe(runEdgeRuleSweep, () => {
 
         expect(zone.calls.map((call) => call.method)).toStrictEqual(["GET"]);
         expect(patch).toHaveBeenCalledWith(
+            "edgeRules",
             "edge1",
             expect.objectContaining({ lastError: expect.stringContaining("more than one rule"), status: "failed" }),
-            "edgeRules",
         );
     });
 
@@ -541,7 +541,7 @@ describe(runEdgeRuleSweep, () => {
         const reread = { ...row, updatedAt: row.updatedAt + 1 };
 
         await runEdgeRuleSweep(
-            { ...database, get: (id, table) => (table === "edgeRules" ? Promise.resolve(reread) : database.get(id, table)) },
+            { ...database, get: (table, id) => (table === "edgeRules" ? Promise.resolve(reread) : database.get(table, id)) },
             options(zone.fetch),
         );
 
@@ -557,7 +557,7 @@ describe(runEdgeRuleSweep, () => {
         await runEdgeRuleSweep(store(tables, { delete: remove }), options(zone.fetch));
 
         expect(zone.phases.get("ddos_l7")?.rules).toStrictEqual([]);
-        expect(remove).toHaveBeenCalledWith("edge1", "edgeRules");
+        expect(remove).toHaveBeenCalledWith("edgeRules", "edge1");
     });
 
     it("takes an applied rule off when its organization now has too many hostnames", async () => {
@@ -598,7 +598,7 @@ describe(engageAnomalyRateLimits, () => {
         await expect(engageAnomalyRateLimits(store(tables(edgeRow({ armed: true, kind: "rate_limit" })), { insert, patch }), [transition], NOW)).resolves.toBe(
             1,
         );
-        expect(patch).toHaveBeenCalledWith("edge1", expect.objectContaining({ engaged: true, status: "pending" }), "edgeRules");
+        expect(patch).toHaveBeenCalledWith("edgeRules", "edge1", expect.objectContaining({ engaged: true, status: "pending" }));
         expect(insert).toHaveBeenCalledWith(
             "auditLog",
             expect.objectContaining({ action: "edge.rate_limit.engage", actorUserId: "system:anomaly", organizationId: "org1" }),

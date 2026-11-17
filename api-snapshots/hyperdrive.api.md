@@ -38,7 +38,7 @@ interface HyperdriveLike {
 
 ```ts
 interface Mysql2Like {
-    execute(this: void, text: string, params?: unknown): Promise<[
+    query(this: void, text: string, params?: unknown): Promise<[
         unknown,
         unknown
     ]>;
@@ -59,7 +59,10 @@ interface NodePgLike {
 
 ```ts
 interface PostgresJsLike {
-    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>): Promise<unknown>;
+    begin?(this: void, work: (tx: PostgresJsLike) => Promise<unknown>): Promise<unknown>;
+    unsafe(this: void, text: string, params?: ReadonlyArray<unknown>, options?: {
+        prepare?: boolean;
+    }): Promise<unknown>;
 }
 ```
 
@@ -87,6 +90,7 @@ interface PullSourceOptions extends ProjectOptions {
 interface SqlClient {
     readonly dbSystem?: "mysql" | "postgresql";
     query: <Row = Record<string, unknown>>(text: string, params?: ReadonlyArray<unknown>) => Promise<Row[]>;
+    transaction?: <T>(work: (tx: SqlClient) => Promise<T>) => Promise<T>;
 }
 ```
 
@@ -102,19 +106,19 @@ const createHyperdrive: (binding: HyperdriveLike) => {
 ### `fromMysql2` (const)
 
 ```ts
-const fromMysql2: (connection: Mysql2Like) => SqlClient;
+const fromMysql2: (load: () => Promise<Mysql2Like> | Mysql2Like) => SqlClient;
 ```
 
 ### `fromNodePg` (const)
 
 ```ts
-const fromNodePg: (client: NodePgLike) => SqlClient;
+const fromNodePg: (load: () => Promise<NodePgLike> | NodePgLike) => SqlClient;
 ```
 
 ### `fromPostgresJs` (const)
 
 ```ts
-const fromPostgresJs: (client: PostgresJsLike) => SqlClient;
+const fromPostgresJs: (load: () => Promise<PostgresJsLike> | PostgresJsLike) => SqlClient;
 ```
 
 ### `projectSourceRow` (const)
@@ -140,16 +144,52 @@ interface CreateHyperdriveGlobalCtxDbOptions extends Omit<SqlCtxDbOptions, "dial
 }
 ```
 
+### `ExportHyperdriveGlobalRowsOptions` (interface)
+
+```ts
+interface ExportHyperdriveGlobalRowsOptions {
+    engine: HyperdriveEngine;
+    exec: SqlExec;
+    schema: SchemaLike;
+    tables?: ReadonlyArray<string>;
+}
+```
+
 ### `HyperdriveEngine` (type)
 
 ```ts
 type HyperdriveEngine = "mysql" | "postgres";
 ```
 
-### `Mysql2Execute` (type)
+### `HyperdriveGlobalIntrospector` (interface)
 
 ```ts
-type Mysql2Execute = Mysql2Like & {
+interface HyperdriveGlobalIntrospector {
+    facetColumn: (options: FacetGlobalColumnOptions) => Promise<GlobalFacetResult>;
+    listTables: () => Promise<GlobalTableInfo[]>;
+    readTablePage: (options: ReadGlobalTablePageOptions) => Promise<GlobalTablePage>;
+}
+```
+
+### `ImportHyperdriveGlobalRowsOptions` (interface)
+
+```ts
+interface ImportHyperdriveGlobalRowsOptions {
+    cdc: boolean;
+    dryRun?: boolean;
+    engine: HyperdriveEngine;
+    exec: SqlExec;
+    onConflict?: ImportConflictMode;
+    rows: ReadonlyArray<ExportRow>;
+    schema: SchemaLike;
+    startLine?: number;
+}
+```
+
+### `Mysql2Client` (type)
+
+```ts
+type Mysql2Client = Mysql2Like & {
     config?: unknown;
     pool?: unknown;
 };
@@ -172,10 +212,22 @@ interface PgVectorIndexOptions {
 type RowClient = SqlClient;
 ```
 
+### `applyHyperdriveGlobalCdc` (const)
+
+```ts
+const applyHyperdriveGlobalCdc: (options: {
+    cdc: boolean;
+    changes: ReadonlyArray<CdcChange>;
+    engine: HyperdriveEngine;
+    exec: SqlExec;
+    schema: SchemaLike;
+}) => Promise<number>;
+```
+
 ### `buildMysqlExec` (const)
 
 ```ts
-const buildMysqlExec: (connection: Mysql2Execute) => SqlExec;
+const buildMysqlExec: (load: () => Mysql2Client | Promise<Mysql2Client>) => SqlExec;
 ```
 
 ### `buildPgExec` (const)
@@ -190,10 +242,16 @@ const buildPgExec: (client: RowClient) => SqlExec;
 const createHyperdriveGlobalCtxDb: ({ engine, exec, ...rest }: CreateHyperdriveGlobalCtxDbOptions) => DatabaseWriterLike;
 ```
 
+### `createHyperdriveGlobalIntrospector` (const)
+
+```ts
+const createHyperdriveGlobalIntrospector: (engine: HyperdriveEngine, exec: SqlExec, schema: SchemaLike) => HyperdriveGlobalIntrospector;
+```
+
 ### `createMysqlGlobalCtxDb` (const)
 
 ```ts
-const createMysqlGlobalCtxDb: (connection: Mysql2Execute, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">) => DatabaseWriterLike;
+const createMysqlGlobalCtxDb: (load: () => Mysql2Client | Promise<Mysql2Client>, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">) => DatabaseWriterLike;
 ```
 
 ### `createPgVectorIndex` (const)
@@ -208,6 +266,18 @@ const createPgVectorIndex: (options: PgVectorIndexOptions) => VectorizeIndexLike
 const createPostgresGlobalCtxDb: (client: RowClient, options: Omit<CreateHyperdriveGlobalCtxDbOptions, "engine" | "exec">) => DatabaseWriterLike;
 ```
 
+### `exportHyperdriveGlobalRows` (const)
+
+```ts
+const exportHyperdriveGlobalRows: ({ engine, exec, schema, tables }: ExportHyperdriveGlobalRowsOptions) => AsyncGenerator<ExportRow, void, undefined>;
+```
+
+### `importHyperdriveGlobalRows` (const)
+
+```ts
+const importHyperdriveGlobalRows: ({ cdc, dryRun, engine, exec, onConflict, rows, schema, startLine }: ImportHyperdriveGlobalRowsOptions) => Promise<ImportResult>;
+```
+
 ### `mysqlDialect` (const)
 
 ```ts
@@ -218,4 +288,17 @@ const mysqlDialect: SqlDialect;
 
 ```ts
 const postgresDialect: SqlDialect;
+```
+
+### `readHyperdriveGlobalCdc` (const)
+
+```ts
+const readHyperdriveGlobalCdc: (engine: HyperdriveEngine, exec: SqlExec, request: {
+    limit?: number;
+    now?: number;
+    sinceSeq: number;
+}) => Promise<{
+    changes: CdcChange[];
+    cursor: number;
+}>;
 ```

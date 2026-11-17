@@ -3,6 +3,15 @@ import type { FunctionReference } from "../../../shared/function-reference";
 export type { ArgsOf, FunctionReference, ReturnOf } from "../../../shared/function-reference";
 
 /**
+ * The `onlineOnly` option a call to the function reference `F` may take. A
+ * function with a `v.sensitive` argument is emitted as `… & { readonly sensitive:
+ * true }`, and is always online-only: its arguments never reach the offline queue,
+ * the outbox or a persistence adapter. For it the option may be omitted or `true`;
+ * `false` is a type error. Every other reference is unchanged.
+ */
+export type OnlineOnlyOption<F> = F extends { readonly sensitive: true } ? { onlineOnly?: true } : unknown;
+
+/**
  * Typed reference to an HTTP-SSE stream route (`httpRoute.<verb>(path).stream()`)
  * emitted by `@lunora/codegen` as `httpStreams.<namespace>.<name>`.
  *
@@ -13,6 +22,22 @@ export type { ArgsOf, FunctionReference, ReturnOf } from "../../../shared/functi
  * params types so `httpStream` (and the framework hooks over it) infer the
  * chunk type end-to-end.
  */
+
+/**
+ * A typed reference to a `defineRoom` room, as the generated `rooms` object carries
+ * it. At runtime it is the room's name; the phantom marker carries its message type,
+ * so `connectRoom(rooms.chat, …)` types `onMessage` and `send` from the room itself.
+ */
+export interface RoomRef<Message = unknown> {
+    /**
+     * Phantom marker carrying the room's message type for inference. Never present
+     * at runtime.
+     */
+    readonly __lunoraRoomMessage?: Message;
+    /** The room's name, which the shard routes on (`room:<name>`). */
+    readonly name: string;
+}
+
 export interface HttpStreamRef<Chunk = unknown, SearchParams = unknown, Params = unknown> {
     /**
      * Phantom marker carrying the `Chunk`/`SearchParams`/`Params` type
@@ -294,6 +319,9 @@ export interface OutboxSink {
  * needed to render offline on reload and to resume the live subscription.
  */
 export interface CachedQuery {
+    /** Fingerprint of the claims the value was read under (see `SubscriptionState.serverClaims`), replayed as `sinceClaims`. */
+    claims?: string;
+
     /**
      * Token-hash fingerprint of the bearer the value was cached under, when the
      * entry was written by the identity the client currently advertises.
@@ -375,12 +403,11 @@ export interface QueryCacheAdapter {
 }
 
 /**
- * Resolves the WS `?token=` credential fresh at every (re)connect — the channel
- * for short-lived tokens (e.g. the ephemeral admin sub-token the worker mints
- * at `POST /_lunora/admin/ws-token`) instead of a static secret in the URL.
- * May return the token synchronously or as a Promise; returning `undefined`
- * connects without a token. A thrown error / rejected Promise fails that
- * connect attempt, and the client retries with its normal reconnect backoff.
+ * Resolves a WebSocket credential (`wsToken` or `wsTicket`) fresh at every
+ * (re)connect, so a short-lived credential is re-minted rather than held.
+ * May return the value synchronously or as a Promise; returning `undefined`
+ * connects without one. A thrown error / rejected Promise fails that connect
+ * attempt, and the client retries with its normal reconnect backoff.
  */
 export type WsTokenProvider = () => Promise<string | undefined> | string | undefined;
 
@@ -391,6 +418,26 @@ export interface LunoraClientOptions {
      * `/api/auth` (matching `@lunora/auth`'s `DEFAULT_AUTH_BASE_PATH`).
      */
     authBasePath?: string;
+
+    /**
+     * Whether sockets present the `setAuthToken` bearer on the upgrade. Turn it on
+     * when the session is a bearer and not a cookie on the API's origin — an
+     * external identity provider's JWT (Clerk, WorkOS, …) or a cross-origin API.
+     *
+     * A browser cannot set `Authorization` on a WebSocket, so the bearer is
+     * offered as a `Sec-WebSocket-Protocol` entry (`lunora.bearer.<base64url>`),
+     * never in the URL; the worker reads it for `resolveIdentity` only.
+     * `@lunora/react-native` turns this on by default on native, where the bearer
+     * also rides an `Authorization` header (the header wins).
+     *
+     * A sign-in from signed-out then reconnects the shard sockets cold. A
+     * refreshed bearer for the same user is handed to the open shard sockets in
+     * place (`POST /_lunora/ws/reauth`); one the server will not take bounces them
+     * warm, so the server sees the current token either way.
+     * The default `false` keeps cookie-session sockets (and their live values)
+     * alone.
+     */
+    authTokenOnUpgrade?: boolean;
     bookmarkStorage?: BookmarkStorage;
 
     /**
@@ -563,23 +610,39 @@ export interface LunoraClientOptions {
      */
     queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
+
+    /**
+     * Deadline (ms) for one HTTP RPC round trip (`query`, `mutation`, a replayed
+     * write), covering the response body as well as the connection. A request
+     * that stalls past it fails with a retryable `TransportError` — and a durable
+     * write is re-queued under the same `mutationId` — instead of freezing every
+     * write queued behind it on the shard. `action` is exempt: it may legitimately
+     * run for longer. Defaults to 30000 (30s); set to `0` (or negative) to disable.
+     */
+    rpcTimeoutMs?: number;
     url: string;
     WebSocket?: typeof WebSocket;
 
     /**
-     * Credential appended to the WebSocket URL as `?token=…`. The server matches
-     * it against `LUNORA_WS_BEARER` (to clear the upgrade gate) and/or
-     * `LUNORA_ADMIN_TOKEN` (to authorize `__lunora_admin__:*` subscriptions —
-     * what the studio supplies). Browsers can't set headers on the `WebSocket`
-     * constructor, so the query parameter is the only channel; it ends up in
-     * server logs and history, so prefer a short-lived rotating token in
-     * production over a static secret.
+     * The short-lived ticket appended to the WebSocket URL as `?token=…`. Only
+     * an ephemeral admin sub-token belongs here, minted by
+     * `POST /_lunora/admin/ws-token`; the server authorizes `__lunora_admin__:*`
+     * subscriptions from it. A ticket lapses after its TTL, so a static master
+     * token must never be used here: the server refuses it in the URL.
      *
-     * Pass a {@link WsTokenProvider} function to resolve the token fresh at
-     * every (re)connect — the channel for short-lived credentials such as the
-     * ephemeral admin sub-token minted by `POST /_lunora/admin/ws-token`: the
-     * provider re-mints on each reconnect, including the one following a `4001`
-     * token-expired drop, so a static master token never has to ride the URL.
+     * Pass a {@link WsTokenProvider} to re-mint on every (re)connect, including
+     * the one that follows a lapsed ticket.
+     */
+    wsTicket?: string | WsTokenProvider;
+
+    /**
+     * The session credential. It is sent in the `connect` frame of every shard
+     * socket and never in the WebSocket URL, because a URL is logged by every
+     * proxy and edge on the way (protocol §6). The server matches it against
+     * `LUNORA_WS_BEARER`; a socket that does not present a match is closed.
+     *
+     * Pass a {@link WsTokenProvider} to resolve it fresh at every (re)connect, so
+     * a rotated session is picked up on the next connect.
      */
     wsToken?: string | WsTokenProvider;
     wsUrl?: string;
@@ -624,7 +687,8 @@ export interface RpcEnvelope {
  * committed at — which gates the drop of a per-call optimistic layer.
  */
 export type RpcResponseBody =
-    { error: { code: string; data?: unknown; message: string } } | { commitCursor?: number; lastMutationId?: number; result: unknown };
+    | { error: { code: string; data?: unknown; message: string } }
+    | { commitCursor?: number; lastMutationId?: number; result: unknown };
 
 /** Subscription protocol — client → server. */
 export interface ClientSubscribeMessage {
@@ -638,7 +702,7 @@ export interface ClientSubscribeMessage {
      * snapshot when nothing the query reads changed since it. Absent on a
      * first-time subscribe.
      */
-    query: { args?: Record<string, unknown>; functionPath?: string; sinceEpoch?: string; sinceSeq?: number; table?: string };
+    query: { args?: Record<string, unknown>; functionPath?: string; sinceClaims?: string; sinceEpoch?: string; sinceSeq?: number; table?: string };
     type: "subscribe";
 }
 
@@ -671,6 +735,13 @@ export interface ClientConnectMessage {
     clientId?: string;
     context?: Record<string, unknown>;
     id: string;
+
+    /**
+     * The session credential (protocol §6). A gated server checks it against
+     * `LUNORA_WS_BEARER`. Set from the client's `wsToken` and never placed in the
+     * socket URL.
+     */
+    token?: string;
     type: "connect";
 }
 
@@ -693,6 +764,9 @@ export interface ClientShapeSubscribeMessage {
      * delta.
      */
     sinceCheckpoint?: number;
+
+    /** The claims fingerprint {@link ClientShapeSubscribeMessage.sinceCheckpoint} was read under; absent resumes cold. */
+    sinceClaims?: string;
 
     /**
      * The CDC epoch {@link ClientShapeSubscribeMessage.sinceCheckpoint} belongs
@@ -792,6 +866,7 @@ export interface ServerDataMessage {
     delta?: unknown;
     /** The CDC epoch this frame's cursor belongs to (see {@link CachedQuery.serverEpoch}). */
     epoch?: string;
+
     id: string;
 
     /**
@@ -801,6 +876,9 @@ export interface ServerDataMessage {
      * the matching optimistic overlay. Absent on shards without custom mutators.
      */
     lastMutationId?: number;
+
+    /** Set on every frame of a delta run except its last; the client holds those until the run ends. */
+    more?: boolean;
     type: "data" | "delta";
 }
 
@@ -900,14 +978,56 @@ export interface ServerWhisperMessage {
 }
 
 /**
+ * The shard processed a `whisper_subscribe` for a live (non-room) `topic` on this socket. It is sent
+ * whether or not the join was admitted, so it carries no authorization signal. A client that must
+ * publish or receive only once its membership took effect waits for it. A room join gets no ack.
+ */
+export interface ServerWhisperSubscribedMessage {
+    topic: string;
+    type: "whisper_subscribed";
+}
+
+/**
+ * A server live publish to a WebSocket member granted `stream` on `topic`. Server-only:
+ * a peer's whisper never carries this type, so a `live` frame is always the server's.
+ * `data` is the published payload, the same as the SSE `live` event.
+ */
+export interface ServerLiveMessage {
+    data: unknown;
+    stream: string;
+    topic: string;
+    type: "live";
+}
+
+/**
  * The user the shard authenticated this socket as, sent in reply to every
  * `connect` frame. `subject` is the resolved user id, or `null` when the socket
  * is anonymous. A cookie-session client reads it to learn who it is — a
  * sign-out or another user's sign-in changes nothing else it can see.
+ *
+ * `connectionId` names this socket to the live-stream control route, which grants
+ * it live topics (see `LunoraClient.subscribeLiveTopic`). `whisperAck` is `true` when the
+ * shard answers every live join with `whisper_subscribed`; a client waits for that answer
+ * before it posts a grant, and posts at once when the flag is absent.
  */
 export interface ServerIdentityMessage {
+    /**
+     * Fingerprint of the verified claims the socket is authenticated with. Opaque to the client, which only
+     * hands it back as `sinceClaims` when it resubscribes from a cursor read under these claims.
+     */
+    claims?: string;
+    connectionId?: string;
+
+    /**
+     * Milliseconds within which the socket must be re-authenticated through
+     * `POST /_lunora/ws/reauth`, or the server closes it with `4005`. Present only
+     * for an authenticated subscription socket.
+     */
+    revalidateMs?: number;
+
     subject: null | string;
     type: "identity";
+    whisperAck?: boolean;
 }
 
 /**
@@ -994,19 +1114,31 @@ export interface ServerPokeEndMessage {
     type: "pokeEnd";
 }
 
+/**
+ * Brackets the frames one write sends to this socket (`batchStart` … `batchEnd`).
+ * Sent only to a client that announced `refreshBatch` on `connect`; the frames
+ * between the two are applied together and their listeners notified once.
+ */
+export interface ServerBatchMessage {
+    type: "batchEnd" | "batchStart";
+}
+
 export type ServerMessage =
     | ServerAckMessage
+    | ServerBatchMessage
     | ServerChunkMessage
     | ServerCompleteMessage
     | ServerDataMessage
     | ServerErrorMessage
     | ServerIdentityMessage
+    | ServerLiveMessage
     | ServerPokeEndMessage
     | ServerPokePartMessage
     | ServerPokeStartMessage
     | ServerResumeMessage
     | ServerSettledMessage
-    | ServerWhisperMessage;
+    | ServerWhisperMessage
+    | ServerWhisperSubscribedMessage;
 
 /**
  * The authenticated user as exposed client-side, mirroring better-auth's
@@ -1034,6 +1166,8 @@ export interface ScheduleRetryPolicy {
     backoff?: "exponential" | "linear";
     /** Base delay in milliseconds for the first retry. Default `30_000`. */
     baseMs?: number;
+    /** Keep retrying instead of dead-lettering; the delay between attempts is clamped to 1 second .. 30 minutes. */
+    forever?: boolean;
     /** Maximum number of dispatch attempts before dead-lettering. Default `5`. */
     maxAttempts?: number;
     /** Optional ceiling clamping the computed backoff delay. */
@@ -1059,6 +1193,11 @@ export interface ScheduleRecord {
      */
     attempts?: number;
     enqueuedAt: number;
+    /** Why the job was dead-lettered. Set on a parked record. */
+    error?: string;
+
+    /** The due time a pooled job had before its full pool first re-armed it; `scheduledFor` then moves with each re-arm. */
+    firstDueAt?: number;
 
     /**
      * The `ns:fn` path dispatched on fire. Absent when the job targets a durable
@@ -1083,6 +1222,77 @@ export interface ScheduleRecord {
      * of {@link ScheduleRecord.functionPath}.
      */
     workflow?: string;
+}
+
+/**
+ * Where a scheduled job is in its life. `succeeded` means its dispatch answered
+ * 2xx (for a workflow/agent target: its instance started); `failed`, that it
+ * exhausted its retry budget; `canceled`, that it was cancelled. Mirrors
+ * `@lunora/scheduler`'s `ScheduledJobState`.
+ */
+export type ScheduledJobState = "canceled" | "failed" | "pending" | "running" | "succeeded";
+
+/** A scheduled job with its lifecycle state, as `getScheduledJob` / `listScheduledHistory` return it. */
+export interface ScheduledJobView extends ScheduleRecord {
+    /** When the job reached its terminal state (epoch ms). Absent while `pending`/`running`. */
+    completedAt?: number;
+    state: ScheduledJobState;
+}
+
+/** One page of finished jobs, newest first, plus the cursor to the next older page, if any. */
+export interface ScheduledHistoryPage {
+    cursor?: string;
+    records: ScheduledJobView[];
+}
+
+/** How one cron fire ended; `skipped` is a tick that did not run because the previous run was still going or the deployment was paused. Mirrors `@lunora/scheduler`'s `CronRunStatus`. */
+export type CronRunStatus = "failed" | "skipped" | "succeeded";
+
+/** One recorded fire of a code-defined cron job. Mirrors `@lunora/scheduler`'s `CronRunRecord`. */
+export interface CronRunRecord {
+    /** Run time in ms; `0` for a skipped tick. */
+    durationMs: number;
+    /** When the run finished, or when the tick was skipped (epoch ms). */
+    endedAt: number;
+    /** The thrown message of a `failed` run. */
+    error?: string;
+    /** The `cronJobs()` name. */
+    name: string;
+    /** Why a tick was `skipped`: the previous run still held the lease, or the deployment was paused. */
+    reason?: "in-flight" | "paused";
+    runId: string;
+    /** Ticks of the same cron skipped while this run held the lease. */
+    skipped: number;
+    startedAt: number;
+    status: CronRunStatus;
+}
+
+/** A cron run that holds its lease right now. Mirrors `@lunora/scheduler`'s `CronRunInFlight`. */
+export interface CronRunInFlight {
+    name: string;
+    /** When the run last said it was still alive; the lease lapses fifteen minutes after this, or after `startedAt` when it never did. */
+    renewedAt?: number;
+    runId: string;
+    /** Ticks skipped so far because this run was still going. */
+    skipped: number;
+    startedAt: number;
+}
+
+/** What `listCronRuns` returns: the runs in flight, and every recorded run newest first per job. */
+export interface CronRunsResult {
+    inFlight: CronRunInFlight[];
+    runs: CronRunRecord[];
+}
+
+/** Whether the deployment is paused, as `getDeploymentPause` / `setDeploymentPause` return it. */
+export interface DeploymentPauseStatus {
+    paused: boolean;
+    /** When the pause began (epoch ms). */
+    pausedAt?: number;
+    /** The operator's note. */
+    reason?: string;
+    /** `false` on a worker without a `schedulerDO`, which cannot be paused. */
+    supported: boolean;
 }
 
 /**
@@ -1181,6 +1391,8 @@ export interface FunctionArgumentDescriptor {
     name: string;
     /** True when the arg is wrapped in `v.optional(...)`. */
     optional: boolean;
+    /** True when the arg is marked `v.sensitive` — a secret the caller supplies, never queued offline. */
+    sensitive?: true;
     /** Target table for an `id` arg (`v.id("table")`). */
     table?: string;
 }
@@ -1194,6 +1406,12 @@ export interface FunctionArgumentDescriptor {
 export interface FunctionDescriptor {
     args?: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+    /** The function's `.meta(...)`, wire-encoded (`decodeWire` restores it). Absent when it declares none, or from an older worker. */
+    meta?: unknown;
+    /** Set instead of `meta` when the declaration holds a value the wire codec cannot encode (a `RegExp`, a cycle). */
+    metaUnencodable?: true;
+    /** Set instead of `meta` when the function is registered lazily and only its loaded module can supply it. */
+    metaUnloaded?: true;
     path: string;
 }
 
@@ -1209,7 +1427,17 @@ export interface FunctionDescriptor {
 // runtime contract (`@lunora/runtime`, which defines the `/_lunora/admin/*` endpoints)
 // and re-exported here for SDK consumers — a single source of truth, no hand-kept
 // copies to drift. Type-only re-export, so no worker code reaches the browser SDK.
-export type { CronJobInfo, KvKeyEntry, KvKeyListResult, KvNamespaceSummary, KvValueResult, VectorIndexSummary, VectorQueryMatch } from "@lunora/runtime";
+export type {
+    AdminTokenSummary,
+    CreatedAdminToken,
+    CronJobInfo,
+    KvKeyEntry,
+    KvKeyListResult,
+    KvNamespaceSummary,
+    KvValueResult,
+    VectorIndexSummary,
+    VectorQueryMatch,
+} from "@lunora/runtime";
 // The durable log-archive wire types, owned by `@lunora/runtime` (the reader) and
 // re-exported here so the studio's `queryLogArchive` shares one source of truth.
 export type { PipelineLogColumnMap, PipelineLogCursor, PipelineLogField, PipelineLogPage, PipelineLogQuery, PipelineLogRow } from "@lunora/runtime";
@@ -1232,10 +1460,16 @@ export interface GlobalTablePage {
 /**
  * One equality constraint a facet-value click adds to the global browser's view
  * (`column = value`). `value` is the raw stored scalar the facet returned, sent
- * as-is and bound server-side, so it never injects SQL.
+ * as-is and bound server-side, so it never injects SQL. The server accepts only
+ * `eq` on a top-level column and rejects `operator` or `path` values it cannot
+ * compile, so the browser never silently gets an equality it did not ask for.
  */
 export interface GlobalFilterClause {
     column: string;
+    /** Must be absent or `"eq"`; the server rejects any other operator. */
+    operator?: string;
+    /** Must be absent or empty; the server rejects a nested path. */
+    path?: string[];
     value: unknown;
 }
 
@@ -1260,10 +1494,26 @@ export type NullableTimestamp = null | number | string;
 // worker/REST code); the proxy already normalizes Cloudflare's snake_case.
 
 /** A workflow instance's lifecycle status. Mirrors Cloudflare's `InstanceStatus`. */
-export type WorkflowInstanceStatus = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+export type WorkflowInstanceStatus =
+    | "complete"
+    | "errored"
+    | "paused"
+    | "queued"
+    | "rollingBack"
+    | "running"
+    | "terminated"
+    | "unknown"
+    | "waiting"
+    | "waitingForPause";
 
 /** The lifecycle mutations the status endpoint accepts. */
-export type WorkflowInstanceAction = "pause" | "resume" | "terminate";
+export type WorkflowInstanceAction = "pause" | "restart" | "resume" | "terminate";
+
+/** The instance a create call started: its id and the status it begins in. */
+export interface WorkflowInstanceCreated {
+    id: string;
+    status: WorkflowInstanceStatus;
+}
 
 /** One row of the workflow-instances list. */
 export interface WorkflowInstanceSummary {

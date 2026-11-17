@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
-import { findTsconfig, fingerprintSchemaSources } from "@lunora/codegen";
+import { findTsconfig, fingerprintSchemaSources, listLunoraSourceFiles, PROJECT_CONFIG_FILENAMES, projectConfigCandidatePaths } from "@lunora/codegen";
 import {
     AGENT_RULES_HINT,
     claimAgentRulesHint,
@@ -12,9 +12,11 @@ import {
     ensureDevVariables,
     ensureDevWorkerEnv,
     fillDevSecrets,
+    inferLunoraBindings,
     isCodegenDisabled,
     lunoraLine,
     runPostCodegenHook,
+    secretSourcesFromBindings,
 } from "@lunora/config";
 import {
     assertWranglerSatisfiesSchema,
@@ -27,6 +29,7 @@ import {
 import type { CodegenLogger } from "./codegen";
 import { createReusableProject, runCodegenPass } from "./codegen";
 import type { CompilationLike, CompilerLike } from "./compiler";
+import { resolveRunnableTargetOrThrow } from "./options";
 import type { ResolvedLunoraRspackOptions } from "./types";
 
 /** Tap name Rspack attributes this plugin's hooks to, in stats and in profiling output. */
@@ -67,6 +70,77 @@ const readFileOrEmpty = (path: string): string => {
     }
 };
 
+/**
+ * `path` resolved through symlinks, or `path` itself when that fails. The watcher
+ * reports a changed file under its real path (on macOS the temp directory alone is
+ * a symlink), so an input is matched in both forms. A path that does not exist yet
+ * gets its directory resolved instead.
+ */
+const realPathOf = (path: string): string => {
+    try {
+        return existsSync(path) ? realpathSync(path) : join(realpathSync(dirname(path)), basename(path));
+    } catch {
+        return path;
+    }
+};
+
+/**
+ * The `tsconfig.json` paths `findTsconfig` tries before reaching `found`, or up to the
+ * filesystem root when it found none. Creating one switches the tsconfig codegen
+ * resolves, so each is watched as a missing file.
+ */
+const nearerTsconfigPaths = (schemaDirectory: string, found: string | undefined): string[] => {
+    const paths: string[] = [];
+
+    for (let directory = schemaDirectory; directory !== dirname(directory); directory = dirname(directory)) {
+        const candidate = join(directory, "tsconfig.json");
+
+        if (candidate === found) {
+            break;
+        }
+
+        paths.push(candidate);
+    }
+
+    return paths;
+};
+
+/**
+ * The `package.json` and `.git` paths that decide where `projectConfigCandidatePaths`
+ * stops: one of each in every directory it walks. Creating or removing a `package.json`
+ * moves that boundary and so changes which `lunora.config.*` codegen reads.
+ *
+ * ponytail: an existing `.git` is left out, since everything git does happens inside
+ * it; deleting one is not seen until the next `lunora/` edit. Watch its parent
+ * directory if that ever matters.
+ */
+const projectBoundaryMarkers = (schemaDirectory: string): string[] =>
+    [...new Set(projectConfigCandidatePaths(schemaDirectory).map((path) => dirname(path)))].flatMap((directory) => {
+        const git = join(directory, ".git");
+
+        return existsSync(git) ? [join(directory, "package.json")] : [join(directory, "package.json"), git];
+    });
+
+/**
+ * The real paths of schema sources that are symlinks to files outside the schema
+ * directory. Codegen reads them through the link, but the watcher reports their edits
+ * under the target, which the directory watch does not cover.
+ */
+const linkedSourceTargets = (schemaDirectory: string): string[] => {
+    if (!existsSync(schemaDirectory)) {
+        return [];
+    }
+
+    const realDirectory = realPathOf(schemaDirectory);
+
+    return [...listLunoraSourceFiles(schemaDirectory, { includeSkipped: true }), join(schemaDirectory, "schema.ts")]
+        .map((path) => realPathOf(path))
+        .filter((path) => !path.startsWith(`${realDirectory}${sep}`));
+};
+
+/** Whether `changed` is `input`, lies under it, or is a directory holding it — all three mean the input may have moved. */
+const touches = (changed: string, input: string): boolean => changed === input || changed.startsWith(`${input}${sep}`) || input.startsWith(`${changed}${sep}`);
+
 /** Everything the plugin prints goes through the badge, so its lines read like `lunora dev`'s. */
 const consoleLogger: CodegenLogger = {
     error: (message: string): void => {
@@ -84,6 +158,24 @@ const consoleLogger: CodegenLogger = {
 };
 
 /**
+ * The project's secret sources, read with the schema directory the plugin was given. When its bindings cannot be read, every dev
+ * secret is generated as before the sources were passed, so a broken tsconfig or barrel does not stop dev startup.
+ */
+const secretSourcesOrUndefined = async (
+    projectRoot: string,
+    schemaDirectory: string,
+    info: (message: string) => void,
+): Promise<ReadonlyArray<string> | undefined> => {
+    try {
+        return secretSourcesFromBindings(await inferLunoraBindings({ projectRoot, schemaDir: schemaDirectory }));
+    } catch (error) {
+        info(`could not read the project's bindings, so every dev secret is generated: ${error instanceof Error ? error.message : String(error)}`);
+
+        return undefined;
+    }
+};
+
+/**
  * Prepare `.dev.vars` and nudge for the agent rules — the watch-mode-only
  * courtesies `lunora dev` and `@lunora/vite` both perform at startup.
  *
@@ -97,14 +189,25 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
         consoleLogger.info(lunoraLine(message));
     };
 
-    await ensureDevVariables({ confirm: createConfirm("[lunora] "), cwd: options.projectRoot, info });
+    const scaffold = await ensureDevVariables({
+        confirm: createConfirm("[lunora] "),
+        cwd: options.projectRoot,
+        info,
+        warn: (message) => {
+            consoleLogger.warn(lunoraLine(message));
+        },
+    });
 
-    fillDevSecrets({ cwd: options.projectRoot, info });
-    // `wrangler dev` loads `.dev.vars` but sets no `WORKER_ENV` of its own, and
-    // this plugin never runs the Worker — so without this a developer running
-    // plain `wrangler dev` alongside their build spends the session with
-    // `isDevEnvironment` false. (`lunora dev` passes `--var` and is unaffected.)
-    ensureDevWorkerEnv(options.projectRoot, info);
+    // An unreadable dev-vars file was reported as "nothing written"; writing `.dev.vars` now would contradict it.
+    if (scaffold.status !== "unreadable") {
+        const secretSources = await secretSourcesOrUndefined(options.projectRoot, options.schemaDir, info);
+        fillDevSecrets({ cwd: options.projectRoot, info, secretSources });
+        // `wrangler dev` loads `.dev.vars` but sets no `WORKER_ENV` of its own, and
+        // this plugin never runs the Worker — so without this a developer running
+        // plain `wrangler dev` alongside their build spends the session with
+        // `isDevEnvironment` false. (`lunora dev` passes `--var` and is unaffected.)
+        ensureDevWorkerEnv(options.projectRoot, info);
+    }
 
     if (!detectAgentRules(options.projectRoot).installed && claimAgentRulesHint()) {
         consoleLogger.warn(`\n${lunoraLine(AGENT_RULES_HINT)}\n`);
@@ -130,8 +233,15 @@ const prepareDevSession = async (options: ResolvedLunoraRspackOptions): Promise<
  * `lunora deploy` do, and a watch rebuild logs it and carries on.
  */
 class LunoraRspackPlugin {
-    /** Resolved options, fixed at construction. */
-    readonly #options: ResolvedLunoraRspackOptions;
+    /** Resolved options. The `target` is re-resolved on each pass. */
+    #options: ResolvedLunoraRspackOptions;
+
+    /**
+     * The target the last codegen pass that actually ran generated for. Unset until
+     * one has run. Kept apart from `#options.target`, which moves at the start of a
+     * pass whether or not that pass gets as far as generating anything.
+     */
+    #generatedTarget: string | undefined;
 
     /** Absolute schema directory — the codegen input, and the watched context. */
     readonly #schemaDirectory: string;
@@ -151,8 +261,8 @@ class LunoraRspackPlugin {
     /** Content hash of everything codegen reads, from the last pass that ran. */
     #lastFingerprint: string | undefined;
 
-    /** The `tsconfig.json` contents the cached Project was built from. */
-    #lastTsconfig: string | undefined;
+    /** The `tsconfig.json` and `lunora.config.*` contents the cached Project was built from. */
+    #lastProjectInputs: string | undefined;
 
     /** Findings from the last pass that ran, re-reported on every compilation until it runs again. */
     #findings: Error[] = [];
@@ -162,6 +272,16 @@ class LunoraRspackPlugin {
 
     /** The in-flight pass, so concurrent compilers share one instead of racing. */
     #inFlight: Promise<void> | undefined;
+
+    /**
+     * Every path a pass reads, in both the form registered and its real form, as of
+     * the last `afterCompile`: the schema directory and each watched config file.
+     * What {@link #untouched} matches a rebuild's changed files against.
+     */
+    #inputs: string[] = [];
+
+    /** {@link linkedSourceTargets} as of the last pass that ran; only a pass can change which sources are linked. */
+    #linkedSources: string[] = [];
 
     public constructor(options: ResolvedLunoraRspackOptions) {
         this.#options = options;
@@ -207,9 +327,16 @@ class LunoraRspackPlugin {
      * this pass writes. Spawned first, wrangler dies on an unresolvable import
      * before the first compilation ever generates it. The first compilation then
      * finds the fingerprint unchanged and skips its own pass.
+     *
+     * Returns the target that pass generated for, so the Worker started next is the
+     * one its output matches. Reading `target` again after this resolves would leave
+     * a window in which an edit to `lunora.config.*` starts a Worker against output
+     * for the other target.
      */
-    public async generateForDev(): Promise<void> {
+    public async generateForDev(): Promise<string> {
         await this.#run(true);
+
+        return this.#generatedTarget ?? this.#options.target;
     }
 
     /** Rspack's plugin entry point. */
@@ -218,7 +345,17 @@ class LunoraRspackPlugin {
             // `watchMode` is read HERE, not at tap time: `apply()` runs inside
             // `createCompiler()`, before `compiler.watch()` assigns it, so at tap
             // time it is always `false`.
-            await this.#run(compiler.watchMode === true);
+            const watching = compiler.watchMode === true;
+
+            // Ahead of the skip below: the warning is asked on every compile until it
+            // has fired, and `cloudflare.config.ts` is no input of the pass.
+            this.#announce();
+
+            if (watching && this.#untouched(compiler.modifiedFiles, compiler.removedFiles)) {
+                return;
+            }
+
+            await this.#run(watching);
         });
 
         compiler.hooks.afterCompile.tapPromise(PLUGIN_NAME, (compilation: CompilationLike) => {
@@ -238,20 +375,33 @@ class LunoraRspackPlugin {
                 compilation.fileDependencies.add(tsconfigPath);
             }
 
-            // EVERY wrangler candidate, as `@lunora/vite` does: creating one is an
-            // edit too — the fix for "wrangler.jsonc not found", or a
-            // `wrangler.jsonc` that now outranks an existing `wrangler.json`. A
-            // file dependency cannot name a file that does not exist yet, so an
-            // absent candidate is watched as a missing one.
-            for (const candidate of WRANGLER_FILES) {
-                const path = resolve(this.#options.projectRoot, candidate);
+            // EVERY wrangler and `lunora.config.*` candidate, as `@lunora/vite` does:
+            // creating one is an edit too — the fix for "wrangler.jsonc not found", or a
+            // `wrangler.jsonc` that now outranks an existing `wrangler.json`. A file
+            // dependency cannot name a file that does not exist yet, so an absent
+            // candidate is watched as a missing one. The config codegen reads for the
+            // schema directory may sit above it, so those candidates are watched too:
+            // its `codegen.exclude` decides which `lunora/` files the Project is seeded with.
+            const watched = [
+                ...WRANGLER_FILES.map((name) => resolve(this.#options.projectRoot, name)),
+                ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(this.#options.projectRoot, name)),
+                ...projectConfigCandidatePaths(this.#schemaDirectory),
+                ...projectBoundaryMarkers(this.#schemaDirectory),
+                ...nearerTsconfigPaths(this.#schemaDirectory, tsconfigPath),
+                ...this.#linkedSources,
+            ];
 
+            for (const path of new Set(watched)) {
                 if (existsSync(path)) {
                     compilation.fileDependencies.add(path);
                 } else {
                     compilation.missingDependencies.add(path);
                 }
             }
+
+            const inputs = [this.#schemaDirectory, ...(tsconfigPath === undefined ? [] : [tsconfigPath]), ...watched];
+
+            this.#inputs = [...new Set([...inputs, ...inputs.map((path) => realPathOf(path))])];
 
             for (const finding of this.#findings) {
                 compilation.errors.push(finding);
@@ -273,6 +423,39 @@ class LunoraRspackPlugin {
         });
 
         await this.#inFlight;
+    }
+
+    /**
+     * Whether a watch rebuild changed nothing a pass reads, so it can skip the pass
+     * without even fingerprinting, which reads and hashes every `lunora/` source.
+     *
+     * Conservative on every axis; any doubt runs the pass, whose fingerprint then
+     * decides as before. It runs when there are no change sets (a one-shot build, the
+     * first watch compilation) or no compilation has registered the inputs yet; when
+     * no clean pass is on record, or a failing one is still being retried — that retry
+     * exists because the repair can be external, so it must not wait for an edit; when
+     * another compiler's pass is in flight, which this one must wait for; and when any
+     * changed or removed path touches an input. Rspack reports an edit under a context
+     * dependency as the DIRECTORY, so the schema directory itself is an input.
+     */
+    #untouched(modified: ReadonlySet<string> | undefined, removed: ReadonlySet<string> | undefined): boolean {
+        if (
+            modified === undefined ||
+            this.#inputs.length === 0 ||
+            this.#lastFingerprint === undefined ||
+            this.#failure !== undefined ||
+            this.#inFlight !== undefined
+        ) {
+            return false;
+        }
+
+        for (const changed of [...modified, ...(removed ?? [])]) {
+            if (this.#inputs.some((input) => touches(changed, input))) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**
@@ -321,14 +504,16 @@ class LunoraRspackPlugin {
             return;
         }
 
-        const tsconfig = this.#readTsconfig();
+        const projectInputs = this.#readProjectInputs();
 
-        if (tsconfig !== this.#lastTsconfig) {
+        if (projectInputs !== this.#lastProjectInputs) {
             // `refreshCodegenProject` only re-reads files the program already knows
-            // about, so a changed `paths`/`include` is invisible to it. Forget the
-            // fingerprint too, so this pass runs rather than being skipped below.
+            // about, so a changed `paths`/`include` is invisible to it, and so is a
+            // changed `codegen.exclude` in lunora.config (it decides which `lunora/`
+            // files the Project is seeded with). Forget the fingerprint too, so this
+            // pass runs rather than being skipped below.
             this.#project.drop();
-            this.#lastTsconfig = tsconfig;
+            this.#lastProjectInputs = projectInputs;
             this.#lastFingerprint = undefined;
         }
 
@@ -344,12 +529,13 @@ class LunoraRspackPlugin {
         // ponytail: a NON-idempotent postcodegen that rewrites a SOURCE file
         // differently each run still oscillates. Vite caps that with
         // MAX_SETTLE_RERUNS; add the same counter here if anyone hits it.
-        const fingerprint = this.#fingerprint(tsconfig);
+        const fingerprint = this.#fingerprint(projectInputs);
 
         if (this.#shouldSkip(fingerprint)) {
             return;
         }
 
+        this.#linkedSources = linkedSourceTargets(this.#schemaDirectory);
         this.#findings = [];
 
         try {
@@ -420,8 +606,8 @@ class LunoraRspackPlugin {
 
     /**
      * Content hash of every input a pass depends on: the schema sources codegen
-     * reads, the tsconfig that decides how they resolve, and the wrangler config
-     * that validation checks them against.
+     * reads, the tsconfig and `lunora.config.*` that decide how they resolve, and
+     * the wrangler config that validation checks them against.
      *
      * The wrangler config has to be in here. Without it, editing `wrangler.jsonc`
      * in a live session left the fingerprint unchanged, so the next compilation
@@ -432,15 +618,20 @@ class LunoraRspackPlugin {
      * Each part is hashed to a fixed-width digest before being combined, so no
      * concatenation of one part's content can impersonate another's.
      */
-    #fingerprint(tsconfig: string): string {
+    #fingerprint(projectInputs: string): string {
         const wranglerPath = findWranglerFile(this.#options.projectRoot);
-        const parts = [fingerprintSchemaSources(this.#schemaDirectory), tsconfig, wranglerPath === undefined ? "" : readFileOrEmpty(wranglerPath)];
+        const parts = [fingerprintSchemaSources(this.#schemaDirectory), projectInputs, wranglerPath === undefined ? "" : readFileOrEmpty(wranglerPath)];
 
         return parts.map((part) => createHash("sha256").update(part).digest("hex")).join("");
     }
 
     /** The pass proper, in the order the steps depend on each other. */
     async #generate(watching: boolean): Promise<void> {
+        // Re-resolved on every pass, not kept from construction: a `target` edited in
+        // `lunora.config.*` is what triggered this pass, and it must reach codegen and
+        // the bindings below. Inside the pass's try, so a bad target is a reported finding.
+        this.#options = { ...this.#options, target: resolveRunnableTargetOrThrow(this.#options.projectRoot, this.#options.explicitTarget) };
+
         // Before validation, and on every pass: provisioning is not validation.
         // The bindings the check below requires are largely the ones Lunora writes
         // here, so validating first fails the first build of any project that
@@ -451,7 +642,9 @@ class LunoraRspackPlugin {
             assertWranglerSatisfiesSchema(this.#options, consoleLogger.warn, "Update your wrangler.jsonc and rebuild.");
         }
 
-        const blockingMessage = runCodegenPass(this.#options, consoleLogger, this.#project.get());
+        const { blockingMessage, markerFailure } = runCodegenPass(this.#options, consoleLogger, this.#project.get());
+
+        this.#generatedTarget = this.#options.target;
         const hook = await runPostCodegenHook({ cwd: this.#options.projectRoot, logger: consoleLogger });
 
         if (hook.error !== undefined) {
@@ -465,13 +658,28 @@ class LunoraRspackPlugin {
         if (!watching && blockingMessage !== undefined) {
             this.#findings.push(new Error(blockingMessage));
         }
+
+        // The CLI's deploy reads this marker to pick the API spec, so a build without it would ship the wrong one.
+        if (!watching && markerFailure !== undefined) {
+            this.#findings.push(new Error(markerFailure));
+        }
     }
 
-    /** The nearest `tsconfig.json`'s contents, or `""` when the project has none. */
-    #readTsconfig(): string {
+    /**
+     * What a cached Project is built from: the nearest `tsconfig.json`'s contents, and the
+     * contents of every `lunora.config.*` candidate that could govern the schema directory
+     * (plus the root's, which sets `target`). An absent candidate contributes its path, so
+     * creating one changes the inputs too.
+     */
+    #readProjectInputs(): string {
         const tsconfigPath = findTsconfig(this.#schemaDirectory);
+        const configPaths = new Set([
+            ...projectConfigCandidatePaths(this.#schemaDirectory),
+            ...PROJECT_CONFIG_FILENAMES.map((name) => resolve(this.#options.projectRoot, name)),
+        ]);
+        const configs = [...configPaths].map((path) => `${path}\n${readFileOrEmpty(path)}`);
 
-        return tsconfigPath === undefined ? "" : readFileOrEmpty(tsconfigPath);
+        return [tsconfigPath === undefined ? "" : readFileOrEmpty(tsconfigPath), ...configs].join("\0");
     }
 }
 

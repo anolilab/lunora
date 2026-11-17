@@ -1,7 +1,7 @@
 import type { AuthConfigInfo } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 
 import { useClientQuery } from "./use-admin-query";
+import useStudioClient from "./use-studio-client";
 
 /**
  * Conservative defaults until `getAuthConfig()` resolves: core capabilities on,
@@ -11,7 +11,7 @@ import { useClientQuery } from "./use-admin-query";
  * selector reuses the `capabilities` slice of this constant as its own fallback.
  */
 export const DEFAULT_AUTH_CONFIG: AuthConfigInfo = {
-    capabilities: { accounts: true, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
+    capabilities: { accounts: true, apiKey: false, admin: true, inviteOnly: false, organization: false, passkey: false, twoFactor: false },
     emailAndPassword: false,
     organization: { enabled: false, roles: false, teams: false },
     plugins: [],
@@ -38,7 +38,7 @@ export const DEFAULT_AUTH_CONFIG: AuthConfigInfo = {
  * that render the config detail use this.
  */
 export const useAuthConfig = (): { config: AuthConfigInfo; ready: boolean } => {
-    const client = useLunora();
+    const client = useStudioClient();
     const { data, isLoading } = useClientQuery<AuthConfigInfo>(["lunora-auth-config"], () => client.getAuthConfig());
 
     return { config: data ?? DEFAULT_AUTH_CONFIG, ready: !isLoading };

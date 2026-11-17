@@ -12,8 +12,7 @@
  * also where the request is screened — see {@link screenRequest}.
  */
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import type { HandleRequestOptions } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
+import type { HandleRequestOptions, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
 /** A Web-Standard fetch handler: takes a `Request`, returns the MCP `Response`. */
 type McpFetchHandler = (request: Request) => Promise<Response>;
@@ -252,14 +251,19 @@ const serveStateless = async (server: Server, request: Request, options?: ServeS
         return screened.response;
     }
 
-    const transport = new WebStandardStreamableHTTPServerTransport({ enableJsonResponse: true, sessionIdGenerator: undefined });
+    // Loaded per request (the module cache makes every load after the first free) so
+    // a Worker that mounts an MCP handler does not evaluate the SDK at startup.
+    let transport: WebStandardStreamableHTTPServerTransport | undefined;
 
     try {
+        const { WebStandardStreamableHTTPServerTransport: Transport } = await import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js");
+
+        transport = new Transport({ enableJsonResponse: true, sessionIdGenerator: undefined });
         await server.connect(transport);
 
         return await transport.handleRequest(request, { authInfo: options?.authInfo, parsedBody: screened.parsedBody });
     } finally {
-        transport.close().catch(() => undefined);
+        transport?.close().catch(() => undefined);
         server.close().catch(() => undefined);
     }
 };

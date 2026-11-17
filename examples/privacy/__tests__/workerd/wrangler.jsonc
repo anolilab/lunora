@@ -16,5 +16,11 @@
         ],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PrivacyTestDO", "PrivacyTombstonesDO"] }],
-    "vars": { "PRIVACY_TOMBSTONE_SECRET": "workerd-test-secret" },
+    // The sign-in tables, as the Worker binds them, so better-auth's migration and the D1 port run for real.
+    "d1_databases": [{ "binding": "DB", "database_name": "lunora-example-privacy-test", "database_id": "lunora-example-privacy-test" }],
+    "vars": {
+        "AUTH_SECRET": "workerd-test-auth-secret-0123456789abcdef",
+        "PRIVACY_FILE_SECRET": "workerd-test-file-secret",
+        "PRIVACY_TOMBSTONE_SECRET": "workerd-test-secret",
+    },
 }

@@ -225,7 +225,7 @@ describe(teardownPorts, () => {
 
         await ports.markTornDown("dep_1");
 
-        expect(patch).toHaveBeenCalledWith("dep_1", { teardownAt: 5000, updatedAt: 5000 }, "deployments");
+        expect(patch).toHaveBeenCalledWith("deployments", "dep_1", { teardownAt: 5000, updatedAt: 5000 });
     });
 
     it("releaseAlias deletes the torn-down project's own claim on the alias", async () => {
@@ -235,7 +235,7 @@ describe(teardownPorts, () => {
 
         await ports.releaseAlias("app", "prj_1");
 
-        expect(deleteRow).toHaveBeenCalledWith("ao_1", "aliasOwnership");
+        expect(deleteRow).toHaveBeenCalledWith("aliasOwnership", "ao_1");
     });
 
     it("releaseAlias is a no-op when no ownership row exists (already released)", async () => {
@@ -406,11 +406,11 @@ describe(usageRollbackPorts, () => {
                 window: { sinceMs: period, untilMs: now },
             });
 
-            return patch.mock.calls.filter((call) => call[2] === "organizations");
+            return patch.mock.calls.filter((call) => call[0] === "organizations");
         };
 
         await expect(run("cloudflare-wfp")).resolves.toStrictEqual([
-            ["org_a", { spendNanoCents: 7 + 4 * RATE_CARD.requests.nanoCentsPerUnit, spendPeriod: period }, "organizations"],
+            ["organizations", "org_a", { spendNanoCents: 7 + 4 * RATE_CARD.requests.nanoCentsPerUnit, spendPeriod: period }],
         ]);
         await expect(run("cloudflare-workers")).resolves.toStrictEqual([]);
     });
@@ -478,7 +478,7 @@ describe(usageRollbackPorts, () => {
 
         await laterPorts.setCheckpoint(5000);
 
-        expect(patch).toHaveBeenCalledWith("cp_1", { readAtMs: 5000, updatedAt: 2000 }, "usageCheckpoints");
+        expect(patch).toHaveBeenCalledWith("usageCheckpoints", "cp_1", { readAtMs: 5000, updatedAt: 2000 });
     });
 
     it("starts a scope with no checkpoint and no old cell column from nothing (the bootstrap window applies)", async () => {

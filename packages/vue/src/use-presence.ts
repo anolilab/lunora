@@ -3,6 +3,7 @@ import type { ShallowRef } from "vue";
 import { shallowRef } from "vue";
 
 import { isBrowser } from "../../../shared/is-browser";
+import { assertPresenceInterval } from "../../../shared/presence-interval";
 import { randomSessionId } from "../../../shared/random-session-id";
 import { useLunora } from "./lunora-provider";
 import onScopeDisposeOrWarn from "./scope-dispose";
@@ -70,6 +71,8 @@ const DEFAULT_INTERVAL_MS = 10_000;
 const usePresence = <H extends HeartbeatReference, L extends ListPresentReference>(roomId: string, options: UsePresenceOptions<H, L>): UsePresenceResult<L> => {
     const client = useLunora();
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
+
+    assertPresenceInterval(intervalMs);
 
     // One session id per composable call unless the caller pins one.
     const sessionId = options.sessionId ?? randomSessionId();

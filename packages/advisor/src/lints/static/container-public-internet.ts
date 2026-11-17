@@ -1,5 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
+import { declarationSiteFields } from "../helpers";
 
 /**
  * Flags a container that leaves outbound internet access at the platform
@@ -27,7 +28,7 @@ const containerPublicInternet: Lint = {
                 emit(containerPublicInternet, {
                     cacheKey: `container_public_internet:${container.exportName}`,
                     detail: `Container "${container.exportName}" doesn't set enableInternet, so outbound internet is on by default (egress is billed).`,
-                    metadata: { container: container.exportName },
+                    metadata: { ...declarationSiteFields(container), container: container.exportName },
                 }),
             ),
     source: "static",

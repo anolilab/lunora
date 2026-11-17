@@ -1,7 +1,8 @@
+import type { LunoraError } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
 import type { LunoraClientError } from "./wire-errors";
-import { slotError } from "./wire-errors";
+import { slotError, undecodableResultError, withResponseHeaders } from "./wire-errors";
 
 /**
  * Wire-encode a call's `args`/payload, tagging an encode failure with the call it
@@ -55,9 +56,15 @@ const isSlotEnvelope = (body: unknown): body is { error?: unknown; result?: unkn
  * as a MISSING error (`{ error: null }` is falsy) and be handed back as
  * `{ ok: true, value: undefined }` — a failed call reported to the caller as a
  * committed one.
+ *
+ * A failed slot carries the batch reply's headers, the same as a single call's
+ * error, so a `Retry-After` on the reply reaches the caller of each failed call.
  */
-const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count: number): BatchSlot[] => {
+const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count: number, responseHeaders: Headers): BatchSlot[] => {
     const slots = Array.from<BatchSlot | undefined>({ length: count });
+    const failed = (inner: { error?: unknown }): BatchSlot => {
+        return { error: withResponseHeaders(slotError(inner), responseHeaders), ok: false };
+    };
 
     for (const entry of rawResults) {
         if (typeof entry.id !== "number" || entry.id < 0 || entry.id >= count) {
@@ -67,16 +74,26 @@ const demuxBatchResults = (rawResults: { body?: unknown; id?: number }[], count:
         // A body that is not a readable envelope is not a verdict on the call, so it
         // fails the slot instead of throwing and abandoning every later slot.
         if (!isSlotEnvelope(entry.body)) {
-            slots[entry.id] = { error: slotError({}), ok: false };
+            slots[entry.id] = failed({});
             continue;
         }
 
         const inner = entry.body;
 
-        slots[entry.id] = "error" in inner ? { error: slotError(inner), ok: false } : { ok: true, value: decodeWire(inner.result) };
+        if ("error" in inner) {
+            slots[entry.id] = failed(inner);
+            continue;
+        }
+
+        // A committed result that does not decode fails its own slot, with the batch headers, and leaves the others.
+        try {
+            slots[entry.id] = { ok: true, value: decodeWire(inner.result) };
+        } catch (error: unknown) {
+            slots[entry.id] = { error: withResponseHeaders(undecodableResultError(error), responseHeaders), ok: false };
+        }
     }
 
-    return slots.map((slot) => slot ?? { error: new Error("batch call returned no result"), ok: false });
+    return slots.map((slot) => slot ?? { error: withResponseHeaders(new Error("batch call returned no result"), responseHeaders), ok: false });
 };
 
 /**
@@ -110,7 +127,7 @@ const replayExpectation = (stamp: null | string | undefined, authToken: null | s
     return stamp?.startsWith("subj:") === true ? { expectSubject: stamp.slice("subj:".length) } : {};
 };
 /** One demuxed result slot of a `LunoraClient.batch` call. */
-type BatchSlot = { error: LunoraClientError; ok: false } | { ok: true; value: unknown };
+type BatchSlot = { error: LunoraClientError | LunoraError; ok: false } | { ok: true; value: unknown };
 
 export { demuxBatchResults, encodeCallArgs, isEncodable, isSlotEnvelope, replayExpectation };
 

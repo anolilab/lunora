@@ -127,11 +127,12 @@ const deliverOne = async (
     const outcome = await send(row, channel, options);
 
     if (outcome === null) {
-        await database.patch(
-            row._id,
-            { attempts: row.attempts + 1, deliveredAt: options.now, status: "delivered", updatedAt: options.now },
-            "notificationDeliveries",
-        );
+        await database.patch("notificationDeliveries", row._id, {
+            attempts: row.attempts + 1,
+            deliveredAt: options.now,
+            status: "delivered",
+            updatedAt: options.now,
+        });
 
         return "delivered";
     }
@@ -139,16 +140,18 @@ const deliverOne = async (
     const attempts = row.attempts + 1;
 
     if (outcome.retryable && attempts < MAX_ATTEMPTS) {
-        await database.patch(
-            row._id,
-            { attempts, error: outcome.error, nextAttemptAt: options.now + retryDelayMs(attempts), status: "pending", updatedAt: options.now },
-            "notificationDeliveries",
-        );
+        await database.patch("notificationDeliveries", row._id, {
+            attempts,
+            error: outcome.error,
+            nextAttemptAt: options.now + retryDelayMs(attempts),
+            status: "pending",
+            updatedAt: options.now,
+        });
 
         return "retrying";
     }
 
-    await database.patch(row._id, { attempts, error: outcome.error, status: "failed", updatedAt: options.now }, "notificationDeliveries");
+    await database.patch("notificationDeliveries", row._id, { attempts, error: outcome.error, status: "failed", updatedAt: options.now });
 
     return "failed";
 };
@@ -164,7 +167,7 @@ const pruneFinished = async (database: ControlPlaneDatabase, now: number): Promi
         for (const row of page as { _id: string; updatedAt: number }[]) {
             if (row.updatedAt < now - RETENTION_MS) {
                 // eslint-disable-next-line no-await-in-loop -- bounded page; sequential deletes keep the writer simple
-                await database.delete(row._id, "notificationDeliveries");
+                await database.delete("notificationDeliveries", row._id);
                 pruned += 1;
             }
         }

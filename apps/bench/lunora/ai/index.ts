@@ -1,0 +1,102 @@
+/**
+ * AI functions — added by `lunora add ai`.
+ *
+ * This file is YOURS ... you own and edit it.
+ *
+ * **Workers AI is metered, and Lunora `action`s are public RPC.** An unguarded
+ * `summarize({ text })` is an anonymous, unbounded way for anyone who can reach
+ * your API to spend your neuron budget — and a free LLM proxy on your account.
+ * So both handlers here fail closed: {@link requireUser} rejects unauthenticated
+ * callers, a per-caller token bucket caps the burn rate, and BOTH ends of the
+ * token bill are bounded — the prompt input by `v.string().max(...)` and the
+ * completion by `maxOutputTokens`. Bounding only the input is not a cost
+ * control: a 12-word prompt can ask for a 100,000-token answer, and output
+ * tokens are the expensive half. Widen the bounds deliberately; don't remove
+ * them.
+ */
+import { generateText } from "@lunora/ai";
+import { LunoraError } from "@lunora/errors";
+
+import { action, v } from "#lunora/_generated/server.js";
+
+import { spendRootBudget } from "../ratelimit/root";
+
+/** The caller's id, or a clear failure — metered inference is never anonymous here. */
+const requireUser = (userId: string | null | undefined): string => {
+    if (userId === null || userId === undefined) {
+        // Coded, not a bare `Error`: an uncoded throw is redacted to a generic
+        // 500, so the caller sees a server fault instead of "sign in first".
+        throw new LunoraError(
+            "UNAUTHORIZED",
+            "@lunora/ai registry item: this endpoint requires an authenticated user — Workers AI is metered. Pass `resolveIdentity` to `createWorker` (see the auth registry item) before exposing it.",
+        );
+    }
+
+    return userId;
+};
+
+/**
+ * Summarize text using Workers AI via `ctx.ai`. The `@lunora/ai` package
+ * re-exports Vercel AI SDK helpers, so you can build agentic flows
+ * directly in your Lunora actions.
+ *
+ * Requires the `AI` binding in wrangler.jsonc (added by this item).
+ */
+export const summarize = action.input({ text: v.string().max(20_000) }).action(async ({ args: { text }, ctx }) => {
+    const userId = requireUser(ctx.auth.userId);
+    const budget = await spendRootBudget("inference", userId);
+
+    if (!budget.ok) {
+        throw new LunoraError("RATE_LIMITED", `inference is limited per caller; retry in ${String(budget.retryAfter ?? 0)} ms`);
+    }
+
+    const result = await generateText({
+        // The output half of the neuron bill. Without it an anonymous-shaped
+        // prompt can drive an arbitrarily long completion; a 2-3 sentence
+        // summary has no business being longer than this.
+        maxOutputTokens: 300,
+        model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+        prompt: `Summarize this text in 2-3 sentences:\n\n${text}`,
+    });
+
+    return { summary: result.text };
+});
+
+const SENTIMENTS = ["positive", "negative", "neutral"] as const;
+
+type Sentiment = (typeof SENTIMENTS)[number];
+
+/** The model's one word, checked: a reply that is not one of the labels fails rather than reaching the caller as one. */
+const toSentiment = (reply: string): Sentiment => {
+    // Quotes, a full stop or whitespace around the word still leave the label; a digit does not.
+    // eslint-disable-next-line sonarjs/slow-regex -- the reply is capped at maxOutputTokens: 10, so the backtracking runs over a few dozen characters
+    const word = reply.toLowerCase().replaceAll(/^[\s.!?,;:'"*]+|[\s.!?,;:'"*]+$/gu, "");
+    const sentiment = SENTIMENTS.find((label) => label === word);
+
+    if (sentiment === undefined) {
+        throw new LunoraError("INTERNAL", `analyzeSentiment: the model answered ${JSON.stringify(reply.slice(0, 40))}, not one of ${SENTIMENTS.join(", ")}`);
+    }
+
+    return sentiment;
+};
+
+/**
+ * Classify the sentiment of `text` as one of {@link SENTIMENTS}.
+ */
+export const analyzeSentiment = action.input({ text: v.string().max(20_000) }).action(async ({ args: { text }, ctx }) => {
+    const userId = requireUser(ctx.auth.userId);
+    const budget = await spendRootBudget("inference", userId);
+
+    if (!budget.ok) {
+        throw new LunoraError("RATE_LIMITED", `inference is limited per caller; retry in ${String(budget.retryAfter ?? 0)} ms`);
+    }
+
+    const result = await generateText({
+        // One word is the whole contract; anything past that is billed waste.
+        maxOutputTokens: 10,
+        model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+        prompt: `Analyze the sentiment. Respond with one word: positive, negative, or neutral.\n\n${text}`,
+    });
+
+    return { sentiment: toSentiment(result.text) };
+});

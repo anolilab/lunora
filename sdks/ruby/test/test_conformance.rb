@@ -190,6 +190,25 @@ end
 class TestWsFrames < Minitest::Test
   include FixtureLoader
 
+  # protocol/README.md 5.1 and 6: the session credential rides the first
+  # +connect+ frame, and the socket URL carries only the admin ticket as ?token=.
+  def test_session_credential_is_in_connect_and_only_the_ticket_is_in_the_url
+    session = "sess-SECRET-1"
+    client = Lunora::Client.new("https://app.example")
+
+    frame = Lunora.build_connect_frame("client-test", token: session)
+    assert_equal session, frame["token"]
+    assert_equal "connect", frame["type"]
+
+    assert_equal [%w[token tkt-1]], URI.decode_www_form(URI.parse(client.send(:ws_url, nil, "tkt-1")).query)
+    assert_equal [%w[shard room-1], %w[token tkt-1]],
+                 URI.decode_www_form(URI.parse(client.send(:ws_url, "room-1", "tkt-1")).query)
+    refute_includes client.send(:ws_url, nil, "tkt-1"), session
+
+    refute Lunora.build_connect_frame("client-test").key?("token"), "no session credential, no token key"
+    assert_equal "wss://app.example/_lunora/ws", client.send(:ws_url)
+  end
+
   def test_client_frames
     ConformanceManifest.covers("client_frame_builders")
 
@@ -224,6 +243,7 @@ class TestWsFrames < Minitest::Test
 
     resent = []
     client.attach_socket(->(frame) { resent << frame })
+    assert_equal "connect", resent.shift["type"], "attach sends connect before anything else"
     client.resend_subscriptions
 
     # BOTH registries. A resend that walks only the queries leaves every shape
@@ -236,6 +256,166 @@ class TestWsFrames < Minitest::Test
     assert_equal({ "room" => "general" }, resent[1]["shape"]["args"])
     assert_equal 5, resent[1]["sinceCheckpoint"]
     assert_equal "e1", resent[1]["sinceEpoch"]
+  end
+
+  def test_connect_frame_announces_page_delta_caps
+    golden = fixture("ws-frames.json")["clientFrames"]["connect-with-page-delta-caps"]
+
+    assert_equal canonical(golden), canonical(Lunora.build_connect_frame("client-test", caps: ["pageDelta"]))
+
+    client = Lunora::Client.new("https://app.example")
+    sent = []
+    client.attach_socket(->(frame) { sent << frame })
+    assert_equal ["pageDelta"], sent.first["caps"], "attach announces pageDelta, and never refreshBatch"
+  end
+
+  def test_page_delta_frames_merge_into_the_cached_list
+    fixture("ws-frames.json")["pageDeltaFrames"].each do |entry|
+      client = Lunora::Client.new("https://app.example")
+      client.attach_socket(->(_frame) {})
+      seen = []
+      client.subscribe("messages:list", { "channel" => "general" }, ->(value) { seen << value })
+      id = entry["frame"]["id"]
+      client.handle_frame(JSON.generate({ "id" => id, "type" => "data", "data" => entry["baseWire"] }))
+      seen.clear
+
+      assert_equal entry["expect"]["kind"], client.handle_frame(JSON.generate(entry["frame"])), entry["name"]
+      assert_equal 1, seen.length, "onData should fire once for #{entry["name"]}"
+      assert_equal canonical(entry["expect"]["valueWire"]), canonical(Lunora.encode_wire(seen.first)), entry["name"]
+    end
+  end
+
+  def test_unmergeable_row_delta_keeps_the_previous_value
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(->(_frame) {})
+    seen = []
+    client.subscribe("messages:list", {}, ->(value) { seen << value })
+    base = { "page" => [{ "text" => "no id" }], "isDone" => true }
+    client.handle_frame(JSON.generate({ "id" => "sub_1", "type" => "data", "data" => base }))
+    seen.clear
+
+    delta = { "key" => "m1", "op" => "update", "table" => "messages", "row" => { "_id" => "m1" } }
+    client.handle_frame(JSON.generate({ "id" => "sub_1", "type" => "delta", "delta" => delta }))
+
+    assert_empty seen, "the row-change envelope must never be published as the result"
+  end
+
+  # One client with one subscription, seeded; +seen+ and +errors+ record what the
+  # subscription's callbacks received.
+  def delta_case_client(entry, identity: nil)
+    sent = []
+    seen = []
+    errors = []
+    client = Lunora::Client.new("https://app.example", identity: identity)
+    client.attach_socket(->(frame) { sent << frame })
+    client.subscribe("messages:list", {}, ->(value) { seen << value }, ->(error) { errors << error.code })
+    client.handle_frame(JSON.generate(entry["seedFrame"]))
+    seen.clear
+
+    [client, sent, seen, errors]
+  end
+
+  # The step loop shared by every delta fixture key: a frame step checks how many
+  # values were published (and the last one's wire form) and, when the step names
+  # +errors+, exactly which error codes fired; a resume step checks the resend.
+  def run_delta_steps(entry, client, sent, seen, errors)
+    entry["steps"].each_with_index do |step, index|
+      label = "#{entry["name"]} step #{index + 1}"
+
+      if step["resume"]
+        sent.clear
+        client.resend_subscriptions
+        subscribe = sent.find { |frame| frame["type"] == "subscribe" }
+        assert_equal step["resume"]["sinceSeq"], subscribe["query"]["sinceSeq"], label
+        assert_equal step["resume"]["sinceEpoch"], subscribe["query"]["sinceEpoch"], label
+        next
+      end
+
+      seen.clear
+      errors.clear
+      client.handle_frame(JSON.generate(step["frame"]))
+      assert_equal step["publishes"], seen.length, label
+      assert_equal canonical(step["valueWire"]), canonical(Lunora.encode_wire(seen.first)), label if step["valueWire"]
+      assert_equal step["errors"], errors, "#{label} error codes" if step.key?("errors")
+    end
+  end
+
+  def test_unmergeable_run_freezes_the_cursor
+    fixture("ws-frames.json")["pageDeltaPoisonCases"].each do |entry|
+      client, sent, seen, errors = delta_case_client(entry)
+      run_delta_steps(entry, client, sent, seen, errors)
+    end
+  end
+
+  def test_a_failed_resend_keeps_a_poisoned_subscription_frozen
+    entry = fixture("ws-frames.json")["pageDeltaPoisonCases"].first
+    freeze = entry["steps"][0]["frame"]
+    later = entry["steps"][1]["frame"]
+    broken = false
+    sent = []
+    client = Lunora::Client.new("https://app.example")
+    client.attach_socket(lambda { |frame|
+      raise IOError, "socket gone" if broken
+
+      sent << frame
+    })
+    seen = []
+    client.subscribe("messages:list", {}, ->(value) { seen << value }, ->(_error) {})
+    client.handle_frame(JSON.generate(entry["seedFrame"]))
+    client.handle_frame(JSON.generate(freeze))
+
+    broken = true
+    assert_raises(IOError) { client.resend_subscriptions }
+
+    # The replay never reached the server, so the dropped change is still unapplied.
+    seen.clear
+    client.handle_frame(JSON.generate(later))
+
+    assert_empty seen
+
+    broken = false
+    sent.clear
+    client.resend_subscriptions
+    subscribe = sent.find { |frame| frame["type"] == "subscribe" }
+
+    assert_equal entry["steps"][4]["resume"]["sinceSeq"], subscribe["query"]["sinceSeq"]
+  end
+
+  def test_delta_runs_are_held_until_their_last_frame
+    cases = fixture("ws-frames.json")["pageDeltaRunCases"]
+    assert_equal 5, cases.length, "pageDeltaRunCases must carry all five cases"
+
+    cases.each do |entry|
+      client, sent, seen, errors = delta_case_client(entry)
+      run_delta_steps(entry, client, sent, seen, errors)
+    end
+  end
+
+  def test_an_undecodable_run_frame_freezes_the_subscription
+    cases = fixture("ws-frames.json")["undecodableDeltaRunCases"]
+    assert_equal 2, cases.length, "undecodableDeltaRunCases must carry its two cases"
+
+    cases.each do |entry|
+      client, sent, seen, errors = delta_case_client(entry)
+      run_delta_steps(entry, client, sent, seen, errors)
+    end
+  end
+
+  def test_identity_change_evicts_the_cached_base_and_the_poison
+    cases = fixture("ws-frames.json")["identityChangeEvictionCases"]
+    assert_equal 2, cases.length, "identityChangeEvictionCases must carry both cases"
+
+    cases.each do |entry|
+      client, sent, seen, errors = delta_case_client(entry, identity: entry["identityChange"]["from"])
+
+      if entry["freezeFrame"]
+        client.handle_frame(JSON.generate(entry["freezeFrame"]))
+        assert_equal entry["freezeErrors"], errors, "#{entry["name"]} freeze"
+      end
+
+      client.identity = entry["identityChange"]["to"]
+      run_delta_steps(entry, client, sent, seen, errors)
+    end
   end
 
   def test_server_frames
@@ -328,11 +508,11 @@ class TestWsFrames < Minitest::Test
   def test_a_subscription_streams_its_frame_values_in_order
     ConformanceManifest.covers("subscription_stream_yields_frame_values_in_order")
 
-    case_data = fixture("ws-frames.json")["stream"]
+    case_data = fixture("ws-frames.json")["watch"]
     client = Lunora::Client.new("https://app.example")
     client.attach_socket(->(_frame) {})
 
-    values, stop = client.stream("messages:list", { "channel" => "general" })
+    values, stop = client.watch("messages:list", { "channel" => "general" })
     seen = []
 
     case_data["frames"].each do |frame|
@@ -490,9 +670,9 @@ class TestClientConcurrency < Minitest::Test
     reading = false
     reader.join
 
-    # Attached only now, so the count below sees resend frames alone.
+    # Attached only now, and counting subscribe frames alone: attach's connect is not a resend.
     resent = 0
-    client.attach_socket(->(_frame) { resent += 1 })
+    client.attach_socket(->(frame) { resent += 1 if frame["type"] == "subscribe" })
     client.resend_subscriptions
 
     assert_equal THREADS * PER_THREAD, resent, "every concurrent subscribe survived with a distinct id"

@@ -1,6 +1,6 @@
 {
     "name": "@lunora/codegen",
-    "version": "1.0.0-alpha.311",
+    "version": "1.0.0-alpha.420",
     "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -40,6 +40,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./sdk": {
+            "types": "./dist/sdk/index.d.ts",
+            "import": "./dist/sdk/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "publishConfig": {
@@ -50,9 +54,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
@@ -61,15 +63,15 @@
         "fallow:health": "fallow health --score"
     },
     "dependencies": {
-        "@lunora/advisor": "1.0.0-alpha.222",
-        "@lunora/agent": "1.0.0-alpha.213",
-        "@lunora/container": "1.0.0-alpha.76",
+        "@lunora/advisor": "^1.0.0-alpha.295",
+        "@lunora/agent": "^1.0.0-alpha.283",
+        "@lunora/container": "1.0.0-alpha.108",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
-        "@lunora/platform": "1.0.0-alpha.64",
-        "@lunora/queue": "1.0.0-alpha.107",
-        "@lunora/scheduler": "1.0.0-alpha.129",
-        "@lunora/values": "1.0.0-alpha.66",
-        "@lunora/workflow": "1.0.0-alpha.78",
+        "@lunora/platform": "1.0.0-alpha.80",
+        "@lunora/queue": "1.0.0-alpha.143",
+        "@lunora/scheduler": "^1.0.0-alpha.170",
+        "@lunora/values": "^1.0.0-alpha.95",
+        "@lunora/workflow": "^1.0.0-alpha.111",
         "@visulima/fs": "catalog:cli",
         "jiti": "catalog:tooling",
         "quicktype-core": "catalog:tooling",
@@ -77,10 +79,12 @@
     },
     "devDependencies": {
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/bindings": "1.0.0-alpha.114",
-        "@lunora/do": "1.0.0-alpha.217",
-        "@lunora/server": "1.0.0-alpha.206",
-        "@lunora/shard-engine": "1.0.0-alpha.131",
+        "@lunora/bindings": "1.0.0-alpha.151",
+        "@lunora/client": "^1.0.0-alpha.299",
+        "@lunora/do": "^1.0.0-alpha.287",
+        "@lunora/payment": "^1.0.0-alpha.274",
+        "@lunora/server": "^1.0.0-alpha.275",
+        "@lunora/shard-engine": "^1.0.0-alpha.199",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

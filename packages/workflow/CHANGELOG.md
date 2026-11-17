@@ -1,3 +1,379 @@
+## @lunora/workflow [1.0.0-alpha.111](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.110...@lunora/workflow@1.0.0-alpha.111) (2026-11-03)
+
+- feat(workflow): create instances and send events via admin api (#1461)
+
+## @lunora/workflow 1.0.0-alpha.111 (2026-11-03)
+
+- feat(workflow): create instances and send events via admin api (#1461)
+
+## @lunora/workflow [1.0.0-alpha.110](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.109...@lunora/workflow@1.0.0-alpha.110) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+* **@lunora/values:** upgraded to 1.0.0-alpha.94
+* **@lunora/server:** upgraded to 1.0.0-alpha.265
+
+## @lunora/workflow [1.0.0-alpha.109](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.108...@lunora/workflow@1.0.0-alpha.109) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+* **@lunora/values:** upgraded to 1.0.0-alpha.93
+* **@lunora/server:** upgraded to 1.0.0-alpha.264
+
+## @lunora/workflow [1.0.0-alpha.108](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.107...@lunora/workflow@1.0.0-alpha.108) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+* **@lunora/values:** upgraded to 1.0.0-alpha.92
+* **@lunora/server:** upgraded to 1.0.0-alpha.263
+
+## @lunora/workflow [1.0.0-alpha.107](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.106...@lunora/workflow@1.0.0-alpha.107) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+* **@lunora/values:** upgraded to 1.0.0-alpha.91
+* **@lunora/server:** upgraded to 1.0.0-alpha.262
+
+## @lunora/workflow [1.0.0-alpha.106](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.105...@lunora/workflow@1.0.0-alpha.106) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+* **@lunora/values:** upgraded to 1.0.0-alpha.90
+* **@lunora/server:** upgraded to 1.0.0-alpha.261
+
+## @lunora/workflow [1.0.0-alpha.105](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.104...@lunora/workflow@1.0.0-alpha.105) (2026-10-31)
+
+### Performance Improvements
+
+* **codegen:** defer queues, email agents, workflows and agents in lazy mode ([#1408](https://github.com/anolilab/lunora/issues/1408)) ([e11e8c2](https://github.com/anolilab/lunora/commit/e11e8c26302de22af4995f0905ca5648e8dc6f8e)), closes [#1166](https://github.com/anolilab/lunora/issues/1166)
+
+## @lunora/workflow [1.0.0-alpha.104](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.103...@lunora/workflow@1.0.0-alpha.104) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+* **@lunora/values:** upgraded to 1.0.0-alpha.89
+* **@lunora/server:** upgraded to 1.0.0-alpha.259
+
+## @lunora/workflow [1.0.0-alpha.103](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.102...@lunora/workflow@1.0.0-alpha.103) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+* **@lunora/values:** upgraded to 1.0.0-alpha.88
+* **@lunora/server:** upgraded to 1.0.0-alpha.258
+
+## @lunora/workflow [1.0.0-alpha.102](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.101...@lunora/workflow@1.0.0-alpha.102) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+* **@lunora/values:** upgraded to 1.0.0-alpha.87
+* **@lunora/wire:** upgraded to 1.0.0-alpha.6
+* **@lunora/server:** upgraded to 1.0.0-alpha.257
+
+## @lunora/workflow [1.0.0-alpha.101](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.100...@lunora/workflow@1.0.0-alpha.101) (2026-10-30)
+
+### Performance Improvements
+
+* **wire:** skip decodeWire on tagless json text ([#1384](https://github.com/anolilab/lunora/issues/1384)) ([ec9dd3d](https://github.com/anolilab/lunora/commit/ec9dd3de697df597b24cbea981ea25a1a2c8fcea))
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+* **@lunora/server:** upgraded to 1.0.0-alpha.255
+
+## @lunora/workflow [1.0.0-alpha.99](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.98...@lunora/workflow@1.0.0-alpha.99) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/values:** upgraded to 1.0.0-alpha.85
+* **@lunora/server:** upgraded to 1.0.0-alpha.247
+
+## @lunora/workflow [1.0.0-alpha.98](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.97...@lunora/workflow@1.0.0-alpha.98) (2026-10-28)
+
+### ⚠ BREAKING CHANGES
+
+* **do:** codegen rejects an exported defineWorkflowEvent anywhere in lunora/ whose type
+is not a string literal (WORKFLOW_EVENT_NOT_LITERAL) or that shares its type with another export
+(WORKFLOW_EVENT_DUPLICATE).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): keep a failed status refresh apart from a failed event send
+
+Discovery of workflow events now also reads definitions called through a namespace import of
+@lunora/workflow and definitions followed by a non-null assertion. In the Send event form, a
+failed instance refresh after a delivered event is reported as such instead of as a send
+failure, so the operator is not nudged into sending the event twice. readInstance no longer
+uses a catch-less try.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* feat(cli): add workflow create and send-event commands
+
+`lunora workflow create <exportName>` starts an instance (`--id`, `--params`) and
+`lunora workflow send-event <exportName> <instanceId> <eventType>` delivers an event
+(`--payload`). Both decode their arguments and dispatch the same admin ops the Studio
+Workflows panel calls through the `lunora run` RPC path, so target resolution, the admin
+bearer and HTTP-status exit codes are shared and the worker stays the only validator.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* docs(do): correct the send-event parser comment on payload validation
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* chore(cli): update api snapshot for the workflow command
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(workflows): unwrap CLI json output, trim create ids, keep send result on audit failure
+
+- lunora workflow --format json returned the admin RPC { result } envelope, so the instance id
+  sat at data.result.id; it is now data.id.
+- createWorkflowInstance trims an explicit id like getWorkflowInstanceStatus and
+  sendWorkflowEvent do, so the id a create returns is the one later lookups address.
+- sendWorkflowEvent logs a failed audit write instead of turning an already delivered event
+  into an error response that invites a duplicate send.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): reset the send-event busy flag in one finally
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* refactor(studio): clear the send-event busy flag with promise finally
+
+React Compiler cannot lower a try statement without a catch clause, so the
+try/finally left the send form without automatic memoization. The send and
+refresh now run in their own function, and the caller clears the flag with
+.finally(), as the export/import panel already does.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): reset the send-event form when the selected workflow changes
+
+The form kept its instance id across workflow selections, so an id typed for
+one workflow could send the event to a same-id instance of the next one. The
+form is now keyed by the selected workflow, which starts it fresh.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+* fix(studio): send workflow events through the studio admin client
+
+Alpha moved Studio's admin calls from useLunora to useStudioClient and
+dropped the useLunora import from the workflows panel, so the send-event
+form threw a ReferenceError after rebasing.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+### Features
+
+* **do:** send events to workflow instances from admin ([#1359](https://github.com/anolilab/lunora/issues/1359)) ([d833e43](https://github.com/anolilab/lunora/commit/d833e43bbb5fe3e97e71b86d7c4c8c488d82ce4f)), closes [#1274](https://github.com/anolilab/lunora/issues/1274)
+
+### Miscellaneous Chores
+
+* **deps:** link @lunora/wire from the workspace again ([#1379](https://github.com/anolilab/lunora/issues/1379)) ([2de853f](https://github.com/anolilab/lunora/commit/2de853f620e92153da77c2fda4419c7355b92c42))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+* **@lunora/values:** upgraded to 1.0.0-alpha.84
+* **@lunora/server:** upgraded to 1.0.0-alpha.245
+
+## @lunora/workflow [1.0.0-alpha.97](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.96...@lunora/workflow@1.0.0-alpha.97) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+* **@lunora/values:** upgraded to 1.0.0-alpha.83
+* **@lunora/server:** upgraded to 1.0.0-alpha.243
+
+## @lunora/workflow [1.0.0-alpha.96](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.95...@lunora/workflow@1.0.0-alpha.96) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+* **@lunora/values:** upgraded to 1.0.0-alpha.82
+* **@lunora/server:** upgraded to 1.0.0-alpha.241
+
+## @lunora/workflow [1.0.0-alpha.95](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.94...@lunora/workflow@1.0.0-alpha.95) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+* **@lunora/values:** upgraded to 1.0.0-alpha.81
+* **@lunora/server:** upgraded to 1.0.0-alpha.238
+
+## @lunora/workflow [1.0.0-alpha.94](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.93...@lunora/workflow@1.0.0-alpha.94) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+* **@lunora/values:** upgraded to 1.0.0-alpha.80
+* **@lunora/server:** upgraded to 1.0.0-alpha.236
+
+## @lunora/workflow [1.0.0-alpha.93](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.92...@lunora/workflow@1.0.0-alpha.93) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+* **@lunora/values:** upgraded to 1.0.0-alpha.79
+* **@lunora/server:** upgraded to 1.0.0-alpha.235
+
+## @lunora/workflow [1.0.0-alpha.92](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.91...@lunora/workflow@1.0.0-alpha.92) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+* **@lunora/values:** upgraded to 1.0.0-alpha.78
+* **@lunora/server:** upgraded to 1.0.0-alpha.228
+
+## @lunora/workflow [1.0.0-alpha.91](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.90...@lunora/workflow@1.0.0-alpha.91) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+* **@lunora/server:** upgraded to 1.0.0-alpha.226
+
+## @lunora/workflow [1.0.0-alpha.90](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.89...@lunora/workflow@1.0.0-alpha.90) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+* **@lunora/values:** upgraded to 1.0.0-alpha.77
+* **@lunora/server:** upgraded to 1.0.0-alpha.225
+
+## @lunora/workflow [1.0.0-alpha.89](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.88...@lunora/workflow@1.0.0-alpha.89) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+* **@lunora/values:** upgraded to 1.0.0-alpha.76
+* **@lunora/server:** upgraded to 1.0.0-alpha.224
+
+## @lunora/workflow [1.0.0-alpha.88](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.87...@lunora/workflow@1.0.0-alpha.88) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+* **@lunora/values:** upgraded to 1.0.0-alpha.75
+* **@lunora/server:** upgraded to 1.0.0-alpha.223
+
+## @lunora/workflow [1.0.0-alpha.87](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.86...@lunora/workflow@1.0.0-alpha.87) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+* **@lunora/values:** upgraded to 1.0.0-alpha.74
+* **@lunora/server:** upgraded to 1.0.0-alpha.222
+
+## @lunora/workflow [1.0.0-alpha.86](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.85...@lunora/workflow@1.0.0-alpha.86) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+* **@lunora/values:** upgraded to 1.0.0-alpha.73
+* **@lunora/server:** upgraded to 1.0.0-alpha.221
+
+## @lunora/workflow [1.0.0-alpha.85](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.84...@lunora/workflow@1.0.0-alpha.85) (2026-10-18)
+
+### Features
+
+* **workflow:** add restart action and rollingBack status ([#1249](https://github.com/anolilab/lunora/issues/1249)) ([01ec235](https://github.com/anolilab/lunora/commit/01ec2353b2d3cad8d26e32aff70fd42dd5590c96))
+
+
+### Dependencies
+
+* **@lunora/server:** upgraded to 1.0.0-alpha.219
+
+## @lunora/workflow [1.0.0-alpha.84](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.83...@lunora/workflow@1.0.0-alpha.84) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+* **@lunora/values:** upgraded to 1.0.0-alpha.72
+* **@lunora/server:** upgraded to 1.0.0-alpha.217
+
+## @lunora/workflow [1.0.0-alpha.83](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.82...@lunora/workflow@1.0.0-alpha.83) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+* **@lunora/values:** upgraded to 1.0.0-alpha.71
+* **@lunora/server:** upgraded to 1.0.0-alpha.216
+
+## @lunora/workflow [1.0.0-alpha.82](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.81...@lunora/workflow@1.0.0-alpha.82) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+* **@lunora/values:** upgraded to 1.0.0-alpha.70
+* **@lunora/server:** upgraded to 1.0.0-alpha.215
+
+## @lunora/workflow [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.80...@lunora/workflow@1.0.0-alpha.81) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+* **@lunora/values:** upgraded to 1.0.0-alpha.69
+* **@lunora/server:** upgraded to 1.0.0-alpha.212
+
+## @lunora/workflow [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.79...@lunora/workflow@1.0.0-alpha.80) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+* **@lunora/values:** upgraded to 1.0.0-alpha.68
+* **@lunora/server:** upgraded to 1.0.0-alpha.211
+
+## @lunora/workflow [1.0.0-alpha.79](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.78...@lunora/workflow@1.0.0-alpha.79) (2026-10-16)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.57
+* **@lunora/values:** upgraded to 1.0.0-alpha.67
+* **@lunora/server:** upgraded to 1.0.0-alpha.208
+
 ## @lunora/workflow [1.0.0-alpha.78](https://github.com/anolilab/lunora/compare/@lunora/workflow@1.0.0-alpha.77...@lunora/workflow@1.0.0-alpha.78) (2026-10-15)
 
 ### Performance Improvements

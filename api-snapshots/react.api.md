@@ -35,6 +35,15 @@ interface AdminAuthListResult<T> {
 }
 ```
 
+### `AgentApprovalGrant` (interface)
+
+```ts
+interface AgentApprovalGrant {
+    createdAt: number;
+    toolName: string;
+}
+```
+
 ### `AgentChatMessage` (interface)
 
 ```ts
@@ -44,7 +53,7 @@ interface AgentChatMessage {
     optimistic?: boolean;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    status?: "approved" | "awaiting_approval" | "rejected";
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     toolCallId?: string;
     toolCalls?: ReadonlyArray<{
         id: string;
@@ -129,6 +138,11 @@ type AgentToolEvent = {
     toolCallId?: string;
     toolName?: string;
     type: "awaiting-approval";
+} | {
+    seq: number;
+    toolCallId?: string;
+    toolName?: string;
+    type: "awaiting-secret";
 };
 ```
 
@@ -245,13 +259,7 @@ interface LunoraProviderProps {
 
 ### `LunoraQueryOptions` (interface)
 
-```ts
-interface LunoraQueryOptions<F extends FunctionReference> {
-    queryFn: () => Promise<ReturnOf<F>>;
-    queryKey: QueryKey;
-    staleTime: number;
-}
-```
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `MutationHook` (interface)
 
@@ -317,6 +325,22 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 Re-exported from `@lunora/client` — signature tracked at its source.
 
+### `PendingApproval` (interface)
+
+```ts
+interface PendingApproval {
+    agent: string;
+    content: string;
+    instanceId: string;
+    requestedAt: number;
+    threadKey: string;
+    threadTitle?: string;
+    threadUpdatedAt: number;
+    toolCallId: string;
+    toolName?: string;
+}
+```
+
 ### `Preloaded` (interface)
 
 Re-exported from `@lunora/client` — signature tracked at its source.
@@ -375,13 +399,46 @@ interface UseAgentApi {
 }
 ```
 
+### `UseAgentApprovalsApi` (interface)
+
+```ts
+interface UseAgentApprovalsApi {
+    agents: {
+        agentPendingApprovals: FunctionReference<"query", {
+            limit?: number;
+        }, Record<string, unknown>[]>;
+    };
+}
+```
+
+### `UseAgentApprovalsOptions` (interface)
+
+```ts
+interface UseAgentApprovalsOptions {
+    api: UseAgentApprovalsApi;
+}
+```
+
+### `UseAgentApprovalsResult` (interface)
+
+```ts
+interface UseAgentApprovalsResult {
+    approvals: PendingApproval[] | undefined;
+    error: Error | undefined;
+}
+```
+
 ### `UseAgentChatApi` (interface)
 
 ```ts
 interface UseAgentChatApi {
     agents: {
+        agentApprovalGrants: AgentApprovalGrantsReference;
+        agentDeclineSecret: AgentDeclineSecretReference;
         agentMessages: AgentMessagesReference$1;
         agentResolveApproval: AgentApprovalReference;
+        agentRevokeApprovalGrant: AgentRevokeApprovalGrantReference;
+        agentSupplySecret: AgentSupplySecretReference;
         agentThread: AgentThreadReference;
     };
 }
@@ -406,14 +463,19 @@ interface UseAgentChatOptions {
 
 ```ts
 interface UseAgentChatResult {
+    approvalGrants: ReadonlyArray<AgentApprovalGrant>;
     approve: (toolCallId: string, note?: string) => Promise<void>;
+    approveForThread: (toolCallId: string, note?: string) => Promise<void>;
     cancel: () => Promise<void>;
+    declineSecret: (toolCallId: string) => Promise<void>;
     error: Error | undefined;
     messages: ReadonlyArray<AgentChatMessage>;
     reject: (toolCallId: string, note?: string) => Promise<void>;
+    revokeGrant: (toolName: string) => Promise<void>;
     send: (input: string, args?: Record<string, unknown>) => Promise<void>;
     status: AgentThreadStatus | undefined;
     streamingText: string;
+    supplySecret: (toolCallId: string, secret: string) => Promise<void>;
 }
 ```
 
@@ -524,13 +586,7 @@ interface UseAuthSessionsOptions extends AdminAuthQueryOptions {
 ### `UseAuthUsersOptions` (interface)
 
 ```ts
-interface UseAuthUsersOptions extends AdminAuthQueryOptions {
-    filterField?: string;
-    filterValue?: string;
-    search?: string;
-    searchField?: string;
-    sortBy?: string;
-    sortDirection?: "asc" | "desc";
+interface UseAuthUsersOptions extends AdminAuthQueryOptions, AuthUsersListFilter {
 }
 ```
 
@@ -605,6 +661,21 @@ interface UseInfiniteQueryResult<T> {
 }
 ```
 
+### `UseLiveTopicOptions` (type)
+
+```ts
+type UseLiveTopicOptions<Payload = unknown> = LiveTopicOptions<Payload>;
+```
+
+### `UseLiveTopicResult` (interface)
+
+```ts
+interface UseLiveTopicResult<Payload = unknown> {
+    error: LiveStreamSubscribeError | undefined;
+    lastEvent: Payload | undefined;
+}
+```
+
 ### `UseMultipartUploadOptions` (interface)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -617,6 +688,7 @@ Re-exported from `@visulima/storage-client` — signature tracked at its source.
 
 ```ts
 interface UseMutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
+    onlineOnly?: boolean;
     optimistic?: (current: TCurrent | undefined) => TValue;
     optimisticUpdate?: OptimisticUpdate<TArgs>;
     shardKey?: string;
@@ -869,11 +941,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `lunoraQueryOptions` (const)
 
-```ts
-const lunoraQueryOptions: <F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: {
-    shardKey?: string;
-}) => LunoraQueryOptions<F>;
-```
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `useAction` (const)
 
@@ -885,6 +953,12 @@ const useAction: <F extends FunctionReference>(function_: F) => ActionHook<F>;
 
 ```ts
 const useAgent: (options: UseAgentOptions) => UseAgentResult;
+```
+
+### `useAgentApprovals` (const)
+
+```ts
+const useAgentApprovals: (options: UseAgentApprovalsOptions) => UseAgentApprovalsResult;
 ```
 
 ### `useAgentChat` (const)
@@ -982,6 +1056,12 @@ const useImpersonate: () => UseImpersonateResult;
 const useInfiniteQuery: <F extends FunctionReference>(function_: F, args: "skip" | PaginatedArgs<F>, options: UseInfiniteQueryOptions) => UseInfiniteQueryResult<PageItemOf<F>>;
 ```
 
+### `useLiveTopic` (function)
+
+```ts
+function useLiveTopic<Payload>(topic: LiveTopicRef<Payload>, options?: UseLiveTopicOptions<Payload>): UseLiveTopicResult<Payload>;
+```
+
 ### `useLunora` (const)
 
 ```ts
@@ -1064,6 +1144,12 @@ const useStream: <F extends FunctionReference<"stream">>(function_: F, args: "sk
 const useSubscription: <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "skip", options?: UseQueryOptions) => UseSubscriptionResult<ReturnOf<F>>;
 ```
 
+### `useSuspenseQuery` (const)
+
+```ts
+const useSuspenseQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: UseQueryOptions) => ReturnOf<F>;
+```
+
 ### `useTusUpload` (const)
 
 Re-exported from `@visulima/storage-client` — signature tracked at its source.
@@ -1143,6 +1229,7 @@ interface Subscription {
     readonly provider: ProviderId;
     readonly quantity: number;
     readonly referenceId: string;
+    readonly revision?: number;
     readonly state: "active" | "canceled" | "past_due" | "paused" | "trialing";
     readonly updatedAt: number;
 }
@@ -1188,7 +1275,7 @@ Re-exported from `@tanstack/react-query` — signature tracked at its source.
 
 ### `LunoraQueryOptions` (interface)
 
-Re-exported from `@lunora/react` — signature tracked in that section.
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `Preloaded` (interface)
 
@@ -1250,7 +1337,7 @@ Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `lunoraQueryOptions` (const)
 
-Re-exported from `@lunora/react` — signature tracked in that section.
+Re-exported from `@lunora/client` — signature tracked at its source.
 
 ### `prefetchQuery` (const)
 
@@ -1385,13 +1472,32 @@ interface AdminAuthQueryOptions {
 }
 ```
 
+### `AgentApprovalGrantsReference` (type)
+
+```ts
+type AgentApprovalGrantsReference = FunctionReference<"query", {
+    key: string;
+}, ReadonlyArray<AgentApprovalGrant>>;
+```
+
 ### `AgentApprovalReference` (type)
 
 ```ts
 type AgentApprovalReference = FunctionReference<"mutation", {
-    decision: "approve" | "reject";
+    decision: "approve" | "approve_for_thread" | "reject";
     instanceId: string;
     note?: string;
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
+}>;
+```
+
+### `AgentDeclineSecretReference` (type)
+
+```ts
+type AgentDeclineSecretReference = FunctionReference<"mutation", {
     threadKey: string;
     toolCallId: string;
 }, {
@@ -1425,6 +1531,29 @@ type AgentMessagesReference$1 = FunctionReference<"query", {
 }, ReadonlyArray<Record<string, unknown>>>;
 ```
 
+### `AgentRevokeApprovalGrantReference` (type)
+
+```ts
+type AgentRevokeApprovalGrantReference = FunctionReference<"mutation", {
+    threadKey: string;
+    toolName: string;
+}, {
+    revoked: boolean;
+}>;
+```
+
+### `AgentSupplySecretReference` (type)
+
+```ts
+type AgentSupplySecretReference = FunctionReference<"mutation", {
+    secret: string;
+    threadKey: string;
+    toolCallId: string;
+}, {
+    resolved: boolean;
+}>;
+```
+
 ### `AgentThreadReference` (type)
 
 ```ts
@@ -1452,7 +1581,7 @@ interface AuthGateProps {
 ### `CallOptions` (type)
 
 ```ts
-type CallOptions<F extends FunctionReference> = UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
+type CallOptions<F extends FunctionReference> = OnlineOnlyOption<F> & UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
 ```
 
 ### `CreateMicrophone` (type)

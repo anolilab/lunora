@@ -101,7 +101,7 @@ describe("payment tables (workerd, real D1)", () => {
                 subscriptionId,
                 type: "subscription.active",
             }),
-        ).resolves.toStrictEqual({ body: { applied: true, reason: "ok" }, status: 200 });
+        ).resolves.toStrictEqual({ body: { applied: true, reason: "ok", referenceId: organizationId }, status: 200 });
 
         // A second event patches the row the first one wrote; a redelivery is deduplicated.
         await expect(
@@ -119,7 +119,7 @@ describe("payment tables (workerd, real D1)", () => {
                 subscriptionId,
                 type: "subscription.active",
             }),
-        ).resolves.toStrictEqual({ body: { applied: false, reason: "duplicate" }, status: 200 });
+        ).resolves.toStrictEqual({ body: { applied: false, reason: "duplicate", referenceId: organizationId }, status: 200 });
 
         await expect(rows("payment_events", { providerEventId: created })).resolves.toMatchObject([{ provider: "creem", type: "subscription.active" }]);
         await expect(rows("payment_subscriptions", { referenceId: organizationId })).resolves.toMatchObject([

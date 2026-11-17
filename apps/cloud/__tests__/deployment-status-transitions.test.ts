@@ -75,7 +75,7 @@ const makeCtx = (row: Row): { ctx: MutationCtx; patched: { id: string; patch: Ro
         catalogInstalls: { findMany: empty },
         delete: () => Promise.resolve(),
         deployments: { findMany: empty },
-        get: (id: string) => {
+        get: (_table: string, id: string) => {
             if (id === row["_id"]) {
                 return Promise.resolve(row);
             }
@@ -85,7 +85,7 @@ const makeCtx = (row: Row): { ctx: MutationCtx; patched: { id: string; patch: Ro
         insert: (table: string) => Promise.resolve(`${table}_id`),
         members: { findMany: () => Promise.resolve({ page: members }) },
         notificationChannels: { findMany: empty },
-        patch: (id: string, patch: Row) => {
+        patch: (_table: string, id: string, patch: Row) => {
             patched.push({ id, patch });
 
             return Promise.resolve();

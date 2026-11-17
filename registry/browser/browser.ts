@@ -31,13 +31,16 @@
  * guarantee does not depend on this file staying edited:
  *
  * ```ts
- * import { launch } from "@cloudflare/playwright";
  * import { createBrowser } from "@lunora/browser";
  *
  * createShardDO({
- *     browser: (env) => createBrowser({ allowedHosts: ["example.com"], binding: env.BROWSER, launch }),
+ *     browser: (env) =>
+ *         createBrowser({ allowedHosts: ["example.com"], binding: env.BROWSER, playwright: () => import("@cloudflare/playwright") }),
  * });
  * ```
+ *
+ * `playwright` is loaded on the first browser call, which keeps the SDK out of
+ * the Worker's startup graph; a static import of it in the entry would not.
  *
  * That factory call is the hard guarantee, and it is a strictly stronger one
  * than the check below: `allowedHosts` is enforced on every navigation *and*

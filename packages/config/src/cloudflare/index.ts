@@ -15,8 +15,11 @@
  */
 
 export { applyModify } from "../jsonc-edit";
+export { reconcileWranglerBindings } from "./apply-bindings";
 export type { AssertWranglerOptions } from "./assert-wrangler";
 export { assertWranglerSatisfiesSchema } from "./assert-wrangler";
+export type { AssetHeadersOptions, AssetHeadersResult } from "./asset-headers";
+export { writeAssetHeaders } from "./asset-headers";
 export type { BindingManifest, BindingRequirement, ManifestConfigShape } from "./binding-manifest";
 export { BINDING_MANIFEST_VERSION, buildBindingManifest } from "./binding-manifest";
 export type { CloudflareCliConfigFinding } from "./cloudflare-cli-config";
@@ -26,16 +29,24 @@ export { default as GLOBAL_FETCH_STRICTLY_PUBLIC_FLAG } from "./compatibility-fl
 export type { CloudflareCredentialProbe } from "./credentials";
 export { hasCloudflareCredentials } from "./credentials";
 export type { DevConfigKind } from "./dev-config";
-export { describeWithheldWorkersAi, withheldWorkersAi } from "./dev-config";
+export type { WithheldBinding } from "./dev-config";
+export { describeWithheld, withheldBindings } from "./dev-config";
+export type { LocalHyperdrive } from "./local-hyperdrive";
+export { bindingsNeedingDatabase, startLocalHyperdrive } from "./local-hyperdrive";
+export type { Manifest } from "./lunora-manifest";
+export { readManifest, recordManifestKey } from "./lunora-manifest";
+export { HYPERDRIVE_PLACEHOLDER_ID } from "./placeholder-ids";
+export type { AssetHeadersLogger, ProjectAssetHeadersInput, ProjectAssetHeadersOutcome } from "./project-asset-headers";
+export { emitProjectAssetHeaders } from "./project-asset-headers";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
-export { collectExportGaps, reconcileWranglerBindings } from "./reconcile-bindings";
+export { collectExportGaps } from "./reconcile-bindings";
 export type { ReconcileCompatibilityDateResult } from "./reconcile-compatibility-date";
 export { reconcileWranglerCompatibilityDate } from "./reconcile-compatibility-date";
 export type { ReconcileResult as ReconcileCronsResult } from "./reconcile-crons";
 export { describePreservedCrons, reconcileWranglerCrons } from "./reconcile-crons";
 export type { ReconcileProject } from "./reconcile-project";
-export { reconcileBindingsSafely, reconcileWranglerExtras } from "./reconcile-project";
-export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape } from "./remote-bindings";
+export { pendingBindingChanges, reconcileBindingsSafely, reconcileStudioAssets, reconcileWranglerExtras } from "./reconcile-project";
+export type { MaterializeDevOptions, MaterializeDevResult, RemoteBindingPlan, RemoteEnableInputs, RemotePlan, RemoteWranglerShape } from "./remote-bindings";
 export {
     injectRemoteFlags,
     isRemoteEnvEnabled,
@@ -43,9 +54,11 @@ export {
     planRemoteBindings,
     REMOTE_ELIGIBLE_KEYS,
     resolveRemoteEnabled,
+    toRemotePlan,
 } from "./remote-bindings";
 export type { ServiceDevConfigs } from "./service-dev-config";
 export { materializeServiceDevConfigs } from "./service-dev-config";
+export { isOwnedStudioAssets } from "./studio-assets";
 export { default as CLOUDFLARE_TOOLCHAIN_VERSIONS } from "./toolchain-versions";
 export { withTailConsumer } from "./validate-settings";
 export type { WranglerCacheShape } from "./workers-cache";

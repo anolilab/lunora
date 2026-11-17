@@ -63,8 +63,8 @@ describe(syncSuspensionHalts, () => {
         const { database } = await world({ suspendedAt: NOW - 1, suspendedReason: "spend-cap" });
 
         await syncSuspensionHalts(database, NOW);
-        await database.patch((haltOf(database, "acme") as HaltRow)._id, { haltedBy: "usr_1", source: "manual" });
-        await database.patch("org_1", { suspendedAt: null, suspendedReason: null });
+        await database.patch("halts", (haltOf(database, "acme") as HaltRow)._id, { haltedBy: "usr_1", source: "manual" });
+        await database.patch("organizations", "org_1", { suspendedAt: null, suspendedReason: null });
 
         await expect(syncSuspensionHalts(database, NOW + 60_000)).resolves.toStrictEqual({ failed: 0, halted: 0, resumed: 1 });
         expect(haltOf(database, "acme")?.state).toBe("halting");
@@ -75,7 +75,7 @@ describe(syncSuspensionHalts, () => {
         const { database } = await world({ suspendedAt: NOW - 1, suspendedReason: "spend-cap" });
 
         await syncSuspensionHalts(database, NOW);
-        await database.patch("org_1", { haltOnSuspension: false });
+        await database.patch("organizations", "org_1", { haltOnSuspension: false });
         await syncSuspensionHalts(database, NOW + 60_000);
 
         expect(halts(database).map((row) => row.state)).toStrictEqual(["resuming", "resuming"]);
@@ -93,7 +93,7 @@ describe(requestOrganizationHalt, () => {
         expect(result.unsupported).toStrictEqual([{ alias: "edge", reason: expect.stringMatching(/your own server/u) }]);
         expect(halts(database).map((row) => row.source)).toStrictEqual(["manual", "manual"]);
 
-        await database.patch("org_1", { suspendedAt: null, suspendedReason: null });
+        await database.patch("organizations", "org_1", { suspendedAt: null, suspendedReason: null });
         await syncSuspensionHalts(database, NOW + 60_000);
 
         expect(halts(database).map((row) => row.state)).toStrictEqual(["halting", "halting"]);
@@ -166,7 +166,7 @@ describe(runHaltConverges, () => {
 
         await syncSuspensionHalts(database, NOW);
         await runHaltConverges(database, ports(deps));
-        await database.patch("org_1", { suspendedAt: null, suspendedReason: null });
+        await database.patch("organizations", "org_1", { suspendedAt: null, suspendedReason: null });
         await syncSuspensionHalts(database, NOW + 60_000);
         converged.length = 0;
 
@@ -276,8 +276,8 @@ describe(runHaltConverges, () => {
         await expect(runHaltConverges(database, ports(deps))).resolves.toStrictEqual({ deferred: 1, failed: 0, halted: 1, resumed: 0 });
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["shop"]);
 
-        await database.patch("d_acme2", { liveAt: NOW + 1000, status: "live", updatedAt: NOW + 1000 });
-        await database.patch("d_acme", { status: "superseded" });
+        await database.patch("deployments", "d_acme2", { liveAt: NOW + 1000, status: "live", updatedAt: NOW + 1000 });
+        await database.patch("deployments", "d_acme", { status: "superseded" });
         await runHaltConverges(database, ports(deps, NOW + 60_000));
 
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["shop", "acme"]);
@@ -312,12 +312,12 @@ describe(runHaltConverges, () => {
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["acme", "shop"]);
 
         // The old converge lands on top of the stub and goes on to verify: the stub waits while it is in flight…
-        await database.patch("d_late", { status: "verifying", updatedAt: NOW + 10_000, verifyingAt: NOW + 10_000 });
+        await database.patch("deployments", "d_late", { status: "verifying", updatedAt: NOW + 10_000, verifyingAt: NOW + 10_000 });
 
         await expect(runHaltConverges(database, ports(deps, NOW + 15_000))).resolves.toMatchObject({ deferred: 1, halted: 0 });
 
         // …and goes back on once it settled.
-        await database.patch("d_late", { failedAt: NOW + 20_000, status: "failed", updatedAt: NOW + 20_000 });
+        await database.patch("deployments", "d_late", { failedAt: NOW + 20_000, status: "failed", updatedAt: NOW + 20_000 });
         await runHaltConverges(database, ports(deps, NOW + 60_000));
 
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["acme", "shop", "acme"]);
@@ -346,7 +346,7 @@ describe(runHaltConverges, () => {
 
         await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
 
-        await Promise.all(halts(database).map(async (row) => database.patch(row._id, { convergingAt: NOW - 1000 })));
+        await Promise.all(halts(database).map(async (row) => database.patch("halts", row._id, { convergingAt: NOW - 1000 })));
 
         await expect(runHaltConverges(database, ports(deps))).resolves.toMatchObject({ halted: 0 });
         await expect(runHaltConverges(database, ports(deps, NOW - 1000 + HALT_LEASE_MS))).resolves.toMatchObject({ halted: 2 });
@@ -438,7 +438,7 @@ describe(runHaltConverges, () => {
 
         await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
         await runHaltConverges(database, ports(deps));
-        await database.patch("p_acme", { placementRef: "acct_1", target: "cloudflare-workers" });
+        await database.patch("projects", "p_acme", { placementRef: "acct_1", target: "cloudflare-workers" });
         await requestOrganizationResume(database, { actor: "usr_1", now: NOW, organizationId: "org_1" });
         converged.length = 0;
         await runHaltConverges(database, ports(deps, NOW + 60_000));
@@ -451,7 +451,7 @@ describe(runHaltConverges, () => {
         const { converged, database, deps } = await world();
 
         await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
-        await database.patch("d_acme", { status: "destroyed" });
+        await database.patch("deployments", "d_acme", { status: "destroyed" });
         await runHaltConverges(database, ports(deps));
 
         expect(converged.map((spec) => spec.alias)).toStrictEqual(["shop"]);
@@ -487,7 +487,7 @@ describe("review fixes: rows that outlive their project (M2)", () => {
 
         await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
         await runHaltConverges(database, ports(deps));
-        await database.patch("d_acme", { status: "destroyed" });
+        await database.patch("deployments", "d_acme", { status: "destroyed" });
         converged.length = 0;
         await runHaltConverges(database, ports(deps, NOW + 60_000));
 
@@ -550,14 +550,14 @@ describe("review fixes: the lease (L1)", () => {
         const get = database.get.bind(database);
         let done = false;
 
-        database.get = async (id, table) => {
-            const row = (await get(id, table)) as HaltRow | null;
+        database.get = async (table, id) => {
+            const row = (await get(table, id)) as HaltRow | null;
 
             if (!done && table === "halts" && row?.alias === alias) {
                 done = true;
                 await between(row);
 
-                return get(id, table);
+                return get(table, id);
             }
 
             return row;
@@ -569,7 +569,7 @@ describe("review fixes: the lease (L1)", () => {
         const halted: string[] = [];
 
         betweenPlanAndClaim(database, "acme", async (row) => {
-            await database.patch(row._id, { convergingAt: NOW, convergingBy: "another-tick" });
+            await database.patch("halts", row._id, { convergingAt: NOW, convergingBy: "another-tick" });
         });
 
         await runHaltConverges(
@@ -591,7 +591,7 @@ describe("review fixes: the lease (L1)", () => {
         const { database, deps } = await halting();
 
         betweenPlanAndClaim(database, "acme", async (row) => {
-            await database.delete(row._id, "halts");
+            await database.delete("halts", row._id);
         });
 
         await expect(runHaltConverges(database, ports(deps))).resolves.toStrictEqual({ deferred: 0, failed: 0, halted: 1, resumed: 0 });
@@ -626,7 +626,7 @@ describe("review fixes: the lease (L1)", () => {
                 halt: async (row) => {
                     const outcome = await haltAlias(row, deps);
 
-                    await database.patch(row._id, { convergingAt: NOW + HALT_LEASE_MS, convergingBy: "took-over" });
+                    await database.patch("halts", row._id, { convergingAt: NOW + HALT_LEASE_MS, convergingBy: "took-over" });
 
                     return outcome;
                 },
@@ -655,7 +655,7 @@ describe("review fixes: which live release, and support's halts (L3, L4)", () =>
         await requestOrganizationHalt(database, { actor: "support", now: NOW, organizationId: "org_1", reason: "support", source: "support" });
         await requestOrganizationHalt(database, { actor: "usr_1", now: NOW, organizationId: "org_1", reason: "manual", source: "manual" });
         await requestOrganizationResume(database, { actor: "usr_1", now: NOW, organizationId: "org_1", sources: ["manual", "suspension"] });
-        await database.patch("org_1", { suspendedAt: null, suspendedReason: null });
+        await database.patch("organizations", "org_1", { suspendedAt: null, suspendedReason: null });
         await syncSuspensionHalts(database, NOW + 60_000);
 
         expect(halts(database).map((row) => [row.alias, row.source, row.haltedBy, row.state])).toStrictEqual([

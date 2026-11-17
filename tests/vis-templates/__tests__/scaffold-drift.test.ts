@@ -37,9 +37,13 @@ const CANONICAL_DIR = join(TEMPLATES_DIR, CANONICAL_TEMPLATE, "lunora");
  * starter — excluded from the identity invariant. `expo` is a complete auth'd
  * chat app (its own schema + an auth-gated live-query backend, `expo()`/`bearer()`
  * auth), demonstrating the React Native integration — not the generic messages
- * demo the framework templates embed.
+ * demo the framework templates embed. `saas` is the composed SaaS kit: its
+ * `lunora/` is what `lunora registry add saas-ui-react` writes (auth, ratelimit,
+ * payment, presence and the kit's own functions), with a `defineSchema` carrying
+ * the managed `.extend()` blocks those items maintain — there is no messages
+ * demo in it to keep identical.
  */
-const EXEMPT_TEMPLATES = new Set(["expo"]);
+const EXEMPT_TEMPLATES = new Set(["expo", "saas"]);
 
 /** The shared scaffold files are those present in the canonical `standalone/lunora/` directory. */
 const sharedFiles = readdirSync(CANONICAL_DIR).filter((entry) => statSync(join(CANONICAL_DIR, entry)).isFile());

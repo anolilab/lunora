@@ -34,6 +34,8 @@ interface TombstonePort {
      * second row for one key must not appear.
      */
     readonly add: (key: string, erasedAt: Date) => Promise<void>;
+    /** Whether one key is on record. Answers for one subject without listing every tombstone. */
+    readonly has: (key: string) => Promise<boolean>;
     /** Every tombstone key on record. */
     readonly keys: () => Promise<ReadonlySet<string>>;
 }

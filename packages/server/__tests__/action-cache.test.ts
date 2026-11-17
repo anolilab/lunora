@@ -67,7 +67,7 @@ const createMemoryDb = () => {
     };
 
     return {
-        delete: async (id: string) => {
+        delete: async (_table: string, id: string) => {
             rows.delete(id);
         },
         insert: async (table: string, document: Record<string, unknown>) => {
@@ -78,7 +78,7 @@ const createMemoryDb = () => {
 
             return id;
         },
-        patch: async (id: string, patch: Record<string, unknown>) => {
+        patch: async (_table: string, id: string, patch: Record<string, unknown>) => {
             const existing = rows.get(id);
 
             if (existing) {

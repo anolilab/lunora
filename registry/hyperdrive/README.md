@@ -26,8 +26,8 @@ lunora codegen
 
 ## Prerequisites
 
-1. **Create a Hyperdrive database** in the Cloudflare dashboard: **Workers & Pages → Hyperdrive → Create**. Point it at your Postgres or MySQL instance.
-2. The **`HYPERDRIVE` binding** is added to `wrangler.jsonc` by this item, with a placeholder `id`. Replace `<replace-with-hyperdrive-create-id>` with the id the dashboard (or `wrangler hyperdrive create`) hands back — wrangler requires both `binding` and `id` on a hyperdrive entry and refuses to load a config that is missing one, so the placeholder fails the whole Worker's config validation until you fill it in. If you use a different binding name, update both `wrangler.jsonc` and the source file.
+1. **A Postgres or MySQL instance** reachable from Cloudflare. `lunora deploy` creates the Hyperdrive config for it (see below); creating one in the dashboard (**Workers & Pages → Hyperdrive → Create**) is the manual alternative.
+2. The **`HYPERDRIVE` binding** is added to `wrangler.jsonc` by this item, with a placeholder `id` (`<replace-with-hyperdrive-create-id>`). `lunora dev` serves it from an embedded Postgres, and `lunora deploy` creates the config when `LUNORA_HYPERDRIVE_URL` holds your connection string. Or replace the placeholder with the id the dashboard (or `wrangler hyperdrive create`) hands back — wrangler requires both `binding` and `id`.
 
 ## How it works
 
@@ -35,10 +35,13 @@ The source file uses the `fromPostgresJs` adapter (for [`postgres.js`](https://g
 
 ```ts
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
-import postgres from "postgres";
 
 const { connectionString } = createHyperdrive(env.HYPERDRIVE);
-const sql = fromPostgresJs(postgres(connectionString));
+const sql = fromPostgresJs(async () => {
+    const { default: postgres } = await import("postgres");
+
+    return postgres(connectionString, { fetch_types: false, max: 5 });
+});
 const rows = await sql.query("select id, name from users where email = $1", [email]);
 ```
 
@@ -74,7 +77,7 @@ Lunora `action`s are public RPC. A client-callable "look a user up by email" is 
 | `fromNodePg`     | `@lunora/hyperdrive` | `pg`        |
 | `fromMysql2`     | `@lunora/hyperdrive` | `mysql2`    |
 
-All three follow the same pattern: `createHyperdrive(env.MY_BINDING)` returns `{ connectionString }`, pass that to your driver, then wrap with the adapter.
+All three follow the same pattern: `createHyperdrive(env.MY_BINDING)` returns `{ connectionString }`, and the adapter takes a loader that imports your driver and builds it from that string. The loader runs on the first query, which keeps the driver out of the Worker's startup graph.
 
 ## Action-only guardrails
 

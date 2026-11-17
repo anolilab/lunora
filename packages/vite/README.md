@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -80,6 +80,14 @@ lunora({
 });
 ```
 
+`target` must match the target the CLI resolved for the run. `lunora build` and `lunora deploy` set `LUNORA_BUILD_TARGET`, and a plugin whose target differs fails the build rather than emit an artifact for another host. Set the same target in the plugin options and `lunora.config.*`, or leave it unset to use the project's.
+
+The plugin has no lazy-functions option. Set `codegen: { lazyFunctions: true }`
+in `lunora.config.ts` instead: codegen reads it on every run, so the plugin and
+`lunora codegen`/`prepare`/`verify`/`build`/`deploy` all generate the same
+registry. `LUNORA_LAZY_FUNCTIONS=1` or `true` also enables lazy imports for one
+run; `lunora dev --lazy-functions` sets it for its bundler child process.
+
 `lunora()` returns a flat `Plugin[]`; Vite flattens nested plugin arrays, so `plugins: [lunora()]` works without spreading.
 
 ### Error overlay
@@ -127,11 +135,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora vite package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora vite package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/vite?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/vite

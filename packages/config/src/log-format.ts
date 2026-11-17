@@ -16,11 +16,11 @@
  * to pass it through unchanged.
  *
  * The one import is the bundler-inlined, zero-dependency `shared/log-fields.ts`
- * field renderer (shared with the runtime sinks and the Studio panel so the
- * `key=value` rendering isn't hand-mirrored), which keeps this module's
- * dependency-free property intact.
+ * field and logged-Error renderer (shared with the runtime sinks and the Studio
+ * panel so the `key=value` rendering isn't hand-mirrored), which keeps this
+ * module's dependency-free property intact.
  */
-import { formatLogFields } from "../../../shared/log-fields";
+import { formatLoggedErrorFields, readLogFields } from "../../../shared/log-fields";
 
 /** Severity a formatted line should be surfaced at, mapped onto the three logger channels. */
 type LunoraLineLevel = "error" | "info" | "warn";
@@ -202,10 +202,10 @@ const formatLunoraEvent = (line: string): LunoraFormattedLine | undefined => {
 
     if (event.type === "log") {
         const parts = [`${labelFor(functionPath, event)}  ${asString(event.message)}`.trimEnd()];
-        const fields = formatLogFields(event.fields);
+        const fields = readLogFields(event.fields);
 
-        if (fields !== "") {
-            parts.push(fields);
+        if (fields.text !== "") {
+            parts.push(fields.text);
         }
 
         // A short trace-id suffix links the line to its RPC span without the noise
@@ -216,7 +216,11 @@ const formatLunoraEvent = (line: string): LunoraFormattedLine | undefined => {
             parts.push(`trace=${traceId.slice(0, 8)}`);
         }
 
-        return { kind: "log", level: toLineLevel(asString(event.level)), text: parts.join("  ") };
+        // A logged Error shows as `key=Name: message` in the line above; its stack
+        // and cause chain follow on indented lines, one block per error field.
+        const errors = fields.errors.length === 0 ? "" : `\n${formatLoggedErrorFields(fields.errors, "  ")}`;
+
+        return { kind: "log", level: toLineLevel(asString(event.level)), text: parts.join("  ") + errors };
     }
 
     if (event.type === "request") {

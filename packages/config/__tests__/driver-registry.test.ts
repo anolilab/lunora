@@ -43,7 +43,7 @@ describe(planToolchainInvocation, () => {
             id: "fake",
             name: "fake",
             projectConfig: () => {
-                return { configPath: "/p/.fake.json", dropped: ["observability"], write: () => writes.push("/p/.fake.json") };
+                return { configPath: "/p/.fake.json", dropped: ["observability"], vars: {}, write: () => writes.push("/p/.fake.json") };
             },
         };
     };

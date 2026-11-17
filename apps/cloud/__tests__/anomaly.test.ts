@@ -147,9 +147,9 @@ describe(runAnomalySweep, () => {
         expect(insert).toHaveBeenCalledWith("alerts", expect.objectContaining({ organizationId: "org1", ruleId: "rule_usage", target: "usage_anomaly" }));
         expect(insert).toHaveBeenCalledWith("alertRuleState", expect.objectContaining({ firing: true, lastValue: 10, ruleId: "rule_usage" }));
         expect(patch).toHaveBeenCalledWith(
+            "anomalyBaselines",
             "base_req",
             expect.objectContaining({ lastBucketStart: BUCKET_START, lastScore: 10, lastValue: 3000, samples: warm.samples + 1 }),
-            "anomalyBaselines",
         );
     });
 
@@ -272,7 +272,7 @@ describe(runAnomalySweep, () => {
         const result = await runAnomalySweep(database, { now });
 
         expect(result.deliveries).toStrictEqual([]);
-        expect(patch).toHaveBeenCalledWith("base_req", expect.objectContaining({ lastBucketStart: bucket, lastValue: 2000 }), "anomalyBaselines");
+        expect(patch).toHaveBeenCalledWith("anomalyBaselines", "base_req", expect.objectContaining({ lastBucketStart: bucket, lastValue: 2000 }));
     });
 
     it("fires a storage anomaly when a Durable Object runs away on rows without any requests", async () => {
@@ -362,7 +362,7 @@ describe(runAnomalySweep, () => {
         const result = await runAnomalySweep(database, { now: NOW });
 
         expect(result.transitions).toMatchObject([{ action: "clear", ruleId: "rule_err" }]);
-        expect(patch).toHaveBeenCalledWith("state_err", expect.objectContaining({ firing: false }), "alertRuleState");
+        expect(patch).toHaveBeenCalledWith("alertRuleState", "state_err", expect.objectContaining({ firing: false }));
     });
 
     it("measures nothing for orgs without an enabled anomaly rule", async () => {

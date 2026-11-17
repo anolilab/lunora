@@ -6,13 +6,14 @@
  * admin gate, option registry, and request helpers through injected deps, so the
  * module imports no runtime values from `create-worker` (only its types).
  */
-import { decodeWire } from "@lunora/wire";
+import { decodeWire, encodeWire } from "@lunora/wire";
 
 import { EMPTY_ARCHITECTURE } from "../../../shared/architecture-manifest";
 import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalFilterClause, GlobalIntrospector } from "./create-worker";
 import { describeArguments } from "./describe-args";
 import { LunoraError } from "./errors";
 import { assertMethod } from "./method-guard";
+import PROCEDURE_META from "./procedure-meta-key";
 
 const FUNCTIONS_PATH = "/_lunora/admin/functions";
 const CRON_JOBS_PATH = "/_lunora/admin/cron-jobs";
@@ -56,14 +57,17 @@ const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | und
         return undefined;
     }
 
+    // `operator` and `path` are forwarded unvalidated on purpose: the D1 compiler
+    // refuses anything but a plain eq, and dropping them here would turn a `has`
+    // or nested clause into an equality on the parent column.
     const clauses = parsed.flatMap((entry) => {
         if (typeof entry !== "object" || entry === null || typeof (entry as { column?: unknown }).column !== "string") {
             return [];
         }
 
-        const { column, value } = entry as { column: string; value?: unknown };
+        const { column, operator, path, value } = entry as { column: string; operator?: string; path?: string[]; value?: unknown };
 
-        return [{ column, value }];
+        return [{ column, value, ...(operator === undefined ? {} : { operator }), ...(path === undefined ? {} : { path }) }];
     });
 
     return clauses.length === 0 ? undefined : clauses;
@@ -78,7 +82,7 @@ const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | und
 const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
     info: {
         description:
-            'No OpenAPI spec is configured on this worker. Run `lunora codegen`, then wire the generated module to `createWorker`: `import { openApiSpec } from "./lunora/_generated/openapi"`.',
+            'No OpenAPI spec is configured on this worker. Run `lunora codegen`, then hand `createWorker` a loader for the generated module: `openApiSpec: () => import("./lunora/_generated/openapi").then((m) => m.openApiSpec)`. A worker that ships it as a Workers Static Asset reads `/_lunora/studio/openapi.json` through its assets binding; if that file is missing, deploy again with `lunora deploy`.',
         title: "Lunora API",
         version: "0.0.0",
     },
@@ -90,7 +94,7 @@ const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
 const EMPTY_OPENRPC_DOCUMENT = Object.freeze({
     info: {
         description:
-            'No OpenRPC spec is configured on this worker. Run `lunora codegen --api-spec openrpc` (or `both`), then wire the generated module to `createWorker`: `import { openRpcSpec } from "./lunora/_generated/openrpc"`.',
+            'No OpenRPC spec is configured on this worker. Run `lunora codegen --api-spec openrpc` (or `both`), then hand `createWorker` a loader for the generated module: `openRpcSpec: () => import("./lunora/_generated/openrpc").then((m) => m.openRpcSpec)`. A worker that ships it as a Workers Static Asset reads `/_lunora/studio/openrpc.json` through its assets binding; if that file is missing, deploy again with `lunora deploy`.',
         title: "Lunora RPC",
         version: "0.0.0",
     },
@@ -98,17 +102,52 @@ const EMPTY_OPENRPC_DOCUMENT = Object.freeze({
     openrpc: "1.3.2",
 });
 
+/** Admin-only documents: never stored by a browser or a shared cache. */
+const DOCUMENT_RESPONSE: ResponseInit = { headers: { "cache-control": "no-store", "content-type": "application/json" }, status: 200 };
+
+/** Loads one of Studio's generated documents (architecture manifest, OpenAPI or OpenRPC spec) on demand. */
+type DocumentLoader = () => Promise<unknown>;
+
+/**
+ * Memoize a {@link DocumentLoader}: the documents grow with the app (hundreds of KiB in a large one),
+ * so they load on the first request to their route and never on an ordinary request.
+ */
+const memoizeDocument = (load: DocumentLoader | undefined): DocumentLoader => {
+    let loaded: Promise<unknown> | undefined;
+
+    return async () => {
+        // Neither a failed load nor a missing document is kept: an asset read answers `undefined` for a transient
+        // asset-worker error or a read mid-rollout, and caching that would blank the view for the isolate's life.
+        loaded ??= load?.().then(
+            (document) => {
+                if (document === undefined) {
+                    loaded = undefined;
+                }
+
+                return document;
+            },
+            (error: unknown) => {
+                loaded = undefined;
+
+                throw error;
+            },
+        );
+
+        return loaded;
+    };
+};
+
 /** The worker internals the static-introspection routes reach through injection rather than closure. */
 interface IntrospectionAdminRouteDeps {
     /** Admin-token gate (throws 403) — used by the spec routes, which serve a default even when unconfigured. */
     assertAdmin: (request: Request) => void;
     options: {
-        architecture?: unknown;
+        architecture?: DocumentLoader;
         cronJobs?: Record<string, ReadonlyArray<CronJobDispatch>>;
         functions?: FunctionRegistryLike;
         globalIntrospector?: GlobalIntrospector;
-        openApiSpec?: unknown;
-        openRpcSpec?: unknown;
+        openApiSpec?: DocumentLoader;
+        openRpcSpec?: DocumentLoader;
     };
     parsePaging: (request: Request) => { limit?: number; offset?: number };
     queryParameter: (url: URL, name: string) => string | undefined;
@@ -118,6 +157,9 @@ interface IntrospectionAdminRouteDeps {
 /** Build the static-introspection route map (`functions` / `cron-jobs` / `openapi` / `openrpc` / `global/*`). */
 const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Record<string, (request: Request) => Promise<Response> | Response> => {
     const { assertAdmin, options, parsePaging, queryParameter, requireAdminOption } = deps;
+    const loadArchitecture = memoizeDocument(options.architecture);
+    const loadOpenApiSpec = memoizeDocument(options.openApiSpec);
+    const loadOpenRpcSpec = memoizeDocument(options.openRpcSpec);
 
     const handleFunctionsList = (request: Request): Response => {
         assertMethod(request, "GET", "Functions");
@@ -136,7 +178,21 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
                     return [];
                 }
 
-                return [{ args: describeArguments(entry.args), kind: entry.kind, path }];
+                const meta = entry[PROCEDURE_META];
+                let metaField: Pick<FunctionDescriptor, "meta" | "metaUnencodable" | "metaUnloaded"> = {};
+
+                if (meta === "unloaded") {
+                    metaField = { metaUnloaded: true };
+                } else if (meta !== undefined) {
+                    try {
+                        metaField = { meta: encodeWire(meta) };
+                    } catch {
+                        // `.meta()` accepts anything structured-cloneable; the wire codec does not (a RegExp, a cycle). One such function must not fail the whole listing.
+                        metaField = { metaUnencodable: true };
+                    }
+                }
+
+                return [{ args: [...(entry.argumentDescriptors ?? describeArguments(entry.args))], kind: entry.kind, ...metaField, path }];
             })
             .toSorted((a, b) => a.path.localeCompare(b.path));
 
@@ -172,32 +228,32 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
         return Response.json({ jobs }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
-    const handleArchitecture = (request: Request): Response => {
+    const handleArchitecture = async (request: Request): Promise<Response> => {
         assertMethod(request, "GET", "Architecture");
 
         assertAdmin(request);
 
         // Codegen emits the manifest only once the app declares a module; until
         // then answer an empty-but-valid one so the studio shows how to opt in.
-        return Response.json(options.architecture ?? EMPTY_ARCHITECTURE, { headers: { "content-type": "application/json" }, status: 200 });
+        return Response.json((await loadArchitecture()) ?? EMPTY_ARCHITECTURE, DOCUMENT_RESPONSE);
     };
 
-    const handleOpenApi = (request: Request): Response => {
+    const handleOpenApi = async (request: Request): Promise<Response> => {
         assertMethod(request, "GET", "OpenAPI");
 
         assertAdmin(request);
 
         // Serve the injected spec verbatim; with none configured, answer 200 with an
         // empty-but-valid document so the studio renders a clean "not configured" state.
-        return Response.json(options.openApiSpec ?? EMPTY_OPENAPI_DOCUMENT, { headers: { "content-type": "application/json" }, status: 200 });
+        return Response.json((await loadOpenApiSpec()) ?? EMPTY_OPENAPI_DOCUMENT, DOCUMENT_RESPONSE);
     };
 
-    const handleOpenRpc = (request: Request): Response => {
+    const handleOpenRpc = async (request: Request): Promise<Response> => {
         assertMethod(request, "GET", "OpenRPC");
 
         assertAdmin(request);
 
-        return Response.json(options.openRpcSpec ?? EMPTY_OPENRPC_DOCUMENT, { headers: { "content-type": "application/json" }, status: 200 });
+        return Response.json((await loadOpenRpcSpec()) ?? EMPTY_OPENRPC_DOCUMENT, DOCUMENT_RESPONSE);
     };
 
     const handleGlobalTables = async (request: Request): Promise<Response> => {

@@ -278,6 +278,58 @@ describe("idle shard sockets and writes", () => {
         await write;
     });
 
+    it("refuses an online-only write to an idled-out shard whose network is down, and queues nothing", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+
+        const client = new LunoraClient({
+            fetch: makeFetch(false),
+            offlineQueue: { queueBeforeFirstConnect: true },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        visitAndIdleOut(client, "a");
+
+        // The idled-out shard is sent over HTTP first, so the failure is a transport
+        // error: an online-only write reports it as `OFFLINE_NOT_QUEUED`, cause attached.
+        const write = client.mutation(send, { text: "secret" }, { onlineOnly: true, shardKey: "a" }).catch((error: unknown) => error);
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        await expect(write).resolves.toMatchObject({ cause: expect.any(TypeError), code: "OFFLINE_NOT_QUEUED" });
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
+    it("sends an online-only write to an idled-out shard over HTTP while the network is up", async () => {
+        expect.hasAssertions();
+
+        vi.useFakeTimers();
+
+        const fetchMock = makeFetch(true);
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            offlineQueue: { queueBeforeFirstConnect: true },
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        visitAndIdleOut(client, "a");
+
+        const write = client.mutation(send, { text: "hi" }, { onlineOnly: true, shardKey: "a" });
+
+        await vi.advanceTimersByTimeAsync(1000);
+
+        await expect(write).resolves.toBe("ok");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(client.pendingCount()).toBe(0);
+
+        client.close();
+    });
+
     it("opens the shard's socket to flush a write queued for a shard with no socket", async () => {
         expect.hasAssertions();
 

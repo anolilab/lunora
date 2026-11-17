@@ -121,3 +121,4 @@ export type { FunctionDescriptor, FunctionKind, RunStatus } from "./lib/types";
 export type { LunoraClient } from "@lunora/client";
 export type { StorageObject } from "@lunora/client";
 export type { ScheduleRecord } from "@lunora/client";
+export type { LunoraAdminClient } from "@lunora/client/admin";

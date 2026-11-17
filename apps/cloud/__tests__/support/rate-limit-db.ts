@@ -44,17 +44,17 @@ const withRateLimitStore = (database: Record<string, unknown>): Record<string, u
     let sequence = 0;
 
     const originalInsert = database.insert as ((table: string, document: Record<string, unknown>) => Promise<string>) | undefined;
-    const originalPatch = database.patch as ((id: string, patch: Record<string, unknown>) => Promise<void>) | undefined;
-    const originalDelete = database.delete as ((id: string) => Promise<void>) | undefined;
+    const originalPatch = database.patch as ((table: string, id: string, patch: Record<string, unknown>) => Promise<void>) | undefined;
+    const originalDelete = database.delete as ((table: string, id: string) => Promise<void>) | undefined;
 
     return {
         ...database,
 
-        delete: (id: string) => {
+        delete: (table: string, id: string) => {
             const key = keyById.get(id);
 
             if (key === undefined) {
-                return originalDelete?.(id) ?? Promise.resolve();
+                return originalDelete?.(table, id) ?? Promise.resolve();
             }
 
             byKey.delete(key);
@@ -79,11 +79,11 @@ const withRateLimitStore = (database: Record<string, unknown>): Record<string, u
             return Promise.resolve(id);
         },
 
-        patch: (id: string, patch: Record<string, unknown>) => {
+        patch: (table: string, id: string, patch: Record<string, unknown>) => {
             const key = keyById.get(id);
 
             if (key === undefined) {
-                return originalPatch?.(id, patch) ?? Promise.resolve();
+                return originalPatch?.(table, id, patch) ?? Promise.resolve();
             }
 
             const existing = byKey.get(key);

@@ -6,6 +6,7 @@
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 
+import type { DiscoveryCache } from "../discovery-cache";
 import join from "../path";
 import type { SchemaInfo } from "../schema-info";
 import { discoverSchemaInfo } from "../schema-info";
@@ -17,6 +18,7 @@ import {
     MERGED_DURABLE_OBJECT,
     MERGED_ROLE_DURABLE_OBJECTS,
 } from "../worker-entry";
+import { isOwnedStudioAssets } from "./studio-assets";
 import { foldMigrationClasses, objectBindingEntries } from "./validate-bindings";
 import { validateSchedulerOrigin } from "./validate-settings";
 import type { CapabilityMethod, WorkerEntry, WorkerEntryLocation } from "./worker-entry-checks";
@@ -27,6 +29,9 @@ import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 import { validateWranglerConfig } from "./wrangler-validator";
 
 interface WranglerProjectValidationOptions {
+    /** Memoises the schema discovery, shared with binding inference. */
+    cache?: DiscoveryCache;
+
     /**
      * Cloudflare environment to validate against `env.<name>` in
      * wrangler.jsonc. See {@link mergeWranglerEnvironment} for which keys
@@ -66,6 +71,25 @@ const namedImageErrors = (entry: WranglerContainerEntry | null | undefined, conf
 
         return [`containers images["${name}"] dockerfile "${dockerfile}" does not exist (resolved relative to ${wranglerPath}); create the Dockerfile`];
     });
+
+/**
+ * `assets.directory` may legitimately not exist at validation time (before the
+ * client build, or before codegen for the Lunora-owned Studio block), so a
+ * missing one is a warning, never an error.
+ */
+const collectMissingAssetsWarning = (assets: WranglerConfig["assets"], configDirectory: string): string[] => {
+    const directory = assets?.directory;
+
+    if (typeof directory !== "string" || directory.length === 0 || existsSync(directory.startsWith("/") ? directory : join(configDirectory, directory))) {
+        return [];
+    }
+
+    const createdBy = isOwnedStudioAssets(assets)
+        ? "it holds the Studio documents `lunora codegen` writes; run codegen before deploy"
+        : "it is created by the client build; run the build before deploy";
+
+    return [`assets.directory "${directory}" does not exist yet — ${createdBy}`];
+};
 
 /**
  * FS-aware existence check for local-path container images: every `./`, `../`,
@@ -166,8 +190,9 @@ const collectUnchainedCapabilityErrors = (schema: SchemaInfo | undefined, projec
             message: (site) =>
                 `schema declares .global({ backend: "hyperdrive" }) table(s) but nothing chains .hyperdriveGlobal(...) onto defineApp() (composed in: ${site}) — ` +
                 `the shard then has no global writer, so every read or write of those tables throws INTERNAL. ` +
-                `Add \`.hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(fromPostgresJs(postgres(` +
-                `env.HYPERDRIVE.connectionString))) })\` to the chain ` +
+                // eslint-disable-next-line no-secrets/no-secrets -- a code sample in a diagnostic, not a credential
+                `Add \`.hyperdriveGlobal({ engine: "postgres", exec: (env) => buildPgExec(fromPostgresJs(async () => (await import("postgres")).default(` +
+                `env.HYPERDRIVE.connectionString, { fetch_types: false, max: 5 }))) })\` to the chain ` +
                 `(\`buildPgExec\` from \`@lunora/hyperdrive/global\`, \`fromPostgresJs\` from \`@lunora/hyperdrive\`).`,
             method: "hyperdriveGlobal",
         });
@@ -427,7 +452,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
 
     // Surface a parse failure as a warning rather than swallowing it — codegen
     // reports the actionable error elsewhere, but a complete miss is hard to debug.
-    const { error: schemaError, info: schemaInfo } = discoverSchemaInfo(options.projectRoot, schemaDirectory);
+    const { error: schemaError, info: schemaInfo } = discoverSchemaInfo(options.projectRoot, schemaDirectory, options.cache);
     const report = validateWranglerConfig(wrangler, schemaInfo, options.environment);
 
     if (schemaError !== undefined) {
@@ -471,19 +496,7 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // entry (class-A's virtual `main`) says nothing about the vector bindings.
     report.errors.push(...collectUnchainedCapabilityErrors(schemaInfo, options.projectRoot));
 
-    // FS-aware: `assets.directory` is created by the client build, so it may
-    // legitimately not exist at validation time (pre-build). Surface a *warning*
-    // (never an error) so pre-build validation flows aren't broken — mirrors the
-    // container-image existence check above, but downgraded to a warning.
-    const assetsDirectory = resolvedWrangler.assets?.directory;
-
-    if (typeof assetsDirectory === "string" && assetsDirectory.length > 0) {
-        const resolved = assetsDirectory.startsWith("/") ? assetsDirectory : join(configDirectory, assetsDirectory);
-
-        if (!existsSync(resolved)) {
-            report.warnings.push(`assets.directory "${assetsDirectory}" does not exist yet — it is created by the client build; run the build before deploy`);
-        }
-    }
+    report.warnings.push(...collectMissingAssetsWarning(resolvedWrangler.assets, configDirectory));
 
     report.valid = report.errors.length === 0;
 

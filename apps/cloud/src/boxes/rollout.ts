@@ -155,11 +155,11 @@ export const withdrawDesiredRelease =
     async (boxIds: string[]): Promise<void> => {
         for (const boxId of boxIds) {
             // eslint-disable-next-line no-await-in-loop -- re-read per box: a newer rollout may have re-pointed it since
-            const row = (await database.get(boxId, "boxes")) as null | { desiredReleaseId?: null | string };
+            const row = (await database.get("boxes", boxId)) as null | { desiredReleaseId?: null | string };
 
             if (row?.desiredReleaseId === releaseId) {
                 // eslint-disable-next-line no-await-in-loop -- see above
-                await database.patch(boxId, { allowDowngrade: false, desiredReleaseId: null }, "boxes");
+                await database.patch("boxes", boxId, { allowDowngrade: false, desiredReleaseId: null });
             }
         }
     };

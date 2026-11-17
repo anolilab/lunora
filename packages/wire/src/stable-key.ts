@@ -27,7 +27,7 @@
  *
  * Fail-loud contract: a value a stable JSON key can't faithfully encode throws a
  * `TypeError` rather than silently collapsing to a colliding key. `bigint` (which
- * `JSON.stringify` rejects) and non-plain objects (`Date`, `ArrayBuffer`, typed
+ * `JSON.stringify` rejects), functions and symbols (which it maps to `undefined`), and non-plain objects (`Date`, `ArrayBuffer`, typed
  * arrays, `Map`, `Set`, `RegExp`, class instances — all of which have no own
  * enumerable keys and would otherwise encode to `{}`) are refused, so two distinct
  * values can never share one cache key and serve each other's cached data. Keys
@@ -54,6 +54,10 @@
  * depends on an exact encoding (e.g. it must never emit `U+0000` at the start and
  * does not skip `undefined` fields). The two are different contracts.
  */
+
+import { classifyNode } from "../../../shared/classify-node";
+
+const MAX_ARRAY_LENGTH = 2 ** 32 - 1;
 
 /**
  * Whether a string needs JSON escaping — a quote, a backslash, a control
@@ -95,24 +99,8 @@ const numberToken = (value: number): string | undefined => {
 };
 
 /** Encode an object that is not an array: plain objects only, sorted by UTF-16 code unit. */
-const stringifyRecord = (value: object, encode: (item: unknown) => string): string => {
-    // Reject non-plain objects (`Date`, `ArrayBuffer`, typed arrays, `Map`, `Set`,
-    // `RegExp`, class instances). They have no own enumerable string keys, so the
-    // record branch below would encode every one of them to `{}` — a SILENT
-    // cache-key collision where two distinct values share a key and are served
-    // each other's cached data. Fail loud at the call site instead. (Only plain
-    // objects — `Object.prototype` or a null prototype — and arrays are keyable.)
-    const proto = Object.getPrototypeOf(value) as object | null;
-
-    if (proto !== null && proto !== Object.prototype) {
-        const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
-
-        throw new TypeError(
-            `stableStringify: cannot use a ${name} in a stable JSON cache key — only plain objects, arrays, and JSON primitives are supported (wire-typed values key via stableWireKey)`,
-        );
-    }
-
-    const record = value as Record<string, unknown>;
+const stringifyRecord = (value: Record<string, unknown>, encode: (item: unknown) => string): string => {
+    const record = value;
     // No comparator, not `toSorted(compareKeys)`. The default comparator sorts
     // strings by UTF-16 code unit — byte-identical to the `a < b` comparator it
     // replaces (verified by fuzzing both over random key sets), and it is NOT
@@ -146,6 +134,19 @@ const stringifyRecord = (value: object, encode: (item: unknown) => string): stri
     return `${out}}`;
 };
 
+// A Proxy over an array can report any `length`; a real one is always an integer in
+// [0, 2**32-1], so a fractional value is truncated and an unbounded one refused rather than looped on.
+const arrayLength = (value: unknown[]): number => {
+    const { length } = value;
+    const whole = Number.isInteger(length) ? length : Math.trunc(length) || 0;
+
+    if (whole > MAX_ARRAY_LENGTH) {
+        throw new RangeError("stable-key: array length exceeds 2**32 - 1");
+    }
+
+    return whole;
+};
+
 const stableStringify = (value: unknown): string => {
     // Encode `undefined` as `null` (mirrors `JSON.stringify`'s array-element
     // behavior) so an `undefined` value never collapses an array position. This
@@ -160,6 +161,15 @@ const stableStringify = (value: unknown): string => {
     // stable JSON key — pass it as a string, or key on the wire form (`stableWireKey`).
     if (typeof value === "bigint") {
         throw new TypeError("stableStringify: cannot use a bigint in a stable JSON cache key — pass it as a string, or use stableWireKey");
+    }
+
+    // Fail loud on a function or symbol too: `JSON.stringify` returns `undefined` for
+    // both (not a string), so a key built from one would be the text "undefined"
+    // inside an object and collide with every other such value.
+    if (typeof value === "function" || typeof value === "symbol") {
+        throw new TypeError(
+            `stableStringify: cannot use a ${typeof value} in a stable JSON cache key — only plain objects, arrays, and JSON primitives are supported`,
+        );
     }
 
     // Tag non-finite numbers (and `-0`) as distinct, unquoted tokens instead of
@@ -185,16 +195,44 @@ const stableStringify = (value: unknown): string => {
         return JSON.stringify(value);
     }
 
-    if (Array.isArray(value)) {
+    const kind = classifyNode(value);
+
+    if (kind === "array") {
         // Every index is read, holes included (they encode as `null` like `undefined`), and never
         // through the array's own iterator or `map`: a custom `Symbol.iterator` must not change the
-        // key, and `map` would skip holes and make `[, 1]` collide with other shapes.
-        const items = Array.from({ length: value.length }, (_, index) => stableStringify((value as unknown[])[index]));
+        // key, and `map` would skip holes and make `[, 1]` collide with other shapes. A plain loop
+        // avoids the intermediate array that `Array.from` + `join` would allocate.
+        // The length is read once: an indexed getter that appends must not keep the loop running.
+        const length = arrayLength(value as unknown[]);
+        let out = "[";
 
-        return `[${items.join(",")}]`;
+        for (let index = 0; index < length; index += 1) {
+            if (index > 0) {
+                out += ",";
+            }
+
+            out += stableStringify((value as unknown[])[index]);
+        }
+
+        return `${out}]`;
     }
 
-    return stringifyRecord(value, stableStringify);
+    if (kind !== "plain") {
+        // Reject non-plain objects (`Date`, `ArrayBuffer`, typed arrays, `Map`, `Set`, `RegExp`,
+        // class instances, and any Proxy whose one prototype read is not `Object.prototype` or
+        // `null`; a Proxy that reports a plain prototype is keyed through its traps like a plain
+        // object). Most have no own enumerable string keys, so the
+        // record branch would encode every one of them to `{}` — a SILENT cache-key collision
+        // where two distinct values share a key and are served each other's cached data. Fail
+        // loud at the call site instead. (Only plain objects and arrays are keyable.)
+        const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
+
+        throw new TypeError(
+            `stableStringify: cannot use a ${name} in a stable JSON cache key — only plain objects, arrays, and JSON primitives are supported (wire-typed values key via stableWireKey)`,
+        );
+    }
+
+    return stringifyRecord(value as Record<string, unknown>, stableStringify);
 };
 
 export default stableStringify;

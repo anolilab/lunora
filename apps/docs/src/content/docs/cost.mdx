@@ -1,0 +1,72 @@
+---
+title: What Lunora costs to run
+description: What a self-hosted Lunora app costs on Cloudflare, what the free plan covers, and which meters grow with traffic.
+---
+
+Lunora is open source, and you run it on your own Cloudflare account. The
+software costs nothing. What you pay is Cloudflare's usage, and the bill depends
+on the meters your app hits. The figures below are Cloudflare's published
+pricing as of 2026-11-07. Check the [Cloudflare pricing page](https://developers.cloudflare.com/workers/platform/pricing/)
+before you budget, because Cloudflare changes them.
+
+## Idle and small apps: the free plan
+
+On the Workers Free plan, an app that sees little traffic costs nothing. The
+limits that matter for Lunora:
+
+| Resource                                  | Free plan limit             |
+| ----------------------------------------- | --------------------------- |
+| Worker requests                           | 100,000 per day             |
+| Worker CPU time                           | 10 ms per invocation        |
+| Durable Object requests                   | 100,000 per day             |
+| Durable Object duration                   | 13,000 GB-s per day         |
+| Durable Object SQLite rows read / written | 5 million / 100,000 per day |
+| D1 rows read / written                    | 5 million / 100,000 per day |
+| Durable Object SQLite storage             | 1 GB per Object, 5 GB total |
+| D1 storage                                | 5 GB total                  |
+
+Durable Objects on the free plan must use the SQLite storage backend, which
+Lunora uses. Daily limits reset at 00:00 UTC.
+
+## Past the free plan: Workers Paid
+
+Workers Paid starts at **$5 per month** and includes these allowances. Usage
+above them is billed per million.
+
+| Resource                           | Included per month | Overage                  |
+| ---------------------------------- | ------------------ | ------------------------ |
+| Worker requests                    | 10 million         | $0.30 per million        |
+| Worker CPU time                    | 30 million CPU ms  | $0.02 per million CPU ms |
+| Durable Object requests            | 1 million          | $0.15 per million        |
+| Durable Object duration            | 400,000 GB-s       | $12.50 per million GB-s  |
+| Durable Object SQLite rows read    | 25 billion         | $0.001 per million       |
+| Durable Object SQLite rows written | 50 million         | $1.00 per million        |
+| D1 rows read                       | 25 billion         | $0.001 per million       |
+| D1 rows written                    | 50 million         | $1.00 per million        |
+
+Workers duration has no charge.
+
+## Which meters grow with your app
+
+- **Requests.** Mutations, actions, and HTTP calls are Worker requests. A live
+  query stays subscribed over one open WebSocket and updates over it, so an
+  active subscription costs fewer requests than the same reads made as HTTP
+  calls. Check Cloudflare's billing docs for how WebSocket messages are metered.
+- **Durable Object duration.** A shard with no traffic hibernates, and its idle
+  WebSocket subscribers cost storage, not CPU. Subscribed `.global()` shapes are
+  the exception: their shard polls D1 every 2 seconds through an alarm until the
+  last one is unsubscribed. A quiet app that keeps a global shape open accrues
+  duration. See [architecture](/docs/architecture) for how hibernation works.
+- **Rows read and written.** These follow your queries and writes. An unindexed
+  scan reads every row it touches, so [indexes](/docs/concepts/indexes) are also a
+  cost control.
+
+To catch a runaway loop before the invoice does, set usage alerts. See
+[Protect yourself from a runaway bill](/docs/runaway-bill).
+
+## Choosing where the cost lands
+
+A new app runs on one shard. `.shardBy()` splits a table across more Durable
+Objects when one shard becomes the bottleneck, and `.global()` moves a table to
+Cloudflare D1. Each choice changes which meters you pay for, so read
+[sharding](/docs/concepts/sharding) before you add one.

@@ -29,7 +29,7 @@ const initCommand: Command = {
             // For React/Vue/Solid/Svelte SPAs use `--vite <framework>` (overlay);
             // `-t` selects a bespoke template.
             description:
-                "Template: analog | astro | expo | next | nuxt | react-router | rspack-react | solid-v2 | standalone | sveltekit | tanstack-start-react | tanstack-start-react-rspack | tanstack-start-solid | vinext | vinext-pages. Also accepts an overlay framework (react | vue | solid | svelte), same as --vite.",
+                "Template: analog | astro | expo | next | nuxt | rspack-react | saas | solid-v2 | standalone | sveltekit | tanstack-start-react | tanstack-start-react-rspack | tanstack-start-solid | vinext | vinext-pages. Also accepts an overlay framework (react | vue | solid | svelte), same as --vite.",
             name: "template",
             type: String,
         },
@@ -88,6 +88,12 @@ const initCommand: Command = {
             type: String,
         },
         {
+            description:
+                "Choose the auth: lunora (better-auth, users in your D1) | clerk | workos | auth0 (the provider owns the session; the Worker verifies its JWT) | none",
+            name: "auth",
+            type: String,
+        },
+        {
             description: "Walk through every step (prompts + output) without writing files, installing, or running git",
             name: "dry-run",
             type: Boolean,
@@ -100,6 +106,7 @@ export { initCommand };
 export type InitOptions = CreateOptions<{
     add: string | undefined;
     "allow-unsafe-source": boolean | undefined;
+    auth: string | undefined;
     ci: string | undefined;
     "dry-run": boolean | undefined;
     from: string | undefined;

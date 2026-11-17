@@ -38,6 +38,27 @@ interface AccessIdentityLike {
 type AdminTableResolver = (table: string) => ShardingInfo | undefined;
 ```
 
+### `AdminTokenSummary` (interface)
+
+```ts
+interface AdminTokenSummary {
+    createdAt: number;
+    expiresAt?: number;
+    lastUsedAt?: number;
+    name: string;
+    revoked?: boolean;
+    scopes: AdminTokenScope[];
+}
+```
+
+### `AiRunBinding` (interface)
+
+```ts
+interface AiRunBinding {
+    run: (model: string, inputs: Record<string, unknown>, options?: Record<string, unknown>) => Promise<unknown>;
+}
+```
+
 ### `AirbyteMessage` (type)
 
 ```ts
@@ -81,6 +102,14 @@ interface AnalyticsEngineDatasetLike {
 ```ts
 interface AnalyticsEngineSinkOptions extends OnlyErrorsOption {
     dataset: AnalyticsEngineDatasetLike;
+}
+```
+
+### `AssetsFetcherLike` (interface)
+
+```ts
+interface AssetsFetcherLike {
+    fetch: (request: Request) => Promise<Response>;
 }
 ```
 
@@ -135,6 +164,9 @@ interface AuthAdmin {
         password?: string;
         role?: string | string[];
     }) => Promise<AuthUser>;
+    deleteApiKey?: (input: {
+        apiKeyId: string;
+    }) => Promise<void>;
     deleteOrganization?: (input: {
         organizationId: string;
     }) => Promise<void>;
@@ -157,6 +189,9 @@ interface AuthAdmin {
         role?: string;
     }) => Promise<Record<string, unknown>>;
     listAccounts?: (input: {
+        userId: string;
+    }) => Promise<Record<string, unknown>[]>;
+    listApiKeys?: (input: {
         userId: string;
     }) => Promise<Record<string, unknown>[]>;
     listInvitations?: (options: {
@@ -269,6 +304,7 @@ interface AuthAdmin {
 interface AuthCapabilities {
     accounts: boolean;
     admin: boolean;
+    apiKey: boolean;
     inviteOnly: boolean;
     organization: boolean;
     passkey: boolean;
@@ -519,6 +555,17 @@ interface CorsOptions {
 }
 ```
 
+### `CreatedAdminToken` (interface)
+
+```ts
+interface CreatedAdminToken {
+    createdAt: number;
+    expiresAt?: number;
+    name: string;
+    token: string;
+}
+```
+
 ### `CronHandler` (type)
 
 ```ts
@@ -550,6 +597,12 @@ interface CronJobInfo {
 }
 ```
 
+### `CrossOriginOpenerPolicy` (type)
+
+```ts
+type CrossOriginOpenerPolicy = "same-origin" | "same-origin-allow-popups" | "unsafe-none";
+```
+
 ### `CrossShardCounter` (type)
 
 ```ts
@@ -576,9 +629,9 @@ interface CrossShardRelationCapabilities {
 ```ts
 interface CrossShardRelationOptions {
     fetch?: typeof globalThis.fetch;
-    identity?: Record<string, unknown>;
+    identity?: Record<string, unknown> | undefined;
     origin: string;
-    userId?: string;
+    userId?: string | undefined;
 }
 ```
 
@@ -625,9 +678,10 @@ interface DynamicShardRegistry extends ShardRegistry {
 ```ts
 interface DynamicShardRegistryOptions {
     cacheTtlMs?: number;
+    env?: unknown;
     instanceName?: string;
     jurisdiction?: DurableObjectJurisdiction;
-    namespace: ShardNamespaceLike;
+    namespace: ShardNamespaceLike | ShardRegistryRpc;
 }
 ```
 
@@ -804,6 +858,9 @@ type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | 
 interface FunctionDescriptor {
     args: FunctionArgumentDescriptor[];
     kind: "action" | "mutation" | "query";
+    meta?: unknown;
+    metaUnencodable?: true;
+    metaUnloaded?: true;
     path: string;
     visibility?: "internal" | "public";
 }
@@ -814,8 +871,12 @@ interface FunctionDescriptor {
 ```ts
 interface FunctionRegistryEntry {
     args?: unknown;
+    argumentDescriptors?: Readonly<FunctionDescriptor["args"]>;
     expose?: RestExposure;
     kind: "action" | "mutation" | "query" | "stream";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "room" | "socket" | "whisper";
+    readonly [PROCEDURE_META]?: unknown;
+    socketPath?: string;
     visibility?: "internal" | "public";
     x402?: {
         readonly price: number | string;
@@ -844,14 +905,18 @@ type GlobalExportFunction = (request: {
 
 ```ts
 type GlobalImportFunction = (request: {
+    dryRun?: boolean;
+    onConflict?: "replace" | "skip";
     rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         line: number;
+        op?: "delete";
         table: string;
     }>;
     startLine?: number;
 }) => Promise<{
     conflicts: number;
+    deleted?: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -859,6 +924,7 @@ type GlobalImportFunction = (request: {
         table: string;
     }>;
     inserted: Record<string, number>;
+    replaced?: number;
 }>;
 ```
 
@@ -1042,7 +1108,17 @@ interface HttpActionContext {
         }) => Promise<unknown>;
     };
     fetch: typeof globalThis.fetch;
+    fetchShard: (shardKey: string | undefined, path: string, init?: {
+        body?: string;
+        headers?: Record<string, string>;
+        method?: string;
+    }) => Promise<Response>;
     forShard: (shardKey: string) => Pick<HttpActionContext, "runAction" | "runMutation" | "runQuery">;
+    live?: {
+        publish: (topic: LiveTopicRefLike, payload: unknown, options?: {
+            shardKey?: string;
+        }) => Promise<void>;
+    };
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -1101,12 +1177,16 @@ interface ImportFanOutRequest {
     batches: ReadonlyArray<{
         rows: ReadonlyArray<{
             doc: Record<string, unknown>;
+            op?: "delete";
             table: string;
         }>;
         shardKey: string;
         startLine?: number;
     }>;
+    deletes?: boolean;
+    dryRun?: boolean;
     headers?: Record<string, string>;
+    onConflict?: "replace" | "skip";
 }
 ```
 
@@ -1115,6 +1195,7 @@ interface ImportFanOutRequest {
 ```ts
 interface ImportFanOutResult {
     conflicts: number;
+    deleted: number;
     errors: ReadonlyArray<{
         code: string;
         line: number;
@@ -1124,6 +1205,7 @@ interface ImportFanOutResult {
     failed: number;
     inserted: Record<string, number>;
     ok: number;
+    replaced: number;
     shards: ReadonlyArray<ShardImportOutcome>;
 }
 ```
@@ -1300,7 +1382,9 @@ class LunoraError extends LunoraError$1 {
     constructor(message: string, options?: {
         cause?: unknown;
         code?: string;
+        internal?: Record<string, unknown>;
         status?: number;
+        why?: string;
     });
     toResponse(): Response;
 }
@@ -1455,9 +1539,11 @@ interface NotifySubscriptionStoreLike {
 
 ```ts
 interface ObservabilityEvent {
+    attributes?: LogFields;
     durationMs: number;
     error?: {
         code: string;
+        internal?: Record<string, unknown>;
         message: string;
         name?: string;
         stack?: string;
@@ -1806,7 +1892,7 @@ interface ReportedError {
 interface ResolvedSecurity {
     cors: ResolvedCors;
     csrf: ResolvedCsrf;
-    headers: ResolvedHeaders;
+    headers: ResolvedSecurityHeaders;
 }
 ```
 
@@ -1944,7 +2030,9 @@ interface ScheduledControllerLike {
 
 ```ts
 interface SecurityHeadersOptions {
+    crossOriginOpenerPolicy?: CrossOriginOpenerPolicy | false;
     csp?: string | false;
+    frameAncestors?: ReadonlyArray<string>;
     frameOptions?: "DENY" | "SAMEORIGIN" | false;
     hsts?: boolean | {
         includeSubDomains?: boolean;
@@ -1991,6 +2079,7 @@ type ShardCallReturn<F> = F extends ShardFunctionReference<infer _A, infer R> ? 
 
 ```ts
 interface ShardCaller {
+    functionPath?: string;
     identity: ResolvedIdentity | null;
     shardKey: string;
 }
@@ -2077,6 +2166,7 @@ interface ShardImportOutcome {
     };
     result?: {
         conflicts: number;
+        deleted: number;
         errors: ReadonlyArray<{
             code: string;
             line: number;
@@ -2084,6 +2174,7 @@ interface ShardImportOutcome {
             table: string;
         }>;
         inserted: Record<string, number>;
+        replaced: number;
     };
     shardKey: string;
 }
@@ -2167,6 +2258,17 @@ interface ShardRegistry {
 }
 ```
 
+### `ShardRegistryRpc` (interface)
+
+```ts
+interface ShardRegistryRpc {
+    listShardKeys: (table: string) => Promise<string[]>;
+    register: (table: string, shardKey: string) => Promise<void>;
+    snapshot: () => Promise<Record<string, string[]>>;
+    unregister: (table: string, shardKey: string) => Promise<void>;
+}
+```
+
 ### `ShardTrafficEntry` (interface)
 
 ```ts
@@ -2204,6 +2306,33 @@ interface ShardingInfo {
         kind: "global" | "root" | "shardBy";
     };
 }
+```
+
+### `SinkEnricher` (type)
+
+```ts
+type SinkEnricher = (event: SinkEvent, signal: SinkSignalKind) => LogFields | undefined;
+```
+
+### `SinkEvent` (type)
+
+```ts
+type SinkEvent = LogEvent | MetricEvent | ObservabilityEvent | SpanEvent;
+```
+
+### `SinkRouteOptions` (interface)
+
+```ts
+interface SinkRouteOptions {
+    exclude?: string[];
+    include?: string[];
+}
+```
+
+### `SinkSignalKind` (type)
+
+```ts
+type SinkSignalKind = "log" | "metric" | "rpc" | "span";
 ```
 
 ### `SpanEvent` (interface)
@@ -2274,6 +2403,12 @@ interface StorageObject {
 }
 ```
 
+### `StudioDocumentName` (type)
+
+```ts
+type StudioDocumentName = "architecture" | "openapi" | "openrpc";
+```
+
 ### `TraceSamplingConfig` (interface)
 
 ```ts
@@ -2293,6 +2428,7 @@ type TraceTrustSignal = "mtls";
 
 ```ts
 interface TriggerTrace {
+    holdSeconds?: number;
     traceparent: string;
 }
 ```
@@ -2365,10 +2501,15 @@ interface WebhookSinkOptions extends OnlyErrorsOption {
 ```ts
 interface WorkerOptions {
     adminGate?: (request: Request, context?: ExecutionContextLike) => boolean | Promise<boolean>;
+    adminRevocations?: ShardNamespaceLike;
     adminToken?: string;
+    agentWorkflows?: ReadonlyArray<string>;
+    aiChatBinding?: AiRunBinding;
+    aiOptInLevel?: AiOptInLevel;
     allowUnauthenticatedShardAccess?: boolean;
     applyGlobals?: GlobalCdcApplyFunction;
-    architecture?: unknown;
+    applySqlMigrations?: SqlMigrationApplier;
+    architecture?: () => Promise<unknown>;
     authAdmin?: AuthAdmin;
     authAuditReader?: AuthAuditReader;
     authBasePath?: string;
@@ -2396,17 +2537,23 @@ interface WorkerOptions {
     identity?: IdentityContractLike;
     importGlobals?: GlobalImportFunction;
     importGlobalsStaging?: GlobalImportStaging;
+    importGlobalsSupportsDelete?: boolean;
+    importGlobalsSupportsDryRun?: boolean;
+    importGlobalsSupportsReplace?: boolean;
     jurisdiction?: DurableObjectJurisdiction;
     kvIntrospector?: KvIntrospector;
     listSchemaTables?: () => ReadonlyArray<string>;
+    liveStreamRoutes?: ReadonlyArray<string>;
+    liveStreams?: boolean;
     logArchive?: LogArchiveConfig;
     notifySubscriptionStore?: NotifySubscriptionStoreLike;
     observability?: ObservabilitySink;
-    openApiSpec?: unknown;
-    openRpcSpec?: unknown;
+    openApiSpec?: () => Promise<unknown>;
+    openRpcSpec?: () => Promise<unknown>;
     passThroughOnException?: boolean;
     queryCoordinator?: QueryCoordinator;
     queue?: QueueConsumerHandler;
+    queueFetchImpl?: typeof fetch;
     queueHandler?: QueueForwardHandler;
     replicaReads?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
@@ -2420,6 +2567,7 @@ interface WorkerOptions {
     security?: SecurityOptions;
     shardDO: ShardNamespaceLike;
     shardRegion?: (shardKey: string) => RegionHint | undefined;
+    spaAssets?: AssetsFetcherLike;
     storage?: (env: unknown, origin?: string) => unknown;
     storageBuckets?: string[];
     storageDelete?: StorageDeleteFunction;
@@ -2648,6 +2796,18 @@ const emitRpcEvent: (sink: ObservabilitySink | undefined, event: ObservabilityEv
 const enforceOrigin: (request: Request, resolved: ResolvedSecurity) => Response | undefined;
 ```
 
+### `enrichSink` (const)
+
+```ts
+const enrichSink: (sink: ObservabilitySink, enrich: SinkEnricher) => ObservabilitySink;
+```
+
+### `filterSink` (const)
+
+```ts
+const filterSink: (sink: ObservabilitySink, options: SinkRouteOptions) => ObservabilitySink;
+```
+
 ### `handleCorsPreflight` (const)
 
 ```ts
@@ -2664,6 +2824,12 @@ const isBackupManifestEntry: (value: unknown) => value is BackupManifestEntry;
 
 ```ts
 const isBackupManifestKey: (key: string) => boolean;
+```
+
+### `loadStudioDocument` (const)
+
+```ts
+const loadStudioDocument: (binding: unknown, name: StudioDocumentName) => Promise<unknown>;
 ```
 
 ### `memoizeIdentity` (const)
@@ -2831,6 +2997,26 @@ Not exported, and reachable only through a signature above. Their members
 are part of that signature's meaning, so a change here is a change to the
 public API and is gated as one. Listed once per package, sorted by name.
 
+### `ADMIN_TOKEN_SCOPES` (const)
+
+```ts
+const ADMIN_TOKEN_SCOPES: readonly [
+    "migrations"
+];
+```
+
+### `AdminTokenScope` (type)
+
+```ts
+type AdminTokenScope = (typeof ADMIN_TOKEN_SCOPES)[number];
+```
+
+### `AiOptInLevel` (type)
+
+```ts
+type AiOptInLevel = "disabled" | "schema" | "schema_and_log" | "schema_and_log_and_data";
+```
+
 ### `AppJurisdiction` (type)
 
 ```ts
@@ -2982,6 +3168,7 @@ type DefaultShardKey = string | null;
 ```ts
 interface ErrorDetail {
     code?: string;
+    internal?: Record<string, unknown>;
     message: string;
     name: string;
     stack?: string;
@@ -3019,6 +3206,7 @@ interface FunctionArgumentDescriptor {
     kind: string;
     name: string;
     optional: boolean;
+    sensitive?: true;
     table?: string;
 }
 ```
@@ -3060,6 +3248,8 @@ interface GlobalFacetResult {
 ```ts
 interface GlobalFilterClause {
     column: string;
+    operator?: string;
+    path?: string[];
     value: unknown;
 }
 ```
@@ -3083,6 +3273,15 @@ interface HealthOptions {
 interface KvLike {
     get: (key: string, type: "json") => Promise<unknown>;
     put: (key: string, value: string) => Promise<unknown>;
+}
+```
+
+### `LiveTopicRefLike` (interface)
+
+```ts
+interface LiveTopicRefLike {
+    readonly __lunoraLive: string;
+    readonly topic: string;
 }
 ```
 
@@ -3148,7 +3347,17 @@ type OtlpSpanKind = "client" | "consumer" | "internal" | "producer" | "server";
 ### `QueueConsumerHandler` (type)
 
 ```ts
-type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace) => Promise<void>;
+type QueueConsumerHandler = (batch: unknown, env: unknown, context: ExecutionContextLike, trigger: TriggerTrace, live: QueueLivePublisherLike, fetchImpl: typeof fetch | undefined) => Promise<void>;
+```
+
+### `QueueLivePublisherLike` (interface)
+
+```ts
+interface QueueLivePublisherLike {
+    publish: (topic: LiveTopicRefLike, payload: unknown, options?: {
+        shardKey?: string;
+    }) => Promise<void>;
+}
 ```
 
 ### `R2PutLike` (interface)
@@ -3222,23 +3431,6 @@ interface ResolvedCsrf {
 }
 ```
 
-### `ResolvedHeaders` (interface)
-
-```ts
-interface ResolvedHeaders {
-    coop: string | undefined;
-    csp: {
-        htmlValue: string | undefined;
-        value: string;
-    } | undefined;
-    enabled: boolean;
-    frameOptions: string | undefined;
-    hsts: string | undefined;
-    permissionsPolicy: string | undefined;
-    referrerPolicy: string | undefined;
-}
-```
-
 ### `ResolvedIdentity` (interface)
 
 ```ts
@@ -3247,6 +3439,23 @@ interface ResolvedIdentity {
     exp?: number;
     expiresAtMs?: number;
     userId: string;
+}
+```
+
+### `ResolvedSecurityHeaders` (interface)
+
+```ts
+interface ResolvedSecurityHeaders {
+    coop: string | undefined;
+    csp: {
+        htmlValue: string;
+        value: string;
+    } | undefined;
+    enabled: boolean;
+    frameOptions: string | undefined;
+    hsts: string | undefined;
+    permissionsPolicy: string | undefined;
+    referrerPolicy: string | undefined;
 }
 ```
 
@@ -3300,8 +3509,23 @@ interface SchedulerContext {
     }>;
     get: (id: string) => Promise<Record<string, unknown> | null>;
     list: () => Promise<Record<string, unknown>[]>;
-    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
-    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>) => Promise<string>;
+    runAfter: (delayMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+    runAt: (timestampMs: number, target: unknown, args?: Record<string, unknown>, options?: SchedulerRunOptions) => Promise<string>;
+}
+```
+
+### `SchedulerRunOptions` (interface)
+
+```ts
+interface SchedulerRunOptions {
+    retry?: {
+        backoff?: "exponential" | "linear";
+        baseMs?: number;
+        forever?: boolean;
+        maxAttempts?: number;
+        maxMs?: number;
+    };
+    shardKey?: string;
 }
 ```
 
@@ -3346,6 +3570,50 @@ interface SpanLink {
     attributes?: LogFields;
     spanId: string;
     traceId: string;
+}
+```
+
+### `SqlMigrationApplier` (type)
+
+```ts
+type SqlMigrationApplier = (request: SqlMigrationApplyRequest) => Promise<SqlMigrationApplyResult>;
+```
+
+### `SqlMigrationApplyRequest` (interface)
+
+```ts
+interface SqlMigrationApplyRequest {
+    additiveOnly: boolean;
+    baseline: boolean;
+    baselineThrough?: string;
+    confirmDestructive: boolean;
+    dryRun: boolean;
+    files: ReadonlyArray<SqlMigrationFileRequest>;
+}
+```
+
+### `SqlMigrationApplyResult` (interface)
+
+```ts
+interface SqlMigrationApplyResult {
+    files: ReadonlyArray<{
+        destructive: ReadonlyArray<string>;
+        name: string;
+        rootOnly: ReadonlyArray<string>;
+        skipped: ReadonlyArray<string>;
+        state: "applied" | "baselined" | "changed" | "pending" | "ran";
+        statements: ReadonlyArray<string>;
+    }>;
+    refused?: ReadonlyArray<string>;
+}
+```
+
+### `SqlMigrationFileRequest` (interface)
+
+```ts
+interface SqlMigrationFileRequest {
+    name: string;
+    sql: string;
 }
 ```
 

@@ -1,0 +1,211 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { Project } from "ts-morph";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import discoverFunctions from "../../src/discover/functions";
+import { emitFunctions } from "../../src/emit";
+
+/**
+ * Discovery of `defineWebSocket`.
+ *
+ * A route the discoverer does not recognise still registers as *something* — it
+ * just never lands in `LUNORA_SOCKETS`, so the worker never recognises its path
+ * as an upgrade route and the shard has no registration to dispatch. Nothing
+ * throws and the symptom is a socket that connects into the app router and
+ * silently never opens. So the case asserts the discovered tag AND that the
+ * registration reaches the emitted `LUNORA_SOCKETS` map, since that map is what
+ * the runtime actually reads.
+ */
+let workdir: string;
+
+describe("discoverFunctions — defineWebSocket", () => {
+    beforeEach(() => {
+        workdir = mkdtempSync(join(tmpdir(), "lunora-socket-"));
+    });
+
+    afterEach(() => {
+        rmSync(workdir, { force: true, recursive: true });
+    });
+
+    const writeFunction = (relative: string, source: string): void => {
+        const full = join(workdir, relative);
+
+        mkdirSync(full.slice(0, Math.max(0, full.lastIndexOf("/"))), { recursive: true });
+        writeFileSync(full, source);
+    };
+
+    const discover = (lazyFunctions = false): ReturnType<typeof discoverFunctions> =>
+        discoverFunctions(new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false }), workdir, { lazyFunctions });
+
+    it("tags a defineWebSocket export as an internal `socket` mutation", () => {
+        expect.assertions(4);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            export const chat = defineWebSocket({ message: v.object({ text: v.string() }), onMessage: () => undefined, path: "/chat" });
+        `,
+        );
+
+        const [chat] = discover();
+
+        expect(chat?.lifecycle).toBe("socket");
+        // A client must never be able to invoke a route's handler by path.
+        expect(chat?.visibility).toBe("internal");
+        expect(chat?.kind).toBe("mutation");
+        // The registration reaches the emitted registry the runtime reads.
+        expect(emitFunctions({ functions: discover() })).toContain("export const LUNORA_SOCKETS");
+    });
+
+    it("discovers a route declared through a namespace import", () => {
+        expect.assertions(2);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import * as lunora from "@lunora/server";
+            export const chat = lunora.defineWebSocket({ message: lunora.v.object({ text: lunora.v.string() }), onMessage: () => undefined, path: "/chat" });
+        `,
+        );
+
+        const [chat] = discover();
+
+        expect(chat?.lifecycle).toBe("socket");
+        expect(emitFunctions({ functions: discover() })).toContain("export const LUNORA_SOCKETS");
+    });
+
+    it("records a route's literal path and auth, so lazy mode can emit its registry without the module", () => {
+        expect.assertions(3);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            export const chat = defineWebSocket({ auth: true, message: v.object({}), onMessage: () => undefined, path: "/chat" });
+            export const lobby = defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/lobby" });
+        `,
+        );
+
+        const [chat, lobby] = discover(true);
+
+        expect(chat?.socket).toMatchObject({ auth: true, path: "/chat" });
+        // `auth` is optional and defaults to an anonymous route.
+        expect(lobby?.socket).toMatchObject({ auth: false, path: "/lobby" });
+        expect(emitFunctions({ functions: discover(true), lazyFunctions: true })).toContain('"/chat": { auth: true, functionPath: "sockets:chat" }');
+    });
+
+    it("refuses a route path the worker could never match, as defineWebSocket does at load", () => {
+        expect.assertions(2);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            export const chat = defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/chat?room=1" });
+        `,
+        );
+
+        expect(() => discover(true)).toThrow(/plain URL path/u);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            export const chat = defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/_lunora/chat" });
+        `,
+        );
+
+        expect(() => discover(true)).toThrow(/plain URL path/u);
+    });
+
+    it("reads one defineWebSocket exported under two names as one route with one origin", () => {
+        expect.assertions(2);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            const chat = defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/chat" });
+            export { chat, chat as lobby };
+        `,
+        );
+
+        const [first, second] = discover(true);
+
+        expect(first?.socket?.origin).toBeDefined();
+        expect(second?.socket?.origin).toBe(first?.socket?.origin);
+    });
+
+    it("refuses a route whose path is not a string literal", () => {
+        expect.assertions(1);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            const PATH = "/chat";
+            export const chat = defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: PATH });
+        `,
+        );
+
+        expect(() => discover(true)).toThrow(/string-literal `path`/u);
+    });
+
+    it("refuses an auth value that is not a literal boolean rather than defaulting it open", () => {
+        expect.assertions(1);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            const REQUIRE_AUTH = true;
+            export const chat = defineWebSocket({ auth: REQUIRE_AUTH, message: v.object({}), onMessage: () => undefined, path: "/chat" });
+        `,
+        );
+
+        expect(() => discover(true)).toThrow(/literal `auth: true` or `auth: false`/u);
+    });
+
+    it.each([
+        [
+            "a shorthand `auth`",
+            'const auth = true;\n            export const chat = defineWebSocket({ auth, message: v.object({}), onMessage: () => undefined, path: "/chat" });',
+        ],
+        [
+            "a spread that could carry `auth`",
+            'const opts = { auth: true };\n            export const chat = defineWebSocket({ ...opts, message: v.object({}), onMessage: () => undefined, path: "/chat" });',
+        ],
+        ["a computed `auth` key", 'export const chat = defineWebSocket({ ["auth"]: true, message: v.object({}), onMessage: () => undefined, path: "/chat" });'],
+    ])("refuses %s rather than defaulting the route open", (_label, declaration) => {
+        expect.assertions(1);
+
+        writeFunction("sockets.ts", `\n            import { defineWebSocket, v } from "@lunora/server";\n            ${declaration}\n        `);
+
+        expect(() => discover(true)).toThrow(/literal `auth: true` or `auth: false`|cannot spread/u);
+    });
+
+    it("keeps a socket route out of the socket-lifecycle manifest", () => {
+        expect.assertions(1);
+
+        writeFunction(
+            "sockets.ts",
+            `
+            import { defineWebSocket, v } from "@lunora/server";
+            export const chat = defineWebSocket({ message: v.object({}), onMessage: () => undefined, path: "/chat" });
+        `,
+        );
+
+        const emitted = emitFunctions({ functions: discover() });
+        const start = emitted.indexOf("export const LUNORA_LIFECYCLE_HOOKS");
+        const manifest = emitted.slice(start, emitted.indexOf("};", start));
+
+        // A route is dispatched through `LUNORA_SOCKETS`, never the socket
+        // lifecycle manifest — a route path there would be dispatched by the
+        // wrong mechanism at the wrong time.
+        expect(manifest).not.toContain("sockets:chat");
+    });
+});

@@ -135,6 +135,9 @@ describe("createPollingFallback", () => {
 interface MockSocket {
     close: () => void;
     open: () => void;
+    receive: (frame: unknown) => void;
+    refuse: (code: number) => void;
+    sent: string[];
     triggerClose: () => void;
 }
 
@@ -173,6 +176,17 @@ const createMockWebSocket = (): typeof WebSocket => {
         public triggerClose(): void {
             this.readyState = 3;
             this.dispatch("close");
+        }
+
+        /** The server closes the socket with a code, as a refused connect frame does. */
+        public refuse(code: number): void {
+            this.readyState = 3;
+            this.dispatch("close", { code, reason: "" });
+        }
+
+        /** A server frame, as the shard sends it. */
+        public receive(frame: unknown): void {
+            this.dispatch("message", { data: JSON.stringify(frame) });
         }
 
         private dispatch(type: string, event?: unknown): void {
@@ -291,11 +305,73 @@ describe("lunoraClient polling fallback", () => {
         expect(polledWhileDown).toBeGreaterThan(0);
 
         sockets.at(-1)?.open();
+        // Polling stops once the server admits the socket, not when the upgrade opens.
+        sockets.at(-1)?.receive({ subject: null, type: "identity" });
         await vi.advanceTimersByTimeAsync(5000);
 
         expect(client.connectionStatus()).toBe("connected");
         // Not one more poll after the live channel came back.
         expect(fetchMock).toHaveBeenCalledTimes(polledWhileDown);
+
+        client.close();
+    });
+
+    it("sends connect first when a socket opens out of polling and a connected listener sends at once", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ results: [{ body: { result: 1 }, id: 0, status: 200 }] }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("messages:list"), {}, () => {});
+        // A listener that answers `connected` with a frame of its own, as an app's subscribe would.
+        client.onConnectionStatus((status) => {
+            if (status === "connected") {
+                client.subscribe(fnRef("messages:mine"), {}, () => {});
+            }
+        });
+
+        await failOpens(2);
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(JSON.parse(sockets.at(-1)?.sent[0] ?? "null")).toMatchObject({ type: "connect" });
+
+        client.close();
+    });
+
+    it("engages polling when a gated shard refuses every connect frame, after the upgrade opens", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ results: [{ body: { result: 1 }, id: 0, status: 200 }] }));
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("messages:list"), {}, () => {});
+
+        // Each upgrade opens, then the shard refuses its connect frame with 4003 and never sends identity.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+            sockets.at(-1)?.open();
+            sockets.at(-1)?.refuse(4003);
+            // eslint-disable-next-line no-await-in-loop -- each refused attempt must settle before the next reconnect is armed
+            await vi.advanceTimersByTimeAsync(STEP_MS);
+        }
+
+        expect(fetchMock.mock.calls.length).toBeGreaterThan(0);
 
         client.close();
     });
@@ -468,6 +544,187 @@ describe("lunoraClient polling fallback", () => {
 
         await expect(Promise.all([queued, live])).resolves.toStrictEqual(["QUEUED", "LIVE"]);
         expect(writes).toStrictEqual(["QUEUED", "LIVE"]);
+
+        client.close();
+    });
+
+    it("keeps a write queued past the ambiguous-send cap when its HTTP send never reached the origin", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers();
+        vi.stubGlobal("navigator", { onLine: false });
+
+        let originReachable = false;
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            if ((input as string).includes("rpc-batch")) {
+                return jsonResponse({ results: [{ body: { result: [] }, id: 0, status: 200 }] });
+            }
+
+            if (!originReachable) {
+                throw new TypeError("Failed to fetch");
+            }
+
+            return jsonResponse({ result: "done" });
+        });
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("todos:list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(10);
+        sockets.at(-1)?.triggerClose();
+        await vi.advanceTimersByTimeAsync(STEP_MS);
+        await failOpens(2);
+
+        expect(client.connectionStatus()).toBe("polling");
+
+        let outcome = "pending";
+
+        const written = client.mutation(fnRef("todos:add"), { text: "x" }).then(
+            (value) => {
+                outcome = String(value);
+
+                return undefined;
+            },
+            () => {
+                outcome = "rejected";
+            },
+        );
+
+        // Far past the replay backoff schedule that exhausts the ambiguous-send cap.
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        expect(outcome).toBe("pending");
+
+        originReachable = true;
+        await vi.advanceTimersByTimeAsync(120_000);
+        await written;
+
+        expect(outcome).toBe("done");
+
+        client.close();
+        vi.unstubAllGlobals();
+    });
+
+    it("settles the caller at the ambiguous-send cap when the device is online and the send keeps failing", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+        vi.stubGlobal("navigator", { onLine: true });
+
+        const originReachable = false;
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            if ((input as string).includes("rpc-batch")) {
+                return jsonResponse({ results: [{ body: { result: [] }, id: 0, status: 200 }] });
+            }
+
+            if (!originReachable) {
+                throw new TypeError("Failed to fetch");
+            }
+
+            return jsonResponse({ result: "done" });
+        });
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("todos:list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(10);
+        sockets.at(-1)?.triggerClose();
+        await vi.advanceTimersByTimeAsync(STEP_MS);
+        await failOpens(2);
+
+        expect(client.connectionStatus()).toBe("polling");
+
+        let outcome = "pending";
+
+        const written = client.mutation(fnRef("todos:add"), { text: "x" }).then(
+            (value) => {
+                outcome = String(value);
+
+                return undefined;
+            },
+            () => {
+                outcome = "rejected";
+            },
+        );
+
+        await vi.advanceTimersByTimeAsync(600_000);
+        await written;
+
+        expect(outcome).toBe("rejected");
+
+        client.close();
+        vi.unstubAllGlobals();
+    });
+
+    it("replays a write whose response was lost after it committed, without its precondition", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers();
+
+        // The origin commits the first send, then the response is lost on the way back.
+        let committed = false;
+        let firstWriteSent = false;
+        const fetchMock = vi.fn<typeof fetch>(async (input) => {
+            if ((input as string).includes("rpc-batch")) {
+                return jsonResponse({ results: [{ body: { result: [] }, id: 0, status: 200 }] });
+            }
+
+            if (!firstWriteSent) {
+                firstWriteSent = true;
+                committed = true;
+
+                throw new TypeError("Failed to fetch");
+            }
+
+            return jsonResponse({ result: "done" });
+        });
+        const client = new LunoraClient({
+            fetch: fetchMock,
+            pollingFallback: { afterFailedAttempts: 2, intervalMs: 1000 },
+            reconnect: FAST_RECONNECT,
+            url: "https://app.example",
+            WebSocket: createMockWebSocket(),
+        });
+
+        client.subscribe(fnRef("todos:list"), {}, () => {});
+        sockets.at(-1)?.open();
+        await vi.advanceTimersByTimeAsync(10);
+        sockets.at(-1)?.triggerClose();
+        await vi.advanceTimersByTimeAsync(STEP_MS);
+        await failOpens(2);
+
+        let outcome = "pending";
+
+        const written = client.mutation(fnRef("todos:add"), { text: "x" }, { precondition: () => !committed }).then(
+            (value) => {
+                outcome = String(value);
+
+                return undefined;
+            },
+            (error: unknown) => {
+                outcome = `rejected: ${String(error)}`;
+            },
+        );
+
+        await vi.advanceTimersByTimeAsync(120_000);
+        await written;
+
+        // The commit is what the precondition now sees, so a precondition re-check would reject the write
+        // before its replay can deduplicate under the same mutation id.
+        expect(committed).toBe(true);
+        expect(outcome).toBe("done");
 
         client.close();
     });

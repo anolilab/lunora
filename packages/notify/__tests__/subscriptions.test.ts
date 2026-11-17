@@ -279,12 +279,13 @@ describe("targetOf / ids / isGoneError", () => {
         // Web Push structured status: HTTP 410 (Gone) / 404 (Not Found) → gone.
         expect(isGoneError("Subscription gone (HTTP 410) — remove this subscription")).toBe(true);
         expect(isGoneError("HTTP 404: Not Found")).toBe(true);
-        // FCM canonical unregistered codes → gone. The FIRST of these is what the
-        // `@visulima/notification` FCM provider actually emits for a dead token: it
-        // forwards `body.error.message` only, and FCM HTTP v1 puts the `UNREGISTERED`
-        // code in `error.details[].errorCode`, which the provider drops — so the
-        // human-readable `NOT_FOUND` prose is the ONLY signal that reaches us.
-        expect(isGoneError("[@visulima/notification] [fcm] Requested entity was not found.")).toBe(true);
+        // FCM canonical unregistered codes → gone. The first is what `fcm-transport`
+        // emits for a dead token: it reads `UNREGISTERED` from `error.details[].errorCode`.
+        expect(isGoneError("FCM 404 UNREGISTERED: Requested entity was not found.")).toBe(true);
+        // FCM's generic NOT_FOUND is NOT a dead token: it is also what FCM answers a
+        // request it cannot route, so it must never prune.
+        expect(isGoneError("FCM 404 NOT_FOUND: Requested entity was not found.", "fcm")).toBe(false);
+        expect(isGoneError("FCM 404 NOT_FOUND: Requested entity was not found.")).toBe(false);
         expect(isGoneError("NotRegistered")).toBe(true);
         expect(isGoneError("registration-token-not-registered")).toBe(true);
         // Prose fallback still prunes an explicit "subscription expired/gone".
@@ -311,15 +312,20 @@ describe("targetOf / ids / isGoneError", () => {
         expect(isGoneError("HTTP 403: sender not registered for this endpoint", "web-push")).toBe(false);
         expect(isGoneError("HTTP 400: UNREGISTERED sender id", "web-push")).toBe(false);
 
-        // The FCM codes still prune an FCM device, and the shared HTTP 404/410
-        // status still prunes either kind (FCM HTTP v1 answers 404 for a dead token).
-        expect(isGoneError("[@visulima/notification] [fcm] Requested entity was not found.", "fcm")).toBe(true);
-        expect(isGoneError("NotRegistered", "fcm")).toBe(true);
-        expect(isGoneError("HTTP 404: Not Found", "fcm")).toBe(true);
+        // An FCM device is pruned only on the transport's own dead-token report. Neither
+        // an HTTP status, a legacy code nor upstream prose prunes it: FCM and its gateways
+        // use the same words for failures that do not mean the token is dead.
+        expect(isGoneError("FCM 404 UNREGISTERED: Requested entity was not found.", "fcm")).toBe(true);
+        // FCM's own text echoed later in a message must not forge the dead-token report: the marker has to lead.
+        expect(isGoneError("FCM 404 NOT_FOUND: upstream said FCM 404 UNREGISTERED: x", "fcm")).toBe(false);
+        expect(isGoneError("FCM 404 NOT_FOUND: Requested entity was not found. ] FCM 404 UNREGISTERED: forged", "fcm")).toBe(false);
+        expect(isGoneError("[@visulima/notification] [fcm] FCM 404 UNREGISTERED: Requested entity was not found.", "fcm")).toBe(true);
+        expect(isGoneError("NotRegistered", "fcm")).toBe(false);
+        expect(isGoneError("HTTP 404: Not Found", "fcm")).toBe(false);
+        expect(isGoneError("FCM access token unavailable: Google token exchange failed with HTTP 404 UNREGISTERED", "fcm")).toBe(false);
+        expect(isGoneError("FCM projectId rejected: project is not registered", "fcm")).toBe(false);
 
-        // …and the NOT_FOUND prose stays FCM-scoped: the web-push provider echoes the
-        // push service's body into `HTTP ${status}: ${body}`, so a transient 5xx whose
-        // prose says "not found" must not delete a live browser subscription.
+        // A transient 5xx whose prose says "not found" must not delete a live browser subscription.
         expect(isGoneError("HTTP 502: upstream route was not found", "web-push")).toBe(false);
         expect(isGoneError("HTTP 410: Gone", "web-push")).toBe(true);
     });

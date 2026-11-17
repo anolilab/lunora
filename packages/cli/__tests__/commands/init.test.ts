@@ -68,7 +68,7 @@ describe("lunora init", () => {
         it("passes a bespoke template id straight through", () => {
             expect.assertions(2);
 
-            expect(resolveTemplateFlag("react-router")).toStrictEqual({ templateType: "react-router" });
+            expect(resolveTemplateFlag("vinext")).toStrictEqual({ templateType: "vinext" });
             expect(resolveTemplateFlag(undefined)).toStrictEqual({});
         });
     });

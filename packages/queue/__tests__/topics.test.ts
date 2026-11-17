@@ -105,7 +105,7 @@ describe("createTopicContext", () => {
         const welcome = fakeBinding();
         const topics = createTopicContext({ QUEUE_WELCOME: welcome }, signupsSpec("welcome"));
 
-        await expect(topics.signups!.publish({}, { delaySeconds: 43_201 })).rejects.toThrow(/publish delaySeconds is 43201.*ceiling/u);
+        await expect(topics.signups!.publish({}, { delaySeconds: 86_401 })).rejects.toThrow(/publish delaySeconds is 86401.*ceiling/u);
         await expect(topics.signups!.publish({ [REQUEUED_KEY]: 1 })).rejects.toThrow(/reserved key/u);
         await expect(
             topics.signups!.publishBatch(

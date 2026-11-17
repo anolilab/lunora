@@ -34,7 +34,7 @@ const auditBatch = action.input({ count: v.number() }).action(async ({ args, ctx
 });
 
 const publishTooLate = mutation.input({}).mutation(async ({ ctx }) => {
-    await (ctx as unknown as WithTopics).topics.signups.publish({}, { delaySeconds: 50_000 });
+    await (ctx as unknown as WithTopics).topics.signups.publish({}, { delaySeconds: 90_000 });
 });
 
 const publishToUndeclared = mutation.input({}).mutation(async ({ ctx }) => {
@@ -87,7 +87,7 @@ describe("recording ctx.topics", () => {
 
         const t = start({ topics: ["audit", "signups"] });
 
-        await expect(t.mutation(publishTooLate, {})).rejects.toThrow(/ceiling of 43200/u);
+        await expect(t.mutation(publishTooLate, {})).rejects.toThrow(/ceiling of 86400/u);
         await expect(t.mutation(publishToUndeclared, {})).rejects.toThrow(/no topic named "typo" \(known topics: audit, signups\)/u);
         await expect(t.action(auditBatch, { count: 101 })).rejects.toThrow(/exceeds 100 \(got 101\)/u);
         expect(t.topics.published()).toStrictEqual([]);

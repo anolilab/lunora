@@ -17,7 +17,7 @@ import { defineNotify, webPushFromEnv, fcmFromEnv, d1SubscriptionStore } from "@
 
 export default defineNotify({
     webPush: (env) => webPushFromEnv(env), // reads VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY / VAPID_SUBJECT
-    fcm: (env) => fcmFromEnv(env), // reads FCM_PROJECT_ID / FCM_ACCESS_TOKEN (prefer a getAccessToken in prod)
+    fcm: (env) => fcmFromEnv(env), // reads FCM_SERVICE_ACCOUNT (+ optional FCM_PROJECT_ID)
     store: (env) => d1SubscriptionStore(env.DB),
 });
 ```
@@ -28,9 +28,22 @@ export default defineNotify({
 VAPID_PUBLIC_KEY=<your-vapid-public-key>
 VAPID_PRIVATE_KEY=<your-vapid-private-key>
 VAPID_SUBJECT=mailto:you@example.com
-FCM_PROJECT_ID=<your-firebase-project-id>
-FCM_ACCESS_TOKEN=<your-fcm-access-token>
+FCM_SERVICE_ACCOUNT=<base64-of-your-service-account-key-json>
 ```
+
+`.dev.vars` cannot hold the JSON's quotes, so store the key file base64-encoded:
+`lunora env set FCM_SERVICE_ACCOUNT "$(base64 < key.json | tr -d '\n')"`. In production
+the raw JSON works too: `wrangler secret put FCM_SERVICE_ACCOUNT < key.json`.
+`FCM_PROJECT_ID` is optional and overrides the key file's `project_id`.
+
+To mint tokens yourself, for example with `google-auth-library`, pass your own
+`getAccessToken`: `fcm: (env) => ({ ...fcmFromEnv(env), getAccessToken })` or
+`fcm: (env) => fcmFromEnv(env, { getAccessToken })`. Lunora reads that from
+the `fcm` entry of an inline `defineNotify({...})` in `lunora/notify.ts`, so `lunora dev`
+and `lunora deploy` then ask for `FCM_PROJECT_ID` instead of `FCM_SERVICE_ACCOUNT`. Set
+it even if the key file is still in env: the preflight does not take the project id from
+the key file. If the same object also sets `projectId` to a string, no FCM key is asked
+for at all. A config the build cannot read keeps asking for `FCM_SERVICE_ACCOUNT`.
 
 Generate a VAPID keypair once: `npx web-push generate-vapid-keys`.
 
@@ -126,7 +139,7 @@ export const announce = action.input({ title: v.string(), body: v.string() }).ac
 });
 ```
 
-`broadcast` reuses the engine's retry + circuit-breaker middleware and prunes subscriptions the push service reports as gone (Web Push HTTP 404/410; FCM's `NOT_FOUND` answer for a dead token, plus the `UNREGISTERED`/`NotRegistered` codes a legacy transport sends). A single targeted send:
+`broadcast` reuses the engine's retry + circuit-breaker middleware and prunes subscriptions the push service reports as gone (Web Push HTTP 404/410; for an FCM device, only FCM's `UNREGISTERED` code, so a bare `NOT_FOUND` or a message that merely says "not registered" never prunes). A single targeted send:
 
 ```ts
 await ctx.push.send(subscriptionId, { title: "Hi", body: "…" });
@@ -136,6 +149,33 @@ await ctx.push.send(subscriptionId, { title: "Hi", body: "…" });
 
 ```ts
 await ctx.push.broadcast({ title: "Approval needed", body: "…", urgency: "high", ttl: 3600 }, { userId });
+```
+
+FCM-specific fields go in `fcmOverrides`, which is forwarded to the message as sent, per platform. It is merged over what the common fields produce, so it wins on a clash. Web Push ignores it:
+
+```ts
+await ctx.push.broadcast(
+    {
+        title: "Kickoff",
+        body: "Match starts now",
+        clickAction: "OPEN_MATCH", // android.notification.click_action
+        sound: "goal.caf", // android and apns sound
+        badge: 3, // apns badge
+        fcmOverrides: {
+            android: { notification: { channel_id: "live-scores" } },
+            apns: { payload: { aps: { category: "MATCH" } } },
+            webpush: { fcm_options: { link: "https://example.com/m/42" } },
+        },
+    },
+    { userId },
+);
+```
+
+Topics and conditions send one FCM message to every device subscribed to a topic, or matching a condition expression. Lunora does not add or remove devices from topics: subscribe them with the Firebase client SDK or the Admin API. These sends have no subscription rows, so there is no per-device receipt and nothing to prune. They resolve to a success receipt whose `messageId` is the FCM message name, and a failure throws. They need the `fcm` channel:
+
+```ts
+await ctx.push.sendToTopic("news", { title: "Breaking", body: "…" });
+await ctx.push.sendToCondition("'sports' in topics && 'news' in topics", { body: "…" });
 ```
 
 Multi-channel through `ctx.notify.send`:
@@ -226,7 +266,7 @@ client-supplied data, so the facade enforces two boundaries:
 
 Every send is counted onto `ctx.metrics` and failures onto `ctx.log` for you — codegen threads the request's logger/metrics into `ctx.notify` (`createNotify(notifyConfig, env, { log, metrics })`), so there is nothing to wire. Two low-cardinality metric series feed the durable metric history + trend charts:
 
-- **`notify.send`** `{ channel, provider, status }` — attempted sends. `status` is `accepted` (the provider took it), `failed`, or `gone` (endpoint unregistered — Web Push 404/410, or FCM's `NOT_FOUND` for a dead token — and pruned). A single send counts 1; a **broadcast aggregates** into one count per `(provider, status)` bucket (value = the bucket's count), not one per recipient — each `ctx.metrics.count` is a durable write.
+- **`notify.send`** `{ channel, provider, status }` — attempted sends. `status` is `accepted` (the provider took it), `failed`, or `gone` (endpoint unregistered — Web Push 404/410, or FCM's `UNREGISTERED` for a dead token — and pruned). A single send counts 1; a **broadcast aggregates** into one count per `(provider, status)` bucket (value = the bucket's count), not one per recipient — each `ctx.metrics.count` is a durable write.
 - **`notify.skipped`** `{ channel, reason }` — a send that reached nobody: `no-subscriptions-matched` (empty broadcast) or `channel-not-configured`.
 
 A **failed** send also emits one `ctx.log.warn` line carrying the error and, for push, the subscription/user ids — trace-correlated to the enclosing action and durably archived. Successes and prunes stay off the log; failure logs stay per-recipient even in a broadcast (they have no durable write).

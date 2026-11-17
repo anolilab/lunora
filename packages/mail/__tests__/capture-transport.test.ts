@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MailboxSink } from "../src/capture-transport";
 import { createCaptureTransport } from "../src/capture-transport";
 import createMailer from "../src/create-mailer";
+import { isOutcomeUnknownMailError } from "../src/send-error";
 import type { SendPayload } from "../src/types";
 
 const fakeSink = (id = "captured-1"): { recorded: SendPayload[]; sink: MailboxSink } => {
@@ -51,5 +52,26 @@ describe("createCaptureTransport", () => {
         const mailer = createMailer({ from: "noreply@x.test", transport: createCaptureTransport(sink) });
 
         await expect(mailer.send({ subject: "bad\r\nBcc: evil@x.test", to: "user@x.test" })).rejects.toThrow(/CR or LF/);
+    });
+
+    it("bounds a capture-mode queue() by the send deadline, as a real send is", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers();
+
+        const sink: MailboxSink = {
+            record: async () =>
+                new Promise<{ id: string }>(() => {
+                    // A root-shard inbox that never answers.
+                }),
+        };
+        const mailer = createMailer({ from: "noreply@x.test", sendTimeoutMs: 1000, transport: createCaptureTransport(sink) });
+        const settled = mailer.queue({ subject: "Hi", text: "x", to: "user@x.test" }).catch((error: unknown) => error);
+
+        await vi.advanceTimersByTimeAsync(1000);
+
+        vi.useRealTimers();
+
+        expect(isOutcomeUnknownMailError(await Promise.race([settled, Promise.resolve("still pending")]))).toBe(true);
     });
 });

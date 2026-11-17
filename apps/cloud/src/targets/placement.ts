@@ -91,11 +91,11 @@ export const rowReaderOf =
     async (table, id) =>
         tables[table].get(id);
 
-/** A {@link RowReader} over the control-plane store (`ControlPlaneStore.get(id, table)`). */
+/** A {@link RowReader} over the control-plane store (`ControlPlaneStore.get(table, id)`). */
 export const storeRowReader =
-    (database: { get: (id: string, table?: string) => Promise<unknown> }): RowReader =>
+    (database: { get: (table: string, id: string) => Promise<unknown> }): RowReader =>
     async (table, id) =>
-        database.get(id, table);
+        database.get(table, id);
 
 /** A host row as a placement reads it. */
 export interface HostRow<H> {

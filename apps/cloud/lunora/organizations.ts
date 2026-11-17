@@ -42,7 +42,7 @@ export const list = query.query(async ({ ctx: context }): Promise<OrganizationRo
     // platform would silently drop any org past the first thousand from its member's
     // switcher, with nothing to say the list was truncated. The read scales with the
     // caller's memberships, which is what the answer depends on.
-    const organizations = await Promise.all(orgIds.map(async (id) => await context.db.get(id)));
+    const organizations = await Promise.all(orgIds.map(async (id) => await context.db.get("organizations", id)));
     const present = organizations.filter((organization): organization is OrganizationRow => organization !== null);
 
     // The plan shown is the one billing applies, read from the subscriptions; the stored column is only the creation default.
@@ -116,7 +116,7 @@ export const create = mutation
 
         // An explicit cell must take new organizations, as an auto-candidate one must.
         if (cellId) {
-            const cell = await context.db.get(cellId);
+            const cell = await context.db.get("cells", cellId);
 
             if (cell?.status !== "active") {
                 throw new LunoraError("UNPROCESSABLE", "that cell is not accepting new organizations");
@@ -177,7 +177,7 @@ export const rename = mutation
         const member = await assertMember(context, organizationId, ["owner"]);
         const { now } = context;
 
-        await context.db.patch(organizationId, { name });
+        await context.db.patch("organizations", organizationId, { name });
         await context.db.insert("auditLog", {
             action: "organization.rename",
             actorUserId: member.userId,
@@ -199,7 +199,7 @@ export const requestDeletion = mutation
         const member = await assertMember(context, organizationId, ["owner"]);
         const { now } = context;
 
-        await context.db.patch(organizationId, { deletionRequestedAt: now });
+        await context.db.patch("organizations", organizationId, { deletionRequestedAt: now });
         await context.db.insert("auditLog", {
             action: "organization.deletion.request",
             actorUserId: member.userId,
@@ -216,7 +216,7 @@ export const cancelDeletion = mutation
         const member = await assertMember(context, organizationId, ["owner"]);
         const { now } = context;
 
-        await context.db.patch(organizationId, { deletionRequestedAt: null });
+        await context.db.patch("organizations", organizationId, { deletionRequestedAt: null });
         await context.db.insert("auditLog", {
             action: "organization.deletion.cancel",
             actorUserId: member.userId,
@@ -336,11 +336,11 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
 
         for (const deployment of toDestroy) {
             // eslint-disable-next-line no-await-in-loop -- sequential patches; volumes are small
-            await context.db.patch(deployment._id, { destroyedAt: context.now, status: "destroyed", updatedAt: context.now });
+            await context.db.patch("deployments", deployment._id, { destroyedAt: context.now, status: "destroyed", updatedAt: context.now });
         }
 
         // eslint-disable-next-line no-await-in-loop -- one delete per org
-        await context.db.delete(organizationId);
+        await context.db.delete("organizations", organizationId);
     }
 
     return { purged: due.length };
@@ -355,11 +355,11 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
 export const linkCreditsAccount = internalMutation
     .input({ creditsAccountId: v.string(), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { creditsAccountId, organizationId } }): Promise<void> => {
-        const organization = (await context.db.get(organizationId)) as null | (OrganizationRow & { creditsAccountId?: string });
+        const organization = (await context.db.get("organizations", organizationId)) as null | (OrganizationRow & { creditsAccountId?: string });
 
         if (!organization || organization.creditsAccountId != null) {
             return;
         }
 
-        await context.db.patch(organizationId, { creditsAccountId });
+        await context.db.patch("organizations", organizationId, { creditsAccountId });
     });

@@ -1,6 +1,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import { stableWireKey } from "@lunora/wire";
 import type { MaybeRefOrGetter, Ref } from "vue";
-import { onScopeDispose, ref, toValue, watch } from "vue";
+import { onScopeDispose, ref, shallowRef, toValue, watch } from "vue";
 
 import { isBrowser } from "../../../shared/is-browser";
 import { useLunora } from "./lunora-provider";
@@ -47,7 +48,9 @@ const useStream = <F extends FunctionReference<"stream">>(
     options: UseStreamOptions = {},
 ): UseStreamResult<ReturnOf<F>> => {
     const client = useLunora();
-    const chunks = ref<ReadonlyArray<ReturnOf<F>>>([]) as Ref<ReadonlyArray<ReturnOf<F>>>;
+    // `shallowRef`: chunks are appended by replacing the array, and a deep `ref`
+    // would proxy every chunk so each nested read in a render pays a proxy trap.
+    const chunks = shallowRef<ReadonlyArray<ReturnOf<F>>>([]) as Ref<ReadonlyArray<ReturnOf<F>>>;
     const error = ref<Error | undefined>(undefined);
     const status = ref<UseStreamStatus>("idle");
 
@@ -59,9 +62,22 @@ const useStream = <F extends FunctionReference<"stream">>(
         cancelCurrent?.();
     };
 
+    // Keyed on the args' CONTENT (`stableWireKey`), not object identity: a getter
+    // that re-runs and produces equal args must not cancel the live stream,
+    // drop its chunks and restart the generation server-side. See `use-query`.
+    // The args are resolved once, in the source, and the stream opens with that
+    // same value: a getter read twice could return something the key does not describe.
+    let resolvedArgs: "skip" | ArgsOf<F> = "skip";
+
     watch(
-        () => toValue(args),
-        (currentArgs, _previous, onCleanup) => {
+        () => {
+            resolvedArgs = toValue(args);
+
+            return stableWireKey(resolvedArgs);
+        },
+        (_key, _previousKey, onCleanup) => {
+            const currentArgs = resolvedArgs;
+
             // Reset for the new (or torn-down) stream.
             chunks.value = [];
             error.value = undefined;

@@ -122,7 +122,7 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
         expect.assertions(2);
 
         const found = discover(
-            `export const rename = mutation(async ({ ctx, args }) => { await ctx.db.patch(args.id, { ownerId: args.ownerId }); });`,
+            `export const rename = mutation(async ({ ctx, args }) => { await ctx.db.patch("posts", args.id, { ownerId: args.ownerId }); });`,
             "rename.ts",
         );
 
@@ -176,6 +176,41 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
         expect.assertions(1);
 
         expect(discover(`export const create = mutation(async ({ ctx, args }) => { await ctx.db.insert("posts", ${document}); });`, "safe.ts")).toHaveLength(0);
+    });
+
+    // The `ctx.db.<table>.<method>` facade writes the same row as the by-name form, so an identity column set through
+    // it is the same act-as-any-user write.
+    it.each([
+        ["an insert", `await ctx.db.posts.insert({ userId: args.userId });`, "userId"],
+        ["a patch", `await ctx.db.posts.patch(args.id, { ownerId: args.ownerId });`, "ownerId"],
+        ["an upsert create", `await ctx.db.posts.upsert({ target: "slug", create: { userId: args.userId, slug: args.slug }, update: {} });`, "userId"],
+        ["an upsert update", `await ctx.db.posts.upsert({ target: "slug", create: {}, update: { userId: args.userId } });`, "userId"],
+        ["an insert through a const alias", `const posts = ctx.db.posts; await posts.insert({ userId: args.userId });`, "userId"],
+        [
+            "an upsert with the column in both create and update",
+            `await ctx.db.posts.upsert({ target: "slug", create: { userId: args.userId }, update: { userId: args.userId } });`,
+            "userId",
+        ],
+        ["an upsertMany row", `await ctx.db.posts.upsertMany({ target: "slug", rows: [{ create: { ownerId: args.ownerId } }] });`, "ownerId"],
+        ["a patchMany by id", `await ctx.db.posts.patchMany([{ id: args.id, values: { ownerId: args.ownerId } }]);`, "ownerId"],
+        ["a patchMany by where", `await ctx.db.posts.patchMany({ where: { slug: args.slug }, values: { ownerId: args.ownerId } });`, "ownerId"],
+        ["a by-name insertMany", `await ctx.db.insertMany("posts", [{ ownerId: args.ownerId }]);`, "ownerId"],
+    ])("flags an identity column written through the facade: %s", (_label, body, field) => {
+        expect.assertions(2);
+
+        const found = discover(`export const create = mutation(async ({ ctx, args }) => { ${body} });`, "facade.ts");
+
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ field });
+    });
+
+    it.each([
+        ["an identity column stamped from ctx through the facade", `await ctx.db.posts.insert({ userId: ctx.auth.userId, title: args.title });`],
+        ["a facade on a receiver that is not the database", `await somethingElse.posts.insert({ userId: args.userId });`],
+    ])("ignores %s", (_label, body) => {
+        expect.assertions(1);
+
+        expect(discover(`export const create = mutation(async ({ ctx, args }) => { ${body} });`, "safe.ts")).toHaveLength(0);
     });
 
     // #957: the owner-scope check compared the TEXT `args`, so a closure inside
@@ -313,7 +348,7 @@ export const createPost = defineMutator({ owner: "userId", server: async (ctx, a
 
         // Rows read through `ctx.db` are server-scoped, even when the query filters on args.
         it.each([
-            ["a `then` on a ctx.db read", `ctx.db.get(args.id).then((row) => ${insert("row.userId")}); // @write`],
+            ["a `then` on a ctx.db read", `ctx.db.get("posts", args.id).then((row) => ${insert("row.userId")}); // @write`],
             [
                 "a `for…of` over ctx.db rows",
                 `const rows = await ctx.db.query("posts").collect();\n        for (const row of rows) {\n            await ${insert("row.userId")}; // @write\n        }`,

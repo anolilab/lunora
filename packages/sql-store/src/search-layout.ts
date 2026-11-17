@@ -354,7 +354,7 @@ const invertedLayout: SearchLayout = {
         await ensureInvertedUniqueKey(exec, dialect, companion);
     },
     indexDocument: async (exec, dialect, companion, document, index, readAs) => {
-        const counts = [...countSearchTokens(analyzedSearchText(document, index), createSearchAnalyzer(index.language))];
+        const counts = [...countSearchTokens(document, index)];
 
         await runInOrder(exec, dialect, invertedWriteStatements(dialect, companion, String(readAs.row["id"]), counts, readAs));
     },
@@ -466,7 +466,7 @@ const companionProfile = (index: SearchIndexDefinitionLike, dialect: SqlDialect)
  *
  * Deliberately looser than `runSqlGlobalTableMigrations`, which provisions only
  * `kind === "global"`: a schema that declares no `shardMode` at all is admitted
- * here, mirroring the "probe every table" tolerance the read path keeps for
+ * here, mirroring the tolerance the writer keeps (`holdsGlobalRows`) for
  * schemas that predate the flag. The cost is a companion created in the
  * `.global()` database for a table whose rows may live in the Durable Objects —
  * its source-table probe finds nothing, the backfill records itself complete,

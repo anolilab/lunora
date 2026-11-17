@@ -12,6 +12,13 @@ export interface SubscriptionQuery {
     functionPath?: string;
 
     /**
+     * Fingerprint of the claims the client's cached value was read under, as the shard announced it on the
+     * socket's `identity` frame. The server resumes from `sinceSeq` only when it equals the fingerprint of the
+     * socket's current claims; absent or different, it takes a full snapshot and honours no cursor.
+     */
+    sinceClaims?: string;
+
+    /**
      * Resume epoch: the `epoch` token the client persisted alongside
      * `sinceSeq` from an earlier frame. The server resumes only when this
      * matches the shard's current epoch — a mismatch means the changelog
@@ -73,8 +80,8 @@ export interface ShapeSubscriptionQuery {
 export interface SubscriptionEnvelope {
     /**
      * Optional capability tokens carried by the `connect` envelope, naming wire
-     * behaviours this client can handle that older ones cannot (currently only
-     * `"pageDelta"` — see `shared/page-result.ts`). Resolved to the decisions
+     * behaviours this client can handle that older ones cannot (`"pageDelta"`,
+     * see `shared/page-result.ts`, and `"refreshBatch"`, see `shared/refresh-batch.ts`). Resolved to the decisions
      * they gate and recorded on the attachment; an unrecognised token is simply
      * never matched, so a newer client talking to an older server degrades
      * silently. Strictly opt-in: absent means the server keeps to the wire
@@ -137,8 +144,18 @@ export interface SubscriptionEnvelope {
      */
     sinceChunk?: number;
 
+    /** Claims fingerprint the {@link SubscriptionEnvelope.sinceCheckpoint} was read under (see {@link SubscriptionQuery.sinceClaims}). */
+    sinceClaims?: string;
+
     /** CDC epoch the {@link SubscriptionEnvelope.sinceCheckpoint} belongs to. */
     sinceEpoch?: string;
+
+    /**
+     * Session credential carried by the `connect` envelope, checked against
+     * `LUNORA_WS_BEARER` when the socket upgraded without one (protocol §6).
+     * Never sent in the URL.
+     */
+    token?: string;
 
     /**
      * Topic of a `whisper`/`whisper_subscribe`/`whisper_unsubscribe` envelope —
@@ -225,6 +242,22 @@ export interface SocketAttachment {
     adminBinding?: string;
 
     /**
+     * `false` on a socket that upgraded without proving the session credential
+     * while `LUNORA_WS_BEARER` is set. Such a socket may send only `connect`,
+     * which must carry the matching `token`. Absent on every other socket, so the
+     * flag costs attachment bytes only when it matters.
+     */
+    authenticated?: boolean;
+
+    /**
+     * Subscriptions that receive `broadcastDelta` frames on a shard that overrides
+     * `executeSubscription`, keyed by subscription id to the function path whose
+     * seed resolved to `null`. Written only by the shard, never from a client
+     * envelope; persisted so the choice survives hibernation.
+     */
+    broadcastSubs?: Record<string, string>;
+
+    /**
      * Stable per-client id from the `connect` envelope (the same id the client
      * stamps on its custom-mutator pushes). Lets a shape poke echo this client's
      * `__client_watermark` as the poke's `lastMutationId`, so a `@lunora/db`
@@ -256,6 +289,9 @@ export interface SocketAttachment {
      * be replayed to the `onDisconnect` hooks at close time.
      */
     context?: Record<string, unknown>;
+
+    /** Server-stamped authority markers for invalidating subscriptions after hibernation; never access policy. */
+    deliveryPermits?: Record<string, { epoch: number; scope: string }>;
 
     /**
      * Token-expiry (epoch ms) of the credential resolved at upgrade, when the
@@ -292,6 +328,15 @@ export interface SocketAttachment {
     ip?: string;
 
     /**
+     * Live-stream grants held by this WebSocket: subscription id to the
+     * `liveSubscriptionKey(stream, topic)` the worker's `onSubscribe` admitted.
+     * A live publish reaches the socket only when it is also a whisper member of
+     * the topic and holds the grant for the publishing stream. Persisted so the
+     * grant survives hibernation; absent until a live subscribe is granted.
+     */
+    liveGrants?: Record<string, string>;
+
+    /**
      * `true` when the socket's `connect` envelope announced the `pageDelta`
      * capability — i.e. this client can merge a row delta into the `page` of a
      * paginated result, so the server may diff one instead of re-sending it.
@@ -305,6 +350,26 @@ export interface SocketAttachment {
     pageDeltas?: boolean;
 
     /**
+     * Epoch ms the `authenticated: false` upgrade was accepted. The shard closes a
+     * pending socket that is still unauthenticated past its connect deadline; the
+     * field is dropped with the flag once `connect` proves the credential.
+     */
+    pendingSince?: number;
+
+    /** `true` when `connect` announced `refreshBatch` (`shared/refresh-batch.ts`); persisted for the same reason as `pageDeltas`. */
+    refreshBatch?: boolean;
+
+    /**
+     * Epoch ms by which an authenticated subscription socket must have its
+     * identity re-resolved through the worker's re-auth route. The shard cannot
+     * run `resolveIdentity`, so without this deadline a socket kept the identity
+     * of its upgrade for life: a revoked session or a removed organization member
+     * kept receiving. Past it the socket is closed with code `4005`, which every
+     * client treats as an ordinary reconnect. Absent on anonymous and route sockets.
+     */
+    revalidateAt?: number;
+
+    /**
      * Live shape subscriptions registered on this socket, keyed by the
      * client-supplied subscription id. The partial-replication parallel to
      * {@link SocketAttachment.subs}: the poke protocol fans membership diffs to
@@ -312,6 +377,23 @@ export interface SocketAttachment {
      * Absent until the socket sends its first `shape_subscribe`.
      */
     shapes?: Record<string, ShapeSubscriptionQuery>;
+
+    /**
+     * Set with {@link SocketAttachment.socketPath}: the registered function path of the route that accepted the
+     * socket. A route is bound to this function rather than to its path, so a deployment that reassigns the path
+     * does not hand an open socket to a different handler. Absent on a route socket that predates it, which fails closed.
+     */
+    socketFunction?: string;
+
+    /**
+     * Set on a socket accepted for a `defineWebSocket` route: the URL path the
+     * route serves (e.g. `/chat`). Its presence marks a socket whose inbound
+     * frames are typed messages for that route rather than subscription
+     * envelopes, and it lets a hibernated socket that wakes on a frame resolve
+     * its handler + broadcast channel again without a per-connection registry.
+     * Absent on every ordinary subscription socket.
+     */
+    socketPath?: string;
     subs: Record<string, SubscriptionQuery>;
 
     /**

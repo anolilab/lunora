@@ -6,8 +6,15 @@ const SESSION_TOKEN_COOKIE = /(?:^|;)[^;=]*session_token=([^;]+)/;
 
 /**
  * Read the current better-auth session token from an Expo auth client, for use
- * as a **bearer** credential on the Lunora client — `client.setAuthToken(token)`
- * for HTTP RPC and `client.setWsToken(token ?? undefined)` for the live socket.
+ * as a **bearer** credential on the Lunora client: `client.setAuthToken(token)`.
+ * That one call covers both transports — HTTP RPC sends it as `Authorization`,
+ * and on native `createLunoraClient` sends it as the WebSocket upgrade's
+ * `Authorization` header (a sign-in reconnects the socket to present it).
+ *
+ * Do NOT pass it to `client.setWsToken`: that value is sent in the `connect`
+ * frame and checked against the shared `LUNORA_WS_BEARER` gate. Under
+ * `react-native-web` the browser socket cannot carry a header; the cookie
+ * session authenticates it there.
  *
  * The Expo plugin persists the session as a cookie in `SecureStore`;
  * `getCookie()` exposes it, and this pulls the `session_token` value out.
@@ -16,7 +23,7 @@ const SESSION_TOKEN_COOKIE = /(?:^|;)[^;=]*session_token=([^;]+)/;
  * `Cookie`, which the runtime's CSRF guard rejects on an `Origin`-less native
  * request (React Native sends no `Origin`). Resolves `null` when signed out.
  *
- * **Async since better-auth 1.7.1**, which changed `@better-auth/expo`'s
+ * **Async since better-auth 1.7** (1.7.0-rc.4), which changed `@better-auth/expo`'s
  * `getCookie` from `() => string` to `() => Promise<string>` (it reads
  * `SecureStore` asynchronously now). The awaited value is what gets matched:
  * regexing the Promise itself would test `"[object Promise]"`, find no
@@ -30,7 +37,6 @@ const SESSION_TOKEN_COOKIE = /(?:^|;)[^;=]*session_token=([^;]+)/;
  * ```ts
  * const token = await expoBearerToken(authClient);
  * client.setAuthToken(token);
- * client.setWsToken(token ?? undefined);
  * ```
  * @experimental
  */

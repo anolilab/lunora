@@ -64,7 +64,7 @@ const environmentLabel = (env: string | undefined): string => (env === undefined
  * - a link recording something else → WARN and keep the existing value.
  *
  * Best-effort — never throws (a convenience must not affect the deploy's exit
- * code) and never called for a dry run, a preview, or a `--temporary` deploy,
+ * code) and never called for a dry run or a `--temporary` deploy,
  * none of which have a durable URL worth recording.
  */
 const autoLinkFromDeployOutput = ({ cwd, env, logger, now, url }: AutoLinkInputs): void => {

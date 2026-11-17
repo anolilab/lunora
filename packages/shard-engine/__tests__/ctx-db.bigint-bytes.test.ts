@@ -129,7 +129,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             await writer.insert("paymentSessions", { _id: "a1", amountMinor: 10n, currency: "usd" }, { allowExplicitId: true });
 
-            const row = await writer.get("a1");
+            const row = await writer.get("paymentSessions", "a1");
 
             expect(row?.["amountMinor"]).toBe(10n);
         });
@@ -144,7 +144,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd", externalId: huge }, { allowExplicitId: true });
 
-            const row = await writer.get("a1");
+            const row = await writer.get("paymentSessions", "a1");
 
             expect(row?.["externalId"]).toBe(huge);
         });
@@ -167,9 +167,9 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("paymentSessions", { _id: "a1", amountMinor: 10n, currency: "usd" }, { allowExplicitId: true });
-            await writer.patch("a1", { currency: "eur" });
+            await writer.patch("paymentSessions", "a1", { currency: "eur" });
 
-            const row = await writer.get("a1");
+            const row = await writer.get("paymentSessions", "a1");
 
             expect(row?.["amountMinor"]).toBe(10n);
         });
@@ -180,9 +180,9 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd" }, { allowExplicitId: true });
-            await writer.patch("a1", { capturedMinor: 99n });
+            await writer.patch("paymentSessions", "a1", { capturedMinor: 99n });
 
-            const row = await writer.get("a1");
+            const row = await writer.get("paymentSessions", "a1");
 
             expect(row?.["capturedMinor"]).toBe(99n);
         });
@@ -202,7 +202,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             await writer.insert("paymentSessions", { _id: "a1", amountMinor: 10n, currency: "usd" }, { allowExplicitId: true });
 
-            const row = await writer.get("a1");
+            const row = await writer.get("paymentSessions", "a1");
 
             expect(row?.["amountMinor"]).toBe(10n);
             // `{"amountMinor":"10"}` — 20 characters. A bigint charged as `{}`
@@ -265,7 +265,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             const { page } = await writer.findMany("paymentSessions", { where: { externalId: 1_234_567_890_123_456_790n } });
 
-            const kept = await writer.get("u1");
+            const kept = await writer.get("paymentSessions", "u1");
 
             expect(ids(page)).toStrictEqual(["u2"]);
             expect(kept?.["externalId"]).toBe(1_234_567_890_123_456_789n);
@@ -397,7 +397,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "max", where: { currency: "usd" } })).resolves.toBe(10);
 
-            await writer.delete("s10", "paymentSessions");
+            await writer.delete("paymentSessions", "s10");
 
             await expect(writer.aggregate("paymentSessions", { field: "amountMinor", op: "max", where: { currency: "usd" } })).resolves.toBe(9);
         });
@@ -579,7 +579,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd", receipt: bytes }, { allowExplicitId: true });
 
-            const row = await writer.get("a1");
+            const row = await writer.get("paymentSessions", "a1");
 
             expect(row?.["receipt"]).toBeInstanceOf(ArrayBuffer);
             expect(new Uint8Array(row?.["receipt"] as ArrayBuffer)).toStrictEqual(new Uint8Array([1, 2, 3, 255]));
@@ -597,11 +597,11 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd", receipt: payload.buffer }, { allowExplicitId: true });
 
-            const first = await writer.get("a1");
+            const first = await writer.get("paymentSessions", "a1");
 
-            await writer.replace("a1", { currency: first?.["currency"], receipt: first?.["receipt"] });
+            await writer.replace("paymentSessions", "a1", { currency: first?.["currency"], receipt: first?.["receipt"] });
 
-            const second = await writer.get("a1");
+            const second = await writer.get("paymentSessions", "a1");
 
             expect(second?.["receipt"]).toBeInstanceOf(ArrayBuffer);
             expect(new Uint8Array(second?.["receipt"] as ArrayBuffer)).toStrictEqual(payload);
@@ -613,9 +613,9 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd", receipt: new Uint8Array([9, 8, 7]).buffer }, { allowExplicitId: true });
-            await writer.patch("a1", { currency: "eur" });
+            await writer.patch("paymentSessions", "a1", { currency: "eur" });
 
-            const row = await writer.get("a1");
+            const row = await writer.get("paymentSessions", "a1");
 
             expect(new Uint8Array(row?.["receipt"] as ArrayBuffer)).toStrictEqual(new Uint8Array([9, 8, 7]));
         });
@@ -626,9 +626,9 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd", receipt: new Uint8Array([0]).buffer }, { allowExplicitId: true });
-            await writer.replace("a1", { currency: "usd", receipt: new Uint8Array([1, 1, 2, 3, 5]).buffer });
+            await writer.replace("paymentSessions", "a1", { currency: "usd", receipt: new Uint8Array([1, 1, 2, 3, 5]).buffer });
 
-            const row = await writer.get("a1");
+            const row = await writer.get("paymentSessions", "a1");
 
             expect(new Uint8Array(row?.["receipt"] as ArrayBuffer)).toStrictEqual(new Uint8Array([1, 1, 2, 3, 5]));
         });
@@ -639,9 +639,9 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
             const writer = setup();
 
             await writer.insert("receipts", { _id: "a1", payload: new Uint8Array([42, 42]).buffer }, { allowExplicitId: true });
-            await writer.delete("a1", "receipts");
+            await writer.delete("receipts", "a1");
 
-            const row = await writer.get("a1", "receipts");
+            const row = await writer.get("receipts", "a1");
 
             expect(new Uint8Array(row?.["payload"] as ArrayBuffer)).toStrictEqual(new Uint8Array([42, 42]));
         });
@@ -705,7 +705,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             await writer.insert("paymentSessions", { _id: "a1", currency: "usd", meta: { fee: 5n } }, { allowExplicitId: true });
 
-            const row = await writer.get("a1");
+            const row = await writer.get("paymentSessions", "a1");
 
             expect(row?.["meta"]).toStrictEqual({ fee: 5n });
         });
@@ -771,7 +771,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
                 JSON.stringify(legacyDocument),
             );
 
-            await expect(writer.get("legacy-1", "paymentSessions")).resolves.toMatchObject({ _id: "legacy-1", currency: "legacy" });
+            await expect(writer.get("paymentSessions", "legacy-1")).resolves.toMatchObject({ _id: "legacy-1", currency: "legacy" });
         });
 
         it("a row whose bigint was stored tagged in place still decodes to a bigint", async () => {
@@ -789,7 +789,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
                 JSON.stringify({ _creationTime: 1_700_000_000_000, _id: "tagged-1", amountMinor: ["$lunora.wire$", "bigint", "10"], currency: "usd" }),
             );
 
-            const row = await writer.get("tagged-1", "paymentSessions");
+            const row = await writer.get("paymentSessions", "tagged-1");
 
             expect(row?.["amountMinor"]).toBe(10n);
         });
@@ -819,7 +819,7 @@ describe("ctx-db bigint/bytes doc-blob round-trip", () => {
 
             // A single-field patch is enough: `patch` merges over the DECODED
             // document and re-encodes the whole blob.
-            await writer.patch("tagged-1", { currency: "eur" });
+            await writer.patch("paymentSessions", "tagged-1", { currency: "eur" });
 
             const after = await writer.findMany("paymentSessions", { where: { amountMinor: 10n } });
             const stored = JSON.parse(harness.raw(`SELECT __doc__ FROM paymentSessions WHERE id = 'tagged-1'`)[0]?.["__doc__"] as string) as Record<

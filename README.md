@@ -9,7 +9,7 @@
 <br />
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![Status][status-badge]][status]
 [![Node][node-badge]][node]
 [![pnpm][pnpm-badge]][pnpm]
@@ -25,7 +25,8 @@
 <div align="center">
     <p>
         <sup>
-            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>.
+            See <a href="https://lunora.sh/sponsors">lunora.sh/sponsors</a> for what sponsorship funds.
         </sup>
     </p>
 </div>
@@ -34,7 +35,7 @@
 
 ## What is Lunora?
 
-Lunora gives you Convex-style DX on your own Cloudflare account. You write type-safe queries, mutations, and actions in TypeScript, and Lunora deploys them as Cloudflare Workers. Durable Objects hold real-time state, D1 handles SQL, R2 stores blobs, and Queues run jobs. Nothing runs on servers we operate; everything lives in the Cloudflare account you already pay for.
+Lunora gives you Convex-style DX on infrastructure you control. You write type-safe queries, mutations, and actions in TypeScript. In production, Lunora deploys them as Cloudflare Workers: Durable Objects hold real-time state, D1 handles SQL, R2 stores blobs, and Queues run jobs. Nothing runs on servers we operate; the production stack lives in the Cloudflare account you already pay for. See [Where it runs](#where-it-runs) for the other targets.
 
 Lunora is Vite-first. The dev loop, codegen, and client bindings plug into a Vite project through `@cloudflare/vite-plugin`, so local dev runs on workerd, the same runtime as production. Rsbuild and Rspack projects get the same loop through `@lunora/rspack`, and a standalone CLI covers everything else.
 
@@ -102,7 +103,7 @@ export default function App() {
 
 `pnpm dev` boots workerd, generates the client types, starts the Vite dev server, and reloads on every save. Click the button and the list updates in every open tab; the query re-runs on the server and pushes the new result.
 
-`lunora init` asks which framework to use and defaults to a React SPA. Pass `-t` to pick one directly: `next`, `nuxt`, `sveltekit`, `astro`, `analog`, `react-router`, `tanstack-start-react`, `tanstack-start-solid`, `solid-v2`, `expo`, `vinext`, `rspack-react`, `standalone`, and a few more (`lunora init --help` lists them). Use `--vite <framework>` for a plain React, Vue, Solid, or Svelte SPA, and `lunora init --here` to add Lunora to an app you already have.
+`lunora init` asks which framework to use and defaults to a React SPA. Pass `-t` to pick one directly: `next`, `nuxt`, `sveltekit`, `astro`, `analog`, `tanstack-start-react`, `tanstack-start-solid`, `solid-v2`, `expo`, `vinext`, `rspack-react`, `standalone`, and a few more (`lunora init --help` lists them). Use `--vite <framework>` for a plain React, Vue, Solid, or Svelte SPA, and `lunora init --here` to add Lunora to an app you already have.
 
 ## Why Lunora
 
@@ -110,15 +111,29 @@ export default function App() {
 
 **Queries are live.** Clients subscribe over WebSocket, and a mutation pushes the change to every subscriber. You don't write cache invalidation.
 
-**It runs on your account.** Workers, Durable Objects, D1, R2, Queues, and KV all live in your Cloudflare account. The only lock-in is Cloudflare itself.
+**Production runs on your account.** Cloudflare is the production target: Workers, Durable Objects, D1, R2, Queues, and KV all live in your Cloudflare account. An idle app costs about nothing, and at scale you pay Cloudflare's prices rather than a SaaS markup.
 
 **It grows past one Durable Object.** Every app starts on a single Durable Object. When one tenant needs its own, add `.shardBy(key)` to the function; for geo-replicated reads, add `.global()`. The rest of the app stays the same.
 
 **Features come as add-ons.** Auth, mail, storage, scheduling, queues and pub/sub topics, workflows, AI agents, payments, feature flags, rate limiting, and notifications ship as `@lunora/*` packages or as items you copy in with `lunora registry add`. Other packages add typed access to Cloudflare Containers, Browser Rendering, Hyperdrive, AI Search, and service bindings to sibling Workers.
 
+**Sign-in is more than passwords.** `@lunora/auth` wraps better-auth, so passkeys, magic links, email OTP, two-factor, anonymous sessions, and OAuth providers are available through its plugins.
+
+**Built for AI agents.** `@lunora/mcp` exposes your deployment's tables, functions, logs, issues, and advisories to MCP clients, so an agent can inspect and debug your app the way you do.
+
 **Clients aren't limited to JavaScript.** There are adapters for React, Vue, Solid, Svelte, Angular, and React Native, and `lunora sdk generate` writes typed clients for Python, Go, Ruby, Rust, Swift, Java, Kotlin, and Dart (see [`sdks/`](./sdks/README.md)).
 
 **The core doesn't depend on Cloudflare.** The reactive engine (`@lunora/shard-engine`) talks to a small set of host contracts in `@lunora/platform`, not to Cloudflare APIs. `@lunora/platform-cloudflare` implements those contracts for production and `@lunora/platform-node` for dev and test. A capability matrix marks each feature as native, emulated, or unsupported per host; codegen leaves out what a host can't run and tells you why.
+
+## Where it runs
+
+| Target                                          | Status       | Use it for                                     |
+| ----------------------------------------------- | ------------ | ---------------------------------------------- |
+| Cloudflare Workers and Durable Objects          | Production   | Deploying your app                             |
+| Node (`@lunora/platform-node`)                  | Dev and test | Local runs and tests. Not a production target. |
+| Self-hosted on celld (`@lunora/platform-celld`) | Experimental | Self-hosting on machines you run               |
+
+Build with Vite (`@lunora/vite`), with Rsbuild or Rspack (`@lunora/rspack`), or with the standalone CLI. The core does not depend on Cloudflare APIs; each target implements the same host contracts in `@lunora/platform`. Each target's capability matrix says which features it supports.
 
 ## Lunora Studio
 
@@ -265,6 +280,7 @@ All packages are published under the [`@lunora`](https://www.npmjs.com/org/lunor
 | [`@lunora/bindings`](packages/bindings/README.md)                   | [![npm](https://img.shields.io/npm/v/%40lunora%2Fbindings?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/%40lunora%2Fbindings)                   | Lightweight Cloudflare binding helpers for Lunora — ctx.kv, ctx.images, ctx.analytics, ctx.pipelines, ctx.vectors, ctx.r2sql, ctx.artifacts, ctx.aiSearch, ctx.analyticsSql — one install, per-binding subpaths        |
 | [`@lunora/browser`](packages/browser/README.md)                     | [![npm](https://img.shields.io/npm/v/%40lunora%2Fbrowser?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/%40lunora%2Fbrowser)                     | Cloudflare Browser Rendering for Lunora: ctx.browser screenshots, PDF, and scraping in actions                                                                                                                         |
 | [`@lunora/cloudflare-access`](packages/cloudflare-access/README.md) | [![npm](https://img.shields.io/npm/v/%40lunora%2Fcloudflare-access?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/%40lunora%2Fcloudflare-access) | Cloudflare Access (Zero Trust) identity for Lunora — verify the Cf-Access-Jwt-Assertion JWT against your team JWKS and feed the verified identity into ctx.auth / RLS via a resolveIdentity adapter                    |
+| [`@lunora/jwt-auth`](packages/jwt-auth/README.md)                   | [![npm](https://img.shields.io/npm/v/%40lunora%2Fjwt-auth?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/%40lunora%2Fjwt-auth)                   | Bring your own auth — verify Clerk, WorkOS, Auth0, Supabase or any OIDC JWT against its JWKS and feed the identity into ctx.auth / RLS                                                                                 |
 | [`@lunora/container`](packages/container/README.md)                 | [![npm](https://img.shields.io/npm/v/%40lunora%2Fcontainer?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/%40lunora%2Fcontainer)                 | Cloudflare Containers for Lunora: defineContainer, generated Container DO classes, and the ctx.containers action surface                                                                                               |
 | [`@lunora/flags`](packages/flags/README.md)                         | [![npm](https://img.shields.io/npm/v/%40lunora%2Fflags?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/%40lunora%2Fflags)                         | OpenFeature-based feature flags for Lunora — ctx.flags, useFlag, and a first-class Cloudflare Flagship provider with any OpenFeature provider pluggable                                                                |
 | [`@lunora/hyperdrive`](packages/hyperdrive/README.md)               | [![npm](https://img.shields.io/npm/v/%40lunora%2Fhyperdrive?style=flat-square&labelColor=292a44&color=663399&label=v)](https://www.npmjs.com/package/%40lunora%2Fhyperdrive)               | Bring-your-own Postgres/MySQL for Lunora via Cloudflare Hyperdrive: a driver-agnostic, action-only ctx.sql                                                                                                             |
@@ -336,7 +352,9 @@ For security reports, see [`SECURITY.md`](./SECURITY.md). For community guidelin
 
 ## License
 
-[FSL-1.1-Apache-2.0](./LICENSE.md) © 2026 anolilab and contributors. The source is available now, and each release becomes Apache-2.0 two years after it ships.
+Lunora is [Apache-2.0](./LICENSE.md) © 2026 anolilab and contributors.
+
+The Lunora Cloud service in [`apps/cloud/`](./apps/cloud) is licensed under [FSL-1.1-Apache-2.0](./apps/cloud/LICENSE.md): source-available now, and each release becomes Apache-2.0 two years after it ships.
 
 <!-- badges -->
 
@@ -344,7 +362,7 @@ For security reports, see [`SECURITY.md`](./SECURITY.md). For community guidelin
 [typescript-url]: https://www.typescriptlang.org/
 [scorecard-badge]: https://api.scorecard.dev/projects/github.com/anolilab/lunora/badge?style=for-the-badge
 [scorecard]: https://scorecard.dev/viewer/?uri=github.com/anolilab/lunora
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: ./LICENSE.md
 [status-badge]: https://img.shields.io/badge/status-alpha-blueviolet.svg?style=for-the-badge
 [status]: #status

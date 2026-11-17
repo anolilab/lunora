@@ -40,12 +40,19 @@ const createPgliteHarness = async (): Promise<PgliteHarness> => {
 
     await database.waitReady;
 
-    const rowClient: RowClient = {
-        query: async <Row = Record<string, unknown>>(text: string, parameters?: ReadonlyArray<unknown>): Promise<Row[]> => {
-            const result = await database.query(text, parameters as unknown[]);
+    const rowClientOver = (target: Pick<PGlite, "query">): RowClient => {
+        return {
+            query: async <Row = Record<string, unknown>>(text: string, parameters?: ReadonlyArray<unknown>): Promise<Row[]> => {
+                const result = await target.query(text, parameters as unknown[]);
 
-            return result.rows as Row[];
-        },
+                return result.rows as Row[];
+            },
+        };
+    };
+    // Transactional like `fromPostgresJs`, so the store's row + companion writes commit together here too.
+    const rowClient: RowClient = {
+        ...rowClientOver(database),
+        transaction: async (work) => await database.transaction(async (tx) => await work(rowClientOver(tx))),
     };
 
     return {

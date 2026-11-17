@@ -1,5 +1,4 @@
 import type { AuthUserFieldSpec } from "@lunora/client";
-import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useState } from "react";
 
@@ -10,6 +9,7 @@ import { Label } from "../../components/ui/label";
 import { ModalShell } from "../../components/ui/modal-shell";
 import useAsyncSubmit from "../../hooks/use-async-submit";
 import { useAuthConfig } from "../../hooks/use-auth-config";
+import useStudioClient from "../../hooks/use-studio-client";
 import { useT } from "../../i18n/i18n-context";
 
 interface UserCreateDialogProps {
@@ -90,7 +90,7 @@ const coerceFieldValue = (field: AuthUserFieldSpec, raw: boolean | string): { va
  * deployment enabled.
  */
 export const UserCreateDialog = ({ onClose, onCreated }: UserCreateDialogProps): ReactElement => {
-    const client = useLunora();
+    const client = useStudioClient();
     const t = useT();
     const { config } = useAuthConfig();
     const { busy, error, run } = useAsyncSubmit();

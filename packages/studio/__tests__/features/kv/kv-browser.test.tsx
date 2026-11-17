@@ -33,6 +33,8 @@ describe("kvBrowser", () => {
     });
 
     afterEach(() => {
+        Reflect.deleteProperty(document, "scrollingElement");
+        vi.unstubAllGlobals();
         vi.restoreAllMocks();
     });
 
@@ -263,5 +265,136 @@ describe("kvBrowser", () => {
         render(renderBrowser(createMockClient({ kvNamespaces: [] })));
 
         await expect(screen.findByTestId("kv-empty")).resolves.toBeDefined();
+    });
+
+    it("scrolls a Tab from the last mounted key on to the next key rather than out of the table", async () => {
+        // Focusing a row only moves the window on the next scroll event; a Tab pressed first found no next
+        // checkbox, and focus left the table.
+        expect.assertions(2);
+
+        const seed: Record<string, { value: string }> = {};
+
+        for (let index = 0; index < 200; index += 1) {
+            seed[`key:${String(index).padStart(4, "0")}`] = { value: "v" };
+        }
+
+        render(renderBrowser(createMockClient({ kvNamespaces: [{ binding: "CACHE" }], kvSeed: { CACHE: seed } })));
+
+        await screen.findByTestId("kv-key-row-key:0000");
+
+        const rows = screen.getAllByTestId(/^kv-key-row-/u);
+        const lastName = rows.at(-1)?.dataset["key"] as string;
+
+        // Inside the window the browser's own Tab order already has the next checkbox.
+        expect(fireEvent.keyDown(screen.getByTestId("kv-select-key:0000"), { key: "Tab" })).toBe(true);
+        expect(fireEvent.keyDown(screen.getByTestId(`kv-select-${lastName}`), { key: "Tab" })).toBe(false);
+    });
+
+    it("mounts only a window of a long key list, while select-all still covers every key", async () => {
+        expect.assertions(3);
+
+        const seed: Record<string, { value: string }> = {};
+
+        for (let index = 0; index < 2000; index += 1) {
+            seed[`key:${String(index).padStart(4, "0")}`] = { value: "v" };
+        }
+
+        render(renderBrowser(createMockClient({ kvNamespaces: [{ binding: "CACHE" }], kvSeed: { CACHE: seed } })));
+
+        await screen.findByTestId("kv-key-row-key:0000");
+
+        expect(screen.getAllByTestId(/^kv-key-row-/u).length).toBeLessThan(100);
+        expect(screen.queryByTestId("kv-key-row-key:1999")).toBeNull();
+
+        fireEvent.click(screen.getByTestId("kv-select-all"));
+
+        expect(screen.getByTestId("kv-bulk-delete-btn").textContent).toBe("Delete 2000");
+    });
+
+    it("re-reads the window when content above the key table resizes without a scroll", async () => {
+        // The table's offset is read from layout; a resize above it moves the table with no scroll event.
+        expect.assertions(2);
+
+        const callbacks: (() => void)[] = [];
+
+        vi.stubGlobal(
+            "ResizeObserver",
+            // eslint-disable-next-line prefer-arrow-callback -- the stub is called with `new`, which an arrow function cannot be
+            vi.fn(function ResizeObserverStub(callback: () => void) {
+                callbacks.push(callback);
+
+                return { disconnect: vi.fn<() => void>(), observe: vi.fn<(target: Element) => void>(), unobserve: vi.fn<(target: Element) => void>() };
+            }),
+        );
+
+        // jsdom has no scrolling element, so the table would never observe an offset at all.
+        Object.defineProperty(document, "scrollingElement", { configurable: true, value: document.documentElement });
+
+        const seed: Record<string, { value: string }> = {};
+
+        for (let index = 0; index < 2000; index += 1) {
+            seed[`key:${String(index).padStart(4, "0")}`] = { value: "v" };
+        }
+
+        render(renderBrowser(createMockClient({ kvNamespaces: [{ binding: "CACHE" }], kvSeed: { CACHE: seed } })));
+
+        await screen.findByTestId("kv-key-row-key:0000");
+
+        expect(screen.queryByTestId("kv-key-row-key:0500")).toBeNull();
+
+        // The body now sits 500 rows above the viewport top, as if the content above it had shrunk.
+        vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+            top: -500 * 33,
+        } as DOMRect);
+        act(() => {
+            for (const callback of callbacks) {
+                callback();
+            }
+        });
+
+        await expect(screen.findByTestId("kv-key-row-key:0500")).resolves.toBeDefined();
+    });
+
+    it("re-reads the window when a banner mounts above the key table after it was set up", async () => {
+        // A banner mounted later is not among the siblings resize-observed at setup, so only the
+        // child-list change can tell the table that its body moved.
+        expect.assertions(2);
+
+        vi.stubGlobal(
+            "ResizeObserver",
+            // eslint-disable-next-line prefer-arrow-callback -- the stub is called with `new`, which an arrow function cannot be
+            vi.fn(function ResizeObserverStub() {
+                return { disconnect: vi.fn<() => void>(), observe: vi.fn<(target: Element) => void>(), unobserve: vi.fn<(target: Element) => void>() };
+            }),
+        );
+
+        // jsdom has no scrolling element, so the table would never observe an offset at all.
+        Object.defineProperty(document, "scrollingElement", { configurable: true, value: document.documentElement });
+
+        const seed: Record<string, { value: string }> = {};
+
+        for (let index = 0; index < 2000; index += 1) {
+            seed[`key:${String(index).padStart(4, "0")}`] = { value: "v" };
+        }
+
+        render(renderBrowser(createMockClient({ kvNamespaces: [{ binding: "CACHE" }], kvSeed: { CACHE: seed } })));
+
+        await screen.findByTestId("kv-key-row-key:0000");
+
+        expect(screen.queryByTestId("kv-key-row-key:0500")).toBeNull();
+
+        vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+            top: -500 * 33,
+        } as DOMRect);
+
+        const banner = document.createElement("p");
+
+        act(() => {
+            document.body.prepend(banner);
+        });
+
+        await expect(screen.findByTestId("kv-key-row-key:0500")).resolves.toBeDefined();
+
+        banner.remove();
     });
 });

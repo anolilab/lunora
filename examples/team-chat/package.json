@@ -2,7 +2,7 @@
     "name": "@lunora-example/team-chat",
     "version": "0.0.0",
     "private": true,
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "type": "module",
     "sideEffects": false,
     "scripts": {
@@ -10,7 +10,7 @@
         "codegen": "node node_modules/lunorash/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
-        "lint:types": "tsc --noEmit",
+        "lint:types": "tsrs --noEmit",
         "test": "vitest run",
         "lint:eslint": "eslint . --max-warnings=0",
         "lint:eslint:fix": "eslint . --fix"
@@ -29,6 +29,7 @@
         "react-dom": "catalog:frontend"
     },
     "devDependencies": {
+        "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@lunora/testing": "workspace:*",
         "@types/node": "catalog:types",
@@ -36,6 +37,7 @@
         "@types/react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vite": "catalog:vite",
+        "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
     },
     "engines": {

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { withTailConsumer } from "../src/cloudflare/validate-settings";
 import type { WranglerConfig, WranglerValidationReport } from "../src/cloudflare/wrangler-config";
@@ -661,11 +661,11 @@ describe("wrangler-validator", () => {
             expect(validateWranglerConfig(wrangler, { hasD1GlobalTable: true, hasHyperdriveGlobalTable: false }, "production").valid).toBe(true);
         });
 
-        // kv_namespaces — NON-inheritable, hint-only (warns on a missing id,
-        // doesn't error): env.production's OWN (id-less) entry must be what
-        // gets validated — the top level's entry (which DOES have an id) must
-        // not silently paper over it.
-        it("kv_namespaces: env.production's own id-less entry warns, even though the top level's has an id", () => {
+        // kv_namespaces — NON-inheritable: env.production's OWN entry must be what
+        // gets validated — the top level's (valid) entry must not silently paper
+        // over it. An id-less entry is fine (wrangler creates the namespace on
+        // deploy), so the proof is an entry with no binding.
+        it("kv_namespaces: env.production's own entry is validated, even though the top level's is complete", () => {
             expect.assertions(2);
 
             const wrangler = topLevel();
@@ -673,17 +673,14 @@ describe("wrangler-validator", () => {
             wrangler.env = {
                 production: {
                     durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-                    kv_namespaces: [{ binding: "CACHE" }],
+                    kv_namespaces: [{ id: "abc123" }],
                 },
             };
 
             const report = validateWranglerConfig(wrangler, undefined, "production");
 
-            // Still valid (kv_namespaces is a hint, not a hard error) — but the
-            // warning must fire, proving the merged view used env.production's
-            // id-less entry rather than the top level's complete one.
-            expect(report.valid).toBe(true);
-            expect(report.warnings.some((line) => line.toLowerCase().includes("kv") && line.includes("id"))).toBe(true);
+            expect(report.valid).toBe(false);
+            expect(report.errors.join(" ")).toContain('must have a non-empty "binding"');
         });
 
         // r2_buckets — NON-inheritable, self-describing (shape-only, no remote
@@ -801,17 +798,143 @@ describe("wrangler-validator", () => {
             wrangler.env = {
                 production: {
                     durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
-                    // `hyperdrive` is a real WranglerConfig key with no verified
+                    // `pipelines` is a real WranglerConfig key with no verified
                     // entry in either NON_INHERITABLE_KEYS or INHERITABLE_KEYS.
-                    hyperdrive: [{ binding: "HYPERDRIVE", id: "env-only-id" }],
+                    pipelines: [{ binding: "EVENTS", stream: "env-only-stream" }],
                 },
             };
 
             const report = validateWranglerConfig(wrangler, undefined, "production");
 
-            expect(report.warnings.some((line) => line.includes("hyperdrive") && line.includes("TOP-LEVEL value only"))).toBe(true);
+            expect(report.warnings.some((line) => line.includes("pipelines") && line.includes("TOP-LEVEL value only"))).toBe(true);
             // Exactly one such warning, not one per unverified key.
             expect(report.warnings.filter((line) => line.includes("TOP-LEVEL value only"))).toHaveLength(1);
+        });
+
+        describe("queue names shared across environments", () => {
+            const sharedQueueWarnings = (report: WranglerValidationReport): string[] =>
+                report.warnings.filter((line) => line.includes("unique per Cloudflare account"));
+
+            afterEach(() => {
+                vi.unstubAllEnvs();
+            });
+
+            it("warns when env.staging produces into the top level's queue", () => {
+                expect.assertions(2);
+
+                const wrangler = topLevel();
+
+                wrangler.env = {
+                    staging: {
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { consumers: [{ queue: "emails" }], producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    },
+                };
+
+                const warnings = sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"));
+
+                // One per name, though the block names "emails" twice.
+                expect(warnings).toHaveLength(1);
+                expect(warnings[0]).toContain(`env.staging.queues names queue "emails", which the top level also names`);
+            });
+
+            it("warns about a dead-letter queue another environment names", () => {
+                expect.assertions(1);
+
+                const wrangler = topLevel();
+
+                wrangler.env = {
+                    production: { queues: { producers: [{ binding: "EMAILS", queue: "emails-dlq" }] } },
+                    staging: {
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { consumers: [{ dead_letter_queue: "emails-dlq", queue: "emails-staging" }] },
+                    },
+                };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails-dlq", which env.production also names`),
+                ]);
+            });
+
+            it("does not compare environments deployed to different accounts", () => {
+                expect.assertions(2);
+
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+
+                const wrangler = topLevel();
+
+                wrangler.account_id = "account-production";
+                wrangler.env = {
+                    preview: { queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } },
+                    staging: {
+                        account_id: "account-staging",
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    },
+                };
+
+                // The top level and env.preview (which inherits its account_id) are on another account.
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([]);
+
+                wrangler.env.preview = { account_id: "account-staging", queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails", which env.preview also names`),
+                ]);
+            });
+
+            it("reads CLOUDFLARE_ACCOUNT_ID only for a scope that names no account, as wrangler does", () => {
+                expect.assertions(3);
+
+                const wrangler = topLevel();
+
+                wrangler.env = {
+                    preview: { account_id: "account-preview", queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } },
+                    staging: {
+                        account_id: "account-staging",
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { producers: [{ binding: "EMAILS", queue: "emails" }] },
+                    },
+                };
+
+                // The top level names no account, so the variable is its account: the same as staging's.
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account-staging");
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails", which the top level also names`),
+                ]);
+
+                // Another account for the top level; env.preview's own account_id is never overridden.
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "account-production");
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([]);
+
+                // Unset, the top level's account is unknown and may be staging's.
+                vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([
+                    expect.stringContaining(`"emails", which the top level also names`),
+                ]);
+            });
+
+            it("says nothing when the environment names its own queues, or for a top-level deploy", () => {
+                expect.assertions(2);
+
+                const wrangler = topLevel();
+
+                wrangler.env = {
+                    staging: {
+                        durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                        queues: { producers: [{ binding: "EMAILS", queue: "emails-staging" }] },
+                    },
+                };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler, undefined, "staging"))).toStrictEqual([]);
+
+                wrangler.env.staging = { queues: { producers: [{ binding: "EMAILS", queue: "emails" }] } };
+
+                expect(sharedQueueWarnings(validateWranglerConfig(wrangler))).toStrictEqual([]);
+            });
         });
     });
 
@@ -2389,6 +2512,29 @@ export const schema = defineSchema({
             expect(result.report.warnings.join(" ")).toMatch(/assets\.directory.*does not exist yet/u);
         });
 
+        it("points a missing Studio assets directory at codegen, not the client build", () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "assets": { "binding": "ASSETS", "directory": ".lunora/studio-assets", "run_worker_first": true }
+}
+`,
+                "utf8",
+            );
+
+            const warnings = validateWranglerProject({ projectRoot: workdir }).report.warnings.join(" ");
+
+            expect(warnings).toMatch(/assets\.directory.*lunora codegen/u);
+            expect(warnings).not.toMatch(/client build/u);
+        });
+
         it("does not warn about assets.directory once the directory exists", () => {
             expect.assertions(1);
 
@@ -3108,7 +3254,7 @@ export const schema = defineSchema({
             };
         };
 
-        it("accepts a well-formed kv_namespaces binding; warns on a missing id; errors on a missing binding", () => {
+        it("accepts a well-formed kv_namespaces binding, with or without an id; errors on a missing binding", () => {
             expect.assertions(4);
 
             const valid = validateWranglerConfig(validBase({ kv_namespaces: [{ binding: "CACHE", id: "abc123" }] }));
@@ -3117,8 +3263,9 @@ export const schema = defineSchema({
 
             const missingId = validateWranglerConfig(validBase({ kv_namespaces: [{ binding: "CACHE" }] }));
 
+            // Wrangler creates a namespace declared without an id on the first deploy.
             expect(missingId.valid).toBe(true);
-            expect(missingId.warnings.join(" ")).toMatch(/wrangler kv namespace create/u);
+            expect(missingId.warnings.join(" ")).not.toMatch(/kv_namespaces/u);
 
             const missingBinding = validateWranglerConfig(validBase({ kv_namespaces: [{ id: "abc123" }] }));
 
@@ -3364,6 +3511,42 @@ export const schema = defineSchema({
             expect(validateWranglerConfig(validBase({ assets: { binding: 5 as never, directory: "./dist/client" } })).errors.join(" ")).toContain(
                 "assets.binding must be a non-empty string",
             );
+        });
+
+        it("checks assets.html_handling and assets.not_found_handling against wrangler's values", () => {
+            expect.assertions(4);
+
+            const assets = (extra: Record<string, unknown>) => validBase({ assets: { directory: "./dist/client", ...extra } });
+
+            expect(validateWranglerConfig(assets({ html_handling: "drop-trailing-slash", not_found_handling: "single-page-application" })).valid).toBe(true);
+            expect(validateWranglerConfig(assets({ not_found_handling: "spa" })).errors.join(" ")).toContain("assets.not_found_handling must be one of");
+            expect(validateWranglerConfig(assets({ html_handling: "trailing-slash" })).errors.join(" ")).toContain("assets.html_handling must be one of");
+            expect(validateWranglerConfig(assets({ html_handling: 1 })).errors.join(" ")).toContain("assets.html_handling must be one of");
+        });
+
+        it("accepts assets.run_worker_first as a boolean or a list of path rules, and rejects anything else", () => {
+            expect.assertions(7);
+
+            const assets = (runWorkerFirst: unknown) => validBase({ assets: { directory: "./dist/client", run_worker_first: runWorkerFirst } as never });
+
+            expect(validateWranglerConfig(assets(true)).valid).toBe(true);
+            expect(validateWranglerConfig(assets(["/_lunora/*", "!/_lunora/static/*"])).valid).toBe(true);
+            expect(validateWranglerConfig(assets("/_lunora/*")).errors.join(" ")).toContain("must be a boolean or an array of path rules");
+            expect(validateWranglerConfig(assets(["_lunora/*"])).errors.join(" ")).toContain('must be a path rule starting with "/"');
+            expect(validateWranglerConfig(assets([5])).errors.join(" ")).toContain('must be a path rule starting with "/"');
+            expect(validateWranglerConfig(assets([`/${"a".repeat(100)}`])).errors.join(" ")).toContain("Cloudflare accepts at most 100");
+            expect(validateWranglerConfig(assets(Array.from({ length: 101 }, (_, index) => `/r${String(index)}`))).errors.join(" ")).toContain("has 101 rules");
+        });
+
+        it("rejects the run_worker_first lists wrangler refuses at deploy", () => {
+            expect.assertions(4);
+
+            const assets = (runWorkerFirst: unknown) => validBase({ assets: { directory: "./dist/client", run_worker_first: runWorkerFirst } as never });
+
+            expect(validateWranglerConfig(assets([])).errors.join(" ")).toContain("empty list");
+            expect(validateWranglerConfig(assets(["!/static/*"])).errors.join(" ")).toContain("only negative");
+            expect(validateWranglerConfig(assets(["/a", "/a"])).errors.join(" ")).toContain('lists "/a" twice');
+            expect(validateWranglerConfig(assets(["/api/*", "/api/users"])).errors.join(" ")).toContain('"/api/users" is already covered by "/api/*"');
         });
 
         it("accepts a well-formed cache block and rejects bad shapes", () => {

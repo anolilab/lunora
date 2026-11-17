@@ -5,6 +5,9 @@
         // bundler-inlined shared helper), and a set rootDir raises TS6059 for that
         // out-of-package file under `tsc --noEmit`. lint:types is noEmit; the real
         // build is vite/packem, so these were vestigial. See CLAUDE.md `shared/` rules.
+        // noEmit because, with allowJs and no outDir, the tests' imports of scripts/*.mjs
+        // would be emitted over themselves (TS5055), which type-aware oxlint reports.
+        "noEmit": true,
         "moduleResolution": "bundler",
         "jsx": "react-jsx",
         "types": ["node", "vitest/globals"]

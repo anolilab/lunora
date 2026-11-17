@@ -131,6 +131,15 @@ function Composer({ channelId }: { channelId: string }) {
 }
 ```
 
+Offline, a write the client can queue is queued as usual. A write it cannot queue
+(before the shard's first connect, or with no WebSocket) waits until the browser
+is back online, then sends. Two kinds of write skip that wait and reject with
+`OFFLINE_NOT_QUEUED` when the network is down instead: a call made with
+`{ onlineOnly: true }`, and any call to a function with a `v.sensitive` argument,
+which is always online-only. Pass `onlineOnly: true` on a credential or one-time
+token so the write is refused rather than queued or held for a later send. For a sensitive function the option
+may be omitted or `true`; `false` is a type error.
+
 There is also a per-call `optimistic: (current) => next` shortcut, but it patches
 only the subscription registered under the **mutation's own** reference and args
 — a query and a mutation that share a path (a counter, a document by id). For the

@@ -76,9 +76,9 @@ export const revoke = mutation
     .input({ id: v.id("invitations"), organizationId: v.id("organizations") })
     .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
-        await assertRowInOrg(context, id, organizationId, "invitation");
+        await assertRowInOrg(context, "invitations", id, organizationId, "invitation");
 
-        await context.db.patch(id, { status: "revoked" });
+        await context.db.patch("invitations", id, { status: "revoked" });
     });
 
 /**
@@ -111,7 +111,7 @@ export const accept = mutation
             });
         }
 
-        await context.db.patch(invitation._id, { status: "accepted" });
+        await context.db.patch("invitations", invitation._id, { status: "accepted" });
 
         return { organizationId: invitation.organizationId };
     });

@@ -397,27 +397,24 @@ const targetOf = (subscription: StoredSubscription): string => {
 const WEB_PUSH_GONE_PATTERN = /\bhttp\s*4(?:04|10)\b/iu;
 
 /**
- * "Permanently gone" signal from FCM: the canonical `UNREGISTERED` (HTTP v1) /
- * `NotRegistered` (legacy) error codes — a.k.a.
- * `registration-token-not-registered` — plus the HTTP v1 `NOT_FOUND` PROSE,
- * meaning the device token is dead.
+ * "Permanently gone" signal for an FCM device of unknown kind: the `UNREGISTERED` code,
+ * or the legacy `NotRegistered` / `registration-token-not-registered` codes. For a known
+ * FCM device {@link isGoneError} uses only `FCM 404 UNREGISTERED`, the report `fcm-transport`
+ * writes from `error.details[].errorCode`: an HTTP 404 with the generic `NOT_FOUND` status is
+ * not a dead token, since FCM answers a request it cannot route (a wrong project id, for one)
+ * with that same 404. Callers without a kind keep this wider match.
  *
- * The prose alternative is not a nicety, it is the only branch that ever fires
- * against the real transport. `@visulima/notification`'s FCM provider surfaces
- * `body.error.message` and nothing else, while FCM HTTP v1 answers a dead token
- * with HTTP 404, `error.status: "NOT_FOUND"`, `error.message: "Requested entity
- * was not found."` and the `UNREGISTERED` code inside `error.details[].errorCode`
- * — a field the provider drops. So the codes above can only arrive from a
- * different/legacy transport, and matching them alone left FCM pruning inert:
- * every uninstalled device stayed in the store forever, re-POSTed on every
- * broadcast, while the README, the docs and `LunoraPush.broadcast`'s JSDoc all
- * promised it was pruned.
- *
- * Scoped to FCM by {@link isGoneError}'s `kind`, for the same reason the codes
- * are: the web-push provider echoes the push service's response body into
- * `HTTP ${status}: ${body}`, where "not found" is ordinary transient prose.
+ * Scoped to FCM by {@link isGoneError}'s `kind`, because the web-push provider echoes
+ * the push service's response body into `HTTP ${status}: ${body}`, where "not
+ * registered" can be ordinary prose.
  */
-const FCM_GONE_PATTERN = /\b(?:unregistered|not[\s-]?registered|registration-token-not-registered|requested entity was not found)\b/iu;
+/** The dead-token report `fcm-transport` writes when FCM's `error.details` carries `UNREGISTERED`. */
+// Anchored to the start of the transport's own message (or to the engine's `[fcm] ` prefix), so text FCM echoes later in the body cannot forge it.
+// Leading only, after the engine's bracketed prefixes: the transport writes its own text first, so FCM's text that
+// follows it can never make this match. A `] FCM 404 UNREGISTERED: ` inside an upstream message does not count.
+const FCM_DEAD_TOKEN_REPORT = /^(?:\[[^\]]*\]\s*)*FCM 404 UNREGISTERED: /u;
+
+const FCM_GONE_PATTERN = /\b(?:unregistered|not[\s-]?registered|registration-token-not-registered)\b/iu;
 
 /**
  * Last-resort text fallback for a provider that phrases "gone" in prose without a
@@ -434,10 +431,9 @@ const GONE_TEXT_FALLBACK = /\bsubscription (?:is )?(?:gone|expired|no longer val
  * transient failure worth retrying.
  *
  * Gates on STRUCTURED signals first: an `HTTP 404/410` status (both providers
- * answer one for a dead endpoint/token, though FCM's is usually replaced by its
- * error body before it reaches here) or, for FCM only, an
- * `UNREGISTERED`/`NOT_REGISTERED` code or the `NOT_FOUND` prose that is the one
- * signal its provider actually forwards (see {@link FCM_GONE_PATTERN}). The
+ * answer one for a dead endpoint/token). For a known FCM device the signal is only the
+ * dead-token report `FCM 404 UNREGISTERED` (see {@link FCM_DEAD_TOKEN_REPORT}); for a caller with
+ * no kind, the `UNREGISTERED`/`NOT_REGISTERED` codes (see {@link FCM_GONE_PATTERN}) also count. The
  * free-text {@link GONE_TEXT_FALLBACK} is a tightened last resort only, so a
  * transient error that happens to contain `expired` (a cert/session expiry) can
  * never permanently drop a valid subscription.
@@ -452,6 +448,13 @@ const GONE_TEXT_FALLBACK = /\bsubscription (?:is )?(?:gone|expired|no longer val
 const isGoneError = (message: string | undefined, kind?: StoredSubscription["kind"]): boolean => {
     if (message === undefined) {
         return false;
+    }
+
+    // An FCM device is pruned only on the dead-token report `fcm-transport` writes from
+    // `error.details[].errorCode`. Upstream prose, an HTTP status, or the word alone never
+    // prunes: a project error, a token-exchange failure or a gateway page can contain any of them.
+    if (kind === "fcm") {
+        return FCM_DEAD_TOKEN_REPORT.test(message);
     }
 
     if (WEB_PUSH_GONE_PATTERN.test(message) || GONE_TEXT_FALLBACK.test(message)) {

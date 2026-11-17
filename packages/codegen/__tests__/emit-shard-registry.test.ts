@@ -3,6 +3,24 @@ import { describe, expect, it } from "vitest";
 import { emitShardRegistry } from "../src/emit/runtime-modules";
 
 describe(emitShardRegistry, () => {
+    it("pins the entrypoint's registry to the schema's jurisdiction, as the shards that register with it are", () => {
+        expect.assertions(2);
+
+        const tables = [{ shardMode: { field: "channelId", kind: "shardBy" } }] as const;
+
+        expect(emitShardRegistry(tables, false, "eu")).toContain('hostedShardRegistry(this.env, "eu")');
+        expect(emitShardRegistry(tables, false)).toContain("hostedShardRegistry(this.env, undefined)");
+    });
+
+    it("emits the RPC entrypoint a client worker binds, over the host's own registry", () => {
+        expect.assertions(2);
+
+        const tables = [{ shardMode: { field: "channelId", kind: "shardBy" } }] as const;
+
+        expect(emitShardRegistry(tables, false)).toContain('import { WorkerEntrypoint } from "cloudflare:workers";');
+        expect(emitShardRegistry(tables, false)).toContain("export class ShardRegistryEntrypoint extends WorkerEntrypoint");
+    });
+
     it("re-exports ShardRegistryDO for a schema with .shardBy() tables", () => {
         expect.assertions(2);
 

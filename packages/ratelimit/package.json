@@ -1,6 +1,6 @@
 {
     "name": "@lunora/ratelimit",
-    "version": "1.0.0-alpha.138",
+    "version": "1.0.0-alpha.196",
     "description": "Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, pluggable stores, and procedure middleware",
     "keywords": [
         "cloudflare",
@@ -14,7 +14,7 @@
     ],
     "homepage": "https://lunora.sh",
     "bugs": "https://github.com/anolilab/lunora/issues",
-    "license": "FSL-1.1-Apache-2.0",
+    "license": "Apache-2.0",
     "author": {
         "name": "Daniel Bannert",
         "email": "d.bannert@anolilab.de"
@@ -50,9 +50,7 @@
         "build:prod": "pnpm exec packem build --production",
         "lint:eslint": "pnpm exec eslint . --max-warnings=0",
         "lint:eslint:fix": "pnpm exec eslint . --fix",
-        "lint:prettier": "prettier --check . --ignore-path ../../.prettierignore",
-        "lint:prettier:fix": "prettier --write . --ignore-path ../../.prettierignore",
-        "lint:types": "pnpm exec tsc --noEmit",
+        "lint:types": "pnpm exec tsrs --noEmit",
         "test": "pnpm exec vitest run",
         "test:coverage": "pnpm exec vitest run --coverage",
         "test:bench": "vitest bench --run --config vitest.bench.config.ts",
@@ -67,15 +65,16 @@
         "@cloudflare/vitest-plugin": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@codspeed/vitest-plugin": "catalog:test",
-        "@lunora/d1": "1.0.0-alpha.182",
-        "@lunora/server": "1.0.0-alpha.206",
-        "@lunora/shard-engine": "1.0.0-alpha.131",
-        "@lunora/values": "1.0.0-alpha.66",
+        "@lunora/d1": "1.0.0-alpha.232",
+        "@lunora/server": "1.0.0-alpha.267",
+        "@lunora/shard-engine": "1.0.0-alpha.186",
+        "@lunora/values": "1.0.0-alpha.94",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fallow": "catalog:lint",
+        "fast-check": "catalog:test",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"

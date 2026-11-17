@@ -1,4 +1,4 @@
-import { LunoraClient } from "@lunora/client";
+import { LunoraAdminClient } from "@lunora/client/admin";
 import { act, render } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -52,7 +52,7 @@ describe("useAuthUsers — cookie-session identity change", () => {
             return Response.json({ result: [] });
         });
         const sockets: MockSocket[] = [];
-        const client = new LunoraClient({
+        const client = new LunoraAdminClient({
             fetch: fetchImpl,
             reconnect: { initialDelayMs: 1, jitter: false, maxDelayMs: 1 },
             url: "https://app.example",

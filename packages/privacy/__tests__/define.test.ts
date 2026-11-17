@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { germany } from "../src/de";
 import { eu } from "../src/eu";
-import { codeOf, DAY_MS, NOW, setup } from "./harness";
+import { codeOf, DAY_MS, exportFileOf, NOW, setup } from "./harness";
 
 const OTHER = { sessionAgeMs: 0, subjectId: "u2" };
 
@@ -29,8 +29,10 @@ describe("definePrivacy export", () => {
         const opened = await privacy.requestExport();
         const outcome = await privacy.runExport(opened.id);
 
-        expect(outcome).toMatchObject({ archiveKey: "r1/export.zip", status: "ready" });
-        expect([...files.files.keys()]).toStrictEqual(expect.arrayContaining(["r1/export.zip", "r1/summary.pdf"]));
+        expect(outcome).toMatchObject({ archiveKey: exportFileOf(files, "r1", "export.zip"), status: "ready" });
+        expect([...files.files.keys()]).toStrictEqual(
+            expect.arrayContaining([exportFileOf(files, "r1", "export.zip"), exportFileOf(files, "r1", "summary.pdf")]),
+        );
     });
 
     it("writes a ZIP whose manifest carries the subject key", async () => {
@@ -38,7 +40,9 @@ describe("definePrivacy export", () => {
         const opened = await privacy.requestExport();
 
         await privacy.runExport(opened.id);
-        const manifest = JSON.parse(new TextDecoder().decode(unzipSync(files.files.get("r1/export.zip") as Uint8Array)["manifest.json"])) as {
+        const manifest = JSON.parse(
+            new TextDecoder().decode(unzipSync(files.files.get(exportFileOf(files, "r1", "export.zip")) as Uint8Array)["manifest.json"]),
+        ) as {
             subjectKey: string;
         };
 

@@ -317,7 +317,22 @@ export type OrderByInput = Record<string, SortDirection | { nulls: NullPlacement
 
 export interface QueryArgs {
     baseWhere?: WhereInput;
+
+    /**
+     * Read the authoritative copy, not a replica. A `.global()` table on D1 otherwise reads
+     * from whichever replica the session can reach, so a row committed a moment ago may be
+     * missing; a policy check on a write path needs this to see the lock it must refuse on.
+     * Shard-local tables are already authoritative, so there it changes nothing.
+     */
+    consistency?: "primary";
     cursor?: null | string;
+
+    /**
+     * Inclusive upper bound — an earlier page's `continueCursor`. Set, the read is the fixed range
+     * `(cursor, endCursor]` a reactive page subscribes to: `isDone: true`, `continueCursor` echoing
+     * `endCursor`, and a `splitCursor` midpoint. `limit` still caps it.
+     */
+    endCursor?: null | string;
 
     includeDeleted?: boolean;
 
@@ -406,6 +421,8 @@ export interface QueryPage {
     isDone: boolean;
     page: Record<string, unknown>[];
     splitCursor?: null | string;
+    /** A bounded read the `limit` cut short: split it at `splitCursor` to reach the rest. */
+    splitRequired?: boolean;
 }
 
 /**
@@ -713,8 +730,11 @@ export interface IndexRangeBuilderLike {
 /** Notifies hibernated subscribers that a row in `table` changed. */
 export type BroadcastDelta = (delta: MutationDelta) => void;
 
-/** Records that a query touched `table`. */
-export type ReadHook = (table: string, idOrScan?: string) => void;
+/**
+ * Records that a query touched `table`. `exact` marks a point read whose result
+ * depends on row `idOrScan` alone, which lets a subscription narrow to it.
+ */
+export type ReadHook = (table: string, idOrScan?: string, exact?: boolean) => void;
 
 /** The argument a connection-lifecycle hook receives. */
 export interface LifecycleEvent {
@@ -765,7 +785,7 @@ export interface DatabaseWriterLike {
      * gate its parent row, which it never writes. Optional: the RLS middleware evaluates the update policy here, and
      * a writer with no policy layer has no update rule to check. The guard gates only the table.
      */
-    assertPatchAllowed?: (id: string, expectedTable?: string) => Promise<void>;
+    assertPatchAllowed?: (table: string, id: string) => Promise<void>;
 
     /**
      * Which tables this store's change-data-capture log recorded a write to
@@ -815,11 +835,17 @@ export interface DatabaseWriterLike {
         | undefined
     >;
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
-    delete: (id: string, expectedTable?: string, options?: { hard?: boolean }) => Promise<void>;
+
+    /**
+     * `skipOnDelete` removes the row without running the schema's `onDelete` actions (cascade, set null,
+     * restrict). Delete triggers still fire, as insert triggers do on an import. Only a data restore uses
+     * it: its file already says what every table holds, and a cascade would reach tables the file does not name.
+     */
+    delete: (table: string, id: string, options?: { hard?: boolean; skipOnDelete?: boolean }) => Promise<void>;
 
     deleteAll?: (tableName: string, options?: { chunkSize?: number; hard?: boolean }) => Promise<{ deleted: number }>;
 
-    deleteMany?: (ids: ReadonlyArray<string>, options?: { limit?: number }, expectedTable?: string) => Promise<{ deleted: number }>;
+    deleteMany?: (table: string, ids: ReadonlyArray<string>, options?: { limit?: number }) => Promise<{ deleted: number }>;
 
     /**
      * Tables whose rows can change under a chunked delete between the page read and the delete: `.global()` tables
@@ -842,7 +868,7 @@ export interface DatabaseWriterLike {
 
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    get: (table: string, id: string) => Promise<Record<string, unknown> | null>;
     groupBy: (tableName: string, options: GroupByOptions) => Promise<ReadonlyArray<GroupByEntry>>;
     insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean; clientId?: string }) => Promise<string>;
     insertMany?: (
@@ -850,6 +876,12 @@ export interface DatabaseWriterLike {
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { limit?: number; skipDuplicates?: boolean },
     ) => Promise<(string | null)[]>;
+
+    /**
+     * The unvalidated bulk insert. It applies column defaults and the parsed output of `v.from` transform
+     * columns (so stored rows match every other write) and nothing else: `.check()` validators, foreign
+     * key existence checks and triggers are all skipped, because the caller vouches for the data.
+     */
     insertManyUnsafe?: (
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
@@ -874,7 +906,7 @@ export interface DatabaseWriterLike {
     lookupById?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     normalizeId: (tableName: string, id: string) => null | string;
 
-    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string, options?: PatchWriteOptions) => Promise<void>;
+    patch: (table: string, id: string, patch: Record<string, unknown>, options?: PatchWriteOptions) => Promise<void>;
 
     /**
      * Conditional patch: apply `patch` to row `id` of `tableName` only while the
@@ -902,9 +934,9 @@ export interface DatabaseWriterLike {
     ) => Promise<{ applied: boolean; doc: Record<string, unknown> | null }>;
 
     patchMany?: (
+        table: string,
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
-        expectedTable?: string,
     ) => Promise<{ patched: number }>;
     patchWhere?: (tableName: string, args: { patch: Record<string, unknown>; where: WhereInput }, options?: { limit?: number }) => Promise<{ patched: number }>;
     query: (tableName: string) => TableReaderLike;
@@ -951,8 +983,8 @@ export interface DatabaseWriterLike {
     /** Per-relation facts the table facade needs for nested relation writes (`connect`/`disconnect`/`set`). */
     relationWrites?: RelationWriteMap;
 
-    replace: (id: string, document: Record<string, unknown>, expectedTable?: string, options?: { allowExplicitId?: boolean }) => Promise<void>;
-    restore?: (id: string, expectedTable?: string) => Promise<void>;
+    replace: (table: string, id: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean }) => Promise<void>;
+    restore?: (table: string, id: string) => Promise<void>;
 
     /**
      * Soft-delete marker column per table, for tables declared `.softDelete()`. The writer's `delete`

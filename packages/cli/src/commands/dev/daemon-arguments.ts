@@ -1,4 +1,6 @@
 /** The argv a detached daemon `lunora dev` re-invocation is started with (`--background`). */
+import { resolveLazyFunctions } from "@lunora/config";
+
 import type { DevOptions } from "./index";
 import { normalizeAllowMail } from "./tunnel";
 
@@ -17,6 +19,10 @@ const daemonArguments = (options: DevOptions, remote: boolean): string[] => {
 
     if (options.apiSpec !== undefined) {
         args.push("--api-spec", options.apiSpec);
+    }
+
+    if (resolveLazyFunctions(options.lazyFunctions)) {
+        args.push("--lazy-functions");
     }
 
     if (options.port !== undefined) {

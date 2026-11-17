@@ -39,6 +39,24 @@ void caseEmptyShardKeyIsOmitted() {
 
   equals(client.wsUrl(shardKey: ''), client.wsUrl(), 'an empty shard key is byte-identical to sending none');
   check(client.wsUrl(shardKey: 'room-1').contains('shard='), 'a real shard key still rides the socket URL');
+
+  // protocol/README.md 6: the URL carries only the admin ticket, as ?token=.
+  equals(
+    canonical(Uri.parse(client.wsUrl(ticket: 'tkt-1')).queryParametersAll),
+    canonical(<String, List<String>>{
+      'token': ['tkt-1'],
+    }),
+    'the ticket is the only ?token= on the socket',
+  );
+  equals(
+    canonical(Uri.parse(client.wsUrl(shardKey: 'room-1', ticket: 'tkt-1')).queryParametersAll),
+    canonical(<String, List<String>>{
+      'shard': ['room-1'],
+      'token': ['tkt-1'],
+    }),
+    'a shard and a ticket are the only query parameters',
+  );
+  equals(client.wsUrl(), 'wss://app.example/_lunora/ws', 'no credential, no query on the socket URL');
 }
 
 void caseRpcRequestBodies() {
@@ -151,7 +169,7 @@ Future<void> caseRpcUnreadableSuccessBodyRaisesSdkError() async {
 void caseAuthTokenRedactedWhenPrinted() {
   covers('auth_token_redacted_when_printed');
 
-  const token = 'lunora-secret-7f3a9c';
+  const token = 'lunora-secret-7f3a9c'; // secret-scanner:allow -- test fixture
   final client = LunoraClient(url: 'https://app.example', authToken: token);
 
   for (final (what, printed) in <(String, String)>[

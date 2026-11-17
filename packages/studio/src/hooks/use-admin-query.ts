@@ -1,10 +1,10 @@
-import { useLunora } from "@lunora/react";
 import type { QueryKey } from "@tanstack/react-query";
 import { keepPreviousData as keepPreviousDataPlaceholder, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../lib/internal";
 import { operationLog } from "../lib/operation-log";
+import useStudioClient from "./use-studio-client";
 
 /**
  * The TanStack Query key for a reserved admin RPC read. Stable + structural:
@@ -56,7 +56,7 @@ interface UseAdminQueryOptions {
      * Open a live admin subscription (`client.subscribe`) for this exact key and
      * push every server re-run into the query cache, so the panel streams writes
      * with no manual Refresh — the same model as `@lunora/react`'s `useQuery`. A
-     * rejected subscription (e.g. the client carries no admin `wsToken`) surfaces
+     * rejected subscription (e.g. the client carries no admin `wsTicket`) surfaces
      * as {@link AdminQueryResult.liveError}; the one-shot fetch still seeded the
      * data, so it stays visible. Defaults to `false` (one-shot read).
      */
@@ -94,6 +94,12 @@ interface AdminQueryResult<T> {
      * when `live` is set; the one-shot data stays valid, it just stops updating.
      */
     readonly liveError: string | undefined;
+
+    /**
+     * Re-run the one-shot read for an auto-refresh tick. Resolves when the read lands and rejects when it fails, so `useAutoRefresh` backs
+     * off on a failing read and stops on an auth error. `refetch` swallows the failure, so it can't drive a poll.
+     */
+    readonly poll: () => Promise<void>;
     /** Imperatively re-run the one-shot read (e.g. a manual Refresh button). */
     readonly refetch: () => void;
 }
@@ -174,7 +180,7 @@ const noteQueryFetch = (key: string): void => {
  */
 // eslint-disable-next-line func-style -- a generic arrow `<T>(…) =>` is misread as a JSX element by packem's Babel (`.ts` compiled with the React preset); a function declaration is the unambiguous form.
 function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, options: UseClientQueryOptions = {}): AdminQueryResult<T> {
-    const client = useLunora();
+    const client = useStudioClient();
     const { enabled = true, keepPreviousData = false, staleTime = 0 } = options;
 
     // Scoped here rather than in each caller's key literal: this is the one place
@@ -213,6 +219,9 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
         refetch: (): void => {
             fireAndForget(query.refetch());
         },
+        poll: async (): Promise<void> => {
+            await query.refetch({ throwOnError: true });
+        },
     };
 }
 
@@ -224,7 +233,7 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
  *
  * The admin RPCs are intercepted inside the Durable Object and gated by the
  * server's `LUNORA_ADMIN_TOKEN` (sent as the client's bearer; the WS leg rides
- * the client's `wsToken` provider, which mints a short-lived sub-token so the
+ * the client's `wsTicket` provider, which mints a short-lived sub-token so the
  * master credential never appears in the socket URL); this hook
  * issues no credentials of its own. The `QueryClient` it uses is the one
  * `@lunora/react`'s `LunoraProvider` already mounts above the studio.
@@ -235,7 +244,7 @@ function useClientQuery<T>(queryKey: QueryKey, queryFunction: () => Promise<T>, 
  */
 // eslint-disable-next-line func-style -- a generic arrow `<T>(…) =>` is misread as a JSX element by packem's Babel (`.ts` compiled with the React preset); a function declaration is the unambiguous form.
 function useAdminQuery<T>(path: string, args: Record<string, unknown>, options: UseAdminQueryOptions = {}): AdminQueryResult<T> {
-    const client = useLunora();
+    const client = useStudioClient();
     const queryClient = useQueryClient();
 
     const { enabled = true, keepPreviousData = false, live = false, shardKey = "", staleTime } = options;

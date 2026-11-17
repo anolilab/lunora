@@ -20,6 +20,7 @@ import { backupObjectKey, createWorker } from "@lunora/runtime";
 import { decodeWire, encodeWire } from "@lunora/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { exportEndLine } from "../../../../shared/export-end";
 import { runBackupCommand } from "../../src/commands/backup/handler";
 import type { StreamingFetchLike } from "../../src/commands/data-transfer";
 import type { Logger } from "../../src/util/logger";
@@ -38,7 +39,7 @@ const DOCUMENTS = [
 /** Wire-encoded export rows — what a shard's admin `exportShard` actually returns. */
 const EXPORT_ROWS = DOCUMENTS.map((document_) => encodeWire({ doc: document_, table: "users" }) as { doc: Record<string, unknown>; table: string });
 
-const NDJSON = `${EXPORT_ROWS.map((row) => JSON.stringify(row)).join("\n")}\n`;
+const NDJSON = `${EXPORT_ROWS.map((row) => JSON.stringify(row)).join("\n")}\n${exportEndLine(EXPORT_ROWS.length)}`;
 
 const capturingLogger = (): { logger: Logger; logs: string[] } => {
     const logs: string[] = [];
@@ -127,6 +128,33 @@ const workerDoubleOver = (bucket: Bucket): { fetchImpl: StreamingFetchLike; impo
     const imported: string[] = [];
     const puts: { bucket: string | undefined; key: string }[] = [];
 
+    /** A `dryRun` POST is the check before the import: it records nothing. A real POST records its rows and reports every document inserted. */
+    const importAnswer = (url: URL, body: string): Awaited<ReturnType<StreamingFetchLike>> => {
+        if (url.searchParams.get("dryRun") === "true") {
+            return {
+                body: null,
+                json: async () => {
+                    return { dryRun: true, inserted: {}, received: 0 };
+                },
+                ok: true,
+                status: 200,
+                text: async () => "",
+            };
+        }
+
+        imported.push(body);
+
+        return {
+            body: null,
+            json: async () => {
+                return { inserted: { users: DOCUMENTS.length }, received: DOCUMENTS.length };
+            },
+            ok: true,
+            status: 200,
+            text: async () => "",
+        };
+    };
+
     const fetchImpl: StreamingFetchLike = async (input, init) => {
         const url = new URL(input);
         const method = init?.method ?? "GET";
@@ -141,9 +169,7 @@ const workerDoubleOver = (bucket: Bucket): { fetchImpl: StreamingFetchLike; impo
         }
 
         if (url.pathname === "/_lunora/admin/import") {
-            imported.push(String(init?.body ?? ""));
-
-            return json({ inserted: { users: DOCUMENTS.length }, received: DOCUMENTS.length });
+            return importAnswer(url, String(init?.body ?? ""));
         }
 
         if (url.pathname === "/_lunora/admin/storage/object") {
@@ -312,6 +338,7 @@ describe("backup tiers write the same thing", () => {
             cwd: workDir,
             fetchImpl: worker.fetchImpl,
             logger,
+            mode: "append",
             subcommand: "restore",
             target: "2026-06-02T03:00:00.000Z",
             token: "t",

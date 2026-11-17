@@ -19,6 +19,7 @@
 
 export { FCM_ENV_KEYS, fcmFromEnv, WEB_PUSH_ENV_KEYS, webPushFromEnv } from "./config";
 export { defineNotify, isNotifyDefinition } from "./define-notify";
+export type { FcmAndroidConfig, FcmApnsConfig, FcmPlatformConfig, FcmWebpushConfig } from "./fcm-transport";
 export type { CreateNotifyOptions } from "./notify";
 export { createNotify } from "./notify";
 export type { ResolvedProviders, RoutingPushOptions } from "./providers";

@@ -36,6 +36,7 @@ const recordingContext = (): { calls: { args: unknown; options: unknown; ref: un
             env: {},
             getState: async () => undefined,
             idempotencyKey: "tool:x:call-1",
+            instanceId: "wf-1",
             reportProgress: () => {},
             run: async (ref: unknown, args: unknown, options: unknown) => {
                 calls.push({ args, options, ref });

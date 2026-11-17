@@ -9,6 +9,8 @@ const makeQueryContext = (): QueryContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
         newId: () => "test-id",
+        random: () => 0.5,
+        shardKey: "__root__",
         secrets: { get: async () => "secret" },
         db: {} as QueryContext["db"],
         log: {} as QueryContext["log"],
@@ -36,6 +38,8 @@ const makeMutationContext = (): MutationContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
         newId: () => "test-id",
+        random: () => 0.5,
+        shardKey: "__root__",
         secrets: { get: async () => "secret" },
         db: {} as MutationContext["db"],
         log: {} as MutationContext["log"],
@@ -66,6 +70,8 @@ const makeActionContext = (): ActionContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
         newId: () => "test-id",
+        random: () => 0.5,
+        shardKey: "__root__",
         cache: { purge: async () => undefined },
         secrets: { get: async () => "secret" },
         db: {} as ActionContext["db"],

@@ -28,7 +28,7 @@ differences shape the whole migration:
    real task.
 2. **Clients don't write the database directly.** There is no equivalent of a
    client-side `setDoc`. Every mutation is a server function, and
-   authorization lives in code (`ctx.auth` + RLS) instead of a Security Rules
+   authorization lives in code (`ctx.auth` + row-level security (RLS)) instead of a Security Rules
    file.
 
 This guide is a side-by-side mapping plus the gotchas you'll hit porting a
@@ -214,7 +214,7 @@ tokens inside a `SessionDO`. Inside functions you read `ctx.auth` (userId,
 claims) the same way you'd read `context.auth` in a callable Cloud Function.
 The client uses `useAuth` instead of `onAuthStateChanged`.
 
-If you'd rather keep an existing IdP, any provider that yields a verifiable
+If you'd rather keep an existing identity provider (IdP), any provider that yields a verifiable
 token works; see [`@lunora/cloudflare-access`](/docs/packages/cloudflare-access)
 for the Zero Trust path.
 
@@ -268,7 +268,7 @@ job for recurring work. Under the hood Lunora persists schedules in a
    `<LunoraProvider client={new LunoraClient({ url })}>` (`url` is your Worker's
    `*.workers.dev` hostname).
 9. **Deploy.** `lunora deploy` builds and calls `wrangler deploy` (data
-   migrations are opt-in: `--migrate`, plus `--migrate-yes` in production). Your data plane now lives in your own Cloudflare account.
+   migrations are opt-in: `--migrate`, which also requires `--migrate-url` and `--migrate-yes`). Your data plane now lives in your own Cloudflare account.
 
 ## Importing your data
 

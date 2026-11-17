@@ -2,6 +2,7 @@ import { jsonSchema } from "ai";
 import { describe, expect, it } from "vitest";
 
 import { codeTool, resolveReferences, runToolScript } from "../src/code-tool";
+import { requestSecretTool } from "../src/secret-request-tool";
 import type { AgentToolContext, AgentToolDefinition, AnyAgentTool } from "../src/types";
 import { DurableStepJournal, passthroughStep } from "./loop-harness";
 
@@ -9,6 +10,7 @@ const UNKNOWN_REF_PATTERN = /unknown result "missing"/u;
 const UNKNOWN_TOOL_PATTERN = /unknown tool "nope"/u;
 const EMPTY_TOOLS_PATTERN = /non-empty map of tools/u;
 const GATED_TOOL_PATTERN = /cannot compose "gated"/u;
+const SECRET_REQUEST_PATTERN = /cannot compose "secret"/u;
 const DUPLICATE_ID_PATTERN = /duplicate code step id "dup"/u;
 const BOOM_PATTERN = /boom/u;
 const MAX_STEPS_PATTERN = /`maxSteps` must be a positive integer/u;
@@ -371,6 +373,13 @@ describe(codeTool, () => {
         const gated: AgentToolDefinition = { ...fakeTool("x"), needsApproval: true };
 
         expect(() => codeTool({ gated })).toThrow(GATED_TOOL_PATTERN);
+    });
+
+    it("rejects composing a secret request (a script can't pause for the owner to supply it)", () => {
+        // The loop pauses on a request only as a top-level tool; a script step would run `execute`, which always throws.
+        const secret = requestSecretTool({ consumer: "charge", description: "Ask for the payment key." });
+
+        expect(() => codeTool({ secret } as Record<string, AnyAgentTool>)).toThrow(SECRET_REQUEST_PATTERN);
     });
 
     it.each([0, -1, 0.5, Number.NaN])("rejects a non-positive-integer maxSteps at declaration time (%s)", (maxSteps) => {

@@ -1,3 +1,252 @@
+## @lunora/ai [1.0.0-alpha.164](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.163...@lunora/ai@1.0.0-alpha.164) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.85
+
+## @lunora/ai [1.0.0-alpha.163](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.162...@lunora/ai@1.0.0-alpha.163) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.84
+
+## @lunora/ai [1.0.0-alpha.162](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.161...@lunora/ai@1.0.0-alpha.162) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.83
+
+## @lunora/ai [1.0.0-alpha.161](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.160...@lunora/ai@1.0.0-alpha.161) (2026-11-02)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.82
+
+## @lunora/ai [1.0.0-alpha.160](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.159...@lunora/ai@1.0.0-alpha.160) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.81
+
+## @lunora/ai [1.0.0-alpha.159](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.158...@lunora/ai@1.0.0-alpha.159) (2026-10-31)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.80
+
+## @lunora/ai [1.0.0-alpha.158](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.157...@lunora/ai@1.0.0-alpha.158) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.79
+
+## @lunora/ai [1.0.0-alpha.157](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.156...@lunora/ai@1.0.0-alpha.157) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.78
+* **@lunora/wire:** upgraded to 1.0.0-alpha.6
+
+## @lunora/ai [1.0.0-alpha.156](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.155...@lunora/ai@1.0.0-alpha.156) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.5
+
+## @lunora/ai [1.0.0-alpha.154](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.153...@lunora/ai@1.0.0-alpha.154) (2026-10-30)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.4
+
+## @lunora/ai [1.0.0-alpha.153](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.152...@lunora/ai@1.0.0-alpha.153) (2026-10-29)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.76
+
+## @lunora/ai [1.0.0-alpha.152](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.151...@lunora/ai@1.0.0-alpha.152) (2026-10-28)
+
+### Performance Improvements
+
+* **agent,ai:** convert tool schemas once, cheaper rag scoring, lexical stack fix ([#1387](https://github.com/anolilab/lunora/issues/1387)) ([38a050d](https://github.com/anolilab/lunora/commit/38a050d1a82c9482c77e9ac884b30157cedca880))
+
+## @lunora/ai [1.0.0-alpha.151](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.150...@lunora/ai@1.0.0-alpha.151) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.75
+
+## @lunora/ai [1.0.0-alpha.150](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.149...@lunora/ai@1.0.0-alpha.150) (2026-10-28)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.74
+
+## @lunora/ai [1.0.0-alpha.149](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.148...@lunora/ai@1.0.0-alpha.149) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.3
+
+## @lunora/ai [1.0.0-alpha.148](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.147...@lunora/ai@1.0.0-alpha.148) (2026-10-27)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.73
+
+## @lunora/ai [1.0.0-alpha.147](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.146...@lunora/ai@1.0.0-alpha.147) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.72
+
+## @lunora/ai [1.0.0-alpha.146](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.145...@lunora/ai@1.0.0-alpha.146) (2026-10-26)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.71
+
+## @lunora/ai [1.0.0-alpha.145](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.144...@lunora/ai@1.0.0-alpha.145) (2026-10-25)
+
+### Bug Fixes
+
+* bug, security and perf fixes from the 2026-10-19 audit ([#1272](https://github.com/anolilab/lunora/issues/1272)) ([7f9d455](https://github.com/anolilab/lunora/commit/7f9d455405fc23686ee253a404b7e231dc5bb702))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.70
+
+## @lunora/ai [1.0.0-alpha.144](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.143...@lunora/ai@1.0.0-alpha.144) (2026-10-24)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.69
+
+## @lunora/ai [1.0.0-alpha.143](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.142...@lunora/ai@1.0.0-alpha.143) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.68
+
+## @lunora/ai [1.0.0-alpha.142](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.141...@lunora/ai@1.0.0-alpha.142) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/wire:** upgraded to 1.0.0-alpha.2
+
+## @lunora/ai [1.0.0-alpha.141](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.140...@lunora/ai@1.0.0-alpha.141) (2026-10-20)
+
+### Features
+
+* **agent:** human-supplied secrets, sensitive-argument masking and usage metering ([#1251](https://github.com/anolilab/lunora/issues/1251)) ([85cb84b](https://github.com/anolilab/lunora/commit/85cb84b8afb23d7c3654d640eb2a5cd2492074df))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.67
+
+## @lunora/ai [1.0.0-alpha.140](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.139...@lunora/ai@1.0.0-alpha.140) (2026-10-20)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.66
+
+## @lunora/ai [1.0.0-alpha.139](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.138...@lunora/ai@1.0.0-alpha.139) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.65
+
+## @lunora/ai [1.0.0-alpha.138](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.137...@lunora/ai@1.0.0-alpha.138) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.64
+
+## @lunora/ai [1.0.0-alpha.137](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.136...@lunora/ai@1.0.0-alpha.137) (2026-10-19)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.63
+
+## @lunora/ai [1.0.0-alpha.136](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.135...@lunora/ai@1.0.0-alpha.136) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.62
+
+## @lunora/ai [1.0.0-alpha.135](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.134...@lunora/ai@1.0.0-alpha.135) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.61
+
+## @lunora/ai [1.0.0-alpha.134](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.133...@lunora/ai@1.0.0-alpha.134) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.60
+
+## @lunora/ai [1.0.0-alpha.133](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.132...@lunora/ai@1.0.0-alpha.133) (2026-10-18)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.59
+
+## @lunora/ai [1.0.0-alpha.132](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.131...@lunora/ai@1.0.0-alpha.132) (2026-10-17)
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.58
+
+## @lunora/ai [1.0.0-alpha.131](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.130...@lunora/ai@1.0.0-alpha.131) (2026-10-16)
+
+### Bug Fixes
+
+* **ai:** validate markdown input and image batches before billing ([#1229](https://github.com/anolilab/lunora/issues/1229)) ([420aaea](https://github.com/anolilab/lunora/commit/420aaeaae103ded6be08f52f2fa464caebb5f85a))
+
+## @lunora/ai [1.0.0-alpha.130](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.129...@lunora/ai@1.0.0-alpha.130) (2026-10-16)
+
+### Features
+
+* **ai:** toMarkdown and image generation ([#1215](https://github.com/anolilab/lunora/issues/1215)) ([d75e414](https://github.com/anolilab/lunora/commit/d75e4147c1b4bf5ce605f367bda8b4c31576fbd8))
+
+
+### Dependencies
+
+* **@lunora/errors:** upgraded to 1.0.0-alpha.57
+
 ## @lunora/ai [1.0.0-alpha.129](https://github.com/anolilab/lunora/compare/@lunora/ai@1.0.0-alpha.128...@lunora/ai@1.0.0-alpha.129) (2026-10-15)
 
 ### Performance Improvements

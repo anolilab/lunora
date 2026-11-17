@@ -15,7 +15,7 @@
 <div align="center">
 
 [![typescript-image][typescript-badge]][typescript-url]
-[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![Apache-2.0 licence][license-badge]][license]
 [![npm version][npm-version-badge]][npm-version]
 [![npm downloads][npm-downloads-badge]][npm-downloads]
 [![PRs Welcome][prs-welcome-badge]][prs-welcome]
@@ -85,6 +85,7 @@ const { mutate, pending } = useMutation(api.messages.send);
 | `useInfiniteQuery`    | `useInfiniteQuery`    | Infinite-scroll variant of `usePaginatedQuery`.                                   |
 | `useAuth`             | `useAuth`             | Reactive auth: readonly `token`/`user`/`status` refs plus `setToken`.             |
 | `usePresence`         | `usePresence`         | Collaborative-awareness — heartbeat + live present-members `ShallowRef`.          |
+| `useLiveTopic`        | `useLiveTopic`        | Follow one declared live topic as `lastEvent` / `error` refs.                     |
 | `useFlag`             | `useFlag`             | Live OpenFeature flag as a readonly `Ref` — holds `default` until resolved.       |
 | `useFlags`            | `useFlags`            | Batch variant — a readonly `Ref` of one value per key in the defaults map.        |
 | `useRateLimit`        | `useRateLimit`        | Client-side rate-limit mirror — `ok`, `disabled`, `retryAfter` as ComputedRefs.   |
@@ -92,6 +93,8 @@ const { mutate, pending } = useMutation(api.messages.send);
 | `hydratePreloaded`    | `usePreloadedQuery`   | Seed a query synchronously from an SSR `Preloaded` token, then go live.           |
 | `useAgentToolEvents`  | `useAgentToolEvents`  | One agent thread's tool lifecycle as a `ComputedRef` of discriminated events.     |
 | `useVoiceAgent`       | `useVoiceAgent`       | Full-duplex voice call — refs for status/transcript/level, `startCall`/`endCall`. |
+
+`useLiveTopic(topic, options?)` takes the reference `_generated/live.ts` hands out, e.g. `useLiveTopic(live.posts.post({ postId }), { onEvent })`, as a value, a ref or a getter, so a reactive `postId` resubscribes. The stream's route is resolved against the injected `LunoraClient`, and `lastEvent` and `onEvent` are typed by the payload the topic declares. Each connection option (`shardKey`, `sessionKey`, `headers`, `withCredentials`, `retryDelay`, `maxDelayMs`) may be a plain value, a ref, or a getter. `onEvent` and `onError` are plain functions and never trigger a resubscribe. The SSE connection is shared by stream route, and it opens nothing during SSR.
 
 `useVoiceAgent` opens nothing until `startCall()` — that call is what requests the microphone, so it must run from a user gesture. `endCall()` releases the socket, the mic tracks and the Web Audio graph, and `onScopeDispose` runs it for you on unmount.
 
@@ -123,11 +126,11 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Lunora vue package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora vue package is open-sourced software licensed under the [Apache-2.0][license].
 
 <!-- badges -->
 
-[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license-badge]: https://img.shields.io/badge/license-Apache--2.0-blue.svg?style=for-the-badge
 [license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
 [npm-version-badge]: https://img.shields.io/npm/v/@lunora/vue?style=for-the-badge
 [npm-version]: https://www.npmjs.com/package/@lunora/vue

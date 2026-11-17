@@ -1,5 +1,5 @@
-@visulima/fs@6.0.29
-===================
+@visulima/fs@7.0.0
+==================
 
 MIT License
 
@@ -537,7 +537,7 @@ Repository: sindresorhus/type-fest
 
 <!-- /TYPE_DEPENDENCIES -->
 
-@visulima/path@4.0.0
+@visulima/path@5.0.0
 ====================
 
 MIT License

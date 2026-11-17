@@ -113,6 +113,72 @@ describe("offlineQueue", () => {
         expect(error.message).toBe("CLIENT_CLOSED");
         expect(error.code).toBe("CLIENT_CLOSED");
     });
+
+    it("clear() rejects a write a replay has drained, once, without promising it will replay", async () => {
+        expect.assertions(5);
+
+        const persistence = createInMemoryPersistence();
+        const queue = new OfflineQueue({}, { persistence });
+        const rejected = vi.fn<(error: unknown) => void>();
+
+        queue.enqueue({ args: {}, functionPath: "a", id: "w1", reject: rejected, resolve: () => undefined });
+        await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+        });
+
+        // The replay owns the write now: out of `size`, still waiting on the server.
+        queue.drain();
+        queue.clear();
+
+        expect(rejected).toHaveBeenCalledTimes(1);
+
+        const error = rejected.mock.calls[0]?.[0] as Error & { code?: string; persisted?: boolean };
+
+        expect(error.code).toBe("CLIENT_CLOSED");
+        // An in-flight replay may still settle it and remove the record, so the caller is not told it will replay.
+        expect(error.persisted).toBe(false);
+        expect(queue.replaying).toBe(0);
+        // Closing does not remove the record itself.
+        await expect(persistence.load()).resolves.toHaveLength(1);
+    });
+});
+
+describe("offlineQueue — drainConflict", () => {
+    it("settles an item whose precondition throws and keeps the rest queued in order", () => {
+        expect.assertions(6);
+
+        const queue = new OfflineQueue();
+        const thrown = new Error("precondition blew up");
+        const reject = vi.fn<(error: unknown) => void>();
+
+        for (const path of ["a", "b", "c"]) {
+            queue.enqueue({
+                args: {},
+                functionPath: path,
+                ...(path === "b"
+                    ? {
+                          precondition: () => {
+                              throw thrown;
+                          },
+                      }
+                    : {}),
+                reject: path === "b" ? reject : () => undefined,
+                resolve: () => undefined,
+            });
+        }
+
+        const conflicted = queue.drainConflict();
+
+        expect(conflicted.map((item) => item.functionPath)).toEqual(["b"]);
+        expect(reject).toHaveBeenCalledTimes(1);
+
+        const error = reject.mock.calls[0]?.[0] as Error & { code?: string };
+
+        expect(error.code).toBe("OFFLINE_PRECONDITION_FAILED");
+        expect(error.cause).toBe(thrown);
+        expect(queue.size).toBe(2);
+        expect(queue.drain().map((item) => item.functionPath)).toEqual(["a", "c"]);
+    });
 });
 
 describe("offlineQueue — persistence", () => {
@@ -189,6 +255,11 @@ describe("offlineQueue — persistence", () => {
 
         queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
         queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
+
+        // The removal follows the dropped entry's own append, so it lands a few turns later.
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
 
         const persisted = await persistence.load();
 
@@ -447,6 +518,105 @@ describe("offlineQueue — persistence error reporting", () => {
         expect(persisted[0]?.identity).toBe("new");
     });
 
+    it("restampIdentity relabels a write a flush has drained but not settled", async () => {
+        expect.assertions(4);
+
+        const base = createInMemoryPersistence();
+
+        await base.append({ args: {}, functionPath: "posts:create", id: "1", identity: "old" });
+
+        // `replace` is reached after `rewriteStamp` awaits the append, so the test waits on the call itself.
+        let onReplace: ((call: { write: Promise<void> }) => void) | undefined;
+        const replaceCalled = new Promise<{ write: Promise<void> }>((resolve) => {
+            onReplace = resolve;
+        });
+        const persistence: PersistenceAdapter = {
+            ...base,
+            replace: (mutation) => {
+                const write = base.replace(mutation);
+
+                onReplace?.({ write });
+
+                return write;
+            },
+        };
+        const queue = new OfflineQueue({}, { persistence });
+
+        await queue.hydrate();
+
+        const drained = queue.drain();
+
+        queue.restampIdentity("old", "new");
+
+        expect(drained[0]?.identity).toBe("new");
+
+        const call = await replaceCalled;
+
+        await call.write;
+
+        queue.requeue(drained);
+
+        expect(drained[0]?.identity).toBe("new");
+
+        const persisted = await base.load();
+
+        expect(persisted[0]?.identity).toBe("new");
+        expect(queue.drain()[0]?.identity).toBe("new");
+    });
+
+    it("restampIdentity leaves a drained write that was then discarded alone", async () => {
+        expect.assertions(2);
+
+        const base = createInMemoryPersistence();
+        const replaced: string[] = [];
+        let onReplace: ((call: { write: Promise<void> }) => void) | undefined;
+        const firstReplaceCalled = new Promise<{ write: Promise<void> }>((resolve) => {
+            onReplace = resolve;
+        });
+        const persistence: PersistenceAdapter = {
+            ...base,
+            replace: (mutation) => {
+                replaced.push(mutation.id);
+
+                const write = base.replace(mutation);
+
+                onReplace?.({ write });
+
+                return write;
+            },
+        };
+        const queue = new OfflineQueue({}, { persistence });
+
+        queue.enqueue({
+            args: {},
+            functionPath: "posts:create",
+            id: "2",
+            identity: "old",
+            reject: () => undefined,
+            resolve: () => undefined,
+        });
+        queue.enqueue({
+            args: {},
+            functionPath: "posts:create",
+            id: "3",
+            identity: "old",
+            reject: () => undefined,
+            resolve: () => undefined,
+        });
+
+        const [discarded] = queue.drain((item) => item.id === "2");
+
+        queue.discard("2");
+        queue.restampIdentity("old", "new");
+
+        const call = await firstReplaceCalled;
+
+        await call.write;
+
+        expect(replaced).toStrictEqual(["3"]);
+        expect(discarded?.identity).toBe("old");
+    });
+
     it("restampIdentity keeps the record's place in FIFO order", async () => {
         expect.assertions(1);
 
@@ -635,9 +805,10 @@ describe("offlineQueue — persistence error reporting", () => {
         queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
         queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
 
-        // Allow both the append and remove promise rejections to settle
-        await Promise.resolve();
-        await Promise.resolve();
+        // Allow the append to land and the remove that follows it to be rejected
+        await new Promise((resolve) => {
+            setTimeout(resolve, 0);
+        });
 
         const removeCalls = handler.mock.calls.filter((call) => call[0]?.operation === "remove");
 

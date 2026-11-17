@@ -12,9 +12,9 @@
 import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
-import { SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
+import { SQLiteDialect } from "drizzle-orm/sqlite-core";
 
-const SQLITE_DIALECT = new SQLiteSyncDialect();
+const SQLITE_DIALECT = new SQLiteDialect();
 
 /**
  * The limits Workerd's SQLite build sets far below stock SQLite's, and the

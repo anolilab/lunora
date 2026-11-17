@@ -13,6 +13,16 @@ export interface FunctionIR {
 
     args: Record<string, ValidatorIR>;
 
+    /** A channel registration: a `defineRoom` and its room name. Absent on every other registration. */
+    channel?: { kind: "room"; name: string };
+
+    /**
+     * The doc comment on the statement that declares the registration, when there
+     * is one. Read from the JSDoc description only (tags are dropped). Absent when
+     * the export has no doc comment, or when it is an `export default`.
+     */
+    description?: string;
+
     exportName: string;
 
     /**
@@ -36,13 +46,33 @@ export interface FunctionIR {
 
     /**
      * Set on lifecycle hooks (`onConnect`/`onDisconnect`/`onShardInit`/
-     * `onQueryChange`/`onWhisper`): the moment the hook fires on. Such a function
-     * is also an internal registration (so it lands in `LUNORA_FUNCTIONS` for path
-     * dispatch) — a mutation for every moment except `whisper`, which is a query;
-     * emit additionally collects it into the `LUNORA_LIFECYCLE_HOOKS` manifest
-     * keyed by this moment. Absent on ordinary functions.
+     * `onQueryChange`/`onWhisper`), on a `defineRoom` registration, and on a
+     * `defineWebSocket` route: the moment the hook fires on. Such a function is
+     * also an internal registration (so it lands in `LUNORA_FUNCTIONS` for path
+     * dispatch) — a mutation for every moment except `whisper`, which is a
+     * query; emit additionally collects the socket moments into the
+     * `LUNORA_LIFECYCLE_HOOKS` manifest keyed by this moment, a `room`
+     * registration into the `LUNORA_ROOMS` topic→path map, and a `socket` route
+     * into the `LUNORA_SOCKETS` path→registration map. Absent on ordinary
+     * functions.
      */
-    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "whisper";
+    lifecycle?: "connect" | "disconnect" | "init" | "reactor" | "socket" | "whisper";
+
+    /**
+     * The chain's merged `.meta(...)`, read only for the lazy registry: its stub
+     * stands in for the function until the module loads, so it carries the
+     * declaration `procedureMeta(fn)` reads. `"unloaded"` when the declaration is
+     * not a literal codegen can copy. Absent on eager builds — the registry holds
+     * the real function there.
+     */
+    meta?: Record<string, unknown> | "unloaded";
+
+    /**
+     * Serialized TS source for the handler's return type, with `Promise<T>`
+     * unwrapped so callers see `T` directly. Defaults to `"unknown"` when
+     * ts-morph cannot resolve the type (typically because the consuming
+     * project lacks a tsconfig that can reach `@lunora/server`).
+     */
 
     /**
      * The `.output(validator)` declaration, when the chain has one.
@@ -55,12 +85,31 @@ export interface FunctionIR {
     output?: ValidatorIR;
 
     /**
-     * Serialized TS source for the handler's return type, with `Promise<T>`
-     * unwrapped so callers see `T` directly. Defaults to `"unknown"` when
-     * ts-morph cannot resolve the type (typically because the consuming
-     * project lacks a tsconfig that can reach `@lunora/server`).
+     * Set on a query that may read `ctx.ip`, decided statically and failing closed: the shard never resumes it
+     * warm, whatever fingerprint a client presents, because its rows can depend on the address the cursor was read at.
      */
+    readsIp?: true;
+
     returnType: string;
+
+    /**
+     * A `defineWebSocket` route: the literal URL `path` it serves and whether it requires a session (`auth`). Read at
+     * build time so the lazy `LUNORA_SOCKETS` map can be emitted without evaluating the route's module.
+     * `origin` names the `defineWebSocket` call the route was read from: two export names of one call are one route.
+     */
+    socket?: { auth: boolean; origin?: string; path: string };
+
+    /**
+     * Set when `args` was read off a declaration-file type (a function re-exported
+     * from a published component) rather than from `.input(...)`. The types are
+     * exact, but bounds and refinements (`.max()`, `.check()`) are not in a type,
+     * so no AOT validator may be compiled from them: the runtime parses through
+     * the function's own `args`. Nor does the type say whether the function is
+     * paid, what its `.meta()` is, or which args are `v.sensitive`, so its module
+     * is loaded eagerly under lazy functions and its client reference is marked
+     * sensitive.
+     */
+    typeDerivedArgs?: true;
 
     /**
      * Call surface the function is exposed on. Absent (or `"public"`) means it
@@ -68,6 +117,13 @@ export interface FunctionIR {
      * `internal` object and is rejected by the DO's external RPC path.
      */
     visibility?: "internal" | "public";
+
+    /**
+     * Literal price from `.x402({ price })`. Lazy registry output needs this
+     * before importing the procedure module so the origin can paywall every
+     * transport synchronously; a missing price means the source was dynamic.
+     */
+    x402?: { price?: number | string };
 }
 
 /**
@@ -89,6 +145,15 @@ export interface ShapeIR {
     exportName: string;
     /** Path relative to `<projectRoot>/lunora/` without extension — always `"shapes"`. */
     filePath: string;
+
+    /** 1-based start line of the `export const` declaring the shape, without leading comments. */
+    line?: number;
+
+    /**
+     * The shape's `where` may read `ctx.ip`, decided statically and failing closed (same rule as {@link FunctionIR.readsIp}),
+     * so the shard never resumes it warm.
+     */
+    readsIp?: true;
 
     /**
      * The `table` string literal from the `defineShape({ table })` call, lifted
@@ -168,11 +233,11 @@ export interface MutatorIR {
 }
 
 /**
- * A whole-row `ctx.db.replace(id, document)` write discovered inside a custom
+ * A whole-row `ctx.db.replace("table", id, document)` write discovered inside a custom
  * mutator's inline `server` impl (`lunora/mutators.ts`) — the input the
  * `mutator_full_row_replace` advisor lint consumes. A `replace` overwrites the
  * entire row, so a concurrent edit to a different column on a synced table is
- * clobbered; `ctx.db.patch(id, { field })` merges at the column level instead.
+ * clobbered; `ctx.db.patch("table", id, { field })` merges at the column level instead.
  * Structurally identical to `AdvisorMutatorWrite` so it passes straight through
  * to the advisor without conversion, exactly as `InsertWriteIR` does for
  * `AdvisorInsertWrite`.
@@ -291,6 +356,8 @@ export interface ProcedureMiddlewareIR {
      */
     hasEmailArg?: boolean;
     kind: "action" | "mutation" | "query";
+    /** 1-based start line of the declaring statement (the `export const`), without leading comments. */
+    line?: number;
     /** `true` when the handler reaches an outbound surface (`ctx.fetch`, mail, queues, storage, sql, ai, …) that can fail. */
     reachesOutbound?: boolean;
     /** `true` when the handler runs any AI generation, bounded or not. */

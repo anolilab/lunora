@@ -55,6 +55,8 @@
  */
 
 import { fromBase64, toBase64 } from "../../../shared/base64";
+import type { NodeKind } from "../../../shared/classify-node";
+import { classifyNode, nativeHref, nativeMapEntries, nativeSetValues, nativeTime, nativeViewBytes } from "../../../shared/classify-node";
 import { isPlainObject } from "../../../shared/is-plain-object";
 
 /**
@@ -143,6 +145,21 @@ const setField = (target: Record<string, unknown>, key: string, fieldValue: unkn
     }
 };
 
+// Through the descriptor, like an object field: a getter element would run here and
+// again in the caller's `JSON.stringify`, so an accessor goes to the encoder, which
+// reads it once. A hole is skipped, as `Array#some` skips it.
+const arrayElementsNeedEncoding = (value: ReadonlyArray<unknown>, needs: (item: unknown) => boolean): boolean => {
+    for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, index);
+
+        if (descriptor !== undefined && (!("value" in descriptor) || descriptor.value === undefined || needs(descriptor.value))) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 /**
  * Would {@link encodeWire} change this value, or is it already the JSON it will
  * become?
@@ -175,13 +192,9 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         return true;
     }
 
-    if (value === null) {
-        return false;
-    }
-
     const kind = typeof value;
 
-    if (kind === "string" || kind === "boolean") {
+    if (value === null || kind === "string" || kind === "boolean") {
         return false;
     }
 
@@ -197,22 +210,31 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
         return true;
     }
 
-    if (Array.isArray(value)) {
+    // `JSON.stringify` calls a `toJSON` — own (even non-enumerable) or inherited —
+    // where `encodeWire` copies only the enumerable fields, so the two disagree.
+    // `in`, not a read: a `toJSON` getter must not run here.
+    if ("toJSON" in (value as object)) {
+        return true;
+    }
+
+    const nodeKind = classifyNode(value as object);
+
+    if (nodeKind === "array") {
         // An array whose first element IS the sentinel gets wrapped as an
         // `"arr"` payload. Only a string equal to the sentinel encodes to it, so
         // testing the raw element is the same test `encodeWire` makes on the
         // encoded one.
-        if (value.length > 0 && value[0] === TAG) {
+        if ((value as unknown[]).length > 0 && (value as unknown[])[0] === TAG) {
             return true;
         }
 
         // `undefined` in an array POSITION is tagged, where `JSON.stringify`
         // would write `null` — the one place the two disagree on a value both
         // can represent.
-        return value.some((item) => item === undefined || needsWireEncoding(item, depth + 1));
+        return arrayElementsNeedEncoding(value as unknown[], (item) => needsWireEncoding(item, depth + 1));
     }
 
-    if (!isPlainObject(value)) {
+    if (nodeKind !== "plain") {
         // Date, Map, Set, URL, bytes, Error — and class instances, which
         // `encodeWire` refuses outright.
         return true;
@@ -222,20 +244,20 @@ const needsWireEncoding = (value: unknown, depth = 0): boolean => {
     // encoding path. Both forms stringify the same today, but the handling is
     // deliberate enough that routing it through the real encoder is the safer
     // reading of "not provably identity".
-    if (Object.hasOwn(value, UNSAFE_KEY)) {
+    if (Object.hasOwn(value as object, UNSAFE_KEY)) {
         return true;
     }
 
-    for (const key of Object.keys(value)) {
-        const field = value[key];
+    // Read through the descriptor: a getter would run here and again when the
+    // caller stringifies the original, so an accessor is never identity and the
+    // encoder reads it once. Both sides drop an `undefined` field.
+    const record = value as Record<string, unknown>;
 
-        // Both sides drop an `undefined` object field, so it is not a difference.
-        if (field !== undefined && needsWireEncoding(field, depth + 1)) {
-            return true;
-        }
-    }
+    return Object.keys(record).some((key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(record, key);
 
-    return false;
+        return descriptor === undefined || !("value" in descriptor) || (descriptor.value !== undefined && needsWireEncoding(descriptor.value, depth + 1));
+    });
 };
 
 const encodeBigint = (value: bigint): unknown[] => {
@@ -309,50 +331,52 @@ const encodeError = (error: Error & Record<string, unknown>, next: Recurse): unk
 
 const encodeView = (view: ArrayBufferView): unknown[] => {
     const ctorName = view.constructor.name;
-    const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    const bytes = nativeViewBytes(view);
 
     // `Uint8Array` keeps Cap'n Web's 2-element form; every other view carries
     // its constructor name so `decodeWire` rebuilds the exact view type.
     return ctorName === "Uint8Array" ? [TAG, "bytes", toBase64(bytes)] : [TAG, "bytes", toBase64(bytes), ctorName];
 };
 
-/** The tagged form of a supported built-in, or `undefined` when `value` is not one. */
-const encodeBuiltin = (value: object, next: Recurse): unknown => {
-    if (value instanceof Date) {
-        // Epoch-ms (matches `v.date()`/`v.timestamp()`'s own wire form). An invalid
-        // Date's `getTime()` is `NaN`, which raw JSON coerces to `null` (→ epoch 0);
-        // route the epoch through the codec's own number handling so `NaN` survives
-        // as a `["nan"]` tag and `decodeWire` rebuilds an invalid Date exactly.
-        return [TAG, "date", next(value.getTime())];
+/** The tagged form of a supported built-in, or `undefined` when `kind` names none. */
+const encodeBuiltin = (value: object, kind: NodeKind, next: Recurse): unknown => {
+    switch (kind) {
+        case "builtin-array-buffer": {
+            return [TAG, "bytes", toBase64(new Uint8Array(value as ArrayBuffer)), "ArrayBuffer"];
+        }
+        case "builtin-date": {
+            // Epoch-ms (matches `v.date()`/`v.timestamp()`'s own wire form). An invalid
+            // Date's `getTime()` is `NaN`, which raw JSON coerces to `null` (→ epoch 0);
+            // route the epoch through the codec's own number handling so `NaN` survives
+            // as a `["nan"]` tag and `decodeWire` rebuilds an invalid Date exactly.
+            return [TAG, "date", next(nativeTime(value))];
+        }
+        case "builtin-error": {
+            return encodeError(value as Error & Record<string, unknown>, next);
+        }
+        case "builtin-map": {
+            // Entries recurse (keys and values), so bigint/bytes/nested structures in a
+            // Map round-trip. `decodeWire` rebuilds a real `Map`.
+            return [TAG, "map", nativeMapEntries(value).map(([k, v]) => [next(k), next(v)])];
+        }
+        case "builtin-set": {
+            return [TAG, "set", nativeSetValues(value).map((item) => next(item))];
+        }
+        case "builtin-url": {
+            return [TAG, "url", nativeHref(value)];
+        }
+        case "builtin-view": {
+            return encodeView(value as ArrayBufferView);
+        }
+        default: {
+            return undefined;
+        }
     }
-
-    if (value instanceof Error) {
-        return encodeError(value as Error & Record<string, unknown>, next);
-    }
-
-    if (value instanceof URL) {
-        return [TAG, "url", value.href];
-    }
-
-    if (value instanceof Map) {
-        // Entries recurse (keys and values), so bigint/bytes/nested structures in a
-        // Map round-trip. `decodeWire` rebuilds a real `Map`.
-        return [TAG, "map", [...(value as Map<unknown, unknown>).entries()].map(([k, v]) => [next(k), next(v)])];
-    }
-
-    if (value instanceof Set) {
-        return [TAG, "set", [...(value as Set<unknown>)].map((item) => next(item))];
-    }
-
-    if (value instanceof ArrayBuffer) {
-        return [TAG, "bytes", toBase64(new Uint8Array(value)), "ArrayBuffer"];
-    }
-
-    return ArrayBuffer.isView(value) ? encodeView(value) : undefined;
 };
 
-const encodeArray = (value: ReadonlyArray<unknown>, next: Recurse): unknown[] => {
-    const encoded = value.map((item) => next(item));
+const encodeArray = (value: ReadonlyArray<unknown>, depth: number): unknown[] => {
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with encodeWire
+    const encoded = value.map((item) => encodeWire(item, depth));
 
     // Escape a user array that would otherwise be mistaken for a tagged value
     // (its first element is literally the sentinel string). Wrap it as an
@@ -360,7 +384,7 @@ const encodeArray = (value: ReadonlyArray<unknown>, next: Recurse): unknown[] =>
     return encoded.length > 0 && encoded[0] === TAG ? [TAG, "arr", encoded] : encoded;
 };
 
-const encodePlainObject = (source: Record<string, unknown>, next: Recurse): Record<string, unknown> => {
+const encodePlainObject = (source: Record<string, unknown>, depth: number): Record<string, unknown> => {
     const result: Record<string, unknown> = {};
 
     for (const key of Object.keys(source)) {
@@ -369,7 +393,8 @@ const encodePlainObject = (source: Record<string, unknown>, next: Recurse): Reco
         // Drop `undefined` fields (matches `JSON.stringify`, keeps pure-JSON
         // objects byte-identical).
         if (field !== undefined) {
-            setField(result, key, next(field));
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with encodeWire
+            setField(result, key, encodeWire(field, depth));
         }
     }
 
@@ -411,32 +436,34 @@ const encodeWire = (value: unknown, depth = 0): unknown => {
         return value;
     }
 
-    const next: Recurse = (item) => encodeWire(item, depth + 1);
-    const builtin = encodeBuiltin(value, next);
+    // One classification per node (one prototype read): a Proxy can not be asked "plain?"
+    // and then "Date?" and answer differently. Arrays and plain objects are nearly every
+    // node of a real payload and return before any built-in brand check runs.
+    const kind = classifyNode(value);
+
+    if (kind === "array") {
+        return encodeArray(value as unknown[], depth + 1);
+    }
+
+    if (kind === "plain") {
+        return encodePlainObject(value as Record<string, unknown>, depth + 1);
+    }
+
+    const builtin = encodeBuiltin(value, kind, (item) => encodeWire(item, depth + 1));
 
     if (builtin !== undefined) {
         return builtin;
     }
 
-    if (Array.isArray(value)) {
-        return encodeArray(value as unknown[], next);
-    }
-
     // Fail loud on any remaining non-plain object (`RegExp`, `Headers`, a class
-    // instance, …). These have no own enumerable string keys, so the plain-object
-    // branch below would silently encode them to `{}` — corruption a caller can't
-    // detect. Only plain objects (`Object.prototype` or a null prototype) fall
-    // through. A thrown TypeError surfaces the unsupported value at the send site.
-    if (!isPlainObject(value)) {
-        const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
+    // instance, …). These have no own enumerable string keys, so encoding them as a
+    // record would silently yield `{}` — corruption a caller can't detect. A thrown
+    // TypeError surfaces the unsupported value at the send site.
+    const name = (value as { constructor?: { name?: string } }).constructor?.name ?? "value";
 
-        throw new TypeError(
-            `wire-codec: cannot encode a ${name} over the Lunora wire — only plain objects, arrays, and the supported built-ins (Date, Error, URL, Map, Set, ArrayBuffer/typed arrays, bigint) round-trip`,
-        );
-    }
-
-    // Plain object — recurse over own enumerable string keys.
-    return encodePlainObject(value, next);
+    throw new TypeError(
+        `wire-codec: cannot encode a ${name} over the Lunora wire — only plain objects, arrays, and the supported built-ins (Date, Error, URL, Map, Set, ArrayBuffer/typed arrays, bigint) round-trip`,
+    );
 };
 
 const decodeBigint = (frame: ReadonlyArray<unknown>): bigint => {
@@ -675,7 +702,7 @@ const decodeTagged = (frame: ReadonlyArray<unknown>, next: Recurse): unknown => 
     }
 };
 
-const decodeObject = (source: Record<string, unknown>, next: Recurse): Record<string, unknown> => {
+const decodeObject = (source: Record<string, unknown>, depth: number): Record<string, unknown> => {
     const result: Record<string, unknown> = {};
 
     for (const key of Object.keys(source)) {
@@ -684,7 +711,8 @@ const decodeObject = (source: Record<string, unknown>, next: Recurse): Record<st
         // (and its prototype chain). `setField` defines it as a plain own data
         // property instead so the value round-trips faithfully without any
         // pollution (Cap'n Web #190).
-        setField(result, key, next(source[key]));
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with decodeWire
+        setField(result, key, decodeWire(source[key], depth));
     }
 
     return result;
@@ -700,23 +728,43 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
         return value;
     }
 
-    const next: Recurse = (item) => decodeWire(item, depth + 1);
-
+    // The recursion closure is built only for tagged frames: plain arrays and
+    // objects are nearly every node, and a closure per node is measurable.
     if (Array.isArray(value)) {
         const frame: unknown[] = value;
 
-        return frame[0] === TAG ? decodeTagged(frame, next) : frame.map((item) => next(item));
+        return frame[0] === TAG ? decodeTagged(frame, (item) => decodeWire(item, depth + 1)) : frame.map((item) => decodeWire(item, depth + 1));
     }
 
-    return decodeObject(value as Record<string, unknown>, next);
+    return decodeObject(value as Record<string, unknown>, depth + 1);
 };
 
 /**
- * Parse a stored JSON blob back into a document: `JSON.parse`, then
- * {@link decodeWire}, then {@link isPlainObject}. Returns `undefined` for
- * anything that is not a document — unparseable text, a malformed tag
- * (`decodeWire` throws on an over-long bigint or past the nesting cap), or a
- * root that decodes to a non-plain object.
+ * `JSON.parse` then {@link decodeWire}, skipping the decode when `text` holds
+ * no {@link TAG}. `JSON.stringify` writes every tagged frame's tag verbatim,
+ * so its absence proves the parsed tree is already the value, and the full
+ * rebuild `decodeWire` does would only copy it. A string that merely contains
+ * the tag text takes the decode path, which leaves it alone.
+ *
+ * Text with a `\u` escape always takes the decode path, because JSON allows
+ * the tag to be spelled that way (`\u0024` for `$`) and the check would miss it.
+ *
+ * Keep `decodeWire(JSON.parse(text))` where a peer controls the text: the
+ * skipped path also skips {@link MAX_DEPTH}, so a tagless tree nested deeper
+ * than 64 levels parses instead of throwing.
+ */
+const parseWire = (text: string): unknown => {
+    const parsed: unknown = JSON.parse(text);
+
+    return text.includes(TAG) || text.includes(String.raw`\u`) ? decodeWire(parsed) : parsed;
+};
+
+/**
+ * Parse a stored JSON blob back into a document: {@link parseWire}, then
+ * {@link isPlainObject}. Returns `undefined` for anything that is not a document:
+ * unparseable text, a malformed tag (`decodeWire` throws on an over-long bigint,
+ * or past the nesting cap in tagged text), or a root that decodes to a non-plain
+ * object.
  *
  * Never throws, because its callers are read paths that must degrade rather
  * than fail: a display surface shows the row unexpanded, an editor falls back
@@ -726,7 +774,7 @@ const decodeWire = (value: unknown, depth = 0): unknown => {
  */
 const decodeDocument = (text: string): Record<string, unknown> | undefined => {
     try {
-        const value = decodeWire(JSON.parse(text));
+        const value = parseWire(text);
 
         return isPlainObject(value) ? value : undefined;
     } catch {
@@ -760,4 +808,4 @@ const encodeArgsOrThrow = (label: string, path: string, args: unknown): unknown 
 };
 
 export { isPlainObject } from "../../../shared/is-plain-object";
-export { decodeDocument, decodeWire, encodeArgsOrThrow, encodeWire, needsWireEncoding, TAG as WIRE_TAG };
+export { decodeDocument, decodeWire, encodeArgsOrThrow, encodeWire, needsWireEncoding, parseWire, TAG as WIRE_TAG };

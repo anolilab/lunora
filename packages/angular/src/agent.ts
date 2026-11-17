@@ -60,8 +60,8 @@ interface AgentChatMessage {
     optimistic?: boolean;
     role: "assistant" | "system" | "tool" | "user";
     seq: number;
-    /** Approval lifecycle marker on a human-in-the-loop tool message. */
-    status?: "approved" | "awaiting_approval" | "rejected";
+    /** Approval or secret-request lifecycle marker on a human-in-the-loop tool message. */
+    status?: "approved" | "awaiting_approval" | "awaiting_secret" | "rejected";
     toolCallId?: string;
     toolCalls?: ReadonlyArray<{ id: string; input: unknown; name: string }>;
     toolName?: string;

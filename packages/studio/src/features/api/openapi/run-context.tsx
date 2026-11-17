@@ -1,8 +1,8 @@
 import { LunoraError } from "@lunora/errors";
-import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useState } from "react";
 
+import useStudioClient from "../../../hooks/use-studio-client";
 import { useT } from "../../../i18n/i18n-context";
 import { adminRef, callOptions, dispatchByKind, errorMessage, fireAndForget } from "../../../lib/internal";
 import restDispatch from "../../../lib/rest-dispatch";
@@ -65,7 +65,7 @@ interface OperationRunProviderProps {
  */
 const OperationRunProvider = ({ children, operation }: OperationRunProviderProps): ReactElement => {
     const t = useT();
-    const client = useLunora();
+    const client = useStudioClient();
 
     const [argsText, setArgsText] = useState<string>(() => seedArgs(operation));
     const [shardKey, setShardKey] = useState<string>("");
