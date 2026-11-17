@@ -396,7 +396,7 @@
     "test-workerd":
         "name": "Workerd integration (${{ matrix.package }})"
         "if": "needs.files-changed.outputs.packages == 'true' && github.event_name != 'merge_group'"
-        "needs": "files-changed"
+        "needs": ["files-changed", "build-dev"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20
         "strategy":
@@ -473,17 +473,17 @@
                     exit 1
                   fi
 
-            # `vis run build` walks upstream deps via dependsOn, so the package's dist
-            # and everything it imports exists. `pnpm --filter "pkg..."` does not build
-            # deps reliably. An example is an app, not a library: only its dependencies
-            # are built (`name^...`), since its suites import their dist, not its own.
-            - "name": "Build package and dependencies"
+            # Built once by `build-dev` (see the comment there). Every package's dist, which
+            # covers the leg's package and everything it or the example imports.
+            - "name": "Download the development dist/ directories"
+              "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
+              "with":
+                  "name": "packages-dist-dev"
+                  "path": "${{ runner.temp }}"
+
+            - "name": "Unpack the development dist/ directories"
               "run": |
-                  project="$(node -p "require('./${{ matrix.package }}/project.json').name")"
-                  case "${{ matrix.package }}" in
-                    examples/*) pnpm exec vis run build --filter "${project}^..." ;;
-                    *) pnpm exec vis run build --query "project=${project}" ;;
-                  esac
+                  tar -xf "${RUNNER_TEMP}/packages-dist-dev.tar"
 
             - "name": "Run workerd suites"
               "env":
@@ -657,7 +657,7 @@
     "e2e":
         "name": "E2E (Playwright + Miniflare)"
         "if": "needs.files-changed.outputs.e2e == 'true' && github.event_name != 'merge_group'"
-        "needs": "files-changed"
+        "needs": ["files-changed", "build-dev"]
         "runs-on": "ubuntu-latest"
         # 30 covered the playground and examples suites; the saas kit adds a cold boot of
         # up to 4 minutes and a 3-minute test budget with two retries.
@@ -687,15 +687,20 @@
 
             # E2E global setup boots the playground's dev server, which imports the
             # packages from dist and runs the `lunora` bin — so they must be built.
-            # The build (CPU/disk) and the browser download (network) bottleneck on
-            # different resources, so `parallel:` overlaps them; both finish before
-            # the suite starts.
-            - "parallel":
-                  - "name": "Build packages"
-                    "run": "pnpm run build:packages"
+            # Built once by `build-dev` (see the comment there); tar keeps the bin's
+            # executable bit.
+            - "name": "Download the development dist/ directories"
+              "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
+              "with":
+                  "name": "packages-dist-dev"
+                  "path": "${{ runner.temp }}"
 
-                  - "name": "Install Playwright browsers"
-                    "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
+            - "name": "Unpack the development dist/ directories"
+              "run": |
+                  tar -xf "${RUNNER_TEMP}/packages-dist-dev.tar"
+
+            - "name": "Install Playwright browsers"
+              "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
 
             - "name": "Run E2E suite"
               "env":
@@ -731,9 +736,63 @@
                       tests/e2e/playwright-report-saas
                   "retention-days": 7
 
-    # The production build the template, Worker-size and Worker-startup jobs consume, built
-    # once per run instead of once per job (17 jobs, ~34 runner-minutes per run). Not the
-    # vis cache: Tests never runs on `push`, so `alpha` never saves one and a PR's first run
+    # The development build the workerd legs and E2E consume, built once per run instead of
+    # once per job (24 jobs, ~14 runner-minutes of build per run), for the reasons and with
+    # the same guarantees as `build-prod` below: a fresh, per-run, per-commit artifact.
+    #
+    # Everything publishable, not each leg's subset: a leg's package and its imports are
+    # always inside it, and every `tag=type:package` project writes only to its dist/.
+    # Development, not `:prod`: these suites ran against the development build before this
+    # job existed. Coverage and Test keep their own affected builds: they are the run's
+    # critical path and would start later waiting for this job than they save.
+    #
+    # Keep "if" equal to the OR of its consumers' conditions (test-workerd, e2e).
+    "build-dev":
+        "name": "Build packages (development artifacts)"
+        "if": "(needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.e2e == 'true') && github.event_name != 'merge_group'"
+        "needs": "files-changed"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43" # v2.22.3
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "anolilab/workflows/step/checkout-with-retry@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+
+            - "name": "Setup resources and environment"
+              "uses": "anolilab/workflows/step/node@1f3a7f7e561f7690fe19dea5d2ed225def53c908" # v26.0.6
+              "with":
+                  "node-version": "22.22"
+                  "cache-prefix": "build-dev"
+                  "install-node-gyp": "true"
+                  "skip-playwright": "true"
+                  "enable-nx-cache": "false"
+                  "npm-version": "11"
+                  "run-npm-audit": "false"
+                  "run-signatures-audit": "false"
+
+            - "name": "Build packages (development artifacts)"
+              "run": "pnpm run build:packages"
+
+            - "name": "Pack the development dist/ directories"
+              "run": |
+                  tar -cf "${RUNNER_TEMP}/packages-dist-dev.tar" packages/*/dist
+
+            - "name": "Upload the development dist/ directories"
+              "uses": "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" # v7.0.2
+              "with":
+                  "name": "packages-dist-dev"
+                  "path": "${{ runner.temp }}/packages-dist-dev.tar"
+                  "retention-days": 3
+                  "if-no-files-found": "error"
+                  "overwrite": true
+
+    # The production build the template, Worker-size, client-size, studio-size and
+    # Worker-startup jobs consume, built once per run instead of once per job (19 jobs,
+    # ~36 runner-minutes per run). Not the vis cache: Tests never runs on `push`, so `alpha` never saves one and a PR's first run
     # starts cold, and parallel jobs in one run cannot warm each other. The artifact belongs
     # to this run and this commit and is built from scratch here, so it cannot carry a stale
     # build; `dist:check` rejects a development build before upload.
@@ -745,11 +804,11 @@
     # measures ~25% heavier. tar keeps the CLI's executable bit, which a plain artifact drops.
     #
     # Keep "if" equal to the OR of its consumers' conditions (templates, templates-expo,
-    # worker-size, worker-startup): a consumer whose condition holds while this job is
-    # skipped is skipped too, silently.
+    # worker-size, client-size, studio-size, worker-startup): a consumer whose condition
+    # holds while this job is skipped is skipped too, silently.
     "build-prod":
         "name": "Build packages (production artifacts)"
-        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.templates_expo == 'true' || needs.files-changed.outputs.worker_size == 'true' || needs.files-changed.outputs.worker_startup == 'true'"
+        "if": "needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.templates == 'true' || needs.files-changed.outputs.templates_expo == 'true' || needs.files-changed.outputs.worker_size == 'true' || needs.files-changed.outputs.client_size == 'true' || needs.files-changed.outputs.studio_size == 'true' || needs.files-changed.outputs.worker_startup == 'true'"
         "needs": "files-changed"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
@@ -1006,7 +1065,7 @@
     "client-size":
         "name": "Client size budget"
         "if": "(needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.client_size == 'true') && github.event_name != 'merge_group'"
-        "needs": "files-changed"
+        "needs": ["files-changed", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
         "steps":
@@ -1030,10 +1089,17 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `:prod` for the same reason as the Worker size gate: users install the production build.
-            # The adapters the reference apps import; vis builds their workspace dependencies too.
-            - "name": "Build packages (production artifacts)"
-              "run": "pnpm exec vis run build:prod --projects client,react,vue,svelte,solid,angular,errors,wire,ratelimit"
+            # `:prod` for the same reason as the Worker size gate: users install the production
+            # build. Built once by `build-prod` (see the comment there).
+            - "name": "Download the production dist/ directories"
+              "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
+              "with":
+                  "name": "packages-dist-prod"
+                  "path": "${{ runner.temp }}"
+
+            - "name": "Unpack the production dist/ directories"
+              "run": |
+                  tar -xf "${RUNNER_TEMP}/packages-dist-prod.tar"
 
             - "name": "Weigh the reference browser apps"
               "run": "pnpm run client-size:check"
@@ -1044,7 +1110,7 @@
     "studio-size":
         "name": "Studio size budget"
         "if": "(needs.files-changed.outputs.packages == 'true' || needs.files-changed.outputs.studio_size == 'true') && github.event_name != 'merge_group'"
-        "needs": "files-changed"
+        "needs": ["files-changed", "build-prod"]
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
         "steps":
@@ -1068,10 +1134,18 @@
                   "run-npm-audit": "false"
                   "run-signatures-audit": "false"
 
-            # `build:prod` for studio AND its dependencies (vis walks `^build:prod`): a
-            # development `@lunora/react` makes the standalone bundle ship React's dev build.
-            - "name": "Build @lunora/studio (production artifacts)"
-              "run": "pnpm exec vis run build:prod --query 'project=studio'"
+            # `build:prod` for studio AND its dependencies: a development `@lunora/react` makes
+            # the standalone bundle ship React's dev build. Built once by `build-prod`, whose
+            # `build:prod` of studio runs the same packem, CSS and standalone steps.
+            - "name": "Download the production dist/ directories"
+              "uses": "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" # v8.0.2
+              "with":
+                  "name": "packages-dist-prod"
+                  "path": "${{ runner.temp }}"
+
+            - "name": "Unpack the production dist/ directories"
+              "run": |
+                  tar -xf "${RUNNER_TEMP}/packages-dist-prod.tar"
 
             - "name": "Weigh the studio first load"
               "run": "pnpm run studio-size:check"
@@ -1390,6 +1464,7 @@
                 "test-celld",
                 "test-mysql",
                 "e2e",
+                "build-dev",
                 "build-prod",
                 "templates-matrix",
                 "templates",
