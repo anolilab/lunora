@@ -528,8 +528,14 @@ describe("argument-taint", () => {
             ).toBe(false);
         });
 
-        it("rejects a whole-key column of a row the query does not pin to the caller", () => {
-            expect.assertions(2);
+        it("judges a whole-key or id column by the query's effective where", () => {
+            expect.assertions(4);
+
+            // A spread before `where` cannot replace it; the `where` written after wins at runtime.
+            const pinnedAfterSpread = `const row = await ctx.db.files.findFirst({ ...args.query, where: { ownerId: ctx.auth.userId } });\n`;
+
+            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(row.storageKey);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(\`\${row.id}/\${args.key ?? args.other}\`);`))).toBe(true);
 
             expect(
                 isScopedByIdentity(

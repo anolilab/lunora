@@ -578,16 +578,6 @@ const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string | unde
         return (field === undefined || key === field) && equatesToCaller(value);
     });
 
-/** Whether a query object passed to `read` holds a member that can rewrite it at runtime: a spread, or a computed key. */
-const hasRuntimeQueryOverride = (read: CallExpression): boolean =>
-    read
-        .getArguments()
-        .some((argument) =>
-            (objectLiteralOf(argument)?.getProperties() ?? []).some(
-                (member) => Node.isSpreadAssignment(member) || staticPropertyName(member.getNameNode()) === undefined,
-            ),
-        );
-
 /** Whether the query object `argument` has a `where` that pins `field` (any column when `undefined`) to the caller. */
 const pinsReadToCaller = (argument: TsNode, field: string | undefined): boolean => {
     const queryArgs = objectLiteralOf(argument);
@@ -600,10 +590,11 @@ const pinsReadToCaller = (argument: TsNode, field: string | undefined): boolean 
 
 /**
  * Whether every row `read` can return is the caller's: fetched by the caller's id (`ctx.db.users.get(ctx.auth.userId)`),
- * or through a `where` that pins some column to the caller, with no spread or computed key that could rewrite the query.
+ * or through a `where` that pins some column to the caller and that no later spread or computed key can replace. A
+ * spread before `where` is harmless: the `where` written after it wins.
  */
 const isPinnedToCaller = (read: CallExpression): boolean =>
-    !hasRuntimeQueryOverride(read) && read.getArguments().some((argument) => isCallerId(argument) || pinsReadToCaller(argument, undefined));
+    read.getArguments().some((argument) => isCallerId(argument) || pinsReadToCaller(argument, undefined));
 
 /**
  * Whether `field` of a row returned by the identity-bound `read` differs per caller: the row's
