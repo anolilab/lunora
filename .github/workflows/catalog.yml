@@ -17,8 +17,15 @@
 
 "jobs":
     "catalog":
+        # A dispatch runs the selected ref's own copy of this workflow, so this check
+        # only stops a mistaken one; the `catalog` environment, whose deployment
+        # branches are limited to `alpha`, is what keeps branch code from the key.
+        "if": "github.ref == 'refs/heads/alpha'"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 15
+        # Holds CATALOG_SIGNING_KEY as an environment secret, never a repository one: a
+        # repository secret reaches any workflow a collaborator pushes on any branch.
+        "environment": "catalog"
         "env":
             "CATALOG_KEY_ID": "${{ vars.CATALOG_KEY_ID }}"
         "steps":

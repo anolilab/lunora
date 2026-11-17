@@ -14,9 +14,11 @@ pnpm run catalog:publish keygen --key-id catalog-2026 --out catalog-signing.pem
 The public line on stdout is the entry the control plane's `CATALOG_PUBLIC_KEYS`
 env expects, for example `[{"keyId":"catalog-2026","publicKey":"..."}]` (wrap the
 line in an array). The private key is written to the `--out` file with mode 600.
-Store its contents as the `CATALOG_SIGNING_KEY` repository secret, set the
-`CATALOG_KEY_ID` repository variable to the same key id, then delete the file. Never
-commit it.
+Create the GitHub Environment `catalog` with deployment branches limited to `alpha`,
+store the file's contents as its secret `CATALOG_SIGNING_KEY` (an environment secret,
+not a repository one: a repository secret reaches any workflow pushed on any branch),
+set the `CATALOG_KEY_ID` repository variable to the same key id, then delete the file.
+Never commit it.
 
 ## 2. Publish
 
