@@ -98,8 +98,8 @@ const namesIp = (node: TsNode): boolean => {
 
 /**
  * Whether `identifier` is an argument of a call to an app function this analysis can read, and that function's
- * body, with the matching parameter as its ctx, cannot read the address. `visiting` holds the functions already
- * on the stack: a recursive call adds nothing the outer pass is not already reading.
+ * body, with the matching parameter as its ctx, cannot read the address. `visiting` holds the helper parameters
+ * already read as a ctx: one reached again adds nothing, but the same helper reached through another parameter does.
  */
 const isHandedToAddressFreeHelper = (identifier: TsNode, visiting: Set<ts.Node>): boolean => {
     const call = identifier.getParent();
@@ -108,7 +108,14 @@ const isHandedToAddressFreeHelper = (identifier: TsNode, visiting: Set<ts.Node>)
         return false;
     }
 
-    const index = call.getArguments().indexOf(identifier);
+    const callArguments = call.getArguments();
+    const index = callArguments.indexOf(identifier);
+
+    // A spread before the ctx moves it to a parameter the index cannot name.
+    if (callArguments.slice(0, Math.max(index, 0)).some((argument) => Node.isSpreadElement(argument))) {
+        return false;
+    }
+
     const helper = appFunctionOf(call.getExpression());
     const parameter = index === -1 || helper === undefined ? undefined : helper.getParameters()[index];
 
@@ -116,19 +123,58 @@ const isHandedToAddressFreeHelper = (identifier: TsNode, visiting: Set<ts.Node>)
         return false;
     }
 
-    if (visiting.has(helper.compilerNode)) {
+    if (visiting.has(parameter.compilerNode)) {
         return true;
     }
 
-    visiting.add(helper.compilerNode);
+    visiting.add(parameter.compilerNode);
 
     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- a helper's body is read by the same walk as the registration
     return !mayReadIpIn(helper, parameter, visiting);
 };
 
-/** Whether `node` is `parameter` itself, by symbol: a helper's ctx under any name. */
-const isParameterUse = (node: TsNode, parameter: ParameterDeclaration | undefined): boolean =>
-    parameter !== undefined && Node.isIdentifier(node) && declarationOf(node)?.compilerNode === parameter.compilerNode;
+/**
+ * Whether `node` is `parameter` by symbol, directly or through any chain of local aliases of it (`const c = ctx`): a
+ * helper's ctx under any name. The chain is followed to its end, however long, since stopping early would read a
+ * ninth alias as unrelated and let the helper pass as address-free; `seen` only stops a self-referencing initializer.
+ */
+const isParameterUse = (node: TsNode, parameter: ParameterDeclaration | undefined, seen = new Set<ts.Node>()): boolean => {
+    if (parameter === undefined || !Node.isIdentifier(node)) {
+        return false;
+    }
+
+    const declaration = declarationOf(node);
+
+    if (declaration?.compilerNode === parameter.compilerNode) {
+        return true;
+    }
+
+    if (declaration === undefined || seen.has(declaration.compilerNode)) {
+        return false;
+    }
+
+    seen.add(declaration.compilerNode);
+
+    const initializer = Node.isVariableDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) ? declaration.getInitializer() : undefined;
+
+    return initializer !== undefined && isParameterUse(initializer, parameter, seen);
+};
+
+/**
+ * Whether `identifier` is a name a parameter, binding element or variable declares (or a destructured key), not a use
+ * of a value: everything in a declaration but its default initializer, which can read the ctx (`(c = ctx) => …`).
+ */
+const isDeclaredName = (identifier: TsNode): boolean => {
+    const parent = identifier.getParent();
+
+    if (!(Node.isParameterDeclaration(parent) || Node.isBindingElement(parent) || Node.isVariableDeclaration(parent))) {
+        return false;
+    }
+
+    const initializer: TsNode | undefined = parent.getInitializer();
+
+    return initializer !== identifier;
+};
 
 const isFunctionLike = (node: TsNode): boolean =>
     Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isFunctionDeclaration(node) || Node.isMethodDeclaration(node);
@@ -159,16 +205,15 @@ const mayReadIpIn = (root: TsNode, contextParameter: ParameterDeclaration | unde
             return true;
         }
 
-        if (Node.isIdentifier(node) && (isContextIdentifier(node) || isParameterUse(node, contextParameter)) && !isReadableContextUse(node)) {
-            // A declaration of the ctx binding itself (a parameter or a destructuring name) is not a use.
-            const parent = node.getParent();
-
-            if (
-                !(Node.isParameterDeclaration(parent) || Node.isBindingElement(parent) || Node.isVariableDeclaration(parent)) &&
-                !isHandedToAddressFreeHelper(node, visiting)
-            ) {
-                return true;
-            }
+        // A declaration of the ctx binding itself (a parameter or a destructuring name) is not a use.
+        if (
+            Node.isIdentifier(node) &&
+            (isContextIdentifier(node) || isParameterUse(node, contextParameter)) &&
+            !isReadableContextUse(node) &&
+            !isDeclaredName(node) &&
+            !isHandedToAddressFreeHelper(node, visiting)
+        ) {
+            return true;
         }
     }
 
