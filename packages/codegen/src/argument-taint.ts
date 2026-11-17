@@ -1089,6 +1089,12 @@ const isTestOf = (node: TsNode): boolean => {
     );
 };
 
+/**
+ * Whether `node`, standing for the row at `path`, only tests the row itself (`!row`, `row === null`): that reads no
+ * field. A field on either side of a comparison (`m.channelId === row.channelId`) is one the guard depends on.
+ */
+const isBareRowTest = (node: TsNode, path: RowPath): boolean => path.length === 0 && isTestOf(node);
+
 /** Whether `node` is the argument of the platform's `JSON.stringify`, which only reads it. */
 const isStringified = (node: TsNode): boolean => {
     const call = node.getParent();
@@ -1101,11 +1107,12 @@ const isStringified = (node: TsNode): boolean => {
 
 /**
  * Whether an object at `path` holding the guarded values at `heldPaths`, used as `node`, only has them read: tested,
- * returned, serialised with `JSON.stringify`, or copied by a spread or a destructuring. A copy is shallow, so it is
+ * returned from `owner` (the function that declares the binding), serialised with `JSON.stringify`, or copied by a
+ * spread or a destructuring. A copy is shallow, so it is
  * read-only only while every held value sits directly on the object: spreading `row` for a key at `row.meta.key`
  * shares `row.meta`, and `copy.meta.key = …` then changes the key unseen.
  */
-const isReadOnlyHolderUse = (node: TsNode, path: RowPath, heldPaths: ReadonlyArray<RowPath>): boolean => {
+const isReadOnlyHolderUse = (node: TsNode, path: RowPath, heldPaths: ReadonlyArray<RowPath>, owner: FunctionNode | undefined): boolean => {
     const parent = node.getParent();
     // A declaration whose name is a pattern can only hold `node` as its initializer.
     const isCopy = Node.isSpreadAssignment(parent) || (Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode()));
@@ -1114,7 +1121,11 @@ const isReadOnlyHolderUse = (node: TsNode, path: RowPath, heldPaths: ReadonlyArr
         return heldPaths.every((held) => held.length === path.length + 1);
     }
 
-    return isTestOf(node) || Node.isReturnStatement(parent) || isStringified(node);
+    // A `return` ends the function that owns the binding, so nothing after it there runs; one from a nested function
+    // hands its caller an alias this check never sees.
+    const returnsFromOwner = Node.isReturnStatement(parent) && owner !== undefined && enclosingFunctionOf(parent)?.compilerNode === owner.compilerNode;
+
+    return isTestOf(node) || returnsFromOwner || isStringified(node);
 };
 
 /**
@@ -1142,7 +1153,9 @@ const keepsGuardedValues = (use: Identifier, guardedPaths: ReadonlyArray<RowPath
 
     const heldPaths = guardedPaths.filter((guardedPath) => holds(path, guardedPath));
 
-    return heldPaths.length === 0 || isReadOnlyHolderUse(node, path, heldPaths);
+    const declaration = declarationOf(use);
+
+    return heldPaths.length === 0 || isReadOnlyHolderUse(node, path, heldPaths, declaration === undefined ? undefined : enclosingFunctionOf(declaration));
 };
 
 /** A use of a helper parameter that received the row's value at `prefix` (`[]` for the whole row). */
@@ -1160,11 +1173,11 @@ const helperRowUsesOf = (helper: FunctionNode, tied: ParameterDeclaration, argum
     const uses = helper
         .getDescendantsOfKind(SyntaxKind.Identifier)
         .filter((identifier) => identifier !== tied.getNameNode() && declarationOf(identifier)?.compilerNode === tied.compilerNode);
-    // A test (`!row`) reads no value the guard depends on.
     const reads = uses.flatMap((use) => {
         const { node, path } = accessChainFrom(use);
+        const read = [...argumentPath, ...(isInvoked(node) ? path.slice(0, -1) : path)];
 
-        return isTestOf(node) ? [] : [[...argumentPath, ...(isInvoked(node) ? path.slice(0, -1) : path)]];
+        return isBareRowTest(node, read) ? [] : [read];
     });
 
     return {
@@ -1500,8 +1513,9 @@ const inlineGuardPathsOf = (declaration: VariableDeclaration, row: VariableDecla
         }
 
         const { node, path } = accessChainFrom(identifier);
+        const read = isInvoked(node) ? path.slice(0, -1) : path;
 
-        return isTestOf(node) ? [] : [isInvoked(node) ? path.slice(0, -1) : path];
+        return isBareRowTest(node, read) ? [] : [read];
     });
 
 /** The helper guard `statement` is, an expression statement `await h(…)` or `h(…)`, or `undefined`. */
@@ -1517,37 +1531,28 @@ const helperGuardStatementOf = (statement: TsNode, row: VariableDeclaration): Ro
 };
 
 /**
- * The identity guard for `row` among the statements before the sink's own statement (`statements[index]`): a
+ * Every identity guard for `row` among the statements before the sink's own statement (`statements[index]`): a
  * helper-guard call, or an inline single-row read followed directly by its enforcing `if` (or a `…OrThrow` read,
  * which enforces on its own).
  */
-const precedingGuardOf = (
-    statements: ReadonlyArray<TsNode>,
-    index: number,
-    row: VariableDeclaration,
-    enclosing: FunctionNode,
-    sinkCall: TsNode,
-): RowGuard | undefined => {
-    for (const [position, statement] of statements.slice(0, index).entries()) {
+const precedingGuardsOf = (statements: ReadonlyArray<TsNode>, index: number, row: VariableDeclaration, enclosing: FunctionNode, sinkCall: TsNode): RowGuard[] =>
+    statements.slice(0, index).flatMap((statement, position) => {
         if (!runsBeforeSinkUnconditionally(statement, enclosing, sinkCall)) {
-            continue;
+            return [];
         }
 
         const helperGuard = helperGuardStatementOf(statement, row);
 
         if (helperGuard !== undefined) {
-            return helperGuard;
+            return [helperGuard];
         }
 
         const inline = inlineGuardOf(statement, row);
 
-        if (inline !== undefined && (inline.selfEnforcing || (position + 1 < index && isNullCheckExit(statements[position + 1], inline.declaration, false)))) {
-            return { guardedPaths: inlineGuardPathsOf(inline.declaration, row) };
-        }
-    }
-
-    return undefined;
-};
+        return inline !== undefined && (inline.selfEnforcing || (position + 1 < index && isNullCheckExit(statements[position + 1], inline.declaration, false)))
+            ? [{ guardedPaths: inlineGuardPathsOf(inline.declaration, row) }]
+            : [];
+    });
 
 /** `node` with any `await`, parentheses and type assertions removed. */
 const unawaited = (node: TsNode): TsNode => {
@@ -2182,40 +2187,38 @@ export const isGuardedByIdentityCheck = (sinkCall: CallExpression, key: TsNode):
 
     const { keyPath, row } = guarded;
     const rowName = row.getNameNode();
-    let guard: RowGuard | undefined;
+    const guards: RowGuard[] = [];
     let child: TsNode = sinkCall;
 
-    for (
-        let ancestor = sinkCall.getParent();
-        guard === undefined && ancestor !== undefined && ancestor.compilerNode !== enclosing.compilerNode;
-        ancestor = ancestor.getParent()
-    ) {
+    for (let ancestor = sinkCall.getParent(); ancestor !== undefined && ancestor.compilerNode !== enclosing.compilerNode; ancestor = ancestor.getParent()) {
         if (Node.isBlock(ancestor)) {
             const statements = ancestor.getStatements();
             const index = statements.findIndex((statement) => statement.compilerNode === child.compilerNode);
 
-            guard = index > 0 ? precedingGuardOf(statements, index, row, enclosing, sinkCall) : undefined;
+            guards.push(...(index > 0 ? precedingGuardsOf(statements, index, row, enclosing, sinkCall) : []));
         }
 
         child = ancestor;
     }
 
-    if (guard === undefined || !Node.isIdentifier(rowName)) {
+    if (!Node.isIdentifier(rowName)) {
         return false;
     }
 
-    // A `const` row's fields stay writable: `row.key = args.key`, `row.channelId = args.channelId` or
-    // `Object.assign(row, args)` replaces what the guard vouched for, in the handler or in the guard helper. Handing
-    // the row to that helper is judged by what the helper does with it.
-    const guardedPaths = guardedPathsOf(keyPath, guard.guardedPaths);
-    const { helperArguments = [], helperUses = [] } = guard;
+    const rowUses = usesOfLocal(rowName).filter((use) => mayRunBeforeSink(use, sinkCall, enclosing));
 
-    return (
-        usesOfLocal(rowName).every(
-            (use) =>
-                !mayRunBeforeSink(use, sinkCall, enclosing) || helperArguments.includes(accessChainFrom(use).node) || keepsGuardedValues(use, guardedPaths),
-        ) && helperUses.every(({ prefix, use }) => keepsGuardedValues(use, guardedPaths, prefix))
-    );
+    // A `const` row's fields stay writable: `row.key = args.key`, `row.channelId = args.channelId` or
+    // `Object.assign(row, args)` replaces what a guard vouched for, in the handler or in the guard helper. Handing
+    // the row to that helper is judged by what the helper does with it. One guard whose values all survive is enough.
+    return guards.some((guard) => {
+        const guardedPaths = guardedPathsOf(keyPath, guard.guardedPaths);
+        const { helperArguments = [], helperUses = [] } = guard;
+
+        return (
+            rowUses.every((use) => helperArguments.includes(accessChainFrom(use).node) || keepsGuardedValues(use, guardedPaths)) &&
+            helperUses.every(({ prefix, use }) => keepsGuardedValues(use, guardedPaths, prefix))
+        );
+    });
 };
 
 export { appFunctionOf };
