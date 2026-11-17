@@ -822,6 +822,28 @@ describe("admin import — staged replace of chunked sections", () => {
         expect(target.kv.get("CACHE")!.has("big")).toBe(false);
     });
 
+    it("refuses a one-line object whose bytes are not its declared size or do not hash to its sha256, and never commits it", async () => {
+        expect.assertions(3);
+
+        await seed();
+
+        const target = createStores();
+        const storageUpload = vi.fn<NonNullable<WorkerOptions["storageUpload"]>>(target.options.storageUpload);
+        const worker = workerWith({ ...target.options, storageUpload });
+        const data = Buffer.from("hello").toString("base64");
+        const response = await postImport(worker, "?mode=replace&tables=messages&stage=one-line", [
+            { doc: { format: 2, sections: ["storage"] }, table: "$lunora" },
+            { doc: { data, key: "short.txt", last: true, offset: 0, size: 6 }, table: "$storage" },
+            { doc: { data, key: "tampered.txt", last: true, offset: 0, sha256: "0".repeat(64), size: 5 }, table: "$storage" },
+        ]);
+        const answer: { errors: { code: string }[] } = await response.json();
+        const committed = await postSession(worker, "commit", "one-line");
+
+        expect(answer.errors.map((error) => error.code)).toStrictEqual(["STORAGE_RESTORE_INCOMPLETE", "STORAGE_SHA256_MISMATCH"]);
+        expect(committed.status).toBe(409);
+        expect(storageUpload).not.toHaveBeenCalled();
+    });
+
     it("refuses a chunked value it has no staging for, and so never commits the session", async () => {
         expect.assertions(2);
 

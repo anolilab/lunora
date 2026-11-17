@@ -55,6 +55,7 @@ import type { ImportRowError } from "./import-stream";
 import type { KvIntrospector } from "./kv-admin-routes";
 import type { ChunkRecord, StagingStore } from "./section-chunks";
 import {
+    assertWholeChunk,
     collectChunks,
     currentSession,
     deleteSession,
@@ -680,6 +681,34 @@ const finishStagedObject = async (
     });
 };
 
+/** An object that arrived whole in one line, checked as an assembled one is, then written unless it exists. */
+const writeWholeObject = async (
+    options: WorkerOptions,
+    row: SectionRow,
+    record: StorageRecord,
+    totals: SectionTotals,
+    upload: NonNullable<WorkerOptions["storageUpload"]>,
+): Promise<void> => {
+    try {
+        assertWholeChunk(record, "STORAGE");
+    } catch (error) {
+        if (!isAssemblyError(error)) {
+            throw error;
+        }
+
+        rowError(totals, row, error.code, error.message);
+
+        return;
+    }
+
+    if (await objectExists(options, record)) {
+        conflict(totals);
+    } else {
+        await upload(record.key, record.bytes.buffer, record.upload);
+        count(totals, STORAGE_TABLE);
+    }
+};
+
 const writeStorageRecord = async (options: WorkerOptions, row: SectionRow, record: StorageRecord, totals: SectionTotals): Promise<void> => {
     const upload = options.storageUpload;
 
@@ -691,12 +720,7 @@ const writeStorageRecord = async (options: WorkerOptions, row: SectionRow, recor
 
     // The whole object in one line: written straight through.
     if (record.offset === 0 && record.lastSize !== undefined) {
-        if (await objectExists(options, record)) {
-            conflict(totals);
-        } else {
-            await upload(record.key, record.bytes.buffer, record.upload);
-            count(totals, STORAGE_TABLE);
-        }
+        await writeWholeObject(options, row, record, totals, upload);
 
         return;
     }

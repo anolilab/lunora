@@ -289,6 +289,21 @@ const stagedChunks = async function* stagedChunks(
     }
 };
 
+/**
+ * Check a value that arrived whole, in one chunk, as {@link stagedChunks} checks
+ * an assembled one: the kind's RESTORE_INCOMPLETE code when its bytes are not
+ * the `size` it declares, SHA256_MISMATCH when they do not hash to the export's digest.
+ */
+const assertWholeChunk = (chunk: ChunkRecord, kind: "KV" | "STORAGE"): void => {
+    if (chunk.bytes.byteLength !== chunk.lastSize) {
+        throw new LunoraError(`the record holds ${String(chunk.bytes.byteLength)} of ${String(chunk.lastSize)} bytes`, { code: `${kind}_RESTORE_INCOMPLETE` });
+    }
+
+    if (chunk.sha256 !== undefined && toHex(sha256(chunk.bytes)) !== chunk.sha256.toLowerCase()) {
+        throw new LunoraError(`the restored bytes do not match the exported sha256 ${chunk.sha256}`, { code: `${kind}_SHA256_MISMATCH` });
+    }
+};
+
 /** Read a session back into one buffer of `size` bytes (the chunk iterator guarantees the sum). */
 const collectChunks = async (chunks: AsyncIterable<Uint8Array>, size: number): Promise<Uint8Array<ArrayBuffer>> => {
     const buffer = new Uint8Array(size);
@@ -364,6 +379,7 @@ const sweepStaleStaging = async (store: StagingStore, buckets: ReadonlyArray<str
 
 export type { ChunkRecord, StagingStore };
 export {
+    assertWholeChunk,
     chunkKey,
     collectChunks,
     currentSession,

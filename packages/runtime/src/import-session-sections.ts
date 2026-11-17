@@ -45,7 +45,7 @@ import {
 } from "./export-sections";
 import type { ImportRowError } from "./import-stream";
 import type { ChunkRecord, StagingStore } from "./section-chunks";
-import { chunkKey, collectChunks, parseChunk, seal, stagedChunks, stagingStore, uploadMultipart } from "./section-chunks";
+import { assertWholeChunk, chunkKey, collectChunks, parseChunk, seal, stagedChunks, stagingStore, uploadMultipart } from "./section-chunks";
 import { STORAGE_UPLOAD_MAX_BODY_BYTES, toHex } from "./storage-admin-routes";
 
 /** The sections a replace can make exact, by the name the header lists them under. */
@@ -244,6 +244,14 @@ const stageStorageRow = async (options: WorkerOptions, ref: SessionRef, row: Sec
 
     // The whole object in one line: it waits on the root shard as it is.
     if (record.offset === 0 && record.lastSize !== undefined) {
+        try {
+            assertWholeChunk(record, "STORAGE");
+        } catch (error) {
+            stageError(errors, row, error instanceof LunoraError ? error.code : "STORAGE_RESTORE_INCOMPLETE", errorMessage(error));
+
+            return undefined;
+        }
+
         return { doc: row.doc, line: row.line, table: STORAGE_TABLE };
     }
 
@@ -516,6 +524,7 @@ const writeObject = async (options: WorkerOptions, ref: SessionRef, record: Stor
     const size = record.lastSize ?? 0;
 
     if (record.offset === 0) {
+        assertWholeChunk(record, "STORAGE");
         await upload(record.key, record.bytes.buffer, record.upload);
 
         return;

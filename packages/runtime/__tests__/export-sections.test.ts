@@ -368,6 +368,21 @@ describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, 
         expect(stores.buckets.get("default")!.has("partial")).toBe(false);
     });
 
+    it("refuses a one-line object whose bytes are not its declared size or do not hash to its sha256, uploading nothing", async () => {
+        expect.hasAssertions();
+
+        const stores = createStores();
+        const storageUpload = vi.fn<NonNullable<WorkerOptions["storageUpload"]>>(stores.options.storageUpload);
+        const data = Buffer.from("hello").toString("base64");
+        const summary = await importInto(workerFor({ ...stores.options, storageUpload }), [
+            JSON.stringify({ doc: { data, key: "short.txt", last: true, offset: 0, size: 6 }, table: "$storage" }),
+            JSON.stringify({ doc: { data, key: "tampered.txt", last: true, offset: 0, sha256: "0".repeat(64), size: 5 }, table: "$storage" }),
+        ]);
+
+        expect(summary.errors.map((error) => error.code)).toStrictEqual(["STORAGE_RESTORE_INCOMPLETE", "STORAGE_SHA256_MISMATCH"]);
+        expect(storageUpload).not.toHaveBeenCalled();
+    });
+
     it("restores an object over 32 MiB through a multipart upload of equal 5 MiB parts", async () => {
         expect.hasAssertions();
 
