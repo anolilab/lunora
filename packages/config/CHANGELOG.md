@@ -1,3 +1,7 @@
+## @lunora/config [1.0.0-alpha.464](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.463...@lunora/config@1.0.0-alpha.464) (2026-11-17)
+
+- fix: studio asset follow-ups from #1499 (#1609)
+
 ## @lunora/config [1.0.0-alpha.463](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.462...@lunora/config@1.0.0-alpha.463) (2026-11-16)
 
 - perf(codegen)!: load studio documents on their routes and ship them as static assets (#1499)
