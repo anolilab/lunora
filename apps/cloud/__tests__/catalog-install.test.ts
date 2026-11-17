@@ -300,7 +300,8 @@ describe(runInstall, () => {
     it("leaves the secrets alone once a newer install has taken the claim", async () => {
         const previous: SealedSecret = { ciphertext: "old", environment: "production", iv: "iv", name: "TOKEN" };
         const { ports } = portsWith({
-            holdsClaim: vi.fn<InstallPorts["holdsClaim"]>(async () => false),
+            // Held while the secret is stored, lost by the time the failed release rolls back.
+            holdsClaim: vi.fn<InstallPorts["holdsClaim"]>().mockResolvedValueOnce(true).mockResolvedValue(false),
             release: vi.fn<InstallPorts["release"]>(async () => {
                 return { deploymentId: "", error: "the health check failed", status: "failed" as const };
             }),
@@ -320,6 +321,36 @@ describe(runInstall, () => {
         expect(ports.restoreSecret).not.toHaveBeenCalled();
         expect(ports.removeSecret).not.toHaveBeenCalled();
         expect(ports.release).toHaveBeenCalledWith(expect.anything(), "dk_secret", "inst_1");
+    });
+
+    it("stops storing secrets once a newer install has taken the claim, and writes none of the rest", async () => {
+        expect.assertions(4);
+
+        const { ports } = portsWith({
+            // A stall past the lease: the claim is held for the first secret only.
+            holdsClaim: vi.fn<InstallPorts["holdsClaim"]>().mockResolvedValueOnce(true).mockResolvedValue(false),
+        });
+        const input = baseInput({
+            artifact: artifactWith({
+                bindings: [{ binding: "ASSETS", type: "assets" }],
+                form: {
+                    secrets: [
+                        { label: "First", name: "FIRST", required: true },
+                        { label: "Second", name: "SECOND", required: true },
+                    ],
+                    vars: [],
+                },
+            }),
+            values: { secrets: { FIRST: "a", SECOND: "b" }, vars: {} },
+        });
+
+        const result = await runInstall(input, ports);
+
+        expect(result).toStrictEqual({ error: "the install lost its claim on the project to a newer install", kind: "internal", ok: false });
+        expect(ports.storeSecret).toHaveBeenCalledTimes(1);
+        // The newer install owns the secrets now: nothing is rolled back over them.
+        expect(ports.removeSecret).not.toHaveBeenCalled();
+        expect(ports.mintReleaseKey).not.toHaveBeenCalled();
     });
 
     it("revokes the key even when the release throws", async () => {

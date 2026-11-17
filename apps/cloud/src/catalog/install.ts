@@ -482,6 +482,7 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts, progr
     const names = Object.keys(plan.secrets);
     const touched: string[] = [];
     let snapshot = new Map<string, SealedSecret>();
+    let claimLost = false;
 
     try {
         // The install writes only its own environment's rows. An "all" row it shadows is not
@@ -491,13 +492,21 @@ export const runInstall = async (input: InstallInput, ports: InstallPorts, progr
         snapshot = new Map(sealed.filter((secret) => secret.environment === INSTALL_ENVIRONMENT).map((secret) => [secret.name, secret]));
 
         await inSequence(names, async (name) => {
+            // An install that stalled past its lease has lost the project to a newer
+            // install, whose secrets these writes would overwrite. Unreadable counts as lost.
+            if (!(await ports.holdsClaim(installId).catch(() => false))) {
+                claimLost = true;
+
+                throw new Error("the install no longer holds the project's claim");
+            }
+
             touched.push(name);
             await ports.storeSecret(name, plan.secrets[name] ?? "");
         });
     } catch {
         await restore(ports, installId, touched, snapshot);
 
-        return internal("could not store the install's secrets");
+        return internal(claimLost ? "the install lost its claim on the project to a newer install" : "could not store the install's secrets");
     }
 
     report("secrets-stored");
