@@ -501,11 +501,24 @@ export const verifyArchive = async (archive: Uint8Array, manifest: CatalogManife
     const listed = new Map(manifest.files.map((file) => [file.path, file]));
     const unlisted: string[] = [];
     const wrongSize: string[] = [];
+    const seen = new Set<string>();
+    const repeated: string[] = [];
     let entries: Record<string, Uint8Array>;
 
     try {
         entries = unzipSync(archive, {
             filter: (file) => {
+                // The declared total counts each path once, so a second entry under a
+                // listed name would inflate past it: N copies of the largest file each
+                // pass the name and size checks.
+                if (seen.has(file.name)) {
+                    repeated.push(file.name);
+
+                    return false;
+                }
+
+                seen.add(file.name);
+
                 const expected = listed.get(file.name);
 
                 if (expected === undefined) {
@@ -525,6 +538,10 @@ export const verifyArchive = async (archive: Uint8Array, manifest: CatalogManife
         });
     } catch {
         return refuse("BAD_ARCHIVE", "the archive is not a readable zip");
+    }
+
+    if (repeated.length > 0) {
+        return refuse("BAD_ARCHIVE", `the archive holds more than one entry named ${repeated.join(", ")}`);
     }
 
     if (unlisted.length > 0) {

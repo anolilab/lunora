@@ -146,6 +146,25 @@ describe(verifyArtifact, () => {
         expect(result).toMatchObject({ error: { code: "UNLISTED_FILE" }, ok: false });
     });
 
+    it("refuses an archive that repeats a listed file's entry", async () => {
+        const key = await makeKey("k1");
+        const artifact = await makeArtifact(key, { archiveFiles: { "worker.js": workerSource, "zorker.js": workerSource, "assets/app.css": assetBytes } });
+        const archive = new Uint8Array(artifact.archive);
+        const from = encoder.encode("zorker.js");
+        const to = encoder.encode("worker.js");
+
+        // fflate cannot write two entries under one name, so rename the second in place (local header and central directory).
+        for (let index = 0; index <= archive.byteLength - from.byteLength; index += 1) {
+            if (from.every((byte, offset) => archive[index + offset] === byte)) {
+                archive.set(to, index);
+            }
+        }
+
+        const result = await verifyArtifact({ ...artifact, archive, keys: [key.trusted] });
+
+        expect(result).toMatchObject({ error: { code: "BAD_ARCHIVE" }, ok: false });
+    });
+
     it("refuses an archive missing a listed file", async () => {
         const key = await makeKey("k1");
         const artifact = await makeArtifact(key, { archiveFiles: { "worker.js": workerSource } });
