@@ -181,6 +181,7 @@ describe("the cloudflare-wfp driver's domain hooks", () => {
             cell: "default",
             dispatchNamespace: "ns",
             ...(saasZone === undefined ? {} : { saasZone }),
+            tailConsumer: "lunora-log-tail",
         });
 
     it("issues the certificate of a verified domain in its zone, and its fleet releases it there", async () => {

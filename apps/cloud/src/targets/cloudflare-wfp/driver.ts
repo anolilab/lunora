@@ -33,8 +33,22 @@ import { dispatchTenantSender } from "./dispatch";
 import { createEdgeProtection } from "./edge";
 import { reconcileEdgeBlocks } from "./edge-block";
 
-/** The tail Worker every tenant ships its console events to (`tail.wrangler.jsonc`). */
-export const TAIL_CONSUMER = "lunora-log-tail";
+/** The tail Worker's script name (`tail.wrangler.jsonc`) when deployed with no `--env`. */
+const TAIL_CONSUMER = "lunora-log-tail";
+
+const CONTROL_PLANE_ENV_SUFFIX = /^lunora-cloud-(?<env>.+)$/u;
+
+/**
+ * The tail Worker of this control plane's environment. Wrangler suffixes the env
+ * name onto both scripts (`lunora-cloud-staging`, `lunora-log-tail-staging`), and
+ * a tenant whose consumer names a script that does not exist ships its logs
+ * nowhere — so the suffix is read off this Worker's own script name.
+ */
+export const tailConsumerOf = (environment: { LUNORA_CONTROL_PLANE_SCRIPT?: string }): string => {
+    const suffix = CONTROL_PLANE_ENV_SUFFIX.exec(environment.LUNORA_CONTROL_PLANE_SCRIPT ?? "")?.groups?.["env"];
+
+    return suffix === undefined ? TAIL_CONSUMER : `${TAIL_CONSUMER}-${suffix}`;
+};
 
 export interface CloudflareWfpPorts {
     /** The platform apex tenants are served under (`LUNORA_APP_DOMAIN`). */
@@ -55,6 +69,8 @@ export interface CloudflareWfpPorts {
 
     /** The SaaS zone custom domains get their certificates in (`LUNORA_SAAS_ZONE_ID`); absent → none are issued. */
     saasZone?: SaasZone;
+    /** The tail Worker a log-collecting tenant ships its console events to ({@link tailConsumerOf}). */
+    tailConsumer: string;
 }
 
 /** What a verified domain records when this control plane cannot request its certificate. */
@@ -74,7 +90,7 @@ export const createCloudflareWfpDriver = (ports: CloudflareWfpPorts): TargetDriv
                     // Crons stay off the Worker: WfP drops `triggers.crons` for namespaced Workers, so the control plane fans them out.
                     spec: deployJobSpec(spec, BINDING_SUPPORT["cloudflare-wfp"], {
                         nativeCrons: false,
-                        tailConsumer: TAIL_CONSUMER,
+                        tailConsumer: ports.tailConsumer,
                         target: { cell: ports.cell, dispatchNamespace: ports.dispatchNamespace, kind: "dispatch-namespace" },
                     }),
                 },
@@ -209,6 +225,8 @@ export type CloudflareWfpEnvironment = {
     DISPATCHER?: DispatchNamespaceLike;
     LUNORA_APP_DOMAIN?: string;
     LUNORA_CELL?: string;
+    /** This Worker's own script name; its env suffix names the tail Worker ({@link tailConsumerOf}). */
+    LUNORA_CONTROL_PLANE_SCRIPT?: string;
     LUNORA_DISPATCH_NAMESPACE?: string;
 
     /**
@@ -269,6 +287,7 @@ export const cloudflareWfpDriverFromEnv = (environment: CloudflareWfpEnvironment
             console.log("[provision]", line);
         },
         ...(saasZone === undefined ? {} : { saasZone }),
+        tailConsumer: tailConsumerOf(environment),
     });
 };
 

@@ -62,7 +62,13 @@ describeTargetConformance("cloudflare-wfp", () => {
     };
 
     return {
-        driver: createCloudflareWfpDriver({ appDomain: "lunora.app", box: () => box, cell: "default", dispatchNamespace: "lunora-production" }),
+        driver: createCloudflareWfpDriver({
+            appDomain: "lunora.app",
+            box: () => box,
+            cell: "default",
+            dispatchNamespace: "lunora-production",
+            tailConsumer: "lunora-log-tail",
+        }),
         running: () => [...workers.keys()],
     };
 });

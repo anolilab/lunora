@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { TenantDeploymentSpec } from "../src/provision-contract";
 import type { CloudflareWfpPorts } from "../src/targets/cloudflare-wfp/driver";
-import { createCloudflareWfpDriver } from "../src/targets/cloudflare-wfp/driver";
+import { createCloudflareWfpDriver, tailConsumerOf } from "../src/targets/cloudflare-wfp/driver";
 import type { AccountCredentials } from "../src/targets/cloudflare-workers/driver";
 import { createCloudflareWorkersDriver } from "../src/targets/cloudflare-workers/driver";
 import type { ProvisionBox } from "../src/targets/provision-box/client";
@@ -52,7 +52,14 @@ const fakeBox = (chunks: ReadonlyArray<string>, status = 200): { box: ProvisionB
 
 /** The driver over a fake box, configured the way the production cell is. */
 const driverFor = (box: ProvisionBox, overrides: Partial<CloudflareWfpPorts> = {}) =>
-    createCloudflareWfpDriver({ appDomain: "lunora.app", box: () => box, cell: "cell-1", dispatchNamespace: "lunora-production", ...overrides });
+    createCloudflareWfpDriver({
+        appDomain: "lunora.app",
+        box: () => box,
+        cell: "cell-1",
+        dispatchNamespace: "lunora-production",
+        tailConsumer: "lunora-log-tail",
+        ...overrides,
+    });
 
 describe(createCloudflareWfpDriver, () => {
     it("posts the deploy job to the project's box, logs its lines to Workers Logs only, and resolves the result", async () => {
@@ -91,6 +98,14 @@ describe(createCloudflareWfpDriver, () => {
         await driverFor(box).deploy({ ...spec, collectLogs: true });
 
         expect(calls[0]?.job).toMatchObject({ spec: { tailConsumers: ["lunora-log-tail"] } });
+    });
+
+    it("attaches the staging cell's own log tail, the script wrangler names for `--env staging`", async () => {
+        const { box, calls } = fakeBox(['{"type":"result"}\n']);
+
+        await driverFor(box, { tailConsumer: tailConsumerOf({ LUNORA_CONTROL_PLANE_SCRIPT: "lunora-cloud-staging" }) }).deploy({ ...spec, collectLogs: true });
+
+        expect(calls[0]?.job).toMatchObject({ spec: { tailConsumers: ["lunora-log-tail-staging"] } });
     });
 
     it("throws the box's error message", async () => {

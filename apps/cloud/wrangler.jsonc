@@ -310,6 +310,8 @@
                 "LUNORA_DISPATCH_NAMESPACE": "lunora-staging",
                 // The dataset `PLATFORM_METRICS` is bound to below, for the read-back.
                 "PLATFORM_METRICS_DATASET": "lunora_platform_metrics_staging",
+                // The dataset the staging dispatcher writes tenant usage to; unset reads production's.
+                "USAGE_ANALYTICS_DATASET": "lunora_tenant_usage_staging",
                 "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud-staging",
                 "LUNORA_OTLP_ENDPOINT": "https://staging.lunora.cloud",
                 // Same origin as above — `SchedulerDO` dispatches its job
