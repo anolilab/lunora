@@ -680,13 +680,14 @@ export const series = query
     .query(async ({ ctx: context, args: { organizationId, periodStart } }): Promise<{ costMinor: number; cpuMs: number; day: number; requests: number }[]> => {
         await assertMember(context, organizationId);
 
-        const { page } = await context.db.platformUsage.findMany({ where: { organizationId, periodStart } });
+        // Drained like `summary`: one page stops at 1000 rows, and a busy org's chart would drop the rest.
+        const rows = await collectAll<PlatformUsageRow>((cursor) => context.db.platformUsage.findMany({ cursor, where: { organizationId, periodStart } }));
         const dayMs = 24 * 60 * 60 * 1000;
         const buckets = new Map<number, PeriodUsage>();
         // Requests a customer box reported, or read back from a connected account: plotted, never priced.
         const boxRequests = new Map<number, number>();
 
-        for (const row of page as PlatformUsageRow[]) {
+        for (const row of rows) {
             if (!isUsageMeter(row.kind)) {
                 continue;
             }

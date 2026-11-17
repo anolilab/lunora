@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server";
-import { enforceSpendCaps, ingest, rollup, setSpendWarning } from "../lunora/usage";
+import { enforceSpendCaps, ingest, rollup, series, setSpendWarning } from "../lunora/usage";
 import { RATE_CARD } from "../src/billing/spend";
 import { UNVERIFIED_METERS } from "../src/billing/usage";
 import { hashDeployKey } from "../src/deploy/keys";
@@ -192,6 +192,23 @@ describe("usage.rollup", () => {
         await rollup.handler(second.ctx, {});
 
         expect(patchedQuantity(second.ops)).toBe(19);
+    });
+});
+
+describe("usage.series", () => {
+    it("charts every page of the period's rows, not only the first", async () => {
+        const day = 1_700_000_000_000 - (1_700_000_000_000 % 86_400_000);
+        const { ctx } = makeCtx({ members: [{ _id: "mem_1", organizationId: "org_1", role: "owner", userId: "usr_1" }] }, day, "usr_1");
+        const pages: Record<string, { continueCursor: null | string; isDone: boolean; page: Row[] }> = {
+            first: { continueCursor: "p2", isDone: false, page: [usageRow("u1", 10, { createdAt: day })] },
+            p2: { continueCursor: null, isDone: true, page: [usageRow("u2", 5, { createdAt: day })] },
+        };
+
+        (ctx.db as unknown as Record<string, unknown>)["platformUsage"] = {
+            findMany: (args?: { cursor?: null | string }) => Promise.resolve(pages[args?.cursor ?? "first"]),
+        };
+
+        await expect(series.handler(ctx, { organizationId: "org_1" as never, periodStart: 1000 })).resolves.toMatchObject([{ day, requests: 15 }]);
     });
 });
 
