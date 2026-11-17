@@ -175,10 +175,20 @@ interface CachedIndex {
     entries: CatalogIndexEntry[];
     expiresAt: number;
     fingerprint: string;
+    /** The index's signed `issuedAt`, so a slower concurrent load of an older index cannot replace it. */
+    issuedAt: number;
 }
 
 /** The last index that verified, served until it expires. Only verified results are ever stored. */
 let cachedIndex: CachedIndex | undefined;
+
+/**
+ * Whether a just-loaded index may replace the cached one. Loads are not
+ * serialized — two can be in flight, and the older index may finish last — so
+ * an older index of the same configuration never replaces a newer one.
+ */
+const replacesCache = (cached: CachedIndex | undefined, loaded: CachedIndex): boolean =>
+    cached?.fingerprint !== loaded.fingerprint || loaded.issuedAt >= cached.issuedAt;
 
 /** Drop the cached index. Tests use this; production lets the TTL expire. */
 export const resetCatalogIndexCache = (): void => {
@@ -293,7 +303,11 @@ const loadIndex = async (deps: CatalogDeps, config: ReadyConfig): Promise<IndexL
         return refuse("STALE_INDEX", "the catalog index is older than one this control plane has already served");
     }
 
-    cachedIndex = { entries: verified.entries, expiresAt: now + INDEX_TTL_MS, fingerprint: config.fingerprint };
+    const loaded: CachedIndex = { entries: verified.entries, expiresAt: now + INDEX_TTL_MS, fingerprint: config.fingerprint, issuedAt: verified.issuedAt };
+
+    if (replacesCache(cachedIndex, loaded)) {
+        cachedIndex = loaded;
+    }
 
     return { entries: verified.entries, ok: true };
 };

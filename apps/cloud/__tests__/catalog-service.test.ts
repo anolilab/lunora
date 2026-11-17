@@ -401,6 +401,47 @@ describe(listCatalog, () => {
         await expect(listCatalog(deps, "org_1")).resolves.toMatchObject({ error: expect.stringContaining("older than one"), ok: false });
     });
 
+    it("keeps the newer index cached when an older concurrent load finishes last", async () => {
+        const key = await generateKey("catalog-2026");
+        const older = await publishIndex(key, [await publishApp(key, { name: "Counter", slug: "counter", version: "1.0.0" })], {
+            issuedAt: new Date(NOW - 60 * 60 * 1000).toISOString(),
+        });
+        const newer = await publishIndex(key, [await publishApp(key, { name: "Counter", slug: "counter", version: "1.1.0" })], { issuedAt: ISSUED });
+        let releaseOlder: () => void = () => undefined;
+        const olderRecorded = new Promise<void>((resolve) => {
+            releaseOlder = resolve;
+        });
+        // A store that accepts both, but answers the older load only once the newer one has finished.
+        const indexState: IndexStateStore = {
+            advance: async (_indexUrl, _keyId, issuedAt) => {
+                if (issuedAt < NOW) {
+                    await olderRecorded;
+                }
+
+                return { accepted: true };
+            },
+        };
+        const clock = { now: NOW };
+        const depsOver = (routes: Map<string, Served>) => {
+            return { ...catalogDeps(envFor([key]), hostFrom(routes).fetch, clock, indexState), installs: async () => [] };
+        };
+
+        const olderLoad = listCatalog(depsOver(older), "org_1");
+
+        await expect(listCatalog(depsOver(newer), "org_1")).resolves.toMatchObject({ apps: [{ version: "1.1.0" }], ok: true });
+
+        releaseOlder();
+        await olderLoad;
+
+        // The index must come from the cache: this host serves both releases' files but no index.
+        const releasesOnly = new Map([...older, ...newer]);
+
+        releasesOnly.delete(INDEX_URL);
+        releasesOnly.delete(new URL("index.sig", INDEX_URL).href);
+
+        await expect(listCatalog(depsOver(releasesOnly), "org_1")).resolves.toMatchObject({ apps: [{ version: "1.1.0" }], ok: true });
+    });
+
     it("advances the stored index forward, and accepts a refresh of the same index without a write", async () => {
         const key = await generateKey("catalog-2026");
         const app = await publishApp(key, { name: "Counter", slug: "counter", version: "1.0.0" });
