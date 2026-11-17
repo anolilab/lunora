@@ -7,24 +7,16 @@
 #
 #   bash scripts/worker-secrets.sh out.json AUTH_SECRET=AUTH_SECRET GITHUB_WEBHOOK_SECRET=CLOUD_GITHUB_WEBHOOK_SECRET
 #
-# The values are passed through `jq --arg`, never as command arguments, so they stay
-# out of the process list and the workflow log.
+# jq reads the values from its environment (`$ENV`); only the variable names reach its
+# command line, so the values stay out of the process list and the workflow log.
 set -euo pipefail
 
 out="$1"
 shift
 
-args=()
-for pair in "$@"; do
-    name="${pair%%=*}"
-    source="${pair#*=}"
-    value="${!source-}"
-
-    if [ -n "${value}" ]; then
-        args+=(--arg "${name}" "${value}")
-    fi
-done
-
 # shellcheck disable=SC2016 # jq program, not a shell expansion
-jq -n '$ARGS.named' "${args[@]+"${args[@]}"}" > "${out}"
+jq -n '
+    [$ARGS.positional[] | capture("^(?<name>[^=]+)=(?<source>.*)$") | { key: .name, value: ($ENV[.source] // "") } | select(.value != "")]
+    | from_entries
+' --args "$@" > "${out}"
 chmod 600 "${out}"
