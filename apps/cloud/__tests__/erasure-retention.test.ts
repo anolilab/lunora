@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { exportMine } from "../lunora/account";
-import { purgeDeleted } from "../lunora/organizations";
+import { cancelDeletion, purgeDeleted } from "../lunora/organizations";
 import { remove } from "../lunora/projects";
 import { prune } from "../lunora/retention";
 import type { OffsiteBucket } from "../src/backup/offsite";
@@ -483,5 +483,55 @@ describe("account export", () => {
         expect(exported.memberships).toStrictEqual([{ createdAt: 1, organizationId: "org_1", role: "owner" }]);
         expect(exported.auditEntries.map((entry) => entry.action)).toStrictEqual(["project.create"]);
         expect(exported.truncated).toBe(false);
+    });
+});
+
+/**
+ * The purge reads its due page first and erases one organization after another, so an owner
+ * can cancel between that read and their organization's turn, or while it is being erased.
+ */
+describe("organization erasure: a cancel racing the purge", () => {
+    const pending = () =>
+        makeCtx(
+            {
+                ...ORG_TABLES,
+                aliasOwnership: [],
+                edgeRules: [],
+                members: [owner("org_1")],
+                organizations: [{ _id: "org_1", deletionRequestedAt: 1 }],
+                payment_customers: [],
+                payment_sessions: [],
+                payment_subscriptions: [],
+                payment_usageEvents: [],
+            },
+            { now: NOW },
+        );
+
+    it("keeps an organization whose deletion was cancelled after the purge read its page", async () => {
+        const { ctx, ops } = pending();
+        const { organizations } = ctx.db as unknown as { organizations: { findMany: (args: unknown) => Promise<{ page: Record<string, unknown>[] }> } };
+        const { findMany } = organizations;
+
+        organizations.findMany = async (args) => {
+            const due = await findMany(args);
+
+            // The owner's cancel lands once the page is read.
+            await cancelDeletion.handler(ctx, { organizationId: "org_1" as never });
+
+            return due;
+        };
+
+        await expect(purgeDeleted.handler(ctx, {})).resolves.toStrictEqual({ purged: 0 });
+        expect(deletedIds(ops)).toStrictEqual([]);
+    });
+
+    it("refuses a cancel once the purge has claimed the organization", async () => {
+        const { ctx, ops } = pending();
+
+        await purgeDeleted.handler(ctx, {});
+
+        // The purge's claim on the row, which a cancel arriving mid-erasure finds.
+        expect(patches(ops)[0]).toStrictEqual({ id: "org_1", patch: { deletionRequestedAt: 0 } });
+        await expect(cancelDeletion.handler(ctx, { organizationId: "org_1" as never })).rejects.toThrow(/already being erased/u);
     });
 });

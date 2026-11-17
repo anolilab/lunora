@@ -214,6 +214,13 @@ export const requestDeletion = mutation
         });
     });
 
+/**
+ * The `deletionRequestedAt` a purge writes when it claims an organization. Still before any
+ * cutoff, so a purge that died part-way is picked up again by the next tick; and never a real
+ * request time, so a cancel can tell a claimed organization from a pending one.
+ */
+const PURGE_CLAIMED = 0;
+
 /** Cancel a pending deletion request (owner only). */
 export const cancelDeletion = mutation
     .use(rateLimit("api"))
@@ -221,8 +228,17 @@ export const cancelDeletion = mutation
     .mutation(async ({ ctx: context, args: { organizationId } }): Promise<void> => {
         const member = await assertMember(context, organizationId, ["owner"]);
         const { now } = context;
+        // Conditional on the purge not having claimed it: a cancel that landed after the claim
+        // would report success while the erasure ran on.
+        const { applied, doc } = await context.db.patchIf("organizations", organizationId, {
+            patch: { deletionRequestedAt: null },
+            where: { deletionRequestedAt: { gt: PURGE_CLAIMED } },
+        });
 
-        await context.db.patch("organizations", organizationId, { deletionRequestedAt: null });
+        if (!applied && doc?.["deletionRequestedAt"] === PURGE_CLAIMED) {
+            throw new LunoraError("CONFLICT", "this organization is already being erased; its deletion can no longer be cancelled");
+        }
+
         await context.db.insert("auditLog", {
             action: "organization.deletion.cancel",
             actorUserId: member.userId,
@@ -288,11 +304,24 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
         where: { deletionRequestedAt: { lt: cutoff } },
     });
 
+    let purged = 0;
+
     for (const organization of due) {
         const organizationId = organization._id;
+        // The page was read before this organization's turn: claim it only while its request is
+        // still due, so a cancel that landed since keeps the organization, and one after is refused.
+        // eslint-disable-next-line no-await-in-loop -- one org purged at a time keeps the writer simple
+        const { applied } = await context.db.patchIf("organizations", organizationId, {
+            patch: { deletionRequestedAt: PURGE_CLAIMED },
+            where: { deletionRequestedAt: { lt: cutoff } },
+        });
+
+        if (!applied) {
+            continue;
+        }
 
         // Before the domain rows go: they are what names each certificate to release.
-        // eslint-disable-next-line no-await-in-loop -- one org purged at a time keeps the writer simple
+        // eslint-disable-next-line no-await-in-loop -- see above
         await queueCertificateReleases(context, { organizationId });
         // eslint-disable-next-line no-await-in-loop -- see above
         await purgeScopedRows(context, ORG_PURGE_TABLES, { organizationId });
@@ -347,9 +376,10 @@ export const purgeDeleted = internalMutation.mutation(async ({ ctx: context }): 
 
         // eslint-disable-next-line no-await-in-loop -- one delete per org
         await context.db.delete("organizations", organizationId);
+        purged += 1;
     }
 
-    return { purged: due.length };
+    return { purged };
 });
 
 /**

@@ -123,6 +123,21 @@ const makeCtx = (tables: Record<string, Row[]>, options: { now?: number; userId?
             return Promise.resolve();
         },
         findFirst: () => Promise.resolve(null),
+        // The compare-and-set applies to the seeded row, unlike `patch`: a caller decides on what it
+        // claimed, so a second `patchIf` must see the first one's write.
+        patchIf: (table: string, id: string, args: { patch: Row; where: Row }) => {
+            const row = pinned(table, id);
+
+            if (row === null || !matches(row, args.where)) {
+                return Promise.resolve({ applied: false, doc: row });
+            }
+
+            assertNoExplicitUndefined(args.patch);
+            Object.assign(row, args.patch);
+            ops.push({ id, kind: "patch", patch: args.patch });
+
+            return Promise.resolve({ applied: true, doc: row });
+        },
         get: (table: string, id: string) => Promise.resolve(pinned(table, id)),
         insert: (table: string, document: Row) => {
             ops.push({ document, kind: "insert", table });
