@@ -223,6 +223,7 @@ export const reconcileBoxDns = async (
     input: { domain: string; live: () => Promise<ReadonlyArray<LiveBoxDns>>; maxWrites: number; zoneId: string },
 ): Promise<BoxDnsReconcileResult> => {
     const { records, truncated } = await api.listDnsRecordsUnder({ domain: input.domain, zoneId: input.zoneId });
+    // react-doctor-disable-next-line react-doctor/server-sequential-independent-await -- the order is the fix: read in parallel, a box enrolled mid-pass loses its records (see above)
     const live = await input.live();
     const operations = planBoxDns(records, input.domain, live, !truncated);
     const executed = operations.slice(0, input.maxWrites);
