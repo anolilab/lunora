@@ -122,6 +122,13 @@ describe("deployments.activate", () => {
         // A preview never moves the project pointer — custom domains resolve through it.
         expect(pointerPatch(patched)).toBeUndefined();
     });
+
+    it("refuses an older release once a newer one of the alias is live, recording nothing", async () => {
+        const { ctx, patched } = makeCtx([deployment({ _id: "dep_older", createdAt: 1, status: "verifying" }), deployment({ _id: "dep_newer", createdAt: 3 })]);
+
+        await expect(activate.handler(ctx, { id: "dep_older" as never })).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(patched).toStrictEqual([]);
+    });
 });
 
 describe("deployments.rollback", () => {

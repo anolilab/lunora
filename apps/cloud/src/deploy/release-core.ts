@@ -111,6 +111,39 @@ export interface DeployHandlerDeps extends ReleaseDeps {
 }
 
 /**
+ * Put the alias's live release back on its Worker after a newer release went
+ * live while this one ran.
+ *
+ * Whichever release converged last is what the Worker serves, and that can be
+ * this failed or refused one even though another is recorded live. Converging
+ * the recorded one again re-aligns the two; `liveAmong` stops it if yet another
+ * release has gone live since.
+ */
+const restoreLiveRelease = async (
+    input: { deploymentId: string; key: string; liveDeploymentId: string; organizationId: string },
+    deps: ReleaseDeps,
+    write: (frame: ReleaseFrame) => void,
+): Promise<void> => {
+    const { deploymentId, liveDeploymentId } = input;
+
+    write({ deploymentId, event: "reverting", to: liveDeploymentId });
+
+    try {
+        const { reprovisioned } = await reprovision({ deploymentId: liveDeploymentId, key: input.key, organizationId: input.organizationId }, deps, {
+            liveAmong: [liveDeploymentId],
+        });
+
+        write(
+            reprovisioned
+                ? { deploymentId, event: "reverted", to: liveDeploymentId }
+                : { deploymentId, event: "not_reverted", reason: "another release has gone live since; it stays" },
+        );
+    } catch (error) {
+        write({ deploymentId, error: error instanceof Error ? error.message : String(error), event: "revert_failed", to: liveDeploymentId });
+    }
+};
+
+/**
  * Put the previous live release back after a release failed its health check.
  *
  * The check runs AFTER cutover — the project has one Worker, and Workers for
@@ -138,12 +171,18 @@ const revertFailedRelease = async (
         // Deploys of one project are not serialized: a newer release may have gone
         // live while this one failed, and putting the older previous release back
         // would undo it. Only the failed release or the one it replaced may be live.
-        const { reprovisioned } = await reprovision({ deploymentId: previousDeploymentId, key: input.key, organizationId: input.organizationId }, deps, {
-            liveAmong: [deploymentId, previousDeploymentId],
-        });
+        const { liveDeploymentId, reprovisioned } = await reprovision(
+            { deploymentId: previousDeploymentId, key: input.key, organizationId: input.organizationId },
+            deps,
+            { liveAmong: [deploymentId, previousDeploymentId] },
+        );
 
         if (!reprovisioned) {
             write({ deploymentId, event: "not_reverted", reason: "a newer release has gone live since; it stays" });
+
+            if (liveDeploymentId !== undefined) {
+                await restoreLiveRelease({ ...input, liveDeploymentId }, deps, write);
+            }
 
             return;
         }

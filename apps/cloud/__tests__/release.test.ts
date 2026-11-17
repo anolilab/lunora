@@ -323,11 +323,12 @@ describe("handler: one stable Worker per project", () => {
         expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
     });
 
-    it("does not revert a failed release over a newer one that went live meanwhile", async () => {
+    it("puts the newer live release back instead of reverting a failed release over it", async () => {
         const { deployed, provisioner } = capture();
         const { store } = memoryReleaseStore();
 
         await store.put("dep_prev", PREVIOUS);
+        await store.put("dep_newer", { ...PREVIOUS, bundle: btoa("export default { v: 3 }") });
 
         const lines = await readLines(
             await handleDeployRequest(
@@ -343,9 +344,37 @@ describe("handler: one stable Worker per project", () => {
             ),
         );
 
-        expect(deployed.map(({ bundle }) => bundle)).toStrictEqual(["export default { v: 2 }"]);
+        // The failed release may have converged after the newer one; the Worker ends on the release recorded live.
+        expect(deployed.map(({ bundle }) => bundle)).toStrictEqual(["export default { v: 2 }", "export default { v: 3 }"]);
         expect(lines).toContainEqual(expect.objectContaining({ deploymentId: "dep_new", event: "not_reverted" }));
-        expect(lines.some((line) => line["event"] === "reverted")).toBe(false);
+        expect(lines).toContainEqual({ deploymentId: "dep_new", event: "reverted", to: "dep_newer" });
+        expect(lines.some((line) => line["event"] === "reverted" && line["to"] === "dep_prev")).toBe(false);
+        expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
+    });
+
+    it("puts the newer live release back when activation refuses an older release", async () => {
+        const { deployed, provisioner } = capture();
+        const { store } = memoryReleaseStore();
+
+        await store.put("dep_prev", PREVIOUS);
+        await store.put("dep_newer", { ...PREVIOUS, bundle: btoa("export default { v: 3 }") });
+
+        const lines = await readLines(
+            await handleDeployRequest(
+                request({ bundle: BUNDLE, projectId: "proj_1", scriptName: "app" }),
+                deps(
+                    backendWith({
+                        activateDeployment: () => Promise.reject(new Error("a newer release of this alias is already live")),
+                        createDeployment: () => Promise.resolve({ deploymentId: "dep_new", previousDeploymentId: "dep_prev", version: 2 }),
+                        releaseTarget: () => Promise.resolve(releaseTarget({ liveDeploymentId: "dep_newer" })),
+                    }),
+                    { provisioner, releases: store },
+                ),
+            ),
+        );
+
+        expect(deployed.map(({ bundle }) => bundle)).toStrictEqual(["export default { v: 2 }", "export default { v: 3 }"]);
+        expect(lines).toContainEqual({ deploymentId: "dep_new", event: "reverted", to: "dep_newer" });
         expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
     });
 

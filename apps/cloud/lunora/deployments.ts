@@ -552,6 +552,14 @@ export const activate = mutation
         const { page } = await context.db.deployments.findMany({ where: { projectId: deployment.projectId } }); // secret-scanner:allow -- domain field name
         const others = page.filter((d) => d._id !== id && d.alias === deployment.alias && d.kind === deployment.kind && d.status === "live");
 
+        // Releases of one alias are not serialized, so an older one can finish
+        // converging after a newer one already went live. Recording it would hand
+        // the alias back to older code; the deploy edge instead puts the live
+        // release back on the Worker when this refuses.
+        if (others.some((other) => other.createdAt > deployment.createdAt)) {
+            throw new LunoraError("CONFLICT", "a newer release of this alias is already live");
+        }
+
         // Every superseded row is checked before the first write, so a refused move leaves the alias as it was.
         for (const other of others) {
             assertStatusMove(other.status, "superseded");
