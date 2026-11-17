@@ -182,6 +182,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "deployments:activate": lunora_deployments_12.activate as unknown as RegisteredLunoraFunction,
     "deployments:adminTarget": lunora_deployments_12.adminTarget as unknown as RegisteredLunoraFunction,
     "deployments:cleanupExpiredPreviews": lunora_deployments_12.cleanupExpiredPreviews as unknown as RegisteredLunoraFunction,
+    "deployments:closePreview": lunora_deployments_12.closePreview as unknown as RegisteredLunoraFunction,
     "deployments:create": lunora_deployments_12.create as unknown as RegisteredLunoraFunction,
     "deployments:ejectTarget": lunora_deployments_12.ejectTarget as unknown as RegisteredLunoraFunction,
     "deployments:listByProject": lunora_deployments_12.listByProject as unknown as RegisteredLunoraFunction,
@@ -1356,6 +1357,7 @@ export interface Caller {
         activate: (args: { deployKey?: unknown; id: Id<"deployments"> }) => Promise<void>;
         adminTarget: (args: { adminPath: string; deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
+        closePreview: (args: { branch: unknown; projectId: Id<"projects"> }) => Promise<{ destroyed: number; }>;
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; allowDeleteClasses?: Array<unknown>; deployKey?: unknown; statefulClasses?: Array<unknown>; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtime?: "worker"; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
         ejectTarget: (args: { deployKey: unknown; deploymentId: Id<"deployments"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
         listByProject: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<(Pick<import("./dataModel.js").Doc_deployments, "_id" | "createdAt" | "organizationId" | "projectId" | "status" | "branch" | "bundleHash" | "updatedAt" | "version" | "kind" | "scriptName" | "alias" | "bindings" | "createdBy" | "expiresAt" | "url"> & { cronSpecs?: null | string[]; durableObjectClasses?: null | string[]; runtime?: "worker" | null; target?: string; verifyingAt?: null | number; })[]>;
@@ -1690,6 +1692,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         activate: (args) => callRegistered(context, "deployments:activate", args),
         adminTarget: (args) => callRegistered(context, "deployments:adminTarget", args),
         cleanupExpiredPreviews: (args) => callRegistered(context, "deployments:cleanupExpiredPreviews", args),
+        closePreview: (args) => callRegistered(context, "deployments:closePreview", args),
         create: (args) => callRegistered(context, "deployments:create", args),
         ejectTarget: (args) => callRegistered(context, "deployments:ejectTarget", args),
         listByProject: (args) => callRegistered(context, "deployments:listByProject", args),

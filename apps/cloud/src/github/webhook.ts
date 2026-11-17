@@ -39,10 +39,11 @@ export interface PreviewIntent {
     commitSha?: string;
 
     /**
-     * The PR's head lives in another repository (a fork). Set on `upsert` only.
-     * A fork's code is built but never released: a preview release resolves the
-     * project's preview secrets and mints its ingest key, which an outside
-     * contributor must never be able to reach by opening a pull request.
+     * The PR's head lives in another repository (a fork). A fork's code is built
+     * but never released: a preview release resolves the project's preview
+     * secrets and mints its ingest key, which an outside contributor must never
+     * be able to reach by opening a pull request. Closing a fork's pull request
+     * removes nothing — its branch name is the fork's, and may be one of ours.
      */
     fromFork?: boolean;
     installationId?: number;
@@ -97,7 +98,7 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
     }
 
     if (action === "closed") {
-        return { action: "remove", branch, number, repository };
+        return { action: "remove", branch, fromFork: isForkHead(event, repository), number, repository };
     }
 
     return null;
@@ -292,8 +293,9 @@ export type ResolveProject = (repository: string) => Promise<null | { organizati
  * deterministic preview script id.
  *
  * The deploy itself runs from CI via `POST /v1/deploy` with a preview deploy key
- * (CI holds it); previews tear down via their TTL cron (§2.3). So this endpoint's
- * job is project resolution + acknowledgement, not minting cross-org deploys.
+ * (CI holds it); a preview is retired when its pull request closes, or by its
+ * TTL cron (§2.3) otherwise. So this endpoint's job is project resolution +
+ * acknowledgement, not minting cross-org deploys.
  */
 export interface GitHubWebhookHooks {
     /** Record a server-side preview build for a PR head (upsert events, GAPS.md A3). */
@@ -318,6 +320,8 @@ export interface GitHubWebhookHooks {
             repository: string;
         },
     ) => Promise<BuildRecordResult>;
+    /** Retire a closed pull request's branch preview (`remove` events from the repository itself). */
+    onPreviewClose?: (intent: { branch: string; projectId: string; repository: string }) => Promise<{ destroyed: number }>;
     /** Record a build for a default-branch push (`push` events, GAPS.md A4). Returns one entry per candidate project; empty when the repo isn't connected. */
     onPush?: (intent: Delivery & PushIntent) => Promise<BuildRecordResult>;
 
@@ -418,11 +422,17 @@ const handlePullRequestIntent = async (intent: PreviewIntent, delivery: Delivery
         await reportSkip(previewBuild, target, options);
     }
 
+    const previewClosed =
+        intent.action === "remove" && intent.fromFork === false && options.onPreviewClose
+            ? await options.onPreviewClose({ branch: intent.branch, projectId: project.projectId, repository: intent.repository })
+            : undefined;
+
     return Response.json(
         {
             accepted: true,
             intent,
             ...(previewBuild.length > 0 ? { previewBuild } : {}),
+            ...(previewClosed === undefined ? {} : { previewClosed }),
             previewScriptName: intent.fromFork === true ? forkPreviewScriptName(project.slug, intent.number) : previewScriptName(project.slug, intent.branch),
             projectId: project.projectId, // secret-scanner:allow -- domain field name
         },

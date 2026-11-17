@@ -77,7 +77,13 @@ describe(parsePullRequestEvent, () => {
     });
 
     it("maps closed to remove", () => {
-        expect(parsePullRequestEvent(payload("closed"))).toStrictEqual({ action: "remove", branch: "feat/x", number: 7, repository: "acme/app" });
+        expect(parsePullRequestEvent(payload("closed"))).toStrictEqual({
+            action: "remove",
+            branch: "feat/x",
+            fromFork: false,
+            number: 7,
+            repository: "acme/app",
+        });
     });
 
     it("returns null for irrelevant actions and malformed payloads", () => {
@@ -165,6 +171,36 @@ describe(handleGitHubWebhook, () => {
         });
 
         expect(recorded).toStrictEqual([expect.objectContaining({ fromFork: false, pullRequest: 9 })]);
+    });
+
+    it("retires a closed pull request's branch preview, and never a fork's", async () => {
+        const closed: unknown[] = [];
+        const hooks: GitHubWebhookHooks = {
+            onPreviewClose: (intent) => {
+                closed.push(intent);
+
+                return Promise.resolve({ destroyed: 1 });
+            },
+            resolveProject: resolveProject(true),
+            secret,
+        };
+        const close = (headRepository: string): string =>
+            JSON.stringify({
+                action: "closed",
+                number: 9,
+                pull_request: { head: { ref: "feat/x", repo: { full_name: headRepository } } },
+                repository: { full_name: "acme/app" },
+            });
+
+        const response = await handleGitHubWebhook(await signedRequest(close("acme/app")), hooks);
+
+        expect(closed).toStrictEqual([{ branch: "feat/x", projectId: "proj_1", repository: "acme/app" }]);
+        await expect(response.json()).resolves.toMatchObject({ previewClosed: { destroyed: 1 } });
+
+        // A fork's branch name is the fork's own and may match one of ours.
+        await handleGitHubWebhook(await signedRequest(close("mallory/app")), hooks);
+
+        expect(closed).toHaveLength(1);
     });
 
     it("hands a push its delivery id and the commit it moved from, and acknowledges a redelivery without a build", async () => {

@@ -810,6 +810,31 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
 });
 
 /**
+ * Retire a closed pull request's preview: every preview release of `branch` in
+ * the project is marked `destroyed`, and the teardown sweep reclaims its Worker
+ * once its alias has nothing else alive — the same path an expired preview takes,
+ * only without waiting out the TTL. SYSTEM only (the GitHub webhook route).
+ */
+export const closePreview = internalMutation
+    .input({ branch: boundedString(LIMITS.gitRef), projectId: v.id("projects") })
+    .mutation(async ({ ctx: context, args: { branch, projectId } }): Promise<{ destroyed: number }> => {
+        const { now } = context;
+        const { page } = await context.db.deployments.findMany({ where: { branch, kind: "preview", projectId } });
+        const open = page.filter((deployment) => deployment.status !== "destroyed");
+
+        for (const deployment of open) {
+            assertStatusMove(deployment.status, "destroyed");
+        }
+
+        for (const deployment of open) {
+            // eslint-disable-next-line no-await-in-loop -- one branch's releases; sequential keeps the writer simple
+            await context.db.patch("deployments", deployment._id, { destroyedAt: now, status: "destroyed", updatedAt: now });
+        }
+
+        return { destroyed: open.length };
+    });
+
+/**
  * Advance a deployment's lifecycle (queued → provisioning → verifying → live, or
  * → failed). A move the transition table (`src/deploy/status-transitions.ts`) does not
  * list is refused with a CONFLICT. Driven by the deploy orchestrator as it works through the

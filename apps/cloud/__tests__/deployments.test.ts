@@ -1,8 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { Doc } from "../lunora/_generated/dataModel";
+import type { Doc, Id } from "../lunora/_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../lunora/_generated/server";
-import { cleanupExpiredPreviews, planForScript, pruneSuperseded } from "../lunora/deployments";
+import { cleanupExpiredPreviews, closePreview, planForScript, pruneSuperseded } from "../lunora/deployments";
 import { orgForScript } from "../lunora/logs";
 import type { DEPLOYMENT_STATUSES } from "../lunora/tables/shared";
 import { periodStartOf } from "../src/billing/spend";
@@ -50,6 +50,27 @@ describe("deployment status union", () => {
     it("keeps DEPLOYMENT_STATUSES and the stored status column in step", () => {
         // Type-level: the check fails `tsc` (lint:types) when the array and the validator drift.
         expectTypeOf<(typeof DEPLOYMENT_STATUSES)[number]>().toEqualTypeOf<Doc<"deployments">["status"]>();
+    });
+});
+
+describe("deployments.closePreview", () => {
+    it("destroys every not-yet-destroyed preview release of the branch in that project, and nothing else", async () => {
+        const { ctx, patched } = makeCtx([
+            { _id: "live", branch: "feat/x", kind: "preview", projectId: "proj_1", status: "live" },
+            { _id: "superseded", branch: "feat/x", kind: "preview", projectId: "proj_1", status: "superseded" },
+            { _id: "gone", branch: "feat/x", kind: "preview", projectId: "proj_1", status: "destroyed" },
+            { _id: "other_branch", branch: "feat/y", kind: "preview", projectId: "proj_1", status: "live" },
+            { _id: "other_project", branch: "feat/x", kind: "preview", projectId: "proj_2", status: "live" },
+            { _id: "production", branch: "feat/x", kind: "production", projectId: "proj_1", status: "live" },
+        ]);
+
+        const result = await closePreview.handler(ctx, { branch: "feat/x", projectId: "proj_1" as Id<"projects"> });
+
+        expect(result).toStrictEqual({ destroyed: 2 });
+        expect(patched.map((entry) => [entry.id, entry.patch["status"]])).toStrictEqual([
+            ["live", "destroyed"],
+            ["superseded", "destroyed"],
+        ]);
     });
 });
 
