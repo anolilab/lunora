@@ -124,10 +124,17 @@ impl CgroupManager {
         write(&directory.join("cgroup.procs"), &pid.to_string())
     }
 
-    /// Remove `alias`'s cgroup once its node has exited; a cgroup still in use is left.
+    /// Kill whatever is left in `alias`'s cgroup once its node has exited, then remove it; a cgroup still in use
+    /// is left.
     pub fn release(&self, alias: &str) {
+        let directory = self.path_of(alias);
+
+        // A process the node started outside its process group still holds the cgroup, and rmdir fails on a
+        // non-empty one. `cgroup.kill` (Linux 5.14+) SIGKILLs every member; on an older kernel or a cgroup
+        // that is already gone the write fails and removal is attempted anyway.
+        let _ = fs::write(directory.join("cgroup.kill"), "1");
         // Gone already, or not empty yet: the next attach reuses it.
-        let _ = fs::remove_dir(self.path_of(alias));
+        let _ = fs::remove_dir(directory);
     }
 }
 
@@ -181,6 +188,10 @@ mod tests {
         assert_eq!(read("fleet-my-app/memory.max"), (512 * MIB).to_string());
         assert_eq!(read("fleet-my-app/memory.swap.max"), "0");
         assert_eq!(read("fleet-my-app/cgroup.procs"), "5151");
+
+        cgroups.release("my-app");
+
+        assert_eq!(read("fleet-my-app/cgroup.kill"), "1");
 
         // A real cgroup directory is empty once its processes exit; here the files stand in for them.
         fs::remove_dir_all(base.join("fleet-my-app")).unwrap();

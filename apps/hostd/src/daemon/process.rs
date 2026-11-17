@@ -115,8 +115,8 @@ impl SupervisedProcess {
         }
     }
 
-    /// Stop the child: SIGTERM, then SIGKILL once `budget` has passed. Resolves when it has exited (at once when
-    /// none runs). It is not restarted.
+    /// Stop the child and everything it started: SIGTERM to its process group, then SIGKILL once `budget` has
+    /// passed. Resolves when the child has exited (at once when none runs). It is not restarted.
     pub async fn stop(&self, budget: Duration) {
         let running = {
             let mut inner = lock(&self.inner);
@@ -133,11 +133,11 @@ impl SupervisedProcess {
             return;
         };
 
-        signal(pid, libc::SIGTERM);
+        signal_group(pid, libc::SIGTERM);
 
         if tokio::time::timeout(budget, exited.wait_for(|done| *done)).await.is_err() {
             self.options.logger.warn(&format!("{} did not stop within {} ms; killing it", self.options.name, budget.as_millis()));
-            signal(pid, libc::SIGKILL);
+            signal_group(pid, libc::SIGKILL);
             let _ = exited.wait_for(|done| *done).await;
         }
     }
@@ -168,7 +168,9 @@ impl SupervisedProcess {
         let options = &self.options;
         let mut command = options.launch.command(&options.program, &options.args);
 
-        command.envs(&options.env).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // Its own process group, led by the child, so `stop` reaches whatever the child forked: signalling the
+        // pid alone left grandchildren running after their fleet was deleted.
+        command.envs(&options.env).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
 
         if let Some(cwd) = &options.cwd {
             command.current_dir(cwd);
@@ -290,13 +292,14 @@ async fn read_lines(process: Arc<SupervisedProcess>, stream: impl AsyncRead + Un
     }
 }
 
-fn signal(pid: u32, signal: i32) {
+/// Signal the process group `pid` leads (`spawn_child` makes every child a group leader).
+fn signal_group(pid: u32, signal: i32) {
     if let Ok(pid) = libc::pid_t::try_from(pid)
         && pid > 0
     {
-        // SAFETY: kill(2) on a pid this process spawned and has not yet reaped.
+        // SAFETY: kill(2) on the group of a pid this process spawned and has not yet reaped.
         unsafe {
-            libc::kill(pid, signal);
+            libc::kill(-pid, signal);
         }
     }
 }
@@ -374,6 +377,60 @@ mod tests {
         assert!(!stubborn.running());
         assert!(lines.lock().unwrap().iter().any(|line| line == "warn: test did not stop within 200 ms; killing it"), "{lines:?}");
         assert_eq!(stubborn.restarts(), 0);
+    }
+
+    /// Gone, or a zombie waiting for init to reap it: either way no longer running.
+    fn is_gone(pid: libc::pid_t) -> bool {
+        // SAFETY: signal 0 only checks that the pid exists.
+        let exists = unsafe { libc::kill(pid, 0) } == 0;
+
+        !exists
+            || std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                .is_ok_and(|stat| stat.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')))
+    }
+
+    #[tokio::test]
+    async fn stop_reaches_the_processes_the_child_started() {
+        let (logger, _lines) = recording();
+        let parent = process("sleep 30 & echo $!; wait", logger);
+
+        parent.start();
+
+        let mut grandchild = None;
+
+        for _ in 0..200 {
+            grandchild = parent.recent_output().first().and_then(|line| line.parse::<libc::pid_t>().ok());
+
+            if grandchild.is_some() {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let grandchild = grandchild.expect("the child printed its background pid");
+
+        parent.stop(Duration::from_secs(5)).await;
+
+        // The signal is sent before `stop` returns; the grandchild's exit is the kernel's to finish.
+        for _ in 0..200 {
+            if is_gone(grandchild) {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let gone = is_gone(grandchild);
+
+        if !gone {
+            // SAFETY: clean up the stray sleep this test started.
+            unsafe {
+                libc::kill(grandchild, libc::SIGKILL);
+            }
+        }
+
+        assert!(gone, "the child's background process survived stop");
     }
 
     #[tokio::test]
