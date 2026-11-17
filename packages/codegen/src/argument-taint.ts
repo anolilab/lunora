@@ -638,22 +638,34 @@ const SELECT_SYSTEM_FIELDS: ReadonlySet<string> = new Set(["_creationTime", "_id
 /**
  * Whether the row `read` returns still carries `field`: no `select`, or a `select` of literal names that lists it. A
  * projected-away column reads `undefined` for every caller, so it scopes nothing; a `select` that is not a literal list
- * keeps only the system fields as far as this can tell.
+ * keeps only the system fields as far as this can tell. A spread (`...args.query`) or computed key can supply a
+ * `select` of the caller's choosing, so with no literal `select` after it the projection is unknown.
  */
 const keepsColumn = (read: CallExpression, field: string): boolean =>
     SELECT_SYSTEM_FIELDS.has(field) ||
     read.getArguments().every((argument) => {
-        const select = propertyValueOf(
-            objectLiteralOf(argument)
-                ?.getProperties()
-                .find((member) => !Node.isSpreadAssignment(member) && propertyKeyName(member) === "select"),
-        );
+        const query = objectLiteralOf(argument);
 
-        if (select === undefined) {
+        if (query === undefined) {
             return true;
         }
 
-        const names = unwrapExpression(select);
+        const members = query.getProperties();
+        const select = members.findLast((member) => !Node.isSpreadAssignment(member) && propertyKeyName(member) === "select");
+
+        if (hasExecutableMember(query)) {
+            return false;
+        }
+
+        if (select === undefined) {
+            return !members.some((member) => Node.isSpreadAssignment(member) || staticPropertyName(member.getNameNode()) === undefined);
+        }
+
+        if (isOverriddenLater(query, select)) {
+            return false;
+        }
+
+        const names = unwrapExpression(propertyValueOf(select));
 
         return (
             Node.isArrayLiteralExpression(names) &&

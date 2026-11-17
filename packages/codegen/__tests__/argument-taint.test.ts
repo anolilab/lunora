@@ -591,13 +591,29 @@ describe("argument-taint", () => {
         });
 
         it("judges a whole-key or id column by the query's effective where", () => {
-            expect.assertions(4);
+            expect.assertions(7);
 
             // A spread before `where` cannot replace it; the `where` written after wins at runtime.
             const pinnedAfterSpread = `const row = await ctx.db.files.findFirst({ ...args.query, where: { ownerId: ctx.auth.userId } });\n`;
 
-            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(row.storageKey);`))).toBe(true);
-            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(\`\${row.id}/\${args.key ?? args.other}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(\`\${row._id}/\${args.key ?? args.other}\`);`))).toBe(true);
+            // ...but it can supply a `select` that projects the column away, leaving it undefined for every caller.
+            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(row.storageKey);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ select: ["ownerId"], ...args.query, where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ ...args.query, select: ["ownerId"], where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(true);
 
             expect(
                 isScopedByIdentity(
