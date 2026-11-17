@@ -317,7 +317,15 @@ describe("argument-taint", () => {
         });
 
         it("follows a where filter held in a local and an AND branch to the owner column", () => {
-            expect.assertions(4);
+            expect.assertions(5);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const filter = { ownerId: ctx.auth.userId };\nconst row = await ctx.db.files.findFirst({ where: (filter as Filter) });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(true);
 
             const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
 
@@ -363,7 +371,23 @@ describe("argument-taint", () => {
         });
 
         it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
-            expect.assertions(6);
+            expect.assertions(8);
+
+            // The owner value must be the caller id, not an expression that merely mentions it.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: args.ownerId + ctx.auth.userId.slice(0, 0) } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: { eq: args.ownerId ?? ctx.auth.userId } } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
 
             expect(
                 isScopedByIdentity(

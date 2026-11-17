@@ -398,6 +398,31 @@ const rowFieldReadOf = (source: TsNode): { field: string | undefined; read: TsNo
     }
 };
 
+/** The `ctx.auth` member that names the caller; `getIdentity` is a method shared by every caller. */
+const CALLER_ID_MEMBER = "userId";
+
+/** `node` without the parentheses, `await`, `!` and type assertions around it, none of which change the value. */
+const strippedValue = (node: TsNode): TsNode => {
+    let current = node;
+
+    for (;;) {
+        const next = Node.isNonNullExpression(current) || Node.isAwaitExpression(current) ? current.getExpression() : unwrapExpression(current);
+
+        if (next === undefined || next === current) {
+            return current;
+        }
+
+        current = next;
+    }
+};
+
+/** Whether `value` is the caller's id itself (`ctx.auth.userId`, or a local bound to it), not merely an expression that mentions it. */
+const isCallerId = (value: TsNode): boolean => {
+    const path = contextTrustPathOf(strippedValue(value));
+
+    return path?.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
+};
+
 /** The value a `key: value` or shorthand `{ key }` property holds; `undefined` for any other member. */
 const propertyValueOf = (property: TsNode | undefined): TsNode | undefined => {
     if (Node.isPropertyAssignment(property)) {
@@ -405,6 +430,27 @@ const propertyValueOf = (property: TsNode | undefined): TsNode | undefined => {
     }
 
     return Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : undefined;
+};
+
+/** The outermost parentheses, `!` or type assertion around `node`, none of which change the value it passes on. */
+const valueWrapperOf = (node: TsNode): TsNode => {
+    let current = node;
+
+    for (let parent = current.getParent(); ; parent = current.getParent()) {
+        if (
+            !(
+                Node.isParenthesizedExpression(parent) ||
+                Node.isNonNullExpression(parent) ||
+                Node.isAsExpression(parent) ||
+                Node.isSatisfiesExpression(parent) ||
+                Node.isTypeAssertion(parent)
+            )
+        ) {
+            return current;
+        }
+
+        current = parent;
+    }
 };
 
 /**
@@ -420,11 +466,13 @@ const isPassedOnly = (identifier: Identifier): boolean => {
         .getDescendantsOfKind(SyntaxKind.Identifier)
         .filter((use) => use.getText() === identifier.getText() && declarationOf(use) === declaration)
         .every((use) => {
-            const parent = use.getParent();
+            const wrapped = valueWrapperOf(use);
+            const parent = wrapped.getParent();
 
+            // `parent` holds `wrapped` either as its name or as its value; only the value passes the object on.
             return (
                 (Node.isVariableDeclaration(parent) && parent.getNameNode() === use) ||
-                (Node.isPropertyAssignment(parent) && parent.getInitializer() === use) ||
+                (Node.isPropertyAssignment(parent) && parent.getNameNode() !== wrapped) ||
                 Node.isShorthandPropertyAssignment(parent)
             );
         });
@@ -443,18 +491,18 @@ const objectLiteralOf = (node: TsNode | undefined): ObjectLiteralExpression | un
     return Node.isObjectLiteralExpression(initializer) ? initializer : undefined;
 };
 
-/** Whether a predicate `value` equates its column to the caller: the identity itself, or `{ eq: identity }`. */
+/** Whether a predicate `value` equates its column to the caller: the caller id itself, or `{ eq: callerId }`. */
 const equatesToCaller = (value: TsNode): boolean => {
     const operand = unwrapExpression(value) ?? value;
 
     if (!Node.isObjectLiteralExpression(operand)) {
-        return readsCallerIdentity(value);
+        return isCallerId(value);
     }
 
     const [only, ...rest] = operand.getProperties();
     const eq = rest.length === 0 && Node.isPropertyAssignment(only) && propertyKeyName(only) === "eq" ? only.getInitializer() : undefined;
 
-    return eq !== undefined && readsCallerIdentity(eq);
+    return eq !== undefined && isCallerId(eq);
 };
 
 /**
@@ -1145,24 +1193,6 @@ const bindingScopesKey = (identifier: TsNode, wholeKey: TsNode | undefined): boo
     const read = owned === undefined ? undefined : databaseReadOf(owned);
 
     return read !== undefined && Node.isIdentifier(identifier) && rowScopesKey(read, identifier, destructuredFieldOf(declarationOf(identifier)), wholeKey);
-};
-
-/** The `ctx.auth` member that names the caller; `getIdentity` is a method shared by every caller. */
-const CALLER_ID_MEMBER = "userId";
-
-/** `node` without the parentheses, `await`, `!` and type assertions around it, none of which change the value. */
-const strippedValue = (node: TsNode): TsNode => {
-    let current = node;
-
-    for (;;) {
-        const next = Node.isNonNullExpression(current) || Node.isAwaitExpression(current) ? current.getExpression() : unwrapExpression(current);
-
-        if (next === undefined || next === current) {
-            return current;
-        }
-
-        current = next;
-    }
 };
 
 /**
