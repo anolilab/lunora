@@ -1046,12 +1046,21 @@ const scopesKeyPart = (part: TsNode): boolean =>
         (identifier) => !isAlternativeOf(identifier, part) && !insideDatabaseCallWithin(identifier, part) && bindingScopesKey(identifier, undefined),
     );
 
+/**
+ * Whether `part` emits the identity it references: scoped, and with no call other than a `ctx.db` read
+ * between the identity and the key, since a call such as `ctx.auth.userId.slice(0, 0)` can return
+ * the same value for every caller.
+ */
+const emitsIdentity = (part: TsNode): boolean =>
+    scopesKeyPart(part) &&
+    [...(Node.isCallExpression(part) ? [part] : []), ...part.getDescendantsOfKind(SyntaxKind.CallExpression)].every((call) => isDatabaseReadCall(call));
+
 /** Whether `parent`, a template or `+` concatenation, opens with an identity-scoped part before `child` and no caller part ahead of it. */
 const opensWithIdentityBefore = (child: TsNode, parent: TsNode): boolean => {
     if (Node.isTemplateSpan(child) && Node.isTemplateExpression(parent)) {
         const spans = parent.getTemplateSpans();
         const leading = spans.slice(0, spans.indexOf(child)).map((span) => span.getExpression());
-        const firstScoped = leading.findIndex((part) => scopesKeyPart(part));
+        const firstScoped = leading.findIndex((part) => emitsIdentity(part));
 
         return firstScoped !== -1 && !leading.slice(0, firstScoped).some((part) => reachesArgsWithinOneHop(part));
     }
@@ -1061,7 +1070,7 @@ const opensWithIdentityBefore = (child: TsNode, parent: TsNode): boolean => {
         Node.isBinaryExpression(parent) &&
         parent.getOperatorToken().getKind() === SyntaxKind.PlusToken &&
         child === parent.getRight() &&
-        scopesKeyPart(parent.getLeft()) &&
+        emitsIdentity(parent.getLeft()) &&
         !reachesArgsWithinOneHop(parent.getLeft())
     );
 };

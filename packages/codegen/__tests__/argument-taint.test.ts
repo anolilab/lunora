@@ -290,7 +290,10 @@ describe("argument-taint", () => {
         });
 
         it("rejects a caller fallback behind a prefix that can drop the identity", () => {
-            expect.assertions(1);
+            expect.assertions(3);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId.slice(0, 0)}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(ctx.auth.userId.slice(0, 0) + "/" + (args.key ?? args.other));`))).toBe(false);
 
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId && "shared"}/\${args.key ?? args.other}\`);`))).toBe(false);
         });
