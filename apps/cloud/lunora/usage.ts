@@ -156,8 +156,15 @@ export const ingest = mutation
             throw new LunoraError("BAD_REQUEST", "usage quantity must be a non-negative number");
         }
 
-        if (!Number.isFinite(arguments_.periodStart) || arguments_.periodStart < 0) {
-            throw new LunoraError("BAD_REQUEST", "usage periodStart must be a valid timestamp");
+        // A future period would sit outside every bill the sweeps compute, and a
+        // mid-month timestamp would form a period of its own that no exact-period read finds.
+        if (
+            !Number.isFinite(arguments_.periodStart) ||
+            arguments_.periodStart < 0 ||
+            periodStartOf(arguments_.periodStart) !== arguments_.periodStart ||
+            arguments_.periodStart > periodStartOf(context.now)
+        ) {
+            throw new LunoraError("BAD_REQUEST", "usage periodStart must be the first instant (UTC) of the current or an earlier month");
         }
 
         // The id is caller-supplied and only its ORG is authorized above, so
@@ -481,10 +488,9 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
     // any organization past that boundary was never evaluated and its spend cap simply
     // did not apply — silently, since the sweep still reported success. The usage read
     // also narrows to the current period in the query, so draining stays proportional
-    // to live spend rather than to all metering history.
-    const usageRows = await collectAll<PlatformUsageRow>((cursor) =>
-        context.db.platformUsage.findMany({ cursor, where: { periodStart: { gte: periodStart } } }),
-    );
+    // to live spend rather than to all metering history. Exact, not `gte`: a row filed
+    // under a future period is not this month's spend.
+    const usageRows = await collectAll<PlatformUsageRow>((cursor) => context.db.platformUsage.findMany({ cursor, where: { periodStart } }));
     const byOrg = new Map<string, PeriodUsage>();
 
     // Every meter counts toward the cap, not just requests/CPU — a tenant can

@@ -180,6 +180,13 @@ describe("usage.rollup", () => {
     });
 });
 
+/** The real sweep's period bucket — the latch compares against it. */
+const thisPeriod = (): number => {
+    const now = new Date();
+
+    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+};
+
 const organization = (over: Row = {}): Row => {
     return { _id: "org_1", plan: "free", ...over };
 };
@@ -192,7 +199,7 @@ describe("usage.enforceSpendCaps", () => {
         // The column says enterprise (no cap); with no subscription the org is on free, which has one.
         const { ctx, ops } = makeCtx({
             organizations: [organization({ plan: "enterprise" })],
-            platformUsage: [usageRow("u1", 10_000_000_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })],
+            platformUsage: [usageRow("u1", 10_000_000_000_000, { periodStart: thisPeriod() })],
         });
 
         await enforceSpendCaps.handler(ctx, {});
@@ -203,7 +210,7 @@ describe("usage.enforceSpendCaps", () => {
     it("suspends an org over its cap and records why", async () => {
         const { ctx, ops } = makeCtx({
             organizations: [organization({ spendCapMinor: 1 })],
-            platformUsage: [usageRow("u1", 10_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })],
+            platformUsage: [usageRow("u1", 10_000_000, { periodStart: thisPeriod() })],
         });
 
         await enforceSpendCaps.handler(ctx, {});
@@ -217,7 +224,7 @@ describe("usage.enforceSpendCaps", () => {
             // $1.00: one billed request-hour of these quantities would pass it many times over.
             organizations: [organization({ spendCapMinor: 100 })],
             platformUsage: [...UNVERIFIED_METERS].map((kind, index) =>
-                usageRow(`u${String(index)}`, 1e15, { billable: false, kind, periodStart: Number.MAX_SAFE_INTEGER - 1 }),
+                usageRow(`u${String(index)}`, 1e15, { billable: false, kind, periodStart: thisPeriod() }),
             ),
         });
 
@@ -230,7 +237,7 @@ describe("usage.enforceSpendCaps", () => {
     it("does not re-suspend an org that is already suspended", async () => {
         const { ctx, ops } = makeCtx({
             organizations: [organization({ spendCapMinor: 1, suspendedAt: 1, suspendedReason: "spend-cap" })],
-            platformUsage: [usageRow("u1", 10_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })],
+            platformUsage: [usageRow("u1", 10_000_000, { periodStart: thisPeriod() })],
         });
 
         await enforceSpendCaps.handler(ctx, {});
@@ -253,6 +260,19 @@ describe("usage.enforceSpendCaps", () => {
         expect(ops.filter((op) => isTransition(op))).toStrictEqual([]);
     });
 
+    it("does not count a row filed under a future period toward this month's cap", async () => {
+        const start = new Date(thisPeriod());
+        const { ctx, ops } = makeCtx({
+            organizations: [organization({ spendCapMinor: 1 })],
+            platformUsage: [usageRow("u1", 10_000_000, { periodStart: Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1) })],
+        });
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.filter((op) => op.kind === "patch" && "suspendedReason" in op.patch)).toStrictEqual([]);
+        expect(ops.find((op) => op.kind === "patch" && "spendNanoCents" in op.patch)).toMatchObject({ patch: { spendNanoCents: 0 } });
+    });
+
     it("lifts a spend-cap suspension once usage is back under the cap", async () => {
         const { ctx, ops } = makeCtx({ organizations: [organization({ suspendedAt: 1, suspendedReason: "spend-cap" })], platformUsage: [] });
 
@@ -262,15 +282,15 @@ describe("usage.enforceSpendCaps", () => {
     });
 });
 
-/** The real sweep's period bucket — the latch compares against it. */
-const thisPeriod = (): number => {
-    const now = new Date();
+/** The month before {@link thisPeriod}. */
+const lastPeriod = (): number => {
+    const start = new Date(thisPeriod());
 
-    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+    return Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 1, 1);
 };
 
 /** About $3 of requests in the current period: over a 1-cent warn, under the default cap. */
-const currentSpend = (): Row[] => [usageRow("u1", 10_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })];
+const currentSpend = (): Row[] => [usageRow("u1", 10_000_000, { periodStart: thisPeriod() })];
 
 const spendRule = (over: Row = {}): Row => {
     return {
@@ -368,7 +388,7 @@ describe("usage.enforceSpendCaps soft cap (plan 365 W2)", () => {
     it("caps an org whose override columns are NULL at its plan default", async () => {
         const { ctx } = makeCtx({
             organizations: [organization({ spendCapMinor: null, spendWarnMinor: null })],
-            platformUsage: [usageRow("u1", 20_000_000, { periodStart: Number.MAX_SAFE_INTEGER - 1 })],
+            platformUsage: [usageRow("u1", 20_000_000, { periodStart: thisPeriod() })],
         });
 
         await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ suspended: 1 });
@@ -391,7 +411,7 @@ describe("usage.enforceSpendCaps soft cap (plan 365 W2)", () => {
 });
 
 const ingestArgs = (over: Row = {}): Row => {
-    return { deployKey: "production:org_1|secret", kind: "requests", organizationId: "org_1", periodStart: 1000, quantity: 5, ...over };
+    return { deployKey: "production:org_1|secret", kind: "requests", organizationId: "org_1", periodStart: 0, quantity: 5, ...over };
 };
 
 describe("usage.ingest accrual (plan 365 W3)", () => {
@@ -416,12 +436,27 @@ describe("usage.ingest accrual (plan 365 W3)", () => {
     });
 
     /** A tenant-chosen periodStart must not be able to reset its own running spend. */
-    it("ignores a row for any other period", async () => {
+    it("ignores a row for an earlier period", async () => {
         const { ctx, ops } = await keyed([organization({ spendNanoCents: 100, spendPeriod: thisPeriod() })]);
 
-        await ingest.handler(ctx, ingestArgs({ periodStart: thisPeriod() + 86_400_000 * 40 }) as never);
+        await ingest.handler(ctx, ingestArgs({ periodStart: lastPeriod() }) as never);
 
         expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([]);
+    });
+
+    it("refuses a future period", async () => {
+        const { ctx, ops } = await keyed([organization()]);
+        const nextPeriod = Date.UTC(new Date(thisPeriod()).getUTCFullYear(), new Date(thisPeriod()).getUTCMonth() + 1, 1);
+
+        await expect(ingest.handler(ctx, ingestArgs({ periodStart: nextPeriod }) as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "platformUsage")).toStrictEqual([]);
+    });
+
+    it("refuses a periodStart that is not the first instant of a month", async () => {
+        const { ctx, ops } = await keyed([organization()]);
+
+        await expect(ingest.handler(ctx, ingestArgs({ periodStart: thisPeriod() + 1 }) as never)).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "platformUsage")).toStrictEqual([]);
     });
 });
 
