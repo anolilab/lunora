@@ -1560,7 +1560,9 @@ public final class LunoraClient {
                 guard let id else { return [] }
 
                 if subscriptions[id] != nil {
-                    if let delay = LunoraClient.retryAfterSeconds(envelope) {
+                    // A late frame from a detached or closed socket must not arm a retry no
+                    // sender can fire: it would sit due until the next attach, or forever.
+                    if let delay = LunoraClient.retryAfterSeconds(envelope), !closed, send != nil {
                         pendingRetries[id] = ProcessInfo.processInfo.systemUptime + delay
                     } else {
                         // A hint-less error ends the subscription: drop an earlier hint's retry.

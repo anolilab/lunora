@@ -299,4 +299,19 @@ final class SubscriptionRetryTests: XCTestCase {
         _ = client.handleFrame(#"{"cursor":14,"epoch":"e1","id":"sub_1","type":"resume"}"#)
         XCTAssertNotNil(client.nextSubscriptionRetryAt, "a resume a frozen subscription ignores must keep the retry")
     }
+
+    func testLateHintAfterDetachOrCloseSchedulesNothing() throws {
+        let retry = try retryGolden()
+        let detached = try openSubscribed(retry, Recorder())
+
+        detached.detachSocket()
+        _ = detached.handleFrame(try json(try XCTUnwrap(retry["hintFrame"])))
+        XCTAssertNil(detached.nextSubscriptionRetryAt, "a hint arriving after detach must not arm a retry")
+
+        let closed = try openSubscribed(retry, Recorder())
+
+        closed.close()
+        _ = closed.handleFrame(try json(try XCTUnwrap(retry["hintFrame"])))
+        XCTAssertNil(closed.nextSubscriptionRetryAt, "a hint arriving after close must not arm a retry")
+    }
 }
