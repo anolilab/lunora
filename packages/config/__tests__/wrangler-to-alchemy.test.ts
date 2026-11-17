@@ -184,6 +184,18 @@ describe("wranglerToAlchemy", () => {
         expect(source).not.toContain("AUTH");
     });
 
+    it("reports module rules and source-map upload, which the emitted worker does not carry", () => {
+        expect.assertions(1);
+
+        const { unsupported } = wranglerToAlchemy({
+            ...BASE,
+            rules: [{ globs: ["**/*.wasm"], type: "CompiledWasm" }],
+            upload_source_maps: true,
+        } as WranglerConfigShape);
+
+        expect(unsupported.toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["rules", "upload_source_maps"]);
+    });
+
     it("preserves a var's JSON type instead of stringifying it", () => {
         expect.assertions(3);
 
