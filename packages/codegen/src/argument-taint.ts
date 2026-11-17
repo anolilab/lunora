@@ -389,8 +389,7 @@ const rowFieldReadOf = (source: TsNode): { field: string | undefined; read: TsNo
         }
 
         if (Node.isElementAccessExpression(parent) && parent.getExpression() === current) {
-            const argument = parent.getArgumentExpression();
-
+            const argument = unwrapExpression(parent.getArgumentExpression());
             const isStaticKey = Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument);
 
             return { field: isStaticKey ? argument.getLiteralValue() : undefined, read: parent };
@@ -556,7 +555,14 @@ const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string | unde
             return false;
         }
 
-        if (propertyKeyName(property) === "AND") {
+        // A computed column (`[args.field]: uid`) lets the caller pick which column the caller id is matched against.
+        const key = staticPropertyName(property.getNameNode());
+
+        if (key === undefined) {
+            return false;
+        }
+
+        if (key === "AND") {
             const branches = unwrapExpression(value);
 
             return (
@@ -569,7 +575,7 @@ const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string | unde
             );
         }
 
-        return (field === undefined || propertyKeyName(property) === field) && equatesToCaller(value);
+        return (field === undefined || key === field) && equatesToCaller(value);
     });
 
 /** Whether a query object passed to `read` holds a member that can rewrite it at runtime: a spread, or a computed key. */
