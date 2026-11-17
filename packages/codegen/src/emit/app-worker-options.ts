@@ -563,6 +563,20 @@ ${options.voiceAgents
         : []),
 ];
 
+/** The queue registry, as an expression: imported on the first batch under the lazy function registry. */
+const queueRegistryExpression = (options: ResolvedAppOptions): string =>
+    options.lazyFunctions === true ? `(await import("./queues.js")).LUNORA_QUEUE_REGISTRY` : "LUNORA_QUEUE_REGISTRY";
+
+/** The dispatch options' `capture` + `env` lines, shared by the native consumer and the forwarded-batch handler. */
+const queueCaptureLines = (options: ResolvedAppOptions): string[] => [
+    `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
+    `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
+        options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
+    })`,
+    `                        : undefined,`,
+    `                    env: queueEnv as Record<string, unknown>,`,
+];
+
 /**
  * The push-consumer handler backing the worker's `queue(batch, …)` entry:
  * routes each delivered batch to its `defineQueue` handler. Built from
@@ -574,33 +588,40 @@ ${options.voiceAgents
  * stream the target serves: the runtime always offers the Worker's shard-forwarding
  * publisher as the fifth argument, and this forwards it only when `liveStreams` is set.
  * Otherwise the handler's `ctx.live` is absent, matching a target without live streams.
+ * The same registry backs `queueHandler`, the forwarded-batch path of `POST /_lunora/queue`.
  */
-const buildQueueConsumerLines = (options: ResolvedAppOptions): string[] =>
-    options.hasQueue
-        ? [
-              // The runtime hands the handler the Worker's shard-forwarding publisher (fifth)
-              // and the host's `ctx.run` fetch (sixth, `undefined` on Cloudflare).
-              // Lazy: the registry statically imports every queue-declaring module, so it loads on the
-              // first batch (all of them at once, cached by the module system) instead of at startup.
-              `            queue: ${options.lazyFunctions === true ? "async " : ""}(batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace, ${options.liveStreams ? "queueLive" : "_live"}: Parameters<typeof dispatchQueueBatch>[2]["live"], queueFetch: Parameters<typeof dispatchQueueBatch>[2]["fetchImpl"]): Promise<void> =>`,
-              `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], ${options.lazyFunctions === true ? `(await import("./queues.js")).LUNORA_QUEUE_REGISTRY` : "LUNORA_QUEUE_REGISTRY"}, {`,
-              `                    capture: shouldCaptureQueue(queueEnv as Record<string, unknown>)`,
-              `                        ? createQueueCaptureSink(queueEnv as Record<string, unknown>${
-                  options.jurisdiction ? `, { jurisdiction: ${JSON.stringify(options.jurisdiction)} }` : ""
-              })`,
-              `                        : undefined,`,
-              `                    env: queueEnv as Record<string, unknown>,`,
-              // Set only while the deployment is paused: the consumer re-enqueues each
-              // message instead of running it.
-              `                    holdSeconds: trigger.holdSeconds,`,
-              // The consumer's `ctx.run` joins the queue invocation's trace instead
-              // of minting a fresh one per dispatched function.
-              `                    traceparent: trigger.traceparent,`,
-              `                    fetchImpl: queueFetch,`,
-              ...(options.liveStreams ? [`                    live: queueLive,`] : []),
-              `                }),`,
-          ]
-        : [];
+const buildQueueConsumerLines = (options: ResolvedAppOptions): string[] => {
+    if (!options.hasQueue) {
+        return [];
+    }
+
+    const asyncPrefix = options.lazyFunctions === true ? "async " : "";
+
+    return [
+        // The runtime hands the handler the Worker's shard-forwarding publisher (fifth)
+        // and the host's `ctx.run` fetch (sixth, `undefined` on Cloudflare).
+        // Lazy: the registry statically imports every queue-declaring module, so it loads on the
+        // first batch (all of them at once, cached by the module system) instead of at startup.
+        `            queue: ${asyncPrefix}(batch: unknown, queueEnv: unknown, _context: ExecutionContextLike, trigger: TriggerTrace, ${options.liveStreams ? "queueLive" : "_live"}: Parameters<typeof dispatchQueueBatch>[2]["live"], queueFetch: Parameters<typeof dispatchQueueBatch>[2]["fetchImpl"]): Promise<void> =>`,
+        `                dispatchQueueBatch(batch as Parameters<typeof dispatchQueueBatch>[0], ${queueRegistryExpression(options)}, {`,
+        ...queueCaptureLines(options),
+        // Set only while the deployment is paused: the consumer re-enqueues each
+        // message instead of running it.
+        `                    holdSeconds: trigger.holdSeconds,`,
+        // The consumer's `ctx.run` joins the queue invocation's trace instead
+        // of minting a fresh one per dispatched function.
+        `                    traceparent: trigger.traceparent,`,
+        `                    fetchImpl: queueFetch,`,
+        ...(options.liveStreams ? [`                    live: queueLive,`] : []),
+        `                }),`,
+        // A Workers-for-Platforms tenant cannot be a queue consumer: the platform drains its
+        // queues and forwards each batch to `POST /_lunora/queue`, which answers 400 without this.
+        `            queueHandler: ${asyncPrefix}(forwarded: Parameters<typeof dispatchForwardedQueueBatch>[0], queueEnv: unknown): Promise<{ retry: string[] }> =>`,
+        `                dispatchForwardedQueueBatch(forwarded, ${queueRegistryExpression(options)}, {`,
+        ...queueCaptureLines(options),
+        `                }),`,
+    ];
+};
 
 /**
  * Studio's documents, as loaders: only its admin routes read them, and they grow

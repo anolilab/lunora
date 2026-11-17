@@ -39,3 +39,14 @@ describe("generated worker options — queue consumer ctx.live", () => {
         expect(emitted).not.toContain("live: queueLive");
     });
 });
+
+describe("generated worker options — forwarded queue batches", () => {
+    it("wires a queueHandler that runs a forwarded batch over the queue registry", () => {
+        expect.assertions(2);
+
+        const emitted = emit(false);
+
+        expect(emitted).toContain("queueHandler: (forwarded: Parameters<typeof dispatchForwardedQueueBatch>[0], queueEnv: unknown)");
+        expect(emitted).toContain("dispatchForwardedQueueBatch(forwarded, LUNORA_QUEUE_REGISTRY, {");
+    });
+});

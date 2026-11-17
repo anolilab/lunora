@@ -416,7 +416,12 @@ curl -X POST https://<tenant>/_lunora/queue \
 
 It needs a `queueHandler` on `createWorker` (`(batch, env, ctx) => { retry? }`);
 without one the endpoint is a `400` rather than a silent success, so a
-misconfigured tenant fails loudly instead of dropping every batch. Messages with
+misconfigured tenant fails loudly instead of dropping every batch. Codegen wires
+one for every app that declares push queues: it runs the batch through the same
+`defineQueue` handlers as the native consumer (`dispatchForwardedQueueBatch` from
+`@lunora/queue`), and `queue` may be the declared name or the queue's producer
+binding (`QUEUE_JOBS`, or its resource form `queue-jobs`), since a platform that
+provisions a queue per binding knows only that. Messages with
 no string `id` are dropped before the handler sees them — there would be nothing
 to ack or retry them by.
 

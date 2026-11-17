@@ -1,0 +1,97 @@
+import { describe, expect, it, vi } from "vitest";
+
+import { defineQueue } from "../src/define-queue";
+import type { QueueRegistry } from "../src/dispatch";
+import { dispatchForwardedQueueBatch } from "../src/forward";
+
+/**
+ * A Workers-for-Platforms tenant receives its queue batches over `POST
+ * /_lunora/queue`, named after the platform's per-binding queue rather than the
+ * queue the app declared. These run that path through the real dispatch.
+ */
+const registryOf = (handler: Parameters<typeof defineQueue>[0]["handler"]): QueueRegistry => {
+    return { "email-jobs": { binding: "QUEUE_EMAIL", definition: defineQueue({ handler }), exportName: "emailJobs" } };
+};
+
+describe(dispatchForwardedQueueBatch, () => {
+    it("routes a batch forwarded under the binding to the declared queue whose name differs", async () => {
+        expect.assertions(2);
+
+        const seen: unknown[] = [];
+        const registry = registryOf((_context, batch) => {
+            for (const message of batch.messages) {
+                seen.push(message.body);
+            }
+        });
+
+        const result = await dispatchForwardedQueueBatch({ messages: [{ body: { to: "a" }, id: "m1" }], queue: "queue-email" }, registry, { env: {} });
+
+        expect(seen).toStrictEqual([{ to: "a" }]);
+        expect(result).toStrictEqual({ retry: [] });
+    });
+
+    it("still routes a batch forwarded under the declared name", async () => {
+        expect.assertions(1);
+
+        const handler = vi.fn<() => void>();
+
+        await dispatchForwardedQueueBatch({ messages: [{ body: 1, id: "m1" }], queue: "email-jobs" }, registryOf(handler), { env: {} });
+
+        expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers the ids the handler retried", async () => {
+        expect.assertions(1);
+
+        const registry = registryOf((_context, batch) => {
+            for (const message of batch.messages) {
+                if (message.body === "bad") {
+                    message.retry();
+                } else {
+                    message.ack();
+                }
+            }
+        });
+
+        const result = await dispatchForwardedQueueBatch(
+            {
+                messages: [
+                    { body: "ok", id: "m1" },
+                    { body: "bad", id: "m2" },
+                ],
+                queue: "queue-email",
+            },
+            registry,
+            { env: {} },
+        );
+
+        expect(result).toStrictEqual({ retry: ["m2"] });
+    });
+
+    it("retries every unacked message when the handler fails the batch", async () => {
+        expect.assertions(1);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const registry = registryOf((_context, batch) => {
+            batch.messages[0]?.ack();
+
+            throw new Error("boom");
+        });
+
+        const result = await dispatchForwardedQueueBatch(
+            {
+                messages: [
+                    { body: 1, id: "m1" },
+                    { body: 2, id: "m2" },
+                ],
+                queue: "queue-email",
+            },
+            registry,
+            { env: {} },
+        );
+
+        error.mockRestore();
+
+        expect(result).toStrictEqual({ retry: ["m2"] });
+    });
+});

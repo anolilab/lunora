@@ -5,6 +5,8 @@ export { createQueues } from "./create-queues";
 export { defineQueue, isQueueDefinition, queueBindingName, queueDefaultName } from "./define-queue";
 export type { CapturedQueueMessage, QueueCaptureSink, QueueRegistry, QueueRegistryEntry } from "./dispatch";
 export { dispatchQueueBatch } from "./dispatch";
+export type { ForwardedQueueBatch } from "./forward";
+export { dispatchForwardedQueueBatch } from "./forward";
 export { createQueueRunContext } from "./run-context";
 export { createTopicContext, defineSubscription, defineTopic } from "./topics";
 export type {

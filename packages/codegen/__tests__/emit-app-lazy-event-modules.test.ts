@@ -43,6 +43,7 @@ const STUBS: Record<string, string> = {
     `,
     "@lunora/queue": `
         export const createQueueCaptureSink = () => undefined;
+        export const dispatchForwardedQueueBatch = async () => ({ retry: [] });
         export const dispatchQueueBatch = async (_batch, registry) => { globalThis.eventTrace.dispatched.push(registry); };
         export const shouldCaptureQueue = () => false;
     `,

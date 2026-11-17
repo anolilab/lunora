@@ -830,5 +830,5 @@ const dispatchQueueBatch = async (batch: MessageBatchLike, registry: QueueRegist
     }
 };
 
-export type { CapturedQueueMessage, QueueCaptureSink, QueueRegistry, QueueRegistryEntry };
+export type { CapturedQueueMessage, DispatchOptions, QueueCaptureSink, QueueRegistry, QueueRegistryEntry };
 export { dispatchQueueBatch };

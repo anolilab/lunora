@@ -161,7 +161,7 @@ const buildImportLines = (options: ResolvedAppOptions): string[] => {
         `import { LUNORA_FUNCTIONS } from "./functions.js";`,
         ...(hasQueue
             ? [
-                  `import { createQueueCaptureSink, dispatchQueueBatch, shouldCaptureQueue } from "@lunora/queue";`,
+                  `import { createQueueCaptureSink, dispatchForwardedQueueBatch, dispatchQueueBatch, shouldCaptureQueue } from "@lunora/queue";`,
                   // Lazy: the consumer `import()`s the registry on its first batch (`app-worker-options.ts`).
                   ...(options.lazyFunctions === true ? [] : [`import { LUNORA_QUEUE_REGISTRY } from "./queues.js";`]),
               ]
