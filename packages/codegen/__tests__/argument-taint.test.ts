@@ -290,7 +290,19 @@ describe("argument-taint", () => {
         });
 
         it("rejects a caller fallback behind a prefix that can drop the identity", () => {
-            expect.assertions(3);
+            expect.assertions(8);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId[0]}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${String(ctx.auth.userId.length)}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId.length}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid!.length}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row._id.length}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
 
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId.slice(0, 0)}/\${args.key ?? args.other}\`);`))).toBe(false);
             expect(isScopedByIdentity(sinkArgument(`SINK(ctx.auth.userId.slice(0, 0) + "/" + (args.key ?? args.other));`))).toBe(false);
@@ -334,7 +346,15 @@ describe("argument-taint", () => {
         });
 
         it("accepts a caller fallback whose alternatives all land after the identity prefix", () => {
-            expect.assertions(4);
+            expect.assertions(7);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId + "/".repeat(1)}\${args.key ?? args.other}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid!}/\${args.key ?? args.other}\`);`))).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`SINK(\`\${(await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }))._id}/\${args.key ?? args.other}\`);`),
+                ),
+            ).toBe(true);
 
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId}/\${args.key ?? args.other}\`);`))).toBe(true);
             expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid}/\${args.key || "default"}\`);`))).toBe(true);

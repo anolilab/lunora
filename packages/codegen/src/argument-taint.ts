@@ -1046,14 +1046,78 @@ const scopesKeyPart = (part: TsNode): boolean =>
         (identifier) => !isAlternativeOf(identifier, part) && !insideDatabaseCallWithin(identifier, part) && bindingScopesKey(identifier, undefined),
     );
 
+/** `node` with any `!` it is wrapped in, so `uid!` reads the same value as `uid`. */
+const withNonNull = (node: TsNode): TsNode => {
+    let current = node;
+
+    for (let parent = current.getParent(); Node.isNonNullExpression(parent); parent = current.getParent()) {
+        current = parent;
+    }
+
+    return current;
+};
+
+/** Whether `node` is an argument of a call at or below `within`, so the call decides what it contributes. */
+const insideCallWithin = (node: TsNode, within: TsNode): boolean => {
+    if (node === within) {
+        return false;
+    }
+
+    for (let ancestor = node.getParent(); ancestor !== undefined; ancestor = ancestor.getParent()) {
+        if (Node.isCallExpression(ancestor) || Node.isNewExpression(ancestor)) {
+            return true;
+        }
+
+        if (ancestor === within) {
+            return false;
+        }
+    }
+
+    return false;
+};
+
 /**
- * Whether `part` emits the identity it references: scoped, and with no call other than a `ctx.db` read
- * between the identity and the key, since a call such as `ctx.auth.userId.slice(0, 0)` can return
- * the same value for every caller.
+ * Whether the identity `identifier` reaches `part` intact: read as itself (`ctx.auth.userId`, a local bound to
+ * it), or as one identity column of an owned row (`row._id`), with no further access or call on top. A lossy
+ * projection such as `.length`, `[0]` or `.slice(0, 0)` can yield the same text for every caller.
+ */
+const isIntactIdentity = (identifier: Identifier, part: TsNode): boolean => {
+    const outermost = outermostChainOf(identifier);
+    const root = contextTrustPathOf(outermost)?.[0];
+
+    if (root === "auth") {
+        return contextTrustPathOf(outermost)?.length === 2 && invokedBy(outermost) === undefined && !insideCallWithin(outermost, part);
+    }
+
+    if (root === "db") {
+        const call = invokedBy(outermost);
+        const { field, read } = call === undefined ? { field: undefined, read: outermost } : rowFieldReadOf(call);
+
+        return field !== undefined && outermostChainOf(read) === read && invokedBy(read) === undefined && !insideCallWithin(read, part);
+    }
+
+    const trusted = trustedInitializerOf(identifier);
+    const value = trusted !== undefined && databaseReadOf(trusted) !== undefined ? rowFieldReadOf(identifier) : { field: "", read: identifier };
+
+    return (
+        value.field !== undefined &&
+        withNonNull(outermostChainOf(value.read)) === withNonNull(value.read) &&
+        invokedBy(value.read) === undefined &&
+        !insideCallWithin(value.read, part)
+    );
+};
+
+/**
+ * Whether `part` emits the identity it is scoped by: every identity value in it (outside the arguments of a
+ * `ctx.db` read, which only select the row) reaches the key intact. Calls that never touch the identity, such
+ * as a fixed `"/".repeat(1)` suffix, do not matter.
  */
 const emitsIdentity = (part: TsNode): boolean =>
     scopesKeyPart(part) &&
-    [...(Node.isCallExpression(part) ? [part] : []), ...part.getDescendantsOfKind(SyntaxKind.CallExpression)].every((call) => isDatabaseReadCall(call));
+    valueIdentifiersOf(part)
+        .filter((identifier) => !insideDatabaseCallWithin(identifier, part))
+        .filter((identifier) => ["auth", "db"].includes(contextTrustPathOf(outermostChainOf(identifier))?.[0] ?? "") || bindingScopesKey(identifier, undefined))
+        .every((identifier) => isIntactIdentity(identifier, part));
 
 /** Whether `parent`, a template or `+` concatenation, opens with an identity-scoped part before `child` and no caller part ahead of it. */
 const opensWithIdentityBefore = (child: TsNode, parent: TsNode): boolean => {
