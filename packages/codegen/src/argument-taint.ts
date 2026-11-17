@@ -1899,11 +1899,15 @@ const isIntactIdentityPart = (part: TsNode, followLocal = true): boolean => {
  * identity (`${args.tenant}/${uid}/${args.a ?? args.b}`), an identity after the fallback, or an identity
  * altered on the way (`${uid.slice(0, 0)}/…`) all leave the fallback refused.
  */
-const followsIdentityPrefix = (identifier: TsNode, within: TsNode): boolean => {
+const followsIdentityPrefix = (identifier: TsNode, within: TsNode, reference: TsNode = identifier): boolean => {
     const parts = keyPartsOf(within);
-    const contains = (node: TsNode): boolean => node.getPos() <= identifier.getPos() && identifier.getEnd() <= node.getEnd();
+    const contains = (node: TsNode, inner: TsNode): boolean => node.getPos() <= inner.getPos() && inner.getEnd() <= node.getEnd();
     const leading = parts.findIndex(({ part }) => !isFixedTextPart(part));
-    const holder = parts.findIndex(({ anchor, part }) => contains(part) || contains(anchor));
+    // A local's expanded parts keep their order at the local's place in the key, so a fallback inside one is placed by
+    // its own part (`${uid}/${args.a ?? args.b}` puts it after the identity), and one in a local that was not expanded
+    // by that local's reference.
+    const inPart = parts.findIndex(({ part }) => contains(part, identifier));
+    const holder = inPart === -1 ? parts.findIndex(({ anchor, part }) => contains(part, reference) || contains(anchor, reference)) : inPart;
     const first = parts[leading];
 
     return first !== undefined && leading < holder && isIntactIdentityPart(first.part);
@@ -2128,11 +2132,20 @@ export const isScopedByIdentity = (node: TsNode): boolean => {
                 isAlternativeOf(identifier, within) && reachesArgsWithinOneHop(outermostChainOf(identifier)) && !followsIdentityPrefix(identifier, within),
         );
     // A local composed into the key carries its own fallback (`${selected}/${args.name}` with `selected = row.ownerId ??
-    // args.key`), unless the local itself lands after the identity prefix.
-    const composedFallback = valueIdentifiersOf(expanded).some((identifier) => {
-        const initializer = trustedInitializerOf(identifier);
+    // args.key`). Each one is placed in the whole key, not only in the local: `${args.t}/${prefix}` with `prefix =
+    // \`${uid}/${args.a ?? args.b}\`` has a caller segment ahead of the identity.
+    const composedFallback = valueIdentifiersOf(expanded).some((reference) => {
+        const initializer = trustedInitializerOf(reference);
 
-        return initializer !== undefined && !followsIdentityPrefix(identifier, expanded) && hasCallerFallback(initializer);
+        return (
+            initializer !== undefined &&
+            valueIdentifiersOf(initializer).some(
+                (identifier) =>
+                    isAlternativeOf(identifier, initializer) &&
+                    reachesArgsWithinOneHop(outermostChainOf(identifier)) &&
+                    !followsIdentityPrefix(identifier, expanded, reference),
+            )
+        );
     });
 
     if (hasCallerFallback(expanded) || composedFallback) {

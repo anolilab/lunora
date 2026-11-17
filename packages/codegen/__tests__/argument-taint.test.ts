@@ -722,6 +722,21 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(`const prefix = \`\${args.name ?? args.other}\`;\nSINK(\`\${prefix}/\${ctx.auth.userId}\`);`))).toBe(false);
         });
 
+        it("places a fallback inside an expanded local by its own part in the whole key", () => {
+            expect.assertions(4);
+
+            const identityLed = `const prefix = \`\${ctx.auth.userId}/\${args.a ?? args.b}\`;\n`;
+
+            // The identity leads the local, and the local leads the key.
+            expect(isScopedByIdentity(sinkArgument(`${identityLed}SINK(\`\${prefix}/file\`);`))).toBe(true);
+            // The fallback comes before the identity inside the local.
+            expect(isScopedByIdentity(sinkArgument(`const prefix = \`\${args.a ?? args.b}/\${ctx.auth.userId}\`;\nSINK(\`\${prefix}/file\`);`))).toBe(false);
+            // The local comes before the identity in the key.
+            expect(isScopedByIdentity(sinkArgument(`const suffix = \`\${args.a ?? args.b}/x\`;\nSINK(\`\${suffix}/\${ctx.auth.userId}\`);`))).toBe(false);
+            // A caller segment ahead of an identity-led local, as refused when written inline.
+            expect(isScopedByIdentity(sinkArgument(`${identityLed}SINK(\`\${args.tenant}/\${prefix}\`);`))).toBe(false);
+        });
+
         it("rejects a row read whose owner predicate has any caller alternative", () => {
             expect.assertions(2);
 
