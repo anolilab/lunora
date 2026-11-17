@@ -309,16 +309,14 @@ export interface BrowserLike {
     sessionId?: () => string | undefined;
 }
 
-/* eslint-disable no-secrets/no-secrets -- the entropy scanner trips on the repeated `@cloudflare/playwright` package name in these doc comments, not a credential */
-
 /**
- * Structural projection of `@cloudflare/playwright`'s `launch` export. Calling it
- * with the Browser Rendering binding resolves a {@link BrowserLike}.
+ * Structural projection of the `launch` export of `@cloudflare/playwright`. Calling
+ * it with the Browser Rendering binding resolves a {@link BrowserLike}.
  */
 export type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, unknown>) => Promise<BrowserLike>;
 
 /**
- * One live Browser Run session, as `@cloudflare/playwright`'s `sessions()`
+ * One live Browser Run session, as `sessions()` from `@cloudflare/playwright`
  * reports it. `connectionId` is set while a worker is connected. Sessions accept
  * several concurrent connections, so a set `connectionId` does not stop
  * {@link Browser.connect}; it only tells you the browser is shared.
@@ -330,13 +328,13 @@ export interface BrowserSession {
 }
 
 /**
- * Structural projection of `@cloudflare/playwright`'s `connect` export —
+ * Structural projection of the `connect` export of `@cloudflare/playwright` —
  * re-attaches to an existing session rather than starting a new browser.
  */
 export type BrowserConnectLike = (binding: BrowserBindingLike, sessionId: string) => Promise<BrowserLike>;
 
 /**
- * Structural projection of `@cloudflare/playwright`'s `sessions` export — lists
+ * Structural projection of the `sessions` export of `@cloudflare/playwright` — lists
  * the account's live Browser Rendering sessions for this binding.
  */
 export type BrowserSessionsLike = (binding: BrowserBindingLike) => Promise<ReadonlyArray<BrowserSession>>;
@@ -469,9 +467,9 @@ export interface LunoraBrowserOptions {
      * Awaited on the first method that drives a browser, never at construction,
      * so the ~3 MiB SDK stays out of the Worker's startup graph (Cloudflare
      * rejects a Worker whose global scope takes more than 1 s of CPU). A static
-     * `import { launch } from "@cloudflare/playwright"` in the entry would put it
-     * back. A failed load rejects that call with the loader's own error and the
-     * next call retries.
+     * `import { launch }` of the package in the entry would put it back. A failed
+     * load rejects that call with the loader's own error and the next call
+     * retries.
      *
      * The APP passes it, not codegen: the generated shard builds `ctx.browser`
      * from a `config.browser` thunk (`defineApp().browser((env) =>
@@ -507,7 +505,6 @@ export interface LunoraBrowserOptions {
      * `false` for trusted, non-caller-supplied URLs where the round-trip matters.
      */
     resolveDns?: boolean;
-    /* eslint-enable no-secrets/no-secrets */
 
     /**
      * Account id + API token for the Browser Run REST API. Required only for
