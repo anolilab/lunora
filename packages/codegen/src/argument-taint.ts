@@ -8,6 +8,7 @@ import type {
     Identifier,
     MethodDeclaration,
     Node as TsNode,
+    ObjectLiteralElementLike,
     ObjectLiteralExpression,
     ParameterDeclaration,
     PropertyAccessExpression,
@@ -405,7 +406,30 @@ const propertyValueOf = (property: TsNode | undefined): TsNode | undefined => {
     return Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : undefined;
 };
 
-/** The object literal `node` is, written inline or held by a local that cannot have been repointed. */
+/**
+ * Whether every use of the local `identifier` names, other than its declaration, only passes the object along as a
+ * property value (`{ where: filter }`, `{ where }`). Any other use can write a field (`filter.ownerId = …`) or
+ * hand the object to code that does, so its initializer no longer says what it holds.
+ */
+const isPassedOnly = (identifier: Identifier): boolean => {
+    const declaration = declarationOf(identifier);
+
+    return identifier
+        .getSourceFile()
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .filter((use) => use.getText() === identifier.getText() && declarationOf(use) === declaration)
+        .every((use) => {
+            const parent = use.getParent();
+
+            return (
+                (Node.isVariableDeclaration(parent) && parent.getNameNode() === use) ||
+                (Node.isPropertyAssignment(parent) && parent.getInitializer() === use) ||
+                Node.isShorthandPropertyAssignment(parent)
+            );
+        });
+};
+
+/** The object literal `node` is, written inline or held by a local that is never repointed, written into or passed on. */
 const objectLiteralOf = (node: TsNode | undefined): ObjectLiteralExpression | undefined => {
     const value = unwrapExpression(node);
 
@@ -413,9 +437,33 @@ const objectLiteralOf = (node: TsNode | undefined): ObjectLiteralExpression | un
         return value;
     }
 
-    const initializer = Node.isIdentifier(value) ? unwrapExpression(trustedInitializerOf(value)) : undefined;
+    const initializer = Node.isIdentifier(value) && isPassedOnly(value) ? unwrapExpression(trustedInitializerOf(value)) : undefined;
 
     return Node.isObjectLiteralExpression(initializer) ? initializer : undefined;
+};
+
+/** Whether a predicate `value` equates its column to the caller: the identity itself, or `{ eq: identity }`. */
+const equatesToCaller = (value: TsNode): boolean => {
+    const operand = unwrapExpression(value) ?? value;
+
+    if (!Node.isObjectLiteralExpression(operand)) {
+        return readsCallerIdentity(value);
+    }
+
+    const [only, ...rest] = operand.getProperties();
+    const eq = rest.length === 0 && Node.isPropertyAssignment(only) && propertyKeyName(only) === "eq" ? only.getInitializer() : undefined;
+
+    return eq !== undefined && readsCallerIdentity(eq);
+};
+
+/** Whether a later member of `object` can replace `property` at runtime: a spread, or the same key written again. */
+const isOverriddenLater = (object: ObjectLiteralExpression, property: ObjectLiteralElementLike): boolean => {
+    const members = object.getProperties();
+    const key = Node.isSpreadAssignment(property) ? undefined : propertyKeyName(property);
+
+    return members
+        .slice(members.indexOf(property) + 1)
+        .some((later) => Node.isSpreadAssignment(later) || (key !== undefined && propertyKeyName(later) === key));
 };
 
 /** Whether the `where` object `filter` pins `field` to the caller on every row it admits: directly, or in any `AND` branch. */
@@ -423,7 +471,7 @@ const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string): bool
     filter.getProperties().some((property) => {
         const value = propertyValueOf(property);
 
-        if (value === undefined || Node.isSpreadAssignment(property)) {
+        if (value === undefined || Node.isSpreadAssignment(property) || isOverriddenLater(filter, property)) {
             return false;
         }
 
@@ -440,7 +488,7 @@ const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string): bool
             );
         }
 
-        return propertyKeyName(property) === field && readsCallerIdentity(value);
+        return propertyKeyName(property) === field && equatesToCaller(value);
     });
 
 /**

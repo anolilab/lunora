@@ -362,6 +362,40 @@ describe("argument-taint", () => {
             ).toBe(false);
         });
 
+        it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
+            expect.assertions(5);
+
+            const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
+
+            expect(
+                isScopedByIdentity(sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId, ...args.where } });\n${sink}`)),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const filter = { ownerId: ctx.auth.userId };\nfilter.ownerId = args.owner;\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const filter = { ownerId: ctx.auth.userId };\nObject.assign(filter, args.where);\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { AND: [{ ownerId: { ne: ctx.auth.userId } }, { status: "active" }] } });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: { eq: ctx.auth.userId } } });\n${sink}`)),
+            ).toBe(true);
+        });
+
         it("counts only a direct predicate of the read's own where as an identity column", () => {
             expect.assertions(2);
 
