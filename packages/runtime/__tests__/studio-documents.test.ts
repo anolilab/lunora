@@ -45,6 +45,35 @@ describe(loadStudioDocument, () => {
         await expect(loadStudioDocument(shell, "openrpc")).resolves.toBeUndefined();
     });
 
+    it("answers undefined when the binding rejects, and asks again on the next read", async () => {
+        expect.assertions(3);
+
+        let calls = 0;
+        const flaky = {
+            fetch: vi.fn<(request: Request) => Promise<Response>>(async () => {
+                calls += 1;
+
+                if (calls === 1) {
+                    throw new Error("assets binding unavailable");
+                }
+
+                return Response.json({ openapi: "3.1.0" });
+            }),
+        };
+
+        await expect(loadStudioDocument(flaky, "openapi")).resolves.toBeUndefined();
+        await expect(loadStudioDocument(flaky, "openapi")).resolves.toStrictEqual({ openapi: "3.1.0" });
+        expect(flaky.fetch).toHaveBeenCalledTimes(2);
+    });
+
+    it("answers undefined for a JSON document that does not parse", async () => {
+        expect.assertions(1);
+
+        const truncated = binding(() => new Response('{"openapi": "3.1', { headers: { "content-type": "application/json" }, status: 200 }));
+
+        await expect(loadStudioDocument(truncated, "openapi")).resolves.toBeUndefined();
+    });
+
     it.each([undefined, null, {}, "ASSETS"])("answers undefined without a binding (%s)", async (missing) => {
         expect.assertions(1);
 

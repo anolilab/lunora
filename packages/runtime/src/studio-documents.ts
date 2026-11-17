@@ -23,8 +23,9 @@ const isFetcher = (binding: unknown): binding is StudioAssetsFetcher =>
     typeof binding === "object" && binding !== null && typeof (binding as { fetch?: unknown }).fetch === "function";
 
 /**
- * The document, or `undefined` when the binding is missing or does not hold it
- * (the admin route then answers its empty document). Only a `2xx` JSON answer
+ * The document, or `undefined` when the binding is missing, does not hold it,
+ * fails the read or holds a file that does not parse (the admin route then
+ * answers its empty document). Only a `2xx` JSON answer
  * counts: a binding that falls back to a single-page app answers a missing file
  * with `index.html` and a `200`.
  */
@@ -33,15 +34,21 @@ const loadStudioDocument = async (binding: unknown, name: StudioDocumentName): P
         return undefined;
     }
 
-    const response = await binding.fetch(new Request(`${STUDIO_ASSETS_ORIGIN}/_lunora/studio/${name}.json`));
+    try {
+        const response = await binding.fetch(new Request(`${STUDIO_ASSETS_ORIGIN}/_lunora/studio/${name}.json`));
 
-    if (!response.ok || !(response.headers.get("content-type") ?? "").includes("application/json")) {
-        await response.body?.cancel();
+        if (!response.ok || !(response.headers.get("content-type") ?? "").includes("application/json")) {
+            await response.body?.cancel();
 
+            return undefined;
+        }
+
+        return await response.json();
+    } catch {
+        // A rejected asset read or a truncated file is the same "not there" to the admin route, which answers its empty
+        // document and, since `undefined` is never memoized, reads again on the next request.
         return undefined;
     }
-
-    return response.json();
 };
 
 export type { StudioDocumentName };
