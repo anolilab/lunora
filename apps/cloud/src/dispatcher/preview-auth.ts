@@ -234,9 +234,53 @@ const passwordAccepted = async (password: string, scriptName: string, plane: Pre
     }
 };
 
+/**
+ * The most a login form may send. The form carries one password field; anything
+ * near a Worker's request limit is not a login, and `formData()` would buffer all
+ * of it in an isolate other requests share before the password is even read.
+ */
+const MAX_LOGIN_BODY_BYTES = 4096;
+
+/** A login body read whole, or `undefined` once it passes {@link MAX_LOGIN_BODY_BYTES}, whatever `Content-Length` claimed. */
+const readLoginBody = async (request: Request): Promise<Uint8Array<ArrayBuffer> | undefined> => {
+    const buffer = new Uint8Array(MAX_LOGIN_BODY_BYTES);
+    let total = 0;
+
+    if (request.body === null) {
+        return buffer.subarray(0, 0);
+    }
+
+    const reader = request.body.getReader();
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- sequential stream drain
+        const { done, value } = await reader.read();
+
+        if (done) {
+            return buffer.subarray(0, total);
+        }
+
+        if (total + value.byteLength > MAX_LOGIN_BODY_BYTES) {
+            // eslint-disable-next-line no-await-in-loop -- leaves the loop: the rest of the body is never read
+            await reader.cancel().catch(() => undefined);
+
+            return undefined;
+        }
+
+        buffer.set(value, total);
+        total += value.byteLength;
+    }
+};
+
 /** Handle the login form POST: verify, then mint the cookie. */
 const handlePreviewLogin = async (request: Request, scriptName: string, scope: string, plane: PreviewControlPlane): Promise<Response> => {
-    const form = await request.formData().catch(() => undefined);
+    const body = await readLoginBody(request).catch(() => undefined);
+
+    if (body === undefined) {
+        return new Response("Login form too large", { status: 413 });
+    }
+
+    const form = await new Response(body, { headers: { "content-type": request.headers.get("content-type") ?? "" } }).formData().catch(() => undefined);
     const password = form?.get("password");
 
     if (typeof password !== "string" || password === "" || !(await passwordAccepted(password, scriptName, plane, request.headers.get("cf-connecting-ip")))) {

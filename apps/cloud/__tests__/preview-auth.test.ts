@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PREVIEW_SESSION_MS, previewCookieHeader, readCookie, signPreviewToken, verifyPreviewToken } from "../src/dispatcher/preview-auth";
+import {
+    guardProtectedPreview,
+    PREVIEW_SESSION_MS,
+    previewCookieHeader,
+    readCookie,
+    signPreviewToken,
+    verifyPreviewToken,
+} from "../src/dispatcher/preview-auth";
 
 const TOKEN = "cp_secret_token"; // gitleaks:allow -- fabricated fixture, not a credential
 const NOW = 1_700_000_000_000;
@@ -124,5 +131,39 @@ describe(previewCookieHeader, () => {
         expect(header).toContain("SameSite=Lax");
         expect(header).toContain("Path=/");
         expect(header).not.toContain("Domain=");
+    });
+});
+
+describe(guardProtectedPreview, () => {
+    const PLANE = { token: TOKEN, url: "https://cp.example" };
+    const LOGIN = new URL("https://acme-pr-42.example.app/__lunora/preview-auth");
+
+    afterEach(() => {
+        vi.unstubAllGlobals();
+    });
+
+    const login = (body: BodyInit): Request => new Request(LOGIN, { body, headers: { "content-type": "application/x-www-form-urlencoded" }, method: "POST" });
+
+    it("forwards a submitted password and mints the cookie once the control plane accepts it", async () => {
+        const verify = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
+
+        vi.stubGlobal("fetch", verify);
+
+        const response = await guardProtectedPreview(login("password=hunter2"), LOGIN, "acme-pr-42", SCOPE, PLANE);
+
+        expect(response?.status).toBe(303);
+        expect(JSON.parse(verify.mock.calls[0]?.[1]?.body as string)).toMatchObject({ password: "hunter2" });
+    });
+
+    /** The login path is public, so a body big enough to strain the isolate is refused before it is parsed or forwarded. */
+    it("refuses an oversized login body without parsing it or asking the control plane", async () => {
+        const verify = vi.fn<typeof fetch>(async () => Response.json({ ok: true }));
+
+        vi.stubGlobal("fetch", verify);
+
+        const response = await guardProtectedPreview(login(`password=hunter2&pad=${"x".repeat(64 * 1024)}`), LOGIN, "acme-pr-42", SCOPE, PLANE);
+
+        expect(response?.status).toBe(413);
+        expect(verify).not.toHaveBeenCalled();
     });
 });
