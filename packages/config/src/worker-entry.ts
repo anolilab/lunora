@@ -118,10 +118,8 @@ const DURABLE_OBJECT_CLASSES = Object.keys(DURABLE_OBJECT_BINDINGS) as DurableOb
 /** Whether `className` is one of Lunora's own Durable Object classes rather than a project's generated or hand-written one. */
 const isFrameworkDurableObject = (className: string): className is DurableObjectClass => Object.hasOwn(DURABLE_OBJECT_BINDINGS, className);
 
-/* eslint-disable no-secrets/no-secrets -- false positive: `frameworkComposePlugin` is a function name in prose, not a credential */
-
 /**
- * The virtual module id `@lunora/vite`'s `frameworkComposePlugin` resolves to a
+ * The virtual module id the frameworkComposePlugin of `@lunora/vite` resolves to a
  * COMPOSED class-A worker entry. Every class-A template sets `wrangler.main` to
  * it and ships no entry file at all, so an fs probe can never find one.
  *
@@ -130,8 +128,6 @@ const isFrameworkDurableObject = (className: string): className is DurableObject
  * public contract a template's `wrangler.jsonc` writes by hand anyway.
  */
 const LUNORA_WORKER_VIRTUAL_ID = "virtual:lunora/worker";
-
-/* eslint-enable no-secrets/no-secrets -- re-enable after the LUNORA_WORKER_VIRTUAL_ID doc block */
 
 /**
  * What the project's `wrangler.main` (or the fallback probe) resolves to.
@@ -367,8 +363,6 @@ const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean
     );
 };
 
-/* eslint-disable no-secrets/no-secrets -- false positive: the two detector names in prose below, not credentials */
-
 /**
  * The Durable Object classes the worker entry exports. Uses `es-module-lexer`'s
  * export list so every form is covered (`export const ShardDO`, `export {
@@ -376,14 +370,13 @@ const isTypeOnlyExportRegexFallback = (code: string, className: string): boolean
  * bind, since wrangler validates that a binding's `class_name` is exported.
  *
  * Type-only-ness is decided by the same two detectors the generated classes use
- * ({@link isTypeOnlyExportEntry} per lexer entry, {@link isTypeOnlyExportRegexFallback}
+ * ({@link isTypeOnlyExportEntry} per lexer entry, the regex fallback defined just above
  * when the file will not parse). The core classes used to get a weaker,
  * unanchored whole-file `\btype\s+ShardDO\b` instead, which an ordinary
  * `import { type ShardDO, createShardDO }` satisfied — so reconcile refused the
  * SHARD binding and `wrangler-validator` then failed the deploy telling the user
  * their dev server auto-reconciles this on startup.
  */
-/* eslint-enable no-secrets/no-secrets -- re-enable after the detector doc block */
 const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] => {
     const code = readFileSync(entryPath, "utf8");
     let exportedNames: Set<string>;

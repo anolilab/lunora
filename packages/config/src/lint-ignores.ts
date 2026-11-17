@@ -1,5 +1,3 @@
-/* eslint-disable jsdoc/check-indentation -- intentional nested bullet list documenting each tool's ignore mechanism */
-
 /**
  * Teach a project's linter and formatter to skip Lunora's generated artifacts.
  *
@@ -23,22 +21,21 @@
  *
  * - **Prettier** reads `.prettierignore`, gitignore syntax. Trivial.
  * - **oxlint** takes `ignorePatterns` in `.oxlintrc.json`, also gitignore-style
- *   (confirmed against its published `configuration_schema.json`).
+ * (confirmed against its published `configuration_schema.json`).
  * - **Biome v2** has no ignore key at all — exclusions are negated patterns in
- *   `files.includes`, which v1 also accepted alongside its `files.ignore`. Since
- *   both keys are in the wild and a config states its own answer, the writer
- *   follows whichever key it already has rather than sniffing a version.
+ * `files.includes`, which v1 also accepted alongside its `files.ignore`. Since
+ * both keys are in the wild and a config states its own answer, the writer
+ * follows whichever key it already has rather than sniffing a version.
  * - **ESLint** flat config **removed `.eslintignore`**. Writing one would be
- *   worse than doing nothing: ESLint warns that the file is unsupported and then
- *   ignores it, so the project would carry a file that looks like it works.
- *   Ignores must live in `eslint.config.*`.
+ * worse than doing nothing: ESLint warns that the file is unsupported and then
+ * ignores it, so the project would carry a file that looks like it works.
+ * Ignores must live in `eslint.config.*`.
  *
  * That last one is why {@link applyLintIgnores} can create an ESLint config but
  * will not edit an existing one — it is arbitrary JavaScript, and a
  * regex-or-AST rewrite of a user's lint config is not a thing to do silently.
  * It reports {@link LintIgnoreStatus} `"manual"` with the exact snippet instead.
  */
-/* eslint-enable jsdoc/check-indentation */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
