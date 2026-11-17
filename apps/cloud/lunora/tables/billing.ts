@@ -48,6 +48,11 @@ export const billingTables = {
         // compacts it only with its own host's rows. Absent on platform-metered rows.
         placementRef: v.optional(placementHost),
         quantity: v.number(),
+        // A roll-up in flight on its survivor row (`usage.rollup`): the rows it
+        // absorbs and the group total. Written before the first delete, so a tick
+        // that stops part-way leaves what the next one needs to finish it.
+        rollupOf: v.optional(v.array(v.id("platformUsage"))),
+        rollupTotal: v.optional(v.number()),
         // When the usage happened (epoch ms): the window a box report counts, or
         // the window the usage readback read. The anomaly sweep scores an hour by
         // the usage whose window overlaps it, apportioned, never by `createdAt`.

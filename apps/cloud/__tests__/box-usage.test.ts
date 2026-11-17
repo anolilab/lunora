@@ -316,12 +316,18 @@ describe("box usage is never billed (plan 458 D12)", () => {
         expect(isBilledTarget("cloudflare-workers")).toBe(false);
     });
 
-    /** A ctx whose `platformUsage` reads answer `rows` as one finished page, whatever the filter. */
+    /**
+     * A ctx whose `platformUsage` reads answer `rows` as one finished page, whatever
+     * the filter — except the roll-up's read of unfinished roll-ups, which none of these rows are.
+     */
     const usageCtx = (rows: Record<string, unknown>[]) => {
         const { ctx, ops } = makeCtx({ members: [owner("org_1")] });
         const database = ctx.db as unknown as Record<string, unknown>;
 
-        database["platformUsage"] = { findMany: () => Promise.resolve({ continueCursor: null, isDone: true, page: rows }) };
+        database["platformUsage"] = {
+            findMany: (args?: { where?: Record<string, unknown> }) =>
+                Promise.resolve({ continueCursor: null, isDone: true, page: args?.where && "rollupTotal" in args.where ? [] : rows }),
+        };
 
         return { ctx, ops };
     };
@@ -353,9 +359,9 @@ describe("box usage is never billed (plan 458 D12)", () => {
 
         await rollup.handler(ctx, {});
 
-        expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([
-            { id: "a", kind: "patch", patch: { quantity: 200 } },
-            { id: "c", kind: "patch", patch: { quantity: 2_000_000_000 } },
+        expect(ops.filter((op) => op.kind === "patch" && "quantity" in op.patch)).toStrictEqual([
+            { id: "a", kind: "patch", patch: { quantity: 200, rollupOf: null, rollupTotal: null } },
+            { id: "c", kind: "patch", patch: { quantity: 2_000_000_000, rollupOf: null, rollupTotal: null } },
         ]);
     });
 });

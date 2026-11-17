@@ -9,11 +9,10 @@ import { hashDeployKey } from "../src/deploy/keys";
 /**
  * The money mutations, which had no tests at all.
  *
- * `rollup` is the only place in the system that can DOUBLE-bill, and the thing
- * that prevents it is statement order alone: the extras are deleted before the
- * survivor's total is written, so a crash mid-compaction can only under-count.
- * Reverse those two awaits and every org with a multi-row meter group gets
- * over-charged, with nothing failing. That invariant had no test.
+ * `rollup` is the only place in the system that can DOUBLE-bill, and the D1
+ * backend commits each of its writes alone. The survivor records the roll-up
+ * before the extras are deleted and takes the total after, so a tick that stops
+ * part-way under-counts until the next tick finishes it from that record.
  *
  * `enforceSpendCaps` is the runaway-bill brake. A regression that fails to
  * suspend costs the platform unbounded money; one that lifts a *dunning*
@@ -104,7 +103,7 @@ const usageRow = (id: string, quantity: number, over: Row = {}): Row => {
 
 /** The quantity the survivor was patched to, for the convergence assertion. */
 const patchedQuantity = (ops: Op[]): number => {
-    const patch = ops.find((op) => op.kind === "patch");
+    const patch = ops.find((op) => op.kind === "patch" && "quantity" in op.patch);
 
     return patch?.kind === "patch" ? (patch.patch["quantity"] as number) : Number.NaN;
 };
@@ -117,24 +116,40 @@ describe("usage.rollup", () => {
 
         expect(result).toStrictEqual({ compacted: 2 });
         expect(ops.filter((op) => op.kind === "delete").map((op) => op.id)).toStrictEqual(["u2", "u3"]);
-        expect(ops.find((op) => op.kind === "patch")).toMatchObject({ id: "u1", patch: { quantity: 16 } });
+        expect(ops.at(-1)).toStrictEqual({ id: "u1", kind: "patch", patch: { quantity: 16, rollupOf: null, rollupTotal: null } });
     });
 
     /**
      * The invariant the whole design rests on. There is no multi-statement
-     * transaction here, so a crash between the two writes must leave the ledger
+     * transaction here, so a stop between writes must leave the ledger
      * under-counted, never over-counted — an extra row surviving beside an
-     * already-summed survivor is a customer billed twice.
+     * already-summed survivor is a customer billed twice — and the record of
+     * the roll-up must be on the survivor before any row it absorbs is gone.
      */
-    it("deletes every extra BEFORE writing the survivor's total", async () => {
+    it("records the roll-up on the survivor before the first delete, and writes the total after the last", async () => {
         const { ctx, ops } = makeCtx({ platformUsage: [usageRow("u1", 10), usageRow("u2", 5)] });
 
         await rollup.handler(ctx, {});
 
-        const lastDelete = ops.findLastIndex((op) => op.kind === "delete");
-        const patchAt = ops.findIndex((op) => op.kind === "patch");
+        expect(ops).toStrictEqual([
+            { id: "u1", kind: "patch", patch: { rollupOf: ["u2"], rollupTotal: 15 } },
+            { id: "u2", kind: "delete" },
+            { id: "u1", kind: "patch", patch: { quantity: 15, rollupOf: null, rollupTotal: null } },
+        ]);
+    });
 
-        expect(patchAt).toBeGreaterThan(lastDelete);
+    it("finishes a roll-up an earlier tick stopped after deleting some of its rows", async () => {
+        // u2 was deleted before the tick stopped; u3 survived, and the survivor still holds its own 10.
+        const { ctx, ops } = makeCtx({
+            platformUsage: [usageRow("u1", 10, { rollupOf: ["u2", "u3"], rollupTotal: 16 }), usageRow("u3", 1)],
+        });
+
+        await rollup.handler(ctx, {});
+
+        expect(ops.slice(0, 2)).toStrictEqual([
+            { id: "u3", kind: "delete" },
+            { id: "u1", kind: "patch", patch: { quantity: 16, rollupOf: null, rollupTotal: null } },
+        ]);
     });
 
     it("leaves a single-row group untouched", async () => {
@@ -159,7 +174,7 @@ describe("usage.rollup", () => {
 
         // Only the two `org_1 / 1000 / requests` rows may merge.
         expect(ops.filter((op) => op.kind === "delete").map((op) => op.id)).toStrictEqual(["a2"]);
-        expect(ops.filter((op) => op.kind === "patch")).toHaveLength(1);
+        expect(ops.filter((op) => op.kind === "patch").map((op) => op.id)).toStrictEqual(["a1", "a1"]);
     });
 
     /**

@@ -782,6 +782,8 @@ export const platformUsage = sqliteTable("platformUsage", {
     periodStart: real("periodStart").notNull(),
     placementRef: text("placementRef", { mode: "json" }).$type<Id<"boxes"> | Id<"cloudflareAccounts">>(),
     quantity: real("quantity").notNull(),
+    rollupOf: text("rollupOf", { mode: "json" }).$type<Array<Id<"platformUsage">>>(),
+    rollupTotal: real("rollupTotal"),
     windowEnd: real("windowEnd"),
     windowStart: real("windowStart"),
 }, (t) => ({

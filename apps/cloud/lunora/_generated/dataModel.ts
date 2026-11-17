@@ -699,6 +699,8 @@ export interface Doc_platformUsage {
     periodStart: number;
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts"> | null;
     quantity: number;
+    rollupOf?: Array<Id<"platformUsage">> | null;
+    rollupTotal?: number | null;
     windowEnd?: number | null;
     windowStart?: number | null;
 }
@@ -1777,6 +1779,8 @@ export interface Insert_platformUsage {
     periodStart: number;
     placementRef?: Id<"boxes"> | Id<"cloudflareAccounts">;
     quantity: number;
+    rollupOf?: Array<Id<"platformUsage">>;
+    rollupTotal?: number;
     windowEnd?: number;
     windowStart?: number;
 }

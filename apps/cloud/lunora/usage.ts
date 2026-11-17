@@ -206,6 +206,24 @@ type PlatformUsageRow = Document_<"platformUsage">;
 /** Rows one roll-up tick compacts. Bounds a single mutation; a backlog drains over ticks. */
 const ROLLUP_BATCH = 1000;
 
+/**
+ * Carry out a survivor's recorded roll-up: delete the rows it absorbs, then
+ * write the total and clear the record. Idempotent, so an interrupted run is
+ * finished by running it again — a row an earlier run already deleted is skipped.
+ */
+const finishRollup = async (context: MutationContext, survivor: PlatformUsageRow): Promise<void> => {
+    for (const id of survivor.rollupOf ?? []) {
+        // eslint-disable-next-line no-await-in-loop -- sequential delete of the rows the total already includes
+        if (await context.db.get("platformUsage", id)) {
+            // eslint-disable-next-line no-await-in-loop -- the same sequential delete
+            await context.db.delete("platformUsage", id);
+        }
+    }
+
+    // `null`, not `undefined`: the store refuses an explicitly-undefined patch.
+    await context.db.patch("platformUsage", survivor._id, { quantity: survivor.rollupTotal ?? survivor.quantity, rollupOf: null, rollupTotal: null });
+};
+
 /** Epoch ms for the first instant of the current UTC month. */
 const currentPeriodStart = (): number => periodStartOf(Date.now());
 
@@ -216,14 +234,22 @@ const currentPeriodStart = (): number => periodStartOf(Date.now());
  * The current period is left untouched so live writes never race the compaction.
  * SYSTEM only (cron dispatch).
  *
- * The D1/global backend has no multi-statement transaction, so the write order
- * is chosen to fail safe: **delete the extra rows first, then set the survivor's
- * total last**. A crash mid-compaction can only *under*-count (some rows gone
- * before the survivor is updated) — it can never leave the summed row alongside
- * surviving originals, which would *double-count* (over-bill). The survivor is
- * patched (not insert-then-delete) so no orphan summed row can ever exist.
+ * The D1/global backend has no multi-statement transaction: each write commits
+ * on its own, so a tick can stop between any two of them. The survivor first
+ * records the roll-up it is about to do (`rollupOf`, `rollupTotal`) in one write,
+ * then the extras are deleted, then the survivor takes the total. A stop after the
+ * intent leaves the ledger *under*-counted until the next tick finishes it from
+ * that record — never *double*-counted (an extra surviving beside a summed
+ * survivor, which over-bills), and never short for good.
  */
 export const rollup = internalMutation.mutation(async ({ ctx: context }): Promise<{ compacted: number }> => {
+    const { page: pending } = await context.db.platformUsage.findMany({ limit: ROLLUP_BATCH, where: { rollupTotal: { gte: 0 } } });
+
+    for (const survivor of pending) {
+        // eslint-disable-next-line no-await-in-loop -- each finish is a few ordered writes; only an interrupted tick leaves any
+        await finishRollup(context, survivor);
+    }
+
     const cutoff = currentPeriodStart();
     // Closed periods only, chosen in the QUERY. Filtering after a `findMany({})` read
     // one 1000-row page of arbitrary rows, so once the table outgrew that cap the
@@ -261,17 +287,13 @@ export const rollup = internalMutation.mutation(async ({ ctx: context }): Promis
         }
 
         const [survivor, ...extras] = rows;
-        const total = rows.reduce((sum, row) => sum + row.quantity, 0);
+        const intent = { rollupOf: extras.map((row) => row._id), rollupTotal: rows.reduce((sum, row) => sum + row.quantity, 0) };
 
-        // Delete the extras first (fail-safe ordering — see the doc comment).
-        for (const row of extras) {
-            // eslint-disable-next-line no-await-in-loop -- sequential delete of the now-summed rows
-            await context.db.delete("platformUsage", row._id);
-        }
-
-        // Then fold the group total onto the surviving row.
-        // eslint-disable-next-line no-await-in-loop -- one patch per group; volumes are small
-        await context.db.patch("platformUsage", survivor._id, { quantity: total });
+        // The intent lands before the first delete; see the doc comment.
+        // eslint-disable-next-line no-await-in-loop -- one intent per group; volumes are small
+        await context.db.patch("platformUsage", survivor._id, intent);
+        // eslint-disable-next-line no-await-in-loop -- the group's ordered deletes and total
+        await finishRollup(context, { ...survivor, ...intent });
 
         compacted += extras.length;
     }
