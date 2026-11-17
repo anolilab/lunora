@@ -699,6 +699,40 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("reports an inline guard whose identity comparison only gates a caller value with &&", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.members.findFirst({ where: { userId: String(ctx.auth.userId === args.guard && args.victim), channelId: message.channelId } });
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a helper guard whose identity comparison only gates a caller value with &&", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId, args.guard, args.victim);",
+                SINK,
+                `const requireMember = async (ctx, channelId, guard, victim) => {
+    const row = await ctx.db.members.findFirst({ where: { userId: String(ctx.auth.userId === guard && victim), channelId } });
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("reports a guard that runs only inside a loop", () => {
         expect.assertions(1);
 
@@ -948,6 +982,22 @@ const requireMember = async (ctx, channelId) => {
     }
     ${extra}
 };`;
+
+    it("accepts a helper guard handed the row that writes an unrelated field", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);", SINK, rowHelper("message.views += 1;")));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a helper guard handed the row that writes the field it checks", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);", SINK, rowHelper(`message.channelId = "general";`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
 
     it("accepts the whole row handed to a helper guard that only reads it", () => {
         expect.assertions(1);

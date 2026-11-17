@@ -359,17 +359,86 @@ const isFixedValue = (node: TsNode): boolean => {
     return initializer !== undefined && !Node.isIdentifier(unwrapExpression(initializer)) && isFixedValue(initializer);
 };
 
+/** The outermost parentheses, `!` or type assertion around `node`, none of which change the value it passes on. */
+const valueWrapperOf = (node: TsNode): TsNode => {
+    let current = node;
+
+    for (let parent = current.getParent(); ; parent = current.getParent()) {
+        if (
+            !(
+                Node.isParenthesizedExpression(parent) ||
+                Node.isNonNullExpression(parent) ||
+                Node.isAsExpression(parent) ||
+                Node.isSatisfiesExpression(parent) ||
+                Node.isTypeAssertion(parent)
+            )
+        ) {
+            return current;
+        }
+
+        current = parent;
+    }
+};
+
+/** The comparison operators besides equality: each yields a boolean whatever its operands. */
+const RELATIONAL_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+    SyntaxKind.GreaterThanEqualsToken,
+    SyntaxKind.GreaterThanToken,
+    SyntaxKind.InKeyword,
+    SyntaxKind.InstanceOfKeyword,
+    SyntaxKind.LessThanEqualsToken,
+    SyntaxKind.LessThanToken,
+]);
+
+/** Whether `node` always yields a boolean: a comparison, a negation, a boolean literal, or a `&&` of such operands. */
+const isBooleanOperand = (node: TsNode): boolean => {
+    const value = unwrapExpression(node) ?? node;
+
+    if (Node.isPrefixUnaryExpression(value)) {
+        return value.getOperatorToken() === SyntaxKind.ExclamationToken;
+    }
+
+    if (Node.isBinaryExpression(value)) {
+        const operator = value.getOperatorToken().getKind();
+
+        return (
+            EQUALITY_OPERATORS.has(operator) ||
+            RELATIONAL_OPERATORS.has(operator) ||
+            (operator === SyntaxKind.AmpersandAmpersandToken && isBooleanOperand(value.getLeft()) && isBooleanOperand(value.getRight()))
+        );
+    }
+
+    return Node.isTrueLiteral(value) || Node.isFalseLiteral(value);
+};
+
+/**
+ * Whether the whole `&&` chain `and` belongs to is a boolean predicate: every operand a comparison, a negation or
+ * another such `&&`. Only then is a compared identity a required condition; `uid === args.guard && args.victim`
+ * yields the caller's value once the caller passes their own id as the guard.
+ */
+const isPredicateChain = (and: TsNode): boolean => {
+    let top = and;
+
+    for (
+        let parent = valueWrapperOf(top).getParent();
+        Node.isBinaryExpression(parent) && parent.getOperatorToken().getKind() === SyntaxKind.AmpersandAmpersandToken;
+        parent = valueWrapperOf(top).getParent()
+    ) {
+        top = parent;
+    }
+
+    return isBooleanOperand(top);
+};
+
 /**
  * Whether `node` sits beside a caller-choosable alternative on its way up to `within`: the fallback side of a `??` or
  * `||`, a left side whose fallback is not a fixed value, or any part of a conditional. Stricter than
  * {@link isAlternativeOf}: the identity on the left of `ctx.auth.userId ?? args.victim` is null for an anonymous
  * caller, who then reads the victim's row. A fixed fallback (`ctx.auth.userId ?? "anon"`) is no one's choice. A `&&`
- * makes a compared identity a required condition (`m.userId === uid && m.channelId === id`), on either side; only
- * an uncompared value on its left (`uid && args.victim`) yields the other operand instead of the identity.
+ * is a required condition only in a boolean predicate (`m.userId === uid && m.channelId === id`, either order; see
+ * {@link isPredicateChain}); a `&&` with any value operand (`uid && args.victim`) yields that value instead.
  */
 const hasAlternativeWithin = (node: TsNode, within: TsNode): boolean => {
-    let compared = false;
-
     for (let child = node, parent = node.getParent(); parent !== undefined && child !== within; child = parent, parent = parent.getParent()) {
         if (Node.isConditionalExpression(parent)) {
             return true;
@@ -381,11 +450,9 @@ const hasAlternativeWithin = (node: TsNode, within: TsNode): boolean => {
             if (child !== parent.getLeft() || !isFixedValue(parent.getRight())) {
                 return true;
             }
-        } else if (Node.isBinaryExpression(parent) && operator === SyntaxKind.AmpersandAmpersandToken && !compared && child === parent.getLeft()) {
+        } else if (Node.isBinaryExpression(parent) && operator === SyntaxKind.AmpersandAmpersandToken && !isPredicateChain(parent)) {
             return true;
         }
-
-        compared ||= operator !== undefined && EQUALITY_OPERATORS.has(operator);
     }
 
     return false;
@@ -513,27 +580,6 @@ const propertyValueOf = (property: TsNode | undefined): TsNode | undefined => {
     }
 
     return Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : undefined;
-};
-
-/** The outermost parentheses, `!` or type assertion around `node`, none of which change the value it passes on. */
-const valueWrapperOf = (node: TsNode): TsNode => {
-    let current = node;
-
-    for (let parent = current.getParent(); ; parent = current.getParent()) {
-        if (
-            !(
-                Node.isParenthesizedExpression(parent) ||
-                Node.isNonNullExpression(parent) ||
-                Node.isAsExpression(parent) ||
-                Node.isSatisfiesExpression(parent) ||
-                Node.isTypeAssertion(parent)
-            )
-        ) {
-            return current;
-        }
-
-        current = parent;
-    }
 };
 
 /** The other uses of the local `identifier`: every identifier in its file bound to the same declaration, minus the declaring name. */
@@ -1169,11 +1215,13 @@ const helperRowUsesOf = (helper: FunctionNode, tied: ParameterDeclaration, argum
     const uses = helper
         .getDescendantsOfKind(SyntaxKind.Identifier)
         .filter((identifier) => identifier !== tied.getNameNode() && declarationOf(identifier)?.compilerNode === tied.compilerNode);
+    // A write (`message.views += 1`) reads nothing the check depends on; it is judged as a use against what the check
+    // reads and the key.
     const reads = uses.flatMap((use) => {
         const { node, path } = accessChainFrom(use);
         const read = [...argumentPath, ...(isInvoked(node) ? path.slice(0, -1) : path)];
 
-        return isBareRowTest(node, read) ? [] : [read];
+        return isBareRowTest(node, read) || isWriteTarget(node) ? [] : [read];
     });
 
     return {
