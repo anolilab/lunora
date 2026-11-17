@@ -1,3 +1,7 @@
+## @lunora/payment [1.0.0-alpha.275](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.274...@lunora/payment@1.0.0-alpha.275) (2026-11-17)
+
+- fix(payment): bound the usage sweep's scan of deferred rows (#1611)
+
 ## @lunora/payment [1.0.0-alpha.274](https://github.com/anolilab/lunora/compare/@lunora/payment@1.0.0-alpha.273...@lunora/payment@1.0.0-alpha.274) (2026-11-16)
 
 - fix(payment)!: keep Stripe usage unreported when no customer exists (#1567)
