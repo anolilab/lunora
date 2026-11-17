@@ -622,6 +622,36 @@ describe("deploy body size", () => {
         expect(response.status).toBe(413);
     });
 
+    it("413s a chunked body with no declared length as soon as it passes the cap, without reading the rest", async () => {
+        const chunk = new Uint8Array(1024 * 1024);
+        const total = 120;
+        let pulled = 0;
+        let cancelled = false;
+        const body = new ReadableStream<Uint8Array>({
+            cancel: () => {
+                cancelled = true;
+            },
+            pull: (controller) => {
+                if (pulled === total) {
+                    controller.close();
+
+                    return;
+                }
+
+                pulled += 1;
+                controller.enqueue(chunk);
+            },
+        });
+        const response = await handleDeployRequest(
+            new Request("https://cloud/v1/deploy", { body, duplex: "half", headers: { authorization: "Bearer k" }, method: "POST" } as RequestInit),
+            deps(backendWith({}), okProvisioner),
+        );
+
+        expect(response.status).toBe(413);
+        expect(cancelled).toBe(true);
+        expect(pulled).toBeLessThan(total);
+    });
+
     it("400s a JSON body that is not an object", async () => {
         const response = await handleDeployRequest(request("k", ["not", "an", "object"]), deps(backendWith({}), okProvisioner));
 

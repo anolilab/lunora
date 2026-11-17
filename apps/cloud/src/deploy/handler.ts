@@ -62,11 +62,51 @@ const MAX_BODY_BYTES = 100 * 1024 * 1024;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** The body's bytes, or `undefined` once the running total passes {@link MAX_BODY_BYTES} — a chunked body is never held past the cap. */
+const readCappedBytes = async (stream: ReadableStream<Uint8Array> | null): Promise<Uint8Array | undefined> => {
+    if (stream === null) {
+        return new Uint8Array(0);
+    }
+
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- a body is read in order; each chunk depends on the last
+        const { done, value } = await reader.read();
+
+        if (done) {
+            break;
+        }
+
+        total += value.byteLength;
+
+        if (total > MAX_BODY_BYTES) {
+            reader.cancel().catch(() => undefined);
+
+            return undefined;
+        }
+
+        chunks.push(value);
+    }
+
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+
+    for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+
+    return bytes;
+};
+
 /**
  * Read the JSON body, refusing anything over {@link MAX_BODY_BYTES} — checked
  * against `content-length` first so an honest oversized upload is refused
- * unread, then against the bytes actually read, since a chunked body has no
- * declared length.
+ * unread, then against the running total as it streams in, since a chunked
+ * body has no declared length.
  */
 const readBody = async (request: Request): Promise<{ body: DeployBody } | { response: Response }> => {
     const tooLarge = { response: json(413, { error: `request body exceeds ${String(MAX_BODY_BYTES)} bytes` }) };
@@ -76,9 +116,9 @@ const readBody = async (request: Request): Promise<{ body: DeployBody } | { resp
         return tooLarge;
     }
 
-    const bytes = await request.arrayBuffer();
+    const bytes = await readCappedBytes(request.body);
 
-    if (bytes.byteLength > MAX_BODY_BYTES) {
+    if (bytes === undefined) {
         return tooLarge;
     }
 
