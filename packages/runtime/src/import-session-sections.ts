@@ -388,7 +388,7 @@ const prepareAuth = async (options: WorkerOptions, records: AsyncIterable<Staged
     const result = await (options.authData?.replaceRows?.(rows, { dryRun: true }) ?? Promise.reject(new TypeError("auth replace is not configured")));
 
     return result.errors.map((error) => {
-        return { code: "AUTH_IMPORT_REFUSED", line: 0, message: error.message, table: AUTH_TABLE };
+        return { code: "AUTH_IMPORT_FAILED", line: 0, message: error.message, table: AUTH_TABLE };
     });
 };
 
