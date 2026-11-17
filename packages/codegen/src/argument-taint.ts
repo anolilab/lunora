@@ -1265,15 +1265,21 @@ const isWriteTarget = (node: TsNode): boolean => {
 };
 
 /**
- * Whether every use of the local `identifier` only reads fields off it (`row.ownerId`, `const { _id } = row`).
- * A write anywhere in a chain on it, or handing it to other code, can change the field the key emits.
+ * Whether every use of the local `identifier` leaves its fields as read: reads (`row.ownerId`, `const { _id } = row`),
+ * a spread copy (`{ ...row }`) or a `return`. A write anywhere in a chain on it, an alias, or passing it to a call can
+ * change the field the key emits, since the callee may write into it.
  */
 const isReadOnlyLocal = (identifier: Identifier): boolean =>
     usesOfLocal(identifier).every((use) => {
         const wrapped = valueWrapperOf(use);
         const parent = wrapped.getParent();
 
-        if (Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode())) {
+        // Destructuring, a spread into another object and a `return` copy or hand back the row without writing into it.
+        if (
+            (Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode())) ||
+            Node.isSpreadAssignment(parent) ||
+            Node.isReturnStatement(parent)
+        ) {
             return true;
         }
 
@@ -1306,6 +1312,11 @@ const bindingScopesKey = (identifier: TsNode, wholeKey: TsNode | undefined): boo
         }
 
         const { field, read: use } = rowFieldReadOf(identifier);
+
+        // An optional read (`row?.ownerId`) is `undefined` whenever the read finds nothing, the same for every such caller.
+        if ((Node.isPropertyAccessExpression(use) || Node.isElementAccessExpression(use)) && use.hasQuestionDotToken()) {
+            return false;
+        }
 
         return rowScopesKey(read, use, field, wholeKey);
     }
@@ -1349,6 +1360,11 @@ const isFixedTextPart = (part: TsNode): boolean => Node.isStringLiteral(part) ||
 
 /** Whether `access` reads an identity column straight off an owned row: `row._id`, `(await ownedRead()).ownerId`. */
 const isOwnedIdentityColumn = (access: ElementAccessExpression | PropertyAccessExpression): boolean => {
+    // `row?.ownerId` is `undefined` for every caller the read finds nothing for, so they all share one prefix.
+    if (access.hasQuestionDotToken()) {
+        return false;
+    }
+
     const base = strippedValue(access.getExpression());
     const baseInitializer = Node.isIdentifier(base) ? trustedInitializerOf(base) : undefined;
 

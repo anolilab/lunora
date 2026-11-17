@@ -418,7 +418,7 @@ describe("argument-taint", () => {
         });
 
         it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
-            expect.assertions(21);
+            expect.assertions(25);
 
             const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
             const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
@@ -457,8 +457,14 @@ describe("argument-taint", () => {
                 ),
             ).toBe(false);
             expect(isScopedByIdentity(sinkArgument(`${owned}Object.assign(row, args.patch);\n${sink}`))).toBe(false);
-            // Reading fields, including by destructuring, leaves the row intact.
+            // Reading fields, destructuring, a spread copy and a return leave the row intact.
             expect(isScopedByIdentity(sinkArgument(`${owned}const { status } = row;\n${sink}`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`${owned}const copy = { ...row };\n${sink}`))).toBe(true);
+            // Passing the row to a call may write into it.
+            expect(isScopedByIdentity(sinkArgument(`${owned}mutate(row);\n${sink}`))).toBe(false);
+            // An optional read is \`undefined\` for every caller the read finds nothing for.
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row?.ownerId}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row?.ownerId}/\${args.key}\`);`))).toBe(false);
 
             // The owner value must be the caller id, not an expression that merely mentions it.
             expect(
