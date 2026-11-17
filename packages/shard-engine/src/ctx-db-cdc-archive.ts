@@ -21,8 +21,6 @@
  * that call from the binding and drives the ordering.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-cdc-archive" mirrors "ctx-db-cdc.ts", the module it extends (which carries the same disable for the same reason). */
-
 import type { R2BucketLike } from "@lunora/platform";
 import { sql as dsql } from "drizzle-orm";
 

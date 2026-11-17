@@ -19,8 +19,7 @@
  * public client protocol (the relay tier is invisible runtime elasticity).
  */
 
-/* eslint-disable max-classes-per-file -- the role-split is three cohesive collaborators by design: a shared RelayLink base plus the OwnerRelay and RelayMember role classes. */
-
+// eslint-disable-next-line max-classes-per-file -- three cohesive collaborators by design: the RelayLink base plus the OwnerRelay and RelayMember roles
 import { LunoraError, toErrorBody } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 

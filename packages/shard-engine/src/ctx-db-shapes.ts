@@ -20,9 +20,6 @@
  * predicate — there is no second, hand-rolled WHERE implementation.
  */
 
-/* eslint-disable no-restricted-syntax -- every `dsql\`…\`` here is a drizzle tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral (see where-sql.ts). */
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-shapes" mirrors its parent "ctx-db.ts" (the established public module name). */
-
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
 
@@ -39,6 +36,7 @@ const idInClause = (ids: ReadonlyArray<string>): SQL | undefined => {
         return undefined;
     }
 
+    // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
     return sqliteInList(dsql`${dsql.identifier("id")}`, ids, false);
 };
 

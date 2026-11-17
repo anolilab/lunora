@@ -9,9 +9,6 @@
  * these so existing import sites (shard-do, the index barrel, tests) are unchanged.
  */
 
-/* eslint-disable no-restricted-syntax -- every `dsql\`…\`` here is a drizzle tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral (see where-sql.ts). */
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-cdc" mirrors its parent "ctx-db.ts" (the established public module name). */
-
 import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";
@@ -184,6 +181,7 @@ const CDC_TABLE_FILTER_CHUNK = 90;
 const tableInClause = (tables: ReadonlySet<string>): SQL =>
     // Bind each table name as a parameter so the `IN (…)` list can never inject SQL.
     dsql` AND ${dsql.identifier("table")} IN (${dsql.join(
+        // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
         [...tables].map((table) => dsql`${table}`),
         dsql`, `,
     )})`;

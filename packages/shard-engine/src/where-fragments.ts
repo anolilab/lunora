@@ -31,7 +31,6 @@
  * not trade away.
  */
 
-/* eslint-disable no-restricted-syntax -- every `sql\`…\`` in the drizzle builder is a tagged-template SQL builder binding a value, not a string conversion; the rule misfires on the inner TemplateLiteral (same exemption as where-sql.ts). */
 import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -87,6 +86,7 @@ const drizzleFragments: WhereFragments<SQL> = {
     inList: (reference, items, negated, budget) => sqliteInList(reference, items, negated, budget),
     negate: (inner) => sql`NOT (${inner})`,
     nullCheck: (reference, negated) => (negated ? sql`${reference} IS NOT NULL` : sql`${reference} IS NULL`),
+    // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
     value: (value) => sql`${value}`,
 };
 

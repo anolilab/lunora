@@ -18,8 +18,6 @@
  * factory closure, so the unit reads as a pure function of its dependencies.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-rank-page" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
-
 import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql as dsql } from "drizzle-orm";

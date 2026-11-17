@@ -61,8 +61,6 @@
  * sibling.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-relay-shapes" mirrors its sibling "ctx-db-shape-poke-cursor" (the established public module naming). */
-
 import { decodeWire, encodeWire } from "@lunora/wire";
 import { sql as dsql } from "drizzle-orm";
 

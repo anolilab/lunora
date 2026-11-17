@@ -23,8 +23,6 @@
  * `ctx-db.ts` re-exports these so existing import sites resolve unchanged.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-global-shape-snapshot" mirrors its parent "ctx-db.ts" (the established public module name). */
-
 import { LunoraError } from "@lunora/errors";
 import { sql as dsql } from "drizzle-orm";
 

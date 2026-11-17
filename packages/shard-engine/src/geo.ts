@@ -19,13 +19,13 @@
  * dropped. This module is deliberately dependency-free so it can be unit-tested in
  * isolation and inlined by the bundler.
  */
-/* eslint-disable no-secrets/no-secrets -- the base-32 geohash alphabet + Niemeyer adjacency tables are algorithm constants, not credentials */
-/* eslint-disable import/exports-last -- each exported helper sits next to its private support code; grouping exports last would scatter the geohash pipeline */
 
 /** The geohash base-32 alphabet (Niemeyer's alphabet). */
+// eslint-disable-next-line no-secrets/no-secrets -- the geohash base-32 alphabet, not a credential
 const BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz";
 
 /** Default geohash precision (characters) maintained by a `.geoIndex()` companion — ~4.8 m cells. */
+// eslint-disable-next-line import/exports-last -- kept next to the private geohash code it builds on or that uses it
 export const GEO_DEFAULT_PRECISION = 9;
 
 /** Mean Earth radius in metres (WGS84 authalic sphere) used by {@link haversineMeters}. */
@@ -105,12 +105,14 @@ const geohashBandCounts = (length: number): { latBands: number; lngSectors: numb
 };
 
 /** A latitude/longitude point (WGS84 decimal degrees). */
+// eslint-disable-next-line import/exports-last -- kept next to the private geohash code it builds on or that uses it
 export interface GeoPoint {
     lat: number;
     lng: number;
 }
 
 /** An axis-aligned latitude/longitude bounding box (`sw`/`ne` corners). */
+// eslint-disable-next-line import/exports-last -- kept next to the private geohash code it builds on or that uses it
 export interface GeoBoundingBox {
     ne: GeoPoint;
     sw: GeoPoint;
@@ -123,6 +125,7 @@ const clampPrecision = (precision: number): number => Math.min(Math.max(Math.tru
  * Encode `point` to a geohash of `precision` characters. Standard interleaved
  * lat/lng bisection over the base-32 alphabet.
  */
+// eslint-disable-next-line import/exports-last -- kept next to the private geohash code it builds on or that uses it
 export const encodeGeohash = (point: GeoPoint, precision: number): string => {
     const chars = clampPrecision(precision);
     let latMin = -90;
@@ -175,6 +178,7 @@ export const encodeGeohash = (point: GeoPoint, precision: number): string => {
 const polewardLatitude = (lat: number, radiusMeters: number): number => Math.min(90, Math.abs(lat) + radiusDegrees(radiusMeters));
 
 /** Great-circle distance between two points in metres (Haversine). */
+// eslint-disable-next-line import/exports-last -- kept next to the private geohash code it builds on or that uses it
 export const haversineMeters = (a: GeoPoint, b: GeoPoint): number => {
     const dLat = (b.lat - a.lat) * DEG_TO_RAD;
     const dLng = (b.lng - a.lng) * DEG_TO_RAD;
@@ -226,9 +230,13 @@ const precisionForRadius = (radiusMeters: number, lat: number): number => {
 // east/west rows, which made `adjacent(..., "east"|"west")` move north/south at odd
 // lengths and silently dropped E/W proximity candidates (fixed).
 const NEIGHBOURS = {
+    // eslint-disable-next-line no-secrets/no-secrets -- geohash algorithm constant, not a credential
     east: ["bc01fg45238967deuvhjyznpkmstqrwx", "p0r21436x8zb9dcf5h7kjnmqesgutwvy"],
+    // eslint-disable-next-line no-secrets/no-secrets -- geohash algorithm constant, not a credential
     north: ["p0r21436x8zb9dcf5h7kjnmqesgutwvy", "bc01fg45238967deuvhjyznpkmstqrwx"],
+    // eslint-disable-next-line no-secrets/no-secrets -- geohash algorithm constant, not a credential
     south: ["14365h7k9dcfesgujnmqp0r2twvyx8zb", "238967debc01fg45kmstqrwxuvhjyznp"],
+    // eslint-disable-next-line no-secrets/no-secrets -- geohash algorithm constant, not a credential
     west: ["238967debc01fg45kmstqrwxuvhjyznp", "14365h7k9dcfesgujnmqp0r2twvyx8zb"],
 } as const;
 const BORDERS = {

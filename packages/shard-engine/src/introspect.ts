@@ -726,12 +726,10 @@ interface QueuesResult {
     queues: QueueMetadata[];
 }
 
-/* eslint-disable no-secrets/no-secrets -- reserved admin RPC names (`createWorkflowInstance`/`getWorkflowInstanceStatus`) are framework constants, not credentials */
-
 /**
  * Lifecycle state of a workflow instance, mirrored from `@lunora/workflow`'s
  * `WorkflowInstanceStatus` so `@lunora/do` carries no dependency on the workflow
- * package. Returned by `getWorkflowInstanceStatus` and `createWorkflowInstance`.
+ * package. Returned by the getWorkflowInstanceStatus and createWorkflowInstance RPCs.
  */
 type WorkflowInstanceState =
     | "complete"
@@ -745,12 +743,14 @@ type WorkflowInstanceState =
     | "waiting"
     | "waitingForPause";
 
+// eslint-disable-next-line no-secrets/no-secrets -- names a reserved admin RPC, a framework constant
 /** Payload of a `__lunora_admin__:createWorkflowInstance` call: the freshly created instance id and its initial status. */
 interface CreateWorkflowInstanceResult {
     id: string;
     status: WorkflowInstanceState;
 }
 
+// eslint-disable-next-line no-secrets/no-secrets -- names a reserved admin RPC, a framework constant
 /** Payload of a `__lunora_admin__:getWorkflowInstanceStatus` call: the instance's current status plus output/error when present. */
 interface WorkflowInstanceStatusResult {
     error?: { message: string; name: string };
@@ -758,7 +758,6 @@ interface WorkflowInstanceStatusResult {
     output?: unknown;
     status: WorkflowInstanceState;
 }
-/* eslint-enable no-secrets/no-secrets */
 
 /** Payload of a `__lunora_admin__:getFunctionStats` call. */
 interface FunctionStatsResult {

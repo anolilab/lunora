@@ -25,8 +25,6 @@
  * which is what the `rebuildCompanions` admin op is for.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companion-state" mirrors its parent "ctx-db.ts" (the established public module name). */
-
 import { sql as dsql } from "drizzle-orm";
 
 import { compareStrings, encodeAggregateKey } from "./aggregate-tally";

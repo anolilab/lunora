@@ -29,8 +29,6 @@
  * modelled line for line on `ctx-db-global-shape-snapshot.ts`.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-shape-poke-cursor" mirrors its sibling "ctx-db-global-shape-snapshot" (the established public module naming). */
-
 import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";
