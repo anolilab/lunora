@@ -1,11 +1,11 @@
-/* eslint-disable unicorn/prevent-abbreviations -- "API" is the domain term for the studio's API tab; the file/export names mirror it. */
 import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { useT } from "../../i18n/i18n-context";
 import type { FunctionDescriptor } from "../../lib/types";
-import ApiDocsPanel from "./api-docs-panel";
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `ApiDocsPanel` is public API (exported from the package root); renaming it breaks consumers
+import ApiDocsPanel from "./api-documentation-panel";
 import ApiReferencePanel from "./api-reference-panel";
 import OpenRpcReferencePanel from "./openrpc-reference-panel";
 
@@ -47,7 +47,7 @@ const FORMAT_KEYS: ReadonlyArray<ApiFormat> = ["openapi", "openrpc"];
  * reference UI (operation browser, schema tables, a live "try it" console, and a
  * request-sample rail), with a small format switch between them. The Snippets
  * view is the per-function React / Client / CLI copy-paste browser
- * (`api-docs-panel`), the lightweight "how do I call this" DX.
+ * (`api-documentation-panel`), the lightweight "how do I call this" DX.
  *
  * Reference is the default; OpenAPI is the default format (the richer,
  * spec-driven view that also covers REST). Each format degrades to a clear

@@ -132,8 +132,6 @@ const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo
             return { index: index.name, table };
         });
 
-/* eslint-disable jsdoc/check-indentation -- intentional nested bullet list documenting the inputs */
-
 /**
  * Build the runtime {@link import("@lunora/advisor").LintContext} from the
  * studio-gathered admin signal, run the `runtime`-source lints, and return their
@@ -143,16 +141,16 @@ const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo
  * The context is built from:
  *
  * - **indexHits** — declared indexes (from `listTables` + `listTableIndexes`)
- *   reconciled against the recorded-reads feed (`getMetrics.indexHits`). A
- *   declared index with no recorded use → `reads: 0` → flagged dead. With no
- *   declared indexes the dead-index half simply finds nothing.
+ * reconciled against the recorded-reads feed (`getMetrics.indexHits`). A
+ * declared index with no recorded use → `reads: 0` → flagged dead. With no
+ * declared indexes the dead-index half simply finds nothing.
  * - **tableScans** — `FunctionCallStat.scannedTables` aggregated per table across
- *   every function; a table over the lint's hot-scan threshold is flagged.
+ * every function; a table over the lint's hot-scan threshold is flagged.
  * - **shardTraffic** — the cross-shard request distribution from the worker's
- *   `POST /_lunora/admin/shard-traffic` fan-out (`orchestrateShardTraffic`),
- *   passed straight through so the `hot_shard` lint fires when one shard takes a
- *   disproportionate share. Best-effort: when the panel hasn't fanned it out (or
- *   the worker predates the endpoint) it's absent and `hot_shard` finds nothing.
+ * `POST /_lunora/admin/shard-traffic` fan-out (`orchestrateShardTraffic`),
+ * passed straight through so the `hot_shard` lint fires when one shard takes a
+ * disproportionate share. Best-effort: when the panel hasn't fanned it out (or
+ * the worker predates the endpoint) it's absent and `hot_shard` finds nothing.
  *
  * Pure and side-effect-free, so the panel can call it inside a `useMemo` and it
  * unit-tests without a client.
@@ -190,7 +188,6 @@ const deriveRuntimeAdvisories = (inputs: RuntimeAdvisoryInputs): AdvisorRow[] =>
 
     return visible.map((finding) => advisoryRow(finding));
 };
-/* eslint-enable jsdoc/check-indentation */
 
 export { declaredIndexesFor, deriveRuntimeAdvisories };
 export type { DeclaredIndex, RuntimeAdvisoryInputs };

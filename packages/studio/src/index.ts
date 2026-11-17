@@ -17,8 +17,8 @@ export { DEFAULT_INSIGHT_THRESHOLDS, deriveInsights } from "./features/advisors/
 export type { InsightsPanelProps } from "./features/advisors/insights-panel";
 export { InsightsPanel } from "./features/advisors/insights-panel";
 export { default as SecurityAdvisorPanel } from "./features/advisors/security-advisor-panel";
-export type { ApiDocsPanelProps } from "./features/api/api-docs-panel";
-export { default as ApiDocsPanel } from "./features/api/api-docs-panel";
+export type { ApiDocsPanelProps } from "./features/api/api-documentation-panel";
+export { default as ApiDocsPanel } from "./features/api/api-documentation-panel";
 export type { ApiReferencePanelProps } from "./features/api/api-reference-panel";
 export { default as ApiReferencePanel } from "./features/api/api-reference-panel";
 export type { ApiTabProps } from "./features/api/api-tab";
