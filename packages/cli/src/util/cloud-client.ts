@@ -10,10 +10,13 @@
  */
 
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+// The platform's own path module for the asset walk: `@visulima/path` reads `\` as a separator, so it
+// cannot name a POSIX file whose name holds one (`logo\dark.svg`).
+import { isAbsolute, join as joinNative, relative } from "node:path";
 
 import type { BindingRequirement } from "@lunora/config/cloudflare";
 import { matcher } from "@visulima/fs";
-import { dirname, isAbsolute, join, relative, resolve } from "@visulima/path";
+import { dirname, join, resolve } from "@visulima/path";
 
 type DeployEvent = Record<string, unknown>;
 
@@ -452,7 +455,8 @@ const assetFilesOf = (root: string): { file: string; path: string }[] => {
     const visited = new Set<string>();
     const files: { file: string; path: string }[] = [];
 
-    const visit = (directory: string): void => {
+    // `prefix` is the asset path so far, `/`-joined from directory entry names, never re-parsed as a file path.
+    const visit = (directory: string, prefix: string): void => {
         const realDirectory = realpathSync(directory);
 
         // A symlinked directory that points back up the tree would otherwise be walked forever.
@@ -463,23 +467,24 @@ const assetFilesOf = (root: string): { file: string; path: string }[] => {
         visited.add(realDirectory);
 
         for (const entry of readdirSync(directory, { withFileTypes: true })) {
-            const full = join(directory, entry.name);
+            const full = joinNative(directory, entry.name);
+            const path = `${prefix}${entry.name}`;
             const real = realpathSync(full);
             const inside = relative(realRoot, real);
 
             if (inside.startsWith("..") || isAbsolute(inside)) {
-                throw new Error(`asset "/${relative(root, full)}" is a symlink that leads outside the assets directory`);
+                throw new Error(`asset "/${path}" is a symlink that leads outside the assets directory`);
             }
 
             if (statSync(real).isDirectory()) {
-                visit(full);
+                visit(full, `${path}/`);
             } else {
-                files.push({ file: real, path: relative(root, full) });
+                files.push({ file: real, path });
             }
         }
     };
 
-    visit(root);
+    visit(root, "");
 
     return files;
 };

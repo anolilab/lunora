@@ -137,6 +137,14 @@ describe(collectAssets, () => {
         }
     });
 
+    it.skipIf(process.platform === "win32")("uploads a POSIX file whose name holds a backslash under that name", () => {
+        expect.assertions(1);
+
+        write(String.raw`logo\dark.svg`, "<svg/>");
+
+        expect(collectAssets(directory, {}).files).toStrictEqual([{ content: "PHN2Zy8+", path: String.raw`/logo\dark.svg` }]);
+    });
+
     it("keys files by URL path, base64-encodes them, and carries only the serving config", () => {
         expect.assertions(1);
 
