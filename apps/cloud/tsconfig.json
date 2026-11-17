@@ -7,6 +7,7 @@
         "lib": ["DOM", "DOM.Iterable", "ES2024"],
         "noUncheckedIndexedAccess": false,
         "declaration": false,
+        "noEmit": true,
         "paths": { "@/*": ["./src/*"] }
     },
     "include": ["src/**/*", "lunora/**/*", "scripts/**/*", "vite.config.ts", "vitest.config.ts", "vitest.bench.config.ts", "__tests__/**/*", "__bench__/**/*"],
