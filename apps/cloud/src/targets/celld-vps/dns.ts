@@ -130,7 +130,8 @@ export const boxSlugOfRecord = (record: Pick<DnsRecord, "name" | "type">, domain
 
 /** One write a reconcile pass plans; `boxId` is absent for an orphan's record. */
 type DnsOperation =
-    { boxId?: string; kind: "delete"; record: DnsRecord } | { boxId: string; content: string; kind: "create"; name: string; type: "A" | "AAAA" };
+    | { boxId?: string; kind: "delete"; record: DnsRecord }
+    | { boxId: string; content: string; kind: "create"; name: string; type: "A" | "AAAA" };
 
 /** The address records a live box should have, per family. */
 const wantedOf = (box: LiveBoxDns): { content: string; type: "A" | "AAAA" }[] => [

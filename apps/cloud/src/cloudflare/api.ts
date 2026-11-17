@@ -157,7 +157,8 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
             // DNS-only: a box terminates its own TLS (Caddy), so the record must
             // resolve to the box, not to a Cloudflare proxy in front of it.
             const result = (await callAt(`/zones/${zoneId}/dns_records`, "POST", { content, name, proxied: false, ttl: 300, type })) as
-                undefined | { id?: string };
+                | undefined
+                | { id?: string };
 
             if (!result?.id) {
                 throw new Error("cloudflare DNS record create returned no id");
@@ -210,7 +211,8 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
         },
         findCustomHostname: async ({ hostname, zoneId }) => {
             const result = (await callAt(`/zones/${zoneId}/custom_hostnames?hostname=${encodeURIComponent(hostname)}`, "GET")) as
-                CustomHostnameResult[] | undefined;
+                | CustomHostnameResult[]
+                | undefined;
             const match = (result ?? []).find((candidate) => candidate.hostname?.toLowerCase() === hostname.toLowerCase());
 
             return match === undefined ? null : toCustomHostname(match, hostname);

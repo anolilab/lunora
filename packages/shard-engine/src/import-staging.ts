@@ -22,8 +22,8 @@
  * does not parse) is never swept and never committed.
  */
 import { LunoraError } from "@lunora/errors";
-
 import { decodeWire, encodeWire } from "@lunora/wire";
+
 import type { SqlExec } from "./ctx-db";
 import { runSql } from "./do-exec";
 
@@ -476,7 +476,10 @@ const touchImportManifest = (sql: SqlExec, session: string, touch: ManifestTouch
 
 /** A manifest transition, each a compare-and-set against the state it expects. */
 type ManifestChange =
-    { batches: number; state: "committing" } | { state: "aborting" } | { state: "committed" } | { step: string; stepResult: ImportStepResult };
+    | { batches: number; state: "committing" }
+    | { state: "aborting" }
+    | { state: "committed" }
+    | { step: string; stepResult: ImportStepResult };
 
 /** Why `manifest` cannot take `change`, or `undefined` when it can. */
 const transitionRefusal = (manifest: ImportManifest, change: ManifestChange): LunoraError | undefined => {

@@ -421,7 +421,7 @@ catalogs:
     semver: ^7.8.5
   prod:
     adm-zip: 0.6.1
-    fflate: 0.7.5
+    fflate: 0.8.3
     csv-parse: 7.0.3
     "@anolilab/commitlint-config": 10.1.3
     "@anolilab/textlint-config": 13.0.6

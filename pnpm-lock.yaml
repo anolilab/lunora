@@ -561,8 +561,8 @@ catalogs:
       specifier: ^3.3.0
       version: 3.3.0
     fflate:
-      specifier: 0.7.5
-      version: 0.7.5
+      specifier: 0.8.3
+      version: 0.8.3
   redact:
     '@visulima/redact':
       specifier: 5.0.0
@@ -1592,7 +1592,7 @@ importers:
         version: 1.13.0(@cfworker/json-schema@4.1.4)(supports-color@10.2.2)
       fflate:
         specifier: catalog:prod
-        version: 0.7.5
+        version: 0.8.3
       picomatch:
         specifier: catalog:node
         version: 4.0.7

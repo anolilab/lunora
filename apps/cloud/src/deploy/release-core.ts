@@ -234,7 +234,8 @@ export type ReleaseFrame =
  * the HTTP route answers the refusal as a status code and the run as a stream.
  */
 export type StartedRelease =
-    { deploymentId: string; run: (write: (frame: ReleaseFrame) => void) => Promise<ReleaseOutcome> } | { error: string; status: 400 | 403 | 409 | 501 };
+    | { deploymentId: string; run: (write: (frame: ReleaseFrame) => void) => Promise<ReleaseOutcome> }
+    | { error: string; status: 400 | 403 | 409 | 501 };
 
 /** What {@link runRelease} needs to know about a release it was handed. */
 interface RecordedRelease {

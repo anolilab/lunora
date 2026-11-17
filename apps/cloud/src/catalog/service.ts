@@ -37,7 +37,9 @@ export interface CatalogEnv {
 
 /** What the environment says about the catalog. */
 export type CatalogConfig =
-    { kind: "empty" } | { fingerprint: string; indexUrl: string; keys: TrustedCatalogKey[]; kind: "ready" } | { error: string; kind: "refused" };
+    | { kind: "empty" }
+    | { fingerprint: string; indexUrl: string; keys: TrustedCatalogKey[]; kind: "ready" }
+    | { error: string; kind: "refused" };
 
 /** Parse `CATALOG_PUBLIC_KEYS`: a JSON array of `{ keyId, publicKey }`, the key being the standard base64 of the raw 32-byte Ed25519 key. */
 const parseKeys = (text: string): { error: string } | { keys: TrustedCatalogKey[] } => {

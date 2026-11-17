@@ -16,7 +16,8 @@ import { discoverProducts, isManagedPolicy, planPolicyWrites } from "./usage-ale
 
 /** What reading an account's notifications found, or why it could not. */
 export type AlertsRead =
-    { kind: NotificationsFailure; message: string; ok: false } | { listed: BillingProduct[] | null; ok: true; policies: NotificationPolicy[] };
+    | { kind: NotificationsFailure; message: string; ok: false }
+    | { listed: BillingProduct[] | null; ok: true; policies: NotificationPolicy[] };
 
 /** What Cloudflare holds for one managed policy after a write: read back, not assumed. */
 export interface StoredPolicy {
