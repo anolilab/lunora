@@ -105,7 +105,8 @@ describe(createDeployRouter, () => {
 
         expect(last.status).toBe(429);
         expect(last.headers.get("retry-after")).not.toBeNull();
-    });
+        // Draining a 12_000-request bucket through the router takes seconds on a loaded runner.
+    }, 60_000);
 
     it("draws each path on the rate-limit bucket its route names, and the shared api bucket otherwise", async () => {
         const limitSpy = vi.spyOn(RateLimiter.prototype, "limit");

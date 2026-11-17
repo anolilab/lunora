@@ -40,6 +40,16 @@ const isAlive = async (pid: number): Promise<boolean> => {
     }
 };
 
+// Polls without asserting: an `expect` inside `vi.waitFor` counts once per retry, so a slow
+// runner would break `expect.assertions`.
+const waitUntilGone = async (pid: number): Promise<void> => {
+    await vi.waitFor(async () => {
+        if (await isAlive(pid)) {
+            throw new Error(`process ${String(pid)} is still alive`);
+        }
+    });
+};
+
 let sandbox: string;
 let pidFile: string;
 let grandchild: number | undefined;
@@ -78,9 +88,9 @@ describe("build box run", () => {
         expect(grandchild).toBeGreaterThan(0);
 
         // SIGKILL is delivered asynchronously; the milestone is the process being gone.
-        await vi.waitFor(async () => {
-            await expect(isAlive(grandchild as number)).resolves.toBe(false);
-        });
+        await waitUntilGone(grandchild);
+
+        await expect(isAlive(grandchild)).resolves.toBe(false);
     });
 
     it("kills a background process a successful command left behind", async () => {
@@ -96,8 +106,8 @@ describe("build box run", () => {
         expect(code).toBe(0);
         expect(lines).toStrictEqual(["built"]);
 
-        await vi.waitFor(async () => {
-            await expect(isAlive(grandchild as number)).resolves.toBe(false);
-        });
+        await waitUntilGone(grandchild);
+
+        await expect(isAlive(grandchild)).resolves.toBe(false);
     });
 });
