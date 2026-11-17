@@ -356,7 +356,23 @@ describe("argument-taint", () => {
         });
 
         it("refuses a prefix that is not the caller id itself, asserted or not", () => {
-            expect.assertions(7);
+            expect.assertions(10);
+
+            // A `let` bound to the caller id can be assigned a caller-chosen value before use.
+            expect(
+                isScopedByIdentity(sinkArgument(`let { userId } = ctx.auth;\nuserId = args.userId;\nSINK(\`\${userId}/\${args.key ?? args.other}\`);`)),
+            ).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`let uid = ctx.auth.userId;\nuid = args.userId;\nSINK(\`\${uid}/\${args.key ?? args.other}\`);`))).toBe(
+                false,
+            );
+            // Array destructuring binds a whole row, not its id column.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const [id] = await ctx.db.files.findMany({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${id}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
 
             // An `OR` arm by a caller-supplied id selects a row the caller chose, so its id is not the caller's.
             expect(

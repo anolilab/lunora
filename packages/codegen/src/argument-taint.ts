@@ -1202,8 +1202,14 @@ const databaseReadOf = (node: TsNode): CallExpression | undefined => {
 
 /** The column a destructured `element` takes from the row; `undefined` below the top level of the pattern. */
 const destructuredFieldOf = (element: TsNode | undefined): string | undefined => {
-    // `const { ...rest } = row` binds an object of the remaining columns, not a column.
-    if (!Node.isBindingElement(element) || element.getDotDotDotToken() !== undefined || Node.isBindingElement(element.getParent().getParent())) {
+    // Only a top-level `{ column }` binds a column: `const { ...rest } = row` binds an object of the remaining
+    // columns, and `const [row] = await findMany(…)` a whole row.
+    if (
+        !Node.isBindingElement(element) ||
+        !Node.isObjectBindingPattern(element.getParent()) ||
+        element.getDotDotDotToken() !== undefined ||
+        Node.isBindingElement(element.getParent().getParent())
+    ) {
         return undefined;
     }
 
@@ -1360,6 +1366,13 @@ const isDestructuredIdentity = (identifier: Identifier): boolean => {
  */
 const isIntactIdentityPart = (part: TsNode, followLocal = true): boolean => {
     const value = strippedValue(part);
+    const declaration = Node.isIdentifier(value) ? declarationOf(value) : undefined;
+
+    // `contextTrustPathOf` follows a local to what it was declared from; a `let` assigned again may hold anything.
+    if ((Node.isVariableDeclaration(declaration) || Node.isBindingElement(declaration)) && isReassignedBinding(declaration)) {
+        return false;
+    }
+
     const path = contextTrustPathOf(value);
 
     if (path !== undefined) {
