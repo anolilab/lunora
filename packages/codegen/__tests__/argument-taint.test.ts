@@ -247,11 +247,18 @@ describe("argument-taint", () => {
         });
 
         it("accepts a key read off a database row fetched by the caller's identity", () => {
-            expect.assertions(2);
+            expect.assertions(5);
 
+            const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
+
+            // As a prefix, only a column that names the caller: the row's id, or the one the read matched on.
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row.ownerId}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row._id}/\${args.k}\`);`))).toBe(true);
+            // As the whole key, any column of the caller's own row: a stored reference the caller cannot repoint.
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(row.storageKey);`))).toBe(true);
             expect(
                 isScopedByIdentity(
-                    sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.key}/\${args.k}\`);`),
+                    sinkArgument(`const { storageKey } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(storageKey);`),
                 ),
             ).toBe(true);
             expect(
@@ -259,6 +266,23 @@ describe("argument-taint", () => {
                     sinkArgument(`const uid = ctx.auth.userId;\nconst row = await ctx.db.files.findFirst({ where: { ownerId: uid } });\nSINK(row.key);`),
                 ),
             ).toBe(true);
+        });
+
+        it("rejects a shared column of the caller's own row as a key prefix", () => {
+            expect.assertions(4);
+
+            const me = `const me = await ctx.db.users.get(ctx.auth.userId);\n`;
+
+            expect(isScopedByIdentity(sinkArgument(`${me}SINK(\`\${me.plan}/\${args.k}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${me}const prefix = me.locale;\nSINK(\`\${prefix}/\${args.k}\`);`))).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const { plan } = await ctx.db.users.findFirst({ where: { _id: ctx.auth.userId } });\nSINK(\`\${plan}/\${args.k}\`);`),
+                ),
+            ).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${(await ctx.db.users.findFirst({ where: { _id: ctx.auth.userId } })).plan}/\${args.k}\`);`))).toBe(
+                false,
+            );
         });
 
         it("rejects a key read off a database write, even one that stamps the caller's identity", () => {
