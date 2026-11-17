@@ -201,13 +201,20 @@ private fun twoHintedClient(sender: (Map<String, Any?>) -> Unit): Client {
 }
 
 private fun failedWriteKeepsUnsentRetriesDue() {
+    // An IOException is checked in Java, but a Kotlin sender can still throw it.
+    for (failure in listOf<() -> Exception>({ IllegalStateException("socket write failed") }, { java.io.IOException("socket write failed") })) {
+        failedWriteKeepsUnsentRetriesDue(failure)
+    }
+}
+
+private fun failedWriteKeepsUnsentRetriesDue(failure: () -> Exception) {
     var failing = false
     var subscribes = 0
     val client = twoHintedClient { frame ->
         if (frame["type"] == "subscribe") {
             if (failing) {
                 failing = false
-                throw IllegalStateException("socket write failed")
+                throw failure()
             }
             subscribes++
         }

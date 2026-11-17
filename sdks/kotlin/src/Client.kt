@@ -1188,7 +1188,8 @@ class Client(
 
             try {
                 sender(retry.second)
-            } catch (failure: RuntimeException) {
+            } catch (failure: Exception) {
+                // Kotlin has no checked exceptions, so a socket write can throw an IOException here.
                 // Unless the socket has changed since, which cancels every retry, the frames not
                 // written stay due; a newer hint or an unsubscribe has already decided the rest.
                 synchronized(lock) {
