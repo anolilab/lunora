@@ -6,7 +6,7 @@ import { memoryStore } from "./support/memory-store";
 
 const NOW = 1_700_000_000_000;
 
-const HELLO = { resources: { cpus: 2, diskFreeMb: 40_960, memMb: 3891 }, versions: { celld: "v0.6.0", hostd: "v0.6.0" } };
+const HELLO = { resources: { diskFreeMb: 40_960, memMb: 3891 }, versions: { caddy: "v2.11.6", celld: "v0.6.0", hostd: "1.0.0" } };
 
 /** A store whose first `boxes` read is followed by a revoke, as an owner's revoke landing between a session's read and its write. */
 const revokedAfterFirstRead = (status: string): MemoryStore => {
@@ -33,7 +33,7 @@ describe("box session writes against a concurrent revoke", () => {
     it("never leaves a box revoked during hello recorded as online", async () => {
         const store = revokedAfterFirstRead("offline");
 
-        await recordHello(store, "box_1", HELLO as Parameters<typeof recordHello>[2], NOW);
+        await recordHello(store, "box_1", HELLO, NOW);
 
         const box = await loadBox(store, "box_1");
 
