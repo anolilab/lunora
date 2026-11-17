@@ -795,13 +795,13 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
     const codegen = (): ReturnType<typeof runCodegen> => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
-    it("gates a declared cron on a target where nothing dispatches one", () => {
+    it("emits a declared cron for node, whose host walks LUNORA_CRONS into its scheduler", () => {
         expect.assertions(3);
 
-        // The `featureUsage` arm cannot cover this: it keys `scheduler` on a
-        // `@lunora/scheduler` import, while `cronJobs` is legitimately imported
-        // from `@lunora/server`. Before the signal existed, this app built green
-        // on a host where the nightly sweep never fires.
+        // `cronJobs` is imported from `@lunora/server`, so the `featureUsage` arm
+        // (keyed on a `@lunora/scheduler` import) cannot see one; the
+        // `cronTriggers` signal can. Node rates it emulated now that
+        // `createNodePlatform({ crons })` arms the map.
         write(
             "crons.ts",
             `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
@@ -809,11 +809,9 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         const result = codegen();
 
-        // The cron IS declared and emitted — the diagnostic is the only thing
-        // standing between it and a deploy where it never fires.
         expect(result.cronTriggers).toStrictEqual(["0 3 * * *"]);
-        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
-        expect(result.platformDiagnostics[0]?.message).toContain("cron");
+        expect(result.platformDiagnostics).toStrictEqual([]);
+        expect(result.generated.crons).toContain('"0 3 * * *"');
     });
 
     // The whole path: the declaration in `lunora/`, the discovery pass, the

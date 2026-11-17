@@ -17,6 +17,28 @@ SemVer promise until the package graduates.
 const NODE_SCHEDULER_DISPATCH_PATH: "/_lunora/scheduler/dispatch";
 ```
 
+### `NodeCronJob` (interface)
+
+```ts
+interface NodeCronJob {
+    args?: Record<string, unknown>;
+    functionPath?: string;
+    name: string;
+    workflow?: string;
+}
+```
+
+### `NodeDeclaredCron` (interface)
+
+```ts
+interface NodeDeclaredCron {
+    args: Record<string, unknown>;
+    expression: string;
+    functionPath: string;
+    name: string;
+}
+```
+
 ### `NodeDispatchInvocation` (interface)
 
 ```ts
@@ -136,6 +158,7 @@ type NodePlatformOptions<Queues extends Record<string, {
 }> = Record<string, never>, Workflows extends Record<string, {
     isLunoraWorkflow: true;
 }> = Record<string, never>> = {
+    crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
     dispatch?: NodePlatformDispatchOptions;
     globalTablesPath?: string;
     objectStorageDirectory?: string;
@@ -207,6 +230,7 @@ interface NodeR2BucketOptions {
 
 ```ts
 interface NodeSchedulerHost {
+    declareCrons: (crons: ReadonlyArray<NodeDeclaredCron>) => void;
     dispose: () => void;
     scheduler: SchedulerHost;
     simulateDeadLetter: (id: string) => Promise<boolean>;

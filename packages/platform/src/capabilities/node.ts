@@ -151,15 +151,15 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         scheduler: {
             level: "emulated",
-            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with finite retry backoff and a dead-letter queue. This host's schedule() refuses `retry.forever` as INVALID_INPUT before a job is persisted or armed. ctx.scheduler does not call schedule(): it posts to the SchedulerDO namespace the app's .scheduler() declaration binds, so whether a ctx.scheduler call can retry forever is decided by what backs that binding, not by this host. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer — but nothing walks an app's DECLARED crons into that method, which is why cronTriggers is rated separately and unsupported here. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
+            note: "SQLite job table dispatched to onDispatch and re-armed on construction, with finite retry backoff and a dead-letter queue. This host's schedule() refuses `retry.forever` as INVALID_INPUT before a job is persisted or armed. ctx.scheduler does not call schedule(): it posts to the SchedulerDO namespace the app's .scheduler() declaration binds, so whether a ctx.scheduler call can retry forever is decided by what backs that binding, not by this host. It is also the only host implementing runtime cron registration (SchedulerHost.cron), which Cloudflare cannot offer. An app's DECLARED crons are rated separately, under cronTriggers. This rating covers the imperative surface only: ctx.scheduler.runAfter/runAt do dispatch on this host",
         },
         relationGraph: {
             level: "emulated",
             note: "Identical to Cloudflare: the same engine-level traversal over the same ctx.db reads, served here by better-sqlite3 through this host's per-shard handle. One process and one disk, so a deep expansion is if anything cheaper than on workerd; what it is not is a platform feature",
         },
         cronTriggers: {
-            level: "unsupported",
-            note: "No runtime walks the generated LUNORA_CRONS map into SchedulerHost.cron, so the conformance suite is that method's only caller and a declared cron does not fire on this host. Gate-bearing: codegen refuses an app that declares one here rather than letting it deploy green and never run. Schedule the work explicitly with ctx.scheduler.runAfter/runAt instead",
+            level: "emulated",
+            note: "createNodePlatform's crons option takes the generated LUNORA_CRONS map and arms each job on the scheduler host's durable cron table, keyed by job name, so two jobs on one schedule and function stay apart and a job the app stops declaring is deleted at the next start. A tick goes through the same onDispatch delivery a scheduled job does, under its own idempotency id. setTimeout over a durable row, not a platform trigger: a tick that falls while the process is down is skipped, not delivered late, and a failed tick is dropped rather than retried. Unlike Cloudflare there is no SchedulerDO, so there is no overlap lease (a slow run can overlap the next tick), no run history, and no deployment pause. Two processes on one database file both fire every tick. A job that targets a workflow is refused when the platform is constructed, because nothing here starts a workflow instance from a tick",
         },
         authJurisdictionMove: {
             level: "unsupported",

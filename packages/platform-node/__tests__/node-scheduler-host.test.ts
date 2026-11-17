@@ -75,6 +75,65 @@ describe("createNodeSchedulerHost", () => {
         });
     });
 
+    describe("declared crons", () => {
+        it("does not re-arm a cron removed while its tick was in flight", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            let release: (() => void) | undefined;
+            const onDispatch = vi.fn<(functionPath: string) => Promise<void>>(
+                async () =>
+                    new Promise<void>((resolve) => {
+                        release = resolve;
+                    }),
+            );
+            const host = createNodeSchedulerHost(database, { onDispatch });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:tick", name: "tick" }]);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+
+                host.declareCrons([]);
+                release?.();
+                await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("leaves a cron registered through cron() alone", async () => {
+            expect.assertions(1);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                await host.scheduler.cron?.("* * * * *", "reports:dynamic", {});
+                host.declareCrons([]);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledWith("reports:dynamic");
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+    });
+
     describe("job lifecycle (get)", () => {
         it("reports running while the handler runs, succeeded after it, and canceled for a cancelled job", async () => {
             expect.assertions(4);

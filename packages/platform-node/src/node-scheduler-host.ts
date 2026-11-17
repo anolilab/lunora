@@ -43,6 +43,14 @@
  * host contract's conformance suite registers stays accepted (`seconds:
  * "optional"`, as `@lunora/scheduler` does); a five-field expression keeps the
  * Cloudflare weekday numbering.
+ *
+ * An app's DECLARED crons (the generated `LUNORA_CRONS` map) go through
+ * `declareCrons`, not `cron`. `cron` keys a row by expression and function
+ * path, so two declared jobs that share both but differ in args would collapse
+ * into one, and it has no way to drop a job the app no longer declares, whose
+ * row would keep firing on every restart. `declareCrons` keys by job name and
+ * replaces the whole declared set; rows registered through `cron` are not
+ * touched by it.
  */
 
 import { randomUUID } from "node:crypto";
@@ -130,6 +138,18 @@ interface CronRow {
     key: string;
 }
 
+/** One declared cron job, as {@link NodeSchedulerHost.declareCrons} takes it. */
+interface NodeDeclaredCron {
+    args: Record<string, unknown>;
+    expression: string;
+    functionPath: string;
+    /** The job's `cronJobs()` name, unique across the app. Keys its row. */
+    name: string;
+}
+
+/** Key prefix of a declared cron's row, keeping them apart from rows `cron()` registered. */
+const DECLARED_CRON_PREFIX = "declared:";
+
 /** Options for {@link createNodeSchedulerHost}. */
 interface NodeSchedulerHostOptions {
     /**
@@ -159,6 +179,15 @@ interface NodeSchedulerHostOptions {
  * TCK's dead-letter legs need.
  */
 interface NodeSchedulerHost {
+    /**
+     * Make `crons` the app's declared cron set: upsert each one, arm it, and
+     * delete and disarm any declared row not in the list (a job the app removed
+     * or renamed). Every expression is parsed before anything is written, so an
+     * invalid one throws and leaves the previous set in place. Throws after
+     * `dispose()`.
+     */
+    declareCrons: (crons: ReadonlyArray<NodeDeclaredCron>) => void;
+
     /**
      * Clear every armed `setTimeout` (one-shot jobs and cron ticks alike) and
      * put the host into a terminal, closed state: afterwards `schedule()` and
@@ -304,9 +333,11 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     );
     const upsertCron = database.prepare<[string, string, string, Buffer]>(
         `INSERT INTO _lunora_scheduler_crons (key, expression, function_path, args) VALUES (?, ?, ?, ?)
-         ON CONFLICT (key) DO UPDATE SET expression = excluded.expression, args = excluded.args`,
+         ON CONFLICT (key) DO UPDATE SET expression = excluded.expression, function_path = excluded.function_path, args = excluded.args`,
     );
     const selectCrons = database.prepare<[], CronRow>("SELECT * FROM _lunora_scheduler_crons");
+    const selectCron = database.prepare<[string], CronRow>("SELECT * FROM _lunora_scheduler_crons WHERE key = ?");
+    const deleteCron = database.prepare<[string]>("DELETE FROM _lunora_scheduler_crons WHERE key = ?");
 
     /**
      * Read the connection's open/closed state *now*.
@@ -641,7 +672,13 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 // during `dispose()` must not arm the next one, since that
                 // timer would be minted after `cronTimers` was cleared.
                 if (!closed && isOpen()) {
-                    armCron(row);
+                    // Re-read rather than re-arm `row`: `declareCrons` may have
+                    // removed or changed this cron while the tick was in flight.
+                    const current = selectCron.get(row.key);
+
+                    if (current !== undefined) {
+                        armCron(current);
+                    }
                 }
             })().catch(() => {
                 // Unreachable — the body catches its own dispatch failure —
@@ -807,6 +844,49 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     }
 
     return {
+        declareCrons: (crons) => {
+            if (closed) {
+                throw new Error("platform closed: cannot declare crons");
+            }
+
+            for (const cron of crons) {
+                parse(cron.expression, CRON_PARSE_OPTIONS);
+            }
+
+            const rows: CronRow[] = crons.map((cron) => {
+                return {
+                    args: serialize(cron.args),
+                    expression: cron.expression,
+                    function_path: cron.functionPath,
+                    key: `${DECLARED_CRON_PREFIX}${cron.name}`,
+                };
+            });
+            const keep = new Set(rows.map((row) => row.key));
+            const stale = selectCrons.all().filter((row) => row.key.startsWith(DECLARED_CRON_PREFIX) && !keep.has(row.key));
+
+            database.transaction(() => {
+                for (const row of stale) {
+                    deleteCron.run(row.key);
+                }
+
+                for (const row of rows) {
+                    upsertCron.run(row.key, row.expression, row.function_path, row.args);
+                }
+            })();
+
+            for (const row of stale) {
+                const timer = cronTimers.get(row.key);
+
+                if (timer !== undefined) {
+                    clearTimeout(timer);
+                    cronTimers.delete(row.key);
+                }
+            }
+
+            for (const row of rows) {
+                armCron(row);
+            }
+        },
         dispose: () => {
             for (const timer of jobTimers.values()) {
                 clearTimeout(timer);
@@ -840,5 +920,5 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     };
 };
 
-export type { NodeSchedulerHost, NodeSchedulerHostOptions };
+export type { NodeDeclaredCron, NodeSchedulerHost, NodeSchedulerHostOptions };
 export { createNodeSchedulerHost };

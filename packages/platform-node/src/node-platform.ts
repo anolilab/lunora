@@ -25,7 +25,7 @@ import { createNodeShardKvStore } from "./node-kv-store";
 import type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 import { createNodeQueueHost } from "./node-queue-host";
 import { createNodeR2Bucket } from "./node-r2-bucket";
-import type { NodeSchedulerHostOptions } from "./node-scheduler-host";
+import type { NodeDeclaredCron, NodeSchedulerHostOptions } from "./node-scheduler-host";
 import { createNodeSchedulerHost } from "./node-scheduler-host";
 import type { NodeShardHostOptions } from "./node-shard-host";
 import { createNodeShardHost } from "./node-shard-host";
@@ -38,6 +38,29 @@ import { createNodeWorkflowStore } from "./node-workflow-store";
 
 /** The shard a request or job without a `shardKey` runs on; the dispatch route and the due-job delivery both default to it. */
 const DEFAULT_SHARD_KEY = "__root__";
+
+/**
+ * Flatten the generated `LUNORA_CRONS` map into the declared set the scheduler
+ * host arms. A workflow-targeted job is refused rather than skipped: nothing on
+ * this host starts a workflow instance from a tick, and a skipped job would be a
+ * declared cron that never fires. Codegen cannot catch it: `cronTriggers` rates
+ * function and workflow jobs together, so this throw at startup is the check.
+ */
+const walkDeclaredCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>): NodeDeclaredCron[] =>
+    Object.entries(crons).flatMap(([expression, jobs]) =>
+        jobs.map((job) => {
+            if (job.functionPath === undefined) {
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    job.workflow === undefined
+                        ? `@lunora/platform-node: cron job "${job.name}" has neither a function target nor a workflow target`
+                        : `@lunora/platform-node: cron job "${job.name}" starts workflow "${job.workflow}", which this host cannot do from a cron tick — schedule a function that calls ctx.workflows.get(name).create() instead`,
+                );
+            }
+
+            return { args: job.args ?? {}, expression, functionPath: job.functionPath, name: job.name };
+        }),
+    );
 
 /**
  * Deliver a due job to the shard through `invoke`, carrying its due time so the shard can record
@@ -68,6 +91,14 @@ export const createJobDelivery =
             );
         }
     };
+
+/** One entry of the generated `LUNORA_CRONS` map (`_generated/crons.ts`). */
+export interface NodeCronJob {
+    args?: Record<string, unknown>;
+    functionPath?: string;
+    name: string;
+    workflow?: string;
+}
 
 /** Every contract this package provides, composed for one Node process. */
 export interface NodePlatform<
@@ -214,6 +245,17 @@ export type NodePlatformOptions<
     Queues extends Record<string, { isLunoraQueue: true }> = Record<string, never>,
     Workflows extends Record<string, { isLunoraWorkflow: true }> = Record<string, never>,
 > = {
+    /**
+     * The app's declared crons — pass the generated `LUNORA_CRONS` map
+     * (`_generated/crons.ts`). Each job is armed on the scheduler and delivered
+     * through the same `onDispatch` a scheduled job uses, so it needs `onFetch`
+     * (or your own `onDispatch`) to reach a shard. When passed, the map is the
+     * whole declared set: a job declared by an earlier run and absent here is
+     * deleted, so pass `{}` rather than omitting it for an app with no crons.
+     * Omit it only when you do not want this host to manage declared crons.
+     */
+    crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
+
     /** Secrets for the dispatch route. Omit to leave the route refusing every request. */
     dispatch?: NodePlatformDispatchOptions;
 
@@ -293,10 +335,18 @@ export const createNodePlatform = <
         // outright, so a job is never delivered twice. Without `onFetch` there is no shard handler
         // to run it, and the host keeps its old behaviour of completing the delivery.
         const deliverJob = options.onFetch === undefined ? undefined : createJobDelivery(invoke, options.shardKey ?? "__root__");
-        const { dispose: disposeScheduler, scheduler } = createNodeSchedulerHost(database, { ...options, onDispatch: options.onDispatch ?? deliverJob });
+        const {
+            declareCrons,
+            dispose: disposeScheduler,
+            scheduler,
+        } = createNodeSchedulerHost(database, { ...options, onDispatch: options.onDispatch ?? deliverJob });
         const { socket: sockets } = createNodeSocketHost(database);
 
         teardown.push(disposeScheduler);
+
+        if (options.crons !== undefined) {
+            declareCrons(walkDeclaredCrons(options.crons));
+        }
 
         // Queues, workflows, object storage and global tables are all composed here
         // rather than left for a caller to assemble: `NODE_CAPABILITIES` rates all
