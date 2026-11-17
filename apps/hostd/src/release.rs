@@ -105,6 +105,15 @@ pub struct Caddy {
     pub version: String,
 }
 
+/// `install.sh` as the release publishes it. Pinned here so the command a control plane
+/// prints can check the installer it runs as root against a hash this signature covers.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Installer {
+    pub sha256: String,
+    pub size: u64,
+    pub url: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Manifest {
     pub caddy: Caddy,
@@ -112,6 +121,9 @@ pub struct Manifest {
     #[serde(rename = "createdAt")]
     pub created_at: String,
     pub hostd: Component,
+    /// Absent from manifests signed before the field existed; `hostd-release` always writes it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub installer: Option<Installer>,
     #[serde(rename = "releaseId")]
     pub release_id: String,
     pub schema: u64,
@@ -271,6 +283,16 @@ fn read_artifacts(value: &Value, path: &str) -> Read<Vec<Artifact>> {
     Ok(artifacts)
 }
 
+fn read_installer(value: &Value, path: &str) -> Read<Installer> {
+    let record = read_object(value, path, &["url", "sha256", "size"], &[])?;
+
+    Ok(Installer {
+        sha256: read_matching(field(record, "sha256"), &format!("{path}.sha256"), is_sha256, "64 lowercase hex digits")?,
+        size: read_integer(field(record, "size"), &format!("{path}.size"), 1)?,
+        url: read_https_url(field(record, "url"), &format!("{path}.url"))?,
+    })
+}
+
 fn read_component(value: &Value, path: &str) -> Read<Component> {
     let record = read_object(value, path, &["version", "artifacts"], &[])?;
 
@@ -350,7 +372,7 @@ fn platforms_of(artifacts: &[Artifact]) -> Vec<Platform> {
 }
 
 fn read_manifest(value: &Value, path: &str) -> Read<Manifest> {
-    let record = read_object(value, path, &["schema", "releaseId", "createdAt", "hostd", "celld", "caddy"], &[])?;
+    let record = read_object(value, path, &["schema", "releaseId", "createdAt", "hostd", "celld", "caddy"], &["installer"])?;
 
     // `1` as JavaScript compares it: `1.0` is the same number.
     if field(record, "schema").as_f64() != Some(1.0) {
@@ -362,6 +384,7 @@ fn read_manifest(value: &Value, path: &str) -> Read<Manifest> {
         celld: read_component(field(record, "celld"), &format!("{path}.celld"))?,
         created_at: read_created_at(field(record, "createdAt"), &format!("{path}.createdAt"))?,
         hostd: read_component(field(record, "hostd"), &format!("{path}.hostd"))?,
+        installer: record.get("installer").map(|installer| read_installer(installer, &format!("{path}.installer"))).transpose()?,
         release_id: read_id(field(record, "releaseId"), &format!("{path}.releaseId"))?,
         schema: RELEASE_SCHEMA,
     };
@@ -780,6 +803,37 @@ mod tests {
 
         unknown["manifest"]["extra"] = json!(1);
         assert_eq!(verify_envelope(&unknown, &trusted()).unwrap_err().code, "INVALID_ENVELOPE");
+    }
+
+    #[test]
+    fn signs_the_installer_pin_and_still_verifies_a_manifest_without_one() {
+        let mut with_installer = manifest();
+
+        with_installer["installer"] = json!({ "url": "https://example.com/install.sh", "sha256": "c".repeat(64), "size": 12 });
+
+        let envelope = sign_for_test(&with_installer, &key());
+        let verified = verify_envelope(&envelope, &trusted()).unwrap();
+
+        assert_eq!(verified.manifest.installer.unwrap().sha256, "c".repeat(64));
+
+        let mut tampered = envelope;
+
+        tampered["manifest"]["installer"]["sha256"] = json!("d".repeat(64));
+        assert_eq!(verify_envelope(&tampered, &trusted()).unwrap_err().code, "BAD_SIGNATURE");
+
+        // Signed before the field existed: still a valid release.
+        assert!(verify_envelope(&sign_for_test(&manifest(), &key()), &trusted()).unwrap().manifest.installer.is_none());
+
+        let path_of = |installer: Value| {
+            let mut value = manifest();
+
+            value["installer"] = installer;
+            validate_manifest(&value).unwrap_err().path
+        };
+
+        assert_eq!(path_of(json!({ "url": "https://example.com/install.sh", "sha256": "C".repeat(64), "size": 12 })), "$.installer.sha256");
+        assert_eq!(path_of(json!({ "url": "http://example.com/install.sh", "sha256": "c".repeat(64), "size": 12 })), "$.installer.url");
+        assert_eq!(path_of(json!({ "url": "https://example.com/install.sh", "sha256": "c".repeat(64), "size": 12, "x": 1 })), "$.installer.x");
     }
 
     #[test]

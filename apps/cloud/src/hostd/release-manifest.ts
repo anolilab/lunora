@@ -61,6 +61,19 @@ interface HostdReleaseCaddy extends HostdReleaseComponent {
 }
 
 /**
+ * `install.sh` as the release publishes it. Pinned so the install command the
+ * control plane prints can check the script it runs as root against a hash the
+ * release signature covers.
+ */
+interface HostdReleaseInstaller {
+    /** Lowercase hex SHA-256 of the bytes at `url`. */
+    sha256: string;
+    size: number;
+    /** `https:` URL without credentials. */
+    url: string;
+}
+
+/**
  * Everything a box installs for one release. `hostd` and `caddy` artifacts are
  * built and hosted by Lunora (Caddy from pinned source, with its modules);
  * `celld` pins upstream release binaries by checksum.
@@ -71,6 +84,8 @@ interface HostdReleaseManifest {
     /** UTC timestamp, `YYYY-MM-DDTHH:MM:SS[.sss]Z`. */
     createdAt: string;
     hostd: HostdReleaseComponent;
+    /** Absent from manifests signed before the field existed; the release tooling always writes it. */
+    installer?: HostdReleaseInstaller;
     /** The id an `upgrade` job names; same alphabet as every protocol id, `[A-Za-z0-9_-]{1,128}`. */
     releaseId: string;
     schema: typeof HOSTD_RELEASE_SCHEMA;
@@ -303,6 +318,16 @@ const readArtifacts = (value: unknown, path: string): HostdReleaseArtifact[] => 
     return artifacts;
 };
 
+const readInstaller = (value: unknown, path: string): HostdReleaseInstaller => {
+    const record = readObject(value, path, ["url", "sha256", "size"]);
+
+    return {
+        sha256: readMatching(record.sha256, `${path}.sha256`, SHA256_PATTERN, "64 lowercase hex digits"),
+        size: readInteger(record.size, `${path}.size`, 1),
+        url: readHttpsUrl(record.url, `${path}.url`),
+    };
+};
+
 const readComponent = (value: unknown, path: string): HostdReleaseComponent => {
     const record = readObject(value, path, ["version", "artifacts"]);
 
@@ -366,7 +391,7 @@ const platformsOf = (component: HostdReleaseComponent): string =>
         .join(",");
 
 const readManifest = (value: unknown, path: string): HostdReleaseManifest => {
-    const record = readObject(value, path, ["schema", "releaseId", "createdAt", "hostd", "celld", "caddy"]);
+    const record = readObject(value, path, ["schema", "releaseId", "createdAt", "hostd", "celld", "caddy"], ["installer"]);
 
     if (record.schema !== HOSTD_RELEASE_SCHEMA) {
         fail(`${path}.schema`, `must be ${String(HOSTD_RELEASE_SCHEMA)}`);
@@ -380,6 +405,10 @@ const readManifest = (value: unknown, path: string): HostdReleaseManifest => {
         releaseId: readId(record.releaseId, `${path}.releaseId`),
         schema: HOSTD_RELEASE_SCHEMA,
     };
+
+    if (record.installer !== undefined) {
+        manifest.installer = readInstaller(record.installer, `${path}.installer`);
+    }
 
     // A box installs all three for its own platform, so a platform one component
     // lacks would leave that box half-upgraded.
@@ -490,6 +519,7 @@ export type {
     HostdReleaseCaddy,
     HostdReleaseComponent,
     HostdReleaseEnvelope,
+    HostdReleaseInstaller,
     HostdReleaseManifest,
     HostdReleasePlatform,
     ReleaseValidationError,

@@ -354,6 +354,37 @@ describe(verifyReleaseManifest, () => {
         expect(releaseKeyId(keys.publicRaw)).toBe(envelope.keyId);
     });
 
+    it("keeps the signed installer pin, and refuses one changed after signing", async () => {
+        expect.assertions(3);
+
+        const keys = keyPair();
+        const installer = { sha256: "c".repeat(64), size: 4096, url: "https://example.com/install.sh" };
+        const envelope = signReleaseManifest({ ...makeManifest(), installer }, keys.privateKey);
+        const trusted = { [envelope.keyId]: keys.publicPem };
+        const verified = await verifyReleaseManifest(JSON.parse(JSON.stringify(envelope, undefined, 4)), trusted);
+
+        expect(verified).toStrictEqual({ envelope, ok: true });
+        expect(verified.ok && verified.envelope.manifest.installer).toStrictEqual(installer);
+
+        const tampered = clone(envelope);
+
+        (tampered.manifest.installer as { sha256: string }).sha256 = "d".repeat(64);
+
+        await expect(verifyReleaseManifest(tampered, trusted)).resolves.toMatchObject({ error: { code: "BAD_SIGNATURE" }, ok: false });
+    });
+
+    it("refuses a malformed installer pin at its field", () => {
+        expect.assertions(2);
+
+        const installer = { sha256: "C".repeat(64), size: 1, url: "https://example.com/install.sh" };
+
+        expect(validateReleaseManifest({ ...makeManifest(), installer })).toMatchObject({ error: { path: "$.installer.sha256" }, ok: false });
+        expect(validateReleaseManifest({ ...makeManifest(), installer: { ...installer, sha256: SHA_A, x: 1 } })).toMatchObject({
+            error: { path: "$.installer.x" },
+            ok: false,
+        });
+    });
+
     it("refuses a manifest changed after signing", async () => {
         const { envelope, trusted } = signed();
         const tampered = clone(envelope);

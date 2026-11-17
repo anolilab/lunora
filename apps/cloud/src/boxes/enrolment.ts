@@ -41,6 +41,9 @@ export const mintBoxSlug = (): string => {
     return `b${[...bytes].map((byte) => (byte % 36).toString(36)).join("")}`;
 };
 
+/** The only shape interpolated into the command as a hash: it lands in a shell line the customer runs as root. */
+const SHA256_PATTERN = /^[\da-f]{64}$/u;
+
 /**
  * The command the studio shows next to a fresh token: install the stable
  * `lunora-hostd` release this control plane offers, then enrol. `--control-plane`
@@ -48,19 +51,24 @@ export const mintBoxSlug = (): string => {
  * releases from (protocol README §5.2) — always this control plane's own public
  * origin (`LUNORA_ORIGIN_URL`).
  *
+ * `installerSha256` is install.sh's hash from the release's verified manifest.
+ * With it, `sha256sum -c` gates the root run on the script being the one the
+ * release key signed for; a release signed before the manifest pinned its
+ * installer has none, and gets the hash printed to compare by hand.
+ *
  * The token is NOT in it. install.sh asks for the token and the bucket's access
  * key at a hidden prompt (`read -rs`), so neither lands in shell history or in
  * `sudo`'s logged argv; the studio shows the token on its own, to paste when
  * prompted. The bucket is the customer's, so it stays a placeholder.
  */
-export const installCommandFor = (input: { controlPlaneOrigin: string; hostdVersion: string }): string => {
+export const installCommandFor = (input: { controlPlaneOrigin: string; hostdVersion: string; installerSha256?: string }): string => {
     const version = input.hostdVersion;
+    const install = `sudo bash install.sh --control-plane ${stripTrailingSlashes(input.controlPlaneOrigin)} --bucket <bucket> --version ${version}`;
+    const download = `curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v${version}/install.sh`;
 
-    // The three lines `apps/hostd/README.md` § Install documents: fetch the
-    // release's install.sh, compare its hash with the release notes, then run it as root.
-    return [
-        `curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v${version}/install.sh`,
-        "sha256sum install.sh   # compare with the release notes",
-        `sudo bash install.sh --control-plane ${stripTrailingSlashes(input.controlPlaneOrigin)} --bucket <bucket> --version ${version}`,
-    ].join("\n");
+    if (input.installerSha256 !== undefined && SHA256_PATTERN.test(input.installerSha256)) {
+        return [download, `echo "${input.installerSha256}  install.sh" | sha256sum -c - && ${install}`].join("\n");
+    }
+
+    return [download, "sha256sum install.sh   # compare with the release notes", install].join("\n");
 };

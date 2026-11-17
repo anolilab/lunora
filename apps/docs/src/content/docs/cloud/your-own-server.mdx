@@ -65,29 +65,31 @@ the box's public hostname uses a random label, so the name never appears in DNS.
 
 ### Copy the install command
 
-The studio shows a three-line command with a one-time **enrolment token** in it.
-The token works once and expires after 15 minutes. It is shown once and is not
-stored, so it cannot be shown again. If it expires, enrol again.
+The studio shows an install command and, separately, a one-time **enrolment
+token**. The token works once and expires after 15 minutes. It is shown once and
+is not stored, so it cannot be shown again. If it expires, enrol again.
 
-The command has this shape. The studio fills in the token, the control-plane
-origin and the release version for you:
+The command has this shape. The studio fills in the installer's hash, the
+control-plane origin and the release version for you:
 
 ```sh
 curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
-sha256sum install.sh   # compare with the release notes
-sudo LUNORA_HOSTD_ENROL_TOKEN=<token> AWS_ACCESS_KEY_ID=<bucket key id> AWS_SECRET_ACCESS_KEY=<bucket secret> \
-    bash install.sh --control-plane <control plane origin> --bucket <bucket> --version <version>
+echo "<sha256>  install.sh" | sha256sum -c - && sudo bash install.sh --control-plane <control plane origin> --bucket <bucket> --version <version>
 ```
+
+`sha256sum -c` checks the downloaded installer against the hash in the release's
+signed manifest, and the installer only runs as root if it matches.
 
 </Step>
 <Step>
 
 ### Run it on the server as root
 
-Fill in your bucket and its key. For a store other than AWS S3, add
-`--endpoint <s3 url>`, and add `--region <region>` if your store needs one. The
-token and the bucket credentials reach the agent through its environment, not
-its command line, and are never printed. The bucket credentials never leave the
+Fill in your bucket. For a store other than AWS S3, add `--endpoint <s3 url>`,
+and add `--region <region>` if your store needs one. The installer asks for the
+enrolment token and the bucket's key at a hidden prompt, so neither lands in
+your shell history. They reach the agent through its environment, not its
+command line, and are never printed. The bucket credentials never leave the
 server.
 
 The installer then does the following:

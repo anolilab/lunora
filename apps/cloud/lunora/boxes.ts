@@ -4,7 +4,7 @@ import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
 import { isBoxPublicKey } from "../src/boxes/encoding";
 import { ENROLMENT_TTL_MS, installCommandFor, mintBoxSlug, mintEnrolmentToken } from "../src/boxes/enrolment";
 import type { StoredReleaseSummary } from "../src/boxes/hostd-releases";
-import { newestStableRelease } from "../src/boxes/hostd-releases";
+import { installerSha256Of, newestStableRelease } from "../src/boxes/hostd-releases";
 import { boxDomainOf } from "../src/boxes/urls";
 import { sha256Hex } from "../src/deploy/keys";
 import type { BoxVersions, FleetSummary } from "../src/hostd/protocol";
@@ -152,8 +152,9 @@ export const createEnrolment = action
 
         await assertWithinQuota(context, organizationId, "boxes", (await activeBoxCount(context, organizationId)) + pending);
 
-        const stable = await latestStableVersions(context);
-        const hostdVersion = stable?.hostd;
+        const { page: releases } = await context.db.hostdReleases.findMany({});
+        const stable = newestStableRelease(releases as (StoredReleaseSummary & { envelope?: null | string })[]);
+        const hostdVersion = stable?.versions.hostd;
 
         // Nothing to install yet: a release is stored only once it verifies
         // against the pinned release keys (`POST /v1/hostd/releases`).
@@ -180,7 +181,9 @@ export const createEnrolment = action
             target: name.trim(),
         });
 
-        return { expiresAt, installCommand: installCommandFor({ controlPlaneOrigin: origin, hostdVersion }), token };
+        const installerSha256 = stable?.envelope == null ? undefined : installerSha256Of(stable.envelope);
+
+        return { expiresAt, installCommand: installCommandFor({ controlPlaneOrigin: origin, hostdVersion, installerSha256 }), token };
     });
 
 /** An organization's boxes, revoked ones included (members). */

@@ -14,6 +14,7 @@ export type {
     HostdReleaseCaddy,
     HostdReleaseComponent,
     HostdReleaseEnvelope,
+    HostdReleaseInstaller,
     HostdReleaseManifest,
     HostdReleasePlatform,
     ReleaseValidationError,

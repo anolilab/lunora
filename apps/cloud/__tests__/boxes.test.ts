@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { authorizeDiagnose, createEnrolment, enrol, get, list, rename, revoke } from "../lunora/boxes";
 import { isPublicIpv4, isPublicIpv6 } from "../src/boxes/addresses";
 import { fromBase64Url, isBoxPublicKey, toBase64Url, verifyBoxSignature } from "../src/boxes/encoding";
-import { isEnrolmentTokenShape, mintBoxSlug } from "../src/boxes/enrolment";
+import { installCommandFor, isEnrolmentTokenShape, mintBoxSlug } from "../src/boxes/enrolment";
 import { sha256Hex } from "../src/deploy/keys";
 import type { FakeCtx, Row } from "./_helpers/fake-ctx";
 import { makeCtx, owner } from "./_helpers/fake-ctx";
@@ -118,11 +118,60 @@ describe("box addresses", () => {
     );
 });
 
+describe(installCommandFor, () => {
+    const SHA = "e".repeat(64);
+
+    it("checks install.sh against the manifest's hash before running it as root", () => {
+        expect.assertions(1);
+
+        expect(installCommandFor({ controlPlaneOrigin: "https://cloud.lunora.test/", hostdVersion: "1.2.0", installerSha256: SHA }).split("\n")).toStrictEqual([
+            "curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v1.2.0/install.sh",
+            `echo "${SHA}  install.sh" | sha256sum -c - && sudo bash install.sh --control-plane https://cloud.lunora.test --bucket <bucket> --version 1.2.0`,
+        ]);
+    });
+
+    it("falls back to a hash to compare by hand without one, and never interpolates a malformed one", () => {
+        expect.assertions(2);
+
+        const fallback = [
+            "curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v1.2.0/install.sh",
+            "sha256sum install.sh   # compare with the release notes",
+            "sudo bash install.sh --control-plane https://cloud.lunora.test --bucket <bucket> --version 1.2.0",
+        ];
+
+        expect(installCommandFor({ controlPlaneOrigin: "https://cloud.lunora.test", hostdVersion: "1.2.0" }).split("\n")).toStrictEqual(fallback);
+        expect(
+            installCommandFor({ controlPlaneOrigin: "https://cloud.lunora.test", hostdVersion: "1.2.0", installerSha256: `${SHA}"; rm -rf / #` }).split("\n"),
+        ).toStrictEqual(fallback);
+    });
+});
+
 describe("boxes.createEnrolment", () => {
     /** The action's ctx: the mutation double plus the env it reads its origin from. */
     const withOrigin = ({ ctx, ops }: FakeCtx, origin: null | string = "https://cloud.lunora.test/"): FakeCtx => {
         return { ctx: { ...ctx, env: origin === null ? {} : { LUNORA_ORIGIN_URL: origin } }, ops };
     };
+
+    it("gates install.sh on the hash the newest stable release's signed manifest pins", async () => {
+        expect.assertions(1);
+
+        const sha = "c".repeat(64);
+        const envelope = JSON.stringify({
+            keyId: "k",
+            manifest: { installer: { sha256: sha, size: 1, url: "https://example.com/install.sh" } },
+            signature: "s",
+        });
+        const releases = RELEASES.map((release) => (release._id === "rel_2" ? { ...release, envelope } : { ...release, envelope: JSON.stringify({}) }));
+        const { ctx } = withOrigin(
+            makeCtx({ boxEnrolments: [], boxes: [], hostdReleases: releases, members: [owner("org_1")], payment_subscriptions: PRO }, { now: NOW }),
+        );
+
+        const result = await createEnrolment.handler(ctx, { name: "edge", organizationId: "org_1" as never });
+
+        expect(result.installCommand.split("\n")[1]).toBe(
+            `echo "${sha}  install.sh" | sha256sum -c - && sudo bash install.sh --control-plane https://cloud.lunora.test --bucket <bucket> --version 1.2.0`,
+        );
+    });
 
     it("returns the token once and stores only its hash, valid for 15 minutes", async () => {
         const { ctx, ops } = withOrigin(

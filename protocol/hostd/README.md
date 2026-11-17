@@ -409,7 +409,12 @@ The published file (`manifest.json`, a GitHub Release asset of
                 }
             ]
         },
-        "caddy": { "version": "v2.11.6", "modules": ["github.com/mholt/caddy-ratelimit"], "artifacts": ["…"] }
+        "caddy": { "version": "v2.11.6", "modules": ["github.com/mholt/caddy-ratelimit"], "artifacts": ["…"] },
+        "installer": {
+            "url": "https://github.com/anolilab/lunora/releases/download/hostd-v1.0.0/install.sh",
+            "sha256": "<64 hex>",
+            "size": 31337
+        }
     },
     "signature": "<86 base64url characters>"
 }
@@ -430,9 +435,13 @@ The published file (`manifest.json`, a GitHub Release asset of
 | `…artifacts[].sha256`                  | 64 **lowercase** hex digits: SHA-256 of the bytes at `url`                                              |
 | `…artifacts[].size`                    | integer ≥ 1: byte length of the bytes at `url`                                                          |
 | `…artifacts[].compression`?            | `"gzip"`: the bytes at `url` are a gzip stream of the binary. Hash and size are of the download         |
+| `manifest.installer`?                  | `{url, sha256, size}` of `install.sh`, same formats as an artifact's; absent from older manifests       |
 
 Validation is strict as in §4: an unknown field anywhere rejects the file.
-`hostd` and `caddy` artifacts are built by Lunora's release workflow (Caddy with
+`installer` pins the `install.sh` published on the same release, so the
+command a control plane prints can check it (`sha256sum -c`) before it runs as
+root; `hostd-release` always writes it, and a verifier accepts a manifest
+without it. `hostd` and `caddy` artifacts are built by Lunora's release workflow (Caddy with
 xcaddy, from a pinned Caddy version and module commits, gzipped) and published on
 the same GitHub Release; `celld` artifacts pin upstream release assets by
 checksum.

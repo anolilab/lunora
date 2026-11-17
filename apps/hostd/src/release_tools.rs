@@ -26,6 +26,9 @@ use crate::release::{
     Envelope, Platform, compare_versions, key_id_of, public_pem, sha256_file, sign_manifest, validate_manifest, verify_artifact, verify_envelope,
 };
 
+/// The installer's file name, in the artifacts directory and on the release.
+const INSTALLER: &str = "install.sh";
+
 /// What every release ships for, in the order the manifest lists them.
 const PLATFORMS: [Platform; 2] = [Platform::LinuxArm64, Platform::LinuxX64];
 
@@ -118,6 +121,23 @@ fn hash_artifacts(directory: &Path, base: &str, name: impl Fn(Platform) -> Strin
         .collect()
 }
 
+/// Hashes `install.sh` in `directory`, published at `{base}/install.sh`. Required: the command a
+/// control plane prints checks the installer against this entry before running it as root.
+fn hash_installer(directory: &Path, base: &str) -> Result<Value, String> {
+    let file = directory.join(INSTALLER);
+    let unreadable = |error: std::io::Error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!("{} is missing: a release pins its installer", file.display())
+        } else {
+            format!("{}: {error}", file.display())
+        }
+    };
+    let size = std::fs::metadata(&file).map_err(unreadable)?.len();
+    let sha256 = sha256_file(&file).map_err(unreadable)?;
+
+    Ok(json!({ "sha256": sha256, "size": size, "url": format!("{base}/{INSTALLER}") }))
+}
+
 /// `YYYY-MM-DDTHH:MM:SS.sssZ` for a time since the Unix epoch, as `Date#toISOString` writes it.
 fn iso_timestamp(since_epoch: Duration) -> String {
     let seconds = since_epoch.as_secs();
@@ -208,6 +228,7 @@ pub fn make_manifest(
     let artifacts_dir = absolute(&options.artifacts_dir.clone().unwrap_or_else(|| package_dir.join("dist").join("release")))?;
     let hostd_artifacts = hash_artifacts(&artifacts_dir, base, |platform| format!("lunora-hostd-{}", platform.as_str()), None)?;
     let caddy_artifacts = hash_artifacts(&artifacts_dir, base, |platform| format!("caddy-{}.gz", platform.as_str()), Some("gzip"))?;
+    let installer = hash_installer(&artifacts_dir, base)?;
     let release_id = options.release_id.clone().unwrap_or_else(|| {
         let id: String =
             version.chars().map(|character| if character.is_ascii_alphanumeric() || character == '_' || character == '-' { character } else { '_' }).collect();
@@ -219,6 +240,7 @@ pub fn make_manifest(
         "celld": pins.get("celld").cloned().unwrap_or(Value::Null),
         "createdAt": created_at,
         "hostd": { "artifacts": hostd_artifacts, "version": version },
+        "installer": installer,
         "releaseId": release_id,
         "schema": 1,
     });
@@ -260,6 +282,13 @@ pub fn verify_manifest(envelope_path: &Path, artifacts_dir: Option<&Path>, trust
             let file = directory.join(file_name_of(&artifact.url));
 
             verify_artifact(&file, &artifact.sha256, artifact.size).map_err(|error| format!("{}: {}: {}", file.display(), error.code, error.message))?;
+            lines.push(format!("ok {}", file.display()));
+        }
+
+        if let Some(installer) = &manifest.installer {
+            let file = directory.join(file_name_of(&installer.url));
+
+            verify_artifact(&file, &installer.sha256, installer.size).map_err(|error| format!("{}: {}: {}", file.display(), error.code, error.message))?;
             lines.push(format!("ok {}", file.display()));
         }
     }
@@ -427,6 +456,8 @@ mod tests {
             std::fs::write(artifacts.join(format!("caddy-{}.gz", platform.as_str())), format!("caddy {}", platform.as_str())).unwrap();
         }
 
+        std::fs::write(artifacts.join(INSTALLER), "#!/usr/bin/env bash\n").unwrap();
+
         Release { _dir: dir, artifacts, key: SigningKey::from_bytes(&[0x4c; 32]), package }
     }
 
@@ -466,15 +497,29 @@ mod tests {
         assert_eq!(envelope["manifest"]["caddy"]["artifacts"][1]["compression"], "gzip");
         assert_eq!(envelope["manifest"]["caddy"]["modules"], json!(["github.com/mholt/caddy-ratelimit"]));
         assert_eq!(envelope["manifest"]["celld"]["version"], "v0.6.0");
+        assert_eq!(
+            envelope["manifest"]["installer"],
+            json!({
+                "sha256": crate::release::sha256_file(&release.artifacts.join(INSTALLER)).unwrap(),
+                "size": 20,
+                "url": "https://example.com/download/hostd-v1.2.3-alpha.1/install.sh"
+            })
+        );
 
         let lines = verify_manifest(&out, Some(&release.artifacts), &trusted).unwrap();
 
-        assert_eq!(lines.len(), 5);
-        assert!(lines[4].ends_with("release hostd-v1_2_3-alpha_1, hostd 1.2.3-alpha.1, celld v0.6.0, caddy v2.11.6"));
+        assert_eq!(lines.len(), 6);
+        assert!(lines[4].ends_with("install.sh"));
+        assert!(lines[5].ends_with("release hostd-v1_2_3-alpha_1, hostd 1.2.3-alpha.1, celld v0.6.0, caddy v2.11.6"));
 
         std::fs::write(release.artifacts.join("caddy-linux-x64.gz"), "caddy linux-x65").unwrap();
 
         assert!(verify_manifest(&out, Some(&release.artifacts), &trusted).unwrap_err().contains("caddy-linux-x64.gz: HASH_MISMATCH: "));
+
+        std::fs::write(release.artifacts.join("caddy-linux-x64.gz"), "caddy linux-x64").unwrap();
+        std::fs::write(release.artifacts.join(INSTALLER), "#!/usr/bin/env bash\n#\n").unwrap();
+
+        assert!(verify_manifest(&out, Some(&release.artifacts), &trusted).unwrap_err().contains("install.sh: "));
         assert!(verify_manifest(&out, None, &BTreeMap::new()).unwrap_err().contains("manifest.json: UNKNOWN_KEY: "));
     }
 
@@ -501,6 +546,10 @@ mod tests {
             make(&MakeOptions { version: Some("1 0".into()), ..options(&release) }, Some(&pem)),
             "invalid manifest: $.hostd.version must be 1-64 characters of [A-Za-z0-9_.+~-]"
         );
+
+        std::fs::remove_file(release.artifacts.join(INSTALLER)).unwrap();
+        assert!(make(&options(&release), Some(&pem)).ends_with("install.sh is missing: a release pins its installer"));
+        std::fs::write(release.artifacts.join(INSTALLER), "#!/usr/bin/env bash\n").unwrap();
 
         std::fs::remove_file(release.artifacts.join("caddy-linux-arm64.gz")).unwrap();
         assert!(make(&options(&release), Some(&pem)).ends_with("caddy-linux-arm64.gz is missing: every platform needs its binary"));

@@ -13,6 +13,21 @@ export const versionsOf = (envelope: HostdReleaseEnvelope): BoxVersions => {
     return { caddy: envelope.manifest.caddy.version, celld: envelope.manifest.celld.version, hostd: envelope.manifest.hostd.version };
 };
 
+/**
+ * The SHA-256 of install.sh from a stored envelope — only ever one that verified
+ * before it was stored. `undefined` for a release signed before the manifest
+ * pinned its installer.
+ */
+export const installerSha256Of = (envelope: string): string | undefined => {
+    try {
+        const sha256: unknown = (JSON.parse(envelope) as Partial<HostdReleaseEnvelope>).manifest?.installer?.sha256;
+
+        return typeof sha256 === "string" ? sha256 : undefined;
+    } catch {
+        return undefined;
+    }
+};
+
 /** One string per version set, so a fleet-upgrade plan can compare a box to a release. */
 export const versionKey = (versions: BoxVersions): string => `hostd ${versions.hostd} / celld ${versions.celld} / caddy ${versions.caddy}`;
 

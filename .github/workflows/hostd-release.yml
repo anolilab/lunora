@@ -368,9 +368,9 @@
                   "merge-multiple": true
 
             # The installer and the unit it writes ship with the release they install.
-            # The manifest's schema has no place for them: install.sh is fetched over
-            # HTTPS from this release and pins the release keys itself, and the release
-            # notes carry both files' SHA-256 for anyone who wants to check by hand.
+            # Copied before the manifest step: hostd-release pins install.sh's SHA-256 and
+            # size in the signed manifest (`installer`), and the control plane's install
+            # command checks it with `sha256sum -c` before running the script as root.
             - "name": "Add the installer"
               "run": |
                   cp apps/hostd/install/install.sh apps/hostd/install/lunora-hostd.service apps/hostd/dist/release/

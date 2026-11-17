@@ -19,10 +19,15 @@ derivative of either; amd64 or arm64, 2 GB of memory, systemd), as root:
 
 ```sh
 curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
-sha256sum install.sh   # compare with the release notes
+echo "<install.sh sha256>  install.sh" | sha256sum -c - && \
 sudo bash install.sh --control-plane https://<control plane origin> --bucket <bucket> --version <version> \
     [--endpoint <s3 url>] [--region <region>] [--single-trust]
 ```
+
+`<install.sh sha256>` is `manifest.installer.sha256` in the release's signed
+`manifest.json`; the studio fills it in from the manifest it verified. A
+release signed before the manifest pinned its installer has no such field:
+compare `sha256sum install.sh` with the release notes instead.
 
 It then asks for the **enrolment token** the studio shows — paste it; nothing
 is echoed — and for the bucket's access key id and secret access key (the
@@ -94,9 +99,14 @@ and the token separately, to paste when asked:
 
 ```sh
 curl -fsSLO https://github.com/anolilab/lunora/releases/download/hostd-v<version>/install.sh
-sha256sum install.sh   # compare with the release notes
-sudo bash install.sh --control-plane <origin> --bucket <bucket> --version <version>
+echo "<sha256>  install.sh" | sha256sum -c - && sudo bash install.sh --control-plane <origin> --bucket <bucket> --version <version>
 ```
+
+`<sha256>` is install.sh's hash from the stored release's verified manifest
+(`manifest.installer`), so the root run only happens for the script the release
+key signed for. A release whose manifest predates that field gets
+`sha256sum install.sh   # compare with the release notes` on a line of its own
+instead.
 
 followed by "paste the token when prompted" and the token in a copy field of
 its own. `<origin>` is this control plane (`LUNORA_ORIGIN_URL`; `enrol`
@@ -114,7 +124,8 @@ the token in shell history and sudo's log; `--token` is now refused.
 1. **Trust root: the release keys pinned in `install.sh`** (`trusted_key()`, the
    same set as [`trusted-release-keys.json`](../../protocol/hostd/trusted-release-keys.json);
    a test in `tests/install_script.rs` keeps them equal). `install.sh` itself comes over HTTPS from the GitHub Release,
-   with its SHA-256 in the release notes and a provenance attestation.
+   with its SHA-256 and size pinned in the signed manifest (`installer`), which
+   the studio's command checks before running it, and a provenance attestation.
 2. It downloads `manifest.json`, looks its `keyId` up among the pinned keys
    (never a key the manifest brings), refuses a placeholder, checks that the
    pinned key's fingerprint is that key id (`ed25519-` + 16 hex digits of
