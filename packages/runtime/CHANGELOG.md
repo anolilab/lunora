@@ -1,3 +1,7 @@
+## @lunora/runtime [1.0.0-alpha.290](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.289...@lunora/runtime@1.0.0-alpha.290) (2026-11-16)
+
+- perf(codegen)!: load studio documents on their routes and ship them as static assets (#1499)
+
 ## @lunora/runtime [1.0.0-alpha.289](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.288...@lunora/runtime@1.0.0-alpha.289) (2026-11-16)
 
 - fix(auth): guard the last owner in removeMember and updateMemberRole (#1557)

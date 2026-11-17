@@ -21,7 +21,7 @@ const Byline: FC<{ name?: string }> = ({ name }) => (name === undefined ? null :
 
 const Featured: FC<{ post: BlogPostSummary }> = ({ post }) => (
     <Link className="group flex flex-col gap-6" params={{ slug: post.slug }} to="/blog/$slug">
-        <Cover category={post.category} description={post.description} eager image={post.image} title={post.title} />
+        <Cover eager image={post.image} slug={post.slug} title={post.title} />
         <div className="flex flex-col gap-4">
             <MetaLine category={post.category} publishedAt={post.publishedAt} />
             <h2 className="max-w-2xl text-h2 font-bold text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h2>
@@ -39,7 +39,7 @@ const Featured: FC<{ post: BlogPostSummary }> = ({ post }) => (
  */
 const FeaturedSide: FC<{ post: BlogPostSummary }> = ({ post }) => (
     <Link className="group flex flex-1 flex-col gap-4" params={{ slug: post.slug }} to="/blog/$slug">
-        <Cover category={post.category} description={post.description} image={post.image} title={post.title} />
+        <Cover image={post.image} slug={post.slug} title={post.title} />
         <div className="flex flex-col gap-2.5">
             <MetaLine category={post.category} publishedAt={post.publishedAt} />
             <h3 className="text-h3 font-semibold text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
@@ -56,7 +56,7 @@ const ArticleRow: FC<{ post: BlogPostSummary }> = ({ post }) => {
         <li className="border-t border-hairline last:border-b">
             <Link className="group flex items-center gap-5 py-5 transition-colors hover:bg-wash sm:gap-7" params={{ slug: post.slug }} to="/blog/$slug">
                 <div className="w-28 flex-none sm:w-40">
-                    <Cover category={post.category} description={post.description} image={post.image} title={post.title} />
+                    <Cover image={post.image} slug={post.slug} title={post.title} />
                 </div>
                 <div className="flex min-w-0 flex-1 flex-col gap-2">
                     <MetaLine category={post.category} publishedAt={post.publishedAt} />

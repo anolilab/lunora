@@ -1,8 +1,12 @@
 .source
 .tmp-external-docs
 .tanstack/tmp
-.netlify
+.wrangler
+.dev.vars
+.alchemy
 public/assets
+# Written by scripts/generate-og-images.mjs on every build.
+public/og
 
 !src/data
 src/content/docs/packages

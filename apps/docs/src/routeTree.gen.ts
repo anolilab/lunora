@@ -25,8 +25,8 @@ import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as SponsorsRouteImport } from './routes/sponsors'
 import { Route as StartRouteImport } from './routes/start'
 import { Route as StudioRouteImport } from './routes/studio'
-import { Route as ApiOgRouteImport } from './routes/api/og'
 import { Route as ApiSearchRouteImport } from './routes/api/search'
+import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
 import { Route as BlogIndexRouteImport } from './routes/blog/index'
 import { Route as BlogSlugRouteImport } from './routes/blog/$slug'
 import { Route as BlogRssDotxmlRouteImport } from './routes/blog/rss[.]xml'
@@ -39,6 +39,7 @@ import { Route as VsConvexRouteImport } from './routes/vs/convex'
 import { Route as VsFirebaseRouteImport } from './routes/vs/firebase'
 import { Route as VsSupabaseRouteImport } from './routes/vs/supabase'
 import { Route as LlmsDotmdxDocsSplatRouteImport } from './routes/llms[.]mdx.docs.$'
+import { Route as PrPosthogSplatRouteImport } from './routes/pr/posthog/$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -120,14 +121,14 @@ const StudioRoute = StudioRouteImport.update({
   path: '/studio',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiOgRoute = ApiOgRouteImport.update({
-  id: '/api/og',
-  path: '/api/og',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ApiSearchRoute = ApiSearchRouteImport.update({
   id: '/api/search',
   path: '/api/search',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiWaitlistRoute = ApiWaitlistRouteImport.update({
+  id: '/api/waitlist',
+  path: '/api/waitlist',
   getParentRoute: () => rootRouteImport,
 } as any)
 const BlogIndexRoute = BlogIndexRouteImport.update({
@@ -190,6 +191,11 @@ const LlmsDotmdxDocsSplatRoute = LlmsDotmdxDocsSplatRouteImport.update({
   path: '/llms.mdx/docs/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PrPosthogSplatRoute = PrPosthogSplatRouteImport.update({
+  id: '/pr/posthog/$',
+  path: '/pr/posthog/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -208,8 +214,8 @@ export interface FileRoutesByFullPath {
   '/sponsors': typeof SponsorsRoute
   '/start': typeof StartRoute
   '/studio': typeof StudioRoute
-  '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
@@ -222,6 +228,7 @@ export interface FileRoutesByFullPath {
   '/docs/': typeof DocsIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
+  '/pr/posthog/$': typeof PrPosthogSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -240,8 +247,8 @@ export interface FileRoutesByTo {
   '/sponsors': typeof SponsorsRoute
   '/start': typeof StartRoute
   '/studio': typeof StudioRoute
-  '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
@@ -254,6 +261,7 @@ export interface FileRoutesByTo {
   '/docs': typeof DocsIndexRoute
   '/packages': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
+  '/pr/posthog/$': typeof PrPosthogSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -273,8 +281,8 @@ export interface FileRoutesById {
   '/sponsors': typeof SponsorsRoute
   '/start': typeof StartRoute
   '/studio': typeof StudioRoute
-  '/api/og': typeof ApiOgRoute
   '/api/search': typeof ApiSearchRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
   '/blog/$slug': typeof BlogSlugRoute
   '/blog/rss.xml': typeof BlogRssDotxmlRoute
   '/docs/$': typeof DocsSplatRoute
@@ -287,6 +295,7 @@ export interface FileRoutesById {
   '/docs/': typeof DocsIndexRoute
   '/packages/': typeof PackagesIndexRoute
   '/llms.mdx/docs/$': typeof LlmsDotmdxDocsSplatRoute
+  '/pr/posthog/$': typeof PrPosthogSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -307,8 +316,8 @@ export interface FileRouteTypes {
     | '/sponsors'
     | '/start'
     | '/studio'
-    | '/api/og'
     | '/api/search'
+    | '/api/waitlist'
     | '/blog/$slug'
     | '/blog/rss.xml'
     | '/docs/$'
@@ -321,6 +330,7 @@ export interface FileRouteTypes {
     | '/docs/'
     | '/packages/'
     | '/llms.mdx/docs/$'
+    | '/pr/posthog/$'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -339,8 +349,8 @@ export interface FileRouteTypes {
     | '/sponsors'
     | '/start'
     | '/studio'
-    | '/api/og'
     | '/api/search'
+    | '/api/waitlist'
     | '/blog/$slug'
     | '/blog/rss.xml'
     | '/docs/$'
@@ -353,6 +363,7 @@ export interface FileRouteTypes {
     | '/docs'
     | '/packages'
     | '/llms.mdx/docs/$'
+    | '/pr/posthog/$'
   id:
     | '__root__'
     | '/'
@@ -371,8 +382,8 @@ export interface FileRouteTypes {
     | '/sponsors'
     | '/start'
     | '/studio'
-    | '/api/og'
     | '/api/search'
+    | '/api/waitlist'
     | '/blog/$slug'
     | '/blog/rss.xml'
     | '/docs/$'
@@ -385,6 +396,7 @@ export interface FileRouteTypes {
     | '/docs/'
     | '/packages/'
     | '/llms.mdx/docs/$'
+    | '/pr/posthog/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -404,8 +416,8 @@ export interface RootRouteChildren {
   SponsorsRoute: typeof SponsorsRoute
   StartRoute: typeof StartRoute
   StudioRoute: typeof StudioRoute
-  ApiOgRoute: typeof ApiOgRoute
   ApiSearchRoute: typeof ApiSearchRoute
+  ApiWaitlistRoute: typeof ApiWaitlistRoute
   BlogSlugRoute: typeof BlogSlugRoute
   BlogRssDotxmlRoute: typeof BlogRssDotxmlRoute
   DocsSplatRoute: typeof DocsSplatRoute
@@ -418,6 +430,7 @@ export interface RootRouteChildren {
   DocsIndexRoute: typeof DocsIndexRoute
   PackagesIndexRoute: typeof PackagesIndexRoute
   LlmsDotmdxDocsSplatRoute: typeof LlmsDotmdxDocsSplatRoute
+  PrPosthogSplatRoute: typeof PrPosthogSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -534,18 +547,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof StudioRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/og': {
-      id: '/api/og'
-      path: '/api/og'
-      fullPath: '/api/og'
-      preLoaderRoute: typeof ApiOgRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/api/search': {
       id: '/api/search'
       path: '/api/search'
       fullPath: '/api/search'
       preLoaderRoute: typeof ApiSearchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/waitlist': {
+      id: '/api/waitlist'
+      path: '/api/waitlist'
+      fullPath: '/api/waitlist'
+      preLoaderRoute: typeof ApiWaitlistRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/blog/': {
@@ -632,6 +645,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LlmsDotmdxDocsSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/pr/posthog/$': {
+      id: '/pr/posthog/$'
+      path: '/pr/posthog/$'
+      fullPath: '/pr/posthog/$'
+      preLoaderRoute: typeof PrPosthogSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -652,8 +672,8 @@ const rootRouteChildren: RootRouteChildren = {
   SponsorsRoute: SponsorsRoute,
   StartRoute: StartRoute,
   StudioRoute: StudioRoute,
-  ApiOgRoute: ApiOgRoute,
   ApiSearchRoute: ApiSearchRoute,
+  ApiWaitlistRoute: ApiWaitlistRoute,
   BlogSlugRoute: BlogSlugRoute,
   BlogRssDotxmlRoute: BlogRssDotxmlRoute,
   DocsSplatRoute: DocsSplatRoute,
@@ -666,6 +686,7 @@ const rootRouteChildren: RootRouteChildren = {
   DocsIndexRoute: DocsIndexRoute,
   PackagesIndexRoute: PackagesIndexRoute,
   LlmsDotmdxDocsSplatRoute: LlmsDotmdxDocsSplatRoute,
+  PrPosthogSplatRoute: PrPosthogSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

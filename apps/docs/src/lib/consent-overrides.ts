@@ -2,12 +2,12 @@ import type { Overrides } from "@c15t/react";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 
-// Geo headers across the CDNs the site may sit behind (Netlify sends
-// "x-country"; the Cloudflare/Vercel/CloudFront names cost nothing to keep).
-// Advisory only — a visitor spoofing one suppresses their own banner, nothing
-// more, and absent headers fail safe (c15t defaults to GDPR → banner shown).
-// Never use these values for anything enforcement-related.
-const COUNTRY_HEADERS = ["x-country", "cf-ipcountry", "x-vercel-ip-country", "x-amz-cf-ipcountry", "x-country-code"] as const;
+// Geo headers across the CDNs the site may sit behind. Cloudflare sets
+// `cf-ipcountry`; the others cost nothing to keep. Advisory only — a visitor
+// spoofing one suppresses their own banner, nothing more, and absent headers
+// fail safe (c15t defaults to GDPR → banner shown). Never use these values for
+// anything enforcement-related.
+const COUNTRY_HEADERS = ["cf-ipcountry", "x-vercel-ip-country", "x-amz-cf-ipcountry", "x-country-code"] as const;
 
 const REGION_HEADERS = ["x-vercel-ip-country-region", "x-region-code"] as const;
 

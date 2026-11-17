@@ -32,6 +32,26 @@ final class SubscriptionRetryTest {
         unsubscribeThatOvertakesRetryIsFollowedByAnother(retry);
         failedSendKeepsUnsentRetriesDue(retry);
         settledThatCutsOffRunKeepsRetry(retry);
+        lateHintAfterDetachOrCloseSchedulesNothing(retry);
+    }
+
+    private static void lateHintAfterDetachOrCloseSchedulesNothing(Map<String, Object> retry)
+            throws IOException {
+        Client detached = openSubscribed(retry, new ArrayList<>(), new ArrayList<>());
+
+        detached.detachSocket(null, null);
+        detached.handleFrame(Json.write(retry.get("hintFrame")));
+        check(
+                detached.nextSubscriptionRetryAtNanos() == null,
+                "a hint arriving after detach must not arm a retry");
+
+        Client closed = openSubscribed(retry, new ArrayList<>(), new ArrayList<>());
+
+        closed.close();
+        closed.handleFrame(Json.write(retry.get("hintFrame")));
+        check(
+                closed.nextSubscriptionRetryAtNanos() == null,
+                "a hint arriving after close must not arm a retry");
     }
 
     private static void settledThatCutsOffRunKeepsRetry(Map<String, Object> retry)

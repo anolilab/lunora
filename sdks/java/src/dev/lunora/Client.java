@@ -1968,7 +1968,9 @@ public final class Client {
                     Shape shape = shapes.get(id);
                     Long delay = retryAfterNanos(envelope);
 
-                    if (entry != null && delay != null) {
+                    // A late frame from a detached or closed socket must not arm a retry no
+                    // sender can fire: it would sit due until the next attach, or forever.
+                    if (entry != null && delay != null && !closed && sender != null) {
                         pendingRetries.put(id, System.nanoTime() + delay);
                     } else if (entry != null) {
                         // A hint-less error ends the subscription: drop an earlier hint's retry.

@@ -1,15 +1,18 @@
 "use client";
 
+import type { TurnstileInstance } from "@marsidev/react-turnstile";
+import { Turnstile } from "@marsidev/react-turnstile";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, Check } from "lucide-react";
 import type { FC, SyntheticEvent } from "react";
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 
 import HatchSpacer from "@/components/sections/hatch-spacer";
 import { Action } from "@/kit/action";
 import { Kicker, Shell } from "@/kit/layout";
 import { ArticleHeader } from "@/kit/page-header";
 import { posthog } from "@/lib/posthog";
+import { TEST_SITE_KEY } from "@/lib/turnstile";
 
 /**
  * Lunora Cloud landing — the managed tier (still in progress), behind an
@@ -21,6 +24,14 @@ const EMAIL_RE = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/;
 
 type Status = "error" | "idle" | "sending" | "success";
 
+// A deploy sets the real key (alchemy.run.ts refuses to run without it); the test
+// key keeps local builds working against the test secret in `.dev.vars` (see
+// `.dev.vars.example`). It stays out of wrangler.jsonc, whose vars a plain deploy would bind.
+const TURNSTILE_SITE_KEY =
+    typeof import.meta.env.VITE_TURNSTILE_SITE_KEY === "string" && import.meta.env.VITE_TURNSTILE_SITE_KEY !== ""
+        ? import.meta.env.VITE_TURNSTILE_SITE_KEY
+        : TEST_SITE_KEY;
+
 const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     const instance = useId();
     const consentId = `privacy-consent-${instance}`;
@@ -29,13 +40,16 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     const [consent, setConsent] = useState(false);
     const [status, setStatus] = useState<Status>("idle");
     const [errorMessage, setErrorMessage] = useState("");
+    // Read only at submit time, so holding it in state would re-render for nothing.
+    const turnstileToken = useRef("");
+    const turnstile = useRef<TurnstileInstance>(undefined);
 
     const fail = (message: string) => {
         setErrorMessage(message);
         setStatus("error");
     };
 
-    const submit = async (event: SyntheticEvent) => {
+    const submit = async (event: SyntheticEvent<HTMLFormElement>) => {
         event.preventDefault();
 
         if (!EMAIL_RE.test(email)) {
@@ -51,25 +65,42 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
             return;
         }
 
+        if (turnstileToken.current === "") {
+            fail("Please wait for the verification check to finish.");
+
+            return;
+        }
+
         setStatus("sending");
 
         try {
-            // Netlify Forms: POST url-encoded to the static detection form (public/__forms.html).
-            const response = await fetch("/__forms.html", {
-                body: new URLSearchParams({ email, "form-name": "lunora-waitlist", honeyField: "", privacy: "true", source }).toString(),
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            const response = await fetch("/api/waitlist", {
+                body: JSON.stringify({
+                    email,
+                    honeyField: new FormData(event.currentTarget).get("honeyField") ?? "",
+                    privacy: true,
+                    source,
+                    turnstileToken: turnstileToken.current,
+                }),
+                headers: { "Content-Type": "application/json" },
                 method: "POST",
             });
 
             if (response.ok) {
                 posthog.capture("waitlist_joined", { source });
                 setStatus("success");
-            } else {
-                fail("Something went wrong. Please try again.");
+
+                return;
             }
+
+            fail(response.status === 403 ? "We couldn't verify you're human. Please try again." : "Something went wrong. Please try again.");
         } catch {
             fail("Something went wrong. Please try again.");
         }
+
+        // A token is good for one siteverify call, so a retry needs a fresh one.
+        turnstileToken.current = "";
+        turnstile.current?.reset();
     };
 
     if (status === "success") {
@@ -82,17 +113,7 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
     }
 
     return (
-        <form
-            className="flex w-full max-w-md flex-col gap-2"
-            data-netlify="true"
-            method="POST"
-            name="lunora-waitlist"
-            // eslint-disable-next-line react/no-unknown-property -- Netlify Forms spam-filter attribute, read by Netlify's build, not the DOM
-            netlify-honeypot="honeyField"
-            onSubmit={(event) => void submit(event)}
-        >
-            <input name="form-name" type="hidden" value="lunora-waitlist" />
-            <input name="source" type="hidden" value={source} />
+        <form className="flex w-full max-w-md flex-col gap-2" onSubmit={(event) => void submit(event)}>
             <p className="hidden">
                 <label htmlFor={honeyId}>
                     Don&apos;t fill this out if you&apos;re human: <input id={honeyId} name="honeyField" tabIndex={-1} />
@@ -149,6 +170,20 @@ const WaitlistForm: FC<{ source?: string }> = ({ source = "cloud" }) => {
                     and to receiving one email when Lunora Cloud opens. No spam; unsubscribe any time.
                 </span>
             </label>
+            <Turnstile
+                onError={() => {
+                    turnstileToken.current = "";
+                }}
+                onExpire={() => {
+                    turnstileToken.current = "";
+                }}
+                onSuccess={(token) => {
+                    turnstileToken.current = token;
+                }}
+                options={{ size: "flexible", theme: "dark" }}
+                ref={turnstile}
+                siteKey={TURNSTILE_SITE_KEY}
+            />
             <p className={`text-xs ${status === "error" ? "text-red-400" : "text-ink-faint"}`}>
                 {status === "error" ? errorMessage : "Your email is only used to notify you. You can self-host the open-source framework any time."}
             </p>

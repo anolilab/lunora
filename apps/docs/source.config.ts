@@ -13,7 +13,12 @@ export const docs = defineDocs({
 });
 
 export default defineConfig({
-    mdxOptions: {
+    // A function, so each MDX processor (the docs collection, and plain `.md`/`.mdx`
+    // imports such as blog posts) gets its own objects. Shiki writes the aliases of
+    // every language it loads into the `langAlias` object it was given; a shared one
+    // makes a second highlighter believe `ts` is loaded when it is not, and every
+    // docs page then fails with "Language `ts` not found".
+    mdxOptions: async () => ({
         remarkPlugins: [remarkImage],
         rehypeCodeOptions: {
             // Overriding rehypeCodeOptions replaces fumadocs' defaults, so the default
@@ -26,6 +31,6 @@ export default defineConfig({
                 tera: "jinja",
             },
         },
-    },
+    }),
     plugins: [lastModified()],
 });
