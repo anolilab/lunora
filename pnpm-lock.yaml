@@ -1588,7 +1588,7 @@ importers:
         specifier: catalog:ui
         version: 2.1.1
       creem:
-        specifier: ^1.5.3
+        specifier: catalog:payment
         version: 1.13.0(@cfworker/json-schema@4.1.4)(supports-color@10.2.2)
       fflate:
         specifier: catalog:prod

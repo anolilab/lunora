@@ -53,7 +53,7 @@
         "better-auth": "catalog:auth",
         "class-variance-authority": "catalog:ui",
         "clsx": "catalog:ui",
-        "creem": "^1.5.3",
+        "creem": "catalog:payment",
         "fflate": "catalog:prod",
         "picomatch": "catalog:node",
         "posthog-js": "catalog:web",
