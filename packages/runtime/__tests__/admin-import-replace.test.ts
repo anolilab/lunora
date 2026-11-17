@@ -595,6 +595,35 @@ describe("admin import — staged replace", () => {
     });
 });
 
+describe("admin import — staged replace with an auth row the store refuses", () => {
+    afterEach(closeCluster);
+
+    it("refuses the commit before any shard is written, so a retry never meets a partial restore", async () => {
+        expect.assertions(3);
+
+        await seed();
+
+        const stores = createStores();
+
+        stores.auth.get("user")!.set("u-live", { id: "u-live" });
+
+        const worker = workerWith({ ...stores.options });
+        const before = await texts("c1");
+
+        await postImport(worker, "?mode=replace&tables=messages&stage=bad-auth", [
+            { doc: { format: 2, sections: ["auth"] }, table: "$lunora" },
+            message("m1", "c1", "as snapshotted"),
+            { doc: { row: { id: "u-old" }, table: "no_such_table" }, table: "$auth" },
+        ]);
+
+        const committed = await postSession(worker, "commit", "bad-auth");
+
+        await expect(committed.json()).resolves.toMatchObject({ status: "refused" });
+        await expect(texts("c1")).resolves.toStrictEqual(before);
+        expect([...stores.auth.get("user")!.keys()]).toStrictEqual(["u-live"]);
+    });
+});
+
 describe("admin import — concurrent commits of one session", () => {
     afterEach(closeCluster);
 

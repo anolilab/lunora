@@ -56,8 +56,12 @@ interface AuthReplaceResult {
 interface AuthDataPortLike {
     exportRows: () => AsyncIterable<{ doc: Row; table: string }>;
     importRows: (rows: ReadonlyArray<{ doc: Row; table: string }>) => Promise<AuthImportResult>;
-    /** Absent when the store has no atomic unit to replace in (an executor without `batch`). */
-    replaceRows?: (rows: ReadonlyArray<{ doc: Row; table: string }>) => Promise<AuthReplaceResult>;
+
+    /**
+     * Absent when the store has no atomic unit to replace in (an executor without `batch`). With
+     * `dryRun`, only checks that every row names a table it would write, and writes nothing.
+     */
+    replaceRows?: (rows: ReadonlyArray<{ doc: Row; table: string }>, options?: { dryRun?: boolean }) => Promise<AuthReplaceResult>;
 }
 
 /** The read half of a SQL executor — all both D1 and Durable Object storage need here. */
@@ -380,6 +384,7 @@ const replaceAuthRows = async (
     rows: ReadonlyArray<{ doc: Row; table: string }>,
     tables: ReadonlyArray<string>,
     clearTables: ReadonlyArray<string>,
+    dryRun = false,
 ): Promise<AuthReplaceResult> => {
     const refused = rows.flatMap(({ table }, index) => (isUnmovableAuthTable(table) ? [{ index, message: `"${table}" is never restored`, table }] : []));
 
@@ -395,6 +400,10 @@ const replaceAuthRows = async (
 
     if (plan.errors.length > 0) {
         return { deleted: 0, errors: plan.errors, inserted: 0 };
+    }
+
+    if (dryRun) {
+        return { deleted: plan.deleted, errors: [], inserted: rows.length };
     }
 
     try {
@@ -422,7 +431,9 @@ const createSqlAuthDataPort = (executor: SqlExecutor, tables: ReadonlyArray<stri
                 tables.filter((table) => !isUnmovableAuthTable(table)),
             ),
         importRows: async (rows) => insertAuthRows(executor, rows, (table) => tables.includes(table)),
-        ...(batch === undefined ? {} : { replaceRows: async (rows) => replaceAuthRows(executor, batch, rows, tables, credentialTables) }),
+        ...(batch === undefined
+            ? {}
+            : { replaceRows: async (rows, options) => replaceAuthRows(executor, batch, rows, tables, credentialTables, options?.dryRun) }),
     };
 };
 
@@ -470,7 +481,7 @@ const createDoAuthDataPort = (post: (body: Row) => Promise<Response>): AuthDataP
             }
         },
         importRows: async (rows) => call<AuthImportResult>({ op: "import", rows }),
-        replaceRows: async (rows) => call<AuthReplaceResult>({ op: "replace", rows }),
+        replaceRows: async (rows, options) => call<AuthReplaceResult>({ dryRun: options?.dryRun === true, op: "replace", rows }),
     };
 };
 

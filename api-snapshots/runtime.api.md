@@ -363,7 +363,9 @@ interface AuthDataPort {
     replaceRows?: (rows: ReadonlyArray<{
         doc: Record<string, unknown>;
         table: string;
-    }>) => Promise<{
+    }>, options?: {
+        dryRun?: boolean;
+    }) => Promise<{
         deleted: number;
         errors: ReadonlyArray<{
             index: number;

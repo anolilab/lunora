@@ -132,9 +132,13 @@ interface AuthDataPort {
      * Make the auth tables hold exactly `rows`, in one transaction of the auth
      * store: on any error nothing changed. Signed-in sessions and one-time tokens
      * are cleared with them. Absent ⇒ a replace import of a snapshot carrying the
-     * `auth` section is refused.
+     * `auth` section is refused. With `dryRun`, checks the rows and writes nothing: a
+     * commit runs it before any shard is written.
      */
-    replaceRows?: (rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>) => Promise<{
+    replaceRows?: (
+        rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>,
+        options?: { dryRun?: boolean },
+    ) => Promise<{
         deleted: number;
         errors: ReadonlyArray<{ index: number; message: string; table: string }>;
         inserted: number;

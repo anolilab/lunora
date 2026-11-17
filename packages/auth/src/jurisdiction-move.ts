@@ -799,6 +799,7 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
                 (body["rows"] ?? []) as { doc: Row; table: string }[],
                 tables,
                 [],
+                body["dryRun"] === true,
             );
         }
         case "rescan": {

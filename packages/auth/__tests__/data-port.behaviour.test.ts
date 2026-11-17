@@ -320,6 +320,23 @@ describe("auth data port", () => {
         expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "kept" }]);
     });
 
+    it("checks the rows and writes nothing on a dry run", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+
+        createTables(database);
+        database.prepare(`INSERT INTO "user" VALUES ('kept', 'edited@since.test', NULL)`).run();
+
+        const port = createSqlAuthDataPort(batchingExecutorOver(database), ["user"]);
+        const refused = await port.replaceRows!([{ doc: { id: "x" }, table: "no_such_table" }], { dryRun: true });
+        const accepted = await port.replaceRows!([{ doc: { email: "a@b.test", id: "u1" }, table: "user" }], { dryRun: true });
+
+        expect(refused.errors).toMatchObject([{ table: "no_such_table" }]);
+        expect(accepted).toMatchObject({ errors: [], inserted: 1 });
+        expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "kept" }]);
+    });
+
     it("replaces the DO-backed auth object's tables in one storage transaction", async () => {
         expect.hasAssertions();
 

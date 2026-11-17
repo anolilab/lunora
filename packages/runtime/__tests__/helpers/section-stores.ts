@@ -166,7 +166,14 @@ const createStores = (): {
                 }
             }
         },
-        replaceRows: async (rows) => {
+        replaceRows: async (rows, options) => {
+            // Like the real port: a row of a table the store does not have refuses the whole replace.
+            const errors = rows.flatMap(({ table }, index) => (auth.has(table) ? [] : [{ index, message: `"${table}" is not an auth table`, table }]));
+
+            if (errors.length > 0 || options?.dryRun === true) {
+                return { deleted: 0, errors, inserted: 0 };
+            }
+
             const deleted = [...auth.values()].reduce((total, table) => total + table.size, 0);
 
             for (const table of auth.values()) {

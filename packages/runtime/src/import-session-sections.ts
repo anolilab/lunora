@@ -366,7 +366,7 @@ const sectionUnsupported = (options: WorkerOptions, section: string): string | u
     }
 };
 
-const commitAuth = async (options: WorkerOptions, records: AsyncIterable<StagedSectionRow>): Promise<SectionStepResult> => {
+const authRows = async (records: AsyncIterable<StagedSectionRow>): Promise<{ doc: Record<string, unknown>; table: string }[]> => {
     const rows: { doc: Record<string, unknown>; table: string }[] = [];
 
     // ponytail: every auth row of the snapshot is held for the one transaction;
@@ -375,6 +375,25 @@ const commitAuth = async (options: WorkerOptions, records: AsyncIterable<StagedS
         rows.push({ doc: record.doc["row"] as Record<string, unknown>, table: String(record.doc["table"]) });
     }
 
+    return rows;
+};
+
+/**
+ * Check the staged auth rows against the auth store without writing: the commit
+ * runs it before any shard is swapped, since a row the store refuses would
+ * otherwise fail the auth step after the shards had committed, on every retry.
+ */
+const prepareAuth = async (options: WorkerOptions, records: AsyncIterable<StagedSectionRow>): Promise<ImportRowError[]> => {
+    const rows = await authRows(records);
+    const result = await (options.authData?.replaceRows?.(rows, { dryRun: true }) ?? Promise.reject(new TypeError("auth replace is not configured")));
+
+    return result.errors.map((error) => {
+        return { code: "AUTH_IMPORT_REFUSED", line: 0, message: error.message, table: AUTH_TABLE };
+    });
+};
+
+const commitAuth = async (options: WorkerOptions, records: AsyncIterable<StagedSectionRow>): Promise<SectionStepResult> => {
+    const rows = await authRows(records);
     const result = await (options.authData?.replaceRows?.(rows) ?? Promise.reject(new TypeError("auth replace is not configured")));
 
     if (result.errors.length > 0) {
@@ -628,4 +647,4 @@ const commitSection = async (
 const SECTION_TABLE: Readonly<Record<ReplaceSection, string>> = { auth: AUTH_TABLE, kv: KV_TABLE, storage: STORAGE_TABLE };
 
 export type { ReplaceSection, SectionStepResult, SessionRef, StagedSectionRow };
-export { commitSection, dropStagedObjects, REPLACE_SECTIONS, SECTION_TABLE, sectionUnsupported, SESSION_STAGING_PREFIX, stageSectionRows };
+export { commitSection, dropStagedObjects, prepareAuth, REPLACE_SECTIONS, SECTION_TABLE, sectionUnsupported, SESSION_STAGING_PREFIX, stageSectionRows };

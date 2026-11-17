@@ -346,7 +346,9 @@ const handleImportSessionRpc = async (shard: ImportSessionShard, functionPath: s
             const state = readImportManifest(shard.sql, session, now)?.state;
 
             // `committed` drops these records: a lagging commit paging them then would read none and prune what it never wrote.
-            if (state !== "committing") {
+            // `open` is the commit's prepare, which checks the auth records before any shard is written; it writes nothing,
+            // and the compare-and-set into `committing` refuses if a batch was staged since.
+            if (state !== "committing" && state !== "open") {
                 throw new LunoraError("IMPORT_SESSION_NOT_COMMITTING", `import session "${session}" is ${state ?? "gone"}, not committing`, { status: 409 });
             }
 

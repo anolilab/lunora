@@ -23,9 +23,10 @@
  * ## What the commit guarantees
  *
  * Prepare: every shard first runs its swap in a transaction it rolls back (a
- * dry run). A row that would not land — no longer valid against the schema, an
- * `_id` owned by another table — refuses the commit before any shard is
- * written, and the caller can abort.
+ * dry run), and the auth store checks the staged auth rows without writing. A
+ * row that would not land — no longer valid against the schema, an `_id` owned
+ * by another table, an auth table the store does not have — refuses the commit
+ * before any shard is written, and the caller can abort.
  *
  * Each shard then swaps in one Durable Object storage transaction: every
  * overwrite and every prune lands, or none does. Shards are not one transaction
@@ -64,7 +65,15 @@ import type { ImportManifest, ImportStepResult } from "@lunora/shard-engine";
 import type { WorkerOptions } from "./create-worker";
 import { LunoraError } from "./errors";
 import type { ReplaceSection, SessionRef, StagedSectionRow } from "./import-session-sections";
-import { commitSection, dropStagedObjects, REPLACE_SECTIONS, SECTION_TABLE, sectionUnsupported, stageSectionRows } from "./import-session-sections";
+import {
+    commitSection,
+    dropStagedObjects,
+    prepareAuth,
+    REPLACE_SECTIONS,
+    SECTION_TABLE,
+    sectionUnsupported,
+    stageSectionRows,
+} from "./import-session-sections";
 import type { ImportRowError, ImportShardFailure, RecordImportAudit } from "./import-stream";
 import { auditPlane, bucketImportStream, UNSHARDED_WARNING } from "./import-stream";
 import type { ImportSessionShardOutcome, QueryCoordinator } from "./query-coordinator";
@@ -626,6 +635,12 @@ const commitImport = async (context: ImportSessionContext, session: string): Pro
 
         if (prepared.errors.length > 0 || prepared.failed.length > 0) {
             return { errors: prepared.errors, failed: prepared.failed, session, status: "refused" };
+        }
+
+        const authErrors = manifest.sections.includes("auth") ? await prepareAuth(options, stagedRecords(context, session, "auth")) : [];
+
+        if (authErrors.length > 0) {
+            return { errors: authErrors, failed: [], session, status: "refused" };
         }
 
         // The compare-and-set: refused unless the session is still open, clean, and took no batch since this prepare read it.

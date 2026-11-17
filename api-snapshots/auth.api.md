@@ -413,7 +413,9 @@ interface AuthDataPortLike {
     replaceRows?: (rows: ReadonlyArray<{
         doc: Row;
         table: string;
-    }>) => Promise<AuthReplaceResult>;
+    }>, options?: {
+        dryRun?: boolean;
+    }) => Promise<AuthReplaceResult>;
 }
 ```
 
