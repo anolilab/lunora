@@ -95,6 +95,39 @@ export default createConfig(
             "unicorn/number-literal-case": "off",
         },
     },
+    // `ctx` / `db` / `doc` are this package's domain vocabulary, not lazy shorthand: the
+    // `ctx-db-*` module family mirrors @lunora/shard-engine's, a "doc" is a stored document
+    // row, and `SqlCtxExec` / `SqlCtxDbOptions` / `createSqlCtxDb` are public API. Every
+    // other abbreviation stays reported. ESLint replaces rule options wholesale, so the
+    // preset's own allowList and replacements are repeated here.
+    {
+        files: ["src/**/*.ts"],
+        rules: {
+            "unicorn/prevent-abbreviations": [
+                "error",
+                {
+                    allowList: { i: true, j: true },
+                    replacements: {
+                        args: false,
+                        ctx: false,
+                        db: false,
+                        dev: false,
+                        dist: false,
+                        doc: false,
+                        docs: false,
+                        env: false,
+                        params: false,
+                        pkg: false,
+                        prop: false,
+                        props: false,
+                        ref: false,
+                        src: false,
+                        utils: false,
+                    },
+                },
+            ],
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code (loose
     // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
     // describe titles). Source files still enforce all of these.

@@ -1,4 +1,4 @@
-/* eslint-disable sonarjs/deprecation -- see server.ts: the low-level `Server` is the sanctioned choice for plain-JSON-Schema tools. */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
@@ -14,6 +14,7 @@ import { createLunoraMcpServer } from "./server";
  * Lives apart from `server.ts` so the Worker entry's module graph never pulls
  * in the stdio transport (and its `node:process` import).
  */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 const connectStdio = async (options: LunoraMcpServerOptions): Promise<Server> => {
     const version = installedVersion();
     const server = createLunoraMcpServer(version === undefined ? options : { version, ...options });

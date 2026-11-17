@@ -9,9 +9,6 @@
  * `do-sql` out from its own ctx-db.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "sql-exec" sits beside "ctx-db", the established module naming in this package. */
-/* eslint-disable no-restricted-syntax -- `sql\`…\` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
-
 import { LunoraError } from "@lunora/errors";
 import type { ColumnMetaLike, TableDefinitionLike } from "@lunora/shard-engine";
 import { needsWireEncoding } from "@lunora/wire";
@@ -34,6 +31,7 @@ const MAX_BOUND_PARAMETERS = 100;
 const physicalColumn = (field: string): string => (field === "_id" || field === "id" ? "id" : field);
 
 /** Logical-field → physical column reference as a drizzle {@link SQL}; the engine's dialect quotes it at render time (`_id`/`id` → `id`). */
+// eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
 const columnRefSql = (field: string): SQL => sql`${sql.identifier(physicalColumn(field))}`;
 
 /** The segments of a dotted field path, with a malformed one reported as the `VALIDATION_ERROR` a caller expects. */
@@ -111,16 +109,16 @@ const pathContainsNeedle = (engine: "mysql" | "postgres", term: SQL): SQL =>
     engine === "postgres" ? sql`(${term})::jsonb #>> '{}'` : sql`JSON_UNQUOTE(${term})`;
 
 /**
- * SQLite: `fn(column, '$.path')` over the object column, guarded by `json_valid`. SQLite raises on text that is not
+ * SQLite: `jsonFunction(column, '$.path')` over the object column, guarded by `json_valid`. SQLite raises on text that is not
  * valid JSON instead of returning NULL, and a column can hold such text: a bigint, bytes or Date inside an object is
  * stored wire-encoded, a string or id column is not JSON at all. The Durable Object store always keeps valid JSON
  * and reads NULL there, so the read is guarded to agree with it. The path is one bound parameter.
  */
-const sqliteJsonCall = (fn: "json_extract" | "json_type", field: string): SQL => {
+const sqliteJsonCall = (jsonFunction: "json_extract" | "json_type", field: string): SQL => {
     const [root = "", ...rest] = pathSegments(field);
     const column = columnRefSql(root);
 
-    return sql`CASE WHEN json_valid(${column}) THEN ${sql.raw(fn)}(${column}, ${`$.${rest.map((segment) => jsonPathSegment(segment)).join(".")}`}) END`;
+    return sql`CASE WHEN json_valid(${column}) THEN ${sql.raw(jsonFunction)}(${column}, ${`$.${rest.map((segment) => jsonPathSegment(segment)).join(".")}`}) END`;
 };
 
 /**
@@ -160,7 +158,7 @@ const pathJsonText = new WeakMap<SQL, string>();
  * then yields the JSON string `"30"` where `30` was meant, so a number path matched the text row. The same
  * double cast is what shard-engine's Postgres `in` uses (`postgresElements`).
  */
-const pgJsonParam = (json: string): SQL => sql`CAST(CAST(${json} AS text) AS jsonb)`;
+const pgJsonParameter = (json: string): SQL => sql`CAST(CAST(${json} AS text) AS jsonb)`;
 
 /**
  * The test that the leaf at path `field` is a JSON value of `type`, ANDed onto a range over it so that `gt: 5`
@@ -203,7 +201,8 @@ const pathValueSql = (engine: "mysql" | "postgres", value: unknown): unknown => 
     }
 
     const json = JSON.stringify(value);
-    const bound = engine === "postgres" ? sql`${pgJsonParam(json)}` : sql`CAST(${json} AS JSON)`;
+    // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
+    const bound = engine === "postgres" ? sql`${pgJsonParameter(json)}` : sql`CAST(${json} AS JSON)`;
 
     pathJsonText.set(bound, json);
 
@@ -244,7 +243,7 @@ const pathInList = (engine: "mysql" | "postgres", reference: SQL, items: Readonl
     const array = `[${texts.join(",")}]`;
     const elements =
         engine === "postgres"
-            ? sql`SELECT e.v FROM jsonb_array_elements(${pgJsonParam(array)}) AS e(v)`
+            ? sql`SELECT e.v FROM jsonb_array_elements(${pgJsonParameter(array)}) AS e(v)`
             : sql`SELECT jt.v FROM JSON_TABLE(${array}, '$[*]' COLUMNS (v JSON PATH '$')) AS jt`;
 
     return negated ? sql`${reference} NOT IN (${elements})` : sql`${reference} IN (${elements})`;

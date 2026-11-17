@@ -1,5 +1,3 @@
-/* eslint-disable unicorn/prevent-abbreviations -- "docs" is public API here: the `@lunora/mcp/docs` subpath and the `lunora_search_docs` / `lunora_get_doc` / `lunora_list_docs` tool names. Renaming the identifiers to "documentation" would diverge from the names callers and models actually use. */
-
 /**
  * The documentation tool surface: search the Lunora docs, and read a page in
  * full. Unlike the deployment tools these touch no user data and need no

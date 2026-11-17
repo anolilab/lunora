@@ -89,6 +89,37 @@ export default createConfig(
             "unicorn/number-literal-case": "off",
         },
     },
+    // "docs" / "doc" are public API in this package, not lazy shorthand: the `@lunora/mcp/docs`
+    // subpath, exported names such as `createDocsMcpServer` / `DocsIndex`, and the
+    // `lunora_search_docs` / `lunora_get_doc` / `lunora_list_docs` tool names models call.
+    // Every other abbreviation stays reported. ESLint replaces rule options wholesale, so the
+    // preset's own allowList and replacements are repeated here.
+    {
+        files: ["src/**/*.ts"],
+        rules: {
+            "unicorn/prevent-abbreviations": [
+                "error",
+                {
+                    allowList: { i: true, j: true },
+                    replacements: {
+                        args: false,
+                        dev: false,
+                        dist: false,
+                        doc: false,
+                        docs: false,
+                        env: false,
+                        params: false,
+                        pkg: false,
+                        prop: false,
+                        props: false,
+                        ref: false,
+                        src: false,
+                        utils: false,
+                    },
+                },
+            ],
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code (loose
     // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
     // describe titles). Source files still enforce all of these.

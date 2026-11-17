@@ -1,5 +1,3 @@
-/* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases" (matching `server.ts`); here it appears only as a parameter type. */
-
 /**
  * Drive one MCP request through a **stateless** Streamable-HTTP transport.
  *
@@ -11,6 +9,7 @@
  * Being the one place every HTTP handler in the package funnels through, it is
  * also where the request is screened — see {@link screenRequest}.
  */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { HandleRequestOptions, WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
@@ -244,6 +243,7 @@ const screenRequest = async (request: Request, options: ServeStatelessOptions | 
  * would otherwise skip it and leak a server + transport per failed request,
  * which on a public endpoint is exactly the request an attacker can repeat.
  */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 const serveStateless = async (server: Server, request: Request, options?: ServeStatelessOptions): Promise<Response> => {
     const screened = await screenRequest(request, options);
 

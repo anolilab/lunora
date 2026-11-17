@@ -8,9 +8,6 @@
  * layouts run the migrations, so the migrations cannot import the layouts.
  */
 
-/* eslint-disable no-restricted-syntax -- `sql`…`` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
-/* eslint-disable unicorn/prevent-abbreviations -- `SqlCtxExec` is this package's established exec type name. */
-
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { FTS_COUNT_COLUMN, FTS_ID_COLUMN, FTS_TOKEN_COLUMN } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
@@ -104,6 +101,7 @@ const readSourceRows = async (
             exec,
             dialect,
             sql`SELECT * FROM ${sql.identifier(table)} WHERE ${qualified(table, "id")} IN (${sql.join(
+                // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
                 chunk.map((id) => sql`${id}`),
                 sql`, `,
             )})`,
@@ -132,6 +130,7 @@ const invertedIndexColumn = (dialect: SqlDialect, column: string, mysqlPrefix: n
     }
 
     if (dialect.textPatternOperatorClass === undefined) {
+        // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
         return sql`${sql.identifier(column)}`;
     }
 

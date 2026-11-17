@@ -1,5 +1,3 @@
-/* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases". Ours qualifies: we dispatch tools defined with plain JSON Schema and bridge structured results ourselves, which avoids McpServer's per-tool zod dependency (matching `server.ts`). */
-
 /**
  * x402-gated (paid) MCP tools, exported from the package root.
  *
@@ -47,6 +45,7 @@
  * cancelled at isolate teardown while the money has already moved on-chain.
  */
 import { LunoraError } from "@lunora/errors";
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { JsonSchemaValidator } from "@modelcontextprotocol/sdk/validation";
@@ -351,6 +350,7 @@ const createPaidMcpServer = (config: PaidMcpServerConfig): PaidMcpServer => {
     };
 
     // Build a fresh registry-backed `Server` (the stateless transport connects one per request).
+    // eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
     const buildServer = async (): Promise<Server> => {
         const { CallToolRequestSchema, ListToolsRequestSchema, Server } = await loadMcpSdk();
         const server = new Server(serverInfo, { capabilities: { tools: {} } });

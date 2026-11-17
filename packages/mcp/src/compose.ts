@@ -1,5 +1,3 @@
-/* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases" (matching `server.ts`): we dispatch tools defined with plain JSON Schema, which avoids McpServer's per-tool zod dependency. */
-
 /**
  * Compose several independent tool surfaces into one MCP server.
  *
@@ -13,6 +11,7 @@
  * Deliberately free of `@lunora/client` and of Node built-ins, so a surface
  * built on it (notably `./docs`) runs unchanged on Workers and in the browser.
  */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import type { CallToolResult, ListResourcesResult, ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 
@@ -67,6 +66,7 @@ interface McpResourceProvider {
  * Async because it loads the MCP SDK (see `./sdk`): building the server is what needs it, so a
  * module that only defines tools stays free of the SDK until the first server is built.
  */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 const createToolServer = async (info: McpServerInfo, tools: ReadonlyArray<McpTool>, resources?: McpResourceProvider): Promise<Server> => {
     const { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema, Server } = await loadMcpSdk();
     const dispatch = new Map<string, McpTool>();

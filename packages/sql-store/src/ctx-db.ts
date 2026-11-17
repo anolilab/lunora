@@ -10,9 +10,7 @@
  * serialization) so the generated `ctx.db.<table>` facade (1.2.7) is
  * backend-agnostic.
  */
-/* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts and every test import it as "./d1-ctx-db.js", and it deliberately mirrors @lunora/do's "ctx-db.ts" twin. Renaming would break those importers. */
 
-/* eslint-disable no-restricted-syntax -- `sql\`…\`` here is the drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import {
@@ -509,6 +507,7 @@ const andBranch = (conditions: SQL[]): SQL => (conditions.length === 1 ? (condit
 /** Comma-joined quoted identifier list (column lists, SELECT lists). */
 const identifierList = (names: ReadonlyArray<string>): SQL =>
     sql.join(
+        // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
         names.map((name) => sql`${sql.identifier(name)}`),
         sql`, `,
     );
@@ -516,6 +515,7 @@ const identifierList = (names: ReadonlyArray<string>): SQL =>
 /** Comma-joined bound-value list (`VALUES (…)` tuples, `IN (…)` lists). */
 const bindList = (values: ReadonlyArray<unknown>): SQL =>
     sql.join(
+        // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
         values.map((value) => sql`${value}`),
         sql`, `,
     );
@@ -590,6 +590,7 @@ const buildRankBeforeBranches = (
 
         const conditions: SQL[] = sortColumns
             .slice(0, pivot)
+            // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
             .map((prefixColumn) => nullSafeEqualsSql(engine, sql`${sql.identifier(prefixColumn)}`, bindableRankValue(own[prefixColumn])));
 
         conditions.push(pivotCondition);
@@ -639,6 +640,7 @@ const buildRankCursorSeek = (
                 continue;
             }
 
+            // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
             conditions.push(nullSafeEqualsSql(engine, sql`${sql.identifier(prefixCol.column)}`, bindableRankValue(decoded[prefix])));
         }
 
@@ -942,6 +944,7 @@ const runSqlCdcMigration = async (exec: SqlCtxExec, dialect: SqlDialect): Promis
     const tablePrefix = dialect.indexKeyPrefix?.("string");
 
     await createIndexIfNotExists(exec, dialect, {
+        // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
         columns: sql`${tablePrefix === undefined ? sql`${sql.identifier("table")}` : sql`${sql.identifier("table")}(${sql.raw(String(tablePrefix))})`}, ${sql.identifier("seq")}`,
         name: CDC_LOG_TABLE_SEQ_INDEX,
         table: CDC_LOG_TABLE,
@@ -1064,6 +1067,7 @@ const sweepSqlCdcRetention = async (exec: SqlCtxExec, dialect: SqlDialect, reten
             }
 
             await createIndexIfNotExists(exec, dialect, {
+                // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
                 columns: sql`${sql.identifier("ts")}`,
                 concurrently: true,
                 name: CDC_LOG_TABLE_TS_INDEX,
@@ -1428,7 +1432,8 @@ const readSqlCdcChangedTables = async (
         exec,
         dialect,
         guarded
-            ? sql`SELECT ${sql.identifier("table")} AS ${sql.identifier("table")}, MAX(seq) AS seq, ${lateCommitCap(sql`${sinceSeq}`, cutoff)} FROM ${log} WHERE seq > ${sinceSeq} GROUP BY ${sql.identifier("table")}`
+            ? // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
+              sql`SELECT ${sql.identifier("table")} AS ${sql.identifier("table")}, MAX(seq) AS seq, ${lateCommitCap(sql`${sinceSeq}`, cutoff)} FROM ${log} WHERE seq > ${sinceSeq} GROUP BY ${sql.identifier("table")}`
             : sqliteChangedTablesSql(sinceSeq),
     );
 
@@ -1651,6 +1656,7 @@ const fencedInsertRows = (
 ): SQL[] => {
     const perStatement = Math.max(1, Math.floor((MAX_BOUND_PARAMETERS - 2) / columns.length));
     const cell = (value: unknown, column: { name: string; type: string }): SQL => {
+        // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
         const typed = dialect.name === "postgres" ? sql`CAST(${value} AS ${sql.raw(column.type)})` : sql`${value}`;
 
         return sql`${typed} AS ${sql.identifier(column.name)}`;
@@ -1826,6 +1832,7 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         // Postgres can't resolve a bare existing-row column in the SET RHS (it's in
         // both the target and `excluded` scopes) — qualify with the table name.
         const current = (column: string): SQL =>
+            // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
             dialect.name === "postgres" ? sql`${sql.identifier(config.table)}.${sql.identifier(column)}` : sql`${sql.identifier(column)}`;
         const assignments = sql.join(
             Object.entries(config.set(excluded, current)).map(([column, expression]) => sql`${sql.identifier(column)} = ${expression}`),
@@ -3063,9 +3070,11 @@ const createSqlCtxDb = (options: SqlCtxDbOptions): DatabaseWriterLike => {
         condition: SQL | undefined,
         on: SqlCtxExec,
     ): Promise<boolean> => {
+        // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
         const versionRef = sql`${sql.identifier(OCC_VERSION_COLUMN)}`;
         const guardClause = sql.join(
             [
+                // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
                 nullSafeEquals(sql`${sql.identifier("id")}`, snapshot["id"]),
                 // eslint-disable-next-line unicorn/no-null -- SQL bind value: `?? null` so a row written before this column existed (or a driver that omits it) compares against SQL NULL.
                 nullSafeEquals(versionRef, snapshot[OCC_VERSION_COLUMN] ?? null),

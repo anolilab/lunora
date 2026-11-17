@@ -13,7 +13,6 @@ import { sql } from "drizzle-orm";
 
 import { validatorAcceptsNull } from "../../../shared/accepts-null";
 import type { SqlDialect } from "./dialect";
-// eslint-disable-next-line unicorn/prevent-abbreviations -- `SqlCtxExec` is this package's established exec type name.
 import type { SqlCtxExec } from "./sql-exec";
 import { OCC_VERSION_COLUMN, qualifiedColumnRefSql, queryAll, queryRun, runInOrder, serializeDocumentColumn } from "./sql-exec";
 import { effectiveColumnKind } from "./value-codec";
