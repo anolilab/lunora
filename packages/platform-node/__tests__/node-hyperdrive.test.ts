@@ -1,0 +1,82 @@
+import { describe, expect, it } from "vitest";
+
+import { createNodeHyperdrive } from "../src/node-hyperdrive";
+
+describe(createNodeHyperdrive, () => {
+    it("splits a postgres URL into the binding's connection fields", () => {
+        expect.assertions(1);
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a fixture URL with a dummy password, percent-encoded to test decoding
+        const url = "postgres://app%40corp:p%2Fss@db.internal:6543/orders%20db?sslmode=require";
+
+        expect(createNodeHyperdrive(url)).toStrictEqual({
+            connectionString: url,
+            database: "orders db",
+            host: "db.internal",
+            password: "p/ss",
+            port: 6543,
+            user: "app@corp",
+        });
+    });
+
+    it.each([
+        ["postgres://u@h/db", 5432],
+        ["postgresql://u@h/db", 5432],
+        ["mysql://u@h/db", 3306],
+    ])("falls back to the protocol's default port for %s", (url, port) => {
+        expect.assertions(1);
+
+        expect(createNodeHyperdrive(url).port).toBe(port);
+    });
+
+    it("strips the brackets from an IPv6 host", () => {
+        expect.assertions(1);
+
+        expect(createNodeHyperdrive("postgres://u@[::1]:5432/db").host).toBe("::1");
+    });
+
+    it("reads DATABASE_URL when no URL is given", () => {
+        expect.assertions(1);
+
+        const previous = process.env.DATABASE_URL;
+
+        process.env.DATABASE_URL = "postgres://u@from-env:5432/db";
+
+        try {
+            expect(createNodeHyperdrive().host).toBe("from-env");
+        } finally {
+            if (previous === undefined) {
+                delete process.env.DATABASE_URL;
+            } else {
+                process.env.DATABASE_URL = previous;
+            }
+        }
+    });
+
+    it("refuses a missing URL", () => {
+        expect.assertions(1);
+
+        expect(() => createNodeHyperdrive("")).toThrow(/DATABASE_URL/u);
+    });
+
+    it("refuses a protocol Hyperdrive does not serve", () => {
+        expect.assertions(1);
+
+        expect(() => createNodeHyperdrive("redis://h:6379/0")).toThrow(/redis:/u);
+    });
+
+    it("keeps the password out of the error for an unparseable URL", () => {
+        expect.assertions(2);
+
+        let message = "";
+
+        try {
+            createNodeHyperdrive("postgres://u:hunter2@:bad");
+        } catch (error) {
+            message = (error as Error).message;
+        }
+
+        expect(message).toContain("not a valid URL");
+        expect(message).not.toContain("hunter2");
+    });
+});

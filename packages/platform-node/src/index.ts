@@ -34,8 +34,9 @@
  * registry as the `shardDO` namespace that worker routes to. Also absent are
  * the Cloudflare product bindings with no local
  * equivalent — Vectorize, Workers AI, Browser Rendering, Containers, Analytics
- * Engine, Pipelines, Hyperdrive. `ctx.secrets` reads environment variables
- * through `createNodeSecretBindings` (`./node-secrets`).
+ * Engine, Pipelines. `ctx.secrets` reads environment variables through
+ * `createNodeSecretBindings` (`./node-secrets`), and the Hyperdrive binding is
+ * built from `DATABASE_URL` by `createNodeHyperdrive` (`./node-hyperdrive`).
  *
  * `@lunora/config` ships a `node` **deploy** driver, so `--target node` resolves
  * for `provision` — which reports, once, which declared features this target
@@ -51,6 +52,8 @@ export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStore
 export { createNodeGlobalStore, createNodeSqlExec } from "./node-global-store";
 export type { NodeHttpServer, NodeHttpServerOptions } from "./node-http-server";
 export { createNodeHttpServer } from "./node-http-server";
+export type { NodeHyperdriveBinding } from "./node-hyperdrive";
+export { createNodeHyperdrive } from "./node-hyperdrive";
 export { createNodeShardKvStore } from "./node-kv-store";
 export type { NodeCronJob, NodePlatform, NodePlatformDispatchOptions, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";

@@ -116,6 +116,19 @@ interface NodeHttpServerOptions {
 }
 ```
 
+### `NodeHyperdriveBinding` (interface)
+
+```ts
+interface NodeHyperdriveBinding {
+    connectionString: string;
+    database: string;
+    host: string;
+    password: string;
+    port: number;
+    user: string;
+}
+```
+
 ### `NodePlatform` (interface)
 
 ```ts
@@ -407,6 +420,12 @@ const createNodeGlobalStore: (options?: NodeGlobalStoreOptions) => NodeGlobalSto
 
 ```ts
 const createNodeHttpServer: (options: NodeHttpServerOptions) => Promise<NodeHttpServer>;
+```
+
+### `createNodeHyperdrive` (const)
+
+```ts
+const createNodeHyperdrive: (url?: string | undefined) => NodeHyperdriveBinding;
 ```
 
 ### `createNodePlatform` (const)

@@ -212,6 +212,18 @@ describe("gatePlatformFeatures", () => {
         expect(celld.diagnostics).toMatchObject([{ feature: "x402", name: "platform_unsupported_feature" }]);
     });
 
+    it("keeps ctx.sql on node, which builds the Hyperdrive binding from DATABASE_URL, and gates it on celld", async () => {
+        expect.assertions(3);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const usage: FeatureUsage = { ...ALL_OFF, hyperdrive: true };
+        const node = gatePlatformFeatures(usage, "node");
+
+        expect(node.usage.hyperdrive).toBe(true);
+        expect(node.diagnostics).toStrictEqual([]);
+        expect(gatePlatformFeatures(usage, "celld").diagnostics).toMatchObject([{ feature: "hyperdrive", name: "platform_unsupported_feature" }]);
+    });
+
     // Plan 234: `node` is a REGISTERED target (unlike the synthetic "partial"
     // matrix above), so this exercises the real `NODE_CAPABILITIES` matrix
     // through the actual registry lookup — the thing `platformMatrixIds`

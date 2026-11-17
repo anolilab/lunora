@@ -24,7 +24,7 @@ import type { PlatformCapabilities } from "./types";
  * What remains genuinely absent is everything a single Node process cannot
  * distribute: placement across nodes, failover, and most Cloudflare-specific
  * product bindings (Vectorize, Workers AI, Containers, Browser Rendering,
- * Analytics Engine, Hyperdrive). Workflows, object storage and
+ * Analytics Engine). Workflows, object storage and
  * queues are the three that CAN be emulated locally — `defineWorkflow` handlers
  * compile onto the `@visulima/workflow` engine, R2 becomes a filesystem bucket,
  * and Queues becomes a durable table with the same batch/ack/retry/dead-letter
@@ -255,7 +255,10 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             level: "emulated",
             note: "Each subscription is a createNodeQueueHost queue, so a publish is one durable insert per subscription into _lunora_queue_messages. A subscription handler's message.run goes through the same in-process dispatch route as the queues row, and needs the same wiring",
         },
-        hyperdrive: { level: "unsupported", note: "No connection-pooling binding implemented" },
+        hyperdrive: {
+            level: "emulated",
+            note: "createNodeHyperdrive (@lunora/platform-node) builds the HYPERDRIVE binding from DATABASE_URL (postgres:, postgresql: or mysql:), so the app's own .hyperdrive((env) => …) wiring builds ctx.sql from it unchanged. Emulated, not native: nothing sits between the driver and the database, so there is no edge connection pool and no query cache, and the driver's own pool settings are the only ones that apply",
+        },
         httpCache: {
             level: "unsupported",
             note: "Nothing sits in front of this host to cache its responses, and Node exposes no Web Cache API global — the runtime's REST edge cache finds no HttpCacheLike here and degrades to emitting Cache-Control alone, which browsers and any CDN in front still honour",
