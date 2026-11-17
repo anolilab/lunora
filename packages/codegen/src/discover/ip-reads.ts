@@ -133,14 +133,12 @@ const isHandedToAddressFreeHelper = (identifier: TsNode, visiting: Set<ts.Node>)
     return !mayReadIpIn(helper, parameter, visiting);
 };
 
-/** How many `const c = ctx` hops inside a helper are followed back to its ctx parameter. */
-const MAX_ALIAS_HOPS = 8;
-
 /**
- * Whether `node` is `parameter` by symbol, directly or through a local alias of it (`const c = ctx`): a helper's ctx
- * under any name.
+ * Whether `node` is `parameter` by symbol, directly or through any chain of local aliases of it (`const c = ctx`): a
+ * helper's ctx under any name. The chain is followed to its end, however long, since stopping early would read a
+ * ninth alias as unrelated and let the helper pass as address-free; `seen` only stops a self-referencing initializer.
  */
-const isParameterUse = (node: TsNode, parameter: ParameterDeclaration | undefined, hops = MAX_ALIAS_HOPS): boolean => {
+const isParameterUse = (node: TsNode, parameter: ParameterDeclaration | undefined, seen = new Set<ts.Node>()): boolean => {
     if (parameter === undefined || !Node.isIdentifier(node)) {
         return false;
     }
@@ -151,9 +149,15 @@ const isParameterUse = (node: TsNode, parameter: ParameterDeclaration | undefine
         return true;
     }
 
+    if (declaration === undefined || seen.has(declaration.compilerNode)) {
+        return false;
+    }
+
+    seen.add(declaration.compilerNode);
+
     const initializer = Node.isVariableDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) ? declaration.getInitializer() : undefined;
 
-    return hops > 0 && initializer !== undefined && isParameterUse(initializer, parameter, hops - 1);
+    return initializer !== undefined && isParameterUse(initializer, parameter, seen);
 };
 
 /**

@@ -119,6 +119,7 @@ describe("discoverFunctions — queries that may read ctx.ip", () => {
         ["hands the ctx to a helper through a second parameter it already visited (#1605 item 13)", "return twoSlots(ctx, ctx);"],
         ["hands the ctx to the second parameter of a helper visited first (#1605 item 13)", "await twoSlots(ctx, 1); return twoSlots(1, ctx);"],
         ["reaches a helper that aliases its ctx before handing it on (#1605 item 14)", "return aliasing(ctx);"],
+        ["reaches a helper that hands the ctx on through nine chained aliases", "return deepAliasing(ctx);"],
         ["reads the ctx in a parameter's default initializer (#1605 item 15)", "const f = (c: any = ctx) => sink(c); return f();"],
         ["reads the ctx in a destructuring default (#1605 item 15)", "const { c = ctx }: any = {}; return sink(c);"],
     ])("marks a query that %s", (_name, body) => {
@@ -127,7 +128,8 @@ describe("discoverFunctions — queries that may read ctx.ip", () => {
         const helpers = `declare const sink: (value: unknown) => unknown;
 const twoSlots = (first: any, second: any) => sink(second);
 const firstOnly = (first: any, _second?: any) => sink(first);
-const aliasing = (p: any) => { const c = p; return sink(c); };`;
+const aliasing = (p: any) => { const c = p; return sink(c); };
+const deepAliasing = (p: any) => { const a1 = p; const a2 = a1; const a3 = a2; const a4 = a3; const a5 = a4; const a6 = a5; const a7 = a6; const a8 = a7; const a9 = a8; return sink(a9); };`;
 
         expect(readsIpFor(body, helpers)).toBe(true);
     });
