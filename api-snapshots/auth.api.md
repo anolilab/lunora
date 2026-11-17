@@ -1082,12 +1082,6 @@ const buildAuditEntry: (context: AuditHookContext, { now, trustProxyHeaders }?: 
 const classifyEmail: (email: string, config?: EmailGateConfig) => EmailClassification;
 ```
 
-### `compileMigrationsSql` (const)
-
-```ts
-const compileMigrationsSql: (options: LunoraAuthOptions) => Promise<string>;
-```
-
 ### `createAuth` (const)
 
 ```ts
@@ -1162,14 +1156,6 @@ const emailGateMiddleware: <Context>(options: EmailGateMiddlewareOptions<Context
 
 ```ts
 const ensureAuthAuditTable: (executor: SqlExecutor) => Promise<void>;
-```
-
-### `ensureMigrated` (const)
-
-```ts
-const ensureMigrated: (auth: LunoraAuth | {
-    options: LunoraAuthOptions;
-}) => Promise<void>;
 ```
 
 ### `eventForPath` (const)
@@ -1462,7 +1448,9 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ### `compileMigrationsSql` (const)
 
-Re-exported from `@lunora/auth` — signature tracked in that section.
+```ts
+const compileMigrationsSql: (options: LunoraAuthOptions) => Promise<string>;
+```
 
 ### `createMigrationAuth` (const)
 
@@ -1472,7 +1460,11 @@ const createMigrationAuth: (options: LunoraAuthOptions) => LunoraAuth;
 
 ### `ensureMigrated` (const)
 
-Re-exported from `@lunora/auth` — signature tracked in that section.
+```ts
+const ensureMigrated: (auth: LunoraAuth | {
+    options: LunoraAuthOptions;
+}) => Promise<void>;
+```
 
 ## `@lunora/auth/plugins`
 
