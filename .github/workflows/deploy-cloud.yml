@@ -40,9 +40,10 @@
 # Never cancel a deploy in flight. Three Workers are published in sequence and a
 # cell is only coherent once all three land: killing the run between the control
 # plane and the dispatcher leaves tenant traffic routed by an old dispatcher
-# against a new control-plane contract.
+# against a new control-plane contract. Keyed on the target cell, not the ref:
+# two refs deploying the same cell must queue, not interleave their Workers.
 "concurrency":
-    "group": "${{ github.workflow }}-${{ github.ref }}"
+    "group": "${{ github.workflow }}-${{ inputs.target || (github.ref_type == 'tag' && 'production' || 'staging') }}"
     "cancel-in-progress": false
 
 "permissions":
@@ -97,6 +98,7 @@
               "id": "target"
               "shell": "bash"
               "env":
+                  "EVENT_NAME": "${{ github.event_name }}"
                   "REQUESTED": "${{ inputs.target }}"
                   "REF_NAME": "${{ github.ref_name }}"
                   "REF_TYPE": "${{ github.ref_type }}"
@@ -112,8 +114,15 @@
                   fi
 
                   # The environment enforces this too; failing here says why.
-                  if [ "${name}" = "production" ] && [ "${REF_TYPE}" != "tag" ]; then
+                  if [ "${name}" = "production" ] && { [ "${REF_TYPE}" != "tag" ] || [[ "${REF_NAME}" != cloud-v* ]]; }; then
                       echo "::error::Production deploys from a cloud-v* tag only. Pick the tag under 'Use workflow from'."
+                      exit 1
+                  fi
+
+                  # A dispatch runs the chosen ref with the staging secrets, so it must be the
+                  # ref a push would deploy: an unreviewed branch never reaches the staging cell.
+                  if [ "${name}" = "staging" ] && [ "${EVENT_NAME}" = "workflow_dispatch" ] && { [ "${REF_TYPE}" != "branch" ] || [ "${REF_NAME}" != "alpha" ]; }; then
+                      echo "::error::Staging deploys from alpha only. Pick alpha under 'Use workflow from'."
                       exit 1
                   fi
 
@@ -281,7 +290,7 @@
         # rather than a record of what is actually serving tenants.
         "name": "GitHub Release"
         "needs": "deploy"
-        "if": "needs.deploy.outputs.target == 'production' && github.ref_type == 'tag'"
+        "if": "needs.deploy.outputs.target == 'production' && github.ref_type == 'tag' && startsWith(github.ref_name, 'cloud-v')"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 10
         "permissions":
