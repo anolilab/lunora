@@ -82,9 +82,11 @@ export const revoke = mutation
     });
 
 /**
- * Accept an invitation by its token (the signed-in invitee). Possession of the
- * token — mailed to the invited address — is the proof. Adds the caller as a
- * member with the invited role and marks the invitation accepted.
+ * Accept an invitation by its token (the signed-in invitee). The token alone is
+ * not enough: a forwarded link would hand the invited role to whoever opens it,
+ * so the caller's email (verified, since sign-in requires it) must be the
+ * invited address. Adds the caller as a member with the invited role and marks
+ * the invitation accepted.
  */
 export const accept = mutation
     .use(rateLimit("sensitive"))
@@ -98,6 +100,13 @@ export const accept = mutation
 
         if (invitation?.status !== "pending" || invitation.expiresAt < context.now) {
             throw new LunoraError("FORBIDDEN", "invitation is invalid, revoked, or expired");
+        }
+
+        const identity = await context.auth.getIdentity();
+        const callerEmail = typeof identity?.["email"] === "string" ? identity["email"] : undefined;
+
+        if (callerEmail?.toLowerCase() !== invitation.email.toLowerCase()) {
+            throw new LunoraError("FORBIDDEN", "this invitation was sent to a different email address");
         }
 
         const members = await context.db.members.findMany({ where: { organizationId: invitation.organizationId, userId } });

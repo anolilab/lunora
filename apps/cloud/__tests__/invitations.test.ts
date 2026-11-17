@@ -10,6 +10,7 @@ type Row = Record<string, unknown>;
 const makeCtx = (
     userId: null | string,
     tables: Record<string, Row[]>,
+    email: null | string = "invitee@example.com",
 ): { ctx: MutationCtx; inserted: { doc: Row; table: string }[]; patched: { id: string; patch: Row }[] } => {
     const inserted: { doc: Row; table: string }[] = [];
     const patched: { id: string; patch: Row }[] = [];
@@ -38,7 +39,7 @@ const makeCtx = (
 
     return {
         ctx: {
-            auth: { getIdentity: () => Promise.resolve(null), userId },
+            auth: { getIdentity: () => Promise.resolve(email === null ? null : { email }), userId },
             db: withRateLimitStore(database),
             log: {},
             // Handlers read the clock through `ctx.now`; without it the expiry
@@ -61,7 +62,17 @@ describe("invitations.accept", () => {
         const token = "invite-token";
         const tokenHash = await sha256Hex(token);
         const { ctx, inserted, patched } = makeCtx("u_new", {
-            invitations: [{ _id: "inv1", expiresAt: Date.now() + 100_000, organizationId: "org_1", role: "member", status: "pending", tokenHash }],
+            invitations: [
+                {
+                    _id: "inv1",
+                    email: "Invitee@Example.com",
+                    expiresAt: Date.now() + 100_000,
+                    organizationId: "org_1",
+                    role: "member",
+                    status: "pending",
+                    tokenHash,
+                },
+            ],
             members: [],
         });
 
@@ -70,6 +81,28 @@ describe("invitations.accept", () => {
         expect(result).toStrictEqual({ organizationId: "org_1" });
         expect(inserted).toStrictEqual([{ doc: expect.objectContaining({ organizationId: "org_1", role: "member", userId: "u_new" }), table: "members" }]);
         expect(patched).toStrictEqual([{ id: "inv1", patch: { status: "accepted" } }]);
+    });
+
+    it("refuses a caller whose email is not the invited address, so a forwarded link grants nothing", async () => {
+        const token = "invite-token";
+        const tokenHash = await sha256Hex(token);
+        const invitation = {
+            _id: "inv1",
+            email: "invitee@example.com",
+            expiresAt: Date.now() + 100_000,
+            organizationId: "org_1",
+            role: "owner",
+            status: "pending",
+            tokenHash,
+        };
+        const other = makeCtx("u_other", { invitations: [invitation], members: [] }, "someone-else@example.com");
+        const anonymousIdentity = makeCtx("u_other", { invitations: [invitation], members: [] }, null);
+
+        await expect(accept.handler(other.ctx, { token })).rejects.toMatchObject({ code: "FORBIDDEN" });
+        await expect(accept.handler(anonymousIdentity.ctx, { token })).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+        expect(other.inserted).toStrictEqual([]);
+        expect(other.patched).toStrictEqual([]);
     });
 
     it("rejects an expired or revoked invitation", async () => {
