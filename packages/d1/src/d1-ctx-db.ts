@@ -8,7 +8,7 @@
  * unchanged for D1 callers (the codegen-emitted worker, the studio introspector,
  * admin export/import, and the test suite).
  */
-/* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts, introspect/admin, and every test import it as "./d1-ctx-db". */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- the filename: `ctx-db` names this module family across d1, sql-store and shard-engine, and 70 imports use it
 import type { SchemaLike } from "@lunora/shard-engine";
 import type { SqlCtxDbOptions, SqlCtxExec, SqlSearchBackfillResult } from "@lunora/sql-store";
 import {
