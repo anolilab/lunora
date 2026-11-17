@@ -87,6 +87,19 @@ describe(overageFleetPorts, () => {
         expect(insert).toHaveBeenCalledWith("auditLog", expect.objectContaining({ action: "organization.suspend", actorUserId: "system:overage" }));
     });
 
+    it("re-suspends an org whose earlier suspension was lifted (suspendedReason: null)", async () => {
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
+        const database = fakeControlPlaneDb({ organizations: [{ _id: "org_a", suspendedAt: null, suspendedReason: null }] }, { insert, patch });
+        const { suspension } = await buildOverageReconcileData(database, 500);
+        const ports = overageFleetPorts(database, noopLedger, 1000, suspension);
+
+        await ports.onExhausted("org_a");
+
+        expect(patch).toHaveBeenCalledWith("organizations", "org_a", { suspendedAt: 1000, suspendedReason: "overage" });
+        expect(insert).toHaveBeenCalledWith("auditLog", expect.objectContaining({ action: "organization.suspend", organizationId: "org_a" }));
+    });
+
     it("never overrides a non-overage suspension on exhaustion", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = overageFleetPorts(fakeControlPlaneDb({}, { patch }), noopLedger, 1000, new Map([["org_a", "dunning"]]));

@@ -20,7 +20,7 @@ type SubscriptionRow = Parameters<typeof toSubscription>[0];
 interface OrgRow {
     _id: string;
     creditsAccountId?: string;
-    suspendedReason?: string;
+    suspendedReason?: null | string;
 }
 
 interface UsageRow {
@@ -130,7 +130,9 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
 
     for (const organization of organizations) {
         accounts.set(organization._id, organization.creditsAccountId ?? null);
-        suspension.set(organization._id, organization.suspendedReason);
+        // Recovery writes `suspendedReason: null`, so a lifted org reads back null,
+        // not absent — keeping null would make `onExhausted` treat it as suspended forever.
+        suspension.set(organization._id, organization.suspendedReason ?? undefined);
         inputs.push({
             alreadyDebitedCredits: debitedByOrg.get(organization._id) ?? 0,
             boxes: boxesByOrg.get(organization._id) ?? 0,
