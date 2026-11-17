@@ -405,12 +405,14 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
 
             // Rows written before `recordUsage` stamped `reportRetryAt` have none, and the due read
             // below cannot see them. Stamp one page per sweep through the same index (an absent
-            // column matches `null`), so the backlog drains without an app-side migration.
+            // column matches `null`), so the backlog drains without an app-side migration. The
+            // explicit order is the index's next columns: the default `_creationTime` order is not,
+            // and would sort the whole legacy backlog before the limit applies.
             const legacy = await database.findMany(
                 PAYMENT_TABLES.usageEvents,
                 // eslint-disable-next-line unicorn/no-null -- `null` is how ctx.db matches a column the row never wrote
                 { provider, reportedToProvider: false, reportRetryAt: null },
-                { limit: wanted },
+                { limit: wanted, orderBy: [{ createdAt: "asc" }, { idempotencyKey: "asc" }] },
             );
 
             for (const row of legacy.rows) {
