@@ -25,6 +25,7 @@ export interface StoredBox {
     fleets?: FleetSummary[] | null;
     organizationId: string;
     publicKey: string;
+    revokedAt?: null | number;
     slug: string;
     status: "offline" | "online" | "pending" | "revoked";
 }
@@ -35,9 +36,24 @@ export const SEEN_WRITE_INTERVAL_MS = 60_000;
 export const loadBox = async (database: ControlPlaneStore, boxId: string): Promise<null | StoredBox> =>
     (await database.get("boxes", boxId)) as null | StoredBox;
 
+/**
+ * `revokedAt` is the authority, not `status`: a session's status write can land after a revoke
+ * it read before, and the store has no conditional patch to stop it. The write never touches
+ * `revokedAt`, so it still says the box is revoked.
+ */
+const isRevoked = (box: StoredBox): boolean => box.status === "revoked" || box.revokedAt != null;
+
+/** Put back a revocation that landed between a session's read and its status write. */
+const keepRevoked = async (database: ControlPlaneStore, boxId: string): Promise<void> => {
+    const box = await loadBox(database, boxId);
+
+    if (box?.revokedAt != null && box.status !== "revoked") {
+        await database.patch("boxes", boxId, { status: "revoked" });
+    }
+};
+
 /** The identity half of a box, as the handshake checks it. */
-export const sessionBoxOf = (box: null | StoredBox): null | SessionBox =>
-    box === null ? null : { publicKey: box.publicKey, revoked: box.status === "revoked" };
+export const sessionBoxOf = (box: null | StoredBox): null | SessionBox => (box === null ? null : { publicKey: box.publicKey, revoked: isRevoked(box) });
 
 /**
  * Record an authenticated `hello`: the box is online, runs these versions with
@@ -53,7 +69,7 @@ export const recordHello = async (
 ): Promise<void> => {
     const box = await loadBox(database, boxId);
 
-    if (box === null || box.status === "revoked") {
+    if (box === null || isRevoked(box)) {
         return;
     }
 
@@ -64,6 +80,7 @@ export const recordHello = async (
         status: "online",
         versions: hello.versions,
     });
+    await keepRevoked(database, boxId);
 };
 
 /**
@@ -103,6 +120,7 @@ export const markOffline = async (database: ControlPlaneStore, boxId: string): P
     }
 
     await database.patch("boxes", boxId, { status: "offline" });
+    await keepRevoked(database, boxId);
 };
 
 /**
