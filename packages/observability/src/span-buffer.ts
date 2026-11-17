@@ -12,15 +12,13 @@ import type { LogFields } from "../../../shared/log-fields";
 import type { SpanEvent, SpanEventPoint, SpanKind } from "../../../shared/span-event";
 import { DEFAULT_CAPACITY, normalizeCapacity } from "./log-buffer";
 
-/* eslint-disable import/exports-last -- a data + types module: the public TraceSpan/TraceSummary shapes are declared next to the ring buffer and fold that produce them; grouping all exports at the end would scatter the contract. */
-
 /**
  * One span in a folded trace, flattened for rendering: `depth` is its nesting
  * level under the root and `offsetMs` its start relative to the trace start, so
  * a waterfall row is a pure function of the record (indent by `depth`, bar from
  * `offsetMs` to `offsetMs + durationMs`) with no client-side tree math.
  */
-export interface TraceSpan {
+interface TraceSpan {
     attributes?: LogFields;
     /** Nesting level; the root span is 0. */
     depth: number;
@@ -48,7 +46,7 @@ export interface TraceSpan {
 }
 
 /** One folded trace: the dispatch plus every span recorded beneath it. */
-export interface TraceSummary {
+interface TraceSummary {
     /** Wall-clock span of the whole trace (root start → last span end). */
     durationMs: number;
     functionPath: string;
@@ -90,7 +88,7 @@ export interface TraceSummary {
  * after its children — so ordering is imposed by {@link foldTraces} at read
  * time rather than assumed here.
  */
-export class SpanBuffer {
+class SpanBuffer {
     private readonly buffer: SpanEvent[] = [];
 
     private readonly capacity: number;
@@ -167,7 +165,7 @@ export class SpanBuffer {
 }
 
 /** Default number of traces {@link foldTraces} returns, newest first. */
-export const DEFAULT_TRACE_LIMIT = 50;
+const DEFAULT_TRACE_LIMIT = 50;
 
 /** Bucket spans by their trace id, preserving arrival order within each group. */
 const groupByTrace = (spans: ReadonlyArray<SpanEvent>): Map<string, SpanEvent[]> => {
@@ -370,7 +368,7 @@ const preOrderSpans = (rows: ReadonlyArray<TraceSpan>, rootSpanId: string): Trac
 };
 
 /** {@link foldTraces} result: the folded waterfalls plus the total distinct traces available before the `limit`. */
-export interface FoldedTraces {
+interface FoldedTraces {
     /**
      * Distinct traces present in the buffer — the denominator for a "showing N of
      * M" affordance. `traces.length` is `min(total, limit)`, so `total > traces.length`
@@ -387,7 +385,7 @@ export interface FoldedTraces {
  * @param spans Buffered spans, in arrival order.
  * @param limit Maximum number of traces to return, newest first.
  */
-export const foldTraces = (spans: ReadonlyArray<SpanEvent>, limit: number = DEFAULT_TRACE_LIMIT): FoldedTraces => {
+const foldTraces = (spans: ReadonlyArray<SpanEvent>, limit: number = DEFAULT_TRACE_LIMIT): FoldedTraces => {
     const byTrace = groupByTrace(spans);
 
     // Newest-first and truncated to `limit` BEFORE folding, so a full ring only
@@ -451,3 +449,6 @@ export const foldTraces = (spans: ReadonlyArray<SpanEvent>, limit: number = DEFA
     // slice, so the panel can flag when older traces exist but weren't returned.
     return { total: byTrace.size, traces: summaries.toSorted((a, b) => b.startTs - a.startTs) };
 };
+
+export type { FoldedTraces, TraceSpan, TraceSummary };
+export { DEFAULT_TRACE_LIMIT, foldTraces, SpanBuffer };
