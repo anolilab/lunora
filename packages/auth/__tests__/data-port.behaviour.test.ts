@@ -8,6 +8,7 @@ import { LunoraAuthDO } from "../src/auth-do";
 import type { AuthDataPortLike } from "../src/data-port";
 import { authCredentialTableNames, authTableNames, createDoAuthDataPort, createSqlAuthDataPort } from "../src/data-port";
 import { createDoAuthWiring } from "../src/do-wiring";
+import { deviceAuthorization, jwt, oauthProvider } from "../src/plugins";
 import type { SqlExecutor } from "../src/sql-store";
 import createDoStorage from "./helpers/do-storage";
 
@@ -233,6 +234,41 @@ describe("auth data port", () => {
         await expect(target.port.importRows(rows)).resolves.toStrictEqual({ conflicts: 0, errors: [], inserted: 1 });
         expect(target.database.prepare(`SELECT "email" FROM "user"`).all()).toEqual([{ email: "ada@example.test" }]);
         await expect(target.port.importRows(rows)).resolves.toStrictEqual({ conflicts: 1, errors: [], inserted: 0 });
+    });
+
+    it("treats OAuth tokens and device codes as live credentials: never exported, emptied by a replace", async () => {
+        expect.hasAssertions();
+
+        const options = { plugins: [jwt(), oauthProvider({ consentPage: "/consent", loginPage: "/sign-in" }), deviceAuthorization()], secret: SECRET };
+        const bearer = ["deviceCode", "oauthAccessToken", "oauthRefreshToken"];
+
+        expect(authTableNames(options)).toContain("oauthClient");
+        expect(authTableNames(options).filter((table) => bearer.includes(table))).toStrictEqual([]);
+        expect(authCredentialTableNames(options)).toStrictEqual(expect.arrayContaining(bearer));
+
+        const database = new DatabaseSync(":memory:");
+
+        createTables(database);
+
+        for (const table of bearer) {
+            database.exec(`CREATE TABLE "${table}" ("id" text NOT NULL PRIMARY KEY, "userId" text)`);
+            database.prepare(`INSERT INTO "${table}" VALUES ('t1', 'u1')`).run();
+        }
+
+        database.prepare(`INSERT INTO "user" VALUES ('u1', 'a@b.test', NULL)`).run();
+
+        // Even handed the token tables by name, export skips them and a replace clears them.
+        const port = createSqlAuthDataPort(batchingExecutorOver(database), ["user", ...bearer]);
+
+        const exported = await collect(port);
+
+        expect(exported.map((row) => row.table)).toStrictEqual(["user"]);
+
+        await port.replaceRows!([{ doc: { email: "a@b.test", id: "u1" }, table: "user" }]);
+
+        for (const table of bearer) {
+            expect(database.prepare(`SELECT * FROM "${table}"`).all()).toEqual([]);
+        }
     });
 
     it("names the live credential tables a replace clears", () => {

@@ -25,10 +25,10 @@
  * dependency edge to the runtime.
  */
 import { LunoraError } from "@lunora/errors";
+import { decodeWire, encodeWire } from "@lunora/wire";
 import { getAuthTables } from "better-auth/db";
 
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { decodeWire, encodeWire } from "@lunora/wire";
 import { AUTH_AUDIT_TABLE } from "./audit";
 import type { LunoraAuthOptions } from "./create-auth";
 import type { SqlExecutor } from "./sql-store";
@@ -65,11 +65,16 @@ type AuthSqlReader = Pick<SqlExecutor, "all">;
 
 /**
  * better-auth tables that hold live bearer credentials rather than data: signed-in
- * sessions and one-time verification / reset tokens. They are never exported — a
- * backup or eject must not hand out working logins, and restoring them would only
- * revive stale ones; users sign in again after a restore.
+ * sessions, one-time verification / reset tokens, and the OAuth access / refresh
+ * tokens and device codes the `mcp()`, `oauthProvider()` and device-authorization
+ * plugins mint for third parties. They are never exported — a backup or eject must
+ * not hand out working logins, and restoring them would only revive stale ones;
+ * users and OAuth clients sign in again after a restore. Lower-cased: SQLite
+ * resolves identifiers case-insensitively, so `"oauthaccesstoken"` names the same table.
  */
-const LIVE_CREDENTIAL_TABLES: ReadonlySet<string> = new Set(["session", "verification"]);
+const LIVE_CREDENTIAL_TABLES: ReadonlySet<string> = new Set(["devicecode", "oauthaccesstoken", "oauthrefreshtoken", "session", "verification"]);
+
+const isLiveCredentialTable = (table: string): boolean => LIVE_CREDENTIAL_TABLES.has(table.toLowerCase());
 
 /**
  * Tables an export never carries and an import never writes: the live
@@ -77,12 +82,7 @@ const LIVE_CREDENTIAL_TABLES: ReadonlySet<string> = new Set(["session", "verific
  * history of this deployment — a restore must not rewrite it, and an import that
  * could add rows to it would let whoever holds the admin token forge entries.
  */
-const isUnmovableAuthTable = (table: string): boolean => {
-    // SQLite resolves identifiers case-insensitively, so `"SESSION"` names the session table.
-    const name = table.toLowerCase();
-
-    return LIVE_CREDENTIAL_TABLES.has(name) || name === AUTH_AUDIT_TABLE.toLowerCase();
-};
+const isUnmovableAuthTable = (table: string): boolean => isLiveCredentialTable(table) || table.toLowerCase() === AUTH_AUDIT_TABLE.toLowerCase();
 
 /**
  * The physical table names better-auth creates for `options` (plugin tables
@@ -144,7 +144,7 @@ const parentsFirst = (tables: Readonly<Record<string, OrderableAuthTable>>): [st
 
 const authTableNames = (options: LunoraAuthOptions): string[] =>
     parentsFirst(getAuthTables(options))
-        .filter(([logical]) => !LIVE_CREDENTIAL_TABLES.has(logical))
+        .filter(([logical]) => !isLiveCredentialTable(logical))
         .map(([, physical]) => physical);
 
 /**
@@ -154,7 +154,7 @@ const authTableNames = (options: LunoraAuthOptions): string[] =>
  */
 const authCredentialTableNames = (options: LunoraAuthOptions): string[] =>
     Object.entries(getAuthTables(options))
-        .filter(([logical]) => LIVE_CREDENTIAL_TABLES.has(logical))
+        .filter(([logical]) => isLiveCredentialTable(logical))
         .map(([, table]) => table.modelName);
 
 /** A table's columns; empty when it does not exist. `PRAGMA table_info` rather than `pragma_table_info()`: D1's authorizer refuses the function form. */
