@@ -703,6 +703,25 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.env.PREFIX}/\${args.key ?? args.other}\`);`))).toBe(false);
         });
 
+        it("rejects a composed local whose own initializer falls back to a caller value", () => {
+            expect.assertions(4);
+
+            const owned = `(await ctx.db.files.findFirstOrThrow({ where: { ownerId: ctx.auth.userId } }))`;
+
+            expect(isScopedByIdentity(sinkArgument(`const selectedKey = ${owned}.ownerId ?? args.key;\nSINK(\`\${selectedKey}/\${args.name}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId ?? args.key;\nSINK(\`\${uid}/\${args.name}\`);`))).toBe(false);
+            // The same fallback after the identity prefix lands under the caller's own key space.
+            expect(isScopedByIdentity(sinkArgument(`const name = args.key ?? args.other;\nSINK(\`\${ctx.auth.userId}/\${name}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid}/\${args.name}\`);`))).toBe(true);
+        });
+
+        it("rejects an identity destructured with a default the caller can supply", () => {
+            expect.assertions(2);
+
+            expect(isScopedByIdentity(sinkArgument(`const { userId = args.victim } = ctx.auth;\nSINK(\`\${userId}/\${args.name}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const { userId } = ctx.auth;\nSINK(\`\${userId}/\${args.name}\`);`))).toBe(true);
+        });
+
         it("rejects a key scoped only by a server-trusted ctx value that names no caller", () => {
             expect.assertions(3);
 

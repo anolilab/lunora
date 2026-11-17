@@ -749,6 +749,111 @@ const requireMember = async (ctx, channelId) => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it.each([
+        ["a tied parameter", `channelId = "general";`],
+        ["the ctx parameter", "ctx = globalThis.adminContext;"],
+    ])("reports a helper that reassigns %s before its identity read", (_label, reassignment) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, HELPER.replace("const userId", `${reassignment}\n    const userId`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a helper whose tied parameter has a default", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, HELPER.replace("(ctx, channelId)", `(ctx, channelId = "general")`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a destructuring assignment", "({ key: message.attachmentKey } = args);"],
+        ["a write through an alias", "const alias = message;\n    alias.attachmentKey = args.key;"],
+        ["Object.assign", "Object.assign(message, args);"],
+        ["a call handed the row", "mutate(message, args);"],
+        ["a method on the row", "message.merge(args);"],
+        ["a computed write", "message[args.field] = args.key;"],
+    ])("reports a guarded row that %s can change before the sink", (_label, mutation) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`await requireMember(ctx, message.channelId);\n    ${mutation}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts a guarded row whose unrelated fields are read or written", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId);\n    message.views = (message.views ?? 0) + 1;\n    const copy = { ...message };\n    void copy.tags.includes(args.tag);",
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports an inline guard whose identity is destructured with a caller default", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const { userId = args.victim } = ctx.auth;
+    const membership = await ctx.db.members.findFirst({ where: { userId, channelId: message.channelId } });
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each(["membership === null", "null === membership", "membership == undefined"])("accepts an inline guard checked with %s", (condition) => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId: message.channelId } });
+    if (${condition}) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["a fallback", `"userId", globalThis.victim ?? ctx.auth.userId`],
+        ["a conditional", `"userId", ctx.auth.userId ? globalThis.victim : userId`],
+    ])("reports a helper whose identity read sits in %s", (_label, predicate) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, HELPER.replace(`"userId", userId`, predicate)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a local", "const uid = args.victim ?? ctx.auth.userId;", "uid"],
+        ["a destructured identity", "const { userId } = ctx.auth;", "args.victim ?? userId"],
+    ])("reports an inline guard whose identity alias through %s only falls back to the caller", (_label, alias, value) => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`${alias}
+    const membership = await ctx.db.members.findFirst({ where: { userId: ${value}, channelId: message.channelId } });
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("reports an inline guard checked with === undefined", () => {
         expect.assertions(1);
 

@@ -170,7 +170,9 @@ const bindingContextPath = (element: BindingElement, policy: Policy, hops: numbe
     const holder = element.getParent().getParent();
     const key = bindingKeyName(element);
 
-    if (element.getDotDotDotToken() !== undefined || (policy === "trust" && isReassignedBinding(element))) {
+    // A default (`const { userId = args.victim } = ctx.auth`) is the value whenever the surface lacks the field,
+    // so the trust policy cannot vouch for what the binding holds.
+    if (element.getDotDotDotToken() !== undefined || (policy === "trust" && (isReassignedBinding(element) || element.getInitializer() !== undefined))) {
         return undefined;
     }
 

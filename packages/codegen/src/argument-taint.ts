@@ -833,6 +833,56 @@ const appFunctionOf = (callee: TsNode | undefined): FunctionNode | undefined => 
 
 const isAssignmentOperator = (kind: SyntaxKind): boolean => kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
 
+/**
+ * Whether `node` is written: the target of an assignment, including from inside a destructuring pattern
+ * (`({ a: row.ownerId } = x)`, `[row.ownerId] = x`), a `for…of` / `for…in` target, or the operand of
+ * `delete`, `++` or `--`.
+ */
+const isWriteTarget = (node: TsNode): boolean => {
+    let current = node;
+    let parent = current.getParent();
+
+    // Climb out of any pattern the node sits in as a target; a value position in an object literal climbs too, which is
+    // harmless: it only ends in a write when that literal is itself an assignment target.
+    while (
+        Node.isParenthesizedExpression(parent) ||
+        Node.isArrayLiteralExpression(parent) ||
+        Node.isObjectLiteralExpression(parent) ||
+        Node.isSpreadElement(parent) ||
+        Node.isSpreadAssignment(parent) ||
+        Node.isShorthandPropertyAssignment(parent) ||
+        (Node.isPropertyAssignment(parent) && parent.getNameNode() !== current)
+    ) {
+        current = parent;
+        parent = current.getParent();
+    }
+
+    if (Node.isBinaryExpression(parent)) {
+        return parent.getLeft() === current && isAssignmentOperator(parent.getOperatorToken().getKind());
+    }
+
+    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
+        return parent.getInitializer() === current;
+    }
+
+    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
+        const operator = parent.getOperatorToken();
+
+        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
+    }
+
+    return Node.isDeleteExpression(parent);
+};
+
+/** Whether `parameter` is assigned anywhere in `helper` (`channelId = "general"`, `({ ctx } = other)`), by symbol. */
+const isReassignedParameter = (parameter: ParameterDeclaration, helper: FunctionNode): boolean =>
+    helper
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .some(
+            (identifier) =>
+                identifier.getText() === parameter.getName() && isWriteTarget(identifier) && declarationOf(identifier)?.compilerNode === parameter.compilerNode,
+        );
+
 /** A chain of calls and property reads, as a `db` read is written: every call in it, the names read along it, and its root. */
 interface DatabaseChain {
     calls: CallExpression[];
@@ -893,7 +943,7 @@ const singleRowReadOf = (chain: DatabaseChain): { selfEnforcing: boolean } | und
  * access chain with at least one level, rooted at a single-identifier `const` whose initializer is a
  * `ctx.db` read. `undefined` otherwise, which leaves the sink reported.
  */
-const rowDeclarationOf = (key: TsNode): VariableDeclaration | undefined => {
+const rowDeclarationOf = (key: TsNode): { keyPath: ReadonlyArray<string>; row: VariableDeclaration } | undefined => {
     const unwrapped = unwrapExpression(key);
     const chain = Node.isIdentifier(unwrapped) ? (unwrapExpression(trustedInitializerOf(unwrapped)) ?? unwrapped) : unwrapped;
     const access = accessPathOf(chain);
@@ -912,7 +962,76 @@ const rowDeclarationOf = (key: TsNode): VariableDeclaration | undefined => {
     const read = awaitedOperand(declaration.getInitializer());
     const readChain = Node.isCallExpression(read) && contextTrustPathOf(read.getExpression())?.[0] === "db" ? databaseChainOf(read) : undefined;
 
-    return readChain !== undefined && singleRowReadOf(readChain) !== undefined ? declaration : undefined;
+    return readChain !== undefined && singleRowReadOf(readChain) !== undefined ? { keyPath: access.path, row: declaration } : undefined;
+};
+
+/** Whether `path` can name `keyPath` or an object on the way to it; an `undefined` segment is a computed key, which may. */
+const mayReach = (path: ReadonlyArray<string | undefined>, keyPath: ReadonlyArray<string>): boolean =>
+    path.length <= keyPath.length && path.every((segment, index) => segment === undefined || segment === keyPath[index]);
+
+/** The operators that only compare a holder (`row === null`), never change it. */
+const EQUALITY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+    SyntaxKind.EqualsEqualsEqualsToken,
+    SyntaxKind.EqualsEqualsToken,
+    SyntaxKind.ExclamationEqualsEqualsToken,
+    SyntaxKind.ExclamationEqualsToken,
+]);
+
+/**
+ * The longest property/element access chain `use` heads, through value-preserving wrappers, and the names it reads
+ * (`undefined` for a computed key).
+ */
+const accessChainFrom = (use: Identifier): { node: TsNode; path: (string | undefined)[] } => {
+    const path: (string | undefined)[] = [];
+    let node: TsNode = valueWrapperOf(use);
+
+    for (let parent = node.getParent(); ; parent = node.getParent()) {
+        if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === node) {
+            path.push(parent.getName());
+        } else if (Node.isElementAccessExpression(parent) && parent.getExpression() === node) {
+            const argument = unwrapExpression(parent.getArgumentExpression());
+
+            path.push(Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument) ? argument.getLiteralValue() : undefined);
+        } else {
+            return { node, path };
+        }
+
+        node = valueWrapperOf(parent);
+    }
+};
+
+/**
+ * Whether `use`, a reference to the guarded row, leaves the value at `keyPath` as the guard saw it. A write to the key
+ * or to an object holding it (`row.key = …`, `({ key: row.key } = args)`, `delete row.key`) changes it, and so can
+ * any code handed an object holding it: a call argument (`Object.assign(row, args)`), a method invoked on it, or an
+ * alias. A holder may still be tested (`!row`, `row === null`) or spread into a copy.
+ */
+const keepsGuardedKey = (use: Identifier, keyPath: ReadonlyArray<string>): boolean => {
+    const { node, path } = accessChainFrom(use);
+
+    if (isWriteTarget(node)) {
+        return !mayReach(path, keyPath);
+    }
+
+    const parent = node.getParent();
+
+    // A method invoked on a holder (`row.save()`) runs with the holder as `this`; one on the key's own value cannot repoint it.
+    if (Node.isCallExpression(parent) && parent.getExpression() === node) {
+        const holder = path.slice(0, -1);
+
+        return path.length === 0 || holder.length >= keyPath.length || !mayReach(holder, keyPath);
+    }
+
+    if (path.length >= keyPath.length || !mayReach(path, keyPath)) {
+        return true;
+    }
+
+    return (
+        (Node.isPrefixUnaryExpression(parent) && parent.getOperatorToken() === SyntaxKind.ExclamationToken) ||
+        (Node.isBinaryExpression(parent) && EQUALITY_OPERATORS.has(parent.getOperatorToken().getKind())) ||
+        Node.isTypeOfExpression(parent) ||
+        Node.isSpreadAssignment(parent)
+    );
 };
 
 /** Every argument of the chain, and every node inside each argument (a callback's body included). */
@@ -963,6 +1082,10 @@ const isIdentityReadOf = (node: TsNode, parameter: ParameterDeclaration): boolea
     return isDirectDestructuredIdentityOf(node, parameter);
 };
 
+/** Whether the read argument `argument` reads the caller's identity through `parameter` on every path: `victim ?? ctx.auth.userId` does only when nothing else is supplied. */
+const argumentReadsIdentityOf = (argument: TsNode, parameter: ParameterDeclaration): boolean =>
+    [argument, ...argument.getDescendants()].some((node) => isIdentityReadOf(node, parameter) && !isAlternativeOf(node, argument));
+
 /** The declaration a variable statement makes, when it is a single `const` binding one identifier. */
 const constDeclarationOf = (statement: TsNode): VariableDeclaration | undefined => {
     if (!Node.isVariableStatement(statement)) {
@@ -975,7 +1098,21 @@ const constDeclarationOf = (statement: TsNode): VariableDeclaration | undefined 
     return declaration !== undefined && isConstDeclaration(declaration) && Node.isIdentifier(declaration.getNameNode()) ? declaration : undefined;
 };
 
-/** Whether `condition` is `!g` or `g == null`, in either operand order, for the binding `g`. */
+/** Whether `node` is the `undefined` global, not a local that shadows the name. */
+const isUndefinedGlobal = (node: TsNode | undefined): boolean => {
+    if (!Node.isIdentifier(node) || node.getText() !== "undefined") {
+        return false;
+    }
+
+    const declaration = declarationOf(node);
+
+    return declaration === undefined || declaration.getSourceFile().isDeclarationFile();
+};
+
+/**
+ * Whether `condition` is `!g`, `g === null`, `g == null` or `g == undefined`, in either operand order, for the binding
+ * `g`. A single-row read answers `null` on a miss, so `g === undefined` never fires and is not a check.
+ */
 const isMissingCheck = (condition: TsNode | undefined, declaration: VariableDeclaration): boolean => {
     const expression = unwrapExpression(condition);
     const isBinding = (node: TsNode | undefined): boolean => Node.isIdentifier(node) && bindsTo(node, declaration);
@@ -984,14 +1121,19 @@ const isMissingCheck = (condition: TsNode | undefined, declaration: VariableDecl
         return expression.getOperatorToken() === SyntaxKind.ExclamationToken && isBinding(unwrapExpression(expression.getOperand()));
     }
 
-    if (!Node.isBinaryExpression(expression) || expression.getOperatorToken().getKind() !== SyntaxKind.EqualsEqualsToken) {
+    if (!Node.isBinaryExpression(expression)) {
         return false;
     }
 
+    const operator = expression.getOperatorToken().getKind();
+    const isMissing = (node: TsNode | undefined): boolean =>
+        operator === SyntaxKind.EqualsEqualsEqualsToken
+            ? Node.isNullLiteral(node)
+            : operator === SyntaxKind.EqualsEqualsToken && (Node.isNullLiteral(node) || isUndefinedGlobal(node));
     const left = unwrapExpression(expression.getLeft());
     const right = unwrapExpression(expression.getRight());
 
-    return (isBinding(left) && Node.isNullLiteral(right)) || (isBinding(right) && Node.isNullLiteral(left));
+    return (isBinding(left) && isMissing(right)) || (isBinding(right) && isMissing(left));
 };
 
 /** Whether a branch's last statement (the branch itself, or its block's last statement) leaves the handler: a `throw`, or a `return` unless `throwOnly`. */
@@ -1035,7 +1177,7 @@ const helperEnforcesRead = (helper: FunctionNode, parameter: ParameterDeclaratio
         }
 
         const nodes = chainArgumentNodes(chain);
-        const readsIdentity = nodes.some((node) => isIdentityReadOf(node, parameter));
+        const readsIdentity = chain.calls.some((call) => call.getArguments().some((argument) => argumentReadsIdentityOf(argument, parameter)));
         const readsRow = tiedParameters.some((tied) => nodes.some((node) => Node.isIdentifier(node) && bindsTo(node, tied)));
 
         if (!readsIdentity || !readsRow) {
@@ -1090,7 +1232,11 @@ const isHelperGuardCall = (call: CallExpression, row: VariableDeclaration, await
     const returnType = helper.getReturnType();
     const mayBePromise = helper.isAsync() || returnType.isAny() || returnType.isUnknown() || returnType.getText().includes("Promise");
 
-    if (tiedParameters.length === 0 || (!awaited && mayBePromise)) {
+    // A default or a reassignment replaces what the call passed before the body reads it: a row field that is
+    // `undefined` takes `channelId = "general"`, and `ctx = other` checks someone else's identity.
+    const isReplaced = (candidate: ParameterDeclaration): boolean => candidate.hasInitializer() || isReassignedParameter(candidate, helper);
+
+    if (tiedParameters.length === 0 || (!awaited && mayBePromise) || [parameter, ...tiedParameters].some((candidate) => isReplaced(candidate))) {
         return false;
     }
 
@@ -1284,49 +1430,6 @@ const destructuredFieldOf = (element: TsNode | undefined): string | undefined =>
     }
 
     return bindingKeyName(element);
-};
-
-/**
- * Whether `node` is written: the target of an assignment, including from inside a destructuring pattern
- * (`({ a: row.ownerId } = x)`, `[row.ownerId] = x`), a `for…of` / `for…in` target, or the operand of
- * `delete`, `++` or `--`.
- */
-const isWriteTarget = (node: TsNode): boolean => {
-    let current = node;
-    let parent = current.getParent();
-
-    // Climb out of any pattern the node sits in as a target; a value position in an object literal climbs too, which is
-    // harmless: it only ends in a write when that literal is itself an assignment target.
-    while (
-        Node.isParenthesizedExpression(parent) ||
-        Node.isArrayLiteralExpression(parent) ||
-        Node.isObjectLiteralExpression(parent) ||
-        Node.isSpreadElement(parent) ||
-        Node.isSpreadAssignment(parent) ||
-        Node.isShorthandPropertyAssignment(parent) ||
-        (Node.isPropertyAssignment(parent) && parent.getNameNode() !== current)
-    ) {
-        current = parent;
-        parent = current.getParent();
-    }
-
-    if (Node.isBinaryExpression(parent)) {
-        const operator = parent.getOperatorToken().getKind();
-
-        return parent.getLeft() === current && operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment;
-    }
-
-    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
-        return parent.getInitializer() === current;
-    }
-
-    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
-        const operator = parent.getOperatorToken();
-
-        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
-    }
-
-    return Node.isDeleteExpression(parent);
 };
 
 /**
@@ -1717,13 +1820,20 @@ export const isScopedByIdentity = (node: TsNode): boolean => {
     // side is missing, so nothing the key also reads can scope it, unless every alternative lands
     // after an identity prefix (`${ctx.auth.userId}/${args.key ?? args.other}`).
     const expanded = trustedInitializerOf(node) ?? node;
-
-    if (
-        valueIdentifiersOf(expanded).some(
+    const hasCallerFallback = (within: TsNode): boolean =>
+        valueIdentifiersOf(within).some(
             (identifier) =>
-                isAlternativeOf(identifier, expanded) && reachesArgsWithinOneHop(outermostChainOf(identifier)) && !followsIdentityPrefix(identifier, expanded),
-        )
-    ) {
+                isAlternativeOf(identifier, within) && reachesArgsWithinOneHop(outermostChainOf(identifier)) && !followsIdentityPrefix(identifier, within),
+        );
+    // A local composed into the key carries its own fallback (`${selected}/${args.name}` with `selected = row.ownerId ??
+    // args.key`), unless the local itself lands after the identity prefix.
+    const composedFallback = valueIdentifiersOf(expanded).some((identifier) => {
+        const initializer = trustedInitializerOf(identifier);
+
+        return initializer !== undefined && !followsIdentityPrefix(identifier, expanded) && hasCallerFallback(initializer);
+    });
+
+    if (hasCallerFallback(expanded) || composedFallback) {
         return false;
     }
 
@@ -1789,7 +1899,7 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
 /**
  * Whether a sink's key is read off a row that the handler has already checked against the caller's
  * identity, before the sink. `sinkCall` is the sink call, `key` its key argument, and `F` the innermost
- * function containing the sink. The rule holds only when all three parts hold; every other shape
+ * function containing the sink. The rule holds only when all its parts hold; every other shape
  * reports.
  *
  * (R) The row. `key` (or, when it is a bare identifier, its one-hop `const` initializer) is an access
@@ -1805,9 +1915,15 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
  * chain, and a `throw`. If `h` is `async` or may return a Promise, the call is awaited.
  *
  * Inline guard: `const g = await ctx.db…(…)` in `F`, whose read arguments reference `ctx.auth`
- * (see {@link isIdentityBoundRead}), followed directly by `if (!g | g === undefined | g === null |
- * g == null) { … }` with no `else`. The branch's last statement (the block's, or the branch itself)
- * is a `throw` or a `return`.
+ * (see {@link isIdentityBoundRead}), followed directly by `if (!g | g === null | g == null |
+ * g == undefined) { … }` with no `else`. The branch's last statement (the block's, or the branch itself)
+ * is a `throw` or a `return`. A read answers `null` on a miss, so `g === undefined` is no check.
+ *
+ * The helper's ctx and row parameters have no default and are never reassigned, and the identity it
+ * reads is not a fallback or a conditional branch.
+ *
+ * (d) The row keeps its key. No use of `R` can change the value at the key's path: no write to it or
+ * to an object holding it, and no object holding it handed to a call, aliased or used as `this`.
  *
  * (b) Tied to the row. For a helper guard, an argument other than the ctx references `R`. For an
  * inline guard, the read's arguments reference `R`. A reference is a symbol match, not a spelling
@@ -1823,20 +1939,18 @@ export const isRequestInputDerived = (node: TsNode, requestName: string): boolea
  */
 export const isGuardedByIdentityCheck = (sinkCall: CallExpression, key: TsNode): boolean => {
     const enclosing = enclosingFunctionOf(sinkCall);
-    const row = rowDeclarationOf(key);
+    const guarded = rowDeclarationOf(key);
 
-    if (enclosing === undefined || row === undefined || enclosingFunctionOf(row)?.compilerNode !== enclosing.compilerNode) {
+    if (enclosing === undefined || guarded === undefined || enclosingFunctionOf(guarded.row)?.compilerNode !== enclosing.compilerNode) {
         return false;
     }
 
-    // A `const` row's fields stay writable: `row.key = args.key` after the guard replaces what the guard vouched for.
-    const overwritten = enclosing.getDescendantsOfKind(SyntaxKind.BinaryExpression).some((expression) => {
-        const target = accessPathOf(expression.getLeft());
+    const { keyPath, row } = guarded;
+    const rowName = row.getNameNode();
 
-        return isAssignmentOperator(expression.getOperatorToken().getKind()) && target !== undefined && bindsTo(target.root, row);
-    });
-
-    if (overwritten) {
+    // A `const` row's fields stay writable: `row.key = args.key` or `Object.assign(row, args)` after the guard replaces
+    // what the guard vouched for.
+    if (!Node.isIdentifier(rowName) || !usesOfLocal(rowName).every((use) => keepsGuardedKey(use, keyPath))) {
         return false;
     }
 
