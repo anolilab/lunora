@@ -157,10 +157,38 @@ describe("studio documents as Workers Static Assets", () => {
             expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
         });
 
-        it("does not read a doc comment or a type-only import of defineApp as composing the app", () => {
+        it.each([
+            ["a declaration-level", `import type { defineApp } from "../lunora/_generated/app";`],
+            ["a specifier-level", `import { type defineApp } from "../lunora/_generated/app";`],
+        ])("does not read a call through %s type-only import of defineApp as composing the app", (_label, typeImport) => {
             expect.assertions(1);
 
-            writeProject({}, {}, `import type { defineApp } from "../lunora/_generated/app";\n\n/** Not built with \`defineApp()\`. */\n${HAND_WRITTEN_ENTRY}`);
+            // The call is there, so only the type-only check keeps this from counting.
+            writeProject({}, {}, `${typeImport}\n\nexport const app = defineApp().build();\n\n${HAND_WRITTEN_ENTRY}`);
+
+            expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
+        });
+
+        it("does not read a doc comment naming defineApp as composing the app", () => {
+            expect.assertions(1);
+
+            writeProject({}, {}, `/** Not built with \`defineApp()\`. */\n${HAND_WRITTEN_ENTRY}`);
+
+            expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
+        });
+
+        it.each([
+            ["imports", `import { type App } from "./app";\n\n`],
+            ["re-exports", `export { type App } from "./app";\n\n`],
+        ])("does not follow a module the entry only type-%s", (_label, typeEdge) => {
+            expect.assertions(1);
+
+            writeProject({}, {}, `${typeEdge}${HAND_WRITTEN_ENTRY}`);
+            writeFileSync(
+                join(root, "src", "app.ts"),
+                `import { defineApp } from "../lunora/_generated/app";\n\nexport const app = defineApp().build();\nexport type App = typeof app;\n`,
+                "utf8",
+            );
 
             expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
         });

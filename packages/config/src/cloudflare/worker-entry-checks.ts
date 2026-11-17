@@ -576,7 +576,8 @@ const localNamesFor = (sourceFile: SourceFile, imported: string, fromModule?: (s
     const names = new Set<string>();
 
     for (const declaration of sourceFile.getImportDeclarations()) {
-        if (fromModule !== undefined && !fromModule(declaration.getModuleSpecifierValue())) {
+        // `import type { defineApp }` marks the declaration, not each specifier, and binds nothing callable either.
+        if (declaration.isTypeOnly() || (fromModule !== undefined && !fromModule(declaration.getModuleSpecifierValue()))) {
             continue;
         }
 
@@ -877,9 +878,27 @@ const entryComposesApp = (entryPath: string): boolean => {
             return true;
         }
 
+        // A declaration whose every named binding is `type` is elided from the bundle like an `import type`, so the
+        // module behind it adds nothing the Worker runs. A bare `import "./x"` has no bindings and is followed.
         const specifiers = [
-            ...sourceFile.getImportDeclarations().filter((declaration) => !declaration.isTypeOnly()),
-            ...sourceFile.getExportDeclarations().filter((declaration) => !declaration.isTypeOnly()),
+            ...sourceFile
+                .getImportDeclarations()
+                .filter(
+                    (declaration) =>
+                        !declaration.isTypeOnly() &&
+                        (declaration.getImportClause() === undefined ||
+                            declaration.getDefaultImport() !== undefined ||
+                            declaration.getNamespaceImport() !== undefined ||
+                            declaration.getNamedImports().length === 0 ||
+                            declaration.getNamedImports().some((specifier) => !specifier.isTypeOnly())),
+                ),
+            ...sourceFile
+                .getExportDeclarations()
+                .filter(
+                    (declaration) =>
+                        !declaration.isTypeOnly() &&
+                        (declaration.getNamedExports().length === 0 || declaration.getNamedExports().some((specifier) => !specifier.isTypeOnly())),
+                ),
         ].flatMap((declaration) => declaration.getModuleSpecifierValue() ?? []);
 
         for (const specifier of specifiers) {
