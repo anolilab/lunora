@@ -6,7 +6,6 @@
  * or users. Errors carry the same `LunoraError` code and `data.errno` the real
  * helpers' errors are translated to.
  */
-/* eslint-disable @typescript-eslint/require-await -- every method is async to honour the ContainerFiles contract; the in-memory disk itself never waits */
 import { LunoraError } from "@lunora/errors";
 
 import type { ContainerFileContent, ContainerFileOptions, ContainerFiles, SandboxDirectoryEntry, SandboxFileStat } from "./sandbox-types";
@@ -83,6 +82,7 @@ const createTestDisk = (): ContainerFiles => {
     };
 
     return {
+        // eslint-disable-next-line @typescript-eslint/require-await -- async to honour the ContainerFiles contract, so a throw from the in-memory disk surfaces as a rejection
         mkdir: async (rawPath: string, options: ContainerFileOptions & { recursive?: boolean } = {}): Promise<void> => {
             const path = resolvePath(rawPath, options);
 
@@ -109,6 +109,7 @@ const createTestDisk = (): ContainerFiles => {
             assertParent(path, "mkdir");
             directories.add(path);
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `mkdir`
         readDirectory: async (rawPath: string, options?: ContainerFileOptions): Promise<SandboxDirectoryEntry[]> => {
             const path = resolvePath(rawPath, options);
 
@@ -124,6 +125,7 @@ const createTestDisk = (): ContainerFiles => {
                 return { name: child.slice(child.lastIndexOf("/") + 1), type: directories.has(child) ? "directory" : "file" };
             });
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `mkdir`
         readFile: async (rawPath: string, options?: ContainerFileOptions): Promise<Response> => {
             const path = resolvePath(rawPath, options);
             const bytes = files.get(path);
@@ -134,6 +136,7 @@ const createTestDisk = (): ContainerFiles => {
 
             return new Response(new Uint8Array(bytes));
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `mkdir`
         remove: async (rawPath: string, options: ContainerFileOptions & { force?: boolean; recursive?: boolean } = {}): Promise<void> => {
             const path = resolvePath(rawPath, options);
 
@@ -162,6 +165,7 @@ const createTestDisk = (): ContainerFiles => {
 
             directories.add("/");
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `mkdir`
         rename: async (rawSource: string, rawDestination: string, options?: ContainerFileOptions): Promise<void> => {
             const source = resolvePath(rawSource, options);
             const destination = resolvePath(rawDestination, options);
@@ -195,6 +199,7 @@ const createTestDisk = (): ContainerFiles => {
                 }
             }
         },
+        // eslint-disable-next-line @typescript-eslint/require-await -- see `mkdir`
         stat: async (rawPath: string, options?: ContainerFileOptions): Promise<SandboxFileStat> => {
             const path = resolvePath(rawPath, options);
             const bytes = files.get(path);
