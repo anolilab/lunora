@@ -543,11 +543,17 @@ const isOverriddenLater = (object: ObjectLiteralExpression, property: ObjectLite
     });
 };
 
+/** Whether `object` has a member that runs code when the query is evaluated (a getter, setter or method), which can rewrite it. */
+const hasExecutableMember = (object: ObjectLiteralExpression): boolean =>
+    object.getProperties().some((member) => Node.isGetAccessorDeclaration(member) || Node.isSetAccessorDeclaration(member) || Node.isMethodDeclaration(member));
+
 /**
  * Whether the `where` object `filter` pins `field` (any column when `undefined`) to the caller on every row it
- * admits: directly, or in any `AND` branch.
+ * admits: directly, or in any `AND` branch. A filter with a getter or method pins nothing: evaluating it can
+ * rewrite the owner predicate before the query reads it.
  */
 const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string | undefined): boolean =>
+    !hasExecutableMember(filter) &&
     filter.getProperties().some((property) => {
         const value = propertyValueOf(property);
 
@@ -583,7 +589,10 @@ const pinsReadToCaller = (argument: TsNode, field: string | undefined): boolean 
     const queryArgs = objectLiteralOf(argument);
     const where = queryArgs === undefined ? undefined : findObjectProperty(queryArgs, "where");
     // `{ where: …, ...args.query }` can replace the whole filter.
-    const filter = queryArgs === undefined || where === undefined || isOverriddenLater(queryArgs, where) ? undefined : objectLiteralOf(propertyValueOf(where));
+    const filter =
+        queryArgs === undefined || where === undefined || hasExecutableMember(queryArgs) || isOverriddenLater(queryArgs, where)
+            ? undefined
+            : objectLiteralOf(propertyValueOf(where));
 
     return filter !== undefined && pinsFieldToCaller(filter, field);
 };
@@ -634,6 +643,17 @@ const rowScopesKey = (read: CallExpression, source: TsNode, field: string | unde
 };
 
 /**
+ * Whether `use` reads a row field with `?.` off a read that can find nothing: then the field is `undefined` for every
+ * caller with no row, and they all share one key prefix. A `…OrThrow` read throws instead, so `?.` there is harmless.
+ */
+const isOptionalReadOfNullableRow = (use: TsNode, read: CallExpression): boolean => {
+    const callee = read.getExpression();
+    const throwsWhenAbsent = Node.isPropertyAccessExpression(callee) && callee.getName().endsWith("OrThrow");
+
+    return (Node.isPropertyAccessExpression(use) || Node.isElementAccessExpression(use)) && use.hasQuestionDotToken() && !throwsWhenAbsent;
+};
+
+/**
  * True when `node` is, or textually contains, a value reference to a key source the
  * caller cannot choose: the caller's identity (a ctx path whose first segment is
  * `auth`, `ctx.auth.userId`), or a value read from the database through a read that
@@ -664,7 +684,7 @@ const referencesScopedKeySource = (node: TsNode, wholeKey?: TsNode): boolean =>
 
         const { field, read } = rowFieldReadOf(call);
 
-        return rowScopesKey(call, read, field, wholeKey);
+        return !isOptionalReadOfNullableRow(read, call) && rowScopesKey(call, read, field, wholeKey);
     });
 
 /** A function whose body can hold an identity guard: the handler itself, or a helper it calls. */
@@ -1274,12 +1294,9 @@ const isReadOnlyLocal = (identifier: Identifier): boolean =>
         const wrapped = valueWrapperOf(use);
         const parent = wrapped.getParent();
 
-        // Destructuring, a spread into another object and a `return` copy or hand back the row without writing into it.
-        if (
-            (Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode())) ||
-            Node.isSpreadAssignment(parent) ||
-            Node.isReturnStatement(parent)
-        ) {
+        // Destructuring and a spread copy the row's fields without writing into it. A `return` hands out the row itself,
+        // and a write through the returned alias would go unseen here, so it does not count.
+        if ((Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode())) || Node.isSpreadAssignment(parent)) {
             return true;
         }
 
@@ -1313,8 +1330,7 @@ const bindingScopesKey = (identifier: TsNode, wholeKey: TsNode | undefined): boo
 
         const { field, read: use } = rowFieldReadOf(identifier);
 
-        // An optional read (`row?.ownerId`) is `undefined` whenever the read finds nothing, the same for every such caller.
-        if ((Node.isPropertyAccessExpression(use) || Node.isElementAccessExpression(use)) && use.hasQuestionDotToken()) {
+        if (isOptionalReadOfNullableRow(use, read)) {
             return false;
         }
 
@@ -1360,11 +1376,6 @@ const isFixedTextPart = (part: TsNode): boolean => Node.isStringLiteral(part) ||
 
 /** Whether `access` reads an identity column straight off an owned row: `row._id`, `(await ownedRead()).ownerId`. */
 const isOwnedIdentityColumn = (access: ElementAccessExpression | PropertyAccessExpression): boolean => {
-    // `row?.ownerId` is `undefined` for every caller the read finds nothing for, so they all share one prefix.
-    if (access.hasQuestionDotToken()) {
-        return false;
-    }
-
     const base = strippedValue(access.getExpression());
     const baseInitializer = Node.isIdentifier(base) ? trustedInitializerOf(base) : undefined;
 
@@ -1375,7 +1386,9 @@ const isOwnedIdentityColumn = (access: ElementAccessExpression | PropertyAccessE
 
     const read = databaseReadOf(base) ?? (baseInitializer === undefined ? undefined : databaseReadOf(baseInitializer));
 
-    return read !== undefined && rowScopesKey(read, access, rowFieldReadOf(access.getExpression()).field, undefined);
+    return (
+        read !== undefined && !isOptionalReadOfNullableRow(access, read) && rowScopesKey(read, access, rowFieldReadOf(access.getExpression()).field, undefined)
+    );
 };
 
 /** Whether `identifier` is destructured as a whole field from the caller's identity (`const { userId } = ctx.auth`) or an owned row's identity column. */

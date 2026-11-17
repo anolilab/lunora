@@ -418,7 +418,7 @@ describe("argument-taint", () => {
         });
 
         it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
-            expect.assertions(25);
+            expect.assertions(29);
 
             const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
             const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
@@ -457,9 +457,33 @@ describe("argument-taint", () => {
                 ),
             ).toBe(false);
             expect(isScopedByIdentity(sinkArgument(`${owned}Object.assign(row, args.patch);\n${sink}`))).toBe(false);
-            // Reading fields, destructuring, a spread copy and a return leave the row intact.
+            // Reading fields, destructuring and a spread copy leave the row intact.
             expect(isScopedByIdentity(sinkArgument(`${owned}const { status } = row;\n${sink}`))).toBe(true);
             expect(isScopedByIdentity(sinkArgument(`${owned}const copy = { ...row };\n${sink}`))).toBe(true);
+            // A returned row is a live alias the caller can write through.
+            expect(isScopedByIdentity(sinkArgument(`${owned}const expose = () => row;\nexpose().ownerId = args.ownerId;\n${sink}`))).toBe(false);
+            // A getter on the filter can rewrite the owner predicate when the query reads it.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const filter = { ownerId: ctx.auth.userId, get status() { filter.ownerId = args.ownerId; return "active"; } };\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            // A direct optional read off a read that can find nothing is \`undefined\` for every caller with no row.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`SINK(\`\${(await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }))?.ownerId}/\${args.key}\`);`),
+                ),
+            ).toBe(false);
+            // A …OrThrow read cannot come back empty, so `?.` on it is harmless.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirstOrThrow({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row?.ownerId}/\${args.key}\`);`,
+                    ),
+                ),
+            ).toBe(true);
             // Passing the row to a call may write into it.
             expect(isScopedByIdentity(sinkArgument(`${owned}mutate(row);\n${sink}`))).toBe(false);
             // An optional read is \`undefined\` for every caller the read finds nothing for.
