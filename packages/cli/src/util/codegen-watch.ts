@@ -441,6 +441,10 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     } finally {
                         hookRunning = false;
                     }
+
+                    // After the hook, so a listener that reads generated output reads the finished copy. A failed
+                    // codegen run `continue`s past this: nothing it would read has changed.
+                    options.onSettled?.();
                 }
             } catch (error: unknown) {
                 // `runOnce` reports rather than throws, so this is the
@@ -694,6 +698,12 @@ export interface CodegenWatcherOptions {
     logger: Logger;
     /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
     lunoraDirectory?: string;
+
+    /**
+     * Called after each run whose codegen succeeded (startup included), once `postcodegen` has finished. A dev
+     * server that loads `_generated/*` itself reloads here rather than on the raw file event, which fires mid-write.
+     */
+    onSettled?: () => void;
     /** Project root containing the `lunora/` directory. */
     projectRoot: string;
     /** Process spawner for the `postcodegen` hook. Injectable so tests need no real subprocess. */

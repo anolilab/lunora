@@ -9,7 +9,7 @@ const devCommand: Command = {
         name: "args",
         type: String,
     },
-    description: "Run the dev stack: wrangler worker + studio + codegen watch",
+    description: "Run the dev stack: the worker (wrangler, or the Node host for --target node) + studio + codegen watch",
     examples: [
         ["lunora dev", "Run the worker + studio + codegen watch"],
         ["lunora dev --background", "Run detached: blocks until ready, prints URL + PID, then returns"],
@@ -21,6 +21,7 @@ const devCommand: Command = {
         ["lunora dev --emit-bindings dev-manifest.json", "Write what this worker needs + where it serves, for a task runner"],
         ["lunora dev --no-studio", "Skip the embedded studio server"],
         ["lunora dev --worker-port 8080", "Use a custom wrangler dev port"],
+        ["lunora dev --target node", "Serve the app on @lunora/platform-node in this process instead of wrangler dev"],
         ["lunora dev --inspector-port 9235", "Pin wrangler's devtools inspector port instead of letting it walk up from 9229"],
         ["lunora dev --remote", "Proxy D1/KV/R2 to the deployed worker (also LUNORA_REMOTE=1)"],
         ["lunora dev --local", "Start no remote proxy session, e.g. in CI where a service's `ai` binding has no credentials"],

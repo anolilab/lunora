@@ -6,6 +6,7 @@
 import type { DeployDriver } from "@lunora/config";
 import { planToolchainInvocation, startCelldDevSession, targetRunsOwnDevServer } from "@lunora/config";
 
+import { servesDevInProcess } from "../../util/deploy-target-resolve";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
 import type { Logger } from "../../util/logger";
 import type { DevFlavor } from "./lifecycle";
@@ -16,19 +17,25 @@ import type { DevCommandOptions, DevCommandPlan, WorkerProcess } from "./types";
 /**
  * The flavor `lunora dev` actually runs for `target`.
  *
- * A host with its own dev server (celld) has no Vite integration and no
- * framework sidecar: `@lunora/vite` and the sidecar both run the worker in
- * workerd. So it always gets the standalone stack — codegen watch, studio, and
- * the host's dev server as the worker — rather than silently serving a celld
- * app on Cloudflare's runtime.
+ * A host with its own dev server (celld), and the Node host this process
+ * serves, have no Vite integration and no framework sidecar: `@lunora/vite`
+ * and the sidecar both run the worker in workerd. So they always get the
+ * standalone stack — codegen watch, studio, and the host as the worker —
+ * rather than silently serving the app on Cloudflare's runtime.
  */
 const resolveTargetFlavor = (target: string, detected: DevFlavor, logger: Logger): DevFlavor => {
-    if (!targetRunsOwnDevServer(target)) {
+    const inProcess = servesDevInProcess(target);
+
+    if (!inProcess && !targetRunsOwnDevServer(target)) {
         return detected;
     }
 
     if (detected !== "wrangler") {
-        logger.info(`target ${target} runs its own dev server, so lunora dev serves the worker on it — start the frontend's dev server separately`);
+        logger.info(
+            inProcess
+                ? `target ${target} is served by lunora dev itself on @lunora/platform-node — start the frontend's dev server separately`
+                : `target ${target} runs its own dev server, so lunora dev serves the worker on it — start the frontend's dev server separately`,
+        );
     }
 
     return "wrangler";

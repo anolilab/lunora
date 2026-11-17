@@ -40,7 +40,7 @@ import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
-import { resolveRunnableTargetOrError } from "../../util/deploy-target-resolve";
+import { resolveDevTargetOrError } from "../../util/deploy-target-resolve";
 import { EXIT_CODE } from "../../util/exit-code";
 import type { Logger } from "../../util/logger";
 import { forceJsonLogging } from "../../util/logger";
@@ -51,6 +51,7 @@ import markWorkerReadyWhenServing from "../../util/worker-ready";
 import { provisionBindings } from "../deploy/handler";
 import type { DevOptions } from "./index";
 import { codegenRequested, detectDevFlavor, printCloudflareCliConfigWarning, reportExistingServer, runLifecycleSubcommand, startBackground } from "./lifecycle";
+import { startNodeDevWorker } from "./node-dev-server";
 import { resolveTargetFlavor, startCelldWorker } from "./own-dev-server";
 import { buildDevPlan } from "./plan";
 import type { Teardown } from "./supervise";
@@ -495,8 +496,10 @@ const attachedCelldProjectionReady = async (plan: DevCommandPlan, options: DevCo
 };
 
 /**
- * The worker the plan runs — a celld dev session, else the planned dev server
- * process — or `undefined`, logged, when it cannot start.
+ * The worker the plan runs — a celld dev session, the in-process Node host,
+ * else the planned dev server process — or `undefined`, logged, when it cannot
+ * start. `onNodeWorker` receives the Node host so the codegen watcher can
+ * reload it.
  */
 const startPlannedWorker = async (
     plan: DevCommandPlan,
@@ -504,8 +507,17 @@ const startPlannedWorker = async (
     spawn: WorkerSpawner,
     cwd: string,
     logger: Logger,
+    onNodeWorker: (reload: () => void) => void,
 ): Promise<WorkerProcess | undefined> => {
     try {
+        if (plan.nodeHost === true) {
+            const worker = await (options.startNodeWorker ?? startNodeDevWorker)({ logger, port: plan.workerPort, projectRoot: cwd });
+
+            onNodeWorker(worker.reload);
+
+            return worker;
+        }
+
         return plan.celldSession === true
             ? await startCelldWorker({ logger, port: plan.workerPort, projectRoot: cwd, start: options.startCelldSession })
             : spawn(plan.wrangler, logger);
@@ -561,17 +573,17 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     // the failure before the dev-vars prompt and the start-record claim, rather
     // than after them.
     //
-    // `Runnable` rather than a bare resolve: a target whose driver ships no
-    // toolchain has nothing for the sidecar (or the Vite plugin's worker) to
-    // spawn, and `toolchain?.dev(...)` used to fall through to `wrangler dev` —
-    // serving a Node-target app on Cloudflare's runtime, then hard-failing at
-    // deploy.
+    // Not a bare resolve: a target whose driver ships no toolchain has nothing
+    // for the sidecar (or the Vite plugin's worker) to spawn, and
+    // `toolchain?.dev(...)` used to fall through to `wrangler dev` — serving a
+    // Node-target app on Cloudflare's runtime. Node itself is accepted because
+    // this process serves it (see `node-dev-server`).
     //
     // Ahead of `buildDevPlan`, so a bad `--target` throws before the `--remote`
     // temp config is written rather than orphaning that file in the project root
     // (where the templates' exact-name `.wrangler` ignore does not match it).
     // There is nothing to tear down yet on this path.
-    const resolvedTarget = resolveRunnableTargetOrError(cwd, options.target);
+    const resolvedTarget = resolveDevTargetOrError(cwd, options.target);
 
     if (resolvedTarget.target === undefined) {
         throw new Error(resolvedTarget.error ?? "unknown deploy target");
@@ -667,6 +679,9 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         noteIpv4LoopbackFallback(plan, logger);
 
+        // Set once the Node host is up; until then a settled run (the startup one) has nothing to reload.
+        let reloadNodeWorker: (() => void) | undefined;
+
         if (plan.runsCodegenWatch) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({
                 apiSpec: options.apiSpec,
@@ -674,6 +689,9 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
                 jsonLogs: options.jsonLogs,
                 logger,
                 lunoraDirectory: resolveSchemaDirectory(cwd),
+                onSettled: () => {
+                    reloadNodeWorker?.();
+                },
                 projectRoot: cwd,
                 target,
             });
@@ -762,7 +780,9 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         ensureSidecarGenerated(plan, options, cwd, logger, target);
 
         const spawn = options.startWorker ?? defaultWorkerSpawner;
-        const worker = await startPlannedWorker(plan, options, spawn, cwd, logger);
+        const worker = await startPlannedWorker(plan, options, spawn, cwd, logger, (reload) => {
+            reloadNodeWorker = reload;
+        });
 
         if (worker === undefined) {
             return { code: EXIT_CODE.FAILURE, plan };

@@ -37,19 +37,29 @@ const CONTAINER_DEPLOY_TARGETS: ReadonlySet<string> = new Set(["node"]);
 const deploysAsContainer = (target: string): boolean => CONTAINER_DEPLOY_TARGETS.has(target);
 
 /**
+ * Targets `lunora dev` serves on a host built into the CLI rather than a
+ * toolchain's dev server. Node has no toolchain to spawn, so `lunora dev` runs
+ * the app on `@lunora/platform-node` in its own process.
+ */
+const IN_PROCESS_DEV_TARGETS: ReadonlySet<string> = new Set(["node"]);
+
+/** Whether `lunora dev` serves `target` on the CLI's own Node host. */
+const servesDevInProcess = (target: string): boolean => IN_PROCESS_DEV_TARGETS.has(target);
+
+/**
  * Resolve a target for a command that must shell out to the host's CLI —
- * `lunora dev`, `lunora build`, and `lunora deploy` for every target that is
- * not a container deploy (see {@link resolveDeployTargetOrError}).
+ * `lunora build`, `lunora prepare`, `lunora dev` for every target it does not
+ * serve in process (see {@link resolveDevTargetOrError}), and `lunora deploy`
+ * for every target that is not a container deploy (see
+ * {@link resolveDeployTargetOrError}).
  *
  * A registered target is not necessarily a *runnable* one. `DeployDriver`
  * models the toolchain as optional, and the Node driver genuinely has none:
- * there is no control plane to deploy to and no local runtime the CLI can
- * spawn. Rejecting that here, at selection, is the whole point — the deploy
- * path rewrites `_generated/*` (tailored to the target's capability matrix) and
- * reconciles `wrangler.jsonc` long before anything asks the driver for a
- * command, so a check at the point of use fails after the side effects, and
- * `lunora dev` did not check at all: `toolchain?.dev(...)` fell through to
- * wrangler, silently serving a Node-target app on Cloudflare's runtime.
+ * there is no control plane to deploy to. Rejecting that here, at selection,
+ * is the whole point — the deploy path rewrites `_generated/*` (tailored to the
+ * target's capability matrix) and reconciles `wrangler.jsonc` long before
+ * anything asks the driver for a command, so a check at the point of use fails
+ * after the side effects.
  * @param projectRoot Directory containing `lunora.config.*`.
  * @param explicit A caller-supplied target, if any.
  * @returns the resolved target, or the message explaining why it was rejected.
@@ -65,8 +75,12 @@ const resolveRunnableTargetOrError = (projectRoot: string, explicit?: string): {
         const runnable = runnableTargetIds();
         const container = deploysAsContainer(resolved.target) ? ` \`lunora deploy --target ${resolved.target}\` builds it as a container.` : "";
 
+        const local = servesDevInProcess(resolved.target)
+            ? `\`lunora dev --target ${resolved.target}\` serves it locally and \`lunora codegen --target ${resolved.target}\` generates for it`
+            : `it can only generate for it (\`lunora codegen --target ${resolved.target}\`)`;
+
         return {
-            error: `deploy target "${resolved.target}" has no command-line toolchain, so the Lunora CLI cannot run it — it can generate for it (\`lunora codegen --target ${resolved.target}\`).${container} Deployable targets: ${runnable.join(", ")}`,
+            error: `deploy target "${resolved.target}" has no command-line toolchain, so the Lunora CLI cannot run it — ${local}.${container} Deployable targets: ${runnable.join(", ")}`,
         };
     }
 
@@ -92,4 +106,23 @@ const resolveDeployTargetOrError = (projectRoot: string, explicit?: string): { e
     return resolveRunnableTargetOrError(projectRoot, explicit);
 };
 
-export { deploysAsContainer, resolveDeployTargetOrError, resolveRunnableTargetOrError, resolveTargetOrError };
+/**
+ * The `lunora dev` form of {@link resolveRunnableTargetOrError}: it also accepts
+ * a target the CLI serves in process. Resolved before anything is written, for
+ * the same reason — `toolchain?.dev(...)` once fell through to wrangler and
+ * served a Node-target app on Cloudflare's runtime.
+ * @param projectRoot Directory containing `lunora.config.*`.
+ * @param explicit A caller-supplied target, if any.
+ * @returns the resolved target, or the message explaining why it was rejected.
+ */
+const resolveDevTargetOrError = (projectRoot: string, explicit?: string): { error?: string; target?: string } => {
+    const resolved = resolveTargetOrError(projectRoot, explicit);
+
+    if (resolved.target !== undefined && servesDevInProcess(resolved.target)) {
+        return resolved;
+    }
+
+    return resolveRunnableTargetOrError(projectRoot, explicit);
+};
+
+export { deploysAsContainer, resolveDeployTargetOrError, resolveDevTargetOrError, resolveRunnableTargetOrError, resolveTargetOrError, servesDevInProcess };

@@ -17,6 +17,19 @@ interface WorkerProcess {
     kill: (signal: NodeJS.Signals) => void;
 }
 
+/** A running Node dev worker (`--target node`): the {@link WorkerProcess} the supervisor stops, plus the reload the codegen watcher calls. */
+interface NodeDevWorker extends WorkerProcess {
+    /** Restart on the current sources. Calls made while one runs collapse into one more. */
+    reload: () => void;
+}
+
+/** What starts a {@link NodeDevWorker}. */
+interface NodeDevWorkerInputs {
+    logger: Logger;
+    port: number;
+    projectRoot: string;
+}
+
 /** Spawns the worker child. Injectable so tests drive the orchestration without a real process. */
 type WorkerSpawner = (descriptor: SpawnDescriptor & { tag: string }, logger: Logger) => WorkerProcess;
 
@@ -105,6 +118,8 @@ interface DevCommandOptions {
     startCodegen?: typeof startCodegenWatch;
     /** Injection seam for tests — defaults to the embedded Postgres behind a Hyperdrive binding. */
     startHyperdrive?: typeof startLocalHyperdrive;
+    /** Starts the Node host for the node target; injected in tests. */
+    startNodeWorker?: (inputs: NodeDevWorkerInputs) => Promise<NodeDevWorker>;
     /** Injection seam for tests — defaults to the real studio server. */
     startStudio?: typeof startStudioServer;
     /** Injection seam for tests — defaults to spawning a real `wrangler dev`. */
@@ -164,6 +179,12 @@ interface DevCommandPlan {
      */
     ipv4LoopbackForced: boolean;
 
+    /**
+     * `true` when the worker is this process's `@lunora/platform-node` host (`--target node`) rather than
+     * {@link DevCommandPlan.wrangler}'s process, reloaded after each settled codegen run.
+     */
+    nodeHost?: true;
+
     /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
     remote: RemotePlan;
     runsCodegenWatch: boolean;
@@ -205,4 +226,14 @@ interface DevCommandPlan {
     wrangler: SpawnDescriptor & { tag: string };
 }
 
-export type { DevCommandOptions, DevCommandPlan, DevTunnelRequest, LongLivedDescriptor, LongLivedSpawner, WorkerProcess, WorkerSpawner };
+export type {
+    DevCommandOptions,
+    DevCommandPlan,
+    DevTunnelRequest,
+    LongLivedDescriptor,
+    LongLivedSpawner,
+    NodeDevWorker,
+    NodeDevWorkerInputs,
+    WorkerProcess,
+    WorkerSpawner,
+};

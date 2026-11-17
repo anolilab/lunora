@@ -478,6 +478,29 @@ origin to 8787 — an `AUTH_URL`/`BETTER_AUTH_URL` (or any other loopback origin
 on that port) would be left pointing at nothing. Free 8787, or pass
 `--worker-port` and update the pinned values to match.
 
+#### The Node target: `--target node`
+
+With `"target": "node"` in `lunora.config.*` (or `--target node`), there is no
+`wrangler dev`: the CLI serves the worker entry `wrangler.jsonc` names in `main`
+on [`@lunora/platform-node`](/packages/platform-node/), in its own process, on
+the same worker port. Install `@lunora/platform-node` as a dev dependency first.
+
+```bash
+lunora dev --target node         # codegen watch + Studio + the app on the Node host
+```
+
+Codegen watches `lunora/` as usual, and the app reloads after each finished
+codegen run and when a file the entry loaded from outside `lunora/` changes. A
+reload restarts the listener, so open sockets and streams reconnect. Studio
+works against it (data browser, logs, live subscriptions). Only Durable Object
+bindings and vars are bound; any other declared binding is named in a startup
+warning. `--remote` is refused, `--inspector-port` is ignored, and a Vite or
+framework project still gets this standalone stack, so start its frontend dev
+server separately. Shard data persists in `.lunora/node/`.
+
+`lunora deploy --target node` is still refused: there is no deploy artifact for
+a Node app yet.
+
 #### The two ports wrangler takes
 
 `wrangler dev` binds the worker **and** a devtools inspector, and both are
