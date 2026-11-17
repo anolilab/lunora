@@ -80,8 +80,20 @@ const exportFrom = async (worker: ReturnType<typeof workerFor>, body: unknown = 
 
 type ImportSummary = { conflicts: number; errors: { code: string }[]; inserted: Record<string, number>; received: number };
 
-/** Replay lines the way a restore does: in order, in batches under the import body cap. */
+/** One POST of an import run: `run` is the `?import=` every request of one restore carries. */
+const postBatch = async (worker: ReturnType<typeof workerFor>, body: string, run: string): Promise<ImportSummary> => {
+    const response = await worker.fetch(
+        new Request(`https://app.example/_lunora/admin/import?import=${run}`, { body, headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+        {},
+        fakeContext,
+    );
+
+    return response.json();
+};
+
+/** Replay lines the way a restore does: in order, in batches under the import body cap, all under one import run. */
 const importInto = async (worker: ReturnType<typeof workerFor>, lines: ReadonlyArray<string>): Promise<ImportSummary> => {
+    const run = crypto.randomUUID();
     const total: ImportSummary = { conflicts: 0, errors: [], inserted: {}, received: 0 };
     const batches: string[] = [];
     let batch = "";
@@ -101,13 +113,7 @@ const importInto = async (worker: ReturnType<typeof workerFor>, lines: ReadonlyA
 
     for (const body of batches) {
         // eslint-disable-next-line no-await-in-loop -- batches go in order, like a restore
-        const response = await worker.fetch(
-            new Request("https://app.example/_lunora/admin/import", { body, headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
-            {},
-            fakeContext,
-        );
-        // eslint-disable-next-line no-await-in-loop -- as above
-        const result: ImportSummary = await response.json();
+        const result = await postBatch(worker, body, run);
 
         total.conflicts += result.conflicts;
         total.errors.push(...result.errors);
@@ -381,6 +387,46 @@ describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, 
 
         expect(summary.errors.map((error) => error.code)).toStrictEqual(["STORAGE_RESTORE_INCOMPLETE", "STORAGE_SHA256_MISMATCH"]);
         expect(storageUpload).not.toHaveBeenCalled();
+    });
+
+    it("keeps two interleaved imports of the same key apart, each restoring its own bytes", async () => {
+        expect.hasAssertions();
+
+        const target = createStores();
+        const worker = workerFor(target.options);
+        const chunk = (value: string, fields: Record<string, unknown>, table: "$kv" | "$storage"): string => {
+            const data = Buffer.from(value).toString("base64");
+            const doc = table === "$kv" ? { data, key: "k", namespace: "CACHE", ...fields } : { data, key: "o.bin", ...fields };
+
+            return JSON.stringify({ doc, table });
+        };
+
+        // Each import's first chunks land, then each one's last chunk: neither may join the other's staging.
+        for (const table of ["$kv", "$storage"] as const) {
+            // eslint-disable-next-line no-await-in-loop -- the interleaving is the point
+            await postBatch(worker, chunk("aaa", { offset: 0 }, table), "first");
+            // eslint-disable-next-line no-await-in-loop -- as above
+            await postBatch(worker, chunk("bbb", { offset: 0 }, table), "second");
+        }
+
+        const last = (value: string): string =>
+            `${chunk(value, { last: true, offset: 3, size: 6 }, "$kv")}\n${chunk(value, { last: true, offset: 3, size: 6 }, "$storage")}`;
+        const restored = (): string[] => [
+            Buffer.from(target.kv.get("CACHE")!.get("k")!.value).toString(),
+            Buffer.from(target.buckets.get("default")!.get("o.bin")!.bytes).toString(),
+        ];
+        const first = await postBatch(worker, last("AAA"), "first");
+        const firstBytes = restored();
+
+        // Cleared so the second import writes rather than skipping what the first restored.
+        target.kv.get("CACHE")!.delete("k");
+        target.buckets.get("default")!.delete("o.bin");
+
+        const second = await postBatch(worker, last("BBB"), "second");
+
+        expect([...first.errors, ...second.errors]).toStrictEqual([]);
+        expect(firstBytes).toStrictEqual(["aaaAAA", "aaaAAA"]);
+        expect(restored()).toStrictEqual(["bbbBBB", "bbbBBB"]);
     });
 
     it("restores an object over 32 MiB through a multipart upload of equal 5 MiB parts", async () => {

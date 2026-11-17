@@ -6,8 +6,10 @@
  * import requests, so each chunk in front of the last is written to a staging
  * object as it lands, and the whole thing is assembled when the last one does:
  *
- * `_lunora/restore/<sha256 of the target>/<session>/<offset>`
+ * `_lunora/restore/<sha256 of the target and its import run>/<session>/<offset>`
  *
+ * The import run (`?import=`, else the one request) keeps two imports of the
+ * same key or object apart: neither can find, let alone assemble, the other's chunks.
  * `<session>` is the time the target's first chunk arrived, counted down from
  * {@link SESSION_CLOCK_MAX} so the newest session of a target lists first: a
  * later chunk finds its session with one `list(limit: 1)`. A restore that
@@ -191,7 +193,7 @@ const fixedChunks = async function* fixedChunks(values: AsyncIterable<Uint8Array
     }
 };
 
-/** Where every session of one target lives: `scope` names the target (section, bucket or namespace, key). */
+/** Where every session of one target lives: `scope` names the target (section, bucket or namespace, key) and the import run. */
 const stagingRoot = async (scope: string): Promise<string> =>
     `${RESTORE_STAGING_PREFIX}${toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(scope)))}/`;
 

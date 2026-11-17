@@ -34,6 +34,28 @@ type ParsedImportRow =
 /** Whether the request opted into `op: "delete"` rows (`?deletes=true`). Read once for the parser and again for the shard plane. */
 const importWantsDeletes = (request: Request): boolean => new URL(request.url).searchParams.get("deletes") === "true";
 
+const IMPORT_RUN_PATTERN = /^[\w-]{1,64}$/u;
+
+/**
+ * The import run a request's chunked `$kv` / `$storage` records are staged
+ * under: `?import=<id>`, which a client sends on every request of one import so
+ * a value's chunks can span them, or else this request alone. Two imports
+ * running at once must never assemble a value from each other's chunks.
+ */
+const importRunOf = (request: Request): string => {
+    const named = new URL(request.url).searchParams.get("import");
+
+    if (named === null) {
+        return crypto.randomUUID();
+    }
+
+    if (!IMPORT_RUN_PATTERN.test(named)) {
+        throw new LunoraError("Import `import` is 1-64 characters of [A-Za-z0-9_-]", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return named;
+};
+
 /**
  * Validate one NDJSON import line into a `{ table, doc }` row, or an
  * `ImportRowError` describing why the line was rejected. Pure — the caller
@@ -529,6 +551,7 @@ const streamingImport = async (
     warnings?: string[];
 }> => {
     const defaultShard = options.defaultShardKey ?? "__root__";
+    const run = importRunOf(request);
 
     const { errors, globalRows, perShard, received, sectionRows } = await bucketImportStream(request, options, defaultShard, undefined);
 
@@ -597,7 +620,7 @@ const streamingImport = async (
     if (sectionRows.length > 0 && dryRun) {
         warnings.push(`a dry run does not check the export's sections ($auth, $kv, $storage): ${String(sectionRows.length)} section line(s) were not checked`);
     } else if (sectionRows.length > 0) {
-        const sections = await importSectionRows(options, sectionRows);
+        const sections = await importSectionRows(options, sectionRows, run);
 
         mergeImportResult(totals, sections);
         await auditPlane(recordAudit, warnings, "importSections", sections, {});

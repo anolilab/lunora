@@ -89,6 +89,11 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
     const totals: ImportTotals = { conflicts: 0, deleted: 0, errors: [], failed: [], inserted: {}, received: 0, replaced: 0, warnings: [] };
     let batch: string[] = [];
     let batchBytes = 0;
+    // One import run for every POST of this batcher: a chunked `$kv` value or `$storage` object spans
+    // POSTs, and the worker stages its chunks under the run so a concurrent import cannot join them.
+    const requestUrl = new URL(config.requestUrl);
+
+    requestUrl.searchParams.set("import", crypto.randomUUID());
 
     /** Fold one admin-import response into the run's running totals. */
     const merge = (json: AdminImportResponse): void => {
@@ -124,7 +129,7 @@ const createImportBatcher = (config: ImportBatcherConfig): ImportBatcher => {
         batch = [];
         batchBytes = 0;
 
-        const response = await config.fetchImpl(config.requestUrl, {
+        const response = await config.fetchImpl(requestUrl.toString(), {
             body,
             headers: { authorization: `Bearer ${config.token}`, "content-type": "application/x-ndjson" },
             method: "POST",

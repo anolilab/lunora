@@ -530,7 +530,14 @@ const putKvValue = async (target: KvTarget, value: string, totals: SectionTotals
  * storage bucket; the value is assembled in memory (25 MiB at most) because the
  * KV port writes a base64 string, not a stream.
  */
-const importKvChunk = async (options: WorkerOptions, row: SectionRow, target: KvTarget, chunk: ChunkRecord, totals: SectionTotals): Promise<void> => {
+const importKvChunk = async (
+    options: WorkerOptions,
+    row: SectionRow,
+    target: KvTarget,
+    chunk: ChunkRecord,
+    totals: SectionTotals,
+    run: string,
+): Promise<void> => {
     const store = stagingStore(options);
     const label = `KV value ${target.namespace}/${target.key}`;
 
@@ -550,7 +557,7 @@ const importKvChunk = async (options: WorkerOptions, row: SectionRow, target: Kv
         return;
     }
 
-    const staging: Staging = { kind: "KV", root: await stagingRoot(`kv\u0000${target.namespace}\u0000${target.key}`), where: {} };
+    const staging: Staging = { kind: "KV", root: await stagingRoot(`kv\u0000${target.namespace}\u0000${target.key}\u0000${run}`), where: {} };
     const size = chunk.lastSize;
 
     await (size === undefined
@@ -558,7 +565,7 @@ const importKvChunk = async (options: WorkerOptions, row: SectionRow, target: Kv
         : finishStaged(store, row, staging, chunk, totals, async (chunks) => putKvValue(target, toBase64(await collectChunks(chunks, size)), totals)));
 };
 
-const importKvRow = async (options: WorkerOptions, row: SectionRow, totals: SectionTotals): Promise<void> => {
+const importKvRow = async (options: WorkerOptions, row: SectionRow, totals: SectionTotals, run: string): Promise<void> => {
     const kv = options.kvIntrospector;
     const { expiration, key, metadata, namespace, value } = row.doc;
 
@@ -588,7 +595,7 @@ const importKvRow = async (options: WorkerOptions, row: SectionRow, totals: Sect
         if (typeof value === "string") {
             await putKvValue(target, value, totals);
         } else if (chunk) {
-            await importKvChunk(options, row, target, chunk, totals);
+            await importKvChunk(options, row, target, chunk, totals, run);
         }
     } catch (error) {
         rowError(totals, row, "KV_IMPORT_FAILED", `KV ${namespace}/${key}: ${errorMessage(error)}`);
@@ -709,7 +716,7 @@ const writeWholeObject = async (
     }
 };
 
-const writeStorageRecord = async (options: WorkerOptions, row: SectionRow, record: StorageRecord, totals: SectionTotals): Promise<void> => {
+const writeStorageRecord = async (options: WorkerOptions, row: SectionRow, record: StorageRecord, totals: SectionTotals, run: string): Promise<void> => {
     const upload = options.storageUpload;
 
     if (!upload) {
@@ -740,7 +747,11 @@ const writeStorageRecord = async (options: WorkerOptions, row: SectionRow, recor
         return;
     }
 
-    const staging: Staging = { kind: "STORAGE", root: await stagingRoot(`storage\u0000${record.where.bucket ?? ""}\u0000${record.key}`), where: record.where };
+    const staging: Staging = {
+        kind: "STORAGE",
+        root: await stagingRoot(`storage\u0000${record.where.bucket ?? ""}\u0000${record.key}\u0000${run}`),
+        where: record.where,
+    };
 
     if (record.lastSize !== undefined) {
         await finishStagedObject(options, store, row, record, staging, totals);
@@ -751,7 +762,7 @@ const writeStorageRecord = async (options: WorkerOptions, row: SectionRow, recor
     }
 };
 
-const importStorageRow = async (options: WorkerOptions, row: SectionRow, totals: SectionTotals): Promise<void> => {
+const importStorageRow = async (options: WorkerOptions, row: SectionRow, totals: SectionTotals, run: string): Promise<void> => {
     const record = parseStorageRecord(row.doc);
 
     if (!record) {
@@ -761,7 +772,7 @@ const importStorageRow = async (options: WorkerOptions, row: SectionRow, totals:
     }
 
     try {
-        await writeStorageRecord(options, row, record, totals);
+        await writeStorageRecord(options, row, record, totals, run);
     } catch (error) {
         rowError(totals, row, "STORAGE_IMPORT_FAILED", `${record.key}: ${errorMessage(error)}`);
     }
@@ -791,7 +802,7 @@ const sweepStaging = async (options: WorkerOptions, row: SectionRow, totals: Sec
  * storage lines are written one at a time, in file order — a storage object's
  * chunks depend on it.
  */
-const importSectionRows = async (options: WorkerOptions, rows: ReadonlyArray<SectionRow>): Promise<SectionTotals> => {
+const importSectionRows = async (options: WorkerOptions, rows: ReadonlyArray<SectionRow>, run: string): Promise<SectionTotals> => {
     const totals: SectionTotals = { conflicts: 0, errors: [], inserted: {} };
 
     await importAuth(
@@ -810,12 +821,12 @@ const importSectionRows = async (options: WorkerOptions, rows: ReadonlyArray<Sec
             }
             case KV_TABLE: {
                 // eslint-disable-next-line no-await-in-loop -- file order
-                await importKvRow(options, row, totals);
+                await importKvRow(options, row, totals, run);
                 break;
             }
             case STORAGE_TABLE: {
                 // eslint-disable-next-line no-await-in-loop -- a storage object's chunks are written in order
-                await importStorageRow(options, row, totals);
+                await importStorageRow(options, row, totals, run);
                 break;
             }
             default:
