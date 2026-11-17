@@ -19,6 +19,7 @@ import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 import { bindingKeyName, descendantsOfKind, findObjectProperty, isConstDeclaration, propertyKeyName, unwrapExpression } from "./discover/ast";
 import { declarationOf, isReassignedBinding, referencedSymbolOf } from "./discover/attribution";
 import { contextTrustPathOf, isHandlerArgsParameter, referencesContext } from "./discover/context-root";
+import { staticPropertyName } from "./discover/property-name";
 
 /**
  * The parameter binding element that declares `name`, searched from the
@@ -456,14 +457,23 @@ const equatesToCaller = (value: TsNode): boolean => {
     return eq !== undefined && readsCallerIdentity(eq);
 };
 
-/** Whether a later member of `object` can replace `property` at runtime: a spread, or the same key written again. */
+/**
+ * Whether a later member of `object` can replace `property` at runtime: a spread, the same key written
+ * again, or a computed key whose name is only known at runtime (`[args.field]: …`).
+ */
 const isOverriddenLater = (object: ObjectLiteralExpression, property: ObjectLiteralElementLike): boolean => {
     const members = object.getProperties();
     const key = Node.isSpreadAssignment(property) ? undefined : propertyKeyName(property);
 
-    return members
-        .slice(members.indexOf(property) + 1)
-        .some((later) => Node.isSpreadAssignment(later) || (key !== undefined && propertyKeyName(later) === key));
+    return members.slice(members.indexOf(property) + 1).some((later) => {
+        if (Node.isSpreadAssignment(later)) {
+            return true;
+        }
+
+        const laterKey = staticPropertyName(later.getNameNode());
+
+        return laterKey === undefined || laterKey === key;
+    });
 };
 
 /** Whether the `where` object `filter` pins `field` to the caller on every row it admits: directly, or in any `AND` branch. */

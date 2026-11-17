@@ -363,7 +363,15 @@ describe("argument-taint", () => {
         });
 
         it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
-            expect.assertions(5);
+            expect.assertions(6);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId, [args.field]: args.ownerId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
 
             const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
 
