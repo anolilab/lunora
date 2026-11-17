@@ -783,6 +783,102 @@ const requireMember = async (ctx, channelId) => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("reports a row whose field the helper guard reads is written from args first", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("message.channelId = args.channelId;\n    await requireMember(ctx, message.channelId);"));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a row whose field the inline guard reads is written from args first", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`message.channelId = args.channelId;
+    const membership = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId: message.channelId } });
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a destructuring read", "const { title } = message;\n    void title;"],
+        ["JSON.stringify", "console.log(JSON.stringify(message));"],
+        ["an early return", "if (args.preview) {\n        return message;\n    }"],
+    ])("accepts a guarded row also used by %s", (_label, use) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`await requireMember(ctx, message.channelId);\n    ${use}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    /** A helper guard handed the whole row; `extra` runs in its body after the membership check. */
+    const rowHelper = (extra: string): string => `const requireMember = async (ctx, message) => {
+    const userId = ctx.auth.userId;
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", message.channelId).eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+    ${extra}
+};`;
+
+    it("accepts the whole row handed to a helper guard that only reads it", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);", SINK, rowHelper("")));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["writes into it", "message.attachmentKey = ctx.auth.userId;"],
+        ["hands it on", "audit(message);"],
+        ["calls a method on it", "message.touch();"],
+    ])("reports the whole row handed to a helper guard that %s", (_label, extra) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);", SINK, rowHelper(extra)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a spread copy", "const copy = { ...message };\n    copy.meta.storageKey = args.key;"],
+        ["a destructured holder", "const { meta } = message;\n    meta.storageKey = args.key;"],
+    ])("reports a nested key shared through %s", (_label, copy) => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                `await requireMember(ctx, message.channelId);\n    ${copy}`,
+                "return ctx.storage.attachments.getSignedUrl(message.meta.storageKey, { expiresIn: 60 });",
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts a nested key whose holder is never copied", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId);",
+                "return ctx.storage.attachments.getSignedUrl(message.meta.storageKey, { expiresIn: 60 });",
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("accepts a guarded row whose unrelated fields are read or written", () => {
         expect.assertions(1);
 
@@ -827,6 +923,8 @@ const requireMember = async (ctx, channelId) => {
 
     it.each([
         ["a fallback", `"userId", globalThis.victim ?? ctx.auth.userId`],
+        ["the left of a fallback", `"userId", ctx.auth.userId ?? globalThis.victim`],
+        ["the left of an or", `"userId", userId || globalThis.victim`],
         ["a conditional", `"userId", ctx.auth.userId ? globalThis.victim : userId`],
     ])("reports a helper whose identity read sits in %s", (_label, predicate) => {
         expect.assertions(1);
@@ -839,6 +937,7 @@ const requireMember = async (ctx, channelId) => {
     it.each([
         ["a local", "const uid = args.victim ?? ctx.auth.userId;", "uid"],
         ["a destructured identity", "const { userId } = ctx.auth;", "args.victim ?? userId"],
+        ["an identity with a caller fallback", "const uid = ctx.auth.userId;", "uid ?? args.victim"],
     ])("reports an inline guard whose identity alias through %s only falls back to the caller", (_label, alias, value) => {
         expect.assertions(1);
 

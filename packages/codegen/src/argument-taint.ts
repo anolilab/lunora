@@ -316,12 +316,40 @@ const isAlternativeOf = (identifier: TsNode, within: TsNode): boolean => {
 };
 
 /**
+ * Whether `node` sits beside an alternative on its way up to `within`: either side of a `??` or `||`, the left of
+ * a `&&`, or any part of a conditional. Stricter than {@link isAlternativeOf}: the identity on the left of
+ * `ctx.auth.userId ?? args.victim` is null for an anonymous caller, who then reads the victim's row.
+ */
+const hasAlternativeWithin = (node: TsNode, within: TsNode): boolean => {
+    for (let child = node, parent = node.getParent(); parent !== undefined && child !== within; child = parent, parent = parent.getParent()) {
+        if (Node.isConditionalExpression(parent)) {
+            return true;
+        }
+
+        if (Node.isBinaryExpression(parent)) {
+            const operator = parent.getOperatorToken().getKind();
+
+            if (
+                operator === SyntaxKind.QuestionQuestionToken ||
+                operator === SyntaxKind.BarBarToken ||
+                (child === parent.getLeft() && operator === SyntaxKind.AmpersandAmpersandToken)
+            ) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+};
+
+/**
  * Whether `argument` names the caller's identity, directly or through a local whose initializer does,
- * on every path: `ownerId: args.ownerId ?? ctx.auth.userId` selects the caller's row only when nothing is sent.
+ * with no alternative beside it: `ownerId: args.ownerId ?? ctx.auth.userId` selects the caller's row only when
+ * nothing is sent, and `ownerId: ctx.auth.userId ?? args.ownerId` selects the caller's choice for an anonymous one.
  */
 const readsCallerIdentity = (argument: TsNode): boolean =>
     valueIdentifiersOf(argument).some((identifier) => {
-        if (isAlternativeOf(identifier, argument)) {
+        if (hasAlternativeWithin(identifier, argument)) {
             return false;
         }
 
@@ -333,7 +361,9 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
 
         return (
             initializer !== undefined &&
-            valueIdentifiersOf(initializer).some((inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth" && !isAlternativeOf(inner, initializer))
+            valueIdentifiersOf(initializer).some(
+                (inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth" && !hasAlternativeWithin(inner, initializer),
+            )
         );
     });
 
@@ -965,9 +995,15 @@ const rowDeclarationOf = (key: TsNode): { keyPath: ReadonlyArray<string>; row: V
     return readChain !== undefined && singleRowReadOf(readChain) !== undefined ? { keyPath: access.path, row: declaration } : undefined;
 };
 
-/** Whether `path` can name `keyPath` or an object on the way to it; an `undefined` segment is a computed key, which may. */
-const mayReach = (path: ReadonlyArray<string | undefined>, keyPath: ReadonlyArray<string>): boolean =>
-    path.length <= keyPath.length && path.every((segment, index) => segment === undefined || segment === keyPath[index]);
+/** A path of names read off the row; an `undefined` segment is a computed key, which may be any name. */
+type RowPath = ReadonlyArray<string | undefined>;
+
+/** Whether `path` and `other` may name the same value, or one an object holding the other. */
+const overlaps = (path: RowPath, other: RowPath): boolean =>
+    path.every((segment, index) => index >= other.length || segment === undefined || other[index] === undefined || segment === other[index]);
+
+/** Whether `path` names an object that holds `other`, rather than `other` itself or a value below it. */
+const holds = (path: RowPath, other: RowPath): boolean => path.length < other.length && overlaps(path, other);
 
 /** The operators that only compare a holder (`row === null`), never change it. */
 const EQUALITY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
@@ -1000,38 +1036,102 @@ const accessChainFrom = (use: Identifier): { node: TsNode; path: (string | undef
     }
 };
 
-/**
- * Whether `use`, a reference to the guarded row, leaves the value at `keyPath` as the guard saw it. A write to the key
- * or to an object holding it (`row.key = …`, `({ key: row.key } = args)`, `delete row.key`) changes it, and so can
- * any code handed an object holding it: a call argument (`Object.assign(row, args)`), a method invoked on it, or an
- * alias. A holder may still be tested (`!row`, `row === null`) or spread into a copy.
- */
-const keepsGuardedKey = (use: Identifier, keyPath: ReadonlyArray<string>): boolean => {
-    const { node, path } = accessChainFrom(use);
-
-    if (isWriteTarget(node)) {
-        return !mayReach(path, keyPath);
-    }
-
+/** Whether `node` is the callee of the call that is its parent (`row.save()`), so the object it is read off runs as `this`. */
+const isInvoked = (node: TsNode): boolean => {
     const parent = node.getParent();
 
-    // A method invoked on a holder (`row.save()`) runs with the holder as `this`; one on the key's own value cannot repoint it.
-    if (Node.isCallExpression(parent) && parent.getExpression() === node) {
-        const holder = path.slice(0, -1);
+    return Node.isCallExpression(parent) && parent.getExpression() === node;
+};
 
-        return path.length === 0 || holder.length >= keyPath.length || !mayReach(holder, keyPath);
-    }
-
-    if (path.length >= keyPath.length || !mayReach(path, keyPath)) {
-        return true;
-    }
+/** Whether `node` only tests an object (`!row`, `row === null`, `typeof row`), which cannot change it. */
+const isTestOf = (node: TsNode): boolean => {
+    const parent = node.getParent();
 
     return (
         (Node.isPrefixUnaryExpression(parent) && parent.getOperatorToken() === SyntaxKind.ExclamationToken) ||
         (Node.isBinaryExpression(parent) && EQUALITY_OPERATORS.has(parent.getOperatorToken().getKind())) ||
-        Node.isTypeOfExpression(parent) ||
-        Node.isSpreadAssignment(parent)
+        Node.isTypeOfExpression(parent)
     );
+};
+
+/** Whether `node` is the argument of the platform's `JSON.stringify`, which only reads it. */
+const isStringified = (node: TsNode): boolean => {
+    const call = node.getParent();
+    const callee = Node.isCallExpression(call) && call.getArguments()[0] === node ? call.getExpression() : undefined;
+    const root = Node.isPropertyAccessExpression(callee) && callee.getName() === "stringify" ? callee.getExpression() : undefined;
+    const declaration = Node.isIdentifier(root) && root.getText() === "JSON" ? declarationOf(root) : undefined;
+
+    return declaration?.getSourceFile().isDeclarationFile() === true;
+};
+
+/**
+ * Whether an object at `path` holding the guarded values at `heldPaths`, used as `node`, only has them read: tested,
+ * returned, serialised with `JSON.stringify`, or copied by a spread or a destructuring. A copy is shallow, so it is
+ * read-only only while every held value sits directly on the object: spreading `row` for a key at `row.meta.key`
+ * shares `row.meta`, and `copy.meta.key = …` then changes the key unseen.
+ */
+const isReadOnlyHolderUse = (node: TsNode, path: RowPath, heldPaths: ReadonlyArray<RowPath>): boolean => {
+    const parent = node.getParent();
+    // A declaration whose name is a pattern can only hold `node` as its initializer.
+    const isCopy = Node.isSpreadAssignment(parent) || (Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode()));
+
+    if (isCopy) {
+        return heldPaths.every((held) => held.length === path.length + 1);
+    }
+
+    return isTestOf(node) || Node.isReturnStatement(parent) || isStringified(node);
+};
+
+/**
+ * Whether `use`, a reference to the guarded row, leaves every value at `guardedPaths` (the key, and each field the
+ * guard read) as the guard saw it. A write that may reach one (`row.key = …`, `row.channelId = args.channelId`,
+ * `({ key: row.key } = args)`, `delete row.key`) changes it, and so can any code handed an object holding one: a call
+ * argument (`Object.assign(row, args)`, `mutate(row)`), a method invoked on it, or an alias. A holder may still be
+ * read without being handed on (see {@link isReadOnlyHolderUse}).
+ */
+const keepsGuardedValues = (use: Identifier, guardedPaths: ReadonlyArray<RowPath>): boolean => {
+    const { node, path } = accessChainFrom(use);
+
+    if (isWriteTarget(node)) {
+        return !guardedPaths.some((guardedPath) => overlaps(path, guardedPath));
+    }
+
+    // A method invoked on a holder (`row.save()`) runs with the holder as `this`; one on a guarded value itself cannot repoint it.
+    if (isInvoked(node)) {
+        const holder = path.slice(0, -1);
+
+        return path.length === 0 || !guardedPaths.some((guardedPath) => holds(holder, guardedPath));
+    }
+
+    const heldPaths = guardedPaths.filter((guardedPath) => holds(path, guardedPath));
+
+    return heldPaths.length === 0 || isReadOnlyHolderUse(node, path, heldPaths);
+};
+
+/**
+ * The row paths a helper reads through its parameter `tied`, which received the row's value at `argumentPath`
+ * (`[]` for the whole row), or `undefined` when the helper may change what it was handed: a write through the
+ * parameter, a method invoked on the whole row, or the whole row handed on.
+ */
+const helperReadPathsOf = (helper: FunctionNode, tied: ParameterDeclaration, argumentPath: RowPath): RowPath[] | undefined => {
+    const paths: RowPath[] = [];
+    const uses = helper
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .filter((identifier) => identifier !== tied.getNameNode() && declarationOf(identifier)?.compilerNode === tied.compilerNode);
+
+    for (const use of uses) {
+        const { node, path } = accessChainFrom(use);
+        const invoked = isInvoked(node);
+        const read = invoked ? path.slice(0, -1) : path;
+
+        if (isWriteTarget(node) || (argumentPath.length === 0 && ((invoked && read.length === 0) || (path.length === 0 && !isTestOf(node))))) {
+            return undefined;
+        }
+
+        paths.push([...argumentPath, ...read]);
+    }
+
+    return paths;
 };
 
 /** Every argument of the chain, and every node inside each argument (a callback's body included). */
@@ -1082,9 +1182,13 @@ const isIdentityReadOf = (node: TsNode, parameter: ParameterDeclaration): boolea
     return isDirectDestructuredIdentityOf(node, parameter);
 };
 
-/** Whether the read argument `argument` reads the caller's identity through `parameter` on every path: `victim ?? ctx.auth.userId` does only when nothing else is supplied. */
+/**
+ * Whether the read argument `argument` reads the caller's identity through `parameter` with no alternative beside it.
+ * `victim ?? ctx.auth.userId` reads the identity only when nothing else is supplied, and `ctx.auth.userId ?? victim`
+ * reads the victim for an anonymous caller, whose `userId` is null.
+ */
 const argumentReadsIdentityOf = (argument: TsNode, parameter: ParameterDeclaration): boolean =>
-    [argument, ...argument.getDescendants()].some((node) => isIdentityReadOf(node, parameter) && !isAlternativeOf(node, argument));
+    [argument, ...argument.getDescendants()].some((node) => isIdentityReadOf(node, parameter) && !hasAlternativeWithin(node, argument));
 
 /** The declaration a variable statement makes, when it is a single `const` binding one identifier. */
 const constDeclarationOf = (statement: TsNode): VariableDeclaration | undefined => {
@@ -1152,7 +1256,7 @@ const isNullCheckExit = (statement: TsNode | undefined, declaration: VariableDec
     exitsBranch(statement.getThenStatement(), throwOnly);
 
 /**
- * Whether `helper`'s own body enforces the identity check of {@link isHelperGuardCall}: a top-level
+ * Whether `helper`'s own body enforces the identity check of {@link helperGuardPathsOf}: a top-level
  * `const r = await P.db…` single-row read whose chain reads the caller's identity through `parameter` and
  * references a parameter that received the row. It is enforced by a later `if (!r)` / `if (r == null)` in
  * the same block whose branch throws, or by the read itself when it is a `…OrThrow` variant.
@@ -1197,16 +1301,48 @@ const helperEnforcesRead = (helper: FunctionNode, parameter: ParameterDeclaratio
 };
 
 /**
- * Whether a helper call is an identity guard for the row: the handler's ctx is its only ctx-valued argument,
- * another argument references the row, and the helper's body enforces the identity read of
- * {@link helperEnforcesRead}. A helper that may return a Promise must be awaited.
+ * The helper parameters that receive the row or a field read off it, with the row paths the helper reads through
+ * each, or `undefined` when the helper may change what it was handed (see {@link helperReadPathsOf}).
  */
-const isHelperGuardCall = (call: CallExpression, row: VariableDeclaration, awaited: boolean): boolean => {
+const tiedArgumentsOf = (
+    helper: FunctionNode,
+    args: ReadonlyArray<TsNode>,
+    contextIndex: number,
+    row: VariableDeclaration,
+): { reads: RowPath[]; tied: ParameterDeclaration }[] | undefined => {
+    const tiedArguments: { reads: RowPath[]; tied: ParameterDeclaration }[] = [];
+
+    for (const [index, argument] of args.entries()) {
+        // The argument must be the row or a field read off it; `args.id || row.id` may pass the caller's value.
+        const access = accessPathOf(unwrapExpression(argument));
+        const tied = index === contextIndex || access === undefined || !bindsTo(access.root, row) ? undefined : helper.getParameters()[index];
+
+        if (access !== undefined && tied !== undefined && Node.isIdentifier(tied.getNameNode())) {
+            const reads = helperReadPathsOf(helper, tied, access.path);
+
+            if (reads === undefined) {
+                return undefined;
+            }
+
+            tiedArguments.push({ reads, tied });
+        }
+    }
+
+    return tiedArguments;
+};
+
+/**
+ * The row paths a helper call guards when it is an identity guard for the row, `undefined` otherwise. It is one
+ * when the handler's ctx is its only ctx-valued argument, another argument references the row, and the helper's
+ * body enforces the identity read of {@link helperEnforcesRead} without changing what it was handed. A helper that
+ * may return a Promise must be awaited.
+ */
+const helperGuardPathsOf = (call: CallExpression, row: VariableDeclaration, awaited: boolean): RowPath[] | undefined => {
     const helper = appFunctionOf(call.getExpression());
     const args = call.getArguments();
 
     if (helper === undefined || args.some((argument) => Node.isSpreadElement(argument))) {
-        return false;
+        return undefined;
     }
 
     const contextIndexes = args.flatMap((argument, index) => (contextTrustPathOf(argument)?.length === 0 ? [index] : []));
@@ -1214,20 +1350,17 @@ const isHelperGuardCall = (call: CallExpression, row: VariableDeclaration, await
     const parameter = contextIndex === undefined ? undefined : helper.getParameters()[contextIndex];
 
     if (contextIndex === undefined || parameter === undefined || parameter.isRestParameter() || !Node.isIdentifier(parameter.getNameNode())) {
-        return false;
+        return undefined;
     }
 
-    const tiedParameters: ParameterDeclaration[] = [];
+    const tiedArguments = tiedArgumentsOf(helper, args, contextIndex, row);
 
-    args.forEach((argument, index) => {
-        // The argument must be the row or a field read off it; `args.id || row.id` may pass the caller's value.
-        const access = accessPathOf(unwrapExpression(argument));
-        const tied = index === contextIndex || access === undefined || !bindsTo(access.root, row) ? undefined : helper.getParameters()[index];
+    if (tiedArguments === undefined) {
+        return undefined;
+    }
 
-        if (tied !== undefined && Node.isIdentifier(tied.getNameNode())) {
-            tiedParameters.push(tied);
-        }
-    });
+    const tiedParameters = tiedArguments.map(({ tied }) => tied);
+    const guardedPaths = tiedArguments.flatMap(({ reads }) => reads);
 
     const returnType = helper.getReturnType();
     const mayBePromise = helper.isAsync() || returnType.isAny() || returnType.isUnknown() || returnType.getText().includes("Promise");
@@ -1237,10 +1370,10 @@ const isHelperGuardCall = (call: CallExpression, row: VariableDeclaration, await
     const isReplaced = (candidate: ParameterDeclaration): boolean => candidate.hasInitializer() || isReassignedParameter(candidate, helper);
 
     if (tiedParameters.length === 0 || (!awaited && mayBePromise) || [parameter, ...tiedParameters].some((candidate) => isReplaced(candidate))) {
-        return false;
+        return undefined;
     }
 
-    return helperEnforcesRead(helper, parameter, tiedParameters);
+    return helperEnforcesRead(helper, parameter, tiedParameters) ? guardedPaths : undefined;
 };
 
 /**
@@ -1298,31 +1431,70 @@ const runsBeforeSinkUnconditionally = (statement: TsNode, enclosing: FunctionNod
     return true;
 };
 
-/**
- * Whether one of the statements before the sink's own statement (`statements[index]`) is an identity
- * guard for `row`: a helper-guard call, or an inline single-row read followed directly by its enforcing
- * `if` (or a `…OrThrow` read, which enforces on its own).
- */
-const hasPrecedingGuard = (statements: ReadonlyArray<TsNode>, index: number, row: VariableDeclaration, enclosing: FunctionNode, sinkCall: TsNode): boolean =>
-    statements.slice(0, index).some((statement, position) => {
-        if (!runsBeforeSinkUnconditionally(statement, enclosing, sinkCall)) {
-            return false;
+/** An identity guard found for the row: the row paths it read, and the helper call when it is one. */
+interface RowGuard {
+    guardedPaths: RowPath[];
+    helperCall?: CallExpression;
+}
+
+/** The row paths an inline guard's read takes off `row`: `message.channelId` in its `where` reads `["channelId"]`. */
+const inlineGuardPathsOf = (declaration: VariableDeclaration, row: VariableDeclaration): RowPath[] =>
+    declaration.getDescendantsOfKind(SyntaxKind.Identifier).flatMap((identifier) => {
+        if (!bindsTo(identifier, row)) {
+            return [];
         }
 
-        if (Node.isExpressionStatement(statement)) {
-            const expression = unwrapExpression(statement.getExpression());
-            const isAwaited = Node.isAwaitExpression(expression);
-            const call = isAwaited ? unwrapExpression(expression.getExpression()) : expression;
+        const { node, path } = accessChainFrom(identifier);
 
-            if (Node.isCallExpression(call) && isHelperGuardCall(call, row, isAwaited)) {
-                return true;
-            }
+        return [isInvoked(node) ? path.slice(0, -1) : path];
+    });
+
+/** The helper guard `statement` is, an expression statement `await h(…)` or `h(…)`, or `undefined`. */
+const helperGuardStatementOf = (statement: TsNode, row: VariableDeclaration): RowGuard | undefined => {
+    if (!Node.isExpressionStatement(statement)) {
+        return undefined;
+    }
+
+    const expression = unwrapExpression(statement.getExpression());
+    const isAwaited = Node.isAwaitExpression(expression);
+    const call = isAwaited ? unwrapExpression(expression.getExpression()) : expression;
+    const guardedPaths = Node.isCallExpression(call) ? helperGuardPathsOf(call, row, isAwaited) : undefined;
+
+    return Node.isCallExpression(call) && guardedPaths !== undefined ? { guardedPaths, helperCall: call } : undefined;
+};
+
+/**
+ * The identity guard for `row` among the statements before the sink's own statement (`statements[index]`): a
+ * helper-guard call, or an inline single-row read followed directly by its enforcing `if` (or a `…OrThrow` read,
+ * which enforces on its own).
+ */
+const precedingGuardOf = (
+    statements: ReadonlyArray<TsNode>,
+    index: number,
+    row: VariableDeclaration,
+    enclosing: FunctionNode,
+    sinkCall: TsNode,
+): RowGuard | undefined => {
+    for (const [position, statement] of statements.slice(0, index).entries()) {
+        if (!runsBeforeSinkUnconditionally(statement, enclosing, sinkCall)) {
+            continue;
+        }
+
+        const helperGuard = helperGuardStatementOf(statement, row);
+
+        if (helperGuard !== undefined) {
+            return helperGuard;
         }
 
         const inline = inlineGuardOf(statement, row);
 
-        return inline !== undefined && (inline.selfEnforcing || (position + 1 < index && isNullCheckExit(statements[position + 1], inline.declaration, false)));
-    });
+        if (inline !== undefined && (inline.selfEnforcing || (position + 1 < index && isNullCheckExit(statements[position + 1], inline.declaration, false)))) {
+            return { guardedPaths: inlineGuardPathsOf(inline.declaration, row) };
+        }
+    }
+
+    return undefined;
+};
 
 /** `node` with any `await`, parentheses and type assertions removed. */
 const unawaited = (node: TsNode): TsNode => {
@@ -1495,7 +1667,13 @@ const bindingScopesKey = (identifier: TsNode, wholeKey: TsNode | undefined): boo
  * The parts of a key built by concatenation, in order: template spans and `+` operands, with
  * nested templates and `+` chains flattened into them. A single part for anything else.
  */
-const keyPartsOf = (node: TsNode, followLocal = true): TsNode[] => {
+/** One part of a concatenated key, and the node in the key it lands at: a local's reference for a part of its initializer. */
+interface KeyPart {
+    anchor: TsNode;
+    part: TsNode;
+}
+
+const keyPartsOf = (node: TsNode, followLocal = true): KeyPart[] => {
     const value = strippedValue(node);
 
     if (Node.isTemplateExpression(value)) {
@@ -1514,10 +1692,13 @@ const keyPartsOf = (node: TsNode, followLocal = true): TsNode[] => {
         composed !== undefined &&
         (Node.isTemplateExpression(composed) || (Node.isBinaryExpression(composed) && composed.getOperatorToken().getKind() === SyntaxKind.PlusToken))
     ) {
-        return keyPartsOf(composed, false);
+        // The local's parts sit in its initializer; the reference is where they land in the key.
+        return keyPartsOf(composed, false).map(({ part }) => {
+            return { anchor: value, part };
+        });
     }
 
-    return [value];
+    return [{ anchor: value, part: value }];
 };
 
 const isFixedTextPart = (part: TsNode): boolean => Node.isStringLiteral(part) || Node.isNoSubstitutionTemplateLiteral(part) || Node.isNumericLiteral(part);
@@ -1600,11 +1781,12 @@ const isIntactIdentityPart = (part: TsNode, followLocal = true): boolean => {
  */
 const followsIdentityPrefix = (identifier: TsNode, within: TsNode): boolean => {
     const parts = keyPartsOf(within);
-    const leading = parts.findIndex((part) => !isFixedTextPart(part));
-    const holder = parts.findIndex((part) => part.getPos() <= identifier.getPos() && identifier.getEnd() <= part.getEnd());
+    const contains = (node: TsNode): boolean => node.getPos() <= identifier.getPos() && identifier.getEnd() <= node.getEnd();
+    const leading = parts.findIndex(({ part }) => !isFixedTextPart(part));
+    const holder = parts.findIndex(({ anchor, part }) => contains(part) || contains(anchor));
     const first = parts[leading];
 
-    return first !== undefined && leading < holder && isIntactIdentityPart(first);
+    return first !== undefined && leading < holder && isIntactIdentityPart(first.part);
 };
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
@@ -1947,31 +2129,35 @@ export const isGuardedByIdentityCheck = (sinkCall: CallExpression, key: TsNode):
 
     const { keyPath, row } = guarded;
     const rowName = row.getNameNode();
-
-    // A `const` row's fields stay writable: `row.key = args.key` or `Object.assign(row, args)` after the guard replaces
-    // what the guard vouched for.
-    if (!Node.isIdentifier(rowName) || !usesOfLocal(rowName).every((use) => keepsGuardedKey(use, keyPath))) {
-        return false;
-    }
-
+    let guard: RowGuard | undefined;
     let child: TsNode = sinkCall;
-    let ancestor: TsNode | undefined = sinkCall.getParent();
 
-    while (ancestor !== undefined && ancestor.compilerNode !== enclosing.compilerNode) {
+    for (
+        let ancestor = sinkCall.getParent();
+        guard === undefined && ancestor !== undefined && ancestor.compilerNode !== enclosing.compilerNode;
+        ancestor = ancestor.getParent()
+    ) {
         if (Node.isBlock(ancestor)) {
             const statements = ancestor.getStatements();
             const index = statements.findIndex((statement) => statement.compilerNode === child.compilerNode);
 
-            if (index > 0 && hasPrecedingGuard(statements, index, row, enclosing, sinkCall)) {
-                return true;
-            }
+            guard = index > 0 ? precedingGuardOf(statements, index, row, enclosing, sinkCall) : undefined;
         }
 
         child = ancestor;
-        ancestor = ancestor.getParent();
     }
 
-    return false;
+    if (guard === undefined || !Node.isIdentifier(rowName)) {
+        return false;
+    }
+
+    // A `const` row's fields stay writable: `row.key = args.key`, `row.channelId = args.channelId` or
+    // `Object.assign(row, args)` replaces what the guard vouched for. The row handed to the guard helper itself was
+    // checked to be only read there.
+    const guardedPaths = [keyPath, ...guard.guardedPaths];
+    const { helperCall } = guard;
+
+    return usesOfLocal(rowName).every((use) => helperCall?.getArguments().includes(valueWrapperOf(use)) === true || keepsGuardedValues(use, guardedPaths));
 };
 
 export { appFunctionOf };

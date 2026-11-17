@@ -715,6 +715,23 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid}/\${args.name}\`);`))).toBe(true);
         });
 
+        it("judges a composed local by where its reference lands in the key", () => {
+            expect.assertions(2);
+
+            expect(isScopedByIdentity(sinkArgument(`const suffix = \`\${args.name ?? args.other}\`;\nSINK(\`\${ctx.auth.userId}/\${suffix}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const prefix = \`\${args.name ?? args.other}\`;\nSINK(\`\${prefix}/\${ctx.auth.userId}\`);`))).toBe(false);
+        });
+
+        it("rejects a row read whose owner predicate has any caller alternative", () => {
+            expect.assertions(2);
+
+            const read = (owner: string): string =>
+                `const row = await ctx.db.files.findFirst({ where: { ownerId: ${owner} } });\nSINK(\`\${row._id}/\${args.k}\`);`;
+
+            expect(isScopedByIdentity(sinkArgument(read("ctx.auth.userId ?? args.victim")))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(read("args.victim ?? ctx.auth.userId")))).toBe(false);
+        });
+
         it("rejects an identity destructured with a default the caller can supply", () => {
             expect.assertions(2);
 

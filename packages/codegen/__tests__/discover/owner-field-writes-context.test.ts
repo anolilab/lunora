@@ -248,6 +248,33 @@ export const create = ${kind}({
     // #991: the condition only picks WHICH server-trusted value (or nothing) is
     // written, so a caller cannot name another tenant. A branch that is itself
     // caller-chosen is still an IDOR.
+    describe("does not trust a ctx binding whose destructuring default the caller supplies", () => {
+        it.each([
+            ["its own default", "const { userId = args.victim } = ctx.auth;"],
+            ["an enclosing default", "const { auth: { userId } = { userId: args.victim } } = ctx;"],
+        ])("reports an owner bound with %s", (_label, binding) => {
+            expect.assertions(1);
+
+            const source = `export const create = mutation({ handler: async ({ args, ctx }) => {
+    ${binding}
+    await ctx.db.insert("posts", { userId }); // @write
+} });`;
+
+            expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toBeDefined();
+        });
+
+        it("keeps an owner bound by a plain ctx destructuring trusted", () => {
+            expect.assertions(1);
+
+            const source = `export const create = mutation({ handler: async ({ args, ctx }) => {
+    const { userId } = ctx.auth;
+    await ctx.db.insert("posts", { userId, title: args.title }); // @write
+} });`;
+
+            expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toBeUndefined();
+        });
+    });
+
     describe("judges a ternary by its branch values, not its condition", () => {
         it("does not report an owner picked by an args condition between ctx values", () => {
             expect.assertions(1);

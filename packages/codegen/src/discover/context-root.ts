@@ -398,6 +398,21 @@ const ECHOING_CONTEXT_METHODS: ReadonlySet<string> = new Set([
  */
 const CALLBACK_RESULT_METHODS: ReadonlySet<string> = new Set(["catch", "flatMap", "map", "reduce", "reduceRight", "then"]);
 
+/** Whether `element`, or an element of the same destructuring that encloses it, has a default. */
+const hasDefaultedElement = (element: BindingElement): boolean => {
+    for (
+        let current: TsNode | undefined = element;
+        Node.isBindingElement(current) || Node.isObjectBindingPattern(current) || Node.isArrayBindingPattern(current);
+        current = current.getParent()
+    ) {
+        if (Node.isBindingElement(current) && current.getInitializer() !== undefined) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 /**
  * Whether `value` is a server-side value ROOTED in the handler's ctx, under
  * the trust policy: its member / call chain — through property and element
@@ -427,6 +442,12 @@ const isContextRooted = (value: TsNode, hops = MAX_CONTEXT_HOPS): boolean => {
 
     const declaration = declarationOf(current);
     const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
+
+    // `const { userId = args.victim } = ctx.auth`, or a default on any element enclosing it, holds the caller's value
+    // whenever the field is missing, so the rooted initializer does not vouch for it.
+    if (Node.isBindingElement(declaration) && hasDefaultedElement(declaration)) {
+        return false;
+    }
     const initializer = isConstDeclaration(variable) && hops > 0 ? variable.getInitializer() : undefined;
 
     return initializer !== undefined && isContextRooted(initializer, hops - 1);
