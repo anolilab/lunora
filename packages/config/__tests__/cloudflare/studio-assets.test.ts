@@ -120,6 +120,43 @@ describe("studio documents as Workers Static Assets", () => {
             expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
         });
 
+        it.each([
+            ["a test", join("__tests__", "app.test.ts")],
+            ["an unrelated module", join("src", "unused-app.ts")],
+        ])("keeps them in the bundle for a hand-written entry when %s outside the bundle calls defineApp", (_label, file) => {
+            expect.assertions(1);
+
+            writeProject({}, {}, HAND_WRITTEN_ENTRY);
+            mkdirSync(join(root, file, ".."), { recursive: true });
+            writeFileSync(join(root, file), `import { defineApp } from "../lunora/_generated/app";\n\nexport const app = defineApp().build();\n`, "utf8");
+
+            expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
+        });
+
+        it.each([
+            ["imports", `import app from "./app";\n\nexport default app;\n`],
+            ["re-exports", `export { default } from "./app";\n`],
+        ])("ships them as assets when the entry %s a local module that composes the app", (_label, entry) => {
+            expect.assertions(1);
+
+            writeProject({}, {}, entry);
+            writeFileSync(
+                join(root, "src", "app.ts"),
+                `import { defineApp } from "../lunora/_generated/app.js";\n\nexport default defineApp().build();\n`,
+                "utf8",
+            );
+
+            expect(studioAssetsPlan(root, { main: "src/server.ts" })).toStrictEqual({ binding: "ASSETS", directory: STUDIO_ASSETS_DIRECTORY });
+        });
+
+        it("keeps them in the bundle when defineApp comes from somewhere other than the generated app module", () => {
+            expect.assertions(1);
+
+            writeProject({}, {}, `import { defineApp } from "./my-factory";\n\nexport default defineApp().build();\n`);
+
+            expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
+        });
+
         it("does not read a doc comment or a type-only import of defineApp as composing the app", () => {
             expect.assertions(1);
 
