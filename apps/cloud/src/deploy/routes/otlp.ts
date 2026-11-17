@@ -30,10 +30,18 @@ import { jsonError, otlpBearer, rejected, requireContext } from "./shared";
  * "bomb" (a tiny body that inflates to GBs) — reading the stream in chunks and
  * aborting past this cap keeps a single request from OOMing the shared isolate.
  */
-const MAX_OTLP_BODY_BYTES = 32 * 1024 * 1024;
+export const MAX_OTLP_BODY_BYTES = 32 * 1024 * 1024;
 
-/** Drain a byte stream to a single buffer, throwing once the running total exceeds {@link MAX_OTLP_BODY_BYTES}. */
-const readAllCapped = async (stream: ReadableStream<Uint8Array> | null): Promise<Uint8Array> => {
+/** A body past {@link MAX_OTLP_BODY_BYTES}: a distinct class so a route can answer 413 rather than 400. */
+export class OtlpBodyTooLargeError extends Error {
+    public constructor() {
+        super("OTLP body exceeds the decompressed size limit");
+        this.name = "OtlpBodyTooLargeError";
+    }
+}
+
+/** Drain a byte stream to a single buffer, throwing {@link OtlpBodyTooLargeError} once the running total exceeds {@link MAX_OTLP_BODY_BYTES}. */
+export const readAllCapped = async (stream: ReadableStream<Uint8Array> | null): Promise<Uint8Array> => {
     if (!stream) {
         return new Uint8Array();
     }
@@ -54,7 +62,7 @@ const readAllCapped = async (stream: ReadableStream<Uint8Array> | null): Promise
             total += value.byteLength;
 
             if (total > MAX_OTLP_BODY_BYTES) {
-                throw new Error("OTLP body exceeds the decompressed size limit");
+                throw new OtlpBodyTooLargeError();
             }
 
             chunks.push(value);

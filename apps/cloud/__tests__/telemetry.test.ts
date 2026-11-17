@@ -1,7 +1,10 @@
 import type { AnalyticsEngineDatasetLike } from "@lunora/bindings/analytics";
 import type { PipelineBindingLike } from "@lunora/bindings/pipelines";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { MAX_OTLP_BODY_BYTES } from "../src/deploy/routes/otlp";
+import type { RouterEnv } from "../src/deploy/routes/shared";
+import { handleTelemetryRoute } from "../src/deploy/routes/telemetry";
 import { crossesThreshold, isSafeWebhookUrl, renderAlert } from "../src/telemetry/alerts";
 import type { OtlpTracePayload } from "../src/telemetry/otlp";
 import { decodeLogRecords, decodeMetricPoints, decodeObservations, decodeTelemetryEvents } from "../src/telemetry/otlp";
@@ -568,5 +571,54 @@ describe("telemetryStore.archiveSpans", () => {
 
         expect(batches).toHaveLength(1);
         expect(batches[0]?.[0]).toMatchObject({ kind: "generation", model: "m", organizationId: "org_1", recordType: "span" });
+    });
+});
+
+describe(handleTelemetryRoute, () => {
+    /** A body streamed in 1 MiB chunks up to `bytes`, so the test never holds the whole oversized body. */
+    const streamedBody = (bytes: number): ReadableStream<Uint8Array> => {
+        const chunk = new Uint8Array(1024 * 1024).fill(32);
+        let sent = 0;
+
+        return new ReadableStream<Uint8Array>({
+            pull: (controller) => {
+                if (sent >= bytes) {
+                    controller.close();
+
+                    return;
+                }
+
+                const size = Math.min(chunk.byteLength, bytes - sent);
+
+                controller.enqueue(chunk.subarray(0, size));
+                sent += size;
+            },
+        });
+    };
+
+    const environment = (runMutation = vi.fn<() => Promise<unknown>>()): RouterEnv =>
+        ({
+            __lunoraCtx: { runAction: vi.fn<() => Promise<unknown>>(), runMutation, runQuery: vi.fn<() => Promise<unknown>>() },
+        }) as unknown as RouterEnv;
+
+    it("answers 413 to a body past the OTLP cap, before any mutation runs", async () => {
+        const runMutation = vi.fn<() => Promise<unknown>>();
+        // Node's fetch requires `duplex` for a stream body; workerd's `RequestInit` type does not declare it.
+        const init: RequestInit & { duplex: "half" } = { body: streamedBody(MAX_OTLP_BODY_BYTES + 1), duplex: "half", method: "POST" };
+        const request = new Request("https://control.lunora.app/v1/telemetry", init);
+
+        const response = await handleTelemetryRoute(request, environment(runMutation));
+
+        expect(response.status).toBe(413);
+        expect(runMutation).not.toHaveBeenCalled();
+    });
+
+    it("still reads a body under the cap", async () => {
+        const request = new Request("https://control.lunora.app/v1/telemetry", { body: JSON.stringify({ resourceSpans: [] }), method: "POST" });
+
+        const response = await handleTelemetryRoute(request, environment());
+
+        // Parsed, then refused for the missing credentials, not for its size.
+        expect(response.status).toBe(400);
     });
 });

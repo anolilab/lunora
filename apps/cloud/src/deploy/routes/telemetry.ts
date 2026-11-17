@@ -5,6 +5,7 @@ import type { OtlpTracePayload } from "../../telemetry/otlp";
 import { decodeObservations, decodeTelemetryEvents } from "../../telemetry/otlp";
 import { ORG_ADMINS_DESTINATION } from "../../telemetry/recipients";
 import { createCloudflareTelemetryStore } from "../../telemetry/store";
+import { OtlpBodyTooLargeError, readAllCapped } from "./otlp";
 import type { RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext } from "./shared";
 
@@ -19,6 +20,22 @@ interface TelemetryBody extends OtlpTracePayload {
 }
 
 /**
+ * The body as JSON, or `null` when it is not JSON. Drained under the OTLP routes'
+ * byte cap because it is read before the deploy key is checked: an unbounded
+ * `request.json()` let any caller make the isolate buffer an arbitrary body.
+ * @throws {OtlpBodyTooLargeError} past the cap.
+ */
+const readTelemetryBody = async (request: Request): Promise<TelemetryBody | null> => {
+    const bytes = await readAllCapped(request.body);
+
+    try {
+        return JSON.parse(new TextDecoder().decode(bytes)) as TelemetryBody | null;
+    } catch {
+        return null;
+    }
+};
+
+/**
  * `POST /v1/telemetry` — Cloud Observability ingest. Accepts OTLP-over-HTTP/JSON
  * from the tenant Worker `otlpSink` and the `@lunora/container` exporter, decodes
  * the error spans, and folds them into grouped issues/incidents (deploy-key
@@ -28,7 +45,13 @@ interface TelemetryBody extends OtlpTracePayload {
 export const handleTelemetryRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    const body = (await request.json().catch(() => null)) as TelemetryBody | null;
+    let body: TelemetryBody | null;
+
+    try {
+        body = await readTelemetryBody(request);
+    } catch (error) {
+        return error instanceof OtlpBodyTooLargeError ? jsonError(413, error.message) : jsonError(400, "unreadable request body");
+    }
 
     if (!body?.deployKey || !body.organizationId) {
         return jsonError(400, "deployKey and organizationId are required");
