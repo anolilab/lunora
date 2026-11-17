@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { handleAdminRoute } from "../src/deploy/routes/admin-proxy";
+import type { RouterEnv } from "../src/deploy/routes/shared";
 
 /**
  * `adminTarget` takes the admin path to decide the caller's role, and the
@@ -16,6 +17,11 @@ const makeCtx = () => {
         runMutation: vi.fn<ActionPort>().mockResolvedValue(null),
         runQuery: vi.fn<ActionPort>().mockResolvedValue(null),
     };
+};
+
+// The mocks answer `unknown`; the context's ports are generic over the reference's result.
+const environment = (ctx: ReturnType<typeof makeCtx>): RouterEnv => {
+    return { __lunoraCtx: ctx as unknown as RouterEnv["__lunoraCtx"] };
 };
 
 const post = (body: string): Request =>
@@ -35,7 +41,7 @@ describe("handleAdminRoute body validation", () => {
         ["a non-string method", JSON.stringify({ ...valid, method: ["GET"] })],
     ])("answers 400 for %s without resolving a target", async (_label, body) => {
         const ctx = makeCtx();
-        const response = await handleAdminRoute(post(body), { __lunoraCtx: ctx });
+        const response = await handleAdminRoute(post(body), environment(ctx));
 
         expect(response.status).toBe(400);
         expect(ctx.runQuery).not.toHaveBeenCalled();
@@ -44,7 +50,7 @@ describe("handleAdminRoute body validation", () => {
 
     it("resolves the target for a well-formed body", async () => {
         const ctx = makeCtx();
-        const response = await handleAdminRoute(post(JSON.stringify(valid)), { __lunoraCtx: ctx });
+        const response = await handleAdminRoute(post(JSON.stringify(valid)), environment(ctx));
 
         expect(response.status).toBe(404);
         expect(ctx.runQuery).toHaveBeenCalledWith(expect.anything(), { adminPath: "tables", deploymentId: "dep_1", organizationId: "org_1" });
