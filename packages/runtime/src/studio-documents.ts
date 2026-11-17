@@ -44,9 +44,13 @@ const loadStudioDocument = async (binding: unknown, name: StudioDocumentName): P
         }
 
         return await response.json();
-    } catch {
+    } catch (error) {
         // A rejected asset read or a truncated file is the same "not there" to the admin route, which answers its empty
-        // document and, since `undefined` is never memoized, reads again on the next request.
+        // document and, since `undefined` is never memoized, reads again on the next request. Logged because that empty
+        // document is otherwise all an operator sees.
+        // eslint-disable-next-line no-console -- the loader has no request-scoped logger; the host captures console
+        console.warn(`[lunora] studio document "${name}" could not be read from the assets binding:`, error);
+
         return undefined;
     }
 };

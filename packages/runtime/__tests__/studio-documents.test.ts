@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadStudioDocument } from "../src/studio-documents";
 
@@ -17,6 +17,10 @@ const binding = (response: () => Response): { fetch: (request: Request) => Promi
 };
 
 describe(loadStudioDocument, () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
     it("reads the document from its fixed path on the binding", async () => {
         expect.assertions(2);
 
@@ -46,7 +50,9 @@ describe(loadStudioDocument, () => {
     });
 
     it("answers undefined when the binding rejects, and asks again on the next read", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         let calls = 0;
         const flaky = {
@@ -64,14 +70,21 @@ describe(loadStudioDocument, () => {
         await expect(loadStudioDocument(flaky, "openapi")).resolves.toBeUndefined();
         await expect(loadStudioDocument(flaky, "openapi")).resolves.toStrictEqual({ openapi: "3.1.0" });
         expect(flaky.fetch).toHaveBeenCalledTimes(2);
+        expect(warn.mock.calls).toStrictEqual([
+            ['[lunora] studio document "openapi" could not be read from the assets binding:', new Error("assets binding unavailable")],
+        ]);
     });
 
-    it("answers undefined for a JSON document that does not parse", async () => {
-        expect.assertions(1);
+    it("answers undefined for a JSON document that does not parse, and logs the failure once", async () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
         const truncated = binding(() => new Response('{"openapi": "3.1', { headers: { "content-type": "application/json" }, status: 200 }));
 
         await expect(loadStudioDocument(truncated, "openapi")).resolves.toBeUndefined();
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[1]).toBeInstanceOf(SyntaxError);
     });
 
     it.each([undefined, null, {}, "ASSETS"])("answers undefined without a binding (%s)", async (missing) => {
