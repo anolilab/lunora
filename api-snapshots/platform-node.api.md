@@ -64,6 +64,35 @@ type MailParkReason = "evidence_expired" | "idempotency_key_conflict" | "outcome
 const NODE_SCHEDULER_DISPATCH_PATH: "/_lunora/scheduler/dispatch";
 ```
 
+### `NodeAppDurableObjectBinding` (interface)
+
+```ts
+interface NodeAppDurableObjectBinding {
+    className: string;
+    name: string;
+}
+```
+
+### `NodeAppHost` (interface)
+
+```ts
+interface NodeAppHost {
+    close: () => Promise<void>;
+    fetch: (request: Request) => Promise<Response>;
+}
+```
+
+### `NodeAppHostOptions` (interface)
+
+```ts
+interface NodeAppHostOptions {
+    dataDirectory?: string;
+    durableObjects: ReadonlyArray<NodeAppDurableObjectBinding>;
+    env?: Record<string, unknown>;
+    worker: Record<string, unknown>;
+}
+```
+
 ### `NodeCronJob` (interface)
 
 ```ts
@@ -508,6 +537,12 @@ interface ShardSocketHooks {
 
 ```ts
 const bindShardSockets: (shard: ShardSocketHooks, inbound: Pick<NodeShard["inbound"], "onClose" | "onMessage">) => void;
+```
+
+### `createNodeAppHost` (const)
+
+```ts
+const createNodeAppHost: (options: NodeAppHostOptions) => NodeAppHost;
 ```
 
 ### `createNodeDispatchRoute` (const)
