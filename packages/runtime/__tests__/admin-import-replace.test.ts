@@ -961,7 +961,7 @@ describe("admin import — staged replace fails closed", () => {
         await expect(texts("c1")).resolves.toStrictEqual({ m1: "edited since", m2: "created since" });
     });
 
-    it("refuses auth rows of sessions, one-time tokens or the audit log at staging, so the commit never reaches them", async () => {
+    it("refuses auth rows of sessions, one-time and OAuth tokens, device codes or the audit log at staging, so the commit never reaches them", async () => {
         expect.assertions(2);
 
         await seed();
@@ -972,10 +972,13 @@ describe("admin import — staged replace fails closed", () => {
             { doc: { format: 2, sections: ["auth"] }, table: "$lunora" },
             { doc: { row: { id: "s1", userId: "u1" }, table: "session" }, table: "$auth" },
             { doc: { row: { event: "forged", seq: 1 }, table: "__lunora_auth_audit__" }, table: "$auth" },
+            { doc: { row: { id: "at1", userId: "u1" }, table: "oauthAccessToken" }, table: "$auth" },
+            { doc: { row: { id: "rt1", userId: "u1" }, table: "oauthRefreshToken" }, table: "$auth" },
+            { doc: { row: { id: "dc1", userId: "u1" }, table: "deviceCode" }, table: "$auth" },
         ]);
         const committed = await postSession(worker, "commit", "forged");
 
-        await expect(response.json()).resolves.toMatchObject({ errors: [{ code: "BAD_ROW" }, { code: "BAD_ROW" }] });
+        await expect(response.json()).resolves.toMatchObject({ errors: Array.from({ length: 5 }, () => expect.objectContaining({ code: "BAD_ROW" })) });
         expect(committed.status).toBe(409);
     });
 

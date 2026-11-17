@@ -166,12 +166,20 @@ const stageChunked = async (
 };
 
 /**
- * Auth tables a restore never writes — live sessions, one-time tokens and the
- * auth audit log (`@lunora/auth`'s `isUnmovableAuthTable`). The export never
+ * Auth tables a restore never writes — live sessions, one-time tokens, OAuth
+ * access / refresh tokens and device codes, and the auth audit log
+ * (`@lunora/auth`'s `isUnmovableAuthTable`), lower-cased. The export never
  * carries them; a snapshot that does is refused at staging, before the commit
  * would refuse it part-way.
  */
-const UNMOVABLE_AUTH_TABLES: ReadonlySet<string> = new Set(["__lunora_auth_audit__", "session", "verification"]);
+const UNMOVABLE_AUTH_TABLES: ReadonlySet<string> = new Set([
+    "__lunora_auth_audit__",
+    "devicecode",
+    "oauthaccesstoken",
+    "oauthrefreshtoken",
+    "session",
+    "verification",
+]);
 
 const stageAuthRow = (row: SectionRow, errors: ImportRowError[]): StagedSectionRow | undefined => {
     if (typeof row.doc["table"] !== "string" || !isRecord(row.doc["row"])) {
