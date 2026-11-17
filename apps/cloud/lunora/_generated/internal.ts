@@ -12,6 +12,9 @@ export interface InternalApiTypes {
         exportMine: FunctionReference<"query", {}, Record<string, unknown>>;
         soleOwnedOrganizations: FunctionReference<"query", { userId: string }, { id: string; name: string }[]>;
     };
+    alerts: {
+        markDelivered: FunctionReference<"mutation", { ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }, { delivered: number; }>;
+    };
     audit_log: {
         record: FunctionReference<"mutation", { action: unknown; organizationId: Id<"organizations">; target?: unknown }, Id<"auditLog">>;
     };
@@ -157,6 +160,9 @@ export const internal: InternalApiTypes = {
         eraseUser: { __lunoraRef: "account:eraseUser" },
         exportMine: { __lunoraRef: "account:exportMine" },
         soleOwnedOrganizations: { __lunoraRef: "account:soleOwnedOrganizations" },
+    },
+    alerts: {
+        markDelivered: { __lunoraRef: "alerts:markDelivered" },
     },
     audit_log: {
         record: { __lunoraRef: "audit_log:record" },

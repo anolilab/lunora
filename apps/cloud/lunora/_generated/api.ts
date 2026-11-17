@@ -13,7 +13,6 @@ export interface ApiTypes {
         deleteRule: FunctionReference<"mutation", { id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
         deleteSilence: FunctionReference<"mutation", { id: Id<"anomalySilences">; organizationId: Id<"organizations"> }, Id<"anomalySilences">>;
         list: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_alerts[]>;
-        markDelivered: FunctionReference<"mutation", { deployKey: unknown; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }, { delivered: number; }>;
         prepareTestAlert: FunctionReference<"mutation", { organizationId: Id<"organizations">; ruleId: Id<"alertRules"> }, { body: string; channel: import("../../src/telemetry/alerts.js").AlertChannel; destination: string; organizationId: string; subject: string }>;
         rules: FunctionReference<"query", { organizationId: Id<"organizations"> }, import("./dataModel.js").Doc_alertRules[]>;
         setRuleEnabled: FunctionReference<"mutation", { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }, Id<"alertRules">>;
@@ -216,7 +215,6 @@ export const api: ApiTypes = {
         deleteRule: { __lunoraRef: "alerts:deleteRule" },
         deleteSilence: { __lunoraRef: "alerts:deleteSilence" },
         list: { __lunoraRef: "alerts:list" },
-        markDelivered: { __lunoraRef: "alerts:markDelivered" },
         prepareTestAlert: { __lunoraRef: "alerts:prepareTestAlert" },
         rules: { __lunoraRef: "alerts:rules" },
         setRuleEnabled: { __lunoraRef: "alerts:setRuleEnabled" },

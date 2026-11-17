@@ -9,9 +9,9 @@ import type { UsageAlertMeter, UsageThresholdSuggestion } from "../src/telemetry
 import { isUsageAlertMeter, previousPeriodStart, usageThresholdSuggestion, usageTotal } from "../src/telemetry/usage-alerts";
 import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { mutation, query, v } from "./_generated/server.js";
+import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import type { MemberRole } from "./authz";
-import { assertMember, authorizeDeployKey } from "./authz";
+import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";
 import { alertTarget, anomalyTarget, usageAlertMeter } from "./tables/shared";
@@ -361,20 +361,18 @@ export const list = query.input({ organizationId: v.id("organizations") }).query
 });
 
 /**
- * Stamp fired alerts delivered after the edge sent them (deploy-key authorized —
- * same credential as the ingest that created them). Each id is org-checked to
- * close the cross-org IDOR on a shared-key call.
+ * Stamp fired alerts delivered after the edge sent them. Internal: its only
+ * caller is the telemetry route, after `telemetry.ingest` authorized the key
+ * and returned these ids — re-checking the key here as a deploy key widened a
+ * project-scoped key to the whole org and refused the ingest-only key the
+ * tenant's `otlpSink` sends. Each id is still org-checked.
  */
-export const markDelivered = mutation
-    .use(rateLimit("machine"))
+export const markDelivered = internalMutation
     .input({
-        deployKey: boundedString(LIMITS.token),
         ids: v.array(v.id("alerts")),
         organizationId: v.id("organizations"),
     })
-    .mutation(async ({ ctx: context, args: { deployKey, ids, organizationId } }): Promise<{ delivered: number }> => {
-        await authorizeDeployKey(context, organizationId, deployKey, "org-wide");
-
+    .mutation(async ({ ctx: context, args: { ids, organizationId } }): Promise<{ delivered: number }> => {
         const { now } = context;
 
         for (const id of ids) {

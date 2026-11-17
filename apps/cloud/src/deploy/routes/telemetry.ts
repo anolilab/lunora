@@ -1,4 +1,5 @@
 import { api } from "../../../lunora/_generated/api";
+import { internal } from "../../../lunora/_generated/internal";
 import type { AlertDelivery } from "../../../lunora/telemetry";
 import { deliverAlert } from "../../mail/notify";
 import type { OtlpTracePayload } from "../../telemetry/otlp";
@@ -88,12 +89,9 @@ export const handleTelemetryRoute = async (request: Request, environment: Router
             await Promise.all(inline.map((alert) => deliverAlert(environment, alert).catch(() => undefined)));
             // Alerts have already gone out, so a failure here must not fail the
             // ingest — but it must not be invisible either: unmarked alerts are
-            // re-delivered on the next sweep, and `markDelivered` is now rate-limited
-            // (the `machine` bucket), so a 429 is a reachable cause of duplicate
-            // pages rather than a theoretical one.
+            // re-delivered on the next sweep, so a failure means duplicate pages.
             await context
-                .runMutation(api.alerts.markDelivered, {
-                    deployKey: body.deployKey,
+                .runMutation(internal.alerts.markDelivered, {
                     ids: inline.map((alert) => alert.id),
                     organizationId: body.organizationId,
                 })

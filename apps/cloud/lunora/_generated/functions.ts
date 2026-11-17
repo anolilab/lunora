@@ -366,6 +366,19 @@ if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "organizationId": source["organizationId"] };
 });
+installCompiledValidatorMap(lunora_alerts_1.markDelivered.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (!Array.isArray(source["ids"])) return DEFER;
+const __arr1 = new Array(source["ids"].length);
+for (let __i1 = 0; __i1 < source["ids"].length; __i1++) {
+const __e1 = source["ids"][__i1];
+if (typeof __e1 !== "string") return DEFER;
+__arr1[__i1] = __e1;
+}
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "ids": __arr1, "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_alerts_1.prepareTestAlert.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -1245,7 +1258,7 @@ export interface Caller {
         deleteRule: (args: { id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;
         deleteSilence: (args: { id: Id<"anomalySilences">; organizationId: Id<"organizations"> }) => Promise<Id<"anomalySilences">>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_alerts[]>;
-        markDelivered: (args: { deployKey: unknown; ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }) => Promise<{ delivered: number; }>;
+        markDelivered: (args: { ids: Array<Id<"alerts">>; organizationId: Id<"organizations"> }) => Promise<{ delivered: number; }>;
         prepareTestAlert: (args: { organizationId: Id<"organizations">; ruleId: Id<"alertRules"> }) => Promise<{ body: string; channel: import("../../src/telemetry/alerts.js").AlertChannel; destination: string; organizationId: string; subject: string }>;
         rules: (args: { organizationId: Id<"organizations"> }) => Promise<import("./dataModel.js").Doc_alertRules[]>;
         setRuleEnabled: (args: { enabled: boolean; id: Id<"alertRules">; organizationId: Id<"organizations"> }) => Promise<Id<"alertRules">>;

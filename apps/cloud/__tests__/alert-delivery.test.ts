@@ -2,7 +2,8 @@ import type { Mock } from "vitest";
 import { describe, expect, it, vi } from "vitest";
 
 import type { TestAlert } from "../lunora/alerts";
-import { createRule, prepareTestAlert, TEST_ALERT_COOLDOWN_MS } from "../lunora/alerts";
+import { createRule, markDelivered, prepareTestAlert, TEST_ALERT_COOLDOWN_MS } from "../lunora/alerts";
+import { hashDeployKey } from "../src/deploy/keys";
 import { createDeployRouter } from "../src/deploy/router";
 import type { AlertTestDeps } from "../src/deploy/routes/alerts";
 import { handleAlertTestRoute } from "../src/deploy/routes/alerts";
@@ -285,5 +286,48 @@ describe("pOST /v1/telemetry inline delivery", () => {
         expect(response.status).toBe(200);
         expect(sent).toStrictEqual(["https://hooks.example.com/x"]);
         expect(marked).toStrictEqual([["a_hook"]]);
+    });
+
+    it("marks the alerts delivered when the ingest came in on an ingest-only key", async () => {
+        expect.assertions(2);
+
+        // The tenant's `otlpSink` sends its telemetry-only key; the ingest accepts it, so marking must too.
+        const ingestKey = "production:org_1|ingest"; // gitleaks:allow -- fabricated fixture token, not a credential
+        const { ctx, ops } = makeCtx(
+            {
+                alerts: [{ _id: "a_hook", organizationId: "org_1", status: "firing" }],
+                deployKeys: [{ _id: "dk_ingest", capability: "ingest", hashedKey: await hashDeployKey(ingestKey), organizationId: "org_1" }],
+            },
+            { now: NOW },
+        );
+        const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const runMutation = vi.fn<(reference: unknown, args?: Record<string, unknown>) => Promise<unknown>>(async (_reference, args) => {
+            if (args && "ids" in args) {
+                return markDelivered.handler(ctx, args as never);
+            }
+
+            return {
+                alerts: [{ body: "b", channel: "webhook", destination: "https://hooks.example.com/x", id: "a_hook", subject: "s" }],
+                incidents: 0,
+                issues: 0,
+            };
+        });
+        const environment = { __lunoraCtx: { runAction: vi.fn<() => Promise<unknown>>(), runMutation, runQuery: vi.fn<() => Promise<unknown>>() } } as unknown;
+
+        const response = await createDeployRouter().fetch(
+            new Request("https://cloud.test/v1/telemetry", {
+                body: JSON.stringify({ deployKey: ingestKey, organizationId: "org_1" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            environment,
+        );
+
+        fetchSpy.mockRestore();
+        errorSpy.mockRestore();
+
+        expect(response.status).toBe(200);
+        expect(ops).toContainEqual(expect.objectContaining({ id: "a_hook", kind: "patch", patch: expect.objectContaining({ status: "delivered" }) }));
     });
 });
