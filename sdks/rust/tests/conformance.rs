@@ -1787,6 +1787,11 @@ fn attach_cancels() {
 }
 
 #[test]
+fn a_hint_after_detach_or_close_schedules_nothing() {
+    retry_cases::a_hint_after_detach_or_close_schedules_nothing();
+}
+
+#[test]
 fn close_cancels() {
     retry_cases::close_cancels();
 }

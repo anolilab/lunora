@@ -173,6 +173,26 @@ pub fn attach_cancels() {
     assert!(subscribes(&take(&second)).is_empty());
 }
 
+pub fn a_hint_after_detach_or_close_schedules_nothing() {
+    let retry = retry_fixture();
+
+    let (mut detached, _sent, _codes, _id) = open();
+    detached.detach_socket(None, None);
+    detached.handle_frame(&wire_text(&retry["hintFrame"])).expect("hint frame");
+    assert!(
+        detached.next_subscription_retry_at().is_none(),
+        "a hint arriving after detach must not arm a retry"
+    );
+
+    let (mut closed, _sent, _codes, _id) = open();
+    closed.close();
+    closed.handle_frame(&wire_text(&retry["hintFrame"])).expect("hint frame");
+    assert!(
+        closed.next_subscription_retry_at().is_none(),
+        "a hint arriving after close must not arm a retry"
+    );
+}
+
 pub fn close_cancels() {
     let retry = retry_fixture();
     let (mut client, _sent, _codes, _id) = open();
