@@ -418,7 +418,7 @@ describe("argument-taint", () => {
         });
 
         it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
-            expect.assertions(30);
+            expect.assertions(31);
 
             const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
             const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
@@ -489,6 +489,14 @@ describe("argument-taint", () => {
             // An optional read is \`undefined\` for every caller the read finds nothing for.
             expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row?.ownerId}/\${args.key ?? args.other}\`);`))).toBe(false);
             expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row?.ownerId}/\${args.key}\`);`))).toBe(false);
+            // A findMany answers a page envelope, not a row: its "ownerId" is undefined for every caller.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `SINK(\`\${(await ctx.db.files.findMany({ where: { ownerId: ctx.auth.userId } }) as any).ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
             // The same with bracket access, straight off the read.
             expect(
                 isScopedByIdentity(

@@ -278,6 +278,9 @@ const invokedBy = (chain: TsNode): CallExpression | undefined => {
 /** The `ctx.db` methods that read rows; a write returns whatever it wrote, so its arguments do not bind the row to anyone. */
 const DB_READ_METHODS: ReadonlySet<string> = new Set(["find", "findFirst", "findFirstOrThrow", "findMany", "findUnique", "first", "get", "unique"]);
 
+/** The read methods that return one row, or none. `findMany` answers a page envelope, so nothing read off it is a row's column. */
+const SINGLE_ROW_READS: ReadonlySet<string> = new Set(["findFirst", "findUnique", "first", "get", "unique"]);
+
 /** Whether `call` invokes a `ctx.db` row read (`ctx.db.files.findFirst(…)`, `ctx.db.get(…)`), not a write. */
 const isDatabaseReadCall = (call: CallExpression): boolean => {
     const callee = call.getExpression();
@@ -631,7 +634,11 @@ const isIdentityField = (read: CallExpression, field: string | undefined): boole
 
 /** Whether `read`'s row, consumed through `source`, scopes a key whose whole value is `wholeKey`. */
 const rowScopesKey = (read: CallExpression, source: TsNode, field: string | undefined, wholeKey: TsNode | undefined): boolean => {
-    if (!isIdentityBoundRead(read)) {
+    const callee = read.getExpression();
+
+    const singleRow = Node.isPropertyAccessExpression(callee) && (SINGLE_ROW_READS.has(callee.getName()) || callee.getName().endsWith("OrThrow"));
+
+    if (!isIdentityBoundRead(read) || !singleRow) {
         return false;
     }
 
@@ -823,9 +830,6 @@ const databaseChainOf = (node: TsNode | undefined): DatabaseChain | undefined =>
 
     return undefined;
 };
-
-/** The read methods that return one row, or none. */
-const SINGLE_ROW_READS: ReadonlySet<string> = new Set(["findFirst", "findUnique", "first", "get", "unique"]);
 
 /**
  * The single-row read a chain ends in. `selfEnforcing` is true for a `…OrThrow` variant, which throws on a
