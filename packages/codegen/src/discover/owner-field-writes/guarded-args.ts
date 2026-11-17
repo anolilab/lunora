@@ -15,13 +15,26 @@ const ARGS = "args";
  * destructured `P` out of the handler's `args` (`({ args: { P } })`, or a `const`
  * destructure of `args`). `undefined` for anything else.
  */
+/** Whether `node` names the handler's `args`: `args` itself, or a rename of it (`({ args: arguments_ })`). */
+const isArgsIdentifier = (node: TsNode | undefined): boolean => {
+    if (!Node.isIdentifier(node)) {
+        return false;
+    }
+
+    if (node.getText() === ARGS) {
+        return true;
+    }
+
+    const declaration = declarationOf(node);
+
+    return Node.isBindingElement(declaration) && declaration.getDotDotDotToken() === undefined && bindingKeyName(declaration) === ARGS;
+};
+
 const argumentFieldOf = (node: TsNode): string | undefined => {
     const access = memberAccessOf(node);
 
     if (access !== undefined) {
-        const object = unwrapExpression(access.object);
-
-        return Node.isIdentifier(object) && object.getText() === ARGS ? access.member : undefined;
+        return isArgsIdentifier(unwrapExpression(access.object)) ? access.member : undefined;
     }
 
     if (!Node.isIdentifier(node)) {
@@ -42,8 +55,7 @@ const argumentFieldOf = (node: TsNode): string | undefined => {
 
     const holder = pattern.getParent();
     const initializer = isConstDeclaration(holder) ? unwrapExpression(holder.getInitializer()) : undefined;
-    const destructuredFromArgs =
-        (Node.isBindingElement(holder) && bindingKeyName(holder) === ARGS) || (Node.isIdentifier(initializer) && initializer.getText() === ARGS);
+    const destructuredFromArgs = (Node.isBindingElement(holder) && bindingKeyName(holder) === ARGS) || isArgsIdentifier(initializer);
 
     return destructuredFromArgs ? bindingKeyName(declaration) : undefined;
 };
@@ -195,7 +207,7 @@ const isDeclaredIdentityGuard = (callee: TsNode): boolean => {
 
 /**
  * The fields a call to a declared identity guard proves: an `args` field and, as
- * another argument, the identity. `assertOwnOrganizationId(ctx.user, organizationId)`
+ * another argument, the identity or the whole ctx. `assertOwnOrganizationId(ctx.user, organizationId)`
  * is the shape. Only a guard declared with `defineIdentityGuard` counts; a helper
  * that merely has an `assert` name does not.
  */
@@ -208,7 +220,8 @@ const assertedFields = (call: CallExpression): string[] => {
 
     return args.flatMap((argument, index) => {
         const field = argumentFieldOf(unwrapExpression(argument) ?? argument);
-        const hasIdentity = args.some((other, otherIndex) => otherIndex !== index && isIdentity(other, true));
+        // The whole ctx (`assertMember(ctx, args.organizationId)`) carries the caller, so the guard can check against it.
+        const hasIdentity = args.some((other, otherIndex) => otherIndex !== index && (isIdentity(other, true) || contextSurfacePathOf(other)?.length === 0));
 
         return field !== undefined && hasIdentity ? [field] : [];
     });

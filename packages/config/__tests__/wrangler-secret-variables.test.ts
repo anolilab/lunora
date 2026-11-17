@@ -100,6 +100,16 @@ describe("scanWranglerVariablesForSecrets", () => {
         expect(findings[0]).toEqual({ file: "wrangler.jsonc", key: "STRIPE_KEY", kind: "stripe_live_key", preview: "sk_l…(30 chars)" });
     });
 
+    it("passes a Cloudflare account id, which is an identifier and not a credential", () => {
+        expect.assertions(2);
+
+        const accountId = "a1b2c3d4".repeat(4);
+
+        expect(scanWranglerVariablesForSecrets({ CLOUDFLARE_ACCOUNT_ID: accountId }, "wrangler.jsonc")).toStrictEqual([]);
+        // The same 32-hex value under a name that does not say what it is still reads as a secret.
+        expect(scanWranglerVariablesForSecrets({ SIGNING_SALT: accountId }, "wrangler.jsonc")).toHaveLength(1);
+    });
+
     it("flags a secret-named key whose value is long enough, as `secret_named_var`", () => {
         expect.assertions(2);
 

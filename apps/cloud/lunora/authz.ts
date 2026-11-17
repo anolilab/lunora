@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/server";
+import { defineIdentityGuard, LunoraError } from "@lunora/server";
 
 import { isDeployCapable, isKeyLive } from "../src/deploy/capability";
 import { hashDeployKey } from "../src/deploy/keys";
@@ -68,15 +68,17 @@ export const assertSignedIn = (userId: null | string | undefined): string => {
  * `allowedRoles` is given, if the member's role isn't permitted). The rule itself is
  * {@link assertRoleForUser}.
  */
-export const assertMember = async (
-    context: QueryContext,
-    organizationId: Id<"organizations">,
-    allowedRoles?: ReadonlyArray<MemberRole>,
-): Promise<{ organizationId: Id<"organizations">; role: MemberRole; userId: string }> => {
-    const userId = assertSignedIn(context.auth.userId);
+export const assertMember = defineIdentityGuard(
+    async (
+        context: QueryContext,
+        organizationId: Id<"organizations">,
+        allowedRoles?: ReadonlyArray<MemberRole>,
+    ): Promise<{ organizationId: Id<"organizations">; role: MemberRole; userId: string }> => {
+        const userId = assertSignedIn(context.auth.userId);
 
-    return assertRoleForUser(context, organizationId, userId, allowedRoles);
-};
+        return assertRoleForUser(context, organizationId, userId, allowedRoles);
+    },
+);
 
 /** Match a key by SHA-256 to its (non-revoked, org-matching) row, or throw `FORBIDDEN`. */
 const resolveKeyRow = async (context: QueryContext, organizationId: Id<"organizations">, key: string): Promise<DeployKeyRow> => {
@@ -109,26 +111,23 @@ const resolveKeyRow = async (context: QueryContext, organizationId: Id<"organiza
  * accepts both key kinds. This function is the deploy/admin gate that keeps an
  * ingest token from deploying (alongside `deploy_keys.verify` at the entrypoint).
  */
-export const authorizeDeployKeyRow = async (
-    context: QueryContext,
-    organizationId: Id<"organizations">,
-    key: string,
-    scope: "org-wide" | Id<"projects">,
-): Promise<DeployKeyRow> => {
-    const row = await resolveKeyRow(context, organizationId, key);
+export const authorizeDeployKeyRow = defineIdentityGuard(
+    async (context: QueryContext, organizationId: Id<"organizations">, key: string, scope: "org-wide" | Id<"projects">): Promise<DeployKeyRow> => {
+        const row = await resolveKeyRow(context, organizationId, key);
 
-    // An ingest key is telemetry-only — it must never authorize a deploy/admin write.
-    if (!isDeployCapable(row)) {
-        throw new LunoraError("FORBIDDEN", "this is a telemetry ingest key, not a deploy key");
-    }
+        // An ingest key is telemetry-only — it must never authorize a deploy/admin write.
+        if (!isDeployCapable(row)) {
+            throw new LunoraError("FORBIDDEN", "this is a telemetry ingest key, not a deploy key");
+        }
 
-    if (row.projectId != null && scope !== "org-wide" && row.projectId !== scope) {
-        throw new LunoraError("FORBIDDEN", "deploy key is not authorized for this project");
-    }
+        if (row.projectId != null && scope !== "org-wide" && row.projectId !== scope) {
+            throw new LunoraError("FORBIDDEN", "deploy key is not authorized for this project");
+        }
 
-    // The key's row: its `organizationId` is the one a write stamps, never the request's.
-    return row;
-};
+        // The key's row: its `organizationId` is the one a write stamps, never the request's.
+        return row;
+    },
+);
 
 /**
  * Authorize an organization's **billing read** with a deploy key (plan 365 W6,
@@ -148,16 +147,13 @@ export const authorizeBillingKey = async (context: QueryContext, organizationId:
 };
 
 /** The id of the deploy key {@link authorizeDeployKeyRow} authorizes. */
-export const authorizeDeployKey = async (
-    context: QueryContext,
-    organizationId: Id<"organizations">,
-    key: string,
-    scope: "org-wide" | Id<"projects">,
-): Promise<Id<"deployKeys">> => {
-    const row = await authorizeDeployKeyRow(context, organizationId, key, scope);
+export const authorizeDeployKey = defineIdentityGuard(
+    async (context: QueryContext, organizationId: Id<"organizations">, key: string, scope: "org-wide" | Id<"projects">): Promise<Id<"deployKeys">> => {
+        const row = await authorizeDeployKeyRow(context, organizationId, key, scope);
 
-    return row._id;
-};
+        return row._id;
+    },
+);
 
 /**
  * Authorize a **telemetry ingest** write to an organization. Accepts BOTH a
@@ -166,9 +162,11 @@ export const authorizeDeployKey = async (
  * is exactly what an ingest key is for. Rejects only a missing/revoked/wrong-org
  * key. Used by `telemetry.ingest` / `logs.ingest`.
  */
-export const authorizeTelemetryKey = async (context: QueryContext, organizationId: Id<"organizations">, key: string): Promise<DeployKeyRow> =>
-    // The key's row: its `organizationId` is the one a write stamps, never the request's.
-    resolveKeyRow(context, organizationId, key);
+export const authorizeTelemetryKey = defineIdentityGuard(
+    async (context: QueryContext, organizationId: Id<"organizations">, key: string): Promise<DeployKeyRow> =>
+        // The key's row: its `organizationId` is the one a write stamps, never the request's.
+        resolveKeyRow(context, organizationId, key),
+);
 
 /**
  * Resolve a deploy key to its owning org from the key ALONE (no org supplied) —
