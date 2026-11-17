@@ -567,6 +567,16 @@ const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string): bool
         return propertyKeyName(property) === field && equatesToCaller(value);
     });
 
+/** Whether a query object passed to `read` holds a member that can rewrite it at runtime: a spread, or a computed key. */
+const hasRuntimeQueryOverride = (read: CallExpression): boolean =>
+    read
+        .getArguments()
+        .some((argument) =>
+            (objectLiteralOf(argument)?.getProperties() ?? []).some(
+                (member) => Node.isSpreadAssignment(member) || staticPropertyName(member.getNameNode()) === undefined,
+            ),
+        );
+
 /**
  * Whether `field` of a row returned by the identity-bound `read` differs per caller: the row's
  * id, or a column the read matched against the caller (`ownerId` in `where: { ownerId:
@@ -578,8 +588,9 @@ const isIdentityField = (read: CallExpression, field: string | undefined): boole
         return false;
     }
 
+    // The row's own id differs per caller only while the query that selected it cannot be rewritten at runtime.
     if (ROW_ID_FIELDS.has(field)) {
-        return true;
+        return !hasRuntimeQueryOverride(read);
     }
 
     // Only a predicate of the read's own `where`, directly or in an `AND` branch, binds every returned row: one
@@ -1237,14 +1248,38 @@ const keyPartsOf = (node: TsNode): TsNode[] => {
 
 const isFixedTextPart = (part: TsNode): boolean => Node.isStringLiteral(part) || Node.isNoSubstitutionTemplateLiteral(part) || Node.isNumericLiteral(part);
 
-/** Whether `node` is written by its parent: the target of an assignment, `delete`, `++` or `--`. */
+/**
+ * Whether `node` is written: the target of an assignment, including from inside a destructuring pattern
+ * (`({ a: row.ownerId } = x)`, `[row.ownerId] = x`), a `for…of` / `for…in` target, or the operand of
+ * `delete`, `++` or `--`.
+ */
 const isWriteTarget = (node: TsNode): boolean => {
-    const parent = node.getParent();
+    let current = node;
+    let parent = current.getParent();
+
+    // Climb out of any pattern the node sits in as a target; a value position in an object literal climbs too, which is
+    // harmless: it only ends in a write when that literal is itself an assignment target.
+    while (
+        Node.isParenthesizedExpression(parent) ||
+        Node.isArrayLiteralExpression(parent) ||
+        Node.isObjectLiteralExpression(parent) ||
+        Node.isSpreadElement(parent) ||
+        Node.isSpreadAssignment(parent) ||
+        Node.isShorthandPropertyAssignment(parent) ||
+        (Node.isPropertyAssignment(parent) && parent.getNameNode() !== current)
+    ) {
+        current = parent;
+        parent = current.getParent();
+    }
 
     if (Node.isBinaryExpression(parent)) {
         const operator = parent.getOperatorToken().getKind();
 
-        return parent.getLeft() === node && operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment;
+        return parent.getLeft() === current && operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment;
+    }
+
+    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
+        return parent.getInitializer() === current;
     }
 
     if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {

@@ -379,7 +379,7 @@ describe("argument-taint", () => {
         });
 
         it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
-            expect.assertions(14);
+            expect.assertions(19);
 
             const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
             const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
@@ -400,8 +400,20 @@ describe("argument-taint", () => {
                     ),
                 ),
             ).toBe(false);
-            // A field written on the row after the read replaces what the key emits.
+            // A field written on the row after the read replaces what the key emits, however the write is spelled.
             expect(isScopedByIdentity(sinkArgument(`${owned}row.ownerId = args.ownerId;\n${sink}`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}({ owner: row.ownerId } = args);\n${sink}`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}[row.ownerId] = args.owners;\n${sink}`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}for (row.ownerId of args.owners) {}\n${sink}`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}for (row.ownerId in args.owners) {}\n${sink}`))).toBe(false);
+            // A spread in the query object can select another row, so its id is not the caller's either.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId }, ...args.query });\nSINK(\`\${row!._id}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
             expect(isScopedByIdentity(sinkArgument(`${owned}Object.assign(row, args.patch);\n${sink}`))).toBe(false);
             // Reading fields, including by destructuring, leaves the row intact.
             expect(isScopedByIdentity(sinkArgument(`${owned}const { status } = row;\n${sink}`))).toBe(true);
