@@ -355,7 +355,15 @@ describe("argument-taint", () => {
         });
 
         it("refuses a prefix that is not the caller id itself, asserted or not", () => {
-            expect.assertions(4);
+            expect.assertions(5);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const { ...id } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${id}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
 
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.getIdentity}/\${args.key ?? args.other}\`);`))).toBe(false);
             expect(isScopedByIdentity(sinkArgument(`const { getIdentity } = ctx.auth;\nSINK(\`\${getIdentity}/\${args.key ?? args.other}\`);`))).toBe(false);
@@ -371,7 +379,32 @@ describe("argument-taint", () => {
         });
 
         it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
-            expect.assertions(8);
+            expect.assertions(14);
+
+            const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
+            const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
+
+            // A comma expression evaluates to its last operand.
+            expect(
+                isScopedByIdentity(sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: (ctx.auth.userId, args.ownerId) } });\n${sink}`)),
+            ).toBe(false);
+            // A spread in the query object can replace the whole `where`.
+            expect(
+                isScopedByIdentity(sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId }, ...args.query });\n${sink}`)),
+            ).toBe(false);
+            // A filter aliased into another object can be written through the alias.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const where = { ownerId: ctx.auth.userId };\nconst holder = { value: where };\nholder.value.ownerId = args.ownerId;\nconst row = await ctx.db.files.findFirst({ where });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            // A field written on the row after the read replaces what the key emits.
+            expect(isScopedByIdentity(sinkArgument(`${owned}row.ownerId = args.ownerId;\n${sink}`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}Object.assign(row, args.patch);\n${sink}`))).toBe(false);
+            // Reading fields, including by destructuring, leaves the row intact.
+            expect(isScopedByIdentity(sinkArgument(`${owned}const { status } = row;\n${sink}`))).toBe(true);
 
             // The owner value must be the caller id, not an expression that merely mentions it.
             expect(
@@ -396,9 +429,6 @@ describe("argument-taint", () => {
                     ),
                 ),
             ).toBe(false);
-
-            const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
-
             expect(
                 isScopedByIdentity(sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId, ...args.where } });\n${sink}`)),
             ).toBe(false);

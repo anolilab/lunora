@@ -453,32 +453,50 @@ const valueWrapperOf = (node: TsNode): TsNode => {
     }
 };
 
-/**
- * Whether every use of the local `identifier` names, other than its declaration, only passes the object along as a
- * property value (`{ where: filter }`, `{ where }`). Any other use can write a field (`filter.ownerId = …`) or
- * hand the object to code that does, so its initializer no longer says what it holds.
- */
-const isPassedOnly = (identifier: Identifier): boolean => {
+/** The other uses of the local `identifier`: every identifier in its file bound to the same declaration, minus the declaring name. */
+const usesOfLocal = (identifier: Identifier): Identifier[] => {
     const declaration = declarationOf(identifier);
 
     return identifier
         .getSourceFile()
         .getDescendantsOfKind(SyntaxKind.Identifier)
         .filter((use) => use.getText() === identifier.getText() && declarationOf(use) === declaration)
-        .every((use) => {
-            const wrapped = valueWrapperOf(use);
-            const parent = wrapped.getParent();
+        .filter((use) => {
+            const parent = use.getParent();
 
-            // `parent` holds `wrapped` either as its name or as its value; only the value passes the object on.
-            return (
-                (Node.isVariableDeclaration(parent) && parent.getNameNode() === use) ||
-                (Node.isPropertyAssignment(parent) && parent.getNameNode() !== wrapped) ||
-                Node.isShorthandPropertyAssignment(parent)
-            );
+            return !((Node.isVariableDeclaration(parent) || Node.isBindingElement(parent)) && parent.getNameNode() === use);
         });
 };
 
-/** The object literal `node` is, written inline or held by a local that is never repointed, written into or passed on. */
+/** Whether `node`, past any value-preserving wrapper, is passed straight to a `ctx.db` row read as an argument. */
+const isDatabaseReadArgument = (node: TsNode): boolean => {
+    const call = valueWrapperOf(node).getParent();
+
+    return Node.isCallExpression(call) && isDatabaseReadCall(call) && call.getArguments().includes(valueWrapperOf(node));
+};
+
+/**
+ * Whether the local `identifier` is only ever handed to a `ctx.db` read: as the query object itself, or as the
+ * `where` of a query object written inline in that call. Any other use (`filter.ownerId = …`, `Object.assign`,
+ * `{ value: filter }`) can change or alias the object, so its initializer no longer says what it holds.
+ */
+const isOnlyQueried = (identifier: Identifier): boolean =>
+    usesOfLocal(identifier).every((use) => {
+        if (isDatabaseReadArgument(use)) {
+            return true;
+        }
+
+        const wrapped = valueWrapperOf(use);
+        const property = wrapped.getParent();
+        const holder = property?.getParent();
+        const isWhere =
+            (Node.isPropertyAssignment(property) && property.getNameNode() !== wrapped && propertyKeyName(property) === "where") ||
+            (Node.isShorthandPropertyAssignment(property) && property.getName() === "where");
+
+        return isWhere && holder !== undefined && isDatabaseReadArgument(holder);
+    });
+
+/** The object literal `node` is, written inline or held by a local that is never repointed and only handed to a `ctx.db` read. */
 const objectLiteralOf = (node: TsNode | undefined): ObjectLiteralExpression | undefined => {
     const value = unwrapExpression(node);
 
@@ -486,7 +504,7 @@ const objectLiteralOf = (node: TsNode | undefined): ObjectLiteralExpression | un
         return value;
     }
 
-    const initializer = Node.isIdentifier(value) && isPassedOnly(value) ? unwrapExpression(trustedInitializerOf(value)) : undefined;
+    const initializer = Node.isIdentifier(value) && isOnlyQueried(value) ? unwrapExpression(trustedInitializerOf(value)) : undefined;
 
     return Node.isObjectLiteralExpression(initializer) ? initializer : undefined;
 };
@@ -569,7 +587,10 @@ const isIdentityField = (read: CallExpression, field: string | undefined): boole
     // `OR` arm a single branch.
     return read.getArguments().some((argument) => {
         const queryArgs = objectLiteralOf(argument);
-        const filter = objectLiteralOf(propertyValueOf(queryArgs === undefined ? undefined : findObjectProperty(queryArgs, "where")));
+        const where = queryArgs === undefined ? undefined : findObjectProperty(queryArgs, "where");
+        // `{ where: …, ...args.query }` can replace the whole filter.
+        const filter =
+            queryArgs === undefined || where === undefined || isOverriddenLater(queryArgs, where) ? undefined : objectLiteralOf(propertyValueOf(where));
 
         return filter !== undefined && pinsFieldToCaller(filter, field);
     });
@@ -1161,7 +1182,8 @@ const databaseReadOf = (node: TsNode): CallExpression | undefined => {
 
 /** The column a destructured `element` takes from the row; `undefined` below the top level of the pattern. */
 const destructuredFieldOf = (element: TsNode | undefined): string | undefined => {
-    if (!Node.isBindingElement(element) || Node.isBindingElement(element.getParent().getParent())) {
+    // `const { ...rest } = row` binds an object of the remaining columns, not a column.
+    if (!Node.isBindingElement(element) || element.getDotDotDotToken() !== undefined || Node.isBindingElement(element.getParent().getParent())) {
         return undefined;
     }
 
@@ -1215,10 +1237,55 @@ const keyPartsOf = (node: TsNode): TsNode[] => {
 
 const isFixedTextPart = (part: TsNode): boolean => Node.isStringLiteral(part) || Node.isNoSubstitutionTemplateLiteral(part) || Node.isNumericLiteral(part);
 
+/** Whether `node` is written by its parent: the target of an assignment, `delete`, `++` or `--`. */
+const isWriteTarget = (node: TsNode): boolean => {
+    const parent = node.getParent();
+
+    if (Node.isBinaryExpression(parent)) {
+        const operator = parent.getOperatorToken().getKind();
+
+        return parent.getLeft() === node && operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment;
+    }
+
+    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
+        const operator = parent.getOperatorToken();
+
+        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
+    }
+
+    return Node.isDeleteExpression(parent);
+};
+
+/**
+ * Whether every use of the local `identifier` only reads fields off it (`row.ownerId`, `const { _id } = row`).
+ * A write anywhere in a chain on it, or handing it to other code, can change the field the key emits.
+ */
+const isReadOnlyLocal = (identifier: Identifier): boolean =>
+    usesOfLocal(identifier).every((use) => {
+        const wrapped = valueWrapperOf(use);
+        const parent = wrapped.getParent();
+
+        if (Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode())) {
+            return true;
+        }
+
+        return (
+            (Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent)) &&
+            parent.getExpression() === wrapped &&
+            !isWriteTarget(valueWrapperOf(outermostChainOf(parent)))
+        );
+    });
+
 /** Whether `access` reads an identity column straight off an owned row: `row._id`, `(await ownedRead()).ownerId`. */
 const isOwnedIdentityColumn = (access: ElementAccessExpression | PropertyAccessExpression): boolean => {
     const base = strippedValue(access.getExpression());
     const baseInitializer = Node.isIdentifier(base) ? trustedInitializerOf(base) : undefined;
+
+    // `const row` still allows `row.ownerId = args.ownerId`, so a row local counts only while nothing writes into it.
+    if (Node.isIdentifier(base) && baseInitializer !== undefined && !isReadOnlyLocal(base)) {
+        return false;
+    }
+
     const read = databaseReadOf(base) ?? (baseInitializer === undefined ? undefined : databaseReadOf(baseInitializer));
 
     return read !== undefined && rowScopesKey(read, access, rowFieldReadOf(access.getExpression()).field, undefined);
