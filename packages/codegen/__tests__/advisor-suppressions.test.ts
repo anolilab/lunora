@@ -310,8 +310,8 @@ export const typo = mutation({ args: {}, handler: async () => { throw new Error(
         expect(secrets.find((entry) => entry.metadata["key"] === "OTHER_SECRET")?.suppressed).toBeUndefined();
     });
 
-    it("accepts nothing when a wrangler directive's line opens with something other than a key", () => {
-        expect.assertions(2);
+    it("attaches a wrangler directive to a key that shares its line with a block comment", () => {
+        expect.assertions(3);
 
         const advisories = advisoriesFor(OPEN_APP, {
             keys: ["STRIPE_SECRET", "OTHER_SECRET"],
@@ -323,8 +323,47 @@ export const typo = mutation({ args: {}, handler: async () => { throw new Error(
 }
 `,
         });
+        const secrets = named(advisories, "plaintext_secret_in_wrangler_vars");
 
-        expect(named(advisories, "plaintext_secret_in_wrangler_vars").filter((entry) => entry.suppressed !== undefined)).toHaveLength(0);
+        expect(secrets.find((entry) => entry.metadata["key"] === "STRIPE_SECRET")?.suppressed).toBeDefined();
+        expect(secrets.find((entry) => entry.metadata["key"] === "OTHER_SECRET")?.suppressed).toBeUndefined();
+        expect(named(advisories, "advisor_suppression_unused")).toHaveLength(0);
+    });
+
+    it("attaches a wrangler directive to a key on the line a multi-line block comment closes on", () => {
+        expect.assertions(2);
+
+        const advisories = advisoriesFor(OPEN_APP, {
+            keys: ["STRIPE_SECRET"],
+            text: `{
+  "vars": {
+    // lunora-advisor-exempt plaintext_secret_in_wrangler_vars -- rotated and read by the test harness only
+    /* rotated monthly
+       by the ops runbook */ "STRIPE_SECRET": "sk_live_0000000000000000"
+  }
+}
+`,
+        });
+
+        expect(named(advisories, "plaintext_secret_in_wrangler_vars")[0]?.suppressed?.file).toBe("wrangler.jsonc");
+        expect(named(advisories, "advisor_suppression_unused")).toHaveLength(0);
+    });
+
+    it("accepts nothing when the code below a wrangler directive is not a key", () => {
+        expect.assertions(2);
+
+        const advisories = advisoriesFor(OPEN_APP, {
+            keys: ["STRIPE_SECRET"],
+            text: `{
+  "vars": {
+    "STRIPE_SECRET": "sk_live_0000000000000000"
+    // lunora-advisor-exempt plaintext_secret_in_wrangler_vars -- rotated and read by the test harness only
+  }
+}
+`,
+        });
+
+        expect(named(advisories, "plaintext_secret_in_wrangler_vars")[0]?.suppressed).toBeUndefined();
         expect(named(advisories, "advisor_suppression_unused")).toHaveLength(1);
     });
 
