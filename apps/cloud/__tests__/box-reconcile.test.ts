@@ -114,6 +114,27 @@ describe(reconcileBoxDns, () => {
         expect(result.outcomes).toStrictEqual(new Map([["box_live", null]]));
     });
 
+    it("reads the live boxes only once the zone listing is in, so a box enrolled during the listing keeps its records", async () => {
+        const fresh = "bfresh00001";
+        const zone = memoryZone([...boxRecords(LIVE)]);
+        const live = [{ boxId: "box_live", ipv4: "203.0.113.9", slug: LIVE }];
+        const { listDnsRecordsUnder } = zone.api;
+
+        // Enrolment (row, then records) lands while the listing is in flight, and the listing sees the records.
+        zone.api.listDnsRecordsUnder = async (input) => {
+            await Promise.resolve();
+            live.push({ boxId: "box_fresh", ipv4: "203.0.113.9", slug: fresh });
+            zone.records.push(...boxRecords(fresh));
+
+            return listDnsRecordsUnder(input);
+        };
+
+        const result = await reconcileBoxDns(zone.api, { domain: DOMAIN, live: () => Promise.resolve([...live]), maxWrites: 100, zoneId: "zone" });
+
+        expect(result.deleted).toBe(0);
+        expect(zone.writes).toStrictEqual([]);
+    });
+
     it("repoints a live box whose address changed", async () => {
         const zone = memoryZone(boxRecords(LIVE, "198.51.100.7"));
 
