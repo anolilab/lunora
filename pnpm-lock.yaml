@@ -3843,9 +3843,15 @@ importers:
       '@lunora/agent':
         specifier: workspace:*
         version: link:../agent
+      '@lunora/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@lunora/container':
         specifier: workspace:*
         version: link:../container
+      '@lunora/d1':
+        specifier: workspace:*
+        version: link:../d1
       '@lunora/errors':
         specifier: workspace:*
         version: link:../errors
