@@ -247,13 +247,14 @@ describe("argument-taint", () => {
         });
 
         it("accepts a key read off a database row fetched by the caller's identity", () => {
-            expect.assertions(7);
+            expect.assertions(8);
 
             const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
 
             // As a prefix, only a column that names the caller: the row's id, or the one the read matched on.
             expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row.ownerId}/\${args.k}\`);`))).toBe(true);
             expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row._id}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row[\`ownerId\`]}/\${args.key ?? args.other}\`);`))).toBe(true);
             expect(
                 isScopedByIdentity(
                     sinkArgument(`const row = await ctx.db.files.findFirst({ where: { "ownerId": ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.k}\`);`),
@@ -355,7 +356,19 @@ describe("argument-taint", () => {
         });
 
         it("refuses a prefix that is not the caller id itself, asserted or not", () => {
-            expect.assertions(5);
+            expect.assertions(7);
+
+            // An `OR` arm by a caller-supplied id selects a row the caller chose, so its id is not the caller's.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { OR: [{ ownerId: ctx.auth.userId }, { id: args.id }] } });\nSINK(\`\${row.id}/\${args.k ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(sinkArgument(`const me = await ctx.db.users.get(ctx.auth.userId);\nSINK(\`\${me._id}/\${args.k ?? args.other}\`);`)),
+            ).toBe(true);
 
             expect(
                 isScopedByIdentity(

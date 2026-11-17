@@ -391,7 +391,9 @@ const rowFieldReadOf = (source: TsNode): { field: string | undefined; read: TsNo
         if (Node.isElementAccessExpression(parent) && parent.getExpression() === current) {
             const argument = parent.getArgumentExpression();
 
-            return { field: Node.isStringLiteral(argument) ? argument.getLiteralValue() : undefined, read: parent };
+            const isStaticKey = Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument);
+
+            return { field: isStaticKey ? argument.getLiteralValue() : undefined, read: parent };
         }
 
         return { field: undefined, read: current };
@@ -542,8 +544,11 @@ const isOverriddenLater = (object: ObjectLiteralExpression, property: ObjectLite
     });
 };
 
-/** Whether the `where` object `filter` pins `field` to the caller on every row it admits: directly, or in any `AND` branch. */
-const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string): boolean =>
+/**
+ * Whether the `where` object `filter` pins `field` (any column when `undefined`) to the caller on every row it
+ * admits: directly, or in any `AND` branch.
+ */
+const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string | undefined): boolean =>
     filter.getProperties().some((property) => {
         const value = propertyValueOf(property);
 
@@ -564,7 +569,7 @@ const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string): bool
             );
         }
 
-        return propertyKeyName(property) === field && equatesToCaller(value);
+        return (field === undefined || propertyKeyName(property) === field) && equatesToCaller(value);
     });
 
 /** Whether a query object passed to `read` holds a member that can rewrite it at runtime: a spread, or a computed key. */
@@ -577,6 +582,16 @@ const hasRuntimeQueryOverride = (read: CallExpression): boolean =>
             ),
         );
 
+/** Whether the query object `argument` has a `where` that pins `field` (any column when `undefined`) to the caller. */
+const pinsReadToCaller = (argument: TsNode, field: string | undefined): boolean => {
+    const queryArgs = objectLiteralOf(argument);
+    const where = queryArgs === undefined ? undefined : findObjectProperty(queryArgs, "where");
+    // `{ where: …, ...args.query }` can replace the whole filter.
+    const filter = queryArgs === undefined || where === undefined || isOverriddenLater(queryArgs, where) ? undefined : objectLiteralOf(propertyValueOf(where));
+
+    return filter !== undefined && pinsFieldToCaller(filter, field);
+};
+
 /**
  * Whether `field` of a row returned by the identity-bound `read` differs per caller: the row's
  * id, or a column the read matched against the caller (`ownerId` in `where: { ownerId:
@@ -588,23 +603,17 @@ const isIdentityField = (read: CallExpression, field: string | undefined): boole
         return false;
     }
 
-    // The row's own id differs per caller only while the query that selected it cannot be rewritten at runtime.
+    // The row's own id is the caller's only when the read is pinned to the caller on every path: fetched by the
+    // caller's id (`ctx.db.users.get(ctx.auth.userId)`), or through a `where` that pins some column to the caller.
+    // A caller id in one `OR` arm, or a query a spread or computed key can rewrite, selects rows the caller chose.
     if (ROW_ID_FIELDS.has(field)) {
-        return !hasRuntimeQueryOverride(read);
+        return !hasRuntimeQueryOverride(read) && read.getArguments().some((argument) => isCallerId(argument) || pinsReadToCaller(argument, undefined));
     }
 
     // Only a predicate of the read's own `where`, directly or in an `AND` branch, binds every returned row: one
     // inside a relation filter (`where: { author: { ownerId: uid } }`) constrains another row, and one in an
     // `OR` arm a single branch.
-    return read.getArguments().some((argument) => {
-        const queryArgs = objectLiteralOf(argument);
-        const where = queryArgs === undefined ? undefined : findObjectProperty(queryArgs, "where");
-        // `{ where: …, ...args.query }` can replace the whole filter.
-        const filter =
-            queryArgs === undefined || where === undefined || isOverriddenLater(queryArgs, where) ? undefined : objectLiteralOf(propertyValueOf(where));
-
-        return filter !== undefined && pinsFieldToCaller(filter, field);
-    });
+    return read.getArguments().some((argument) => pinsReadToCaller(argument, field));
 };
 
 /** Whether `read`'s row, consumed through `source`, scopes a key whose whole value is `wholeKey`. */
