@@ -1,5 +1,3 @@
-/* eslint-disable jsdoc/check-indentation, jsdoc/no-multi-asterisks -- intentional nested bullet list documenting the inbound security model */
-
 /**
  * `@lunora/agent/inbound` — start a durable agent run from an inbound email.
  *
@@ -12,27 +10,26 @@
  * agent claims is dropped without error.
  *
  * SECURITY — inbound mail is untrusted and a run dispatches privileged:
- * - Cloudflare Email Routing authenticates only the *recipient* domain, not the
- *   *sender*. The envelope `from`, subject, and body are trivially spoofable, so
- *   an `onEmail` mapper MUST NOT make trust/authorization decisions on
- *   `email.from`. The handler below drops a message whose `From` domain is not
- *   vouched for by an aligned verdict before any mapper runs; a mapper that
- *   needs a stricter policy (an allow-list of sender domains, say) checks
- *   `email.authentication` itself and returns `null` to decline.
+ * - Cloudflare Email Routing authenticates only the _recipient_ domain, not the
+ * _sender_. The envelope `from`, subject, and body are trivially spoofable, so
+ * an `onEmail` mapper MUST NOT make trust/authorization decisions on
+ * `email.from`. The handler below drops a message whose `From` domain is not
+ * vouched for by an aligned verdict before any mapper runs; a mapper that
+ * needs a stricter policy (an allow-list of sender domains, say) checks
+ * `email.authentication` itself and returns `null` to decline.
  * - The started run has no request identity: its thread owner is whatever the
- *   mapper puts in `AgentEmailRun.owner`, and its tools run RLS-bypassed. Derive
- *   `owner` from a verified signal (a DKIM-checked address mapped to an account),
- *   never blindly from the spoofable sender, and treat every mapped field as
- *   attacker-controlled input.
+ * mapper puts in `AgentEmailRun.owner`, and its tools run RLS-bypassed. Derive
+ * `owner` from a verified signal (a DKIM-checked address mapped to an account),
+ * never blindly from the spoofable sender, and treat every mapped field as
+ * attacker-controlled input.
  * - Every failure — parse, verify, or dispatch — rejects the message with a
- *   fixed generic reason, so the sender's bounce never reflects internal error
- *   detail. Cloudflare gives an inbound worker no way to signal "try later": an
- *   uncaught throw is also permanent, just opaque, so there is nothing to gain
- *   by rethrowing. This handler wires no `retain` sink, so a transient dispatch
- *   failure bounces too; the two permanent failures below reject themselves so
- *   their real reason reaches the server log.
+ * fixed generic reason, so the sender's bounce never reflects internal error
+ * detail. Cloudflare gives an inbound worker no way to signal "try later": an
+ * uncaught throw is also permanent, just opaque, so there is nothing to gain
+ * by rethrowing. This handler wires no `retain` sink, so a transient dispatch
+ * failure bounces too; the two permanent failures below reject themselves so
+ * their real reason reaches the server log.
  */
-/* eslint-enable jsdoc/check-indentation, jsdoc/no-multi-asterisks */
 import type { ForwardableEmailMessageLike } from "@lunora/mail/inbound";
 import { authenticatesFrom, createInboundEmailHandler, parseInboundEmail } from "@lunora/mail/inbound";
 

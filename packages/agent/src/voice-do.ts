@@ -203,7 +203,6 @@ class VoiceSessionDO {
 
         this.state.acceptWebSocket(server);
 
-        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- workerd provides the Web Crypto global; this DO never runs under Node
         const connectionId = crypto.randomUUID();
         const identity = parseIdentity(request.headers.get("x-lunora-identity"));
         const userId = decodeUserIdHeader(request.headers.get("x-lunora-userid"));

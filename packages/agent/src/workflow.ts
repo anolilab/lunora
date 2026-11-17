@@ -1,5 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- JSDoc names the generated `<Name>AgentWorkflow` class, not a credential. */
-
 import type { WorkflowDefinition } from "@lunora/workflow";
 import { defineWorkflow } from "@lunora/workflow";
 
@@ -53,7 +51,7 @@ const withAutoOtlpTelemetry = (
 
 /**
  * Compile a `defineAgent` definition into the workflow the generated
- * `<Name>AgentWorkflow` entrypoint class runs. Codegen emits, per agent:
+ * per-agent entrypoint class (`SupportAgentWorkflow` below) runs. Codegen emits, per agent:
  *
  * ```ts
  * import LunoraWorkflow from "@lunora/workflow/do";
