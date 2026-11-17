@@ -1,5 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- JSDoc names the `RegisteredFunction<ArgsValidator, …>` type, not a credential. */
-
 // The declared analysis languages and storage strategies. Inlined by the
 // bundler from `shared/search` rather than depended on, so the schema builder
 // still stands up without the DO runtime — it just no longer restates the
@@ -705,7 +703,7 @@ interface FunctionHandle<Kind extends "action" | "mutation" | "query" | "stream"
  * ctx object must annotate its `(reference, args)` explicitly — see
  * `@lunora/testing`'s harness). It does not work: a concrete
  * `RegisteredQuery<{…}, number>` is not assignable to a
- * `RegisteredFunction<ArgsValidator, …>` constraint, because `handler`'s args
+ * `RegisteredFunction` constraint over `ArgsValidator`, because `handler`'s args
  * are in a contravariant position. Two inference sites it is.
  */
 
@@ -1762,6 +1760,7 @@ interface WorkflowStatusResult {
     status: WorkflowInstanceStatus;
 }
 
+// eslint-disable-next-line no-secrets/no-secrets -- names the mirrored `@lunora/workflow` type, not a credential
 /** Options accepted by {@link WorkflowHandle.createBatch}: explicit `instances`, or `count` sharing one `params`/`retention`. Mirrors `@lunora/workflow`'s `WorkflowCreateBatchOptions`. */
 type WorkflowCreateBatchOptions<Params = Record<string, unknown>> =
     | { instances: ReadonlyArray<WorkflowCreateOptions<Params>> }
@@ -1802,6 +1801,7 @@ interface WorkflowEventDefinition<Payload = unknown> {
     readonly type: string;
 }
 
+// eslint-disable-next-line no-secrets/no-secrets -- names the mirrored `@lunora/workflow` type, not a credential
 /** One event `WorkflowInstance.subscribe()` streams. Mirrors `@lunora/workflow`'s `WorkflowInstanceEventLike`. */
 interface WorkflowInstanceEvent {
     [field: string]: unknown;

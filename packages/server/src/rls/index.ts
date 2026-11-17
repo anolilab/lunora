@@ -1,5 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- JSDoc names a stable error-kind constant, not a secret */
-
 /**
  * Public surface for Row-Level Security (PLAN2 §3.2).
  *
@@ -23,7 +21,7 @@
  * sees an unwrapped `ctx.db` and the policy list has no effect.
  *
  * `count()` against a policy-restricted table throws
- * `LunoraError("COUNT_RLS_UNSUPPORTED")` (422). Document this in any
+ * a `COUNT_RLS_UNSUPPORTED` LunoraError (422). Document this in any
  * code that wraps `ctx.db.<table>.count`.
  *
  * Permissions let a policy check a named capability instead of enumerating
@@ -44,7 +42,6 @@
  * builders.mutation.use(rls(definePolicies([policy]), { roles: [admin] }));
  * ```
  */
-/* eslint-enable no-secrets/no-secrets */
 export { createPolicyDsl, definePermission, definePolicies, definePolicy, defineRole } from "./define";
 export type { RlsContextIn } from "./middleware";
 export { rls } from "./middleware";

@@ -193,8 +193,6 @@ const rewriteTableReferences = (table: TableDefinition, key: string, bareNames: 
     return { ...table, aggregateIndexes, rankIndexes, relationMap, shape };
 };
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- the install/compose accumulator types fold over a heterogeneous tuple of plugins; per-plugin types are recovered by the `infer`s below. */
-
 /**
  * The prefixed tables a single plugin `P` contributes, or an empty map when it
  * ships no schema extension. Mirrors {@link PrefixedTables} at the plugin level
@@ -222,10 +220,9 @@ type InstalledTables<T extends Record<string, TableDefinition>, Plugins extends 
  * infers at the `.use(...)` site.
  */
 type ComposedOut<Plugins extends ReadonlyArray<unknown>> = Plugins extends readonly [infer Head, ...infer Rest]
-    ? ComposedOut<Rest> & (Head extends Plugin<any, any, infer Out> ? Out : unknown)
+    ? // eslint-disable-next-line @typescript-eslint/no-explicit-any -- folds over a heterogeneous plugin tuple; the infers recover each plugin type
+      ComposedOut<Rest> & (Head extends Plugin<any, any, infer Out> ? Out : unknown)
     : unknown;
-
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
  * Schema fragment a plugin contributes. Same shape as the `tables` map
@@ -371,9 +368,8 @@ export const definePlugin = (<TExtension extends Record<string, TableDefinition>
  * ones as their `RegisteredInternal*` counterparts. A bare `RegisteredFunction`
  * leaves visibility open, and codegen refuses to guess it.
  */
-/* eslint-disable @typescript-eslint/no-explicit-any -- ComponentFunctions is a heterogeneous bag; per-entry types are recovered by the consumer's re-export. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- a heterogeneous bag of functions; the consumer re-export recovers each entry type
 export type ComponentFunctions = Readonly<Record<string, RegisteredFunction<any, any, FunctionKind>>>;
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 /**
  * Component = {@link Plugin} with a bundle of registered functions. The
@@ -531,8 +527,6 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     };
 };
 
-/* eslint-disable @typescript-eslint/no-explicit-any -- the install/compose helpers fold over a heterogeneous tuple of plugins; per-plugin types are recovered by the recursive accumulator types declared above. */
-
 /**
  * Install several plugins' schema extensions in one call — the one-shot
  * counterpart to chaining `defineSchema(...).extend(a).extend(b)`. Plugins
@@ -549,6 +543,7 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
  * middleware in a single `.use(...)`, so installing N plugins is two calls
  * rather than N `.extend(...)` + N `.use(...)`.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- folds over a heterogeneous plugin tuple; the infers recover each plugin type
 export const installPlugins = <T extends Record<string, TableDefinition>, const Plugins extends ReadonlyArray<Plugin<any, any, any>>>(
     base: Schema<T>,
     plugins: Plugins,
@@ -576,6 +571,7 @@ export const installPlugins = <T extends Record<string, TableDefinition>, const 
  * `.use(...)` site; the result type widens it by the union of the plugins'
  * outputs.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- folds over a heterogeneous plugin tuple; the infers recover each plugin type
 export const composePluginMiddleware = <ContextIn = unknown, const Plugins extends ReadonlyArray<Plugin<any, any, any>> = ReadonlyArray<Plugin<any, any, any>>>(
     plugins: Plugins,
 ): Middleware<ContextIn, ComposedOut<Plugins> & ContextIn> => {
@@ -590,5 +586,3 @@ export const composePluginMiddleware = <ContextIn = unknown, const Plugins exten
     // `rls(...)` as its middleware would otherwise register with no `fn.rls`.
     return composeMiddleware<ContextIn, ComposedOut<Plugins> & ContextIn>(middlewares);
 };
-
-/* eslint-enable @typescript-eslint/no-explicit-any */

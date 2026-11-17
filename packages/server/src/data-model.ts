@@ -20,27 +20,6 @@
  * so this module needs no reference to the project-local `OneRelation` /
  * `ManyRelation` aliases the codegen still emits.
  */
-/* eslint-disable @typescript-eslint/no-empty-object-type -- `{}` is the deliberate identity element for the with-arg intersection machinery and the default `W` type param; `object`/`unknown` change the inference this module exists to provide. */
-/* eslint-disable no-secrets/no-secrets -- the high-entropy strings flagged here are framework API type names quoted in doc comments, not credentials. */
-/* eslint-disable import/exports-last -- internal helper type aliases sit next to the exported types that use them; grouping all exports last would scatter the with-arg machinery. */
-/* eslint-disable unicorn/prevent-abbreviations -- `WithArg` is the public type name the generated dataModel binds as `WithArgOf`; renaming it breaks the codegen contract. */
-
-/** A branded id for table `TName`. Structurally a `string` at runtime. */
-export type Id<TName extends string> = string & { readonly __table: TName };
-
-/** Field-level operators for the typed `where` DSL (see `@lunora/do`'s compiler). */
-export interface WhereOperators<T> {
-    contains?: string;
-    eq?: T;
-    gt?: T;
-    gte?: T;
-    in?: T[];
-    isNull?: boolean;
-    lt?: T;
-    lte?: T;
-    ne?: T;
-    notIn?: T[];
-}
 
 /**
  * A value stored as a plain JS object: not a scalar (an `Id<T>` is a branded string, which is an `object` to
@@ -76,11 +55,13 @@ type PathValue<V, P extends string> = P extends `${infer Head}.${infer Rest}`
  * Every dotted path into an object-valued column of `Doc` (`"profile.address.city"`), at most four segments
  * counting the column. A column that is not a plain object contributes none.
  */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `Doc` mirrors the public Doc<T> naming; this name is rendered in the API snapshot
 type ColumnPaths<Doc> = {
     [K in keyof Doc & string]-?: [IsPlainObject<NonNullable<Doc[K]>>] extends [true] ? `${K}.${SubPaths<NonNullable<Doc[K]>, []>}` : never;
 }[keyof Doc & string];
 
 /** The type at the end of a {@link ColumnPaths} path. */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `Doc` mirrors the public Doc<T> naming; this name is rendered in the API snapshot
 type DocPathValue<Doc, P extends string> = P extends `${infer Column}.${infer Rest}`
     ? Column extends keyof Doc
         ? PathValue<NonNullable<Doc[Column]>, Rest>
@@ -90,6 +71,7 @@ type DocPathValue<Doc, P extends string> = P extends `${infer Column}.${infer Re
 type ScalarLeaf = boolean | number | string | null | undefined;
 
 /** The dotted paths into an object column that end at a string, number or boolean. */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `Doc` mirrors the public Doc<T> naming; this name is rendered in the API snapshot
 type ScalarPaths<Doc> = { [P in ColumnPaths<Doc>]: [DocPathValue<Doc, P>] extends [ScalarLeaf] ? P : never }[ColumnPaths<Doc>];
 
 /**
@@ -99,12 +81,123 @@ type ScalarPaths<Doc> = { [P in ColumnPaths<Doc>]: [DocPathValue<Doc, P>] extend
  * `unknown` (the identity for `&`) when there are none, never `{}`: intersecting with an empty object type
  * switches off the weak-type check that rejects a `where` key naming nothing.
  */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `Doc` mirrors the public Doc<T> naming; this name is rendered in the API snapshot
 type PathWhere<Doc, Paths extends string = ScalarPaths<Doc>> = [Paths] extends [never]
     ? unknown
     : { [P in Paths]?: DocPathValue<Doc, P> | WhereOperators<DocPathValue<Doc, P>> };
 
 /** `patch` keys that set one value inside an object column, keeping its siblings: `{ "profile.plan": "pro" }`. */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `Doc` mirrors the public Doc<T> naming; this name is rendered in the API snapshot
 type PathPatch<Doc, Paths extends string = ColumnPaths<Doc>> = [Paths] extends [never] ? unknown : { [P in Paths]?: DocPathValue<Doc, P> };
+
+/**
+ * The relation-predicate portion of {@link WhereOf}: each declared relation on
+ * `T` contributes a kind-dispatched node — `one` → `{ is?; isNot? }`, `many` →
+ * `{ some?; none?; every? }` — whose inner type is the target table's own
+ * relation-aware `where` (so multi-hop predicates type-check inside-out).
+ */
+type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = {
+    [K in keyof REL[T]]?: REL[T][K] extends { __relationKind: "one"; __target: infer Target extends keyof DM }
+        ? OneRelationWhere<WhereOf<DM, REL, Target>>
+        : REL[T][K] extends { __relationKind: "many"; __target: infer Target extends keyof DM }
+          ? ManyRelationWhere<WhereOf<DM, REL, Target>>
+          : never;
+};
+
+/** The nested `with` sub-argument inside a relation's with-value, or `{}`. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` is the identity element of the with-arg intersections; `object` changes inference
+type NestedWithArgument<WK> = WK extends { with: infer NW } ? NW : {};
+
+/** The nested `select` tuple inside a relation's with-value, or `undefined` (no projection). */
+type NestedSelectArgument<WK> = WK extends { select: infer S } ? S : undefined;
+
+/**
+ * Resolve a single relation descriptor + its with-value to the loaded type,
+ * threading the nested `select` tuple into the projected child shape (the 5th
+ * `LoadWith` arg) so `with: { author: { select: ["name"] } }` narrows the loaded
+ * `author` to the selected columns + system fields.
+ */
+type LoadRelation<DM, REL extends Record<keyof DM, object>, R, WK> = R extends { __relationKind: "one"; __target: infer Target extends keyof DM }
+    ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>> | null
+    : R extends { __relationKind: "many"; __target: infer Target extends keyof DM }
+      ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>>[]
+      : never;
+
+/** The relation keys of `W` that were actually requested (not `false`/`undefined`). */
+type LoadedRelations<DM, REL extends Record<keyof DM, object>, T extends keyof DM, W> = {
+    [K in keyof W as K extends keyof REL[T] ? (W[K] extends false | undefined ? never : K) : never]: K extends keyof REL[T]
+        ? LoadRelation<DM, REL, REL[T][K], W[K]>
+        : never;
+};
+
+/** The `_count` projection of `W`, if any. */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` is the identity element of the with-arg intersections; `object` changes inference
+type LoadedCount<W> = W extends { _count: infer C } ? { _count: { [K in keyof C]: number } } : {};
+
+/** System columns a `select` projection always retains, so cursors and by-id reuse keep working. */
+type SelectAlwaysKeep<DM, T extends keyof DM> = ("_creationTime" | "_id") & keyof DM[T];
+
+/**
+ * `DM[T]` narrowed to the columns named by a `select` tuple `S` (plus the system
+ * fields). `undefined` (the default — no `select`) keeps the full document.
+ */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `Doc` mirrors the public Doc<T> naming; this name is rendered in the API snapshot
+type ProjectDoc<DM, T extends keyof DM, S> =
+    S extends ReadonlyArray<infer K> ? (K extends keyof DM[T] ? Pick<DM[T], (K & keyof DM[T]) | SelectAlwaysKeep<DM, T>> : DM[T]) : DM[T];
+
+/**
+ * An atomic update for a number column, applied to the value the row holds when the
+ * write runs: `{ increment: 1 }`, `{ decrement: 1 }`, `{ multiply: 2 }`, `{ divide: 2 }`.
+ * The column must already hold a finite number; a result that is not finite is rejected.
+ */
+type NumberFieldOperator =
+    | { decrement: number; divide?: never; increment?: never; multiply?: never }
+    | { decrement?: never; divide: number; increment?: never; multiply?: never }
+    | { decrement?: never; divide?: never; increment: number; multiply?: never }
+    | { decrement?: never; divide?: never; increment?: never; multiply: number };
+
+/** An atomic update for a boolean column: `{ toggle: true }` flips the stored value. */
+interface BooleanFieldOperator {
+    toggle: true;
+}
+
+/**
+ * The operator a column of type `T` takes: arithmetic when `T` is exactly `number` (so a literal union
+ * such as `1 | 2` is out — the result could leave the set — and so is `number | string`, which the
+ * store does not treat as a number column), `{ toggle: true }` when it is exactly `boolean`.
+ */
+type OperatorFor<T> = [T] extends [number]
+    ? [number] extends [T]
+        ? NumberFieldOperator
+        : never
+    : [T] extends [boolean]
+      ? [boolean] extends [T]
+          ? BooleanFieldOperator
+          : never
+      : never;
+
+/** The foreign-key columns of a table's to-one relations — the keys a nested `connect` supplies. */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `RelT` (a relation map) is rendered in the API snapshot; renaming changes it
+type OneRelationFields<RelT> = {
+    [K in keyof RelT]: RelT[K] extends { __field: infer Field extends string; __relationKind: "one" } ? Field : never;
+}[keyof RelT];
+
+/** A branded id for table `TName`. Structurally a `string` at runtime. */
+export type Id<TName extends string> = string & { readonly __table: TName };
+
+/** Field-level operators for the typed `where` DSL (see `@lunora/do`'s compiler). */
+export interface WhereOperators<T> {
+    contains?: string;
+    eq?: T;
+    gt?: T;
+    gte?: T;
+    in?: T[];
+    isNull?: boolean;
+    lt?: T;
+    lte?: T;
+    ne?: T;
+    notIn?: T[];
+}
 
 /** A typed `where` tree over a document's columns. */
 export type Where<TDocument> = PathWhere<TDocument> & {
@@ -160,20 +253,6 @@ export interface ManyRelationWhere<W> {
     none?: W;
     some?: W;
 }
-
-/**
- * The relation-predicate portion of {@link WhereOf}: each declared relation on
- * `T` contributes a kind-dispatched node — `one` → `{ is?; isNot? }`, `many` →
- * `{ some?; none?; every? }` — whose inner type is the target table's own
- * relation-aware `where` (so multi-hop predicates type-check inside-out).
- */
-type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = {
-    [K in keyof REL[T]]?: REL[T][K] extends { __relationKind: "one"; __target: infer Target extends keyof DM }
-        ? OneRelationWhere<WhereOf<DM, REL, Target>>
-        : REL[T][K] extends { __relationKind: "many"; __target: infer Target extends keyof DM }
-          ? ManyRelationWhere<WhereOf<DM, REL, Target>>
-          : never;
-};
 
 /**
  * Relation-aware `where` tree — the column predicates of {@link Where} plus
@@ -237,18 +316,13 @@ export interface QueryPage<TDocument> {
     splitRequired?: boolean;
 }
 
-/** The nested `with` sub-argument inside a relation's with-value, or `{}`. */
-type NestedWithArgument<WK> = WK extends { with: infer NW } ? NW : {};
-
-/** The nested `select` tuple inside a relation's with-value, or `undefined` (no projection). */
-type NestedSelectArgument<WK> = WK extends { select: infer S } ? S : undefined;
-
 /**
  * The `with` argument for table `T`: each relation can be `true` (load with no
  * refinements) or an object. `many` relations accept `where`/`orderBy`/`limit`/
  * `select` plus a nested `with`; `one` relations accept `select` + a nested
  * `with`. The reserved `_count` key requests per-relation aggregate counts.
  */
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public type name the generated dataModel binds as `WithArgOf`; renaming breaks codegen
 export type WithArg<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = {
     [K in keyof REL[T]]?: REL[T][K] extends { __relationKind: "many"; __target: infer Target extends keyof DM }
         ? boolean | (QueryArgs<DM[Target]> & { with?: WithArg<DM, REL, Target> })
@@ -258,38 +332,6 @@ export type WithArg<DM, REL extends Record<keyof DM, object>, T extends keyof DM
 } & {
     _count?: { [K in keyof REL[T]]?: true };
 };
-
-/**
- * Resolve a single relation descriptor + its with-value to the loaded type,
- * threading the nested `select` tuple into the projected child shape (the 5th
- * `LoadWith` arg) so `with: { author: { select: ["name"] } }` narrows the loaded
- * `author` to the selected columns + system fields.
- */
-type LoadRelation<DM, REL extends Record<keyof DM, object>, R, WK> = R extends { __relationKind: "one"; __target: infer Target extends keyof DM }
-    ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>> | null
-    : R extends { __relationKind: "many"; __target: infer Target extends keyof DM }
-      ? LoadWith<DM, REL, Target, NestedWithArgument<WK>, NestedSelectArgument<WK>>[]
-      : never;
-
-/** The relation keys of `W` that were actually requested (not `false`/`undefined`). */
-type LoadedRelations<DM, REL extends Record<keyof DM, object>, T extends keyof DM, W> = {
-    [K in keyof W as K extends keyof REL[T] ? (W[K] extends false | undefined ? never : K) : never]: K extends keyof REL[T]
-        ? LoadRelation<DM, REL, REL[T][K], W[K]>
-        : never;
-};
-
-/** The `_count` projection of `W`, if any. */
-type LoadedCount<W> = W extends { _count: infer C } ? { _count: { [K in keyof C]: number } } : {};
-
-/** System columns a `select` projection always retains, so cursors and by-id reuse keep working. */
-type SelectAlwaysKeep<DM, T extends keyof DM> = ("_creationTime" | "_id") & keyof DM[T];
-
-/**
- * `DM[T]` narrowed to the columns named by a `select` tuple `S` (plus the system
- * fields). `undefined` (the default — no `select`) keeps the full document.
- */
-type ProjectDoc<DM, T extends keyof DM, S> =
-    S extends ReadonlyArray<infer K> ? (K extends keyof DM[T] ? Pick<DM[T], (K & keyof DM[T]) | SelectAlwaysKeep<DM, T>> : DM[T]) : DM[T];
 
 /**
  * `Doc<T>` narrowed to exactly the relations requested in the with-arg `W` and,
@@ -477,7 +519,7 @@ export interface TableReaderFacade<
      * Count rows. The planner routes `where` keys that match a declared
      * `aggregateIndex.by` set to the indexed counter (no scan); otherwise
      * falls back to a SCAN. Accepts either a bare `where` tree or the broader
-     * `RestrictableQueryOptions` shape; the latter is the seam the RLS layer
+     * RestrictableQueryOptions shape; the latter is the seam the RLS layer
      * uses to inject `baseWhere` and `restrictsCounts`.
      */
     count: (where?: RestrictableQueryOptionsOf<DM, REL, T> | WhereOf<DM, REL, T>) => Promise<number>;
@@ -499,12 +541,15 @@ export interface TableReaderFacade<
      * Keep the result on the server rather than returning it to a client.
      */
     explain: (args?: QueryArgsOf<DM, REL, T>) => Promise<QueryPlan>;
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` is the identity element of the with-arg intersections; `object` changes inference
     findFirst: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
         args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
     ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` is the identity element of the with-arg intersections; `object` changes inference
     findFirstOrThrow: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
         args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
     ) => Promise<LoadWith<DM, REL, T, W, S>>;
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` is the identity element of the with-arg intersections; `object` changes inference
     findMany: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
         args?: QueryArgsOf<DM, REL, T> & { select?: S; with?: W },
     ) => Promise<QueryPage<LoadWith<DM, REL, T, W, S>>>;
@@ -518,6 +563,7 @@ export interface TableReaderFacade<
      * `limit`/`cursor`/`endCursor` are not accepted rather than silently ignored: paging a read
      * that must match at most one row is the assertion being dropped again.
      */
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type -- `{}` is the identity element of the with-arg intersections; `object` changes inference
     findUnique: <W extends WithArg<DM, REL, T> = {}, S extends ReadonlyArray<keyof DM[T] & string> | undefined = undefined>(
         args?: Omit<QueryArgsOf<DM, REL, T>, "cursor" | "endCursor" | "limit"> & { select?: S; with?: W },
     ) => Promise<LoadWith<DM, REL, T, W, S> | null>;
@@ -650,43 +696,12 @@ export interface TableWriterFacade<
 export type UpsertTargetOf<DM, T extends keyof DM> = ReadonlyArray<keyof DM[T] & string> | (keyof DM[T] & string);
 
 /**
- * An atomic update for a number column, applied to the value the row holds when the
- * write runs: `{ increment: 1 }`, `{ decrement: 1 }`, `{ multiply: 2 }`, `{ divide: 2 }`.
- * The column must already hold a finite number; a result that is not finite is rejected.
- */
-type NumberFieldOperator =
-    | { decrement: number; divide?: never; increment?: never; multiply?: never }
-    | { decrement?: never; divide: number; increment?: never; multiply?: never }
-    | { decrement?: never; divide?: never; increment: number; multiply?: never }
-    | { decrement?: never; divide?: never; increment?: never; multiply: number };
-
-/** An atomic update for a boolean column: `{ toggle: true }` flips the stored value. */
-interface BooleanFieldOperator {
-    toggle: true;
-}
-
-/**
  * The values a `patch` accepts: any column's own type, and for a number or boolean
  * column also an atomic operator ({@link NumberFieldOperator}, {@link BooleanFieldOperator}).
  */
 export type PatchValues<Row> = PathPatch<Row> & {
     [K in keyof Row]?: Row[K] | OperatorFor<NonNullable<Row[K]>>;
 };
-
-/**
- * The operator a column of type `T` takes: arithmetic when `T` is exactly `number` (so a literal union
- * such as `1 | 2` is out — the result could leave the set — and so is `number | string`, which the
- * store does not treat as a number column), `{ toggle: true }` when it is exactly `boolean`.
- */
-type OperatorFor<T> = [T] extends [number]
-    ? [number] extends [T]
-        ? NumberFieldOperator
-        : never
-    : [T] extends [boolean]
-      ? [boolean] extends [T]
-          ? BooleanFieldOperator
-          : never
-      : never;
 
 /** What `explain` returns: the SQL a read compiles to, its bound parameters, and the database's plan for it. */
 export interface QueryPlan {
@@ -727,11 +742,6 @@ export type RelationWrites<DM, REL extends Record<keyof DM, object>, T extends k
                 ? ToManyRelationWrite<Id<string & Target>>
                 : never;
       };
-
-/** The foreign-key columns of a table's to-one relations — the keys a nested `connect` supplies. */
-type OneRelationFields<RelT> = {
-    [K in keyof RelT]: RelT[K] extends { __field: infer Field extends string; __relationKind: "one" } ? Field : never;
-}[keyof RelT];
 
 /**
  * What `insert` accepts: the row as it is, or the row without its to-one foreign keys plus the nested writes that
