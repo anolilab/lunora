@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -110,6 +110,31 @@ describe(collectAssets, () => {
 
     afterEach(() => {
         rmSync(directory, { force: true, recursive: true });
+    });
+
+    it("refuses a symlink that leads out of the assets directory, and uploads one that stays inside", () => {
+        expect.assertions(2);
+
+        const outside = mkdtempSync(join(tmpdir(), "lunora-cloud-outside-"));
+
+        try {
+            writeFileSync(join(outside, "secret.txt"), "do not upload");
+            write("index.html", "x");
+            write("real.txt", "y");
+            symlinkSync(join(directory, "real.txt"), join(directory, "alias.txt"));
+
+            expect(
+                collectAssets(directory, {})
+                    .files.map((file) => file.path)
+                    .toSorted((a, b) => a.localeCompare(b)),
+            ).toStrictEqual(["/alias.txt", "/index.html", "/real.txt"]);
+
+            symlinkSync(join(outside, "secret.txt"), join(directory, "leak.txt"));
+
+            expect(() => collectAssets(directory, {})).toThrow(/leads outside the assets directory/);
+        } finally {
+            rmSync(outside, { force: true, recursive: true });
+        }
     });
 
     it("keys files by URL path, base64-encodes them, and carries only the serving config", () => {

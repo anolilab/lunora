@@ -9,11 +9,11 @@
  * the app's static assets into the upload body ({@link collectAssets}).
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 
 import type { BindingRequirement } from "@lunora/config/cloudflare";
-import { matcher, walkSync } from "@visulima/fs";
-import { dirname, join, relative, resolve } from "@visulima/path";
+import { matcher } from "@visulima/fs";
+import { dirname, isAbsolute, join, relative, resolve } from "@visulima/path";
 
 type DeployEvent = Record<string, unknown>;
 
@@ -443,6 +443,48 @@ const readAssetsIgnore = (directory: string): ((path: string) => boolean) => {
 };
 
 /**
+ * Every file under `root`, keyed by the path it has inside `root` (a symlink keeps its own name, not its
+ * target's), with the real file to read. A symlink is followed only while its target stays inside `root`:
+ * one that leads out would upload a file from elsewhere on the machine, so it is refused rather than skipped.
+ */
+const assetFilesOf = (root: string): { file: string; path: string }[] => {
+    const realRoot = realpathSync(root);
+    const visited = new Set<string>();
+    const files: { file: string; path: string }[] = [];
+
+    const visit = (directory: string): void => {
+        const realDirectory = realpathSync(directory);
+
+        // A symlinked directory that points back up the tree would otherwise be walked forever.
+        if (visited.has(realDirectory)) {
+            return;
+        }
+
+        visited.add(realDirectory);
+
+        for (const entry of readdirSync(directory, { withFileTypes: true })) {
+            const full = join(directory, entry.name);
+            const real = realpathSync(full);
+            const inside = relative(realRoot, real);
+
+            if (inside.startsWith("..") || isAbsolute(inside)) {
+                throw new Error(`asset "/${relative(root, full)}" is a symlink that leads outside the assets directory`);
+            }
+
+            if (statSync(real).isDirectory()) {
+                visit(full);
+            } else {
+                files.push({ file: real, path: relative(root, full) });
+            }
+        }
+    };
+
+    visit(root);
+
+    return files;
+};
+
+/**
  * Walk the `assets.directory` (already resolved against the wrangler file) into
  * the upload body. A root `_headers` / `_redirects` rides in the config rather
  * than as a file, as wrangler sends it. Throws with a user-facing message when
@@ -459,14 +501,12 @@ const collectAssets = (directory: string, wranglerAssets: WranglerAssets): Asset
     const files: AssetFile[] = [];
     let total = 0;
 
-    for (const entry of walkSync(directory, { followSymlinks: true, includeDirs: false })) {
-        const path = relative(directory, entry.path);
-
+    for (const { file, path } of assetFilesOf(directory)) {
         if (RESERVED_ASSET_FILES.has(path) || ignored(path)) {
             continue;
         }
 
-        const { size } = statSync(entry.path);
+        const { size } = statSync(file);
 
         if (size > MAX_ASSET_FILE_BYTES) {
             throw new Error(`asset "/${path}" is ${String(size)} bytes; Cloudflare caps a single asset at 25 MiB`);
@@ -478,7 +518,7 @@ const collectAssets = (directory: string, wranglerAssets: WranglerAssets): Asset
             throw new Error(`assets in "${directory}" exceed the 50 MiB upload cap`);
         }
 
-        files.push({ content: readFileSync(entry.path).toString("base64"), path: `/${path}` });
+        files.push({ content: readFileSync(file).toString("base64"), path: `/${path}` });
     }
 
     if (files.length === 0) {
