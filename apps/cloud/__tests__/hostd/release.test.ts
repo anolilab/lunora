@@ -362,6 +362,7 @@ describe(verifyReleaseManifest, () => {
         const installer = { sha256: "c".repeat(64), size: 4096, url: "https://example.com/install.sh" };
         const envelope = signReleaseManifest({ ...makeManifest(), installer }, keys.privateKey);
         const trusted = { [envelope.keyId]: keys.publicPem };
+        // react-doctor-disable-next-line react-doctor/no-json-parse-stringify-clone -- not a clone: the signed installer field must survive a pretty-printed JSON round trip
         const verified = await verifyReleaseManifest(JSON.parse(JSON.stringify(envelope, undefined, 4)), trusted);
 
         expect(verified).toStrictEqual({ envelope, ok: true });
