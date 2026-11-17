@@ -1222,53 +1222,6 @@ const destructuredFieldOf = (element: TsNode | undefined): string | undefined =>
 };
 
 /**
- * Whether the local `identifier` names a key source the caller cannot choose, one hop back. A
- * local holding a whole row (`const row = await ctx.db.files.findFirst(…)`) is judged by the
- * field read off it here; a destructured one (`const { key } = await …`) by the field it took.
- */
-const bindingScopesKey = (identifier: TsNode, wholeKey: TsNode | undefined): boolean => {
-    const isWhole = wholeKey !== undefined && unwrapExpression(identifier) === unwrapExpression(wholeKey);
-    const trusted = trustedInitializerOf(identifier);
-
-    if (trusted !== undefined) {
-        const read = databaseReadOf(trusted);
-
-        if (read === undefined) {
-            return referencesScopedKeySource(trusted, isWhole ? trusted : undefined);
-        }
-
-        const { field, read: use } = rowFieldReadOf(identifier);
-
-        return rowScopesKey(read, use, field, wholeKey);
-    }
-
-    const owned = ownedRowInitializerOf(identifier);
-    const read = owned === undefined ? undefined : databaseReadOf(owned);
-
-    return read !== undefined && Node.isIdentifier(identifier) && rowScopesKey(read, identifier, destructuredFieldOf(declarationOf(identifier)), wholeKey);
-};
-
-/**
- * The parts of a key built by concatenation, in order: template spans and `+` operands, with
- * nested templates and `+` chains flattened into them. A single part for anything else.
- */
-const keyPartsOf = (node: TsNode): TsNode[] => {
-    const value = strippedValue(node);
-
-    if (Node.isTemplateExpression(value)) {
-        return value.getTemplateSpans().flatMap((span) => keyPartsOf(span.getExpression()));
-    }
-
-    if (Node.isBinaryExpression(value) && value.getOperatorToken().getKind() === SyntaxKind.PlusToken) {
-        return [...keyPartsOf(value.getLeft()), ...keyPartsOf(value.getRight())];
-    }
-
-    return [value];
-};
-
-const isFixedTextPart = (part: TsNode): boolean => Node.isStringLiteral(part) || Node.isNoSubstitutionTemplateLiteral(part) || Node.isNumericLiteral(part);
-
-/**
  * Whether `node` is written: the target of an assignment, including from inside a destructuring pattern
  * (`({ a: row.ownerId } = x)`, `[row.ownerId] = x`), a `for…of` / `for…in` target, or the operand of
  * `delete`, `++` or `--`.
@@ -1330,6 +1283,69 @@ const isReadOnlyLocal = (identifier: Identifier): boolean =>
             !isWriteTarget(valueWrapperOf(outermostChainOf(parent)))
         );
     });
+
+/**
+ * Whether the local `identifier` names a key source the caller cannot choose, one hop back. A
+ * local holding a whole row (`const row = await ctx.db.files.findFirst(…)`) is judged by the
+ * field read off it here; a destructured one (`const { key } = await …`) by the field it took.
+ */
+const bindingScopesKey = (identifier: TsNode, wholeKey: TsNode | undefined): boolean => {
+    const isWhole = wholeKey !== undefined && unwrapExpression(identifier) === unwrapExpression(wholeKey);
+    const trusted = trustedInitializerOf(identifier);
+
+    if (trusted !== undefined) {
+        const read = databaseReadOf(trusted);
+
+        if (read === undefined) {
+            return referencesScopedKeySource(trusted, isWhole ? trusted : undefined);
+        }
+
+        // `const row` still allows `row.ownerId = args.ownerId`, so a row local counts only while nothing writes into it.
+        if (Node.isIdentifier(identifier) && !isReadOnlyLocal(identifier)) {
+            return false;
+        }
+
+        const { field, read: use } = rowFieldReadOf(identifier);
+
+        return rowScopesKey(read, use, field, wholeKey);
+    }
+
+    const owned = ownedRowInitializerOf(identifier);
+    const read = owned === undefined ? undefined : databaseReadOf(owned);
+
+    return read !== undefined && Node.isIdentifier(identifier) && rowScopesKey(read, identifier, destructuredFieldOf(declarationOf(identifier)), wholeKey);
+};
+
+/**
+ * The parts of a key built by concatenation, in order: template spans and `+` operands, with
+ * nested templates and `+` chains flattened into them. A single part for anything else.
+ */
+const keyPartsOf = (node: TsNode, followLocal = true): TsNode[] => {
+    const value = strippedValue(node);
+
+    if (Node.isTemplateExpression(value)) {
+        return value.getTemplateSpans().flatMap((span) => keyPartsOf(span.getExpression(), followLocal));
+    }
+
+    if (Node.isBinaryExpression(value) && value.getOperatorToken().getKind() === SyntaxKind.PlusToken) {
+        return [...keyPartsOf(value.getLeft(), followLocal), ...keyPartsOf(value.getRight(), followLocal)];
+    }
+
+    // A prefix factored into a local (`const prefix = \`${uid}/${args.tenant}\``) is judged by its parts, one hop deep.
+    const initializer = followLocal && Node.isIdentifier(value) ? trustedInitializerOf(value) : undefined;
+    const composed = initializer === undefined ? undefined : strippedValue(initializer);
+
+    if (
+        composed !== undefined &&
+        (Node.isTemplateExpression(composed) || (Node.isBinaryExpression(composed) && composed.getOperatorToken().getKind() === SyntaxKind.PlusToken))
+    ) {
+        return keyPartsOf(composed, false);
+    }
+
+    return [value];
+};
+
+const isFixedTextPart = (part: TsNode): boolean => Node.isStringLiteral(part) || Node.isNoSubstitutionTemplateLiteral(part) || Node.isNumericLiteral(part);
 
 /** Whether `access` reads an identity column straight off an owned row: `row._id`, `(await ownedRead()).ownerId`. */
 const isOwnedIdentityColumn = (access: ElementAccessExpression | PropertyAccessExpression): boolean => {

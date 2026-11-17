@@ -418,7 +418,7 @@ describe("argument-taint", () => {
         });
 
         it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
-            expect.assertions(19);
+            expect.assertions(21);
 
             const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
             const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
@@ -439,6 +439,9 @@ describe("argument-taint", () => {
                     ),
                 ),
             ).toBe(false);
+            // Without a fallback too: the plain composed-key path reads the same row.
+            expect(isScopedByIdentity(sinkArgument(`${owned}row.ownerId = args.ownerId;\nSINK(\`\${row.ownerId}/\${args.key}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}row.storageKey = args.key;\nSINK(row.storageKey);`))).toBe(false);
             // A field written on the row after the read replaces what the key emits, however the write is spelled.
             expect(isScopedByIdentity(sinkArgument(`${owned}row.ownerId = args.ownerId;\n${sink}`))).toBe(false);
             expect(isScopedByIdentity(sinkArgument(`${owned}({ owner: row.ownerId } = args);\n${sink}`))).toBe(false);
@@ -587,7 +590,15 @@ describe("argument-taint", () => {
         });
 
         it("accepts a caller fallback whose alternatives all land after the identity prefix", () => {
-            expect.assertions(8);
+            expect.assertions(10);
+
+            // A prefix factored into a local is judged by its own parts.
+            expect(
+                isScopedByIdentity(sinkArgument(`const prefix = \`\${ctx.auth.userId}/\${args.tenant}\`;\nSINK(\`\${prefix}/\${args.key ?? args.other}\`);`)),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(sinkArgument(`const prefix = \`\${args.tenant}/\${ctx.auth.userId}\`;\nSINK(\`\${prefix}/\${args.key ?? args.other}\`);`)),
+            ).toBe(false);
 
             expect(isScopedByIdentity(sinkArgument(`SINK(ctx.auth.userId + "/" + args.folder + "/" + (args.key ?? args.other));`))).toBe(true);
 
