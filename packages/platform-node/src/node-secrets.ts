@@ -31,9 +31,10 @@ export const createNodeSecretBindings = (
             {
                 // eslint-disable-next-line @typescript-eslint/require-await -- the binding contract is async; reading a variable is not
                 get: async (): Promise<string> => {
-                    const value = source[name];
+                    // Own and string-valued only: `toString` and friends resolve through the prototype.
+                    const value = Object.hasOwn(source, name) ? source[name] : undefined;
 
-                    if (value === undefined || value === "") {
+                    if (typeof value !== "string" || value === "") {
                         throw new LunoraError("INTERNAL", `ctx.secrets: environment variable "${name}" is not set on this Node host`);
                     }
 

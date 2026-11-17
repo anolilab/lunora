@@ -65,6 +65,15 @@ describe(createNodeHyperdrive, () => {
         expect(() => createNodeHyperdrive("redis://h:6379/0")).toThrow(/redis:/u);
     });
 
+    it.each([
+        ["user", "postgres://u%ZZ@h/db"],
+        ["database", "postgres://u@h/db%ZZ"],
+    ])("reports bad percent-encoding in the %s as a VALIDATION_ERROR, not a raw URIError", (_part, url) => {
+        expect.assertions(1);
+
+        expect(() => createNodeHyperdrive(url)).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.not.stringContaining("%ZZ") }));
+    });
+
     it("keeps the password out of the error for an unparseable URL", () => {
         expect.assertions(2);
 

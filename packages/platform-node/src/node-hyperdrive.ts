@@ -46,9 +46,16 @@ const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL
     }
 
     let parsed: URL;
+    let database: string;
+    let password: string;
+    let user: string;
 
     try {
         parsed = new URL(url);
+        // Decoded here so bad percent-encoding is reported like any other malformed URL, not as a raw URIError.
+        database = decodeURIComponent(parsed.pathname.replace(LEADING_SLASH, ""));
+        password = decodeURIComponent(parsed.password);
+        user = decodeURIComponent(parsed.username);
     } catch {
         // The URL itself is left out of the message: it carries the password.
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the Hyperdrive database URL is not a valid URL");
@@ -65,11 +72,11 @@ const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL
 
     return {
         connectionString: url,
-        database: decodeURIComponent(parsed.pathname.replace(LEADING_SLASH, "")),
+        database,
         host: parsed.hostname.replace(BRACKETED_HOST, "$1"),
-        password: decodeURIComponent(parsed.password),
+        password,
         port: parsed.port === "" ? defaultPort : Number(parsed.port),
-        user: decodeURIComponent(parsed.username),
+        user,
     };
 };
 

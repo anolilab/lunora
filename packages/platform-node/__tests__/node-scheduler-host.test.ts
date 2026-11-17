@@ -108,6 +108,95 @@ describe("createNodeSchedulerHost", () => {
             }
         });
 
+        it("fires on UTC, not on the process's local zone", async () => {
+            expect.assertions(2);
+
+            const previousTz = process.env.TZ;
+
+            // New York is UTC-5 here: a local-zone parse fires `0 9 * * *` at 14:00 UTC.
+            process.env.TZ = "America/New_York";
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:00Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "0 9 * * *", functionPath: "reports:daily", name: "daily" }]);
+                await vi.advanceTimersByTimeAsync(3 * 60 * 60 * 1000);
+
+                expect(onDispatch).not.toHaveBeenCalled();
+
+                await vi.advanceTimersByTimeAsync(18 * 60 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledWith("reports:daily");
+            } finally {
+                host.dispose();
+                database.close();
+
+                if (previousTz === undefined) {
+                    delete process.env.TZ;
+                } else {
+                    process.env.TZ = previousTz;
+                }
+            }
+        });
+
+        it("skips the ticks a slow run covers rather than overlapping it", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            let release: (() => void) | undefined;
+            const onDispatch = vi.fn<(functionPath: string) => Promise<void>>(
+                async () =>
+                    new Promise<void>((resolve) => {
+                        release = resolve;
+                    }),
+            );
+            const host = createNodeSchedulerHost(database, { onDispatch });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:slow", name: "slow" }]);
+                // First tick at 12:01; the run is still going through 12:02 and 12:03.
+                await vi.advanceTimersByTimeAsync(3 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+
+                release?.();
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(2);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("refuses two declared crons with the same name", () => {
+            expect.assertions(1);
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+
+            try {
+                expect(() => {
+                    host.declareCrons([
+                        { args: {}, expression: "0 3 * * *", functionPath: "reports:a", name: "nightly" },
+                        { args: {}, expression: "0 4 * * *", functionPath: "reports:b", name: "nightly" },
+                    ]);
+                }).toThrow(/"nightly"/u);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
         it("leaves a cron registered through cron() alone", async () => {
             expect.assertions(1);
 

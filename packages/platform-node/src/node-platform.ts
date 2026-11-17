@@ -63,6 +63,23 @@ const walkDeclaredCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCron
     );
 
 /**
+ * Walk the declared crons, refusing a non-empty set nothing can deliver: without `onFetch` or
+ * `onDispatch` the scheduler's delivery is a no-op, so every tick would complete having run nothing.
+ */
+const deliverableCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>, canDeliver: boolean): NodeDeclaredCron[] => {
+    const declared = walkDeclaredCrons(crons);
+
+    if (declared.length > 0 && !canDeliver) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            "@lunora/platform-node: `crons` declares jobs but nothing can deliver them — pass `onFetch` (to run them on the shard) or `onDispatch`",
+        );
+    }
+
+    return declared;
+};
+
+/**
  * Deliver a due job to the shard through `invoke`, carrying its due time so the shard can record
  * scheduler lag. A non-2xx marks the delivery failed, which re-arms it with backoff.
  */
@@ -249,7 +266,8 @@ export type NodePlatformOptions<
      * The app's declared crons — pass the generated `LUNORA_CRONS` map
      * (`_generated/crons.ts`). Each job is armed on the scheduler and delivered
      * through the same `onDispatch` a scheduled job uses, so it needs `onFetch`
-     * (or your own `onDispatch`) to reach a shard. When passed, the map is the
+     * (or your own `onDispatch`) to reach a shard; a non-empty map with neither
+     * throws. Job names must be unique, and schedules are read as UTC. When passed, the map is the
      * whole declared set: a job declared by an earlier run and absent here is
      * deleted, so pass `{}` rather than omitting it for an app with no crons.
      * Omit it only when you do not want this host to manage declared crons.
@@ -345,7 +363,7 @@ export const createNodePlatform = <
         teardown.push(disposeScheduler);
 
         if (options.crons !== undefined) {
-            declareCrons(walkDeclaredCrons(options.crons));
+            declareCrons(deliverableCrons(options.crons, options.onDispatch !== undefined || options.onFetch !== undefined));
         }
 
         // Queues, workflows, object storage and global tables are all composed here

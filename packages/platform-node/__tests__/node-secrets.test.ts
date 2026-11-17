@@ -34,6 +34,12 @@ describe(createNodeSecretBindings, () => {
         await expect(bindings.STRIPE_KEY?.get()).rejects.toThrow(/STRIPE_KEY/u);
     });
 
+    it.each(["toString", "constructor", "hasOwnProperty"])("rejects %s, which only the prototype carries", async (name) => {
+        expect.assertions(1);
+
+        await expect(createNodeSecretBindings([name], {})[name]?.get()).rejects.toThrow(name);
+    });
+
     it("exposes only get, so ctx.secrets does not mistake it for a KV or R2 binding", () => {
         expect.assertions(1);
 

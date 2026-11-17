@@ -61,8 +61,12 @@ import type { ScheduledJob, ScheduledJobRecord, ScheduledJobStatus, ScheduleOpti
 import { parse } from "@visulima/cron-parser/cloudflare";
 import type Database from "better-sqlite3";
 
-/** The `cloudflare` entry fixes the dialect; `seconds` keeps the optional leading seconds field working. */
-const CRON_PARSE_OPTIONS = { seconds: "optional" } as const;
+/**
+ * The `cloudflare` entry fixes the dialect; `seconds` keeps the optional leading seconds field working.
+ * `tz` pins UTC, as Cloudflare's cron triggers are: without it the parser uses the process's local
+ * zone, so a `0 9 * * *` declared for 09:00 UTC would fire at 09:00 local and move again across DST.
+ */
+const CRON_PARSE_OPTIONS = { seconds: "optional", tz: "UTC" } as const;
 
 /**
  * Retry policy applied when a caller supplies none. `ScheduleOptions.retry`
@@ -615,6 +619,12 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * armed regardless, which is how a recurring schedule has to behave: a
      * failed 09:00 run must not cancel 10:00.
      *
+     * The next tick is armed after the dispatch settles, from the time it
+     * settles, so a run that outlasts the interval skips the ticks it covers
+     * rather than overlapping itself. That is the outcome Cloudflare's per-job
+     * lease gives (a tick landing during a run is skipped); here the skip is
+     * not recorded anywhere.
+     *
      * Chunked past {@link MAX_TIMEOUT_MS} exactly as `armJob` is, and for a
      * worse failure: a monthly cron's next tick is up to ~2.68e9 ms out, which
      * `setTimeout` clamps to 1 ms. The tick would fire, dispatch, and re-arm
@@ -849,7 +859,18 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 throw new Error("platform closed: cannot declare crons");
             }
 
+            const names = new Set<string>();
+
             for (const cron of crons) {
+                // A row is keyed by name, so a second job of the same name would silently replace the first.
+                if (names.has(cron.name)) {
+                    throw new LunoraError(
+                        "VALIDATION_ERROR",
+                        `@lunora/platform-node: two declared cron jobs are named "${cron.name}"; cron job names must be unique`,
+                    );
+                }
+
+                names.add(cron.name);
                 parse(cron.expression, CRON_PARSE_OPTIONS);
             }
 

@@ -58,7 +58,11 @@ describe("createNodePlatform declared crons", () => {
         expect.assertions(2);
 
         const path = join(directory, "shard.sqlite3");
-        const first = createNodePlatform({ crons: { "* * * * *": [{ args: {}, functionPath: "reports:old", name: "old" }] }, path });
+        const first = createNodePlatform({
+            crons: { "* * * * *": [{ args: {}, functionPath: "reports:old", name: "old" }] },
+            onDispatch: () => undefined,
+            path,
+        });
 
         first.close();
 
@@ -79,6 +83,37 @@ describe("createNodePlatform declared crons", () => {
         } finally {
             second.close();
         }
+    });
+
+    it("refuses declared crons when neither onFetch nor onDispatch can deliver them", () => {
+        expect.assertions(2);
+
+        expect(() =>
+            createNodePlatform({
+                crons: { "* * * * *": [{ args: {}, functionPath: "reports:tick", name: "tick" }] },
+                path: join(directory, "shard.sqlite3"),
+            }),
+        ).toThrow(/onFetch/u);
+
+        // An empty map declares nothing to deliver, and is how a cron-free app clears stale rows.
+        expect(() => {
+            createNodePlatform({ crons: {}, path: join(directory, "shard.sqlite3") }).close();
+        }).not.toThrow();
+    });
+
+    it("refuses two declared jobs with the same name instead of dropping one", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            createNodePlatform({
+                crons: {
+                    "0 3 * * *": [{ args: {}, functionPath: "reports:a", name: "nightly" }],
+                    "0 4 * * *": [{ args: {}, functionPath: "reports:b", name: "nightly" }],
+                },
+                onDispatch: () => undefined,
+                path: join(directory, "shard.sqlite3"),
+            }),
+        ).toThrow(/"nightly"/u);
     });
 
     it("refuses a workflow-targeted cron at construction instead of never firing it", () => {
