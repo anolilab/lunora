@@ -196,10 +196,27 @@ fn is_loopback_address(value: &Value) -> bool {
         .is_some_and(|port| (1..=5).contains(&port.len()) && port.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
-/// An `http:`/`https:` origin with nothing after it.
-fn is_origin(value: &Value) -> bool {
+/// An `https:` origin with nothing after it, or an `http:` one on loopback.
+///
+/// The box runs the release JSON this origin serves, and nothing signs that
+/// response: only TLS keeps a network attacker from swapping in their own code.
+/// Plain HTTP is for a control plane on the same machine (development).
+fn is_control_plane_origin(value: &Value) -> bool {
     value.as_str().is_some_and(|text| {
-        url::Url::parse(text).is_ok_and(|url| (url.scheme() == "https" || url.scheme() == "http") && url.origin().ascii_serialization() == text)
+        url::Url::parse(text).is_ok_and(|url| {
+            let secure = match url.scheme() {
+                "https" => true,
+                "http" => match url.host() {
+                    Some(url::Host::Domain(domain)) => domain == "localhost",
+                    Some(url::Host::Ipv4(address)) => address.is_loopback(),
+                    Some(url::Host::Ipv6(address)) => address.is_loopback(),
+                    None => false,
+                },
+                _ => false,
+            };
+
+            secure && url.origin().ascii_serialization() == text
+        })
     })
 }
 
@@ -261,7 +278,7 @@ pub fn parse_config(raw: &Value) -> Result<HostdConfig, ConfigError> {
             region: read_optional(bucket, "region", is_optional_string, "a region", "$.bucket")?.map(text),
         },
         caddy: read_caddy(raw)?,
-        control_plane: text(read_field(raw, "controlPlane", is_origin, "an http(s) origin with no path", "$")?),
+        control_plane: text(read_field(raw, "controlPlane", is_control_plane_origin, "an https origin with no path (http only on loopback)", "$")?),
         credentials_file: text(read_field(raw, "credentialsFile", is_absolute_path, "an absolute path", "$")?),
         data_dir,
         edge_user: read_optional(raw, "edgeUser", is_user_name, "a user name", "$")?.map_or_else(|| DEFAULT_EDGE_USER.to_owned(), text),
@@ -428,12 +445,34 @@ mod tests {
         };
 
         assert_eq!(error(json!({ "boxId": "a b" })), "$.boxId must be a box id");
-        assert_eq!(error(json!({ "controlPlane": "https://cloud.example/path" })), "$.controlPlane must be an http(s) origin with no path");
+        assert_eq!(
+            error(json!({ "controlPlane": "https://cloud.example/path" })),
+            "$.controlPlane must be an https origin with no path (http only on loopback)"
+        );
         assert_eq!(error(json!({ "ports": { "first": 20_000, "last": 20_000 } })), "$.ports.last must be above $.ports.first: each fleet takes two ports");
         assert_eq!(error(json!({ "caddy": { "adminAddress": "0.0.0.0:2019" } })), "$.caddy.adminAddress must be 127.0.0.1:{port}");
         assert_eq!(error(json!({ "fleetMemoryMaxMb": 32 })), "$.fleetMemoryMaxMb must be a whole number of MiB, at least 64");
         assert_eq!(error(json!({ "fleetUser": "Root" })), "$.fleetUser must be a user name");
         assert_eq!(parse_config(&json!([])).unwrap_err().0, "the configuration must be a JSON object");
+    }
+
+    #[test]
+    fn refuses_a_plain_http_control_plane_off_loopback() {
+        let with = |origin: &str| {
+            let mut raw = minimal();
+
+            raw["controlPlane"] = json!(origin);
+
+            parse_config(&raw)
+        };
+
+        for origin in ["http://cloud.example", "http://10.0.0.5:8787", "http://[fd00::5]:8787", "ftp://cloud.example"] {
+            assert!(with(origin).is_err(), "{origin} was accepted");
+        }
+
+        for origin in ["https://cloud.example", "http://localhost:8787", "http://127.0.0.1:8787", "http://[::1]:8787"] {
+            assert_eq!(with(origin).unwrap().control_plane, origin);
+        }
     }
 
     #[test]
