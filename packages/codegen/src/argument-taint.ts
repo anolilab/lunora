@@ -913,6 +913,49 @@ const ownedRowInitializerOf = (node: TsNode): TsNode | undefined => {
     return initializer !== undefined && isDatabaseReadSource(initializer) ? initializer : undefined;
 };
 
+/** Whether `part` is scoped by a key source the caller cannot choose, directly or through one trusted local. */
+const scopesKeyPart = (part: TsNode): boolean =>
+    referencesScopedKeySource(part) ||
+    valueIdentifiersOf(part).some((identifier) => {
+        if (isAlternativeOf(identifier, part) || insideDatabaseCallWithin(identifier, part)) {
+            return false;
+        }
+
+        const boundInitializer = trustedInitializerOf(identifier) ?? ownedRowInitializerOf(identifier);
+
+        return boundInitializer !== undefined && referencesScopedKeySource(boundInitializer);
+    });
+
+/**
+ * Whether some template or `+` concatenation between `identifier` and `within` puts an
+ * identity-scoped part before the one holding `identifier`. Whatever that part then
+ * resolves to, it is appended under the caller's own prefix. A scoped part after it does
+ * not count: `${args.a ?? args.b}/${uid}` lets the caller choose the leading segment.
+ */
+const followsIdentityPrefix = (identifier: TsNode, within: TsNode): boolean => {
+    for (let child = identifier, parent = identifier.getParent(); parent !== undefined && child !== within; child = parent, parent = parent.getParent()) {
+        if (Node.isTemplateSpan(child) && Node.isTemplateExpression(parent)) {
+            const spans = parent.getTemplateSpans();
+            const earlier = spans.slice(0, spans.indexOf(child));
+
+            if (earlier.some((span) => scopesKeyPart(span.getExpression()))) {
+                return true;
+            }
+        }
+
+        if (
+            Node.isBinaryExpression(parent) &&
+            parent.getOperatorToken().getKind() === SyntaxKind.PlusToken &&
+            child === parent.getRight() &&
+            scopesKeyPart(parent.getLeft())
+        ) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
@@ -1123,10 +1166,16 @@ export const isScopedByContext = (node: TsNode): boolean => {
  */
 export const isScopedByIdentity = (node: TsNode): boolean => {
     // A caller value on any fallback path (`row?.storageKey ?? args.key`) is the key whenever the scoped
-    // side is missing, so nothing the key also reads can scope it.
+    // side is missing, so nothing the key also reads can scope it, unless every alternative lands
+    // after an identity prefix (`${ctx.auth.userId}/${args.key ?? args.other}`).
     const expanded = trustedInitializerOf(node) ?? node;
 
-    if (valueIdentifiersOf(expanded).some((identifier) => isAlternativeOf(identifier, expanded) && reachesArgsWithinOneHop(outermostChainOf(identifier)))) {
+    if (
+        valueIdentifiersOf(expanded).some(
+            (identifier) =>
+                isAlternativeOf(identifier, expanded) && reachesArgsWithinOneHop(outermostChainOf(identifier)) && !followsIdentityPrefix(identifier, expanded),
+        )
+    ) {
         return false;
     }
 

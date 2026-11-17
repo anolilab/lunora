@@ -279,6 +279,24 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(`const row = await ctx.db.get("files", args.id);\nSINK(row.key);`))).toBe(false);
         });
 
+        it("accepts a caller fallback whose alternatives all land after the identity prefix", () => {
+            expect.assertions(4);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId}/\${args.key ?? args.other}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid}/\${args.key || "default"}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`SINK(ctx.auth.userId + "/" + (args.key ?? args.other));`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const k = \`\${ctx.auth.userId}/\${args.flag ? args.a : args.b}\`;\nSINK(k);`))).toBe(true);
+        });
+
+        it("rejects a caller fallback that can supply the whole key or the segment before the identity", () => {
+            expect.assertions(4);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(args.key ?? \`\${ctx.auth.userId}/x\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${args.key ?? args.other}/\${ctx.auth.userId}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK((args.key ?? args.other) + "/" + ctx.auth.userId);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.env.PREFIX}/\${args.key ?? args.other}\`);`))).toBe(false);
+        });
+
         it("rejects a key scoped only by a server-trusted ctx value that names no caller", () => {
             expect.assertions(3);
 
