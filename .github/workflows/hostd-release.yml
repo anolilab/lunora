@@ -28,7 +28,7 @@
     "workflow_dispatch":
         "inputs":
             "version":
-                "description": "Version to release, e.g. 1.0.0 or 1.0.0-alpha.1 (published as hostd-v<version>)"
+                "description": "Version to build, e.g. 1.0.0 or 1.0.0-alpha.1; signs and publishes hostd-v<version> only when dispatched on that tag"
                 "required": true
                 "type": "string"
 
@@ -311,12 +311,18 @@
     "release":
         "name": "Sign, attest and publish"
         "needs": ["prepare", "build", "build-caddy"]
+        # A dispatch from a branch builds and smoke-tests, and stops here: the key
+        # only ever signs a `hostd-v*` tag. This check lives in the ref's own copy of
+        # the workflow, so a branch can drop it; what holds is the environment below,
+        # whose deployment refs are limited to protected `hostd-v*` tags.
+        "if": "github.ref_type == 'tag' && startsWith(github.ref_name, 'hostd-v')"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 20
         # Holds HOSTD_RELEASE_SIGNING_KEY (secret): the Ed25519 private key, PKCS#8
         # PEM, whose public half is in protocol/hostd/trusted-release-keys.json. Give
-        # the environment a required reviewer: every box installs whatever this key
-        # signs. See apps/hostd/README.md ("Releases & signing").
+        # the environment a required reviewer and limit its deployment refs to the
+        # `hostd-v*` tags (protected by a tag ruleset): every box installs whatever
+        # this key signs. See apps/hostd/README.md ("Releases & signing").
         "environment": "hostd-release"
         "permissions":
             "contents": "write" # to create the tag + GitHub release

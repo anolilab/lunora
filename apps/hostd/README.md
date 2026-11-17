@@ -507,9 +507,9 @@ not need them. The byte-level format, for implementations in any language, is
   signature does not verify against a key pinned in
   `trusted-release-keys.json`.
 - `.github/workflows/hostd-release.yml` does all of it on a `hostd-v<version>`
-  tag or a manual dispatch: test and build the daemon and Caddy on x64 and arm64
-  runners with smoke tests, sign, verify, attest, publish the GitHub Release
-  `hostd-v<version>`. The committed `Cargo.toml` version stays
+  tag: test and build the daemon and Caddy on x64 and arm64 runners with smoke
+  tests, sign, verify, attest, publish the GitHub Release `hostd-v<version>`. A
+  manual dispatch from a branch builds and smoke-tests only. The committed `Cargo.toml` version stays
   `0.0.0`; the workflow stamps the released version through
   `LUNORA_HOSTD_VERSION`, and refuses to build with `LUNORA_HOSTD_TRUSTED_KEYS`
   set.
@@ -537,8 +537,11 @@ Keep the two in step.
 3. Commit the two printed entries — to `"keys"` in `trusted-release-keys.json`
    (which the daemon and the control plane both read) and to `trusted_key()` in
    `install/install.sh` — and delete both placeholder entries.
-4. Create the GitHub Environment `hostd-release` with a required reviewer, and
-   store the **whole PEM file** as its secret `HOSTD_RELEASE_SIGNING_KEY`.
+4. Create the GitHub Environment `hostd-release` with a required reviewer and
+   deployment refs limited to tags matching `hostd-v*`, protect that tag
+   pattern with a ruleset, and store the **whole PEM file** as its secret
+   `HOSTD_RELEASE_SIGNING_KEY`. A branch runs its own copy of the workflow, so
+   only the environment keeps branch code away from the key.
 5. Keep an offline backup of `hostd-release.pem`, then delete the local copy.
 
 To rotate, add the new public key next to the old one, switch the secret, and
