@@ -24,7 +24,7 @@ import type { PlatformCapabilities } from "./types";
  * What remains genuinely absent is everything a single Node process cannot
  * distribute: placement across nodes, failover, and most Cloudflare-specific
  * product bindings (Vectorize, Workers AI, Containers, Browser Rendering,
- * Analytics Engine, Secrets Store, Hyperdrive). Workflows, object storage and
+ * Analytics Engine, Hyperdrive). Workflows, object storage and
  * queues are the three that CAN be emulated locally — `defineWorkflow` handlers
  * compile onto the `@visulima/workflow` engine, R2 becomes a filesystem bucket,
  * and Queues becomes a durable table with the same batch/ack/retry/dead-letter
@@ -240,8 +240,8 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "The queue tier this host lacked when the rating was written now exists (createNodeQueueHost), but nothing here composes a @lunora/mail transport or the queued-send consumer, so a send would be accepted and never delivered",
         },
         secrets: {
-            level: "unsupported",
-            note: "No Secrets Store-equivalent binding implemented (a real host would likely map this to env vars). Gate-bearing, and it has to be: ctx.secrets is a core built-in spliced into every context, so codegen refuses an app that reads it on this target instead of emitting a surface that throws on first use",
+            level: "emulated",
+            note: "createNodeSecretBindings(names) (@lunora/platform-node) builds one binding per named secret over process.env, spread into the env the worker and shard are built over, so ctx.secrets.get(name) reads that variable when called and rejects if it is unset or empty. Only listed names are bound, as only listed secrets_store_secrets[] are on Cloudflare. Emulated, not native: environment variables are not a secrets store, so a value is plaintext to anything that can read the process environment, there is no per-secret access control or audit, and a rotated value needs a restart",
         },
         secretValues: {
             level: "unsupported",

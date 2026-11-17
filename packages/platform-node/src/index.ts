@@ -34,7 +34,8 @@
  * registry as the `shardDO` namespace that worker routes to. Also absent are
  * the Cloudflare product bindings with no local
  * equivalent — Vectorize, Workers AI, Browser Rendering, Containers, Analytics
- * Engine, Pipelines, Secrets Store, Hyperdrive.
+ * Engine, Pipelines, Hyperdrive. `ctx.secrets` reads environment variables
+ * through `createNodeSecretBindings` (`./node-secrets`).
  *
  * `@lunora/config` ships a `node` **deploy** driver, so `--target node` resolves
  * for `provision` — which reports, once, which declared features this target
@@ -61,6 +62,8 @@ export type { NodeR2BucketOptions } from "./node-r2-bucket";
 export { createNodeR2Bucket } from "./node-r2-bucket";
 export type { NodeDeclaredCron, NodeSchedulerHost, NodeSchedulerHostOptions } from "./node-scheduler-host";
 export { createNodeSchedulerHost } from "./node-scheduler-host";
+export type { NodeSecretBinding } from "./node-secrets";
+export { createNodeSecretBindings } from "./node-secrets";
 export type { NodeShardHostOptions } from "./node-shard-host";
 export { createNodeShardHost } from "./node-shard-host";
 export { createNodeShardNamespace } from "./node-shard-namespace";

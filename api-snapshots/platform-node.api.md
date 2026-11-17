@@ -249,6 +249,14 @@ interface NodeSchedulerHostOptions {
 }
 ```
 
+### `NodeSecretBinding` (interface)
+
+```ts
+interface NodeSecretBinding {
+    get: () => Promise<string>;
+}
+```
+
 ### `NodeShard` (interface)
 
 ```ts
@@ -435,6 +443,12 @@ const createNodeR2Bucket: (options: NodeR2BucketOptions) => R2BucketLike;
 
 ```ts
 const createNodeSchedulerHost: (database: Database.Database, options?: NodeSchedulerHostOptions) => NodeSchedulerHost;
+```
+
+### `createNodeSecretBindings` (const)
+
+```ts
+const createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, NodeSecretBinding>;
 ```
 
 ### `createNodeShardHost` (const)

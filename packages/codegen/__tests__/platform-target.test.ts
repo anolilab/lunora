@@ -195,19 +195,21 @@ describe("gatePlatformFeatures", () => {
     });
 
     it("gates ctx.x402 on a target without a secrets store", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        // The generated rail reads its wallet key through `ctx.secrets`, which `node`
+        // The generated rail reads its wallet key through `ctx.secrets`, which `celld`
         // rates unsupported, so raw-key and CDP custody would fail on the first payment.
         const usage: FeatureUsage = { ...ALL_OFF, x402: true };
 
         expect(gatePlatformFeatures(usage, "cloudflare").usage.x402).toBe(true);
+        // `node` maps ctx.secrets onto process.env (createNodeSecretBindings), so the rail has its key there.
+        expect(gatePlatformFeatures(usage, "node").usage.x402).toBe(true);
 
-        const node = gatePlatformFeatures(usage, "node");
+        const celld = gatePlatformFeatures(usage, "celld");
 
-        expect(node.usage.x402).toBe(false);
-        expect(node.diagnostics).toMatchObject([{ feature: "x402", name: "platform_unsupported_feature" }]);
+        expect(celld.usage.x402).toBe(false);
+        expect(celld.diagnostics).toMatchObject([{ feature: "x402", name: "platform_unsupported_feature" }]);
     });
 
     // Plan 234: `node` is a REGISTERED target (unlike the synthetic "partial"
@@ -1118,9 +1120,19 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(codegen().platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["mail"]);
     });
 
+    it("emits ctx.secrets for node, which maps it onto process.env", () => {
+        expect.assertions(1);
+
+        write("keys.ts", `import { action } from "@lunora/server";\n\nexport const send = action.action(async ({ ctx }) => ctx.secrets.get("STRIPE_KEY"));\n`);
+
+        expect(codegen().platformDiagnostics).toStrictEqual([]);
+    });
+
     it("gates a destructured ctx.secrets read, not only a direct property access", () => {
         expect.assertions(2);
 
+        // celld rates `secrets` unsupported; node no longer does.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
         write(
             "keys.ts",
             `import { action } from "@lunora/server";\n\nexport const send = action({ args: {}, handler: async (ctx) => {\n    const { secrets } = ctx;\n\n    return secrets.get("STRIPE_KEY");\n} });\n`,
@@ -1148,6 +1160,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         // binding named "…"` on first use — the exact failure this gate refuses.
         // `secrets` has no import arm and no capability row, so nothing else
         // covers it.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
         write("keys.ts", `import { action } from "@lunora/server";\n\nexport const send = action.action(${handler});\n`);
 
         const result = codegen();
