@@ -290,7 +290,13 @@ describe("argument-taint", () => {
         });
 
         it("rejects a caller fallback behind a prefix that can drop the identity", () => {
-            expect.assertions(8);
+            expect.assertions(11);
+
+            // Nested compositions are flattened before ordering, so a caller part ahead of the identity counts.
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${\`\${args.tenant}/\${ctx.auth.userId}\`}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${args.tenant}/\${\`\${ctx.auth.userId}/\${args.key ?? args.other}\`}\`);`))).toBe(false);
+            // A local bound to a lossy call is no more the identity than the call written inline.
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId.slice(0, 0);\nSINK(\`\${uid}/\${args.key ?? args.other}\`);`))).toBe(false);
 
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId[0]}/\${args.key ?? args.other}\`);`))).toBe(false);
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${String(ctx.auth.userId.length)}/\${args.key ?? args.other}\`);`))).toBe(false);
@@ -365,7 +371,9 @@ describe("argument-taint", () => {
         });
 
         it("accepts a caller fallback whose alternatives all land after the identity prefix", () => {
-            expect.assertions(7);
+            expect.assertions(8);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(ctx.auth.userId + "/" + args.folder + "/" + (args.key ?? args.other));`))).toBe(true);
 
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId + "/".repeat(1)}\${args.key ?? args.other}\`);`))).toBe(true);
             expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid!}/\${args.key ?? args.other}\`);`))).toBe(true);

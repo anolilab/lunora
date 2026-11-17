@@ -2,12 +2,14 @@ import type {
     ArrowFunction,
     BindingElement,
     CallExpression,
+    ElementAccessExpression,
     FunctionDeclaration,
     FunctionExpression,
     Identifier,
     MethodDeclaration,
     Node as TsNode,
     ParameterDeclaration,
+    PropertyAccessExpression,
     VariableDeclaration,
 } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
@@ -1049,122 +1051,109 @@ const bindingScopesKey = (identifier: TsNode, wholeKey: TsNode | undefined): boo
     return read !== undefined && Node.isIdentifier(identifier) && rowScopesKey(read, identifier, destructuredFieldOf(declarationOf(identifier)), wholeKey);
 };
 
-/** Whether `part`, one piece of a larger key, is scoped by a key source the caller cannot choose, directly or through one local. */
-const scopesKeyPart = (part: TsNode): boolean =>
-    referencesScopedKeySource(part) ||
-    valueIdentifiersOf(part).some(
-        (identifier) => !isAlternativeOf(identifier, part) && !insideDatabaseCallWithin(identifier, part) && bindingScopesKey(identifier, undefined),
-    );
-
-/** `node` with any `!` it is wrapped in, so `uid!` reads the same value as `uid`. */
-const withNonNull = (node: TsNode): TsNode => {
+/** `node` without the parentheses, `await`, `!` and type assertions around it, none of which change the value. */
+const strippedValue = (node: TsNode): TsNode => {
     let current = node;
 
-    for (let parent = current.getParent(); Node.isNonNullExpression(parent); parent = current.getParent()) {
-        current = parent;
-    }
+    for (;;) {
+        const next = Node.isNonNullExpression(current) || Node.isAwaitExpression(current) ? current.getExpression() : unwrapExpression(current);
 
-    return current;
+        if (next === undefined || next === current) {
+            return current;
+        }
+
+        current = next;
+    }
 };
 
-/** Whether `node` is an argument of a call at or below `within`, so the call decides what it contributes. */
-const insideCallWithin = (node: TsNode, within: TsNode): boolean => {
-    if (node === within) {
+/**
+ * The parts of a key built by concatenation, in order: template spans and `+` operands, with
+ * nested templates and `+` chains flattened into them. A single part for anything else.
+ */
+const keyPartsOf = (node: TsNode): TsNode[] => {
+    const value = strippedValue(node);
+
+    if (Node.isTemplateExpression(value)) {
+        return value.getTemplateSpans().flatMap((span) => keyPartsOf(span.getExpression()));
+    }
+
+    if (Node.isBinaryExpression(value) && value.getOperatorToken().getKind() === SyntaxKind.PlusToken) {
+        return [...keyPartsOf(value.getLeft()), ...keyPartsOf(value.getRight())];
+    }
+
+    return [value];
+};
+
+const isFixedTextPart = (part: TsNode): boolean => Node.isStringLiteral(part) || Node.isNoSubstitutionTemplateLiteral(part) || Node.isNumericLiteral(part);
+
+/** Whether `access` reads an identity column straight off an owned row: `row._id`, `(await ownedRead()).ownerId`. */
+const isOwnedIdentityColumn = (access: ElementAccessExpression | PropertyAccessExpression): boolean => {
+    const base = strippedValue(access.getExpression());
+    const baseInitializer = Node.isIdentifier(base) ? trustedInitializerOf(base) : undefined;
+    const read = databaseReadOf(base) ?? (baseInitializer === undefined ? undefined : databaseReadOf(baseInitializer));
+
+    return read !== undefined && rowScopesKey(read, access, rowFieldReadOf(access.getExpression()).field, undefined);
+};
+
+/** Whether `identifier` is destructured as a whole field from the caller's identity (`const { userId } = ctx.auth`) or an owned row's identity column. */
+const isDestructuredIdentity = (identifier: Identifier): boolean => {
+    const declaration = declarationOf(identifier);
+    const field = destructuredFieldOf(declaration);
+    const source = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration)?.getInitializer() : undefined;
+    const sourcePath = source === undefined ? undefined : contextTrustPathOf(strippedValue(source));
+
+    if (sourcePath !== undefined) {
+        return sourcePath.length === 1 && sourcePath[0] === "auth" && field !== undefined;
+    }
+
+    const owned = ownedRowInitializerOf(identifier);
+    const read = owned === undefined ? undefined : databaseReadOf(owned);
+
+    return read !== undefined && rowScopesKey(read, identifier, field, undefined);
+};
+
+/**
+ * Whether `part` is the caller's identity itself, unaltered: `ctx.auth.userId`, an identity column read
+ * straight off an owned row (`row._id`, `(await ownedRead())._id`), or a local bound to one of those.
+ * Anything computed from the identity (`.length`, `[0]`, `.slice(0, 0)`, `uid && "x"`) can yield the same
+ * text for every caller, so it is not.
+ */
+const isIntactIdentityPart = (part: TsNode, followLocal = true): boolean => {
+    const value = strippedValue(part);
+    const path = contextTrustPathOf(value);
+
+    if (path !== undefined) {
+        return path[0] === "auth" && path.length === 2;
+    }
+
+    if (Node.isPropertyAccessExpression(value) || Node.isElementAccessExpression(value)) {
+        return isOwnedIdentityColumn(value);
+    }
+
+    if (!Node.isIdentifier(value)) {
         return false;
     }
 
-    for (let ancestor = node.getParent(); ancestor !== undefined; ancestor = ancestor.getParent()) {
-        if (Node.isCallExpression(ancestor) || Node.isNewExpression(ancestor)) {
-            return true;
-        }
+    const trusted = trustedInitializerOf(value);
 
-        if (ancestor === within) {
-            return false;
-        }
-    }
-
-    return false;
+    return trusted === undefined ? isDestructuredIdentity(value) : followLocal && isIntactIdentityPart(trusted, false);
 };
 
 /**
- * Whether the identity `identifier` reaches `part` intact: read as itself (`ctx.auth.userId`, a local bound to
- * it), or as one identity column of an owned row (`row._id`), with no further access or call on top. A lossy
- * projection such as `.length`, `[0]` or `.slice(0, 0)` can yield the same text for every caller.
- */
-const isIntactIdentity = (identifier: Identifier, part: TsNode): boolean => {
-    const outermost = outermostChainOf(identifier);
-    const root = contextTrustPathOf(outermost)?.[0];
-
-    if (root === "auth") {
-        return contextTrustPathOf(outermost)?.length === 2 && invokedBy(outermost) === undefined && !insideCallWithin(outermost, part);
-    }
-
-    if (root === "db") {
-        const call = invokedBy(outermost);
-        const { field, read } = call === undefined ? { field: undefined, read: outermost } : rowFieldReadOf(call);
-
-        return field !== undefined && outermostChainOf(read) === read && invokedBy(read) === undefined && !insideCallWithin(read, part);
-    }
-
-    const trusted = trustedInitializerOf(identifier);
-    const value = trusted !== undefined && databaseReadOf(trusted) !== undefined ? rowFieldReadOf(identifier) : { field: "", read: identifier };
-
-    return (
-        value.field !== undefined &&
-        withNonNull(outermostChainOf(value.read)) === withNonNull(value.read) &&
-        invokedBy(value.read) === undefined &&
-        !insideCallWithin(value.read, part)
-    );
-};
-
-/**
- * Whether `part` emits the identity it is scoped by: every identity value in it (outside the arguments of a
- * `ctx.db` read, which only select the row) reaches the key intact. Calls that never touch the identity, such
- * as a fixed `"/".repeat(1)` suffix, do not matter.
- */
-const emitsIdentity = (part: TsNode): boolean =>
-    scopesKeyPart(part) &&
-    valueIdentifiersOf(part)
-        .filter((identifier) => !insideDatabaseCallWithin(identifier, part))
-        .filter((identifier) => ["auth", "db"].includes(contextTrustPathOf(outermostChainOf(identifier))?.[0] ?? "") || bindingScopesKey(identifier, undefined))
-        .every((identifier) => isIntactIdentity(identifier, part));
-
-/** Whether `parent`, a template or `+` concatenation, opens with an identity-scoped part before `child` and no caller part ahead of it. */
-const opensWithIdentityBefore = (child: TsNode, parent: TsNode): boolean => {
-    if (Node.isTemplateSpan(child) && Node.isTemplateExpression(parent)) {
-        const spans = parent.getTemplateSpans();
-        const leading = spans.slice(0, spans.indexOf(child)).map((span) => span.getExpression());
-        const firstScoped = leading.findIndex((part) => emitsIdentity(part));
-
-        return firstScoped !== -1 && !leading.slice(0, firstScoped).some((part) => reachesArgsWithinOneHop(part));
-    }
-
-    // The left side folds every earlier operand, so any caller value in it may precede the identity.
-    return (
-        Node.isBinaryExpression(parent) &&
-        parent.getOperatorToken().getKind() === SyntaxKind.PlusToken &&
-        child === parent.getRight() &&
-        emitsIdentity(parent.getLeft()) &&
-        !reachesArgsWithinOneHop(parent.getLeft())
-    );
-};
-
-/**
- * Whether some template or `+` concatenation between `identifier` and `within` opens with an
- * identity-scoped part before the one holding `identifier`, with no caller-supplied part ahead
- * of that identity. Whatever the later part then resolves to, it is appended under the caller's
- * own prefix. A scoped part after it does not count (`${args.a ?? args.b}/${uid}`), and neither
- * does one behind a caller segment (`${args.tenant}/${uid}/${args.a ?? args.b}`): the caller
- * chooses the leading segment there.
+ * Whether `identifier`, a caller value in a fallback position, lands after the caller's identity in
+ * `within`: `within` is built by concatenation, its first part that is not fixed text is the intact
+ * identity, and `identifier` sits in a later part. Whichever alternative is then taken, it is appended
+ * under the caller's own prefix. The structure is checked as written, so a caller part ahead of the
+ * identity (`${args.tenant}/${uid}/${args.a ?? args.b}`), an identity after the fallback, or an identity
+ * altered on the way (`${uid.slice(0, 0)}/…`) all leave the fallback refused.
  */
 const followsIdentityPrefix = (identifier: TsNode, within: TsNode): boolean => {
-    for (let child = identifier, parent = identifier.getParent(); parent !== undefined && child !== within; child = parent, parent = parent.getParent()) {
-        if (opensWithIdentityBefore(child, parent)) {
-            return true;
-        }
-    }
+    const parts = keyPartsOf(within);
+    const leading = parts.findIndex((part) => !isFixedTextPart(part));
+    const holder = parts.findIndex((part) => part.getPos() <= identifier.getPos() && identifier.getEnd() <= part.getEnd());
+    const first = parts[leading];
 
-    return false;
+    return first !== undefined && leading < holder && isIntactIdentityPart(first);
 };
 
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
