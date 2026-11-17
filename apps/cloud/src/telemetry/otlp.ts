@@ -277,7 +277,8 @@ const decodeTelemetryEvent = (span: OtlpSpan, context: { isContainer: boolean; s
     }
 
     const { isContainer, serviceName } = context;
-    const message = span.status.message ?? span.name ?? "";
+    // An exception message routinely quotes the request that failed, credentials included.
+    const message = redactText(span.status.message ?? span.name ?? "") ?? "";
     const code = attributeString(span.attributes, "error.type");
     const ts = epochMsFromNano(span.endTimeUnixNano);
     const traceId = span.traceId === undefined || span.traceId === "" ? undefined : span.traceId;
@@ -454,7 +455,7 @@ export const decodeLogRecords = (payload: OtlpLogsPayload): OtlpLogEntry[] => {
                     fields: redactRecord(logFields(record.attributes)),
                     functionPath: attributeString(record.attributes, "lunora.function_path") ?? attributeString(record.attributes, "code.function"),
                     level: severityToLevel(record.severityNumber, record.severityText),
-                    message: describeBody(body),
+                    message: redactText(describeBody(body)) ?? "",
                     serviceName,
                     spanId: record.spanId === "" ? undefined : record.spanId,
                     traceId: record.traceId === "" ? undefined : record.traceId,
@@ -538,7 +539,7 @@ const decodeSpanObservation = (span: OtlpSpan, context: { kind: "container" | "w
         serviceName,
         spanId: span.spanId,
         startedAt,
-        statusMessage: errored ? span.status?.message : undefined,
+        statusMessage: errored ? redactText(span.status?.message) : undefined,
         traceId: span.traceId,
         ...generation,
     };

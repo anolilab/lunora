@@ -574,6 +574,25 @@ describe("telemetryStore.archiveSpans", () => {
     });
 });
 
+describe("telemetry free-text redaction", () => {
+    const BEARER = `Bearer ${"x".repeat(16)}`;
+    const leaked = `request failed: ${BEARER} password=hunter2-hunter2`;
+    const scrubbed = "request failed: Bearer [redacted] password=[redacted]";
+
+    it("redacts credentials in a log record's body", () => {
+        const [entry] = decodeLogRecords(logsPayload([{ body: { stringValue: leaked } }]));
+
+        expect(entry?.message).toBe(scrubbed);
+    });
+
+    it("redacts credentials in an error span's status message, as an Issue event and as a trace observation", () => {
+        const spans = [{ ...errorSpan({ message: leaked }), spanId: "a1", startTimeUnixNano: "1700000000000000000", traceId: "t1" }];
+
+        expect(decodeTelemetryEvents(payload("@lunora/runtime", spans))[0]?.message).toBe(scrubbed);
+        expect(decodeObservations(payload("@lunora/runtime", spans))[0]?.statusMessage).toBe(scrubbed);
+    });
+});
+
 describe(handleTelemetryRoute, () => {
     /** A body streamed in 1 MiB chunks up to `bytes`, so the test never holds the whole oversized body. */
     const streamedBody = (bytes: number): ReadableStream<Uint8Array> => {
