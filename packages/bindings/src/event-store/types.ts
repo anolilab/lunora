@@ -1,5 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- JSDoc quotes the `r2sql.from<EventStoreRecord<Schema>>(table)` call shape, not a credential. */
-
 /**
  * PROTOTYPE (plan 247, design spike) — types for `defineEventStore`, which
  * explores whether one declared schema can drive BOTH the Pipelines write
@@ -90,9 +88,9 @@ interface EventStoreConfig<Schema extends EventStoreSchema> {
 interface EventStore<Schema extends EventStoreSchema> {
     /**
      * Start a typed r2sql `SELECT` over the same table + schema — literally
-     * `r2sql.from<EventStoreRecord<Schema>>(table)`, so it inherits every
-     * `SelectBuilder` feature (`WHERE`, joins, window functions, set
-     * operations, …) for free; this prototype adds no query surface of its
+     * `r2sql.from(table)` with `EventStoreRecord<Schema>` as its row type, so it
+     * inherits every `SelectBuilder` feature (`WHERE`, joins, window functions,
+     * set operations, …) for free; this prototype adds no query surface of its
      * own.
      */
     query: () => SelectBuilder<EventStoreRecord<Schema>>;
