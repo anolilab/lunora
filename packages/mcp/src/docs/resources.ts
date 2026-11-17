@@ -1,5 +1,3 @@
-/* eslint-disable unicorn/prevent-abbreviations -- "docs" is public API here: the `@lunora/mcp/docs` subpath and the `lunora_*_docs` tool names. */
-
 /**
  * The documentation corpus as MCP **resources**.
  *

@@ -1,6 +1,3 @@
-/* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases" (matching `server.ts`); here it appears only as a return type. */
-/* eslint-disable unicorn/prevent-abbreviations -- "docs" is public API here: the `@lunora/mcp/docs` subpath and the `lunora_search_docs` / `lunora_get_doc` / `lunora_list_docs` tool names. Renaming the identifiers to "documentation" would diverge from the names callers and models actually use. */
-
 /**
  * The composed server behind `lunora mcp serve` — one stdio endpoint carrying
  * every surface a coding agent wants while it builds a Lunora app:
@@ -18,6 +15,7 @@
  * `@lunora/client` itself.
  */
 import { LunoraAdminClient } from "@lunora/client/admin";
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
@@ -382,6 +380,7 @@ const localTools = (options: LocalMcpServerOptions, clientFor?: (deployment: Loc
 };
 
 /** Build the composed local server without connecting a transport. */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 const createLocalMcpServer = async (options: LocalMcpServerOptions = {}): Promise<Server> => {
     // Resources come from the same docs index the tools read, so they appear
     // only when the documentation surface is enabled.
@@ -416,6 +415,7 @@ const createLocalMcpServer = async (options: LocalMcpServerOptions = {}): Promis
  * MCP client uses when it spawns `lunora mcp serve`. Resolves once connected;
  * the process then stays alive serving requests.
  */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 const connectLocalStdio = async (options: LocalMcpServerOptions = {}): Promise<Server> => {
     const server = await createLocalMcpServer(options);
 

@@ -1,5 +1,3 @@
-/* eslint-disable unicorn/prevent-abbreviations -- "docs" is public API here: the `@lunora/mcp/docs` subpath and the `lunora_search_docs` / `lunora_get_doc` / `lunora_list_docs` tool names. Renaming the identifiers to "documentation" would diverge from the names callers and models actually use. */
-
 /**
  * A {@link DocsIndex} backed by a published Lunora docs site over plain HTTP.
  *

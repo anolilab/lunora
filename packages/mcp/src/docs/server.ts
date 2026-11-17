@@ -1,7 +1,3 @@
-/* eslint-disable unicorn/prevent-abbreviations -- "docs" is public API here: the `@lunora/mcp/docs` subpath and the `lunora_search_docs` / `lunora_get_doc` / `lunora_list_docs` tool names. Renaming the identifiers to "documentation" would diverge from the names callers and models actually use. */
-
-/* eslint-disable sonarjs/deprecation -- the SDK marks the low-level `Server` @deprecated in favour of the high-level `McpServer`, but explicitly sanctions `Server` for "advanced use cases" (matching `server.ts`); here it appears only as a return type. */
-
 /**
  * A documentation-only MCP server, plus the Streamable-HTTP handler a docs site
  * mounts to publish it.
@@ -15,6 +11,7 @@
  * Nothing here touches Node built-ins, so it runs on Workers, Netlify/Vercel
  * functions, Deno, and Bun unchanged.
  */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 
 import type { McpServerInfo } from "../compose";
@@ -57,6 +54,7 @@ const serverInfo = (version: string | undefined): McpServerInfo => {
  * Connect it yourself, or use {@link createDocsMcpFetchHandler} for the remote
  * HTTP case.
  */
+// eslint-disable-next-line sonarjs/deprecation -- the SDK deprecates the low-level `Server` but sanctions it for advanced use; it serves our plain-JSON-Schema tools without McpServer's per-tool zod dependency
 const createDocsMcpServer = (options: DocsMcpServerOptions): Promise<Server> =>
     createToolServer(serverInfo(options.version), docsTools(options.index), docsResources(options.index));
 
