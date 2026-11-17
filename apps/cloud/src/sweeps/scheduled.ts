@@ -671,8 +671,12 @@ const drainBuildQueue = async (env: ControlPlaneEnv, context: ExecutionContextLi
     }
 };
 
-/** Tick every due tenant cron of every `fanout: "dispatcher"` target, over its fleet's in-network `dispatch`. */
-const fanOutTenantCrons = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+/**
+ * Tick every due tenant cron of every `fanout: "dispatcher"` target, over its fleet's in-network `dispatch`.
+ * Matched against the tick's scheduled minute, not the wall clock: this runs after every other sweep and
+ * can start in the next minute, which would fire that minute's crons and skip this one's.
+ */
+const fanOutTenantCrons = async (database: ControlPlaneStore, env: ControlPlaneEnv, controller: ScheduledControllerLike): Promise<void> => {
     const fleets = registeredFleets(env, { fanout: "dispatcher" }).flatMap(({ dispatch, id }) => (dispatch ? [{ dispatch, target: id }] : []));
 
     if (fleets.length === 0) {
@@ -685,7 +689,7 @@ const fanOutTenantCrons = async (database: ControlPlaneStore, env: ControlPlaneE
         fleets,
         // A halted alias's Worker runs the emergency stop's stub: its crons wait for the resume.
         live: withoutHalted(live, halted),
-        now: new Date(),
+        now: new Date(controller.scheduledTime),
         secretEncryptionKey: env.SECRET_ENCRYPTION_KEY,
         store: database,
     });
@@ -835,7 +839,7 @@ const SCHEDULED_SWEEPS: { cron: string; run: (tick: TickContext) => Promise<void
     // Tenant cron fan-out (§2.4): WfP drops `triggers.crons` for namespaced workers,
     // so this is the only path that fires their cron jobs. It needs a fleet's
     // in-network `dispatch`, and runs last, uncaught.
-    { cron: EVERY_MINUTE, stage: "fanOut", run: withStore((database, env) => fanOutTenantCrons(database, env)) },
+    { cron: EVERY_MINUTE, stage: "fanOut", run: withStore(fanOutTenantCrons) },
 ];
 
 /**
