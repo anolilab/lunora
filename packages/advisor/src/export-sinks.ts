@@ -1,8 +1,6 @@
-/* eslint-disable no-secrets/no-secrets -- the referenced lint rule id in the doc comment, not a credential */
-
 /**
  * One CDC export-sink construction discovered in a function body — the input the
- * `export_sink_misconfigured` lint consumes. Produced by the codegen feeder,
+ * export_sink_misconfigured lint consumes. Produced by the codegen feeder,
  * which walks the lunora source for the three sink factories the export tap
  * (plan 170) ships: `defineExportSink({ name, deliver })`,
  * `webhookExportSink({ name, url, … })`, and `r2Sink({ name, bucket, … })`.
@@ -33,5 +31,3 @@ export interface AdvisorExportSink {
     /** Config keys present on the object literal, regardless of value. */
     presentKeys: string[];
 }
-
-/* eslint-enable no-secrets/no-secrets -- re-enable after the AdvisorExportSink doc block */

@@ -1,11 +1,9 @@
 import type { AdvisorCallSiteScope } from "./call-site-scope";
 
-/* eslint-disable no-secrets/no-secrets -- the doc comment quotes the lint's rule id `payment_webhook_wide_tolerance`, not a credential */
-
 /**
  * One payment webhook-adapter construction (`createStripeAdapter` /
  * `createPolarAdapter` / `createAutumnAdapter` / `createDodoPaymentsAdapter`) —
- * the shared input for the `payment_webhook_wide_tolerance` lint. The adapters
+ * the shared input for the payment_webhook_wide_tolerance lint. The adapters
  * verify a webhook's signed timestamp against a `webhookToleranceSeconds` replay
  * window (default 300s); an implausibly wide window leaves the endpoint accepting
  * stale, replayable signed payloads long after capture. `toleranceSeconds`
