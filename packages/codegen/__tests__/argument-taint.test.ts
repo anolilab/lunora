@@ -316,6 +316,49 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId && "shared"}/\${args.key ?? args.other}\`);`))).toBe(false);
         });
 
+        it("follows a where filter held in a local and an AND branch to the owner column", () => {
+            expect.assertions(4);
+
+            const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const filter = { ownerId: ctx.auth.userId };\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`),
+                ),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(sinkArgument(`const where = { ownerId: ctx.auth.userId };\nconst row = await ctx.db.files.findFirst({ where });\n${sink}`)),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { AND: [{ ownerId: ctx.auth.userId }, { status: "active" }] } });\n${sink}`,
+                    ),
+                ),
+            ).toBe(true);
+            // A local that is reassigned may no longer hold the caller's filter.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `let filter = { ownerId: ctx.auth.userId };\nfilter = { ownerId: args.owner };\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
+        it("refuses a lossy projection of the identity hidden behind a type assertion", () => {
+            expect.assertions(2);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${(ctx.auth.userId as string)[0]}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${(row._id as string).length}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
         it("counts only a direct predicate of the read's own where as an identity column", () => {
             expect.assertions(2);
 

@@ -8,6 +8,7 @@ import type {
     Identifier,
     MethodDeclaration,
     Node as TsNode,
+    ObjectLiteralExpression,
     ParameterDeclaration,
     PropertyAccessExpression,
     VariableDeclaration,
@@ -395,6 +396,53 @@ const rowFieldReadOf = (source: TsNode): { field: string | undefined; read: TsNo
     }
 };
 
+/** The value a `key: value` or shorthand `{ key }` property holds; `undefined` for any other member. */
+const propertyValueOf = (property: TsNode | undefined): TsNode | undefined => {
+    if (Node.isPropertyAssignment(property)) {
+        return property.getInitializer();
+    }
+
+    return Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : undefined;
+};
+
+/** The object literal `node` is, written inline or held by a local that cannot have been repointed. */
+const objectLiteralOf = (node: TsNode | undefined): ObjectLiteralExpression | undefined => {
+    const value = unwrapExpression(node);
+
+    if (Node.isObjectLiteralExpression(value)) {
+        return value;
+    }
+
+    const initializer = Node.isIdentifier(value) ? unwrapExpression(trustedInitializerOf(value)) : undefined;
+
+    return Node.isObjectLiteralExpression(initializer) ? initializer : undefined;
+};
+
+/** Whether the `where` object `filter` pins `field` to the caller on every row it admits: directly, or in any `AND` branch. */
+const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string): boolean =>
+    filter.getProperties().some((property) => {
+        const value = propertyValueOf(property);
+
+        if (value === undefined || Node.isSpreadAssignment(property)) {
+            return false;
+        }
+
+        if (propertyKeyName(property) === "AND") {
+            const branches = unwrapExpression(value);
+
+            return (
+                Node.isArrayLiteralExpression(branches) &&
+                branches.getElements().some((branch) => {
+                    const object = objectLiteralOf(branch);
+
+                    return object !== undefined && pinsFieldToCaller(object, field);
+                })
+            );
+        }
+
+        return propertyKeyName(property) === field && readsCallerIdentity(value);
+    });
+
 /**
  * Whether `field` of a row returned by the identity-bound `read` differs per caller: the row's
  * id, or a column the read matched against the caller (`ownerId` in `where: { ownerId:
@@ -410,24 +458,14 @@ const isIdentityField = (read: CallExpression, field: string | undefined): boole
         return true;
     }
 
-    // Only a direct predicate of the read's own `where` binds the returned row: one inside a relation filter
-    // (`where: { author: { ownerId: uid } }`) constrains another row, and one in an `OR` arm a single branch.
+    // Only a predicate of the read's own `where`, directly or in an `AND` branch, binds every returned row: one
+    // inside a relation filter (`where: { author: { ownerId: uid } }`) constrains another row, and one in an
+    // `OR` arm a single branch.
     return read.getArguments().some((argument) => {
-        const where = Node.isObjectLiteralExpression(argument) ? findObjectProperty(argument, "where") : undefined;
-        const filter = Node.isPropertyAssignment(where) ? unwrapExpression(where.getInitializer()) : undefined;
+        const queryArgs = objectLiteralOf(argument);
+        const filter = objectLiteralOf(propertyValueOf(queryArgs === undefined ? undefined : findObjectProperty(queryArgs, "where")));
 
-        return (
-            Node.isObjectLiteralExpression(filter) &&
-            filter.getProperties().some((property) => {
-                if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
-                    return false;
-                }
-
-                const value = Node.isPropertyAssignment(property) ? property.getInitializer() : property.getNameNode();
-
-                return propertyKeyName(property) === field && value !== undefined && readsCallerIdentity(value);
-            })
-        );
+        return filter !== undefined && pinsFieldToCaller(filter, field);
     });
 };
 
