@@ -244,7 +244,7 @@ const storeReleaseDeps = (deps: HaltConvergeDeps, deployment: DeploymentRow, liv
             resolveSecrets: async ({ kind, organizationId, projectId }) => {
                 const rows = await drainTable<EncryptedSecret>(deps.database, "secrets", { where: { organizationId, projectId } });
 
-                return decryptSecrets(secretsForKind(rows, kind), deps.masterKey);
+                return decryptSecrets(secretsForKind(rows, kind), { organizationId, projectId }, deps.masterKey);
             },
             rollbackDeployment: () => {
                 throw new LunoraError("INTERNAL", "a resume records its release itself; it records no rollback");

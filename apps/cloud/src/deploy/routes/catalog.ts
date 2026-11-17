@@ -17,7 +17,7 @@ import type { InstallEvent } from "../../catalog/install-events";
 import { encodeInstallEvent } from "../../catalog/install-events";
 import type { CatalogDeps, CatalogEnv, CatalogInstallRow, InstallAdapters, InstallFailureKind, InstallRequest, InstallTarget } from "../../catalog/service";
 import { installApp, listCatalog } from "../../catalog/service";
-import { encryptSecret } from "../../secrets/crypto";
+import { openSecret, sealSecret } from "../../secrets/select";
 import { formatDeployKey, hashDeployKey, randomSecret } from "../keys";
 import type { DeployPacer } from "../pacing";
 import { startRelease } from "../release-core";
@@ -223,10 +223,15 @@ export const installPorts = (
             }
         },
         restoreSecret: async (secret) => {
+            // Re-sealed rather than written back as it was: `store` marks every row it
+            // writes as bound, which a snapshot of a row from before the binding is not.
+            const plaintext = await openSecret(secretKey, { organizationId, projectId }, secret);
+            const sealed = await sealSecret(secretKey, { organizationId, projectId }, secret.environment, secret.name, plaintext);
+
             await context.runMutation(api.secrets.store, {
-                ciphertext: secret.ciphertext,
+                ciphertext: sealed.ciphertext,
                 environment: secret.environment,
-                iv: secret.iv,
+                iv: sealed.iv,
                 name: secret.name,
                 organizationId,
                 projectId,
@@ -242,7 +247,7 @@ export const installPorts = (
             return rows.map((row) => row.name);
         },
         storeSecret: async (name, value) => {
-            const sealed = await encryptSecret(secretKey, value);
+            const sealed = await sealSecret(secretKey, { organizationId, projectId }, "production", name, value);
 
             await context.runMutation(api.secrets.store, {
                 ciphertext: sealed.ciphertext,

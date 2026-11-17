@@ -334,6 +334,7 @@ export const secrets = sqliteTable("secrets", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     ciphertext: text("ciphertext").notNull(),
+    cipherVersion: real("cipherVersion"),
     createdAt: real("createdAt").notNull(),
     environment: text("environment", { mode: "json" }).$type<"all" | "production" | "preview" | "dev">().notNull(),
     iv: text("iv").notNull(),

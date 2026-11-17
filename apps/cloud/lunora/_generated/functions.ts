@@ -1491,9 +1491,9 @@ export interface Caller {
     };
     secrets: {
         list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
-        listEncrypted: (args: { deployKey?: unknown; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; iv: string; name: string; }[]>;
+        listEncrypted: (args: { deployKey?: unknown; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; cipherVersion?: null | number; environment: string; iv: string; name: string; }[]>;
         remove: (args: { id: Id<"secrets">; organizationId: Id<"organizations"> }) => Promise<void>;
-        snapshotRows: (args: { names: Array<unknown>; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string; }[]>;
+        snapshotRows: (args: { names: Array<unknown>; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; cipherVersion?: null | number; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string; }[]>;
         store: (args: { ciphertext: unknown; environment?: "all" | "production" | "preview" | "dev"; iv: unknown; name: unknown; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"secrets">>;
     };
     sessions: {

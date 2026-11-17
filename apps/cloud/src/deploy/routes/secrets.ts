@@ -1,5 +1,5 @@
 import { api } from "../../../lunora/_generated/api";
-import { encryptSecret } from "../../secrets/crypto";
+import { sealSecret } from "../../secrets/select";
 import type { RouterEnv } from "./shared";
 import { jsonError, rejected, requireContext } from "./shared";
 
@@ -42,7 +42,13 @@ export const handleSecretRoute = async (request: Request, environment: RouterEnv
     let iv: string;
 
     try {
-        ({ ciphertext, iv } = await encryptSecret(environment.SECRET_ENCRYPTION_KEY, secret.value));
+        ({ ciphertext, iv } = await sealSecret(
+            environment.SECRET_ENCRYPTION_KEY,
+            { organizationId: secret.organizationId, projectId: secret.projectId },
+            secret.environment ?? "all",
+            secret.name,
+            secret.value,
+        ));
     } catch (error) {
         return jsonError(500, error instanceof Error ? error.message : "secret encryption failed");
     }

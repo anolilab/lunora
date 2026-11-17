@@ -57,6 +57,7 @@ const INSTALL_ENVIRONMENT = "production";
  */
 export interface SealedSecret {
     ciphertext: string;
+    cipherVersion?: null | number;
     environment: "all" | "dev" | "preview" | "production";
     iv: string;
     name: string;

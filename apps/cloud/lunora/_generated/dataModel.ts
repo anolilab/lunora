@@ -312,6 +312,7 @@ export interface Doc_secrets {
     _id: Id<"secrets">;
     _creationTime: number;
     ciphertext: string;
+    cipherVersion?: 2 | null;
     createdAt: number;
     environment: "all" | "production" | "preview" | "dev";
     iv: string;
@@ -1389,6 +1390,7 @@ export interface Insert_secrets {
     _id?: Id<"secrets">;
     _creationTime?: number;
     ciphertext: string;
+    cipherVersion?: 2;
     createdAt: number;
     environment: "all" | "production" | "preview" | "dev";
     iv: string;

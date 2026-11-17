@@ -56,20 +56,31 @@ export interface EncryptedSecret {
     iv: string;
 }
 
-/** AES-256-GCM encrypt a plaintext secret. Returns base64 ciphertext + IV. */
-export const encryptSecret = async (keyHex: string, plaintext: string): Promise<EncryptedSecret> => {
+/** The AES-GCM parameters, binding `additionalData` when there is any. */
+const gcmParameters = (iv: Uint8Array, additionalData: string | undefined): AesGcmParams =>
+    additionalData === undefined
+        ? { iv: iv as BufferSource, name: "AES-GCM" }
+        : { additionalData: encoder.encode(additionalData), iv: iv as BufferSource, name: "AES-GCM" };
+
+/**
+ * AES-256-GCM encrypt a plaintext secret. Returns base64 ciphertext + IV.
+ *
+ * `additionalData` is authenticated but not stored: decrypting needs the same
+ * value, so a ciphertext bound to one row cannot be replayed into another.
+ */
+export const encryptSecret = async (keyHex: string, plaintext: string, additionalData?: string): Promise<EncryptedSecret> => {
     const key = await importKey(keyHex);
     const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ciphertext = await crypto.subtle.encrypt({ iv: iv as BufferSource, name: "AES-GCM" }, key, encoder.encode(plaintext));
+    const ciphertext = await crypto.subtle.encrypt(gcmParameters(iv, additionalData), key, encoder.encode(plaintext));
 
     return { ciphertext: bytesToBase64(new Uint8Array(ciphertext)), iv: bytesToBase64(iv) };
 };
 
-/** AES-256-GCM decrypt a stored secret back to plaintext. */
-export const decryptSecret = async (keyHex: string, secret: EncryptedSecret): Promise<string> => {
+/** AES-256-GCM decrypt a stored secret back to plaintext; `additionalData` must be what it was encrypted with. */
+export const decryptSecret = async (keyHex: string, secret: EncryptedSecret, additionalData?: string): Promise<string> => {
     const key = await importKey(keyHex);
     const plaintext = await crypto.subtle.decrypt(
-        { iv: base64ToBytes(secret.iv) as BufferSource, name: "AES-GCM" },
+        gcmParameters(base64ToBytes(secret.iv), additionalData),
         key,
         base64ToBytes(secret.ciphertext) as BufferSource,
     );

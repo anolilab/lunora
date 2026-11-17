@@ -169,7 +169,7 @@ export interface ApiTypes {
     };
     secrets: {
         list: FunctionReference<"query", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { createdAt: number; environment: string; id: Id<"secrets">; name: string; updatedAt: number; }[]>;
-        listEncrypted: FunctionReference<"query", { deployKey?: unknown; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }, { ciphertext: string; iv: string; name: string; }[]>;
+        listEncrypted: FunctionReference<"query", { deployKey?: unknown; environment?: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects"> }, { ciphertext: string; cipherVersion?: null | number; environment: string; iv: string; name: string; }[]>;
         remove: FunctionReference<"mutation", { id: Id<"secrets">; organizationId: Id<"organizations"> }, void>;
         store: FunctionReference<"mutation", { ciphertext: unknown; environment?: "all" | "production" | "preview" | "dev"; iv: unknown; name: unknown; organizationId: Id<"organizations">; projectId: Id<"projects"> }, Id<"secrets">>;
     };

@@ -19,6 +19,7 @@ import { dispatchBuilds, runBuildStage } from "../../builds/control-plane";
 import type { BuildJob, BuildStage } from "../../builds/runner-job";
 import { runtimeColumn, storedRuntime } from "../../project-runtime";
 import type { DeployKind } from "../../provision-contract";
+import type { EncryptedSecret } from "../../secrets/select";
 import { decryptSecrets } from "../../secrets/select";
 import type { TargetDriver } from "../../targets/driver";
 import type { Placement, StoredPlacement } from "../../targets/placement";
@@ -41,12 +42,6 @@ import { recordingDriver } from "../worker-classes";
 import type { LunoraActionContext, RouterEnv } from "./shared";
 import { jsonError, readJsonObject, rejected, requireContext, strictBearer } from "./shared";
 
-interface EncryptedSecretRow {
-    ciphertext: string;
-    iv: string;
-    name: string;
-}
-
 /** The cell this control-plane deployment runs in — the only thing `LUNORA_CELL` decides (`src/targets/placement.ts`). */
 const thisCell = (environment: RouterEnv): string => environment.LUNORA_CELL ?? "default";
 
@@ -59,7 +54,8 @@ const resolveSecrets =
     (context: LunoraActionContext, environment: RouterEnv): NonNullable<ReleaseDeps["backend"]["resolveSecrets"]> =>
     async ({ key, kind, organizationId, projectId }) =>
         decryptSecrets(
-            await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, { deployKey: key, environment: kind, organizationId, projectId }),
+            await context.runQuery<EncryptedSecret[]>(api.secrets.listEncrypted, { deployKey: key, environment: kind, organizationId, projectId }),
+            { organizationId, projectId },
             environment.SECRET_ENCRYPTION_KEY,
         );
 

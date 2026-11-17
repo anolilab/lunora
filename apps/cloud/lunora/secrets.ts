@@ -1,4 +1,4 @@
-import { secretsForKind } from "../src/secrets/select";
+import { SECRET_CIPHER_VERSION, secretsForKind } from "../src/secrets/select";
 import type { Doc as Document_, Id } from "./_generated/dataModel.js";
 import { internalQuery, mutation, query, v } from "./_generated/server.js";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
@@ -7,7 +7,7 @@ import { boundedString, LIMITS } from "./validators";
 
 /**
  * Tenant secrets. Values are AES-256-GCM encrypted at the
- * Worker edge (`POST /v1/secrets` → `src/secrets/crypto.ts`) before they reach
+ * Worker edge (`POST /v1/secrets` → `sealSecret` in `src/secrets/select.ts`) before they reach
  * `store`, so these functions only ever touch ciphertext — never plaintext.
  * `list` returns names only; `listEncrypted` (deploy path) returns ciphertext for
  * the edge to decrypt and inject into the tenant Worker at deploy time.
@@ -15,7 +15,13 @@ import { boundedString, LIMITS } from "./validators";
 
 type SecretRow = Document_<"secrets">;
 
-/** Persist an already-encrypted secret (owner/admin). Upserts by project+name. */
+/**
+ * Persist an already-encrypted secret (owner/admin). Upserts by project+name.
+ *
+ * Every row it writes is marked bound (`SECRET_CIPHER_VERSION`), whatever the caller
+ * sends: a caller could otherwise store an unbound ciphertext copied from another
+ * organization's row and have it decrypt in this project's deploy.
+ */
 export const store = mutation
     .use(rateLimit("api"))
     .input({
@@ -40,13 +46,19 @@ export const store = mutation
         const { now } = context;
 
         if (existing) {
-            await context.db.patch("secrets", existing._id, { ciphertext: arguments_.ciphertext, iv: arguments_.iv, updatedAt: now });
+            await context.db.patch("secrets", existing._id, {
+                ciphertext: arguments_.ciphertext,
+                cipherVersion: SECRET_CIPHER_VERSION,
+                iv: arguments_.iv,
+                updatedAt: now,
+            });
 
             return existing._id;
         }
 
         return context.db.insert("secrets", {
             ciphertext: arguments_.ciphertext,
+            cipherVersion: SECRET_CIPHER_VERSION,
             createdAt: now,
             environment,
             iv: arguments_.iv,
@@ -93,15 +105,25 @@ export const listEncrypted = query
         projectId: v.id("projects"),
     })
     .query(
-        async ({ ctx: context, args: { deployKey, environment, organizationId, projectId } }): Promise<{ ciphertext: string; iv: string; name: string }[]> => {
+        async ({
+            ctx: context,
+            args: { deployKey, environment, organizationId, projectId },
+        }): Promise<{ ciphertext: string; cipherVersion?: null | number; environment: string; iv: string; name: string }[]> => {
             await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId, ["owner", "admin"]));
             await assertRowInOrg(context, "projects", projectId, organizationId, "project");
 
             const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
 
             // Kind-specific rows override shared ("all") rows of the same name.
+            // `environment` is the row's own, not the requested kind: an "all" row is bound to "all".
             return secretsForKind(page as SecretRow[], environment ?? "production").map((secret) => {
-                return { ciphertext: secret.ciphertext, iv: secret.iv, name: secret.name };
+                return {
+                    ciphertext: secret.ciphertext,
+                    cipherVersion: secret.cipherVersion,
+                    environment: secret.environment,
+                    iv: secret.iv,
+                    name: secret.name,
+                };
             });
         },
     );
@@ -118,14 +140,22 @@ export const snapshotRows = internalQuery
         async ({
             ctx: context,
             args: { names, organizationId, projectId },
-        }): Promise<{ ciphertext: string; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string }[]> => {
+        }): Promise<
+            { ciphertext: string; cipherVersion?: null | number; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string }[]
+        > => {
             const wanted = new Set(names);
             const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
 
             return (page as SecretRow[])
                 .filter((secret) => wanted.has(secret.name))
                 .map((secret) => {
-                    return { ciphertext: secret.ciphertext, environment: secret.environment, iv: secret.iv, name: secret.name };
+                    return {
+                        ciphertext: secret.ciphertext,
+                        cipherVersion: secret.cipherVersion,
+                        environment: secret.environment,
+                        iv: secret.iv,
+                        name: secret.name,
+                    };
                 });
         },
     );

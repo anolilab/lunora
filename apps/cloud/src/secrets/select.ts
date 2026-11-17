@@ -6,15 +6,61 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-import { decryptSecret } from "./crypto";
+import type { EncryptedSecret as Sealed } from "./crypto";
+import { decryptSecret, encryptSecret } from "./crypto";
+
+/**
+ * The `cipherVersion` of a row sealed with {@link secretAad}. A row without one
+ * was encrypted before the binding and still decrypts without it; the next write
+ * of that secret replaces it with a bound one.
+ */
+export const SECRET_CIPHER_VERSION = 2 as const;
+
+/** The project a set of secret rows belongs to. */
+export interface SecretScope {
+    organizationId: string;
+    projectId: string;
+}
 
 /** A stored secret, as far as selecting and decrypting it goes. */
 export interface EncryptedSecret {
     ciphertext: string;
-    environment?: string;
+    cipherVersion?: null | number;
+    environment: string;
     iv: string;
     name: string;
 }
+
+/**
+ * The additional data a secret's ciphertext is bound to. Owners and admins can
+ * read a project's ciphertext and write any ciphertext into a secret, so without
+ * it a value sealed for one organization's secret decrypts in another's deploy.
+ */
+export const secretAad = (scope: SecretScope, environment: string, name: string): string =>
+    [scope.organizationId, scope.projectId, environment, name].join("\0");
+
+/** Encrypt `plaintext` for the secret `name` of `environment` in `scope`. */
+export const sealSecret = async (
+    masterKey: string,
+    scope: SecretScope,
+    environment: string,
+    name: string,
+    plaintext: string,
+): Promise<Sealed & { cipherVersion: typeof SECRET_CIPHER_VERSION }> => {
+    return { ...(await encryptSecret(masterKey, plaintext, secretAad(scope, environment, name))), cipherVersion: SECRET_CIPHER_VERSION };
+};
+
+/** Decrypt one stored row of `scope`, bound or (for a row written before the binding) not. */
+export const openSecret = (
+    masterKey: string,
+    scope: SecretScope,
+    row: Pick<EncryptedSecret, "ciphertext" | "cipherVersion" | "environment" | "iv" | "name">,
+): Promise<string> =>
+    decryptSecret(
+        masterKey,
+        { ciphertext: row.ciphertext, iv: row.iv },
+        row.cipherVersion === SECRET_CIPHER_VERSION ? secretAad(scope, row.environment, row.name) : undefined,
+    );
 
 /**
  * The secrets a release of `kind` gets: every row of that kind or `all`, a
@@ -49,7 +95,8 @@ export const secretsForKind = <Row extends EncryptedSecret>(rows: ReadonlyArray<
  * @throws {LunoraError} `INTERNAL` when there are secrets and no key to decrypt them.
  */
 export const decryptSecrets = async (
-    rows: ReadonlyArray<Pick<EncryptedSecret, "ciphertext" | "iv" | "name">>,
+    rows: ReadonlyArray<Pick<EncryptedSecret, "ciphertext" | "cipherVersion" | "environment" | "iv" | "name">>,
+    scope: SecretScope,
     masterKey: string | undefined,
 ): Promise<Record<string, string>> => {
     if (!masterKey) {
@@ -63,9 +110,7 @@ export const decryptSecrets = async (
         return {};
     }
 
-    const entries = await Promise.all(
-        rows.map(async (row): Promise<[string, string]> => [row.name, await decryptSecret(masterKey, { ciphertext: row.ciphertext, iv: row.iv })]),
-    );
+    const entries = await Promise.all(rows.map(async (row): Promise<[string, string]> => [row.name, await openSecret(masterKey, scope, row)]));
 
     return Object.fromEntries(entries);
 };

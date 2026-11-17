@@ -416,6 +416,10 @@ export const deployTables = {
     // decrypted at deploy time into the tenant Worker's script secrets.
     secrets: defineTable({
         ciphertext: v.string(),
+        // 2: bound to its org, project, environment and name as AES-GCM additional
+        // data (`secretAad` in `src/secrets/select.ts`). Absent on a row written
+        // before that, which decrypts unbound until its next write.
+        cipherVersion: v.optional(v.literal(2)),
         createdAt: v.number(),
         // Which deployment kind sees this secret; "all" is shared across
         // environments and overridden by a kind-specific row of the same name.

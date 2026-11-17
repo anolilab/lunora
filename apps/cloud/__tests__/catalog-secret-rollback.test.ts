@@ -6,7 +6,8 @@ import type { CatalogManifest } from "../src/catalog/artifact";
 import type { InstallInput, InstallRelease, VerifiedArtifact } from "../src/catalog/install";
 import { runInstall } from "../src/catalog/install";
 import { installPorts } from "../src/deploy/routes/catalog";
-import { secretsForKind } from "../src/secrets/select";
+import { encryptSecret } from "../src/secrets/crypto";
+import { openSecret, sealSecret, SECRET_CIPHER_VERSION, secretsForKind } from "../src/secrets/select";
 
 /**
  * The install's secret rollback, run through the real edge ports against an in-memory
@@ -18,6 +19,7 @@ type Environment = "all" | "dev" | "preview" | "production";
 
 interface Row {
     ciphertext: string;
+    cipherVersion?: number;
     environment: Environment;
     id: string;
     iv: string;
@@ -25,6 +27,18 @@ interface Row {
 }
 
 const HASH = "a".repeat(64);
+const KEY = "c".repeat(64);
+const SCOPE = { organizationId: "org_1", projectId: "proj_1" };
+
+/** A stored row holding `value`, sealed as `store` writes it — or, `legacy`, as a row from before the binding. */
+const sealedRow = async (id: string, environment: Environment, name: string, value: string, legacy = false): Promise<Row> => {
+    const sealed = legacy ? await encryptSecret(KEY, value) : await sealSecret(KEY, SCOPE, environment, name, value);
+
+    return { ...sealed, environment, id, name };
+};
+
+/** The value a row decrypts to, the way a deploy reads it. */
+const valueOf = async (row: Row | undefined): Promise<string | undefined> => (row === undefined ? undefined : openSecret(KEY, SCOPE, row));
 const encoder = new TextEncoder();
 
 const artifactFor = (secretNames: string[]): VerifiedArtifact => {
@@ -69,13 +83,16 @@ const tableWith = (initial: Row[]) => {
                 const environment = (args["environment"] ?? "all") as Environment;
                 const existing = rows.find((row) => row.environment === environment && row.name === args["name"]);
 
+                // Like the real `store`, every write is marked bound.
                 if (existing) {
                     existing.ciphertext = args["ciphertext"] as string;
+                    existing.cipherVersion = SECRET_CIPHER_VERSION;
                     existing.iv = args["iv"] as string;
                 } else {
                     counter += 1;
                     rows.push({
                         ciphertext: args["ciphertext"] as string,
+                        cipherVersion: SECRET_CIPHER_VERSION,
                         environment,
                         id: `row_${String(counter)}`,
                         iv: args["iv"] as string,
@@ -153,13 +170,7 @@ const tableWith = (initial: Row[]) => {
 
 /** The real edge ports over `context`, with a release that fails so the rollback runs. */
 const failingInstall = async (context: ReturnType<typeof tableWith>["context"], input: InstallInput) => {
-    const ports = installPorts(
-        context as unknown as Parameters<typeof installPorts>[0],
-        "org_1",
-        "proj_1",
-        "k".repeat(64),
-        {} as Parameters<typeof installPorts>[4],
-    );
+    const ports = installPorts(context as unknown as Parameters<typeof installPorts>[0], "org_1", "proj_1", KEY, {} as Parameters<typeof installPorts>[4]);
 
     return runInstall(input, {
         ...ports,
@@ -171,28 +182,30 @@ const failingInstall = async (context: ReturnType<typeof tableWith>["context"], 
 
 describe("a failed catalog install puts each secret row back where it was", () => {
     it("leaves an all-environment secret as an all row, with no production copy shadowing it", async () => {
-        const { context, rows } = tableWith([{ ciphertext: "all-value", environment: "all", id: "row_all", iv: "iv_all", name: "API_KEY" }]);
+        const original = await sealedRow("row_all", "all", "API_KEY", "all-value");
+        const { context, rows } = tableWith([{ ...original }]);
 
         const result = await failingInstall(context, inputFor(["API_KEY"], { API_KEY: "new-value" }));
 
         expect(result).toMatchObject({ ok: false });
-        expect(rows.filter((row) => row.name === "API_KEY")).toStrictEqual([
-            { ciphertext: "all-value", environment: "all", id: "row_all", iv: "iv_all", name: "API_KEY" },
-        ]);
+        expect(rows.filter((row) => row.name === "API_KEY")).toStrictEqual([original]);
     });
 
-    it("restores a production secret to its old value, and the all row it overrode is left alone", async () => {
+    it.each([
+        ["bound", false],
+        ["written before the binding", true],
+    ])("restores a %s production secret to its old value, and the all row it overrode is left alone", async (_label, legacy) => {
         const { context, rows } = tableWith([
-            { ciphertext: "all-value", environment: "all", id: "row_all", iv: "iv_all", name: "TOKEN" },
-            { ciphertext: "prod-old", environment: "production", id: "row_prod", iv: "iv_prod", name: "TOKEN" },
+            await sealedRow("row_all", "all", "TOKEN", "all-value"),
+            await sealedRow("row_prod", "production", "TOKEN", "prod-old", legacy),
         ]);
 
         const result = await failingInstall(context, inputFor(["TOKEN"], { TOKEN: "prod-new" }));
 
         expect(result).toMatchObject({ ok: false });
-        expect(rows.find((row) => row.environment === "all" && row.name === "TOKEN")?.ciphertext).toBe("all-value");
-        expect(rows.find((row) => row.environment === "production" && row.name === "TOKEN")).toMatchObject({ ciphertext: "prod-old", iv: "iv_prod" });
-        expect(secretsForKind(rows, "production").find((row) => row.name === "TOKEN")?.ciphertext).toBe("prod-old");
+        await expect(valueOf(rows.find((row) => row.environment === "all" && row.name === "TOKEN"))).resolves.toBe("all-value");
+        await expect(valueOf(rows.find((row) => row.environment === "production" && row.name === "TOKEN"))).resolves.toBe("prod-old");
+        await expect(valueOf(secretsForKind(rows, "production").find((row) => row.name === "TOKEN"))).resolves.toBe("prod-old");
     });
 
     it("removes a secret row the install created, when there was no row for it before", async () => {

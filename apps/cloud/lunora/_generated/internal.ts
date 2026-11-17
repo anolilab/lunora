@@ -130,7 +130,7 @@ export interface InternalApiTypes {
         prune: FunctionReference<"mutation", {}, { auditLog: number; deployments: number; events: number; financial: number; }>;
     };
     secrets: {
-        snapshotRows: FunctionReference<"query", { names: Array<unknown>; organizationId: Id<"organizations">; projectId: Id<"projects"> }, { ciphertext: string; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string; }[]>;
+        snapshotRows: FunctionReference<"query", { names: Array<unknown>; organizationId: Id<"organizations">; projectId: Id<"projects"> }, { ciphertext: string; cipherVersion?: null | number; environment: "all" | "dev" | "preview" | "production"; iv: string; name: string; }[]>;
     };
     telemetry: {
         orgForDeployKey: FunctionReference<"query", { deployKey: unknown }, { organizationId: Id<"organizations">; } | null>;
