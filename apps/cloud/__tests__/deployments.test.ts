@@ -3,6 +3,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import type { Doc } from "../lunora/_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../lunora/_generated/server";
 import { cleanupExpiredPreviews, planForScript, pruneSuperseded } from "../lunora/deployments";
+import { orgForScript } from "../lunora/logs";
 import type { DEPLOYMENT_STATUSES } from "../lunora/tables/shared";
 import { periodStartOf } from "../src/billing/spend";
 
@@ -175,6 +176,17 @@ describe("deployments.planForScript", () => {
                     organizations: [{ _id: "org_1", plan: "free" }, suspended],
                 }),
             ).resolves.toBe("free");
+        });
+
+        it("attributes tail logs to the alias's owner, not an earlier owner's leftover release", async () => {
+            const earlier = { ...live, _id: "d0", createdAt: 1, organizationId: "org_old", status: "destroyed" };
+            const current = { ...live, organizationId: "org_new" };
+            const owner = async (world: Parameters<typeof queryCtx>[1]) => orgForScript.handler(queryCtx(null, world), { scriptName: "app" });
+
+            await expect(owner({ deployments: [earlier, current], ledger: [{ alias: "app", organizationId: "org_new" }] })).resolves.toStrictEqual({
+                organizationId: "org_new",
+            });
+            await expect(owner({ deployments: [current, { ...live, _id: "d2", organizationId: "org_old", status: "superseded" }] })).resolves.toBeNull();
         });
 
         it("refuses when the ledger owner has no release here", async () => {

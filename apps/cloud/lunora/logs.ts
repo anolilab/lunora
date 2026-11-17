@@ -7,6 +7,7 @@ import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember, authorizeTelemetryKey } from "./authz";
+import { servingDeployment } from "./deployments";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";
 
@@ -186,17 +187,19 @@ export const ingest = mutation
     });
 
 /**
- * Resolve a dispatch-namespace script id → its owning org, via the immutable
- * `deployments.by_script` index. Used by the platform tail route to attribute a
- * batch of tail-captured lines (which carry only a `scriptName`) to an org
- * without holding that org's deploy key. Returns `null` for an unknown script
- * (e.g. a superseded/destroyed release the tail lags behind). SYSTEM only.
+ * Resolve a dispatch-namespace script id → its owning org. Used by the platform
+ * tail route to attribute a batch of tail-captured lines (which carry only a
+ * `scriptName`) to an org without holding that org's deploy key. A script name
+ * is an alias, shared by every release of it, including an earlier owner's after
+ * the alias was released and re-claimed, so the org comes from the release the
+ * alias serves ({@link servingDeployment}), never from whichever row a page
+ * starts with. `null` when that cannot be stated: the lines are dropped rather
+ * than stored under a guessed org. SYSTEM only.
  */
 export const orgForScript = internalQuery
     .input({ scriptName: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { scriptName } }): Promise<{ organizationId: Id<"organizations"> } | null> => {
-        const { page } = await context.db.deployments.findMany({ where: { scriptName } });
-        const row = page[0];
+        const row = await servingDeployment(context, scriptName);
 
         return row ? { organizationId: row.organizationId } : null;
     });

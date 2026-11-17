@@ -216,7 +216,7 @@ const previewProtectionScope = async (context: QueryContext, projectId: Id<"proj
  * release, a ledger owner with none, releases of two organizations — is not
  * guessed at.
  */
-const servingDeployment = async (context: QueryContext, scriptName: string): Promise<DeploymentRow | null> => {
+export const servingDeployment = async (context: QueryContext, scriptName: string): Promise<DeploymentRow | null> => {
     const rows = await collectAll<DeploymentRow>((cursor) => context.db.deployments.findMany({ cursor, where: { scriptName } }));
     const standing = rows.filter((row) => row.status !== "destroyed");
     const { page: ledger } = await context.db.aliasOwnership.findMany({ where: { alias: scriptName } });
