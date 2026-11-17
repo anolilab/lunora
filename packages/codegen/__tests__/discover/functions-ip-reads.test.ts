@@ -113,6 +113,31 @@ describe("discoverFunctions — queries that may read ctx.ip", () => {
         expect(readsIpFor("return helper(ctx, 1);", helper)).toBe(true);
     });
 
+    it.each([
+        ["copies the ctx into a nested function's default parameter (#1605 item 11)", "return (({ ...rest }: any = ctx) => sink(rest))();"],
+        ["passes the ctx after a spread argument (#1605 item 12)", "const extra: unknown[] = []; return firstOnly(...extra, ctx);"],
+        ["hands the ctx to a helper through a second parameter it already visited (#1605 item 13)", "return twoSlots(ctx, ctx);"],
+        ["hands the ctx to the second parameter of a helper visited first (#1605 item 13)", "await twoSlots(ctx, 1); return twoSlots(1, ctx);"],
+        ["reaches a helper that aliases its ctx before handing it on (#1605 item 14)", "return aliasing(ctx);"],
+        ["reads the ctx in a parameter's default initializer (#1605 item 15)", "const f = (c: any = ctx) => sink(c); return f();"],
+        ["reads the ctx in a destructuring default (#1605 item 15)", "const { c = ctx }: any = {}; return sink(c);"],
+    ])("marks a query that %s", (_name, body) => {
+        expect.assertions(1);
+
+        const helpers = `declare const sink: (value: unknown) => unknown;
+const twoSlots = (first: any, second: any) => sink(second);
+const firstOnly = (first: any, _second?: any) => sink(first);
+const aliasing = (p: any) => { const c = p; return sink(c); };`;
+
+        expect(readsIpFor(body, helpers)).toBe(true);
+    });
+
+    it("leaves a query unmarked when a helper aliases its ctx and only reads the database", () => {
+        expect.assertions(1);
+
+        expect(readsIpFor("return aliasing(ctx);", "const aliasing = (p: any) => { const c = p; return c.db.query('messages').collect(); };")).toBeUndefined();
+    });
+
     it("leaves a query unmarked when a nested callback collects the rest of a row", () => {
         expect.assertions(1);
 
