@@ -242,24 +242,24 @@ var buildBindingManifest = (config) => {
   const unmodelled = [];
   const malformed = /* @__PURE__ */ new Set();
   const source = recordOf(config, "(wrangler config)", malformed);
-  const bindings = collectBindings(source, unnamed, unmodelled, malformed).map((requirement) => compact(requirement)).toSorted((a2, b3) => a2.type.localeCompare(b3.type) || a2.binding.localeCompare(b3.binding));
+  const bindings = collectBindings(source, unnamed, unmodelled, malformed).map((requirement) => compact(requirement)).toSorted((a, b2) => a.type.localeCompare(b2.type) || a.binding.localeCompare(b2.binding));
   const unknown = [
     ...Object.keys(source).filter((field) => !NON_BINDING_FIELDS.has(field) && !KNOWN_BINDING_FIELDS.has(field)),
     ...unnamed.map((field) => `${field} (entry with no binding name)`),
     ...unmodelled
-  ].toSorted((a2, b3) => a2.localeCompare(b3));
+  ].toSorted((a, b2) => a.localeCompare(b2));
   const compatibilityDate = stringOf(source["compatibility_date"], "compatibility_date", malformed);
   const flags = source["compatibility_flags"];
   const compatibilityFlags = flags === void 0 || flags === null ? void 0 : stringsOf(flags, "compatibility_flags", malformed);
   const crons = stringsOf(recordOf(source["triggers"], "triggers", malformed)["crons"], "triggers.crons", malformed);
   const name = stringOf(source["name"], "name", malformed);
-  const variableNames = Object.keys(recordOf(source["vars"], "vars", malformed)).toSorted((a2, b3) => a2.localeCompare(b3));
+  const variableNames = Object.keys(recordOf(source["vars"], "vars", malformed)).toSorted((a, b2) => a.localeCompare(b2));
   return {
     bindings,
     ...compatibilityDate === void 0 ? {} : { compatibilityDate },
     ...compatibilityFlags === void 0 ? {} : { compatibilityFlags },
     crons,
-    malformed: [...malformed].toSorted((a2, b3) => a2.localeCompare(b3)),
+    malformed: [...malformed].toSorted((a, b2) => a.localeCompare(b2)),
     ...name === void 0 ? {} : { name },
     unknown,
     vars: variableNames,
@@ -268,286 +268,283 @@ var buildBindingManifest = (config) => {
 };
 
 // packages/cli/src/util/cloud-client.ts
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 
 // node_modules/.pnpm/@visulima+fs@7.0.0_@visulima+yaml@2.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/index.js
-import { createRequire as h2 } from "node:module";
-
-// node_modules/.pnpm/@visulima+path@5.0.0/node_modules/@visulima/path/dist/utils.js
-import { createRequire as u } from "node:module";
+import { createRequire as h } from "node:module";
 
 // node_modules/.pnpm/@visulima+path@5.0.0/node_modules/@visulima/path/dist/packem_shared/path-CxEa27Rz.js
 var ge = () => {
   var s = (() => {
-    var c = Object.defineProperty, i3 = Object.getOwnPropertyDescriptor, f3 = Object.getOwnPropertyNames, g4 = Object.prototype.hasOwnProperty, d = (e3, t) => {
-      for (var n2 in t) c(e3, n2, { get: t[n2], enumerable: true });
-    }, E2 = (e3, t, n2, o2) => {
-      if (t && typeof t == "object" || typeof t == "function") for (let r of f3(t)) !g4.call(e3, r) && r !== n2 && c(e3, r, { get: () => t[r], enumerable: !(o2 = i3(t, r)) || o2.enumerable });
-      return e3;
-    }, m2 = (e3) => E2(c({}, "__esModule", { value: true }), e3), I2 = {};
-    d(I2, { zeptomatch: () => pe });
-    var V2 = (e3) => {
-      const t = /* @__PURE__ */ new Set(), n2 = [e3];
-      for (let o2 = 0; o2 < n2.length; o2++) {
-        const r = n2[o2];
+    var c = Object.defineProperty, i2 = Object.getOwnPropertyDescriptor, f2 = Object.getOwnPropertyNames, g2 = Object.prototype.hasOwnProperty, d = (e2, t) => {
+      for (var n in t) c(e2, n, { get: t[n], enumerable: true });
+    }, E = (e2, t, n, o) => {
+      if (t && typeof t == "object" || typeof t == "function") for (let r of f2(t)) !g2.call(e2, r) && r !== n && c(e2, r, { get: () => t[r], enumerable: !(o = i2(t, r)) || o.enumerable });
+      return e2;
+    }, m2 = (e2) => E(c({}, "__esModule", { value: true }), e2), I = {};
+    d(I, { zeptomatch: () => pe });
+    var V = (e2) => {
+      const t = /* @__PURE__ */ new Set(), n = [e2];
+      for (let o = 0; o < n.length; o++) {
+        const r = n[o];
         if (t.has(r)) continue;
         t.add(r);
-        const { children: l3 } = r;
-        if (l3?.length) for (let u3 = 0, p3 = l3.length; u3 < p3; u3++) n2.push(l3[u3]);
+        const { children: l2 } = r;
+        if (l2?.length) for (let u2 = 0, p = l2.length; u2 < p; u2++) n.push(l2[u2]);
       }
       return Array.from(t);
-    }, we = (e3) => {
+    }, we = (e2) => {
       let t = "";
-      const n2 = V2(e3);
-      for (let o2 = 0, r = n2.length; o2 < r; o2++) {
-        const l3 = n2[o2];
-        if (!l3.regex) continue;
-        const u3 = l3.regex.flags;
-        if (t || (t = u3), t !== u3) throw new Error(`Inconsistent RegExp flags used: "${t}" and "${u3}"`);
+      const n = V(e2);
+      for (let o = 0, r = n.length; o < r; o++) {
+        const l2 = n[o];
+        if (!l2.regex) continue;
+        const u2 = l2.regex.flags;
+        if (t || (t = u2), t !== u2) throw new Error(`Inconsistent RegExp flags used: "${t}" and "${u2}"`);
       }
       return t;
-    }, H = (e3, t, n2) => {
-      const o2 = n2.get(e3);
-      if (o2 !== void 0) return o2;
-      const r = e3.partial ?? t;
-      let l3 = "";
-      if (e3.regex && (l3 += r ? "(?:$|" : "", l3 += e3.regex.source), e3.children?.length) {
-        const u3 = _e(e3.children.map((p3) => H(p3, t, n2)).filter(Boolean));
-        if (u3?.length) {
-          const p3 = e3.children.some((T) => !T.regex || !(T.partial ?? t)), x4 = u3.length > 1 || r && (!l3.length || p3);
-          l3 += x4 ? r ? "(?:$|" : "(?:" : "", l3 += u3.join("|"), l3 += x4 ? ")" : "";
+    }, H = (e2, t, n) => {
+      const o = n.get(e2);
+      if (o !== void 0) return o;
+      const r = e2.partial ?? t;
+      let l2 = "";
+      if (e2.regex && (l2 += r ? "(?:$|" : "", l2 += e2.regex.source), e2.children?.length) {
+        const u2 = _e(e2.children.map((p) => H(p, t, n)).filter(Boolean));
+        if (u2?.length) {
+          const p = e2.children.some((T) => !T.regex || !(T.partial ?? t)), x2 = u2.length > 1 || r && (!l2.length || p);
+          l2 += x2 ? r ? "(?:$|" : "(?:" : "", l2 += u2.join("|"), l2 += x2 ? ")" : "";
         }
       }
-      return e3.regex && (l3 += r ? ")" : ""), n2.set(e3, l3), l3;
-    }, Ee = (e3, t) => {
-      const n2 = /* @__PURE__ */ new Map(), o2 = V2(e3);
-      for (let r = o2.length - 1; r >= 0; r--) {
-        const l3 = H(o2[r], t, n2);
-        if (!(r > 0)) return l3;
+      return e2.regex && (l2 += r ? ")" : ""), n.set(e2, l2), l2;
+    }, Ee = (e2, t) => {
+      const n = /* @__PURE__ */ new Map(), o = V(e2);
+      for (let r = o.length - 1; r >= 0; r--) {
+        const l2 = H(o[r], t, n);
+        if (!(r > 0)) return l2;
       }
       return "";
-    }, _e = (e3) => Array.from(new Set(e3)), C3 = (e3, t, n2) => C3.compile(e3, n2).test(t);
-    C3.compile = (e3, t) => {
-      const n2 = t?.partial ?? false, o2 = Ee(e3, n2), r = we(e3);
-      return new RegExp(`^(?:${o2})$`, r);
+    }, _e = (e2) => Array.from(new Set(e2)), C2 = (e2, t, n) => C2.compile(e2, n).test(t);
+    C2.compile = (e2, t) => {
+      const n = t?.partial ?? false, o = Ee(e2, n), r = we(e2);
+      return new RegExp(`^(?:${o})$`, r);
     };
-    var ye = C3, Re = (e3, t) => {
-      const n2 = ye.compile(e3, t), o2 = `${n2.source.slice(0, -1)}[\\\\/]?$`, r = n2.flags;
-      return new RegExp(o2, r);
-    }, Ae = Re, be = (e3) => {
-      const t = e3.map((o2) => o2.source).join("|") || "$^", n2 = e3[0]?.flags;
-      return new RegExp(t, n2);
-    }, ve = be, X = (e3) => Array.isArray(e3), O = (e3) => typeof e3 == "function", Me = (e3) => e3.length === 0, Se = (() => {
-      const { toString: e3 } = Function.prototype, t = /(?:^\(\s*(?:[^,.()]|\.(?!\.\.))*\s*\)\s*=>|^\s*[a-zA-Z$_][a-zA-Z0-9$_]*\s*=>)/;
-      return (n2) => (n2.length === 0 || n2.length === 1) && t.test(e3.call(n2));
-    })(), ze = (e3) => typeof e3 == "number", Ie = (e3) => typeof e3 == "object" && e3 !== null, Oe = (e3) => e3 instanceof RegExp, je = /* @__PURE__ */ (() => {
-      const e3 = /\\\(|\((?!\?(?::|=|!|<=|<!))/;
-      return (t) => e3.test(t.source);
+    var ye = C2, Re = (e2, t) => {
+      const n = ye.compile(e2, t), o = `${n.source.slice(0, -1)}[\\\\/]?$`, r = n.flags;
+      return new RegExp(o, r);
+    }, Ae = Re, be = (e2) => {
+      const t = e2.map((o) => o.source).join("|") || "$^", n = e2[0]?.flags;
+      return new RegExp(t, n);
+    }, ve = be, X = (e2) => Array.isArray(e2), O = (e2) => typeof e2 == "function", Me = (e2) => e2.length === 0, Se = (() => {
+      const { toString: e2 } = Function.prototype, t = /(?:^\(\s*(?:[^,.()]|\.(?!\.\.))*\s*\)\s*=>|^\s*[a-zA-Z$_][a-zA-Z0-9$_]*\s*=>)/;
+      return (n) => (n.length === 0 || n.length === 1) && t.test(e2.call(n));
+    })(), ze = (e2) => typeof e2 == "number", Ie = (e2) => typeof e2 == "object" && e2 !== null, Oe = (e2) => e2 instanceof RegExp, je = /* @__PURE__ */ (() => {
+      const e2 = /\\\(|\((?!\?(?::|=|!|<=|<!))/;
+      return (t) => e2.test(t.source);
     })(), Te = /* @__PURE__ */ (() => {
-      const e3 = /^[a-zA-Z0-9_-]+$/;
-      return (t) => e3.test(t.source) && !t.flags.includes("i");
-    })(), J = (e3) => typeof e3 == "string", y2 = (e3) => e3 === void 0, ke = (e3) => {
+      const e2 = /^[a-zA-Z0-9_-]+$/;
+      return (t) => e2.test(t.source) && !t.flags.includes("i");
+    })(), J = (e2) => typeof e2 == "string", y = (e2) => e2 === void 0, ke = (e2) => {
       const t = /* @__PURE__ */ new Map();
-      return (n2) => {
-        const o2 = t.get(n2);
-        if (o2 !== void 0) return o2;
-        const r = e3(n2);
-        return t.set(n2, r), r;
+      return (n) => {
+        const o = t.get(n);
+        if (o !== void 0) return o;
+        const r = e2(n);
+        return t.set(n, r), r;
       };
-    }, K = (e3, t, n2 = {}) => {
-      const o2 = { cache: {}, input: e3, index: 0, indexBacktrackMax: 0, options: n2, output: [] }, r = R2(t)(o2), l3 = Math.max(o2.index, o2.indexBacktrackMax);
-      if (r && o2.index === e3.length) return o2.output;
-      throw new Error(`Failed to parse at index ${l3}`);
-    }, a2 = (e3, t) => X(e3) ? Pe(e3, t) : J(e3) ? Q(e3, t) : Ce(e3, t), Pe = (e3, t) => {
-      const n2 = {};
-      for (const o2 of e3) {
-        if (o2.length !== 1) throw new Error(`Invalid character: "${o2}"`);
-        const r = o2.charCodeAt(0);
-        n2[r] = true;
+    }, K = (e2, t, n = {}) => {
+      const o = { cache: {}, input: e2, index: 0, indexBacktrackMax: 0, options: n, output: [] }, r = R(t)(o), l2 = Math.max(o.index, o.indexBacktrackMax);
+      if (r && o.index === e2.length) return o.output;
+      throw new Error(`Failed to parse at index ${l2}`);
+    }, a = (e2, t) => X(e2) ? Pe(e2, t) : J(e2) ? Q(e2, t) : Ce(e2, t), Pe = (e2, t) => {
+      const n = {};
+      for (const o of e2) {
+        if (o.length !== 1) throw new Error(`Invalid character: "${o}"`);
+        const r = o.charCodeAt(0);
+        n[r] = true;
       }
-      return (o2) => {
-        const r = o2.input;
-        let l3 = o2.index, u3 = l3;
-        for (; u3 < r.length && r.charCodeAt(u3) in n2; ) u3 += 1;
-        if (u3 > l3) {
-          if (!y2(t) && !o2.options.silent) {
-            const p3 = r.slice(l3, u3), x4 = O(t) ? t(p3, r, `${l3}`) : t;
-            y2(x4) || o2.output.push(x4);
+      return (o) => {
+        const r = o.input;
+        let l2 = o.index, u2 = l2;
+        for (; u2 < r.length && r.charCodeAt(u2) in n; ) u2 += 1;
+        if (u2 > l2) {
+          if (!y(t) && !o.options.silent) {
+            const p = r.slice(l2, u2), x2 = O(t) ? t(p, r, `${l2}`) : t;
+            y(x2) || o.output.push(x2);
           }
-          o2.index = u3;
+          o.index = u2;
         }
         return true;
       };
-    }, Ce = (e3, t) => {
-      if (Te(e3)) return Q(e3.source, t);
+    }, Ce = (e2, t) => {
+      if (Te(e2)) return Q(e2.source, t);
       {
-        const n2 = e3.source, o2 = e3.flags.replace(/y|$/, "y"), r = new RegExp(n2, o2);
-        return je(e3) && O(t) && !Se(t) ? Le(r, t) : Ze(r, t);
+        const n = e2.source, o = e2.flags.replace(/y|$/, "y"), r = new RegExp(n, o);
+        return je(e2) && O(t) && !Se(t) ? Le(r, t) : Ze(r, t);
       }
-    }, Le = (e3, t) => (n2) => {
-      const o2 = n2.index, r = n2.input;
-      e3.lastIndex = o2;
-      const l3 = e3.exec(r);
-      if (l3) {
-        const u3 = e3.lastIndex;
-        if (!n2.options.silent) {
-          const p3 = t(...l3, r, `${o2}`);
-          y2(p3) || n2.output.push(p3);
+    }, Le = (e2, t) => (n) => {
+      const o = n.index, r = n.input;
+      e2.lastIndex = o;
+      const l2 = e2.exec(r);
+      if (l2) {
+        const u2 = e2.lastIndex;
+        if (!n.options.silent) {
+          const p = t(...l2, r, `${o}`);
+          y(p) || n.output.push(p);
         }
-        return n2.index = u3, true;
+        return n.index = u2, true;
       } else return false;
-    }, Ze = (e3, t) => (n2) => {
-      const o2 = n2.index, r = n2.input;
-      if (e3.lastIndex = o2, e3.test(r)) {
-        const l3 = e3.lastIndex;
-        if (!y2(t) && !n2.options.silent) {
-          const u3 = O(t) ? t(r.slice(o2, l3), r, `${o2}`) : t;
-          y2(u3) || n2.output.push(u3);
+    }, Ze = (e2, t) => (n) => {
+      const o = n.index, r = n.input;
+      if (e2.lastIndex = o, e2.test(r)) {
+        const l2 = e2.lastIndex;
+        if (!y(t) && !n.options.silent) {
+          const u2 = O(t) ? t(r.slice(o, l2), r, `${o}`) : t;
+          y(u2) || n.output.push(u2);
         }
-        return n2.index = l3, true;
+        return n.index = l2, true;
       } else return false;
-    }, Q = (e3, t) => (n2) => {
-      const o2 = n2.index, r = n2.input;
-      if (r.startsWith(e3, o2)) {
-        if (!y2(t) && !n2.options.silent) {
-          const l3 = O(t) ? t(e3, r, `${o2}`) : t;
-          y2(l3) || n2.output.push(l3);
+    }, Q = (e2, t) => (n) => {
+      const o = n.index, r = n.input;
+      if (r.startsWith(e2, o)) {
+        if (!y(t) && !n.options.silent) {
+          const l2 = O(t) ? t(e2, r, `${o}`) : t;
+          y(l2) || n.output.push(l2);
         }
-        return n2.index += e3.length, true;
+        return n.index += e2.length, true;
       } else return false;
-    }, L2 = (e3, t, n2, o2) => {
-      const r = R2(e3), l3 = t > 1;
-      return B(Z(ee((u3) => {
-        let p3 = 0;
-        for (; p3 < n2; ) {
-          const x4 = u3.index;
-          if (!r(u3) || (p3 += 1, u3.index === x4)) break;
+    }, L = (e2, t, n, o) => {
+      const r = R(e2), l2 = t > 1;
+      return B(Z(ee((u2) => {
+        let p = 0;
+        for (; p < n; ) {
+          const x2 = u2.index;
+          if (!r(u2) || (p += 1, u2.index === x2)) break;
         }
-        return p3 >= t;
-      }, l3), o2));
-    }, Y = (e3, t) => L2(e3, 0, 1, t), P = (e3, t) => L2(e3, 0, 1 / 0, t), Be = (e3, t) => L2(e3, 1, 1 / 0, t), M2 = (e3, t) => {
-      const n2 = e3.map(R2);
-      return B(Z(ee((o2) => {
-        for (let r = 0, l3 = n2.length; r < l3; r++) if (!n2[r](o2)) return false;
+        return p >= t;
+      }, l2), o));
+    }, Y = (e2, t) => L(e2, 0, 1, t), P = (e2, t) => L(e2, 0, 1 / 0, t), Be = (e2, t) => L(e2, 1, 1 / 0, t), M = (e2, t) => {
+      const n = e2.map(R);
+      return B(Z(ee((o) => {
+        for (let r = 0, l2 = n.length; r < l2; r++) if (!n[r](o)) return false;
         return true;
       }), t));
-    }, $ = (e3, t) => {
-      const n2 = e3.map(R2);
-      return B(Z((o2) => {
-        for (let r = 0, l3 = n2.length; r < l3; r++) if (n2[r](o2)) return true;
+    }, $ = (e2, t) => {
+      const n = e2.map(R);
+      return B(Z((o) => {
+        for (let r = 0, l2 = n.length; r < l2; r++) if (n[r](o)) return true;
         return false;
       }, t));
-    }, ee = (e3, t = true, n2 = false) => {
-      const o2 = R2(e3);
+    }, ee = (e2, t = true, n = false) => {
+      const o = R(e2);
       return t ? (r) => {
-        const l3 = r.index, u3 = r.output.length, p3 = o2(r);
-        return !p3 && !n2 && (r.indexBacktrackMax = Math.max(r.indexBacktrackMax, r.index)), (!p3 || n2) && (r.index = l3, r.output.length !== u3 && (r.output.length = u3)), p3;
-      } : o2;
-    }, Z = (e3, t) => {
-      const n2 = R2(e3);
-      return t ? (o2) => {
-        if (o2.options.silent) return n2(o2);
-        const r = o2.output.length;
-        if (n2(o2)) {
-          const l3 = o2.output.splice(r, 1 / 0), u3 = t(l3);
-          return y2(u3) || o2.output.push(u3), true;
+        const l2 = r.index, u2 = r.output.length, p = o(r);
+        return !p && !n && (r.indexBacktrackMax = Math.max(r.indexBacktrackMax, r.index)), (!p || n) && (r.index = l2, r.output.length !== u2 && (r.output.length = u2)), p;
+      } : o;
+    }, Z = (e2, t) => {
+      const n = R(e2);
+      return t ? (o) => {
+        if (o.options.silent) return n(o);
+        const r = o.output.length;
+        if (n(o)) {
+          const l2 = o.output.splice(r, 1 / 0), u2 = t(l2);
+          return y(u2) || o.output.push(u2), true;
         } else return false;
-      } : n2;
+      } : n;
     }, B = /* @__PURE__ */ (() => {
-      let e3 = 0;
+      let e2 = 0;
       return (t) => {
-        const n2 = R2(t), o2 = e3 += 1;
+        const n = R(t), o = e2 += 1;
         return (r) => {
-          var l3;
-          if (r.options.memoization === false) return n2(r);
-          const u3 = r.index, p3 = (l3 = r.cache)[o2] || (l3[o2] = { indexMax: -1, queue: [] }), x4 = p3.queue;
-          if (u3 <= p3.indexMax) {
-            const k2 = p3.store || (p3.store = /* @__PURE__ */ new Map());
-            if (x4.length) {
-              for (let z2 = 0, Ut = x4.length; z2 < Ut; z2 += 2) {
-                const Ft = x4[z2 * 2], qt = x4[z2 * 2 + 1];
+          var l2;
+          if (r.options.memoization === false) return n(r);
+          const u2 = r.index, p = (l2 = r.cache)[o] || (l2[o] = { indexMax: -1, queue: [] }), x2 = p.queue;
+          if (u2 <= p.indexMax) {
+            const k2 = p.store || (p.store = /* @__PURE__ */ new Map());
+            if (x2.length) {
+              for (let z = 0, Ut = x2.length; z < Ut; z += 2) {
+                const Ft = x2[z * 2], qt = x2[z * 2 + 1];
                 k2.set(Ft, qt);
               }
-              x4.length = 0;
+              x2.length = 0;
             }
-            const w3 = k2.get(u3);
-            if (w3 === false) return false;
-            if (ze(w3)) return r.index = w3, true;
-            if (w3) return r.index = w3.index, w3.output?.length && r.output.push(...w3.output), true;
+            const w2 = k2.get(u2);
+            if (w2 === false) return false;
+            if (ze(w2)) return r.index = w2, true;
+            if (w2) return r.index = w2.index, w2.output?.length && r.output.push(...w2.output), true;
           }
-          const T = r.output.length, Dt2 = n2(r);
-          if (p3.indexMax = Math.max(p3.indexMax, u3), Dt2) {
-            const k2 = r.index, w3 = r.output.length;
-            if (w3 > T) {
-              const z2 = r.output.slice(T, w3);
-              x4.push(u3, { index: k2, output: z2 });
-            } else x4.push(u3, k2);
+          const T = r.output.length, Dt2 = n(r);
+          if (p.indexMax = Math.max(p.indexMax, u2), Dt2) {
+            const k2 = r.index, w2 = r.output.length;
+            if (w2 > T) {
+              const z = r.output.slice(T, w2);
+              x2.push(u2, { index: k2, output: z });
+            } else x2.push(u2, k2);
             return true;
-          } else return x4.push(u3, false), false;
+          } else return x2.push(u2, false), false;
         };
       };
-    })(), te = (e3) => {
+    })(), te = (e2) => {
       let t;
-      return (n2) => (t || (t = R2(e3())), t(n2));
-    }, R2 = ke((e3) => {
-      if (O(e3)) return Me(e3) ? te(e3) : e3;
-      if (J(e3) || Oe(e3)) return a2(e3);
-      if (X(e3)) return M2(e3);
-      if (Ie(e3)) return $(Object.values(e3));
+      return (n) => (t || (t = R(e2())), t(n));
+    }, R = ke((e2) => {
+      if (O(e2)) return Me(e2) ? te(e2) : e2;
+      if (J(e2) || Oe(e2)) return a(e2);
+      if (X(e2)) return M(e2);
+      if (Ie(e2)) return $(Object.values(e2));
       throw new Error("Invalid rule");
-    }), b3 = (e3) => e3, Ne = (e3) => typeof e3 == "string", We = (e3) => {
-      const t = /* @__PURE__ */ new WeakMap(), n2 = /* @__PURE__ */ new WeakMap();
-      return (o2, r) => {
-        const l3 = r?.partial ? n2 : t, u3 = l3.get(o2);
-        if (u3 !== void 0) return u3;
-        const p3 = e3(o2, r);
-        return l3.set(o2, p3), p3;
+    }), b2 = (e2) => e2, Ne = (e2) => typeof e2 == "string", We = (e2) => {
+      const t = /* @__PURE__ */ new WeakMap(), n = /* @__PURE__ */ new WeakMap();
+      return (o, r) => {
+        const l2 = r?.partial ? n : t, u2 = l2.get(o);
+        if (u2 !== void 0) return u2;
+        const p = e2(o, r);
+        return l2.set(o, p), p;
       };
-    }, De = (e3) => {
-      const t = {}, n2 = {};
-      return (o2, r) => {
-        const l3 = r?.partial ? n2 : t;
-        return l3[o2] ?? (l3[o2] = e3(o2, r));
+    }, De = (e2) => {
+      const t = {}, n = {};
+      return (o, r) => {
+        const l2 = r?.partial ? n : t;
+        return l2[o] ?? (l2[o] = e2(o, r));
       };
-    }, Ue = a2(/\\./, b3), Fe = a2(/./, b3), qe = a2(/\*\*\*+/, "*"), Ge = a2(/([^/{[(!])\*\*/, (e3, t) => `${t}*`), Ve = a2(/(^|.)\*\*(?=[^*/)\]}])/, (e3, t) => `${t}*`), He = P($([Ue, qe, Ge, Ve, Fe])), Xe = He, Je = (e3) => K(e3, Xe, { memoization: false }).join(""), Ke = Je, ne = "abcdefghijklmnopqrstuvwxyz", Qe = (e3) => {
+    }, Ue = a(/\\./, b2), Fe = a(/./, b2), qe = a(/\*\*\*+/, "*"), Ge = a(/([^/{[(!])\*\*/, (e2, t) => `${t}*`), Ve = a(/(^|.)\*\*(?=[^*/)\]}])/, (e2, t) => `${t}*`), He = P($([Ue, qe, Ge, Ve, Fe])), Xe = He, Je = (e2) => K(e2, Xe, { memoization: false }).join(""), Ke = Je, ne = "abcdefghijklmnopqrstuvwxyz", Qe = (e2) => {
       let t = "";
-      for (; e3 > 0; ) {
-        const n2 = (e3 - 1) % 26;
-        t = ne[n2] + t, e3 = Math.floor((e3 - 1) / 26);
+      for (; e2 > 0; ) {
+        const n = (e2 - 1) % 26;
+        t = ne[n] + t, e2 = Math.floor((e2 - 1) / 26);
       }
       return t;
-    }, re = (e3) => {
+    }, re = (e2) => {
       let t = 0;
-      for (let n2 = 0, o2 = e3.length; n2 < o2; n2++) t = t * 26 + ne.indexOf(e3[n2]) + 1;
+      for (let n = 0, o = e2.length; n < o; n++) t = t * 26 + ne.indexOf(e2[n]) + 1;
       return t;
-    }, N2 = (e3, t) => {
-      if (t < e3) return N2(t, e3);
-      const n2 = [];
-      for (; e3 <= t; ) n2.push(e3++);
-      return n2;
-    }, Ye = (e3, t, n2) => N2(e3, t).map((o2) => String(o2).padStart(n2, "0")), oe = (e3, t) => N2(re(e3), re(t)).map(Qe), h3 = (e3) => ({ partial: false, regex: new RegExp(e3, "s"), children: [] }), j2 = (e3) => ({ children: e3 }), S = /* @__PURE__ */ (() => {
-      const e3 = (t, n2, o2) => {
-        if (o2.has(t)) return;
-        o2.add(t);
+    }, N = (e2, t) => {
+      if (t < e2) return N(t, e2);
+      const n = [];
+      for (; e2 <= t; ) n.push(e2++);
+      return n;
+    }, Ye = (e2, t, n) => N(e2, t).map((o) => String(o).padStart(n, "0")), oe = (e2, t) => N(re(e2), re(t)).map(Qe), h2 = (e2) => ({ partial: false, regex: new RegExp(e2, "s"), children: [] }), j = (e2) => ({ children: e2 }), S = /* @__PURE__ */ (() => {
+      const e2 = (t, n, o) => {
+        if (o.has(t)) return;
+        o.add(t);
         const { children: r } = t;
-        if (!r.length) r.push(n2);
-        else for (let l3 = 0, u3 = r.length; l3 < u3; l3++) e3(r[l3], n2, o2);
+        if (!r.length) r.push(n);
+        else for (let l2 = 0, u2 = r.length; l2 < u2; l2++) e2(r[l2], n, o);
       };
       return (t) => {
-        if (!t.length) return j2([]);
-        for (let n2 = t.length - 1; n2 >= 1; n2--) {
-          const o2 = /* @__PURE__ */ new Set(), r = t[n2 - 1], l3 = t[n2];
-          e3(r, l3, o2);
+        if (!t.length) return j([]);
+        for (let n = t.length - 1; n >= 1; n--) {
+          const o = /* @__PURE__ */ new Set(), r = t[n - 1], l2 = t[n];
+          e2(r, l2, o);
         }
         return t[0];
       };
-    })(), A = () => ({ regex: new RegExp("[\\\\/]", "s"), children: [] }), et = a2(/\\./, h3), tt = a2(/[$.*+?^(){}[\]\|]/, (e3) => h3(`\\${e3}`)), nt = a2(/[\\\/]/, A), rt = a2(/[^$.*+?^(){}[\]\|\\\/]+/, h3), ot = a2(/^(?:!!)*!(.*)$/, (e3, t) => h3(`(?!^${pe.compile(t).source}$).*?`)), st = a2(/^(!!)+/), it = $([ot, st]), lt = a2(/\/(\*\*\/)+/, () => j2([S([A(), h3(".+?"), A()]), A()])), ct = a2(/^(\*\*\/)+/, () => j2([h3("^"), S([h3(".*?"), A()])])), ut = a2(/\/(\*\*)$/, () => j2([S([A(), h3(".*?")]), h3("$")])), at = a2(/\*\*/, () => h3(".*?")), se = $([lt, ct, ut, at]), ft = a2(/\*\/(?!\*\*\/|\*$)/, () => S([h3("[^\\\\/]*?"), A()])), pt = a2(/\*/, () => h3("[^\\\\/]*")), ie = $([ft, pt]), le = a2("?", () => h3("[^\\\\/]")), gt2 = a2("[", b3), ht = a2("]", b3), dt2 = a2(/[!^]/, "^\\\\/"), xt2 = a2(/[a-z]-[a-z]|[0-9]-[0-9]/i, b3), mt2 = a2(/\\./, b3), $t2 = a2(/[$.*+?^(){}[\|]/, (e3) => `\\${e3}`), wt = a2(/[\\\/]/, "\\\\/"), Et2 = a2(/[^$.*+?^(){}[\]\|\\\/]+/, b3), _t2 = $([mt2, $t2, wt, xt2, Et2]), ce = M2([gt2, Y(dt2), P(_t2), ht], (e3) => h3(e3.join(""))), yt2 = a2("{", "(?:"), Rt = a2("}", ")"), At = a2(/(\d+)\.\.(\d+)/, (e3, t, n2) => Ye(+t, +n2, Math.min(t.length, n2.length)).join("|")), bt2 = a2(/([a-z]+)\.\.([a-z]+)/, (e3, t, n2) => oe(t, n2).join("|")), vt = a2(/([A-Z]+)\.\.([A-Z]+)/, (e3, t, n2) => oe(t.toLowerCase(), n2.toLowerCase()).join("|").toUpperCase()), Mt = $([At, bt2, vt]), ue = M2([yt2, Mt, Rt], (e3) => h3(e3.join(""))), St2 = a2("{"), zt = a2("}"), It2 = a2(","), Ot2 = a2(/\\./, h3), jt = a2(/[$.*+?^(){[\]\|]/, (e3) => h3(`\\${e3}`)), Tt = a2(/[\\\/]/, A), kt2 = a2(/[^$.*+?^(){}[\]\|\\\/,]+/, h3), Pt = te(() => fe), Ct2 = a2("", () => h3("(?:)")), Lt2 = Be($([se, ie, le, ce, ue, Pt, Ot2, jt, Tt, kt2]), S), ae = $([Lt2, Ct2]), fe = M2([St2, Y(M2([ae, P(M2([It2, ae]))])), zt], j2), Zt = P($([it, se, ie, le, ce, ue, fe, et, tt, nt, rt]), S), Bt2 = Zt, Nt2 = (e3) => K(e3, Bt2, { memoization: false })[0], Wt = Nt2, W = (e3, t, n2) => W.compile(e3, n2).test(t);
+    })(), A = () => ({ regex: new RegExp("[\\\\/]", "s"), children: [] }), et = a(/\\./, h2), tt = a(/[$.*+?^(){}[\]\|]/, (e2) => h2(`\\${e2}`)), nt = a(/[\\\/]/, A), rt = a(/[^$.*+?^(){}[\]\|\\\/]+/, h2), ot = a(/^(?:!!)*!(.*)$/, (e2, t) => h2(`(?!^${pe.compile(t).source}$).*?`)), st = a(/^(!!)+/), it = $([ot, st]), lt = a(/\/(\*\*\/)+/, () => j([S([A(), h2(".+?"), A()]), A()])), ct = a(/^(\*\*\/)+/, () => j([h2("^"), S([h2(".*?"), A()])])), ut = a(/\/(\*\*)$/, () => j([S([A(), h2(".*?")]), h2("$")])), at = a(/\*\*/, () => h2(".*?")), se = $([lt, ct, ut, at]), ft = a(/\*\/(?!\*\*\/|\*$)/, () => S([h2("[^\\\\/]*?"), A()])), pt = a(/\*/, () => h2("[^\\\\/]*")), ie = $([ft, pt]), le = a("?", () => h2("[^\\\\/]")), gt2 = a("[", b2), ht = a("]", b2), dt2 = a(/[!^]/, "^\\\\/"), xt2 = a(/[a-z]-[a-z]|[0-9]-[0-9]/i, b2), mt2 = a(/\\./, b2), $t2 = a(/[$.*+?^(){}[\|]/, (e2) => `\\${e2}`), wt = a(/[\\\/]/, "\\\\/"), Et2 = a(/[^$.*+?^(){}[\]\|\\\/]+/, b2), _t2 = $([mt2, $t2, wt, xt2, Et2]), ce = M([gt2, Y(dt2), P(_t2), ht], (e2) => h2(e2.join(""))), yt2 = a("{", "(?:"), Rt = a("}", ")"), At = a(/(\d+)\.\.(\d+)/, (e2, t, n) => Ye(+t, +n, Math.min(t.length, n.length)).join("|")), bt2 = a(/([a-z]+)\.\.([a-z]+)/, (e2, t, n) => oe(t, n).join("|")), vt = a(/([A-Z]+)\.\.([A-Z]+)/, (e2, t, n) => oe(t.toLowerCase(), n.toLowerCase()).join("|").toUpperCase()), Mt = $([At, bt2, vt]), ue = M([yt2, Mt, Rt], (e2) => h2(e2.join(""))), St2 = a("{"), zt = a("}"), It2 = a(","), Ot2 = a(/\\./, h2), jt = a(/[$.*+?^(){[\]\|]/, (e2) => h2(`\\${e2}`)), Tt = a(/[\\\/]/, A), kt2 = a(/[^$.*+?^(){}[\]\|\\\/,]+/, h2), Pt = te(() => fe), Ct2 = a("", () => h2("(?:)")), Lt2 = Be($([se, ie, le, ce, ue, Pt, Ot2, jt, Tt, kt2]), S), ae = $([Lt2, Ct2]), fe = M([St2, Y(M([ae, P(M([It2, ae]))])), zt], j), Zt = P($([it, se, ie, le, ce, ue, fe, et, tt, nt, rt]), S), Bt2 = Zt, Nt2 = (e2) => K(e2, Bt2, { memoization: false })[0], Wt = Nt2, W = (e2, t, n) => W.compile(e2, n).test(t);
     W.compile = (() => {
-      const e3 = De((n2, o2) => Ae(Wt(Ke(n2)), o2)), t = We((n2, o2) => ve(n2.map((r) => e3(r, o2))));
-      return (n2, o2) => Ne(n2) ? e3(n2, o2) : t(n2, o2);
+      const e2 = De((n, o) => Ae(Wt(Ke(n)), o)), t = We((n, o) => ve(n.map((r) => e2(r, o))));
+      return (n, o) => Ne(n) ? e2(n, o) : t(n, o);
     })();
     var pe = W;
-    return m2(I2);
+    return m2(I);
   })();
   return s.default || s;
 };
@@ -572,55 +569,55 @@ var Yt = () => {
   return "/";
 };
 var q = (s, c) => {
-  let i3 = "", f3 = 0, g4 = -1, d = 0, E2;
+  let i2 = "", f2 = 0, g2 = -1, d = 0, E;
   for (let m2 = 0; m2 <= s.length; ++m2) {
-    if (m2 < s.length) E2 = s[m2];
+    if (m2 < s.length) E = s[m2];
     else {
-      if (E2 === "/") break;
-      E2 = "/";
+      if (E === "/") break;
+      E = "/";
     }
-    if (E2 === "/") {
-      if (!(g4 === m2 - 1 || d === 1)) if (d === 2) {
-        if (i3.length < 2 || f3 !== 2 || !i3.endsWith(".") || i3.at(-2) !== ".") {
-          if (i3.length > 2) {
-            const I2 = i3.lastIndexOf("/");
-            I2 === -1 ? (i3 = "", f3 = 0) : (i3 = i3.slice(0, I2), f3 = i3.length - 1 - i3.lastIndexOf("/")), g4 = m2, d = 0;
+    if (E === "/") {
+      if (!(g2 === m2 - 1 || d === 1)) if (d === 2) {
+        if (i2.length < 2 || f2 !== 2 || !i2.endsWith(".") || i2.at(-2) !== ".") {
+          if (i2.length > 2) {
+            const I = i2.lastIndexOf("/");
+            I === -1 ? (i2 = "", f2 = 0) : (i2 = i2.slice(0, I), f2 = i2.length - 1 - i2.lastIndexOf("/")), g2 = m2, d = 0;
             continue;
-          } else if (i3.length > 0) {
-            i3 = "", f3 = 0, g4 = m2, d = 0;
+          } else if (i2.length > 0) {
+            i2 = "", f2 = 0, g2 = m2, d = 0;
             continue;
           }
         }
-        c && (i3 += i3.length > 0 ? "/.." : "..", f3 = 2);
-      } else i3.length > 0 ? i3 += `/${s.slice(g4 + 1, m2)}` : i3 = s.slice(g4 + 1, m2), f3 = m2 - g4 - 1;
-      g4 = m2, d = 0;
-    } else E2 === "." && d !== -1 ? ++d : d = -1;
+        c && (i2 += i2.length > 0 ? "/.." : "..", f2 = 2);
+      } else i2.length > 0 ? i2 += `/${s.slice(g2 + 1, m2)}` : i2 = s.slice(g2 + 1, m2), f2 = m2 - g2 - 1;
+      g2 = m2, d = 0;
+    } else E === "." && d !== -1 ? ++d : d = -1;
   }
-  return i3;
+  return i2;
 };
 var v = (s) => Xt.test(s);
 var G = function(s) {
   if (s.length === 0) return ".";
   s = _(s);
-  const c = Ht.exec(s), i3 = v(s), f3 = s.at(-1) === "/";
-  return s = q(s, !i3), s.length === 0 ? i3 ? "/" : f3 ? "./" : "." : (f3 && (s += "/"), F.test(s) && (s += "/"), c ? i3 ? `//${s}` : `//./${s}` : i3 && !v(s) ? `/${s}` : s);
+  const c = Ht.exec(s), i2 = v(s), f2 = s.at(-1) === "/";
+  return s = q(s, !i2), s.length === 0 ? i2 ? "/" : f2 ? "./" : "." : (f2 && (s += "/"), F.test(s) && (s += "/"), c ? i2 ? `//${s}` : `//./${s}` : i2 && !v(s) ? `/${s}` : s);
 };
 var en = (...s) => {
   let c = "";
-  for (const i3 of s) if (i3) if (c.length > 0) {
-    const f3 = c.at(-1) === "/", g4 = i3[0] === "/";
-    f3 && g4 ? c += i3.slice(1) : c += f3 || g4 ? i3 : `/${i3}`;
-  } else c += i3;
+  for (const i2 of s) if (i2) if (c.length > 0) {
+    const f2 = c.at(-1) === "/", g2 = i2[0] === "/";
+    f2 && g2 ? c += i2.slice(1) : c += f2 || g2 ? i2 : `/${i2}`;
+  } else c += i2;
   return G(c);
 };
 var U = function(...s) {
-  s = s.map((f3) => _(f3));
-  let c = "", i3 = false;
-  for (let f3 = s.length - 1; f3 >= -1 && !i3; f3--) {
-    const g4 = f3 >= 0 ? s[f3] : Yt();
-    !g4 || g4.length === 0 || (c = `${g4}/${c}`, i3 = v(g4));
+  s = s.map((f2) => _(f2));
+  let c = "", i2 = false;
+  for (let f2 = s.length - 1; f2 >= -1 && !i2; f2--) {
+    const g2 = f2 >= 0 ? s[f2] : Yt();
+    !g2 || g2.length === 0 || (c = `${g2}/${c}`, i2 = v(g2));
   }
-  return c = q(c, !i3), F.test(c) ? `${c}/` : i3 && !v(c) ? `/${c}` : c.length > 0 ? c : ".";
+  return c = q(c, !i2), F.test(c) ? `${c}/` : i2 && !v(c) ? `/${c}` : c.length > 0 ? c : ".";
 };
 var tn = function(s) {
   return _(s);
@@ -629,176 +626,42 @@ var xe = function(s) {
   return Jt.exec(_(s))?.[1] ?? "";
 };
 var nn = function(s, c) {
-  const i3 = U(s).replace(he, "$1").replace(de, "$1").split("/"), f3 = U(c).replace(he, "$1").replace(de, "$1").split("/");
-  if (f3[0][1] === ":" && i3[0][1] === ":" && i3[0] !== f3[0]) return f3.join("/");
-  const g4 = Math.min(i3.length, f3.length);
+  const i2 = U(s).replace(he, "$1").replace(de, "$1").split("/"), f2 = U(c).replace(he, "$1").replace(de, "$1").split("/");
+  if (f2[0][1] === ":" && i2[0][1] === ":" && i2[0] !== f2[0]) return f2.join("/");
+  const g2 = Math.min(i2.length, f2.length);
   let d = 0;
-  for (; d < g4 && i3[d] === f3[d]; ) d += 1;
-  const E2 = i3.length - d;
-  return [...Array.from({ length: E2 }).fill(".."), ...f3.slice(d)].join("/");
+  for (; d < g2 && i2[d] === f2[d]; ) d += 1;
+  const E = i2.length - d;
+  return [...Array.from({ length: E }).fill(".."), ...f2.slice(d)].join("/");
 };
 var me = (s) => {
-  const c = _(s).replace(Qt, ""), i3 = c.lastIndexOf("/");
-  if (i3 === -1) return v(s) ? "/" : ".";
-  const f3 = c.slice(0, i3);
-  return F.test(f3) ? `${f3}/` : f3 || (v(s) ? "/" : ".");
+  const c = _(s).replace(Qt, ""), i2 = c.lastIndexOf("/");
+  if (i2 === -1) return v(s) ? "/" : ".";
+  const f2 = c.slice(0, i2);
+  return F.test(f2) ? `${f2}/` : f2 || (v(s) ? "/" : ".");
 };
 var rn = function(s) {
-  const c = s.dir || s.root, i3 = s.base || `${s.name ?? ""}${s.ext ?? ""}`;
-  return _(c ? c === s.root ? c + i3 : `${c}/${i3}` : i3);
+  const c = s.dir || s.root, i2 = s.base || `${s.name ?? ""}${s.ext ?? ""}`;
+  return _(c ? c === s.root ? c + i2 : `${c}/${i2}` : i2);
 };
 var $e = (s, c) => {
-  const i3 = _(s), f3 = i3.slice(i3.lastIndexOf("/") + 1);
-  if (c && f3.endsWith(c)) {
-    if (c === i3) return "";
-    const g4 = f3.slice(0, -c.length);
-    if (g4.length > 0) return g4;
+  const i2 = _(s), f2 = i2.slice(i2.lastIndexOf("/") + 1);
+  if (c && f2.endsWith(c)) {
+    if (c === i2) return "";
+    const g2 = f2.slice(0, -c.length);
+    if (g2.length > 0) return g2;
   }
-  return f3;
+  return f2;
 };
 var on = function(s) {
-  const c = Kt.exec(s)?.[0]?.replaceAll("\\", "/") ?? "", i3 = $e(s), f3 = xe(i3);
-  return { base: i3, dir: me(s), ext: f3, name: i3.slice(0, i3.length - f3.length), root: c };
+  const c = Kt.exec(s)?.[0]?.replaceAll("\\", "/") ?? "", i2 = $e(s), f2 = xe(i2);
+  return { base: i2, dir: me(s), ext: f2, name: i2.slice(0, i2.length - f2.length), root: c };
 };
 var sn = (s, c) => Gt(c, G(s));
 var un = Object.defineProperty({ __proto__: null, basename: $e, delimiter: ":", dirname: me, extname: xe, format: rn, isAbsolute: v, join: en, matchesGlob: sn, normalize: G, normalizeString: q, parse: on, relative: nn, resolve: U, sep: "/", toNamespacedPath: tn }, Symbol.toStringTag, { value: "Module" });
 
-// node_modules/.pnpm/@visulima+path@5.0.0/node_modules/@visulima/path/dist/utils.js
-var g;
-var b = (e3) => (g ??= u(import.meta.url))(e3);
-var i = typeof globalThis < "u" && typeof globalThis.process < "u" ? globalThis.process : process;
-var x = (e3) => {
-  if (typeof i < "u" && i.versions && i.versions.node) {
-    const [t, s] = i.versions.node.split(".").map(Number);
-    if (t > 22 || t === 22 && s >= 3 || t === 20 && s >= 16) return i.getBuiltinModule(e3);
-  }
-  return b(e3);
-};
-var { fileURLToPath: v2 } = x("node:url");
-function w(e3) {
-  return e3 && e3.__esModule && Object.prototype.hasOwnProperty.call(e3, "default") ? e3.default : e3;
-}
-var a;
-var p;
-function y() {
-  return p || (p = 1, a = ["3dm", "3ds", "3g2", "3gp", "7z", "a", "aac", "adp", "afdesign", "afphoto", "afpub", "ai", "aif", "aiff", "alz", "ape", "apk", "appimage", "ar", "arj", "asf", "au", "avi", "bak", "baml", "bh", "bin", "bk", "bmp", "btif", "bz2", "bzip2", "cab", "caf", "cgm", "class", "cmx", "cpio", "cr2", "cr3", "cur", "dat", "dcm", "deb", "dex", "djvu", "dll", "dmg", "dng", "doc", "docm", "docx", "dot", "dotm", "dra", "DS_Store", "dsk", "dts", "dtshd", "dvb", "dwg", "dxf", "ecelp4800", "ecelp7470", "ecelp9600", "egg", "eol", "eot", "epub", "exe", "f4v", "fbs", "fh", "fla", "flac", "flatpak", "fli", "flv", "fpx", "fst", "fvt", "g3", "gh", "gif", "graffle", "gz", "gzip", "h261", "h263", "h264", "icns", "ico", "ief", "img", "ipa", "iso", "jar", "jpeg", "jpg", "jpgv", "jpm", "jxr", "key", "ktx", "lha", "lib", "lvp", "lz", "lzh", "lzma", "lzo", "m3u", "m4a", "m4v", "mar", "mdi", "mht", "mid", "midi", "mj2", "mka", "mkv", "mmr", "mng", "mobi", "mov", "movie", "mp3", "mp4", "mp4a", "mpeg", "mpg", "mpga", "mxu", "nef", "npx", "numbers", "nupkg", "o", "odp", "ods", "odt", "oga", "ogg", "ogv", "otf", "ott", "pages", "pbm", "pcx", "pdb", "pdf", "pea", "pgm", "pic", "png", "pnm", "pot", "potm", "potx", "ppa", "ppam", "ppm", "pps", "ppsm", "ppsx", "ppt", "pptm", "pptx", "psd", "pya", "pyc", "pyo", "pyv", "qt", "rar", "ras", "raw", "resources", "rgb", "rip", "rlc", "rmf", "rmvb", "rpm", "rtf", "rz", "s3m", "s7z", "scpt", "sgi", "shar", "snap", "sil", "sketch", "slk", "smv", "snk", "so", "stl", "suo", "sub", "swf", "tar", "tbz", "tbz2", "tga", "tgz", "thmx", "tif", "tiff", "tlz", "ttc", "ttf", "txz", "udf", "uvh", "uvi", "uvm", "uvp", "uvs", "uvu", "viv", "vob", "war", "wav", "wax", "wbmp", "wdp", "weba", "webm", "webp", "whl", "wim", "wm", "wma", "wmv", "wmx", "woff", "woff2", "wrm", "wvx", "xbm", "xif", "xla", "xlam", "xls", "xlsb", "xlsm", "xlsx", "xlt", "xltm", "xltx", "xm", "xmind", "xpi", "xpm", "xwd", "xz", "z", "zip", "zipx"]), a;
-}
-var z = y();
-var j = w(z);
-var _2 = new Set(j);
-var C = (e3) => _(e3 instanceof URL ? v2(e3) : e3);
-
-// node_modules/.pnpm/@visulima+fs@7.0.0_@visulima+yaml@2.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/assertValidFileOrDirectoryPath-CAHgg-jK.js
-var n = (t) => {
-  if (!t || !(t instanceof URL) && typeof t != "string") throw new TypeError("Path must be a non-empty string or URL.");
-};
-
-// node_modules/.pnpm/@visulima+fs@7.0.0_@visulima+yaml@2.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/WalkError-B8qTd-v-.js
-var e = class extends Error {
-  root;
-  constructor(r, o2) {
-    super(`${r instanceof Error ? r.message : String(r)} for path "${o2}"`), this.cause = r, this.root = o2;
-  }
-  get name() {
-    return "WalkError";
-  }
-  set name(r) {
-    throw new Error("Cannot overwrite name of WalkError");
-  }
-};
-
-// node_modules/.pnpm/@visulima+fs@7.0.0_@visulima+yaml@2.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/walk-include-aizKyl9e.js
-var o = (e3) => {
-  const t = [], r = /* @__PURE__ */ new Set();
-  let s = 0;
-  for (const a2 of e3) {
-    if (a2 === "{") t.push(s);
-    else if (a2 === "}") {
-      const l3 = t.pop();
-      l3 !== void 0 && (r.add(l3), r.add(s));
-    }
-    s += 1;
-  }
-  let i3 = 0, c = 0, n2 = "";
-  for (const a2 of e3) a2 === "{" ? r.has(c) ? (n2 += "(", i3 += 1) : n2 += String.raw`\{` : a2 === "}" ? r.has(c) ? (n2 += ")", i3 -= 1) : n2 += String.raw`\}` : a2 === "," && i3 > 0 ? n2 += "|" : n2 += a2, c += 1;
-  return n2;
-};
-var g2 = (e3) => {
-  const t = e3.replace(/[$()+\\^]/g, String.raw`\$&`).replace(/\.\*/g, ".([^/]*)").replace(/\*\*/g, "(.*)").replace(/(?<!\.)\*(?!\*)/g, "([^/]*)").replace(/\?/g, "[^/]").replace(/\.(?!\*)/g, String.raw`\.`), r = o(t).replace(/\[!(.*?)\]/g, "[^$1]");
-  try {
-    return new RegExp(`^${r}$`);
-  } catch (s) {
-    throw new Error(`Invalid glob pattern: ${e3}`, { cause: s });
-  }
-};
-var p2 = class {
-  name;
-  path;
-  #e;
-  constructor(t, r, s) {
-    this.#e = t, this.name = r, this.path = s;
-  }
-  isDirectory() {
-    return this.#e.isDirectory();
-  }
-  isFile() {
-    return this.#e.isFile();
-  }
-  isSymbolicLink() {
-    return this.#e.isSymbolicLink();
-  }
-};
-var h = (e3, t, r) => new p2(e3, t, r);
-var f = (e3, t, r, s) => {
-  if (Array.isArray(t) && t.length > 0 && !t.some((c) => e3.endsWith(c))) return false;
-  const i3 = e3.includes("\\") ? e3.replaceAll("\\", "/") : e3;
-  return r && !r.some((c) => c.test(i3)) ? false : !s?.some((c) => c.test(i3));
-};
-
-// node_modules/.pnpm/@visulima+fs@7.0.0_@visulima+yaml@2.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/walkSync-BWGgTwUy.js
-import { createRequire as x2 } from "node:module";
-var E;
-var q2 = (e3) => (E ??= x2(import.meta.url))(e3);
-var l = typeof globalThis < "u" && typeof globalThis.process < "u" ? globalThis.process : process;
-var N = (e3) => {
-  if (typeof l < "u" && l.versions && l.versions.node) {
-    const [t, s] = l.versions.node.split(".").map(Number);
-    if (t > 22 || t === 22 && s >= 3 || t === 20 && s >= 16) return l.getBuiltinModule(e3);
-  }
-  return q2(e3);
-};
-var { readdirSync: R, realpathSync: M, statSync: I } = N("node:fs");
-var V = (e3) => {
-  const t = G(e3), s = I(t);
-  return h(s, $e(t), t);
-};
-function* L(e3, t = {}) {
-  const { extensions: s, followSymlinks: u3 = false, includeDirs: _3 = true, includeFiles: v3 = true, includeSymlinks: g4 = true, match: k2, maxDepth: d = Number.POSITIVE_INFINITY, skip: D3 } = t;
-  if (n(e3), d < 0) return;
-  const p3 = t.visited ?? /* @__PURE__ */ new Set(), c = k2 ? k2.map((i3) => typeof i3 == "string" ? g2(i3) : i3) : void 0, r = D3 ? D3.map((i3) => typeof i3 == "string" ? g2(i3) : i3) : void 0;
-  if (e3 = U(C(e3)), _3 && f(e3, s, c, r) && (yield V(e3)), !(d < 1 || !f(e3, void 0, void 0, r))) try {
-    const i3 = R(e3, { withFileTypes: true });
-    for (const o2 of i3) {
-      let n2 = en(e3, o2.name), S = o2, { name: w3 } = o2, b3 = o2.isDirectory(), j2 = o2.isFile();
-      if (o2.isSymbolicLink()) if (u3) {
-        const a2 = G(M(n2));
-        if (p3.has(a2)) continue;
-        n2 = a2;
-        const h3 = I(a2);
-        b3 = h3.isDirectory(), j2 = h3.isFile(), S = h3, w3 = $e(a2);
-      } else if (g4 && f(n2, s, c, r)) {
-        yield h(o2, o2.name, G(n2));
-        continue;
-      } else continue;
-      b3 ? (u3 && p3.add(n2), yield* L(n2, { extensions: s, followSymlinks: u3, includeDirs: _3, includeFiles: v3, includeSymlinks: g4, match: c, maxDepth: d - 1, skip: r, visited: p3 })) : j2 && v3 && f(n2, s, c, r) && (yield h(S, w3, G(n2)));
-    }
-  } catch (i3) {
-    throw i3 instanceof e ? i3 : new e(i3, e3);
-  }
-}
-
 // node_modules/.pnpm/@visulima+fs@7.0.0_@visulima+yaml@2.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/packem_shared/_commonjsHelpers-CqkleIqs.js
-function e2(t) {
+function e(t) {
   return t && t.__esModule && Object.prototype.hasOwnProperty.call(t, "default") ? t.default : t;
 }
 
@@ -809,36 +672,36 @@ var Ct;
 function _t() {
   if (Ct) return bt;
   Ct = 1;
-  const g4 = "\\\\/", d = `[^${g4}]`, q4 = 0, F3 = /* @__PURE__ */ Symbol("unignore"), O = "\\.", c = "\\+", a2 = "\\?", i3 = "\\/", f3 = "(?=.)", v3 = "[^/]", y2 = `(?:${i3}|$)`, M2 = `(?:^|${i3})`, I2 = `${O}{1,2}${y2}`, w3 = `(?!${O})`, K = `(?!${M2}${I2})`, it = `(?!${O}{0,1}${y2})`, j2 = `(?!${I2})`, tt = `[^.${i3}]`, z2 = `${v3}*?`, l3 = { DOT_LITERAL: O, PLUS_LITERAL: c, QMARK_LITERAL: a2, SLASH_LITERAL: i3, ONE_CHAR: f3, QMARK: v3, END_ANCHOR: y2, DOTS_SLASH: I2, NO_DOT: w3, NO_DOTS: K, NO_DOT_SLASH: it, NO_DOTS_SLASH: j2, QMARK_NO_DOT: tt, STAR: z2, START_ANCHOR: M2, SEP: "/" }, t = { ...l3, SLASH_LITERAL: `[${g4}]`, QMARK: d, STAR: `${d}*?`, DOTS_SLASH: `${O}{1,2}(?:[${g4}]|$)`, NO_DOT: `(?!${O})`, NO_DOTS: `(?!(?:^|[${g4}])${O}{1,2}(?:[${g4}]|$))`, NO_DOT_SLASH: `(?!${O}{0,1}(?:[${g4}]|$))`, NO_DOTS_SLASH: `(?!${O}{1,2}(?:[${g4}]|$))`, QMARK_NO_DOT: `[^.${g4}]`, START_ANCHOR: `(?:^|[${g4}])`, END_ANCHOR: `(?:[${g4}]|$)`, SEP: "\\" }, E2 = { __proto__: null, alnum: "a-zA-Z0-9", alpha: "a-zA-Z", ascii: "\\x00-\\x7F", blank: " \\t", cntrl: "\\x00-\\x1F\\x7F", digit: "0-9", graph: "\\x21-\\x7E", lower: "a-z", print: "\\x20-\\x7E ", punct: "\\-!\"#$%&'()\\*+,./:;<=>?@[\\]^_`{|}~", space: " \\t\\r\\n\\v\\f", upper: "A-Z", word: "A-Za-z0-9_", xdigit: "A-Fa-f0-9" };
-  return bt = { DEFAULT_MAX_EXTGLOB_RECURSION: q4, MAX_LENGTH: 1024 * 64, POSIX_REGEX_SOURCE: E2, UNIGNORE: F3, REGEX_BACKSLASH: /\\(?![*+?^${}(|)[\]])/g, REGEX_NON_SPECIAL_CHARS: /^[^@![\].,$*+?^{}()|\\/]+/, REGEX_SPECIAL_CHARS: /[-*+?.^${}(|)[\]]/, REGEX_SPECIAL_CHARS_BACKREF: /(\\?)((\W)(\3*))/g, REGEX_SPECIAL_CHARS_GLOBAL: /([-*+?.^${}(|)[\]])/g, REGEX_REMOVE_BACKSLASH: /(?:\[.*?[^\\]\]|\\(?=.))/g, REPLACEMENTS: { __proto__: null, "***": "*", "**/**": "**", "**/**/**": "**" }, CHAR_0: 48, CHAR_9: 57, CHAR_UPPERCASE_A: 65, CHAR_LOWERCASE_A: 97, CHAR_UPPERCASE_Z: 90, CHAR_LOWERCASE_Z: 122, CHAR_LEFT_PARENTHESES: 40, CHAR_RIGHT_PARENTHESES: 41, CHAR_ASTERISK: 42, CHAR_AMPERSAND: 38, CHAR_AT: 64, CHAR_BACKWARD_SLASH: 92, CHAR_CARRIAGE_RETURN: 13, CHAR_CIRCUMFLEX_ACCENT: 94, CHAR_COLON: 58, CHAR_COMMA: 44, CHAR_DOT: 46, CHAR_DOUBLE_QUOTE: 34, CHAR_EQUAL: 61, CHAR_EXCLAMATION_MARK: 33, CHAR_FORM_FEED: 12, CHAR_FORWARD_SLASH: 47, CHAR_GRAVE_ACCENT: 96, CHAR_HASH: 35, CHAR_HYPHEN_MINUS: 45, CHAR_LEFT_ANGLE_BRACKET: 60, CHAR_LEFT_CURLY_BRACE: 123, CHAR_LEFT_SQUARE_BRACKET: 91, CHAR_LINE_FEED: 10, CHAR_NO_BREAK_SPACE: 160, CHAR_PERCENT: 37, CHAR_PLUS: 43, CHAR_QUESTION_MARK: 63, CHAR_RIGHT_ANGLE_BRACKET: 62, CHAR_RIGHT_CURLY_BRACE: 125, CHAR_RIGHT_SQUARE_BRACKET: 93, CHAR_SEMICOLON: 59, CHAR_SINGLE_QUOTE: 39, CHAR_SPACE: 32, CHAR_TAB: 9, CHAR_UNDERSCORE: 95, CHAR_VERTICAL_LINE: 124, CHAR_ZERO_WIDTH_NOBREAK_SPACE: 65279, extglobChars(h3) {
-    return { "!": { type: "negate", open: "(?:(?!(?:", close: `))${h3.STAR})` }, "?": { type: "qmark", open: "(?:", close: ")?" }, "+": { type: "plus", open: "(?:", close: ")+" }, "*": { type: "star", open: "(?:", close: ")*" }, "@": { type: "at", open: "(?:", close: ")" } };
-  }, globChars(h3) {
-    return h3 === true ? t : l3;
+  const g2 = "\\\\/", d = `[^${g2}]`, q3 = 0, F3 = /* @__PURE__ */ Symbol("unignore"), O = "\\.", c = "\\+", a = "\\?", i2 = "\\/", f2 = "(?=.)", v2 = "[^/]", y = `(?:${i2}|$)`, M = `(?:^|${i2})`, I = `${O}{1,2}${y}`, w2 = `(?!${O})`, K = `(?!${M}${I})`, it = `(?!${O}{0,1}${y})`, j = `(?!${I})`, tt = `[^.${i2}]`, z = `${v2}*?`, l2 = { DOT_LITERAL: O, PLUS_LITERAL: c, QMARK_LITERAL: a, SLASH_LITERAL: i2, ONE_CHAR: f2, QMARK: v2, END_ANCHOR: y, DOTS_SLASH: I, NO_DOT: w2, NO_DOTS: K, NO_DOT_SLASH: it, NO_DOTS_SLASH: j, QMARK_NO_DOT: tt, STAR: z, START_ANCHOR: M, SEP: "/" }, t = { ...l2, SLASH_LITERAL: `[${g2}]`, QMARK: d, STAR: `${d}*?`, DOTS_SLASH: `${O}{1,2}(?:[${g2}]|$)`, NO_DOT: `(?!${O})`, NO_DOTS: `(?!(?:^|[${g2}])${O}{1,2}(?:[${g2}]|$))`, NO_DOT_SLASH: `(?!${O}{0,1}(?:[${g2}]|$))`, NO_DOTS_SLASH: `(?!${O}{1,2}(?:[${g2}]|$))`, QMARK_NO_DOT: `[^.${g2}]`, START_ANCHOR: `(?:^|[${g2}])`, END_ANCHOR: `(?:[${g2}]|$)`, SEP: "\\" }, E = { __proto__: null, alnum: "a-zA-Z0-9", alpha: "a-zA-Z", ascii: "\\x00-\\x7F", blank: " \\t", cntrl: "\\x00-\\x1F\\x7F", digit: "0-9", graph: "\\x21-\\x7E", lower: "a-z", print: "\\x20-\\x7E ", punct: "\\-!\"#$%&'()\\*+,./:;<=>?@[\\]^_`{|}~", space: " \\t\\r\\n\\v\\f", upper: "A-Z", word: "A-Za-z0-9_", xdigit: "A-Fa-f0-9" };
+  return bt = { DEFAULT_MAX_EXTGLOB_RECURSION: q3, MAX_LENGTH: 1024 * 64, POSIX_REGEX_SOURCE: E, UNIGNORE: F3, REGEX_BACKSLASH: /\\(?![*+?^${}(|)[\]])/g, REGEX_NON_SPECIAL_CHARS: /^[^@![\].,$*+?^{}()|\\/]+/, REGEX_SPECIAL_CHARS: /[-*+?.^${}(|)[\]]/, REGEX_SPECIAL_CHARS_BACKREF: /(\\?)((\W)(\3*))/g, REGEX_SPECIAL_CHARS_GLOBAL: /([-*+?.^${}(|)[\]])/g, REGEX_REMOVE_BACKSLASH: /(?:\[.*?[^\\]\]|\\(?=.))/g, REPLACEMENTS: { __proto__: null, "***": "*", "**/**": "**", "**/**/**": "**" }, CHAR_0: 48, CHAR_9: 57, CHAR_UPPERCASE_A: 65, CHAR_LOWERCASE_A: 97, CHAR_UPPERCASE_Z: 90, CHAR_LOWERCASE_Z: 122, CHAR_LEFT_PARENTHESES: 40, CHAR_RIGHT_PARENTHESES: 41, CHAR_ASTERISK: 42, CHAR_AMPERSAND: 38, CHAR_AT: 64, CHAR_BACKWARD_SLASH: 92, CHAR_CARRIAGE_RETURN: 13, CHAR_CIRCUMFLEX_ACCENT: 94, CHAR_COLON: 58, CHAR_COMMA: 44, CHAR_DOT: 46, CHAR_DOUBLE_QUOTE: 34, CHAR_EQUAL: 61, CHAR_EXCLAMATION_MARK: 33, CHAR_FORM_FEED: 12, CHAR_FORWARD_SLASH: 47, CHAR_GRAVE_ACCENT: 96, CHAR_HASH: 35, CHAR_HYPHEN_MINUS: 45, CHAR_LEFT_ANGLE_BRACKET: 60, CHAR_LEFT_CURLY_BRACE: 123, CHAR_LEFT_SQUARE_BRACKET: 91, CHAR_LINE_FEED: 10, CHAR_NO_BREAK_SPACE: 160, CHAR_PERCENT: 37, CHAR_PLUS: 43, CHAR_QUESTION_MARK: 63, CHAR_RIGHT_ANGLE_BRACKET: 62, CHAR_RIGHT_CURLY_BRACE: 125, CHAR_RIGHT_SQUARE_BRACKET: 93, CHAR_SEMICOLON: 59, CHAR_SINGLE_QUOTE: 39, CHAR_SPACE: 32, CHAR_TAB: 9, CHAR_UNDERSCORE: 95, CHAR_VERTICAL_LINE: 124, CHAR_ZERO_WIDTH_NOBREAK_SPACE: 65279, extglobChars(h2) {
+    return { "!": { type: "negate", open: "(?:(?!(?:", close: `))${h2.STAR})` }, "?": { type: "qmark", open: "(?:", close: ")?" }, "+": { type: "plus", open: "(?:", close: ")+" }, "*": { type: "star", open: "(?:", close: ")*" }, "@": { type: "at", open: "(?:", close: ")" } };
+  }, globChars(h2) {
+    return h2 === true ? t : l2;
   } }, bt;
 }
 var $t;
 function Et() {
-  return $t || ($t = 1, (function(g4) {
-    const { REGEX_BACKSLASH: d, REGEX_REMOVE_BACKSLASH: q4, REGEX_SPECIAL_CHARS: F3, REGEX_SPECIAL_CHARS_GLOBAL: O } = _t();
-    g4.isObject = (c) => c !== null && typeof c == "object" && !Array.isArray(c), g4.hasRegexChars = (c) => F3.test(c), g4.isRegexChar = (c) => c.length === 1 && g4.hasRegexChars(c), g4.escapeRegex = (c) => c.replace(O, "\\$1"), g4.toPosixSlashes = (c) => c.replace(d, "/"), g4.isWindows = () => {
+  return $t || ($t = 1, (function(g2) {
+    const { REGEX_BACKSLASH: d, REGEX_REMOVE_BACKSLASH: q3, REGEX_SPECIAL_CHARS: F3, REGEX_SPECIAL_CHARS_GLOBAL: O } = _t();
+    g2.isObject = (c) => c !== null && typeof c == "object" && !Array.isArray(c), g2.hasRegexChars = (c) => F3.test(c), g2.isRegexChar = (c) => c.length === 1 && g2.hasRegexChars(c), g2.escapeRegex = (c) => c.replace(O, "\\$1"), g2.toPosixSlashes = (c) => c.replace(d, "/"), g2.isWindows = () => {
       if (typeof navigator < "u" && navigator.platform) {
         const c = navigator.platform.toLowerCase();
         return c === "win32" || c === "windows";
       }
       return process.platform ? process.platform === "win32" : false;
-    }, g4.removeBackslashes = (c) => c.replace(q4, (a2) => a2 === "\\" ? "" : a2), g4.escapeLast = (c, a2, i3) => {
-      const f3 = c.lastIndexOf(a2, i3);
-      return f3 === -1 ? c : c[f3 - 1] === "\\" ? g4.escapeLast(c, a2, f3 - 1) : `${c.slice(0, f3)}\\${c.slice(f3)}`;
-    }, g4.removePrefix = (c, a2 = {}) => {
-      let i3 = c;
-      return i3.startsWith("./") && (i3 = i3.slice(2), a2.prefix = "./"), i3;
-    }, g4.wrapOutput = (c, a2 = {}, i3 = {}) => {
-      const f3 = i3.contains ? "" : "^", v3 = i3.contains ? "" : "$";
-      let y2 = `${f3}(?:${c})${v3}`;
-      return a2.negated === true && (y2 = `(?:^(?!${y2}).*$)`), y2;
-    }, g4.basename = (c, { windows: a2 } = {}) => {
-      const i3 = c.split(a2 ? /[\\/]/ : "/"), f3 = i3[i3.length - 1];
-      return f3 === "" ? i3[i3.length - 2] : f3;
+    }, g2.removeBackslashes = (c) => c.replace(q3, (a) => a === "\\" ? "" : a), g2.escapeLast = (c, a, i2) => {
+      const f2 = c.lastIndexOf(a, i2);
+      return f2 === -1 ? c : c[f2 - 1] === "\\" ? g2.escapeLast(c, a, f2 - 1) : `${c.slice(0, f2)}\\${c.slice(f2)}`;
+    }, g2.removePrefix = (c, a = {}) => {
+      let i2 = c;
+      return i2.startsWith("./") && (i2 = i2.slice(2), a.prefix = "./"), i2;
+    }, g2.wrapOutput = (c, a = {}, i2 = {}) => {
+      const f2 = i2.contains ? "" : "^", v2 = i2.contains ? "" : "$";
+      let y = `${f2}(?:${c})${v2}`;
+      return a.negated === true && (y = `(?:^(?!${y}).*$)`), y;
+    }, g2.basename = (c, { windows: a } = {}) => {
+      const i2 = c.split(a ? /[\\/]/ : "/"), f2 = i2[i2.length - 1];
+      return f2 === "" ? i2[i2.length - 2] : f2;
     };
   })(gt)), gt;
 }
@@ -847,64 +710,64 @@ var Ht2;
 function Nt() {
   if (Ht2) return xt;
   Ht2 = 1;
-  const g4 = Et(), { CHAR_ASTERISK: d, CHAR_AT: q4, CHAR_BACKWARD_SLASH: F3, CHAR_COMMA: O, CHAR_DOT: c, CHAR_EXCLAMATION_MARK: a2, CHAR_FORWARD_SLASH: i3, CHAR_LEFT_CURLY_BRACE: f3, CHAR_LEFT_PARENTHESES: v3, CHAR_LEFT_SQUARE_BRACKET: y2, CHAR_PLUS: M2, CHAR_QUESTION_MARK: I2, CHAR_RIGHT_CURLY_BRACE: w3, CHAR_RIGHT_PARENTHESES: K, CHAR_RIGHT_SQUARE_BRACKET: it } = _t(), j2 = (s) => s === i3 || s === F3, tt = (s) => {
+  const g2 = Et(), { CHAR_ASTERISK: d, CHAR_AT: q3, CHAR_BACKWARD_SLASH: F3, CHAR_COMMA: O, CHAR_DOT: c, CHAR_EXCLAMATION_MARK: a, CHAR_FORWARD_SLASH: i2, CHAR_LEFT_CURLY_BRACE: f2, CHAR_LEFT_PARENTHESES: v2, CHAR_LEFT_SQUARE_BRACKET: y, CHAR_PLUS: M, CHAR_QUESTION_MARK: I, CHAR_RIGHT_CURLY_BRACE: w2, CHAR_RIGHT_PARENTHESES: K, CHAR_RIGHT_SQUARE_BRACKET: it } = _t(), j = (s) => s === i2 || s === F3, tt = (s) => {
     s.isPrefix !== true && (s.depth = s.isGlobstar ? 1 / 0 : 1);
   };
-  return xt = (s, l3) => {
-    const t = l3 || {}, E2 = s.length - 1, h3 = t.parts === true || t.scanToEnd === true, A = [], p3 = [], R2 = [];
-    let P = s, U2 = -1, B = 0, et = 0, Q = false, rt = false, N2 = false, at = false, ft = false, nt = false, H = false, st = false, ht = false, W = false, X = 0, V2, _3, S = { value: "", depth: 0, isGlob: false };
-    const n2 = () => U2 >= E2, Z = () => P.charCodeAt(U2 + 1), G2 = () => (V2 = _3, P.charCodeAt(++U2));
-    for (; U2 < E2; ) {
-      _3 = G2();
-      let C3;
-      if (_3 === F3) {
-        H = S.backslashes = true, _3 = G2(), _3 === f3 && (nt = true);
+  return xt = (s, l2) => {
+    const t = l2 || {}, E = s.length - 1, h2 = t.parts === true || t.scanToEnd === true, A = [], p = [], R = [];
+    let P = s, U2 = -1, B = 0, et = 0, Q = false, rt = false, N = false, at = false, ft = false, nt = false, H = false, st = false, ht = false, W = false, X = 0, V, _2, S = { value: "", depth: 0, isGlob: false };
+    const n = () => U2 >= E, Z = () => P.charCodeAt(U2 + 1), G2 = () => (V = _2, P.charCodeAt(++U2));
+    for (; U2 < E; ) {
+      _2 = G2();
+      let C2;
+      if (_2 === F3) {
+        H = S.backslashes = true, _2 = G2(), _2 === f2 && (nt = true);
         continue;
       }
-      if (nt === true || _3 === f3) {
-        for (X++; n2() !== true && (_3 = G2()); ) {
-          if (_3 === F3) {
+      if (nt === true || _2 === f2) {
+        for (X++; n() !== true && (_2 = G2()); ) {
+          if (_2 === F3) {
             H = S.backslashes = true, G2();
             continue;
           }
-          if (_3 === f3) {
+          if (_2 === f2) {
             X++;
             continue;
           }
-          if (nt !== true && _3 === c && (_3 = G2()) === c) {
-            if (Q = S.isBrace = true, N2 = S.isGlob = true, W = true, h3 === true) continue;
+          if (nt !== true && _2 === c && (_2 = G2()) === c) {
+            if (Q = S.isBrace = true, N = S.isGlob = true, W = true, h2 === true) continue;
             break;
           }
-          if (nt !== true && _3 === O) {
-            if (Q = S.isBrace = true, N2 = S.isGlob = true, W = true, h3 === true) continue;
+          if (nt !== true && _2 === O) {
+            if (Q = S.isBrace = true, N = S.isGlob = true, W = true, h2 === true) continue;
             break;
           }
-          if (_3 === w3 && (X--, X === 0)) {
+          if (_2 === w2 && (X--, X === 0)) {
             nt = false, Q = S.isBrace = true, W = true;
             break;
           }
         }
-        if (h3 === true) continue;
+        if (h2 === true) continue;
         break;
       }
-      if (_3 === i3) {
-        if (A.push(U2), p3.push(S), S = { value: "", depth: 0, isGlob: false }, W === true) continue;
-        if (V2 === c && U2 === B + 1) {
+      if (_2 === i2) {
+        if (A.push(U2), p.push(S), S = { value: "", depth: 0, isGlob: false }, W === true) continue;
+        if (V === c && U2 === B + 1) {
           B += 2;
           continue;
         }
         et = U2 + 1;
         continue;
       }
-      if (t.noext !== true && (_3 === M2 || _3 === q4 || _3 === d || _3 === I2 || _3 === a2) === true && Z() === v3) {
-        if (N2 = S.isGlob = true, at = S.isExtglob = true, W = true, _3 === a2 && U2 === B && (ht = true), h3 === true) {
-          for (; n2() !== true && (_3 = G2()); ) {
-            if (_3 === F3) {
-              H = S.backslashes = true, _3 = G2();
+      if (t.noext !== true && (_2 === M || _2 === q3 || _2 === d || _2 === I || _2 === a) === true && Z() === v2) {
+        if (N = S.isGlob = true, at = S.isExtglob = true, W = true, _2 === a && U2 === B && (ht = true), h2 === true) {
+          for (; n() !== true && (_2 = G2()); ) {
+            if (_2 === F3) {
+              H = S.backslashes = true, _2 = G2();
               continue;
             }
-            if (_3 === K) {
-              N2 = S.isGlob = true, W = true;
+            if (_2 === K) {
+              N = S.isGlob = true, W = true;
               break;
             }
           }
@@ -912,40 +775,40 @@ function Nt() {
         }
         break;
       }
-      if (_3 === d) {
-        if (V2 === d && (ft = S.isGlobstar = true), N2 = S.isGlob = true, W = true, h3 === true) continue;
+      if (_2 === d) {
+        if (V === d && (ft = S.isGlobstar = true), N = S.isGlob = true, W = true, h2 === true) continue;
         break;
       }
-      if (_3 === I2) {
-        if (N2 = S.isGlob = true, W = true, h3 === true) continue;
+      if (_2 === I) {
+        if (N = S.isGlob = true, W = true, h2 === true) continue;
         break;
       }
-      if (_3 === y2) {
-        for (; n2() !== true && (C3 = G2()); ) {
-          if (C3 === F3) {
+      if (_2 === y) {
+        for (; n() !== true && (C2 = G2()); ) {
+          if (C2 === F3) {
             H = S.backslashes = true, G2();
             continue;
           }
-          if (C3 === it) {
-            rt = S.isBracket = true, N2 = S.isGlob = true, W = true;
+          if (C2 === it) {
+            rt = S.isBracket = true, N = S.isGlob = true, W = true;
             break;
           }
         }
-        if (h3 === true) continue;
+        if (h2 === true) continue;
         break;
       }
-      if (t.nonegate !== true && _3 === a2 && U2 === B) {
+      if (t.nonegate !== true && _2 === a && U2 === B) {
         st = S.negated = true, B++;
         continue;
       }
-      if (t.noparen !== true && _3 === v3) {
-        if (N2 = S.isGlob = true, h3 === true) {
-          for (; n2() !== true && (_3 = G2()); ) {
-            if (_3 === v3) {
-              H = S.backslashes = true, _3 = G2();
+      if (t.noparen !== true && _2 === v2) {
+        if (N = S.isGlob = true, h2 === true) {
+          for (; n() !== true && (_2 = G2()); ) {
+            if (_2 === v2) {
+              H = S.backslashes = true, _2 = G2();
               continue;
             }
-            if (_3 === K) {
+            if (_2 === K) {
               W = true;
               break;
             }
@@ -954,26 +817,26 @@ function Nt() {
         }
         break;
       }
-      if (N2 === true) {
-        if (W = true, h3 === true) continue;
+      if (N === true) {
+        if (W = true, h2 === true) continue;
         break;
       }
     }
-    t.noext === true && (at = false, N2 = false);
-    let k2 = P, e3 = "", r = "";
-    B > 0 && (e3 = P.slice(0, B), P = P.slice(B), et -= B), k2 && N2 === true && et > 0 ? (k2 = P.slice(0, et), r = P.slice(et)) : N2 === true ? (k2 = "", r = P) : k2 = P, k2 && k2 !== "" && k2 !== "/" && k2 !== P && j2(k2.charCodeAt(k2.length - 1)) && (k2 = k2.slice(0, -1)), t.unescape === true && (r && (r = g4.removeBackslashes(r)), k2 && H === true && (k2 = g4.removeBackslashes(k2)));
-    const J = { prefix: e3, input: s, start: B, base: k2, glob: r, isBrace: Q, isBracket: rt, isGlob: N2, isExtglob: at, isGlobstar: ft, negated: st, negatedExtglob: ht };
-    if (t.tokens === true && (J.maxDepth = 0, j2(_3) || p3.push(S), J.tokens = p3), t.parts === true || t.tokens === true) {
-      let C3;
-      for (let L2 = 0; L2 < A.length; L2++) {
-        const ct = C3 ? C3 + 1 : B, Y = A[L2], lt = s.slice(ct, Y);
-        t.tokens && (L2 === 0 && B !== 0 ? (p3[L2].isPrefix = true, p3[L2].value = e3) : p3[L2].value = lt, tt(p3[L2]), J.maxDepth += p3[L2].depth), (L2 !== 0 || lt !== "") && R2.push(lt), C3 = Y;
+    t.noext === true && (at = false, N = false);
+    let k2 = P, e2 = "", r = "";
+    B > 0 && (e2 = P.slice(0, B), P = P.slice(B), et -= B), k2 && N === true && et > 0 ? (k2 = P.slice(0, et), r = P.slice(et)) : N === true ? (k2 = "", r = P) : k2 = P, k2 && k2 !== "" && k2 !== "/" && k2 !== P && j(k2.charCodeAt(k2.length - 1)) && (k2 = k2.slice(0, -1)), t.unescape === true && (r && (r = g2.removeBackslashes(r)), k2 && H === true && (k2 = g2.removeBackslashes(k2)));
+    const J = { prefix: e2, input: s, start: B, base: k2, glob: r, isBrace: Q, isBracket: rt, isGlob: N, isExtglob: at, isGlobstar: ft, negated: st, negatedExtglob: ht };
+    if (t.tokens === true && (J.maxDepth = 0, j(_2) || p.push(S), J.tokens = p), t.parts === true || t.tokens === true) {
+      let C2;
+      for (let L = 0; L < A.length; L++) {
+        const ct = C2 ? C2 + 1 : B, Y = A[L], lt = s.slice(ct, Y);
+        t.tokens && (L === 0 && B !== 0 ? (p[L].isPrefix = true, p[L].value = e2) : p[L].value = lt, tt(p[L]), J.maxDepth += p[L].depth), (L !== 0 || lt !== "") && R.push(lt), C2 = Y;
       }
-      if (C3 && C3 + 1 < s.length) {
-        const L2 = s.slice(C3 + 1);
-        R2.push(L2), t.tokens && (p3[p3.length - 1].value = L2, tt(p3[p3.length - 1]), J.maxDepth += p3[p3.length - 1].depth);
+      if (C2 && C2 + 1 < s.length) {
+        const L = s.slice(C2 + 1);
+        R.push(L), t.tokens && (p[p.length - 1].value = L, tt(p[p.length - 1]), J.maxDepth += p[p.length - 1].depth);
       }
-      J.slashes = A, J.parts = R2;
+      J.slashes = A, J.parts = R;
     }
     return J;
   }, xt;
@@ -983,586 +846,586 @@ var mt;
 function kt() {
   if (mt) return St;
   mt = 1;
-  const g4 = _t(), d = Et(), { MAX_LENGTH: q4, POSIX_REGEX_SOURCE: F3, REGEX_NON_SPECIAL_CHARS: O, REGEX_SPECIAL_CHARS_BACKREF: c, REPLACEMENTS: a2 } = g4, i3 = (s, l3) => {
-    if (typeof l3.expandRange == "function") return l3.expandRange(...s, l3);
+  const g2 = _t(), d = Et(), { MAX_LENGTH: q3, POSIX_REGEX_SOURCE: F3, REGEX_NON_SPECIAL_CHARS: O, REGEX_SPECIAL_CHARS_BACKREF: c, REPLACEMENTS: a } = g2, i2 = (s, l2) => {
+    if (typeof l2.expandRange == "function") return l2.expandRange(...s, l2);
     s.sort();
     const t = `[${s.join("-")}]`;
     try {
       new RegExp(t);
     } catch {
-      return s.map((h3) => d.escapeRegex(h3)).join("..");
+      return s.map((h2) => d.escapeRegex(h2)).join("..");
     }
     return t;
-  }, f3 = (s, l3) => `Missing ${s}: "${l3}" - use "\\\\${l3}" to match literal characters`, v3 = (s) => {
-    const l3 = [];
-    let t = 0, E2 = 0, h3 = 0, A = "", p3 = false;
-    for (const R2 of s) {
-      if (p3 === true) {
-        A += R2, p3 = false;
+  }, f2 = (s, l2) => `Missing ${s}: "${l2}" - use "\\\\${l2}" to match literal characters`, v2 = (s) => {
+    const l2 = [];
+    let t = 0, E = 0, h2 = 0, A = "", p = false;
+    for (const R of s) {
+      if (p === true) {
+        A += R, p = false;
         continue;
       }
-      if (R2 === "\\") {
-        A += R2, p3 = true;
+      if (R === "\\") {
+        A += R, p = true;
         continue;
       }
-      if (R2 === '"') {
-        h3 = h3 === 1 ? 0 : 1, A += R2;
+      if (R === '"') {
+        h2 = h2 === 1 ? 0 : 1, A += R;
         continue;
       }
-      if (h3 === 0) {
-        if (R2 === "[") t++;
-        else if (R2 === "]" && t > 0) t--;
+      if (h2 === 0) {
+        if (R === "[") t++;
+        else if (R === "]" && t > 0) t--;
         else if (t === 0) {
-          if (R2 === "(") E2++;
-          else if (R2 === ")" && E2 > 0) E2--;
-          else if (R2 === "|" && E2 === 0) {
-            l3.push(A), A = "";
+          if (R === "(") E++;
+          else if (R === ")" && E > 0) E--;
+          else if (R === "|" && E === 0) {
+            l2.push(A), A = "";
             continue;
           }
         }
       }
-      A += R2;
+      A += R;
     }
-    return l3.push(A), l3;
-  }, y2 = (s) => {
-    let l3 = false;
+    return l2.push(A), l2;
+  }, y = (s) => {
+    let l2 = false;
     for (const t of s) {
-      if (l3 === true) {
-        l3 = false;
+      if (l2 === true) {
+        l2 = false;
         continue;
       }
       if (t === "\\") {
-        l3 = true;
+        l2 = true;
         continue;
       }
       if (/[?*+@!()[\]{}]/.test(t)) return false;
     }
     return true;
-  }, M2 = (s) => {
-    let l3 = s.trim(), t = true;
-    for (; t === true; ) t = false, /^@\([^\\()[\]{}|]+\)$/.test(l3) && (l3 = l3.slice(2, -1), t = true);
-    if (y2(l3)) return l3.replace(/\\(.)/g, "$1");
-  }, I2 = (s) => {
-    const l3 = s.map(M2).filter(Boolean);
-    for (let t = 0; t < l3.length; t++) for (let E2 = t + 1; E2 < l3.length; E2++) {
-      const h3 = l3[t], A = l3[E2], p3 = h3[0];
-      if (!(!p3 || h3 !== p3.repeat(h3.length) || A !== p3.repeat(A.length)) && (h3 === A || h3.startsWith(A) || A.startsWith(h3))) return true;
+  }, M = (s) => {
+    let l2 = s.trim(), t = true;
+    for (; t === true; ) t = false, /^@\([^\\()[\]{}|]+\)$/.test(l2) && (l2 = l2.slice(2, -1), t = true);
+    if (y(l2)) return l2.replace(/\\(.)/g, "$1");
+  }, I = (s) => {
+    const l2 = s.map(M).filter(Boolean);
+    for (let t = 0; t < l2.length; t++) for (let E = t + 1; E < l2.length; E++) {
+      const h2 = l2[t], A = l2[E], p = h2[0];
+      if (!(!p || h2 !== p.repeat(h2.length) || A !== p.repeat(A.length)) && (h2 === A || h2.startsWith(A) || A.startsWith(h2))) return true;
     }
     return false;
-  }, w3 = (s, l3 = true) => {
+  }, w2 = (s, l2 = true) => {
     if (s[0] !== "+" && s[0] !== "*" || s[1] !== "(") return;
-    let t = 0, E2 = 0, h3 = 0, A = false;
-    for (let p3 = 1; p3 < s.length; p3++) {
-      const R2 = s[p3];
+    let t = 0, E = 0, h2 = 0, A = false;
+    for (let p = 1; p < s.length; p++) {
+      const R = s[p];
       if (A === true) {
         A = false;
         continue;
       }
-      if (R2 === "\\") {
+      if (R === "\\") {
         A = true;
         continue;
       }
-      if (R2 === '"') {
-        h3 = h3 === 1 ? 0 : 1;
+      if (R === '"') {
+        h2 = h2 === 1 ? 0 : 1;
         continue;
       }
-      if (h3 !== 1) {
-        if (R2 === "[") {
+      if (h2 !== 1) {
+        if (R === "[") {
           t++;
           continue;
         }
-        if (R2 === "]" && t > 0) {
+        if (R === "]" && t > 0) {
           t--;
           continue;
         }
         if (!(t > 0)) {
-          if (R2 === "(") {
-            E2++;
+          if (R === "(") {
+            E++;
             continue;
           }
-          if (R2 === ")" && (E2--, E2 === 0)) return l3 === true && p3 !== s.length - 1 ? void 0 : { type: s[0], body: s.slice(2, p3), end: p3 };
+          if (R === ")" && (E--, E === 0)) return l2 === true && p !== s.length - 1 ? void 0 : { type: s[0], body: s.slice(2, p), end: p };
         }
       }
     }
   }, K = (s) => `${s.length === 1 ? d.escapeRegex(s[0]) : `[${s.map((t) => d.escapeRegex(t)).join("")}]`}*`, it = (s) => {
-    let l3 = 0;
+    let l2 = 0;
     const t = [];
-    for (; l3 < s.length; ) {
-      const E2 = w3(s.slice(l3), false);
-      if (!E2 || E2.type !== "*") return;
-      const h3 = v3(E2.body).map((p3) => p3.trim());
-      if (h3.length !== 1) return;
-      const A = M2(h3[0]);
+    for (; l2 < s.length; ) {
+      const E = w2(s.slice(l2), false);
+      if (!E || E.type !== "*") return;
+      const h2 = v2(E.body).map((p) => p.trim());
+      if (h2.length !== 1) return;
+      const A = M(h2[0]);
       if (!A || A.length !== 1) return;
-      t.push(A), l3 += E2.end + 1;
+      t.push(A), l2 += E.end + 1;
     }
     if (!(t.length < 1)) return t;
-  }, j2 = (s) => {
-    let l3 = 0, t = s.trim(), E2 = w3(t);
-    for (; E2; ) l3++, t = E2.body.trim(), E2 = w3(t);
-    return l3;
-  }, tt = (s, l3) => {
-    if (l3.maxExtglobRecursion === false) return { risky: false };
-    const t = typeof l3.maxExtglobRecursion == "number" ? l3.maxExtglobRecursion : g4.DEFAULT_MAX_EXTGLOB_RECURSION, E2 = v3(s).map((R2) => R2.trim());
-    if (E2.length > 1 && (E2.some((R2) => R2 === "") || E2.some((R2) => /^[*?]+$/.test(R2)) || I2(E2))) return { risky: true };
-    const h3 = [];
-    let A = false, p3 = true;
-    for (const R2 of E2) {
-      const P = it(R2);
+  }, j = (s) => {
+    let l2 = 0, t = s.trim(), E = w2(t);
+    for (; E; ) l2++, t = E.body.trim(), E = w2(t);
+    return l2;
+  }, tt = (s, l2) => {
+    if (l2.maxExtglobRecursion === false) return { risky: false };
+    const t = typeof l2.maxExtglobRecursion == "number" ? l2.maxExtglobRecursion : g2.DEFAULT_MAX_EXTGLOB_RECURSION, E = v2(s).map((R) => R.trim());
+    if (E.length > 1 && (E.some((R) => R === "") || E.some((R) => /^[*?]+$/.test(R)) || I(E))) return { risky: true };
+    const h2 = [];
+    let A = false, p = true;
+    for (const R of E) {
+      const P = it(R);
       if (P) {
-        A = true, h3.push(...P);
+        A = true, h2.push(...P);
         continue;
       }
-      const U2 = M2(R2);
+      const U2 = M(R);
       if (U2 && U2.length === 1) {
-        h3.push(U2);
+        h2.push(U2);
         continue;
       }
-      if (p3 = false, j2(R2) > t) return { risky: true };
+      if (p = false, j(R) > t) return { risky: true };
     }
-    return A ? p3 ? { risky: true, safeOutput: K([...new Set(h3)]) } : { risky: true } : { risky: false };
-  }, z2 = (s, l3) => {
+    return A ? p ? { risky: true, safeOutput: K([...new Set(h2)]) } : { risky: true } : { risky: false };
+  }, z = (s, l2) => {
     if (typeof s != "string") throw new TypeError("Expected a string");
-    s = a2[s] || s;
-    const t = { ...l3 }, E2 = typeof t.maxLength == "number" ? Math.min(q4, t.maxLength) : q4;
-    let h3 = s.length;
-    if (h3 > E2) throw new SyntaxError(`Input length: ${h3}, exceeds maximum allowed length: ${E2}`);
-    const A = { type: "bos", value: "", output: t.prepend || "" }, p3 = [A], R2 = t.capture ? "" : "?:", P = g4.globChars(t.windows), U2 = g4.extglobChars(P), { DOT_LITERAL: B, PLUS_LITERAL: et, SLASH_LITERAL: Q, ONE_CHAR: rt, DOTS_SLASH: N2, NO_DOT: at, NO_DOT_SLASH: ft, NO_DOTS_SLASH: nt, QMARK: H, QMARK_NO_DOT: st, STAR: ht, START_ANCHOR: W } = P, X = (o2) => `(${R2}(?:(?!${W}${o2.dot ? N2 : B}).)*?)`, V2 = t.dot ? "" : at, _3 = t.dot ? H : st;
+    s = a[s] || s;
+    const t = { ...l2 }, E = typeof t.maxLength == "number" ? Math.min(q3, t.maxLength) : q3;
+    let h2 = s.length;
+    if (h2 > E) throw new SyntaxError(`Input length: ${h2}, exceeds maximum allowed length: ${E}`);
+    const A = { type: "bos", value: "", output: t.prepend || "" }, p = [A], R = t.capture ? "" : "?:", P = g2.globChars(t.windows), U2 = g2.extglobChars(P), { DOT_LITERAL: B, PLUS_LITERAL: et, SLASH_LITERAL: Q, ONE_CHAR: rt, DOTS_SLASH: N, NO_DOT: at, NO_DOT_SLASH: ft, NO_DOTS_SLASH: nt, QMARK: H, QMARK_NO_DOT: st, STAR: ht, START_ANCHOR: W } = P, X = (o) => `(${R}(?:(?!${W}${o.dot ? N : B}).)*?)`, V = t.dot ? "" : at, _2 = t.dot ? H : st;
     let S = t.bash === true ? X(t) : ht;
     t.capture && (S = `(${S})`), typeof t.noext == "boolean" && (t.noextglob = t.noext);
-    const n2 = { input: s, index: -1, start: 0, dot: t.dot === true, consumed: "", output: "", prefix: "", backtrack: false, negated: false, brackets: 0, braces: 0, parens: 0, quotes: 0, globstar: false, tokens: p3 };
-    s = d.removePrefix(s, n2), h3 = s.length;
+    const n = { input: s, index: -1, start: 0, dot: t.dot === true, consumed: "", output: "", prefix: "", backtrack: false, negated: false, brackets: 0, braces: 0, parens: 0, quotes: 0, globstar: false, tokens: p };
+    s = d.removePrefix(s, n), h2 = s.length;
     const Z = [], G2 = [], k2 = [];
-    let e3 = A, r;
-    const J = () => n2.index === h3 - 1, C3 = n2.peek = (o2 = 1) => s[n2.index + o2], L2 = n2.advance = () => s[++n2.index] || "", ct = () => s.slice(n2.index + 1), Y = (o2 = "", T = 0) => {
-      n2.consumed += o2, n2.index += T;
-    }, lt = (o2) => {
-      n2.output += o2.output != null ? o2.output : o2.value, Y(o2.value);
+    let e2 = A, r;
+    const J = () => n.index === h2 - 1, C2 = n.peek = (o = 1) => s[n.index + o], L = n.advance = () => s[++n.index] || "", ct = () => s.slice(n.index + 1), Y = (o = "", T = 0) => {
+      n.consumed += o, n.index += T;
+    }, lt = (o) => {
+      n.output += o.output != null ? o.output : o.value, Y(o.value);
     }, Tt = () => {
-      let o2 = 1;
-      for (; C3() === "!" && (C3(2) !== "(" || C3(3) === "?"); ) L2(), n2.start++, o2++;
-      return o2 % 2 === 0 ? false : (n2.negated = true, n2.start++, true);
-    }, Rt = (o2) => {
-      n2[o2]++, k2.push(o2);
-    }, pt = (o2) => {
-      n2[o2]--, k2.pop();
-    }, b3 = (o2) => {
-      if (e3.type === "globstar") {
-        const T = n2.braces > 0 && (o2.type === "comma" || o2.type === "brace"), u3 = o2.extglob === true || Z.length && (o2.type === "pipe" || o2.type === "paren");
-        o2.type !== "slash" && o2.type !== "paren" && !T && !u3 && (n2.output = n2.output.slice(0, -e3.output.length), e3.type = "star", e3.value = "*", e3.output = S, n2.output += e3.output);
+      let o = 1;
+      for (; C2() === "!" && (C2(2) !== "(" || C2(3) === "?"); ) L(), n.start++, o++;
+      return o % 2 === 0 ? false : (n.negated = true, n.start++, true);
+    }, Rt = (o) => {
+      n[o]++, k2.push(o);
+    }, pt = (o) => {
+      n[o]--, k2.pop();
+    }, b2 = (o) => {
+      if (e2.type === "globstar") {
+        const T = n.braces > 0 && (o.type === "comma" || o.type === "brace"), u2 = o.extglob === true || Z.length && (o.type === "pipe" || o.type === "paren");
+        o.type !== "slash" && o.type !== "paren" && !T && !u2 && (n.output = n.output.slice(0, -e2.output.length), e2.type = "star", e2.value = "*", e2.output = S, n.output += e2.output);
       }
-      if (Z.length && o2.type !== "paren" && (Z[Z.length - 1].inner += o2.value), (o2.value || o2.output) && lt(o2), e3 && e3.type === "text" && o2.type === "text") {
-        e3.output = (e3.output || e3.value) + o2.value, e3.value += o2.value;
+      if (Z.length && o.type !== "paren" && (Z[Z.length - 1].inner += o.value), (o.value || o.output) && lt(o), e2 && e2.type === "text" && o.type === "text") {
+        e2.output = (e2.output || e2.value) + o.value, e2.value += o.value;
         return;
       }
-      o2.prev = e3, p3.push(o2), e3 = o2;
-    }, At = (o2, T) => {
-      const u3 = { ...U2[T], conditions: 1, inner: "" };
-      u3.prev = e3, u3.parens = n2.parens, u3.output = n2.output, u3.startIndex = n2.index, u3.tokensIndex = p3.length;
-      const x4 = (t.capture ? "(" : "") + u3.open;
-      Rt("parens"), b3({ type: o2, value: T, output: n2.output ? "" : rt }), b3({ type: "paren", extglob: true, value: L2(), output: x4 }), Z.push(u3);
-    }, vt = (o2) => {
-      const T = s.slice(o2.startIndex, n2.index + 1), u3 = s.slice(o2.startIndex + 2, n2.index), x4 = tt(u3, t);
-      if ((o2.type === "plus" || o2.type === "star") && x4.risky) {
-        const $ = x4.safeOutput ? (o2.output ? "" : rt) + (t.capture ? `(${x4.safeOutput})` : x4.safeOutput) : void 0, ut = p3[o2.tokensIndex];
+      o.prev = e2, p.push(o), e2 = o;
+    }, At = (o, T) => {
+      const u2 = { ...U2[T], conditions: 1, inner: "" };
+      u2.prev = e2, u2.parens = n.parens, u2.output = n.output, u2.startIndex = n.index, u2.tokensIndex = p.length;
+      const x2 = (t.capture ? "(" : "") + u2.open;
+      Rt("parens"), b2({ type: o, value: T, output: n.output ? "" : rt }), b2({ type: "paren", extglob: true, value: L(), output: x2 }), Z.push(u2);
+    }, vt = (o) => {
+      const T = s.slice(o.startIndex, n.index + 1), u2 = s.slice(o.startIndex + 2, n.index), x2 = tt(u2, t);
+      if ((o.type === "plus" || o.type === "star") && x2.risky) {
+        const $ = x2.safeOutput ? (o.output ? "" : rt) + (t.capture ? `(${x2.safeOutput})` : x2.safeOutput) : void 0, ut = p[o.tokensIndex];
         ut.type = "text", ut.value = T, ut.output = $ || d.escapeRegex(T);
-        for (let ot = o2.tokensIndex + 1; ot < p3.length; ot++) p3[ot].value = "", p3[ot].output = "", delete p3[ot].suffix;
-        n2.output = o2.output + ut.output, n2.backtrack = true, b3({ type: "paren", extglob: true, value: r, output: "" }), pt("parens");
+        for (let ot = o.tokensIndex + 1; ot < p.length; ot++) p[ot].value = "", p[ot].output = "", delete p[ot].suffix;
+        n.output = o.output + ut.output, n.backtrack = true, b2({ type: "paren", extglob: true, value: r, output: "" }), pt("parens");
         return;
       }
-      let m2 = o2.close + (t.capture ? ")" : ""), D3;
-      if (o2.type === "negate") {
+      let m2 = o.close + (t.capture ? ")" : ""), D3;
+      if (o.type === "negate") {
         let $ = S;
-        if (o2.inner && o2.inner.length > 1 && o2.inner.includes("/") && ($ = X(t)), ($ !== S || J() || /^\)+$/.test(ct())) && (m2 = o2.close = `)$))${$}`), o2.inner.includes("*") && (D3 = ct()) && /^\.[^\\/.]+$/.test(D3)) {
-          const ut = z2(D3, { ...l3, fastpaths: false }).output;
-          m2 = o2.close = `)${ut})${$})`;
+        if (o.inner && o.inner.length > 1 && o.inner.includes("/") && ($ = X(t)), ($ !== S || J() || /^\)+$/.test(ct())) && (m2 = o.close = `)$))${$}`), o.inner.includes("*") && (D3 = ct()) && /^\.[^\\/.]+$/.test(D3)) {
+          const ut = z(D3, { ...l2, fastpaths: false }).output;
+          m2 = o.close = `)${ut})${$})`;
         }
-        o2.prev.type === "bos" && (n2.negatedExtglob = true);
+        o.prev.type === "bos" && (n.negatedExtglob = true);
       }
-      b3({ type: "paren", extglob: true, value: r, output: m2 }), pt("parens");
+      b2({ type: "paren", extglob: true, value: r, output: m2 }), pt("parens");
     };
     if (t.fastpaths !== false && !/(^[*!]|[/()[\]{}"])/.test(s)) {
-      let o2 = false, T = s.replace(c, (u3, x4, m2, D3, $, ut) => D3 === "\\" ? (o2 = true, u3) : D3 === "?" ? x4 ? x4 + D3 + ($ ? H.repeat($.length) : "") : ut === 0 ? _3 + ($ ? H.repeat($.length) : "") : H.repeat(m2.length) : D3 === "." ? B.repeat(m2.length) : D3 === "*" ? x4 ? x4 + D3 + ($ ? S : "") : S : x4 ? u3 : `\\${u3}`);
-      return o2 === true && (t.unescape === true ? T = T.replace(/\\/g, "") : T = T.replace(/\\+/g, (u3) => u3.length % 2 === 0 ? "\\\\" : u3 ? "\\" : "")), T === s && t.contains === true ? (n2.output = s, n2) : (n2.output = d.wrapOutput(T, n2, l3), n2);
+      let o = false, T = s.replace(c, (u2, x2, m2, D3, $, ut) => D3 === "\\" ? (o = true, u2) : D3 === "?" ? x2 ? x2 + D3 + ($ ? H.repeat($.length) : "") : ut === 0 ? _2 + ($ ? H.repeat($.length) : "") : H.repeat(m2.length) : D3 === "." ? B.repeat(m2.length) : D3 === "*" ? x2 ? x2 + D3 + ($ ? S : "") : S : x2 ? u2 : `\\${u2}`);
+      return o === true && (t.unescape === true ? T = T.replace(/\\/g, "") : T = T.replace(/\\+/g, (u2) => u2.length % 2 === 0 ? "\\\\" : u2 ? "\\" : "")), T === s && t.contains === true ? (n.output = s, n) : (n.output = d.wrapOutput(T, n, l2), n);
     }
     for (; !J(); ) {
-      if (r = L2(), r === "\0") continue;
+      if (r = L(), r === "\0") continue;
       if (r === "\\") {
-        const u3 = C3();
-        if (u3 === "/" && t.bash !== true || u3 === "." || u3 === ";") continue;
-        if (!u3) {
-          r += "\\", b3({ type: "text", value: r });
+        const u2 = C2();
+        if (u2 === "/" && t.bash !== true || u2 === "." || u2 === ";") continue;
+        if (!u2) {
+          r += "\\", b2({ type: "text", value: r });
           continue;
         }
-        const x4 = /^\\+/.exec(ct());
+        const x2 = /^\\+/.exec(ct());
         let m2 = 0;
-        if (x4 && x4[0].length > 2 && (m2 = x4[0].length, n2.index += m2, m2 % 2 !== 0 && (r += "\\")), t.unescape === true ? r = L2() : r += L2(), n2.brackets === 0) {
-          b3({ type: "text", value: r });
+        if (x2 && x2[0].length > 2 && (m2 = x2[0].length, n.index += m2, m2 % 2 !== 0 && (r += "\\")), t.unescape === true ? r = L() : r += L(), n.brackets === 0) {
+          b2({ type: "text", value: r });
           continue;
         }
       }
-      if (n2.brackets > 0 && (r !== "]" || e3.value === "[" || e3.value === "[^")) {
+      if (n.brackets > 0 && (r !== "]" || e2.value === "[" || e2.value === "[^")) {
         if (t.posix !== false && r === ":") {
-          const u3 = e3.value.slice(1);
-          if (u3.includes("[") && (e3.posix = true, u3.includes(":"))) {
-            const x4 = e3.value.lastIndexOf("["), m2 = e3.value.slice(0, x4), D3 = e3.value.slice(x4 + 2), $ = F3[D3];
+          const u2 = e2.value.slice(1);
+          if (u2.includes("[") && (e2.posix = true, u2.includes(":"))) {
+            const x2 = e2.value.lastIndexOf("["), m2 = e2.value.slice(0, x2), D3 = e2.value.slice(x2 + 2), $ = F3[D3];
             if ($) {
-              e3.value = m2 + $, n2.backtrack = true, L2(), !A.output && p3.indexOf(e3) === 1 && (A.output = rt);
+              e2.value = m2 + $, n.backtrack = true, L(), !A.output && p.indexOf(e2) === 1 && (A.output = rt);
               continue;
             }
           }
         }
-        (r === "[" && C3() !== ":" || r === "-" && C3() === "]") && (r = `\\${r}`), r === "]" && (e3.value === "[" || e3.value === "[^") && (r = `\\${r}`), t.posix === true && r === "!" && e3.value === "[" && (r = "^"), e3.value += r, lt({ value: r });
+        (r === "[" && C2() !== ":" || r === "-" && C2() === "]") && (r = `\\${r}`), r === "]" && (e2.value === "[" || e2.value === "[^") && (r = `\\${r}`), t.posix === true && r === "!" && e2.value === "[" && (r = "^"), e2.value += r, lt({ value: r });
         continue;
       }
-      if (n2.quotes === 1 && r !== '"') {
-        r = d.escapeRegex(r), e3.value += r, lt({ value: r });
+      if (n.quotes === 1 && r !== '"') {
+        r = d.escapeRegex(r), e2.value += r, lt({ value: r });
         continue;
       }
       if (r === '"') {
-        n2.quotes = n2.quotes === 1 ? 0 : 1, t.keepQuotes === true && b3({ type: "text", value: r });
+        n.quotes = n.quotes === 1 ? 0 : 1, t.keepQuotes === true && b2({ type: "text", value: r });
         continue;
       }
       if (r === "(") {
-        Rt("parens"), b3({ type: "paren", value: r });
+        Rt("parens"), b2({ type: "paren", value: r });
         continue;
       }
       if (r === ")") {
-        if (n2.parens === 0 && t.strictBrackets === true) throw new SyntaxError(f3("opening", "("));
-        const u3 = Z[Z.length - 1];
-        if (u3 && n2.parens === u3.parens + 1) {
+        if (n.parens === 0 && t.strictBrackets === true) throw new SyntaxError(f2("opening", "("));
+        const u2 = Z[Z.length - 1];
+        if (u2 && n.parens === u2.parens + 1) {
           vt(Z.pop());
           continue;
         }
-        b3({ type: "paren", value: r, output: n2.parens ? ")" : "\\)" }), pt("parens");
+        b2({ type: "paren", value: r, output: n.parens ? ")" : "\\)" }), pt("parens");
         continue;
       }
       if (r === "[") {
         if (t.nobracket === true || !ct().includes("]")) {
-          if (t.nobracket !== true && t.strictBrackets === true) throw new SyntaxError(f3("closing", "]"));
+          if (t.nobracket !== true && t.strictBrackets === true) throw new SyntaxError(f2("closing", "]"));
           r = `\\${r}`;
         } else Rt("brackets");
-        b3({ type: "bracket", value: r });
+        b2({ type: "bracket", value: r });
         continue;
       }
       if (r === "]") {
-        if (t.nobracket === true || e3 && e3.type === "bracket" && e3.value.length === 1) {
-          b3({ type: "text", value: r, output: `\\${r}` });
+        if (t.nobracket === true || e2 && e2.type === "bracket" && e2.value.length === 1) {
+          b2({ type: "text", value: r, output: `\\${r}` });
           continue;
         }
-        if (n2.brackets === 0) {
-          if (t.strictBrackets === true) throw new SyntaxError(f3("opening", "["));
-          b3({ type: "text", value: r, output: `\\${r}` });
+        if (n.brackets === 0) {
+          if (t.strictBrackets === true) throw new SyntaxError(f2("opening", "["));
+          b2({ type: "text", value: r, output: `\\${r}` });
           continue;
         }
         pt("brackets");
-        const u3 = e3.value.slice(1);
-        if (e3.posix !== true && u3[0] === "^" && !u3.includes("/") && (r = `/${r}`), e3.value += r, lt({ value: r }), t.literalBrackets === false || d.hasRegexChars(u3)) continue;
-        const x4 = d.escapeRegex(e3.value);
-        if (n2.output = n2.output.slice(0, -e3.value.length), t.literalBrackets === true) {
-          n2.output += x4, e3.value = x4;
+        const u2 = e2.value.slice(1);
+        if (e2.posix !== true && u2[0] === "^" && !u2.includes("/") && (r = `/${r}`), e2.value += r, lt({ value: r }), t.literalBrackets === false || d.hasRegexChars(u2)) continue;
+        const x2 = d.escapeRegex(e2.value);
+        if (n.output = n.output.slice(0, -e2.value.length), t.literalBrackets === true) {
+          n.output += x2, e2.value = x2;
           continue;
         }
-        e3.value = `(${R2}${x4}|${e3.value})`, n2.output += e3.value;
+        e2.value = `(${R}${x2}|${e2.value})`, n.output += e2.value;
         continue;
       }
       if (r === "{" && t.nobrace !== true) {
         Rt("braces");
-        const u3 = { type: "brace", value: r, output: "(", outputIndex: n2.output.length, tokensIndex: n2.tokens.length };
-        G2.push(u3), b3(u3);
+        const u2 = { type: "brace", value: r, output: "(", outputIndex: n.output.length, tokensIndex: n.tokens.length };
+        G2.push(u2), b2(u2);
         continue;
       }
       if (r === "}") {
-        const u3 = G2[G2.length - 1];
-        if (t.nobrace === true || !u3) {
-          b3({ type: "text", value: r, output: r });
+        const u2 = G2[G2.length - 1];
+        if (t.nobrace === true || !u2) {
+          b2({ type: "text", value: r, output: r });
           continue;
         }
-        let x4 = ")";
-        if (u3.dots === true) {
-          const m2 = p3.slice(), D3 = [];
-          for (let $ = m2.length - 1; $ >= 0 && (p3.pop(), m2[$].type !== "brace"); $--) m2[$].type !== "dots" && D3.unshift(m2[$].value);
-          x4 = i3(D3, t), n2.backtrack = true;
+        let x2 = ")";
+        if (u2.dots === true) {
+          const m2 = p.slice(), D3 = [];
+          for (let $ = m2.length - 1; $ >= 0 && (p.pop(), m2[$].type !== "brace"); $--) m2[$].type !== "dots" && D3.unshift(m2[$].value);
+          x2 = i2(D3, t), n.backtrack = true;
         }
-        if (u3.comma !== true && u3.dots !== true) {
-          const m2 = n2.output.slice(0, u3.outputIndex), D3 = n2.tokens.slice(u3.tokensIndex);
-          u3.value = u3.output = "\\{", r = x4 = "\\}", n2.output = m2;
-          for (const $ of D3) n2.output += $.output || $.value;
+        if (u2.comma !== true && u2.dots !== true) {
+          const m2 = n.output.slice(0, u2.outputIndex), D3 = n.tokens.slice(u2.tokensIndex);
+          u2.value = u2.output = "\\{", r = x2 = "\\}", n.output = m2;
+          for (const $ of D3) n.output += $.output || $.value;
         }
-        b3({ type: "brace", value: r, output: x4 }), pt("braces"), G2.pop();
+        b2({ type: "brace", value: r, output: x2 }), pt("braces"), G2.pop();
         continue;
       }
       if (r === "|") {
-        Z.length > 0 && Z[Z.length - 1].conditions++, b3({ type: "text", value: r });
+        Z.length > 0 && Z[Z.length - 1].conditions++, b2({ type: "text", value: r });
         continue;
       }
       if (r === ",") {
-        let u3 = r;
-        const x4 = G2[G2.length - 1];
-        x4 && k2[k2.length - 1] === "braces" && (x4.comma = true, u3 = "|"), b3({ type: "comma", value: r, output: u3 });
+        let u2 = r;
+        const x2 = G2[G2.length - 1];
+        x2 && k2[k2.length - 1] === "braces" && (x2.comma = true, u2 = "|"), b2({ type: "comma", value: r, output: u2 });
         continue;
       }
       if (r === "/") {
-        if (e3.type === "dot" && n2.index === n2.start + 1) {
-          n2.start = n2.index + 1, n2.consumed = "", n2.output = "", p3.pop(), e3 = A;
+        if (e2.type === "dot" && n.index === n.start + 1) {
+          n.start = n.index + 1, n.consumed = "", n.output = "", p.pop(), e2 = A;
           continue;
         }
-        b3({ type: "slash", value: r, output: Q });
+        b2({ type: "slash", value: r, output: Q });
         continue;
       }
       if (r === ".") {
-        if (n2.braces > 0 && e3.type === "dot") {
-          e3.value === "." && (e3.output = B);
-          const u3 = G2[G2.length - 1];
-          e3.type = "dots", e3.output += r, e3.value += r, u3.dots = true;
+        if (n.braces > 0 && e2.type === "dot") {
+          e2.value === "." && (e2.output = B);
+          const u2 = G2[G2.length - 1];
+          e2.type = "dots", e2.output += r, e2.value += r, u2.dots = true;
           continue;
         }
-        if (n2.braces + n2.parens === 0 && e3.type !== "bos" && e3.type !== "slash") {
-          b3({ type: "text", value: r, output: B });
+        if (n.braces + n.parens === 0 && e2.type !== "bos" && e2.type !== "slash") {
+          b2({ type: "text", value: r, output: B });
           continue;
         }
-        b3({ type: "dot", value: r, output: B });
+        b2({ type: "dot", value: r, output: B });
         continue;
       }
       if (r === "?") {
-        if (!(e3 && e3.value === "(") && t.noextglob !== true && C3() === "(" && C3(2) !== "?") {
+        if (!(e2 && e2.value === "(") && t.noextglob !== true && C2() === "(" && C2(2) !== "?") {
           At("qmark", r);
           continue;
         }
-        if (e3 && e3.type === "paren") {
-          const x4 = C3();
+        if (e2 && e2.type === "paren") {
+          const x2 = C2();
           let m2 = r;
-          (e3.value === "(" && !/[!=<:]/.test(x4) || x4 === "<" && !/<([!=]|\w+>)/.test(ct())) && (m2 = `\\${r}`), b3({ type: "text", value: r, output: m2 });
+          (e2.value === "(" && !/[!=<:]/.test(x2) || x2 === "<" && !/<([!=]|\w+>)/.test(ct())) && (m2 = `\\${r}`), b2({ type: "text", value: r, output: m2 });
           continue;
         }
-        if (t.dot !== true && (e3.type === "slash" || e3.type === "bos")) {
-          b3({ type: "qmark", value: r, output: st });
+        if (t.dot !== true && (e2.type === "slash" || e2.type === "bos")) {
+          b2({ type: "qmark", value: r, output: st });
           continue;
         }
-        b3({ type: "qmark", value: r, output: H });
+        b2({ type: "qmark", value: r, output: H });
         continue;
       }
       if (r === "!") {
-        if (t.noextglob !== true && C3() === "(" && (C3(2) !== "?" || !/[!=<:]/.test(C3(3)))) {
+        if (t.noextglob !== true && C2() === "(" && (C2(2) !== "?" || !/[!=<:]/.test(C2(3)))) {
           At("negate", r);
           continue;
         }
-        if (t.nonegate !== true && n2.index === 0) {
+        if (t.nonegate !== true && n.index === 0) {
           Tt();
           continue;
         }
       }
       if (r === "+") {
-        if (t.noextglob !== true && C3() === "(" && C3(2) !== "?") {
+        if (t.noextglob !== true && C2() === "(" && C2(2) !== "?") {
           At("plus", r);
           continue;
         }
-        if (e3 && e3.value === "(" || t.regex === false) {
-          b3({ type: "plus", value: r, output: et });
+        if (e2 && e2.value === "(" || t.regex === false) {
+          b2({ type: "plus", value: r, output: et });
           continue;
         }
-        if (e3 && (e3.type === "bracket" || e3.type === "paren" || e3.type === "brace") || n2.parens > 0) {
-          b3({ type: "plus", value: r });
+        if (e2 && (e2.type === "bracket" || e2.type === "paren" || e2.type === "brace") || n.parens > 0) {
+          b2({ type: "plus", value: r });
           continue;
         }
-        b3({ type: "plus", value: et });
+        b2({ type: "plus", value: et });
         continue;
       }
       if (r === "@") {
-        if (t.noextglob !== true && C3() === "(" && C3(2) !== "?") {
-          b3({ type: "at", extglob: true, value: r, output: "" });
+        if (t.noextglob !== true && C2() === "(" && C2(2) !== "?") {
+          b2({ type: "at", extglob: true, value: r, output: "" });
           continue;
         }
-        b3({ type: "text", value: r });
+        b2({ type: "text", value: r });
         continue;
       }
       if (r !== "*") {
         (r === "$" || r === "^") && (r = `\\${r}`);
-        const u3 = O.exec(ct());
-        u3 && (r += u3[0], n2.index += u3[0].length), b3({ type: "text", value: r });
+        const u2 = O.exec(ct());
+        u2 && (r += u2[0], n.index += u2[0].length), b2({ type: "text", value: r });
         continue;
       }
-      if (e3 && (e3.type === "globstar" || e3.star === true)) {
-        e3.type = "star", e3.star = true, e3.value += r, e3.output = S, n2.backtrack = true, n2.globstar = true, Y(r);
+      if (e2 && (e2.type === "globstar" || e2.star === true)) {
+        e2.type = "star", e2.star = true, e2.value += r, e2.output = S, n.backtrack = true, n.globstar = true, Y(r);
         continue;
       }
-      let o2 = ct();
-      if (t.noextglob !== true && /^\([^?]/.test(o2)) {
+      let o = ct();
+      if (t.noextglob !== true && /^\([^?]/.test(o)) {
         At("star", r);
         continue;
       }
-      if (e3.type === "star") {
+      if (e2.type === "star") {
         if (t.noglobstar === true) {
           Y(r);
           continue;
         }
-        const u3 = e3.prev, x4 = u3.prev, m2 = u3.type === "slash" || u3.type === "bos", D3 = x4 && (x4.type === "star" || x4.type === "globstar");
-        if (t.bash === true && (!m2 || o2[0] && o2[0] !== "/")) {
-          b3({ type: "star", value: r, output: "" });
+        const u2 = e2.prev, x2 = u2.prev, m2 = u2.type === "slash" || u2.type === "bos", D3 = x2 && (x2.type === "star" || x2.type === "globstar");
+        if (t.bash === true && (!m2 || o[0] && o[0] !== "/")) {
+          b2({ type: "star", value: r, output: "" });
           continue;
         }
-        const $ = n2.braces > 0 && (u3.type === "comma" || u3.type === "brace"), ut = Z.length && (u3.type === "pipe" || u3.type === "paren");
-        if (!m2 && u3.type !== "paren" && !$ && !ut) {
-          b3({ type: "star", value: r, output: "" });
+        const $ = n.braces > 0 && (u2.type === "comma" || u2.type === "brace"), ut = Z.length && (u2.type === "pipe" || u2.type === "paren");
+        if (!m2 && u2.type !== "paren" && !$ && !ut) {
+          b2({ type: "star", value: r, output: "" });
           continue;
         }
-        for (; o2.slice(0, 3) === "/**"; ) {
-          const ot = s[n2.index + 4];
+        for (; o.slice(0, 3) === "/**"; ) {
+          const ot = s[n.index + 4];
           if (ot && ot !== "/") break;
-          o2 = o2.slice(3), Y("/**", 3);
+          o = o.slice(3), Y("/**", 3);
         }
-        if (u3.type === "bos" && J()) {
-          e3.type = "globstar", e3.value += r, e3.output = X(t), n2.output = e3.output, n2.globstar = true, Y(r);
+        if (u2.type === "bos" && J()) {
+          e2.type = "globstar", e2.value += r, e2.output = X(t), n.output = e2.output, n.globstar = true, Y(r);
           continue;
         }
-        if (u3.type === "slash" && u3.prev.type !== "bos" && !D3 && J()) {
-          n2.output = n2.output.slice(0, -(u3.output + e3.output).length), u3.output = `(?:${u3.output}`, e3.type = "globstar", e3.output = X(t) + (t.strictSlashes ? ")" : "|$)"), e3.value += r, n2.globstar = true, n2.output += u3.output + e3.output, Y(r);
+        if (u2.type === "slash" && u2.prev.type !== "bos" && !D3 && J()) {
+          n.output = n.output.slice(0, -(u2.output + e2.output).length), u2.output = `(?:${u2.output}`, e2.type = "globstar", e2.output = X(t) + (t.strictSlashes ? ")" : "|$)"), e2.value += r, n.globstar = true, n.output += u2.output + e2.output, Y(r);
           continue;
         }
-        if (u3.type === "slash" && u3.prev.type !== "bos" && o2[0] === "/") {
-          const ot = o2[1] !== void 0 ? "|$" : "";
-          n2.output = n2.output.slice(0, -(u3.output + e3.output).length), u3.output = `(?:${u3.output}`, e3.type = "globstar", e3.output = `${X(t)}${Q}|${Q}${ot})`, e3.value += r, n2.output += u3.output + e3.output, n2.globstar = true, Y(r + L2()), b3({ type: "slash", value: "/", output: "" });
+        if (u2.type === "slash" && u2.prev.type !== "bos" && o[0] === "/") {
+          const ot = o[1] !== void 0 ? "|$" : "";
+          n.output = n.output.slice(0, -(u2.output + e2.output).length), u2.output = `(?:${u2.output}`, e2.type = "globstar", e2.output = `${X(t)}${Q}|${Q}${ot})`, e2.value += r, n.output += u2.output + e2.output, n.globstar = true, Y(r + L()), b2({ type: "slash", value: "/", output: "" });
           continue;
         }
-        if (u3.type === "bos" && o2[0] === "/") {
-          e3.type = "globstar", e3.value += r, e3.output = `(?:^|${Q}|${X(t)}${Q})`, n2.output = e3.output, n2.globstar = true, Y(r + L2()), b3({ type: "slash", value: "/", output: "" });
+        if (u2.type === "bos" && o[0] === "/") {
+          e2.type = "globstar", e2.value += r, e2.output = `(?:^|${Q}|${X(t)}${Q})`, n.output = e2.output, n.globstar = true, Y(r + L()), b2({ type: "slash", value: "/", output: "" });
           continue;
         }
-        if ($ && o2[0] === "/") {
-          e3.type = "globstar", e3.value += r, e3.output = `(?:^|${Q}|${X(t)}${Q})`, n2.output += e3.output, n2.globstar = true, Y(r + L2()), b3({ type: "slash", value: "/", output: "" });
+        if ($ && o[0] === "/") {
+          e2.type = "globstar", e2.value += r, e2.output = `(?:^|${Q}|${X(t)}${Q})`, n.output += e2.output, n.globstar = true, Y(r + L()), b2({ type: "slash", value: "/", output: "" });
           continue;
         }
-        n2.output = n2.output.slice(0, -e3.output.length), e3.type = "globstar", e3.output = X(t), e3.value += r, n2.output += e3.output, n2.globstar = true, Y(r);
+        n.output = n.output.slice(0, -e2.output.length), e2.type = "globstar", e2.output = X(t), e2.value += r, n.output += e2.output, n.globstar = true, Y(r);
         continue;
       }
       const T = { type: "star", value: r, output: S };
       if (t.bash === true) {
-        T.output = ".*?", (e3.type === "bos" || e3.type === "slash") && (T.output = V2 + T.output), b3(T);
+        T.output = ".*?", (e2.type === "bos" || e2.type === "slash") && (T.output = V + T.output), b2(T);
         continue;
       }
-      if (e3 && (e3.type === "bracket" || e3.type === "paren") && t.regex === true) {
-        T.output = r, b3(T);
+      if (e2 && (e2.type === "bracket" || e2.type === "paren") && t.regex === true) {
+        T.output = r, b2(T);
         continue;
       }
-      (n2.index === n2.start || e3.type === "slash" || e3.type === "dot") && (e3.type === "dot" ? (n2.output += ft, e3.output += ft) : t.dot === true ? (n2.output += nt, e3.output += nt) : (n2.output += V2, e3.output += V2), C3() !== "*" && (n2.output += rt, e3.output += rt)), b3(T);
+      (n.index === n.start || e2.type === "slash" || e2.type === "dot") && (e2.type === "dot" ? (n.output += ft, e2.output += ft) : t.dot === true ? (n.output += nt, e2.output += nt) : (n.output += V, e2.output += V), C2() !== "*" && (n.output += rt, e2.output += rt)), b2(T);
     }
-    for (; n2.brackets > 0; ) {
-      if (t.strictBrackets === true) throw new SyntaxError(f3("closing", "]"));
-      n2.output = d.escapeLast(n2.output, "["), pt("brackets");
+    for (; n.brackets > 0; ) {
+      if (t.strictBrackets === true) throw new SyntaxError(f2("closing", "]"));
+      n.output = d.escapeLast(n.output, "["), pt("brackets");
     }
-    for (; n2.parens > 0; ) {
-      if (t.strictBrackets === true) throw new SyntaxError(f3("closing", ")"));
-      n2.output = d.escapeLast(n2.output, "("), pt("parens");
+    for (; n.parens > 0; ) {
+      if (t.strictBrackets === true) throw new SyntaxError(f2("closing", ")"));
+      n.output = d.escapeLast(n.output, "("), pt("parens");
     }
-    for (; n2.braces > 0; ) {
-      if (t.strictBrackets === true) throw new SyntaxError(f3("closing", "}"));
-      n2.output = d.escapeLast(n2.output, "{"), pt("braces");
+    for (; n.braces > 0; ) {
+      if (t.strictBrackets === true) throw new SyntaxError(f2("closing", "}"));
+      n.output = d.escapeLast(n.output, "{"), pt("braces");
     }
-    if (t.strictSlashes !== true && (e3.type === "star" || e3.type === "bracket") && b3({ type: "maybe_slash", value: "", output: `${Q}?` }), n2.backtrack === true) {
-      n2.output = "";
-      for (const o2 of n2.tokens) n2.output += o2.output != null ? o2.output : o2.value, o2.suffix && (n2.output += o2.suffix);
+    if (t.strictSlashes !== true && (e2.type === "star" || e2.type === "bracket") && b2({ type: "maybe_slash", value: "", output: `${Q}?` }), n.backtrack === true) {
+      n.output = "";
+      for (const o of n.tokens) n.output += o.output != null ? o.output : o.value, o.suffix && (n.output += o.suffix);
     }
-    return n2;
+    return n;
   };
-  return z2.fastpaths = (s, l3) => {
-    const t = { ...l3 }, E2 = typeof t.maxLength == "number" ? Math.min(q4, t.maxLength) : q4, h3 = s.length;
-    if (h3 > E2) throw new SyntaxError(`Input length: ${h3}, exceeds maximum allowed length: ${E2}`);
-    s = a2[s] || s;
-    const { DOT_LITERAL: A, SLASH_LITERAL: p3, ONE_CHAR: R2, DOTS_SLASH: P, NO_DOT: U2, NO_DOTS: B, NO_DOTS_SLASH: et, STAR: Q, START_ANCHOR: rt } = g4.globChars(t.windows), N2 = t.dot ? B : U2, at = t.dot ? et : U2, ft = t.capture ? "" : "?:", nt = { negated: false, prefix: "" };
+  return z.fastpaths = (s, l2) => {
+    const t = { ...l2 }, E = typeof t.maxLength == "number" ? Math.min(q3, t.maxLength) : q3, h2 = s.length;
+    if (h2 > E) throw new SyntaxError(`Input length: ${h2}, exceeds maximum allowed length: ${E}`);
+    s = a[s] || s;
+    const { DOT_LITERAL: A, SLASH_LITERAL: p, ONE_CHAR: R, DOTS_SLASH: P, NO_DOT: U2, NO_DOTS: B, NO_DOTS_SLASH: et, STAR: Q, START_ANCHOR: rt } = g2.globChars(t.windows), N = t.dot ? B : U2, at = t.dot ? et : U2, ft = t.capture ? "" : "?:", nt = { negated: false, prefix: "" };
     let H = t.bash === true ? ".*?" : Q;
     t.capture && (H = `(${H})`);
-    const st = (V2) => V2.noglobstar === true ? H : `(${ft}(?:(?!${rt}${V2.dot ? P : A}).)*?)`, ht = (V2) => {
-      switch (V2) {
+    const st = (V) => V.noglobstar === true ? H : `(${ft}(?:(?!${rt}${V.dot ? P : A}).)*?)`, ht = (V) => {
+      switch (V) {
         case "*":
-          return `${N2}${R2}${H}`;
+          return `${N}${R}${H}`;
         case ".*":
-          return `${A}${R2}${H}`;
+          return `${A}${R}${H}`;
         case "*.*":
-          return `${N2}${H}${A}${R2}${H}`;
+          return `${N}${H}${A}${R}${H}`;
         case "*/*":
-          return `${N2}${H}${p3}${R2}${at}${H}`;
+          return `${N}${H}${p}${R}${at}${H}`;
         case "**":
-          return N2 + st(t);
+          return N + st(t);
         case "**/*":
-          return `(?:${N2}${st(t)}${p3})?${at}${R2}${H}`;
+          return `(?:${N}${st(t)}${p})?${at}${R}${H}`;
         case "**/*.*":
-          return `(?:${N2}${st(t)}${p3})?${at}${H}${A}${R2}${H}`;
+          return `(?:${N}${st(t)}${p})?${at}${H}${A}${R}${H}`;
         case "**/.*":
-          return `(?:${N2}${st(t)}${p3})?${A}${R2}${H}`;
+          return `(?:${N}${st(t)}${p})?${A}${R}${H}`;
         default: {
-          const _3 = /^(.*?)\.(\w+)$/.exec(V2);
-          if (!_3) return;
-          const S = ht(_3[1]);
-          return S ? S + A + _3[2] : void 0;
+          const _2 = /^(.*?)\.(\w+)$/.exec(V);
+          if (!_2) return;
+          const S = ht(_2[1]);
+          return S ? S + A + _2[2] : void 0;
         }
       }
     }, W = d.removePrefix(s, nt);
     let X = ht(W);
-    return X && t.strictSlashes !== true && (X += `${p3}?`), X;
-  }, St = z2, St;
+    return X && t.strictSlashes !== true && (X += `${p}?`), X;
+  }, St = z, St;
 }
 var yt;
 var Ot;
 function It() {
   if (Ot) return yt;
   Ot = 1;
-  const g4 = Nt(), d = kt(), q4 = Et(), F3 = _t(), O = (a2) => a2 && typeof a2 == "object" && !Array.isArray(a2), c = (a2, i3, f3 = false) => {
-    if (Array.isArray(a2)) {
-      const j2 = a2.map((z2) => c(z2, i3, f3));
-      return (z2) => {
-        for (const s of j2) {
-          const l3 = s(z2);
-          if (l3) return l3;
+  const g2 = Nt(), d = kt(), q3 = Et(), F3 = _t(), O = (a) => a && typeof a == "object" && !Array.isArray(a), c = (a, i2, f2 = false) => {
+    if (Array.isArray(a)) {
+      const j = a.map((z) => c(z, i2, f2));
+      return (z) => {
+        for (const s of j) {
+          const l2 = s(z);
+          if (l2) return l2;
         }
         return false;
       };
     }
-    const v3 = O(a2) && a2.tokens && a2.input;
-    if (a2 === "" || typeof a2 != "string" && !v3) throw new TypeError("Expected pattern to be a non-empty string");
-    const y2 = i3 || {}, M2 = y2.windows, I2 = v3 ? c.compileRe(a2, i3) : c.makeRe(a2, i3, false, true), w3 = I2.state;
-    delete I2.state;
+    const v2 = O(a) && a.tokens && a.input;
+    if (a === "" || typeof a != "string" && !v2) throw new TypeError("Expected pattern to be a non-empty string");
+    const y = i2 || {}, M = y.windows, I = v2 ? c.compileRe(a, i2) : c.makeRe(a, i2, false, true), w2 = I.state;
+    delete I.state;
     let K = () => false;
-    if (y2.ignore) {
-      const j2 = { ...i3, ignore: null, onMatch: null, onResult: null };
-      K = c(y2.ignore, j2, f3);
+    if (y.ignore) {
+      const j = { ...i2, ignore: null, onMatch: null, onResult: null };
+      K = c(y.ignore, j, f2);
     }
-    const it = (j2, tt = false) => {
-      const { isMatch: z2, match: s, output: l3 } = c.test(j2, I2, i3, { glob: a2, posix: M2 }), t = { glob: a2, state: w3, regex: I2, posix: M2, input: j2, output: l3, match: s, isMatch: z2 };
-      if (typeof y2.onResult == "function" && y2.onResult(t), z2 === false) return t.isMatch = false, tt ? t : false;
-      t: if (K(j2)) {
-        if (typeof y2.onIgnore == "function" && y2.onIgnore(t) === F3.UNIGNORE) {
+    const it = (j, tt = false) => {
+      const { isMatch: z, match: s, output: l2 } = c.test(j, I, i2, { glob: a, posix: M }), t = { glob: a, state: w2, regex: I, posix: M, input: j, output: l2, match: s, isMatch: z };
+      if (typeof y.onResult == "function" && y.onResult(t), z === false) return t.isMatch = false, tt ? t : false;
+      t: if (K(j)) {
+        if (typeof y.onIgnore == "function" && y.onIgnore(t) === F3.UNIGNORE) {
           t.isMatch = true;
           break t;
         }
         return t.isMatch = false, tt ? t : false;
       }
-      return typeof y2.onMatch == "function" && y2.onMatch(t), tt ? t : true;
+      return typeof y.onMatch == "function" && y.onMatch(t), tt ? t : true;
     };
-    return f3 && (it.state = w3), it;
+    return f2 && (it.state = w2), it;
   };
-  return c.test = (a2, i3, f3, { glob: v3, posix: y2 } = {}) => {
-    if (typeof a2 != "string") throw new TypeError("Expected input to be a string");
-    if (a2 === "") return { isMatch: false, output: "" };
-    const M2 = f3 || {}, I2 = M2.format || (y2 ? q4.toPosixSlashes : null);
-    let w3 = a2 === v3, K = w3 && I2 ? I2(a2) : a2;
-    return w3 === false && (K = I2 ? I2(a2) : a2, w3 = K === v3), (w3 === false || M2.capture === true) && (M2.matchBase === true || M2.basename === true ? w3 = c.matchBase(a2, i3, f3, y2) : w3 = i3.exec(K)), { isMatch: !!w3, match: w3, output: K };
-  }, c.matchBase = (a2, i3, f3, v3 = f3 && f3.windows) => (i3 instanceof RegExp ? i3 : c.makeRe(i3, f3)).test(q4.basename(a2, { windows: v3 })), c.isMatch = (a2, i3, f3) => c(i3, f3)(a2), c.parse = (a2, i3) => Array.isArray(a2) ? a2.map((f3) => c.parse(f3, i3)) : d(a2, { ...i3, fastpaths: false }), c.scan = (a2, i3) => g4(a2, i3), c.compileRe = (a2, i3, f3 = false, v3 = false) => {
-    if (f3 === true) return a2.output;
-    const y2 = i3 || {}, M2 = y2.contains ? "" : "^", I2 = y2.contains ? "" : "$";
-    let w3 = `${M2}(?:${a2.output})${I2}`;
-    a2 && a2.negated === true && (w3 = `^(?!${w3}).*$`);
-    const K = c.toRegex(w3, i3);
-    return v3 === true && (K.state = a2), K;
-  }, c.makeRe = (a2, i3 = {}, f3 = false, v3 = false) => {
-    if (!a2 || typeof a2 != "string") throw new TypeError("Expected a non-empty string");
-    let y2 = { negated: false, fastpaths: true };
-    return i3.fastpaths !== false && (a2[0] === "." || a2[0] === "*") && (y2.output = d.fastpaths(a2, i3)), y2.output || (y2 = d(a2, i3)), c.compileRe(y2, i3, f3, v3);
-  }, c.toRegex = (a2, i3) => {
+  return c.test = (a, i2, f2, { glob: v2, posix: y } = {}) => {
+    if (typeof a != "string") throw new TypeError("Expected input to be a string");
+    if (a === "") return { isMatch: false, output: "" };
+    const M = f2 || {}, I = M.format || (y ? q3.toPosixSlashes : null);
+    let w2 = a === v2, K = w2 && I ? I(a) : a;
+    return w2 === false && (K = I ? I(a) : a, w2 = K === v2), (w2 === false || M.capture === true) && (M.matchBase === true || M.basename === true ? w2 = c.matchBase(a, i2, f2, y) : w2 = i2.exec(K)), { isMatch: !!w2, match: w2, output: K };
+  }, c.matchBase = (a, i2, f2, v2 = f2 && f2.windows) => (i2 instanceof RegExp ? i2 : c.makeRe(i2, f2)).test(q3.basename(a, { windows: v2 })), c.isMatch = (a, i2, f2) => c(i2, f2)(a), c.parse = (a, i2) => Array.isArray(a) ? a.map((f2) => c.parse(f2, i2)) : d(a, { ...i2, fastpaths: false }), c.scan = (a, i2) => g2(a, i2), c.compileRe = (a, i2, f2 = false, v2 = false) => {
+    if (f2 === true) return a.output;
+    const y = i2 || {}, M = y.contains ? "" : "^", I = y.contains ? "" : "$";
+    let w2 = `${M}(?:${a.output})${I}`;
+    a && a.negated === true && (w2 = `^(?!${w2}).*$`);
+    const K = c.toRegex(w2, i2);
+    return v2 === true && (K.state = a), K;
+  }, c.makeRe = (a, i2 = {}, f2 = false, v2 = false) => {
+    if (!a || typeof a != "string") throw new TypeError("Expected a non-empty string");
+    let y = { negated: false, fastpaths: true };
+    return i2.fastpaths !== false && (a[0] === "." || a[0] === "*") && (y.output = d.fastpaths(a, i2)), y.output || (y = d(a, i2)), c.compileRe(y, i2, f2, v2);
+  }, c.toRegex = (a, i2) => {
     try {
-      const f3 = i3 || {};
-      return new RegExp(a2, f3.flags || (f3.nocase ? "i" : ""));
-    } catch (f3) {
-      if (i3 && i3.debug === true) throw f3;
+      const f2 = i2 || {};
+      return new RegExp(a, f2.flags || (f2.nocase ? "i" : ""));
+    } catch (f2) {
+      if (i2 && i2.debug === true) throw f2;
       return /$^/;
     }
   }, c.constants = F3, yt = c, yt;
@@ -1572,76 +1435,76 @@ var Lt;
 function Bt() {
   if (Lt) return dt;
   Lt = 1;
-  const g4 = It(), d = Et();
-  function q4(F3, O, c = false) {
-    return O && (O.windows === null || O.windows === void 0) && (O = { ...O, windows: d.isWindows() }), g4(F3, O, c);
+  const g2 = It(), d = Et();
+  function q3(F3, O, c = false) {
+    return O && (O.windows === null || O.windows === void 0) && (O = { ...O, windows: d.isWindows() }), g2(F3, O, c);
   }
-  return Object.assign(q4, g4), dt = q4, dt;
+  return Object.assign(q3, g2), dt = q3, dt;
 }
 var Gt2 = Bt();
-var Dt = e2(Gt2);
+var Dt = e(Gt2);
 
 // node_modules/.pnpm/@visulima+fs@7.0.0_@visulima+yaml@2.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/match.js
 var m = (r, c) => {
-  const o2 = Dt(r, c);
-  return (t) => o2(t);
+  const o = Dt(r, c);
+  return (t) => o(t);
 };
 
 // node_modules/.pnpm/@visulima+fs@7.0.0_@visulima+yaml@2.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/index.js
 var F2;
-var b2 = (n2) => (F2 ??= h2(import.meta.url))(n2);
-var f2 = typeof globalThis < "u" && typeof globalThis.process < "u" ? globalThis.process : process;
-var u2 = (n2) => {
-  if (typeof f2 < "u" && f2.versions && f2.versions.node) {
-    const [s, i3] = f2.versions.node.split(".").map(Number);
-    if (s > 22 || s === 22 && i3 >= 3 || s === 20 && i3 >= 16) return f2.getBuiltinModule(n2);
+var b = (n) => (F2 ??= h(import.meta.url))(n);
+var f = typeof globalThis < "u" && typeof globalThis.process < "u" ? globalThis.process : process;
+var u = (n) => {
+  if (typeof f < "u" && f.versions && f.versions.node) {
+    const [s, i2] = f.versions.node.split(".").map(Number);
+    if (s > 22 || s === 22 && i2 >= 3 || s === 20 && i2 >= 16) return f.getBuiltinModule(n);
   }
-  return b2(n2);
+  return b(n);
 };
-var g3 = u2("fs");
-var w2 = u2("os");
-var k = u2("path");
-var l2 = {};
-var x3;
-function C2() {
-  if (x3) return l2;
-  x3 = 1;
-  var n2 = Object.defineProperty, s = (o2, e3) => n2(o2, "name", { value: e3, configurable: true }), i3 = g3, y2 = w2, S = k;
-  const p3 = s((o2) => {
-    let e3 = "";
-    for (let r = 0; r < o2.length; r += 1) {
-      const t = o2[r], a2 = t.toUpperCase();
-      e3 += t === a2 ? t.toLowerCase() : a2;
+var g = u("fs");
+var w = u("os");
+var k = u("path");
+var l = {};
+var x;
+function C() {
+  if (x) return l;
+  x = 1;
+  var n = Object.defineProperty, s = (o, e2) => n(o, "name", { value: e2, configurable: true }), i2 = g, y = w, S = k;
+  const p = s((o) => {
+    let e2 = "";
+    for (let r = 0; r < o.length; r += 1) {
+      const t = o[r], a = t.toUpperCase();
+      e2 += t === a ? t.toLowerCase() : a;
     }
-    return e3;
-  }, "invertCase"), c = /* @__PURE__ */ new Map(), m2 = s((o2, e3) => {
-    const r = S.join(o2, `.is-fs-case-sensitive-test-${process.pid}`);
+    return e2;
+  }, "invertCase"), c = /* @__PURE__ */ new Map(), m2 = s((o, e2) => {
+    const r = S.join(o, `.is-fs-case-sensitive-test-${process.pid}`);
     try {
-      return e3.writeFileSync(r, ""), !e3.existsSync(p3(r));
+      return e2.writeFileSync(r, ""), !e2.existsSync(p(r));
     } finally {
       try {
-        e3.unlinkSync(r);
+        e2.unlinkSync(r);
       } catch {
       }
     }
-  }, "checkDirectoryCaseWithWrite"), v3 = s((o2, e3, r) => {
+  }, "checkDirectoryCaseWithWrite"), v2 = s((o, e2, r) => {
     try {
-      return m2(o2, r);
+      return m2(o, r);
     } catch (t) {
-      if (e3 === void 0) return m2(y2.tmpdir(), r);
+      if (e2 === void 0) return m2(y.tmpdir(), r);
       throw t;
     }
-  }, "checkDirectoryCaseWithFallback"), _3 = s((o2, e3 = i3, r = true) => {
-    const t = o2 ?? process.cwd();
+  }, "checkDirectoryCaseWithFallback"), _2 = s((o, e2 = i2, r = true) => {
+    const t = o ?? process.cwd();
     if (r && c.has(t)) return c.get(t);
-    let a2;
-    const d = p3(t);
-    return d !== t && e3.existsSync(t) ? a2 = !e3.existsSync(d) : a2 = v3(t, o2, e3), r && c.set(t, a2), a2;
+    let a;
+    const d = p(t);
+    return d !== t && e2.existsSync(t) ? a = !e2.existsSync(d) : a = v2(t, o, e2), r && c.set(t, a), a;
   }, "isFsCaseSensitive");
-  return l2.isFsCaseSensitive = _3, l2;
+  return l.isFsCaseSensitive = _2, l;
 }
-var D2 = C2();
-var q3 = D2.isFsCaseSensitive;
+var D2 = C();
+var q2 = D2.isFsCaseSensitive;
 
 // packages/cli/src/util/cloud-client.ts
 var MAX_ASSET_FILE_BYTES = 25 * 1024 * 1024;
@@ -1731,7 +1594,34 @@ var readAssetsIgnore = (directory) => {
     ...floating.length > 0 ? [m(floating, { dot: true, matchBase: true })] : []
   ];
   const isMatch = (path) => matchers.some((match) => match(path));
-  return (path) => path.split("/").some((_3, index, segments) => isMatch(segments.slice(0, index + 1).join("/")));
+  return (path) => path.split("/").some((_2, index, segments) => isMatch(segments.slice(0, index + 1).join("/")));
+};
+var assetFilesOf = (root) => {
+  const realRoot = realpathSync(root);
+  const visited = /* @__PURE__ */ new Set();
+  const files = [];
+  const visit = (directory) => {
+    const realDirectory = realpathSync(directory);
+    if (visited.has(realDirectory)) {
+      return;
+    }
+    visited.add(realDirectory);
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const full = en(directory, entry.name);
+      const real = realpathSync(full);
+      const inside = nn(realRoot, real);
+      if (inside.startsWith("..") || v(inside)) {
+        throw new Error(`asset "/${nn(root, full)}" is a symlink that leads outside the assets directory`);
+      }
+      if (statSync(real).isDirectory()) {
+        visit(full);
+      } else {
+        files.push({ file: real, path: nn(root, full) });
+      }
+    }
+  };
+  visit(root);
+  return files;
 };
 var collectAssets = (directory, wranglerAssets) => {
   if (!existsSync(directory) || !statSync(directory).isDirectory()) {
@@ -1740,12 +1630,11 @@ var collectAssets = (directory, wranglerAssets) => {
   const ignored = readAssetsIgnore(directory);
   const files = [];
   let total = 0;
-  for (const entry of L(directory, { followSymlinks: true, includeDirs: false })) {
-    const path = nn(directory, entry.path);
+  for (const { file, path } of assetFilesOf(directory)) {
     if (RESERVED_ASSET_FILES.has(path) || ignored(path)) {
       continue;
     }
-    const { size } = statSync(entry.path);
+    const { size } = statSync(file);
     if (size > MAX_ASSET_FILE_BYTES) {
       throw new Error(`asset "/${path}" is ${String(size)} bytes; Cloudflare caps a single asset at 25 MiB`);
     }
@@ -1753,7 +1642,7 @@ var collectAssets = (directory, wranglerAssets) => {
     if (total > MAX_ASSETS_TOTAL_BYTES) {
       throw new Error(`assets in "${directory}" exceed the 50 MiB upload cap`);
     }
-    files.push({ content: readFileSync(entry.path).toString("base64"), path: `/${path}` });
+    files.push({ content: readFileSync(file).toString("base64"), path: `/${path}` });
   }
   if (files.length === 0) {
     throw new Error(`assets directory "${directory}" is empty \u2014 build the app first`);
