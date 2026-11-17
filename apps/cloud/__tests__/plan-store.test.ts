@@ -25,6 +25,17 @@ describe(parsePlanRecord, () => {
         expect(parsePlanRecord("pro")).toBeUndefined();
     });
 
+    /** The scope is what the dispatcher signs into a preview cookie; a record that dropped it would let cookies outlive a password change. */
+    it("keeps a protected record's protection scope, and rejects a scope that is not a string", () => {
+        expect(parsePlanRecord({ plan: "pro", protected: true, protectionScope: "abc", verifiedAt: T0 })).toStrictEqual({
+            plan: "pro",
+            protected: true,
+            protectionScope: "abc",
+            verifiedAt: T0,
+        });
+        expect(parsePlanRecord({ plan: "pro", protected: true, protectionScope: 1, verifiedAt: T0 })).toBeUndefined();
+    });
+
     it("drops recursion values other than allow, so the default stays terminate", () => {
         expect(parsePlanRecord({ plan: "pro", recursion: "deny", verifiedAt: T0 })).toStrictEqual({ plan: "pro", verifiedAt: T0 });
     });

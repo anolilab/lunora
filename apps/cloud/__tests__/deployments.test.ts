@@ -196,9 +196,27 @@ describe("deployments.planForScript", () => {
             await expect(
                 facts(serving, {
                     deployments: [{ ...live, createdAt: 9, kind: "production", status: "superseded" }, preview],
-                    projects: [{ _id: "p1", previewPasswordHash: "h" }],
+                    projects: [{ _id: "p1", previewPasswordHash: "h", previewPasswordSalt: "s" }],
                 }),
-            ).resolves.toStrictEqual({ plan: "free", protected: true });
+            ).resolves.toStrictEqual({ plan: "free", protected: true, protectionScope: expect.stringMatching(/^[\da-f]{64}$/u) });
+        });
+
+        /** The dispatcher signs the scope into each preview cookie, so it must move whenever an issued cookie has to stop working. */
+        it("answers a protection scope that changes with the password and with the project", async () => {
+            const preview = { ...live, kind: "preview" };
+            const scopeOf = async (project: Record<string, unknown>, deployment: Record<string, unknown> = preview): Promise<unknown> => {
+                const answer = (await facts(serving, { deployments: [deployment], projects: [project] })) as { protectionScope?: string };
+
+                return answer.protectionScope;
+            };
+
+            const current = await scopeOf({ _id: "p1", previewPasswordHash: "h", previewPasswordSalt: "s1" });
+
+            await expect(scopeOf({ _id: "p1", previewPasswordHash: "h", previewPasswordSalt: "s1" })).resolves.toBe(current);
+            await expect(scopeOf({ _id: "p1", previewPasswordHash: "h2", previewPasswordSalt: "s2" })).resolves.not.toBe(current);
+            await expect(scopeOf({ _id: "p2", previewPasswordHash: "h", previewPasswordSalt: "s1" }, { ...preview, projectId: "p2" })).resolves.not.toBe(
+                current,
+            );
         });
     });
 

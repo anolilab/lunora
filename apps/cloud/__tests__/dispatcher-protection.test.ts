@@ -16,6 +16,9 @@ import { dispatcherEnv } from "./_helpers/dispatcher-env";
 
 const CONTROL_PLANE_TOKEN = "cp_token_fixture"; // gitleaks:allow -- fabricated fixture, not a credential
 const SCRIPT = "acme-pr-42";
+const SCOPE = "scope-current";
+/** A protected preview whose password was changed: cookies issued under the old one carry `scope-old`. */
+const ROTATED_SCRIPT = "acme-pr-77";
 
 /** A tenant that must never be reached while the gate holds. */
 const tenantFetch = vi.fn<() => Promise<Response>>(() => Promise.resolve(new Response("tenant body", { status: 200 })));
@@ -38,7 +41,10 @@ const controlPlane = vi.fn<typeof globalThis.fetch>(async (input, init) => {
     if (url.includes("/v1/tenants/plan")) {
         const script = new URL(url).searchParams.get("script") ?? "";
 
-        return Response.json({ plan: "pro", ...(script === SCRIPT ? { protected: true } : {}) }, { status: 200 });
+        return Response.json(
+            { plan: "pro", ...(script === SCRIPT || script === ROTATED_SCRIPT ? { protected: true, protectionScope: SCOPE } : {}) },
+            { status: 200 },
+        );
     }
 
     if (url.includes("/v1/tenants/preview-auth")) {
@@ -82,7 +88,7 @@ describe("deployment protection", () => {
     });
 
     it("lets a request with a valid cookie through to the tenant", async () => {
-        const token = await signPreviewToken(SCRIPT, CONTROL_PLANE_TOKEN);
+        const token = await signPreviewToken(SCRIPT, SCOPE, CONTROL_PLANE_TOKEN);
         const response = await dispatcher.fetch(get(`__lunora_preview=${token}`), makeEnv());
 
         expect(response.status).toBe(200);
@@ -94,8 +100,17 @@ describe("deployment protection", () => {
      * offers one preview's cookie to the next; the signed scope is what rejects it.
      */
     it("rejects a cookie minted for a different preview", async () => {
-        const token = await signPreviewToken("acme-pr-99", CONTROL_PLANE_TOKEN);
+        const token = await signPreviewToken("acme-pr-99", SCOPE, CONTROL_PLANE_TOKEN);
         const response = await dispatcher.fetch(get(`__lunora_preview=${token}`), makeEnv());
+
+        expect(response.status).toBe(401);
+        expect(tenantFetch).not.toHaveBeenCalled();
+    });
+
+    /** Changing the password changes the scope the plan lookup sends, which revokes every cookie issued before. */
+    it("rejects a cookie issued under the project's previous password", async () => {
+        const token = await signPreviewToken(ROTATED_SCRIPT, "scope-old", CONTROL_PLANE_TOKEN);
+        const response = await dispatcher.fetch(get(`__lunora_preview=${token}`, ROTATED_SCRIPT), makeEnv());
 
         expect(response.status).toBe(401);
         expect(tenantFetch).not.toHaveBeenCalled();

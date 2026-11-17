@@ -9,7 +9,7 @@
  */
 
 import type { PlanFacts } from "./plan-facts";
-import { egressOf, normalizeFacts } from "./plan-facts";
+import { egressOf, normalizeFacts, protectionFieldsValid } from "./plan-facts";
 
 /** What the control plane verified for one script, and when. */
 export interface PlanRecord extends PlanFacts {
@@ -49,7 +49,7 @@ export const parsePlanRecord = (data: unknown): PlanRecord | undefined => {
         return undefined;
     }
 
-    if (body["protected"] !== undefined && typeof body["protected"] !== "boolean") {
+    if (!protectionFieldsValid(body)) {
         return undefined;
     }
 
@@ -61,7 +61,13 @@ export const parsePlanRecord = (data: unknown): PlanRecord | undefined => {
     }
 
     return {
-        ...normalizeFacts({ egress: egress.kind === "valid" ? egress.policy : undefined, plan, protected: body["protected"], recursion: body["recursion"] }),
+        ...normalizeFacts({
+            egress: egress.kind === "valid" ? egress.policy : undefined,
+            plan,
+            protected: body["protected"],
+            protectionScope: body["protectionScope"],
+            recursion: body["recursion"],
+        }),
         plan,
         verifiedAt,
     };

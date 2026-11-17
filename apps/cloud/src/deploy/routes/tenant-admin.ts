@@ -68,7 +68,7 @@ export const handleTenantPlanRoute = async (request: Request, environment: Route
         return jsonError(400, "script is required");
     }
 
-    const result = await context.runQuery<{ plan: string; protected?: boolean }>(api.deployments.planForScript, { scriptName });
+    const result = await context.runQuery<{ plan: string; protected?: boolean; protectionScope?: string }>(api.deployments.planForScript, { scriptName });
 
     return Response.json(result);
 };

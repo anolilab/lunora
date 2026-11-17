@@ -4,12 +4,13 @@ import { PREVIEW_SESSION_MS, previewCookieHeader, readCookie, signPreviewToken, 
 
 const TOKEN = "cp_secret_token"; // gitleaks:allow -- fabricated fixture, not a credential
 const NOW = 1_700_000_000_000;
+const SCOPE = "scope-a";
 
 describe(signPreviewToken, () => {
     it("round-trips a token for the script it was minted for", async () => {
-        const token = await signPreviewToken("acme-pr-42", TOKEN, NOW);
+        const token = await signPreviewToken("acme-pr-42", SCOPE, TOKEN, NOW);
 
-        await expect(verifyPreviewToken(token, "acme-pr-42", TOKEN, NOW + 1000)).resolves.toBe(true);
+        await expect(verifyPreviewToken(token, "acme-pr-42", SCOPE, TOKEN, NOW + 1000)).resolves.toBe(true);
     });
 
     /**
@@ -19,22 +20,49 @@ describe(signPreviewToken, () => {
      * one preview's cookie opening the next.
      */
     it("does not authorise a different script", async () => {
-        const token = await signPreviewToken("acme-pr-42", TOKEN, NOW);
+        const token = await signPreviewToken("acme-pr-42", SCOPE, TOKEN, NOW);
 
-        await expect(verifyPreviewToken(token, "acme-pr-43", TOKEN, NOW + 1000)).resolves.toBe(false);
+        await expect(verifyPreviewToken(token, "acme-pr-43", SCOPE, TOKEN, NOW + 1000)).resolves.toBe(false);
+    });
+
+    /**
+     * A preview's script name comes from its slug and branch, so it outlives both the
+     * password the cookie was issued under and the project it was issued for. The scope
+     * the plan lookup sends changes with either, and a cookie is good only for its own.
+     */
+    it("does not authorise the same script under another protection scope", async () => {
+        const token = await signPreviewToken("acme-pr-42", SCOPE, TOKEN, NOW);
+
+        await expect(verifyPreviewToken(token, "acme-pr-42", "scope-b", TOKEN, NOW + 1000)).resolves.toBe(false);
+    });
+
+    it("does not authorise a cookie minted before scopes, which has none", async () => {
+        const payload = btoa(JSON.stringify({ exp: NOW + PREVIEW_SESSION_MS, script: "acme-pr-42" }))
+            .replaceAll("+", "-")
+            .replaceAll("/", "_")
+            .replaceAll("=", "");
+        const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(TOKEN), { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
+        const derived = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode("lunora-preview-auth-v1"));
+        const signing = await crypto.subtle.importKey("raw", derived, { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
+        const signature = btoa(String.fromCodePoint(...new Uint8Array(await crypto.subtle.sign("HMAC", signing, new TextEncoder().encode(payload)))))
+            .replaceAll("+", "-")
+            .replaceAll("/", "_")
+            .replaceAll("=", "");
+
+        await expect(verifyPreviewToken(`${payload}.${signature}`, "acme-pr-42", "", TOKEN, NOW + 1000)).resolves.toBe(false);
     });
 
     it("expires", async () => {
-        const token = await signPreviewToken("acme-pr-42", TOKEN, NOW);
+        const token = await signPreviewToken("acme-pr-42", SCOPE, TOKEN, NOW);
 
-        await expect(verifyPreviewToken(token, "acme-pr-42", TOKEN, NOW + PREVIEW_SESSION_MS + 1)).resolves.toBe(false);
+        await expect(verifyPreviewToken(token, "acme-pr-42", SCOPE, TOKEN, NOW + PREVIEW_SESSION_MS + 1)).resolves.toBe(false);
     });
 
     /** Rotating the control-plane token invalidates outstanding cookies — the intended blast radius. */
     it("does not verify under a different control-plane token", async () => {
-        const token = await signPreviewToken("acme-pr-42", TOKEN, NOW);
+        const token = await signPreviewToken("acme-pr-42", SCOPE, TOKEN, NOW);
 
-        await expect(verifyPreviewToken(token, "acme-pr-42", "cp_rotated", NOW + 1000)).resolves.toBe(false); // gitleaks:allow -- fabricated fixture
+        await expect(verifyPreviewToken(token, "acme-pr-42", SCOPE, "cp_rotated", NOW + 1000)).resolves.toBe(false); // gitleaks:allow -- fabricated fixture
     });
 
     /**
@@ -43,22 +71,22 @@ describe(signPreviewToken, () => {
      * payload fails before anything inside it is read.
      */
     it("rejects a tampered payload that keeps a valid-looking signature", async () => {
-        const token = await signPreviewToken("acme-pr-42", TOKEN, NOW);
+        const token = await signPreviewToken("acme-pr-42", SCOPE, TOKEN, NOW);
         const [, signature] = token.split(".");
-        const forgedPayload = btoa(JSON.stringify({ exp: NOW + PREVIEW_SESSION_MS, script: "acme-pr-43" }))
+        const forgedPayload = btoa(JSON.stringify({ exp: NOW + PREVIEW_SESSION_MS, scope: SCOPE, script: "acme-pr-43" }))
             .replaceAll("+", "-")
             .replaceAll("/", "_")
             .replaceAll("=", "");
 
-        await expect(verifyPreviewToken(`${forgedPayload}.${signature ?? ""}`, "acme-pr-43", TOKEN, NOW + 1000)).resolves.toBe(false);
+        await expect(verifyPreviewToken(`${forgedPayload}.${signature ?? ""}`, "acme-pr-43", SCOPE, TOKEN, NOW + 1000)).resolves.toBe(false);
     });
 
     it("rejects structurally broken tokens rather than throwing", async () => {
-        await expect(verifyPreviewToken("", "acme-pr-42", TOKEN, NOW)).resolves.toBe(false);
-        await expect(verifyPreviewToken("nodot", "acme-pr-42", TOKEN, NOW)).resolves.toBe(false);
-        await expect(verifyPreviewToken(".onlysig", "acme-pr-42", TOKEN, NOW)).resolves.toBe(false);
-        await expect(verifyPreviewToken("onlypayload.", "acme-pr-42", TOKEN, NOW)).resolves.toBe(false);
-        await expect(verifyPreviewToken("not-base64!.also-not", "acme-pr-42", TOKEN, NOW)).resolves.toBe(false);
+        await expect(verifyPreviewToken("", "acme-pr-42", SCOPE, TOKEN, NOW)).resolves.toBe(false);
+        await expect(verifyPreviewToken("nodot", "acme-pr-42", SCOPE, TOKEN, NOW)).resolves.toBe(false);
+        await expect(verifyPreviewToken(".onlysig", "acme-pr-42", SCOPE, TOKEN, NOW)).resolves.toBe(false);
+        await expect(verifyPreviewToken("onlypayload.", "acme-pr-42", SCOPE, TOKEN, NOW)).resolves.toBe(false);
+        await expect(verifyPreviewToken("not-base64!.also-not", "acme-pr-42", SCOPE, TOKEN, NOW)).resolves.toBe(false);
     });
 });
 

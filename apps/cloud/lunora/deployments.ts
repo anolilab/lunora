@@ -5,6 +5,7 @@ import { highestPlan } from "../src/billing/plans";
 import type { AdmissionRow } from "../src/billing/spend";
 import { organizationServing } from "../src/billing/spend";
 import { endInstallBadge, restoreInstallBadge } from "../src/catalog/install-badge";
+import { sha256Hex } from "../src/deploy/keys";
 import { previewExpiry } from "../src/deploy/preview";
 import { assertStatusMove } from "../src/deploy/status-transitions";
 import { PLAIN_WORKER_NO_ADMIN, RUNTIME_LABELS, storedRuntime } from "../src/project-runtime";
@@ -185,11 +186,23 @@ export const adminTarget = internalQuery
         },
     );
 
-/** Whether a project has a preview password set. Read as part of {@link planForScript}. */
-const previewProtectionEnabled = async (context: QueryContext, projectId: Id<"projects">): Promise<boolean> => {
-    const project = (await context.db.get("projects", projectId)) as null | { previewPasswordHash?: string };
+/**
+ * A project's preview protection scope, or `undefined` when it has no preview password.
+ * Read as part of {@link planForScript}.
+ *
+ * The dispatcher signs it into every preview cookie and accepts only an exact match, so
+ * it has to change whenever an issued cookie must stop working: a new password (each
+ * gets a fresh salt) or another project serving the script. It crosses to the data
+ * plane and this query is public, so it is a hash and never the salt itself.
+ */
+const previewProtectionScope = async (context: QueryContext, projectId: Id<"projects">): Promise<string | undefined> => {
+    const project = (await context.db.get("projects", projectId)) as null | { previewPasswordHash?: null | string; previewPasswordSalt?: null | string };
 
-    return Boolean(project?.previewPasswordHash);
+    if (!project?.previewPasswordHash) {
+        return undefined;
+    }
+
+    return sha256Hex(`lunora-preview-scope\0${projectId}\0${project.previewPasswordSalt ?? ""}`);
 };
 
 /**
@@ -230,7 +243,7 @@ const servingDeployment = async (context: QueryContext, scriptName: string): Pro
  */
 export const planForScript = query
     .input({ scriptName: boundedString(LIMITS.name) })
-    .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string; protected?: boolean; recursion?: "allow" }> => {
+    .query(async ({ ctx: context, args: { scriptName } }): Promise<{ plan: string; protected?: boolean; protectionScope?: string; recursion?: "allow" }> => {
         const deployment = await servingDeployment(context, scriptName);
 
         if (!deployment) {
@@ -256,18 +269,18 @@ export const planForScript = query
         // Deployment protection rides along on the plan lookup rather than getting
         // its own endpoint: this is the dispatcher's ONE cached control-plane call
         // on the request path, and a second resolver would double that traffic to
-        // answer a question the same row already knows. Only the boolean crosses —
+        // answer a question the same row already knows. Only the flag and a hashed scope cross —
         // the password hash stays in the control plane (`verifyPreviewPassword`).
         //
         // Protection applies to PREVIEW deployments only. Production is public by
         // definition, and gating it here would be a foot-gun with no undo.
-        const isProtectedPreview = deployment.kind === "preview" && (await previewProtectionEnabled(context, deployment.projectId));
+        const protectionScope = deployment.kind === "preview" ? await previewProtectionScope(context, deployment.projectId) : undefined;
 
         // The org's recursion policy rides the same cached lookup (plan 365 W5). Only an
         // explicit `allow` crosses; the dispatcher treats anything else as `terminate`.
         return {
             plan: highestPlan(entitlements.plans),
-            ...(isProtectedPreview ? { protected: true } : {}),
+            ...(protectionScope === undefined ? {} : { protected: true, protectionScope }),
             ...(organization?.recursionPolicy === "allow" ? { recursion: "allow" as const } : {}),
         };
     });

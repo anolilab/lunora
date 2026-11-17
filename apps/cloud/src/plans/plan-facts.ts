@@ -25,6 +25,13 @@ export interface PlanFacts {
     plan?: string;
     /** True when this is a PREVIEW deployment whose project has a password set (deployment protection). */
     protected?: boolean;
+
+    /**
+     * Which project and which password a protected preview's cookies are good for. It changes when
+     * the password does or the script comes to serve another project, which is what revokes the
+     * cookies issued before. Not a secret: the cookie's MAC is what cannot be forged.
+     */
+    protectionScope?: string;
     /** `allow` when the org opted out of recursion termination (plan 365 W5); absent ⇒ `terminate`. */
     recursion?: "allow";
 }
@@ -40,11 +47,18 @@ const KNOWN_PLANS: ReadonlySet<string> = new Set([...SERVABLE_PLANS, "suspended"
  * only as `allow`, because only an explicit `allow` opts out of recursion termination (plan 365 W5) and
  * anything else keeps it on, fail closed.
  */
-export const normalizeFacts = (input: { egress?: EgressPolicy; plan?: string; protected?: unknown; recursion?: unknown }): PlanFacts => {
+export const normalizeFacts = (input: {
+    egress?: EgressPolicy;
+    plan?: string;
+    protected?: unknown;
+    protectionScope?: unknown;
+    recursion?: unknown;
+}): PlanFacts => {
     return {
         ...(input.egress === undefined ? {} : { egress: input.egress }),
         ...(input.plan === undefined ? {} : { plan: input.plan }),
         ...(input.protected === true ? { protected: true } : {}),
+        ...(input.protected === true && typeof input.protectionScope === "string" ? { protectionScope: input.protectionScope } : {}),
         ...(input.recursion === "allow" ? { recursion: "allow" as const } : {}),
     };
 };
@@ -68,12 +82,17 @@ export const egressOf = (body: Record<string, unknown>): { kind: "absent" } | { 
 /** Whether two sets of facts say the same thing. Compares the normalised forms, so a flag added to {@link normalizeFacts} is compared too. */
 export const sameFacts = (a: PlanFacts, b: PlanFacts): boolean => JSON.stringify(normalizeFacts(a)) === JSON.stringify(normalizeFacts(b));
 
+/** Whether a plan body's protection fields have their types: a boolean flag and a string scope, each optional. */
+export const protectionFieldsValid = (body: Record<string, unknown>): boolean =>
+    (body["protected"] === undefined || typeof body["protected"] === "boolean") &&
+    (body["protectionScope"] === undefined || typeof body["protectionScope"] === "string");
+
 /** A plan answer, or `undefined` when the body is not one `GET /v1/tenants/plan` gives. */
 export const toScriptFacts = (data: unknown): (PlanFacts & { plan: string }) | undefined => {
     const body = (typeof data === "object" && data !== null ? data : {}) as Record<string, unknown>;
     const { plan } = body;
 
-    if (typeof plan !== "string" || !KNOWN_PLANS.has(plan) || (body["protected"] !== undefined && typeof body["protected"] !== "boolean")) {
+    if (typeof plan !== "string" || !KNOWN_PLANS.has(plan) || !protectionFieldsValid(body)) {
         return undefined;
     }
 
@@ -86,7 +105,13 @@ export const toScriptFacts = (data: unknown): (PlanFacts & { plan: string }) | u
     }
 
     return {
-        ...normalizeFacts({ egress: egress.kind === "valid" ? egress.policy : undefined, plan, protected: body["protected"], recursion: body["recursion"] }),
+        ...normalizeFacts({
+            egress: egress.kind === "valid" ? egress.policy : undefined,
+            plan,
+            protected: body["protected"],
+            protectionScope: body["protectionScope"],
+            recursion: body["recursion"],
+        }),
         plan,
     };
 };

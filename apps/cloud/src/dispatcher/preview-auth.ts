@@ -46,10 +46,18 @@ const signingKey = async (controlPlaneToken: string): Promise<CryptoKey> => {
     return crypto.subtle.importKey("raw", derived, { hash: "SHA-256", name: "HMAC" }, false, ["sign"]);
 };
 
-/** The claims a preview cookie carries. Deliberately tiny — a scope and a deadline, nothing else. */
+/** The claims a preview cookie carries. Deliberately tiny — what it opens and a deadline, nothing else. */
 interface PreviewClaims {
     /** Expiry, epoch millis. */
     exp: number;
+
+    /**
+     * The protection scope the password was checked against (the plan answer's `protectionScope`).
+     * A script name outlives both its project and its password — previews are named from slug and
+     * branch — so without it a cookie survived a password change and passed to whoever re-claimed
+     * the name.
+     */
+    scope: string;
     /** The script this cookie authorises. A cookie for one preview must not open another. */
     script: string;
 }
@@ -62,8 +70,8 @@ interface PreviewClaims {
  * sent to every other preview in the account — signing the scope means a cookie
  * for one preview is rejected by the next even though the browser offers it.
  */
-export const signPreviewToken = async (script: string, controlPlaneToken: string, now: number = Date.now()): Promise<string> => {
-    const claims: PreviewClaims = { exp: now + PREVIEW_SESSION_MS, script };
+export const signPreviewToken = async (script: string, scope: string, controlPlaneToken: string, now: number = Date.now()): Promise<string> => {
+    const claims: PreviewClaims = { exp: now + PREVIEW_SESSION_MS, scope, script };
     const payload = toBase64Url(new TextEncoder().encode(JSON.stringify(claims)));
     const signature = await crypto.subtle.sign("HMAC", await signingKey(controlPlaneToken), new TextEncoder().encode(payload));
 
@@ -71,14 +79,20 @@ export const signPreviewToken = async (script: string, controlPlaneToken: string
 };
 
 /**
- * Verify a cookie value for one script. `false` for anything that is not a valid,
- * unexpired signature over that exact script.
+ * Verify a cookie value for one script and protection scope. `false` for anything
+ * that is not a valid, unexpired signature over that exact script and scope.
  *
  * Verification recomputes the signature and compares in constant time rather than
  * trusting the payload first: the claims are attacker-supplied until the MAC says
  * otherwise, so nothing is read out of them before the check passes.
  */
-export const verifyPreviewToken = async (token: string, script: string, controlPlaneToken: string, now: number = Date.now()): Promise<boolean> => {
+export const verifyPreviewToken = async (
+    token: string,
+    script: string,
+    scope: string,
+    controlPlaneToken: string,
+    now: number = Date.now(),
+): Promise<boolean> => {
     const separator = token.indexOf(".");
 
     if (separator <= 0 || separator === token.length - 1) {
@@ -111,7 +125,7 @@ export const verifyPreviewToken = async (token: string, script: string, controlP
         return false;
     }
 
-    return claims.script === script && typeof claims.exp === "number" && claims.exp > now;
+    return claims.script === script && claims.scope === scope && typeof claims.exp === "number" && claims.exp > now;
 };
 
 /**
@@ -221,7 +235,7 @@ const passwordAccepted = async (password: string, scriptName: string, plane: Pre
 };
 
 /** Handle the login form POST: verify, then mint the cookie. */
-const handlePreviewLogin = async (request: Request, scriptName: string, plane: PreviewControlPlane): Promise<Response> => {
+const handlePreviewLogin = async (request: Request, scriptName: string, scope: string, plane: PreviewControlPlane): Promise<Response> => {
     const form = await request.formData().catch(() => undefined);
     const password = form?.get("password");
 
@@ -233,7 +247,7 @@ const handlePreviewLogin = async (request: Request, scriptName: string, plane: P
     return new Response(null, {
         headers: {
             location: "/",
-            "set-cookie": previewCookieHeader(await signPreviewToken(scriptName, plane.token)),
+            "set-cookie": previewCookieHeader(await signPreviewToken(scriptName, scope, plane.token)),
         },
         status: 303,
     });
@@ -246,16 +260,23 @@ const handlePreviewLogin = async (request: Request, scriptName: string, plane: P
  * Handles the login POST itself so the tenant never sees the password: a form
  * submission to {@link PREVIEW_AUTH_PATH} is verified against the control plane,
  * and on success the dispatcher mints its own signed cookie and redirects back.
- * `plane.url` must already be stripped of trailing slashes.
+ * `plane.url` must already be stripped of trailing slashes. `scope` is the plan
+ * answer's `protectionScope`; a cookie minted under another one is not accepted.
  */
-export const guardProtectedPreview = async (request: Request, url: URL, scriptName: string, plane: PreviewControlPlane): Promise<Response | undefined> => {
+export const guardProtectedPreview = async (
+    request: Request,
+    url: URL,
+    scriptName: string,
+    scope: string,
+    plane: PreviewControlPlane,
+): Promise<Response | undefined> => {
     if (request.method === "POST" && url.pathname === PREVIEW_AUTH_PATH) {
-        return handlePreviewLogin(request, scriptName, plane);
+        return handlePreviewLogin(request, scriptName, scope, plane);
     }
 
     const cookie = readCookie(request.headers.get("cookie"));
 
-    if (cookie !== undefined && (await verifyPreviewToken(cookie, scriptName, plane.token))) {
+    if (cookie !== undefined && (await verifyPreviewToken(cookie, scriptName, scope, plane.token))) {
         return undefined;
     }
 

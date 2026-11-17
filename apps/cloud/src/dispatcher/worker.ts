@@ -605,7 +605,12 @@ const serveVerified = async (request: Request, env: DispatcherEnv, context: Wait
     // Gated BEFORE dispatch, deliberately: a check inside the tenant would run
     // the tenant's own code (and bill for it) on every unauthenticated probe.
     if (route.protected === true) {
-        const gate = await guardProtectedPreview(request, url, route.scriptName, { token: plane.token, url: stripTrailingSlashes(plane.url) });
+        // A protected answer without a scope (a plan record stored before scopes) still gates;
+        // its cookies are good only until the next answer carries one.
+        const gate = await guardProtectedPreview(request, url, route.scriptName, route.protectionScope ?? "", {
+            token: plane.token,
+            url: stripTrailingSlashes(plane.url),
+        });
 
         if (gate) {
             return { response: gate };
