@@ -192,6 +192,31 @@ describe("control-plane backup off-site copy", () => {
     });
 });
 
+describe("control-plane backup primary prune failure", () => {
+    it("still copies the dump off-site and reports the primary prune failure", async () => {
+        const remote = fakeS3({ accessKeyId: "offsite-key-id", bucket: "dr-backups", now: () => new Date(NOW) });
+        const primary = fakeBucket();
+        const offsite = offsiteBucket(OFFSITE_ENV, remote.fetch);
+
+        primary.bucket.list = () => Promise.reject(new Error("r2 list unavailable"));
+
+        const result = await runBackupSweep({
+            bucket: primary.bucket,
+            cell: "eu-1",
+            fetch: async () => okResponse(),
+            now: NOW,
+            ...(offsite ? { offsite } : {}),
+            startExport: async () => {
+                return { signedUrl: "https://d1.example.invalid/dump.sql" };
+            },
+        });
+
+        expect(result).toMatchObject({ pruned: 0, pruneError: "primary prune: r2 list unavailable", written: "control-plane/eu-1/20260906T120000000Z.sql" });
+        expect(result.offsite).toStrictEqual({ pruned: 0, status: "succeeded" });
+        expect([...remote.objects.keys()]).toStrictEqual(["control-plane/eu-1/20260906T120000000Z.sql"]);
+    });
+});
+
 describe(runBackupSweep, () => {
     it("writes the dump under a timestamped key for this cell", async () => {
         const { bucket, put } = fakeBucket();

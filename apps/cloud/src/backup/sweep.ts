@@ -58,6 +58,8 @@ export interface BackupSweepResult {
     offsite?: CopyOutcome & { pruned: number };
     /** Objects deleted because they aged past the retention window. */
     pruned: number;
+    /** Why the primary prune failed, when it did; the dump is written and copied regardless. */
+    pruneError?: string;
     /** The key written, or null when the sweep did not write one. */
     written: null | string;
 }
@@ -120,10 +122,12 @@ const prune = async (bucket: Pick<BackupBucket, "delete" | "list">, cell: string
 /**
  * Take one control-plane backup and prune expired ones.
  *
- * The prune runs even when the export fails, so a run of failed backups still
- * ages out its predecessors on schedule rather than growing the bucket forever
- * — but it runs *after* the write, so a failure never deletes the newest good
- * dump while leaving nothing in its place.
+ * A failed export or download throws before anything is pruned: while no new
+ * dump is being written, the old ones are the only ones there are, and ageing
+ * them out would leave nothing. The prune runs only after the write.
+ *
+ * A failed primary prune is reported in the result, not thrown: the dump is
+ * already written, and the off-site copy of it matters more than the cleanup.
  */
 export const runBackupSweep = async (deps: BackupSweepDeps): Promise<BackupSweepResult> => {
     const { bucket, cell, now } = deps;
@@ -141,10 +145,19 @@ export const runBackupSweep = async (deps: BackupSweepDeps): Promise<BackupSweep
     // Worker that reads it into memory first is one growth spurt from OOM.
     await bucket.put(key, dump.body, { httpMetadata: { contentType: SQL_CONTENT_TYPE } });
 
-    const pruned = await prune(bucket, cell, now);
+    let pruned = 0;
+    let pruneError: string | undefined;
+
+    try {
+        pruned = await prune(bucket, cell, now);
+    } catch (error) {
+        pruneError = `primary prune: ${error instanceof Error ? error.message : "failed"}`;
+    }
+
+    const primary = { pruned, ...(pruneError === undefined ? {} : { pruneError }), written: key };
 
     if (!deps.offsite) {
-        return { pruned, written: key };
+        return primary;
     }
 
     // Read back from the primary rather than teeing the download, so a slow or
@@ -159,12 +172,11 @@ export const runBackupSweep = async (deps: BackupSweepDeps): Promise<BackupSweep
             offsitePruned = await prune(deps.offsite, cell, now);
         } catch (error) {
             return {
+                ...primary,
                 offsite: { error: `off-site prune: ${error instanceof Error ? error.message : "failed"}`, pruned: 0, status: "failed" },
-                pruned,
-                written: key,
             };
         }
     }
 
-    return { offsite: { ...copied, pruned: offsitePruned }, pruned, written: key };
+    return { ...primary, offsite: { ...copied, pruned: offsitePruned } };
 };

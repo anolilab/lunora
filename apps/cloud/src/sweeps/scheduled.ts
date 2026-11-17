@@ -309,12 +309,12 @@ const sweepBackup = async (env: ControlPlaneEnv): Promise<void> => {
     });
 
     // The control plane keeps no row for its own dumps, so this line is the record
-    // of the off-site copy — and a failed one is a warning, never a failed tick.
-    if (!result.offsite) {
+    // of the off-site copy and the prunes — and a failed one is a warning, never a failed tick.
+    if (!result.offsite && result.pruneError === undefined) {
         return;
     }
 
-    if (result.offsite.status === "failed") {
+    if (result.offsite?.status === "failed" || result.pruneError !== undefined) {
         // eslint-disable-next-line no-console -- keys, counts and a bounded reason only
         console.warn("[control-plane-backup]", JSON.stringify(result));
     } else {
