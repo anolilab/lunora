@@ -5,9 +5,9 @@ import type { EvidenceLogRow, GeneratePort, InvestigationIncident, Investigation
 import { buildEvidenceBundle, resolveInvestigationRunner } from "../src/telemetry/investigation";
 import type { TriageIncident, TriageIssue } from "../src/telemetry/triage";
 import { buildTriagePrompt, MAX_ISSUES } from "../src/telemetry/triage";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import type { ActionCtx as ActionContext } from "./_generated/server.js";
-import { action, mutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import type { ActionCtx as ActionContext } from "./_generated/server";
+import { action, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg } from "./authz";
 import { orgEntitlements } from "./entitlements";

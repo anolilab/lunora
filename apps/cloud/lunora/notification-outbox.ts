@@ -1,8 +1,8 @@
 import type { NotificationEvent, NotificationFacts, NotificationMessage } from "../src/notifications/events";
 import { channelsForEvent, renderNotification } from "../src/notifications/events";
 import { pendingDeliveryRow } from "../src/notifications/outbox";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext } from "./_generated/server";
 
 /**
  * Write side of the notification outbox. A lifecycle mutation (deploy live, domain

@@ -3,9 +3,9 @@ import { LunoraError } from "@lunora/server";
 
 import type { AlertDelivery as AlertDeliveryBase, FiringRule, MetricRule, MetricTarget } from "../src/telemetry/alerts";
 import { fireCrossedRules, fireMetricRules } from "../src/telemetry/alerts";
-import type { Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { internalMutation, internalQuery, mutation, v } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertRowInOrg, authorizeTelemetryKey, resolveDeployKeyOrg } from "./authz";
 import { rateLimit } from "./guards";

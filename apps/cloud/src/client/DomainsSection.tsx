@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { FAILURES_BEFORE_UNVERIFIED } from "../domains/check";
 import type { EdgeBlockMode } from "../domains/edge-block-mode";
 import readJson from "../read-json";

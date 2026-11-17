@@ -1,5 +1,5 @@
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import { mutation, query, v } from "./_generated/server";
 import { assertMember, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
 

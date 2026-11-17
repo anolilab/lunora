@@ -5,8 +5,8 @@ import { LunoraError } from "@lunora/server";
 import { plansByReference } from "../src/billing/plan-of";
 import type { PlanName, QuotaResource } from "../src/billing/plans";
 import { effectiveLimit, highestPlan, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
-import type { Doc as StoredRow, Id } from "./_generated/dataModel.js";
-import type { QueryCtx as QueryContext } from "./_generated/server.js";
+import type { Doc as StoredRow, Id } from "./_generated/dataModel";
+import type { QueryCtx as QueryContext } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { collectAll } from "./paginate";
 

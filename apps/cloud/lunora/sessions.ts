@@ -1,7 +1,7 @@
 import type { SessionSpan } from "../src/telemetry/session-rollup";
 import { foldSessions } from "../src/telemetry/session-rollup";
-import type { Id } from "./_generated/dataModel.js";
-import { query, v } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel";
+import { query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember } from "./authz";
 import { boundedString, LIMITS } from "./validators";

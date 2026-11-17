@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { AsyncList } from "./AsyncList";
 import { Row, RowActions, RowList, StatusBadge } from "./section-ui";
 import type { OrgId } from "./types";

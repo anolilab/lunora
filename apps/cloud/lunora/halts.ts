@@ -16,9 +16,9 @@ import {
 import { stubbedWorkflowsOf } from "../src/deploy/halt-stub";
 import { beginConverge as beginConvergeOnStore, endConverge as endConvergeOnStore } from "../src/deploy/worker-classes";
 import { storedTarget } from "../src/provision-contract";
-import type { Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
-import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";

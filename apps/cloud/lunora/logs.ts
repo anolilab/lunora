@@ -2,9 +2,9 @@ import { createDbStore, RateLimiter } from "@lunora/ratelimit";
 import { LunoraError } from "@lunora/server";
 
 import { admitTailLines, TAIL_LOG_LIMITS } from "../src/tail/ingest-budget";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";

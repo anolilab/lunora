@@ -11,7 +11,7 @@ import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { AlertTarget } from "../telemetry/alerts";
 import { ANOMALY_TARGETS, EVENT_TARGETS, METRIC_TARGETS, USAGE_TARGETS } from "../telemetry/alerts";
 import { ORG_ADMINS_DESTINATION } from "../telemetry/recipients";

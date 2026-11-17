@@ -19,7 +19,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { RecordedWorkspacePackages } from "../builds/paths";
 import type { ProjectRuntime } from "../project-runtime";
 import type { TargetId } from "../provision-contract";

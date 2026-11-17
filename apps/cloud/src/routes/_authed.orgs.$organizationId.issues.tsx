@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { IssuesSection } from "../client/IssuesSection";
 import type { OrgId } from "../client/types";
 import { sectionLoader } from "./-section-loader";

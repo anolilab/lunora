@@ -5,7 +5,7 @@ import type { ReactElement } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { AsyncList } from "./AsyncList";
 import { ColumnHeader } from "./ColumnHeader";
 import { formatDateTime } from "./format";

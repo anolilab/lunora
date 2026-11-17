@@ -1,5 +1,5 @@
-import type { Id } from "./_generated/dataModel.js";
-import { internalMutation, query, v } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel";
+import { internalMutation, query, v } from "./_generated/server";
 import { assertSignedIn } from "./authz";
 import { deployTarget } from "./tables/shared";
 

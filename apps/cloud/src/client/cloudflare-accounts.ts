@@ -1,6 +1,6 @@
 import type { ReturnOf } from "@lunora/client";
 
-import type { api } from "../../lunora/_generated/api.js";
+import type { api } from "../../lunora/_generated/api";
 import type { CloudflarePermission } from "../cloudflare-permissions";
 import { CLOUDFLARE_TOKEN_PERMISSIONS } from "../cloudflare-permissions";
 

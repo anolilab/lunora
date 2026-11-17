@@ -115,7 +115,7 @@ export const loadMyOrganizationIds = createServerFn({ method: "GET" }).handler(a
     const [{ createServerClient }, { getRequest, getRequestUrl }, { api }] = await Promise.all([
         import("@lunora/client/ssr"),
         import("@tanstack/react-start/server"),
-        import("../../lunora/_generated/api.js"),
+        import("../../lunora/_generated/api"),
     ]);
 
     const cookie = getRequest().headers.get("cookie") ?? "";
@@ -203,7 +203,7 @@ const preloadOnServer = createServerFn({ method: "POST" })
         const [{ createServerClient, preloadQuery }, { getRequest, getRequestUrl }, { LUNORA_FUNCTIONS }] = await Promise.all([
             import("@lunora/client/ssr"),
             import("@tanstack/react-start/server"),
-            import("../../lunora/_generated/functions.js"),
+            import("../../lunora/_generated/functions"),
         ]);
 
         const registered = LUNORA_FUNCTIONS[data.functionPath];

@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { MAX_LINEAGE_DEPTH } from "../dispatcher/lineage";
 import { ColumnHeader } from "./ColumnHeader";
 import { Field, FieldForm, FormError, StatusBadge } from "./section-ui";

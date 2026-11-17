@@ -1,8 +1,8 @@
 import { LunoraError } from "@lunora/server";
 
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import { mutation, query, v } from "./_generated/server";
 import { assertMember, assertRowInOrg, assertSignedIn } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";

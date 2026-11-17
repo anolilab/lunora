@@ -1,4 +1,4 @@
-import { query, v } from "./_generated/server.js";
+import { query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember } from "./authz";
 

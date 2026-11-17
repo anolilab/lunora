@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { COLUMN_LABEL } from "@/lib/typography";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { CloudflareAccountView } from "./cloudflare-accounts";
 import { accountTitle } from "./cloudflare-accounts";
 import { formatNumber } from "./format";

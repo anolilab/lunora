@@ -4,7 +4,7 @@ import type { ReactElement } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { COLUMN_LABEL } from "@/lib/typography";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { formatValue } from "./metric-format";
 import { Sparkline, TrendBadge } from "./MetricSparkline";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";

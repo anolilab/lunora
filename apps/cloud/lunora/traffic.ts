@@ -1,5 +1,5 @@
 import { createTrafficReader, DEFAULT_TRAFFIC_WINDOW_MS, MAX_TRAFFIC_SCRIPTS } from "../src/telemetry/traffic-read";
-import { action, query, v } from "./_generated/server.js";
+import { action, query, v } from "./_generated/server";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";

@@ -7,8 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import { api } from "../../lunora/_generated/api.js";
-import type { Id } from "../../lunora/_generated/dataModel.js";
+import { api } from "../../lunora/_generated/api";
+import type { Id } from "../../lunora/_generated/dataModel";
 import { AsyncList } from "./AsyncList";
 import { BuildAdvisoriesCard } from "./BuildAdvisoriesCard";
 import { formatDateTime } from "./format";

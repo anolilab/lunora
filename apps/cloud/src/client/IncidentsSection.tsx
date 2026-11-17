@@ -8,8 +8,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { COLUMN_LABEL } from "@/lib/typography";
 
-import { api } from "../../lunora/_generated/api.js";
-import type { Id } from "../../lunora/_generated/dataModel.js";
+import { api } from "../../lunora/_generated/api";
+import type { Id } from "../../lunora/_generated/dataModel";
 import { AsyncList } from "./AsyncList";
 import { ColumnHeader } from "./ColumnHeader";
 import { CrossTabLink } from "./CrossTabLink";

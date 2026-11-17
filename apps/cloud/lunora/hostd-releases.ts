@@ -1,7 +1,7 @@
 import { LunoraError } from "@lunora/server";
 
-import type { Doc as Document_ } from "./_generated/dataModel.js";
-import { internalMutation, internalQuery, v } from "./_generated/server.js";
+import type { Doc as Document_ } from "./_generated/dataModel";
+import { internalMutation, internalQuery, v } from "./_generated/server";
 import { boundedString, LIMITS } from "./validators";
 
 /**

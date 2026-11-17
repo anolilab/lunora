@@ -3,7 +3,7 @@ import { LunoraError } from "@lunora/server";
 import { foldMetricSeries } from "../src/telemetry/metric-series";
 import type { MetricSeries } from "../src/telemetry/metrics-read";
 import { createMetricsReader, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry/metrics-read";
-import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
+import { action, internalMutation, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";

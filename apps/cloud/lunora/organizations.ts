@@ -2,8 +2,8 @@ import { LunoraError } from "@lunora/server";
 
 import { assertStatusMove } from "../src/deploy/status-transitions";
 import { DELETION_RETENTION_MS } from "../src/lib/deletion-retention";
-import type { Doc as Document_, Id, TableName } from "./_generated/dataModel.js";
-import { internalMutation, mutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id, TableName } from "./_generated/dataModel";
+import { internalMutation, mutation, query, v } from "./_generated/server";
 import { assertMember, assertSignedIn } from "./authz";
 import { releaseIdleAliases } from "./deployment-aliases";
 import { queueCertificateReleases } from "./domains";

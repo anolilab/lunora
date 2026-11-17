@@ -1,7 +1,7 @@
 import { useLunora } from "@lunora/react";
 import { useEffect, useState } from "react";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { OrgId } from "./types";
 
 /**

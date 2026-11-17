@@ -8,7 +8,7 @@ import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/componen
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { COLUMN_LABEL } from "@/lib/typography";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { ColumnHeader } from "./ColumnHeader";
 import { CrossTabLink } from "./CrossTabLink";
 import { formatMs, formatNumber, formatTime } from "./format";

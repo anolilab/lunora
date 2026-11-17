@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { OrgId } from "./types";
 
 /**

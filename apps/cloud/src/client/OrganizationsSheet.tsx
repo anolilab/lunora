@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { PlanId } from "./plan-catalog";
 import { isPaidPlan, PLAN_CATALOG, planCard, planPriceId } from "./plan-catalog";
 import { Field, FieldForm, FormError } from "./section-ui";

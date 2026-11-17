@@ -2,9 +2,9 @@ import { LunoraError } from "@lunora/server";
 
 import { activeOperation, tenantBackupKey } from "../src/backup/tenant-policy";
 import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
-import { internalMutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
+import { internalMutation, query, v } from "./_generated/server";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";

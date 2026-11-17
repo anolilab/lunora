@@ -1,8 +1,8 @@
 import { LunoraError } from "@lunora/server";
 
 import { RELEASE_LEASE_MS } from "../src/deploy/lease";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import { internalMutation, internalQuery, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import { internalMutation, internalQuery, query, v } from "./_generated/server";
 import { assertMember } from "./authz";
 import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";

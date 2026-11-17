@@ -1,6 +1,6 @@
 import type { ReturnOf } from "@lunora/client";
 
-import type { api } from "../../lunora/_generated/api.js";
+import type { api } from "../../lunora/_generated/api";
 
 /**
  * Pure decisions of the emergency-stop card (`./EmergencyStopCard.tsx`): how

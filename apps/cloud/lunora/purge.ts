@@ -1,5 +1,5 @@
-import type { TableName } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext } from "./_generated/server.js";
+import type { TableName } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext } from "./_generated/server";
 
 type MatchingRow = Record<string, unknown> & { _id: string };
 

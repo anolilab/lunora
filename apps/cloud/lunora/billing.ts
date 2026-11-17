@@ -1,8 +1,8 @@
 import { evaluateDunning } from "../src/billing/dunning";
 import type { QuotaResource } from "../src/billing/plans";
 import { effectiveLimit } from "../src/billing/plans";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import { action, internalMutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import { action, internalMutation, query, v } from "./_generated/server";
 import { assertMember } from "./authz";
 import { orgEntitlements } from "./entitlements";
 import { rateLimit } from "./guards";

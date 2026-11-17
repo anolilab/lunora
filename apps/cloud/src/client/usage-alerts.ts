@@ -1,6 +1,6 @@
 import type { ReturnOf } from "@lunora/client";
 
-import type { api } from "../../lunora/_generated/api.js";
+import type { api } from "../../lunora/_generated/api";
 import { magnitudeMismatch, normalizeRecipients, thresholdError } from "../cloudflare-accounts/usage-alerts";
 import { formatNumber } from "./format";
 

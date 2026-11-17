@@ -6,7 +6,7 @@ import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { UsageAlertMeter, UsageThresholdSuggestion } from "../telemetry/usage-alerts";
 import { Field } from "./section-ui";
 import type { OrgId } from "./types";

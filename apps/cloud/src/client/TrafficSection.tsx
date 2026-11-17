@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { EdgeProtectionCard } from "./EdgeProtectionCard";
 import { countryFlag, countryName, formatMs, formatNumber, formatTime } from "./format";
 import { TimeRangePicker, useTimeRange } from "./TimeRangeProvider";

@@ -2,8 +2,8 @@ import { defineIdentityGuard, LunoraError } from "@lunora/server";
 
 import { isDeployCapable, isKeyLive } from "../src/deploy/capability";
 import { hashDeployKey } from "../src/deploy/keys";
-import type { Doc as Document_, Id, TableName } from "./_generated/dataModel.js";
-import type { QueryCtx as QueryContext } from "./_generated/server.js";
+import type { Doc as Document_, Id, TableName } from "./_generated/dataModel";
+import type { QueryCtx as QueryContext } from "./_generated/server";
 
 /**
  * Organization authorization. Org-scoped

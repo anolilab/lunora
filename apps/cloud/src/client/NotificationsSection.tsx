@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { NotificationEvent, NotificationKind } from "../notifications/events";
 import { NOTIFICATION_EVENTS, NOTIFICATION_KINDS } from "../notifications/events";
 import { AsyncList } from "./AsyncList";

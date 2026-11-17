@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { ProjectRuntime } from "../project-runtime";
 import { DEFAULT_RUNTIME } from "../project-runtime";
 import { DEFAULT_TARGET } from "../provision-contract";

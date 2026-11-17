@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { Doc, IndexName } from "../lunora/_generated/dataModel.js";
+import type { Doc, IndexName } from "../lunora/_generated/dataModel";
 import { createRule, suggestUsageThreshold, usageProgress } from "../lunora/alerts";
 import { alertFamily } from "../src/telemetry/alerts";
 import { runUsageAlertSweep } from "../src/telemetry/usage-alert-sweep";

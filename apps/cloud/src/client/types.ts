@@ -1,4 +1,4 @@
-import type { Id } from "../../lunora/_generated/dataModel.js";
+import type { Id } from "../../lunora/_generated/dataModel";
 
 /** Shared id aliases so the client components don't repeat the generic. */
 export type OrgId = Id<"organizations">;

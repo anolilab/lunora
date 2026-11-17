@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { Doc } from "../lunora/_generated/dataModel.js";
+import type { Doc } from "../lunora/_generated/dataModel";
 import type { UsageMeter } from "../src/billing/spend";
 import {
     DEFAULT_SPEND_CAP_MINOR,

@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { AccountSection } from "../client/AccountSection";
 import { OrganizationList } from "../client/OrganizationList";
 import { preload } from "../ssr/loader";

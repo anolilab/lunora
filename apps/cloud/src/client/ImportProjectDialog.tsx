@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { ProjectRuntime } from "../project-runtime";
 import { DEFAULT_RUNTIME } from "../project-runtime";
 import { RuntimeField } from "./RuntimeField";

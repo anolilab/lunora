@@ -14,9 +14,9 @@ import {
     thresholdError,
     usageOfPeriod,
 } from "../src/cloudflare-accounts/usage-alerts";
-import type { Id } from "./_generated/dataModel.js";
-import type { ActionCtx as ActionContext } from "./_generated/server.js";
-import { action, internalQuery, v } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel";
+import type { ActionCtx as ActionContext } from "./_generated/server";
+import { action, internalQuery, v } from "./_generated/server";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { collectAll } from "./paginate";

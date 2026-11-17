@@ -1,4 +1,4 @@
-import { internalMutation } from "./_generated/server.js";
+import { internalMutation } from "./_generated/server";
 
 /**
  * Tenant cron fan-out heartbeat. This no-op exists so the

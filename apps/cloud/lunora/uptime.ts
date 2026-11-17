@@ -1,6 +1,6 @@
 import { summarizeUptime } from "../src/uptime/probe";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import { internalMutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import { internalMutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember } from "./authz";
 

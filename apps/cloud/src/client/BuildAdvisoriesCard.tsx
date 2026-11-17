@@ -4,8 +4,8 @@ import type { ReactElement } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-import { api } from "../../lunora/_generated/api.js";
-import type { Id } from "../../lunora/_generated/dataModel.js";
+import { api } from "../../lunora/_generated/api";
+import type { Id } from "../../lunora/_generated/dataModel";
 import { StatusBadge } from "./section-ui";
 import type { OrgId } from "./types";
 

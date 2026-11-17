@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { BoxDetail } from "./BoxDetail";
 import type { BoxView, MemberRole } from "./boxes";
 import { canDiagnose, canManage, pickBox } from "./boxes";

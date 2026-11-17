@@ -1,6 +1,6 @@
-import type { Id, TableName } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
-import { internalMutation, internalQuery, v } from "./_generated/server.js";
+import type { Id, TableName } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
+import { internalMutation, internalQuery, v } from "./_generated/server";
 import { assertSignedIn } from "./authz";
 import { legacySetRoleTargetRole } from "./members";
 import { collectAll } from "./paginate";

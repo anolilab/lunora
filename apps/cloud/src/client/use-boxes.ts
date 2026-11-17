@@ -2,7 +2,7 @@ import { useLunora, useQuery } from "@lunora/react";
 import { useRouteContext } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { MemberRole } from "./boxes";
 import { roleOf } from "./boxes";
 import type { OrgId } from "./types";

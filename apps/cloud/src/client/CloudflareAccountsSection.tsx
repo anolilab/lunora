@@ -10,7 +10,7 @@ import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle }
 import { Skeleton } from "@/components/ui/skeleton";
 import { COLUMN_LABEL } from "@/lib/typography";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { canManage } from "./boxes";
 import type { CloudflareAccountView } from "./cloudflare-accounts";
 import { accountTitle, missingPermissions, permissionLabel } from "./cloudflare-accounts";

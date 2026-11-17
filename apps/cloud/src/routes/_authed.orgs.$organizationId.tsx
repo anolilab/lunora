@@ -9,7 +9,7 @@ import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, Side
 import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { identifyOperator } from "../client/analytics";
 import { DashboardLayout } from "../client/DashboardLayout";
 import { OrgSwitcher } from "../client/OrgSwitcher";

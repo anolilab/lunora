@@ -10,7 +10,7 @@
  */
 import type { D1DatabaseLike } from "@lunora/d1";
 
-import { api } from "../../../lunora/_generated/api.js";
+import { api } from "../../../lunora/_generated/api";
 import type { TestAlert } from "../../../lunora/alerts";
 import type { AuthEnv } from "../../auth";
 import { authUserEmails } from "../../auth";

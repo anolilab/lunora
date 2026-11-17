@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { includedUsageFor } from "../billing/overage";
 import { estimatedSpendMinor, spendBreakdown } from "../billing/spend";
 import type { UsageTotals } from "../billing/usage";

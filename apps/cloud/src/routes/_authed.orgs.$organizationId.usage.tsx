@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { EmergencyStopCard } from "../client/EmergencyStopCard";
 import type { OrgId } from "../client/types";
 import { monthStart } from "../client/usage-period";

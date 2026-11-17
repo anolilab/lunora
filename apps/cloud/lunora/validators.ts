@@ -1,6 +1,6 @@
 import type { Validator } from "@lunora/values";
 
-import { v } from "./_generated/server.js";
+import { v } from "./_generated/server";
 
 /*
  * Length-bounded string arguments for the control plane's public procedures.

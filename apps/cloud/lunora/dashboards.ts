@@ -2,8 +2,8 @@ import { LunoraError } from "@lunora/server";
 
 import type { DashboardPanel } from "../src/telemetry/dashboards";
 import { validatePanels } from "../src/telemetry/dashboards";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import { mutation, query, v } from "./_generated/server";
 import { assertMember, assertRowInOrg } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";

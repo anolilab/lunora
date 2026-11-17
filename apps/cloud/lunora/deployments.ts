@@ -12,9 +12,9 @@ import { PLAIN_WORKER_NO_ADMIN, RUNTIME_LABELS, storedRuntime } from "../src/pro
 import type { TargetId } from "../src/provision-contract";
 import { classesMissingFrom, DEFAULT_TARGET, storedTarget, TARGETS } from "../src/provision-contract";
 import { isCellPlaced, resourceRefOf } from "../src/targets/placement";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server.js";
-import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
+import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { claimDeploymentAlias } from "./deployment-aliases";
 import { installBadgeOf, isWebUrl, onEnter, PHASE_TIMESTAMP, projectNameOf, releaseDetail } from "./deployment-lifecycle";

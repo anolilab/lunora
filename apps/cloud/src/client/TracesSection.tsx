@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { COLUMN_LABEL } from "@/lib/typography";
 import { cn } from "@/lib/utils";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { ObservationSpan, WaterfallSpan } from "../telemetry/trace-tree";
 import { buildTraceTree } from "../telemetry/trace-tree";
 import { ColumnHeader } from "./ColumnHeader";

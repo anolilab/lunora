@@ -1,6 +1,6 @@
 import { SECRET_CIPHER_VERSION, secretsForKind } from "../src/secrets/select";
-import type { Doc as Document_, Id } from "./_generated/dataModel.js";
-import { internalQuery, mutation, query, v } from "./_generated/server.js";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
+import { internalQuery, mutation, query, v } from "./_generated/server";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";

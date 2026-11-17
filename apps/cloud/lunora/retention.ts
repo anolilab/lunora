@@ -1,5 +1,5 @@
-import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { internalMutation } from "./_generated/server.js";
+import type { MutationCtx as MutationContext } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { ERASED_REFERENCE } from "./purge";
 
 const DAY_MS = 24 * 60 * 60 * 1000;

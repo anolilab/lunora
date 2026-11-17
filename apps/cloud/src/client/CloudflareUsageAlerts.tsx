@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { COLUMN_LABEL } from "@/lib/typography";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import type { CloudflareAccountView } from "./cloudflare-accounts";
 import { FormError, StatusBadge } from "./section-ui";
 import type { OrgId } from "./types";

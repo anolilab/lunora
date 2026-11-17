@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import { mutation, v } from "./_generated/server.js";
+import { mutation, v } from "./_generated/server";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 

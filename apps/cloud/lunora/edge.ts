@@ -4,9 +4,9 @@ import type { FirewallEvent, OrganizationHostnames } from "../src/edge/protectio
 import { edgeBudget, MAX_FIREWALL_WINDOW_MS, organizationHostnames, RATE_LIMIT_PERIODS, RATE_LIMIT_REQUESTS } from "../src/edge/protection";
 import type { TargetEnvironment } from "../src/targets/registry";
 import { registeredFleet } from "../src/targets/registry";
-import type { Id } from "./_generated/dataModel.js";
-import type { MutationCtx as MutationContext } from "./_generated/server.js";
-import { action, internalMutation, mutation, query, v } from "./_generated/server.js";
+import type { Id } from "./_generated/dataModel";
+import type { MutationCtx as MutationContext } from "./_generated/server";
+import { action, internalMutation, mutation, query, v } from "./_generated/server";
 import { assertMember } from "./authz";
 import { rateLimit } from "./guards";
 import { boundedString, LIMITS } from "./validators";

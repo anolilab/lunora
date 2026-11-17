@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { MutationCtx as MutationContext } from "../lunora/_generated/server.js";
+import type { MutationCtx as MutationContext } from "../lunora/_generated/server";
 import { fireDeployAlerts } from "../lunora/alerts";
 import { renderDeployAlert } from "../src/telemetry/alerts";
 

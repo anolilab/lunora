@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 
-import { api } from "../../lunora/_generated/api.js";
+import { api } from "../../lunora/_generated/api";
 import { ColumnHeader } from "./ColumnHeader";
 import type { HaltStatusView } from "./halt";
 import { confirmsHalt, describeHaltReason, emergencyStopActions, HALT_CONFIRMATION, HALT_STATE, haltOnSuspensionCopy } from "./halt";
