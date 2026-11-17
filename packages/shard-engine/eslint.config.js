@@ -74,6 +74,41 @@ export default createConfig(
             "unicorn/number-literal-case": "off",
         },
     },
+    // `ctx` / `db` / `doc` are the engine's domain vocabulary, not lazy shorthand:
+    // `ctx.db` is the public handler surface, a "doc" is a stored document row, and
+    // the `ctx-db-*` module family plus exported names such as `createShardCtxDb`,
+    // `CtxDbOptions` and `ScheduledFunctionDoc` are public API that mirrors
+    // Convex's `Doc` and @lunora/d1's `d1-ctx-db`. Every other abbreviation stays
+    // reported. ESLint replaces rule options wholesale, so the preset's own
+    // allowList and replacements are repeated here.
+    {
+        files: ["src/**/*.ts"],
+        rules: {
+            "unicorn/prevent-abbreviations": [
+                "error",
+                {
+                    allowList: { i: true, j: true },
+                    replacements: {
+                        args: false,
+                        ctx: false,
+                        db: false,
+                        dev: false,
+                        dist: false,
+                        doc: false,
+                        docs: false,
+                        env: false,
+                        params: false,
+                        pkg: false,
+                        prop: false,
+                        props: false,
+                        ref: false,
+                        src: false,
+                        utils: false,
+                    },
+                },
+            ],
+        },
+    },
     {
         files: ["**/__tests__/**/*.{ts,tsx}", "**/__bench__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}", "**/*.bench.{ts,tsx}"],
         rules: {

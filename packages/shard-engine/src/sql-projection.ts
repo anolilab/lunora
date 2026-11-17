@@ -152,8 +152,6 @@ const FLOAT64_KEY_DIGITS = 16;
 /** A key's shape: exactly {@link FLOAT64_KEY_DIGITS} lowercase hex digits, which is what `toString(16)` emits. */
 const FLOAT64_KEY_RE = /^[\da-f]{16}$/u;
 
-/* eslint-disable no-bitwise -- the IEEE-754 total-order transform IS bit manipulation; expressing it any other way would obscure the one thing these two functions do. */
-
 /**
  * An order-preserving, exactly-reversible text key for a JS number — the
  * float64 twin of {@link bigintSqlKey}, and the transform the reactive layer's
@@ -181,14 +179,18 @@ const float64SqlKey = (value: number): string => {
     let high = view.getUint32(0, false);
     let low = view.getUint32(4, false);
 
+    // eslint-disable-next-line no-bitwise -- IEEE-754 total-order transform: this is bit manipulation by definition
     if ((high & 0x80_00_00_00) === 0) {
         // Non-negative: set the sign bit so it sorts above every negative.
         // `>>> 0` is load-bearing — JS bitwise ops yield a SIGNED int32, and a
         // negative `high` would render as "-3ff00000" and destroy the ordering.
+        // eslint-disable-next-line no-bitwise -- IEEE-754 total-order transform: this is bit manipulation by definition
         high = (high ^ 0x80_00_00_00) >>> 0;
     } else {
         // Negative: flip everything so larger magnitudes sort lower.
+        // eslint-disable-next-line no-bitwise -- IEEE-754 total-order transform: this is bit manipulation by definition
         high = ~high >>> 0;
+        // eslint-disable-next-line no-bitwise -- IEEE-754 total-order transform: this is bit manipulation by definition
         low = ~low >>> 0;
     }
 
@@ -214,12 +216,16 @@ const decodeFloat64SqlKey = (raw: string): number | undefined => {
     let high = Number.parseInt(raw.slice(0, 8), 16);
     let low = Number.parseInt(raw.slice(8), 16);
 
+    // eslint-disable-next-line no-bitwise -- IEEE-754 total-order transform: this is bit manipulation by definition
     if ((high & 0x80_00_00_00) === 0) {
         // The sign bit is clear, so the encoder took its negative branch and
         // flipped every bit. Flipping again is its own inverse.
+        // eslint-disable-next-line no-bitwise -- IEEE-754 total-order transform: this is bit manipulation by definition
         high = ~high >>> 0;
+        // eslint-disable-next-line no-bitwise -- IEEE-754 total-order transform: this is bit manipulation by definition
         low = ~low >>> 0;
     } else {
+        // eslint-disable-next-line no-bitwise -- IEEE-754 total-order transform: this is bit manipulation by definition
         high = (high ^ 0x80_00_00_00) >>> 0;
     }
 
@@ -230,8 +236,6 @@ const decodeFloat64SqlKey = (raw: string): number | undefined => {
 
     return view.getFloat64(0, false);
 };
-
-/* eslint-enable no-bitwise -- back to ordinary code. */
 
 /**
  * The SQL-comparable scalar to store at `$.field` — and to bind against it — in

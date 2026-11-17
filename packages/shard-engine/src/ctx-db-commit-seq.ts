@@ -73,8 +73,6 @@
  * never touches the counter.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- silences the FILENAME rule only (it wants "context-database-commit-seq.ts"); no identifier in this file trips it. "ctx-db-commit-seq" mirrors its parent "ctx-db.ts", the established public module name that ten sibling `ctx-db-*` modules already follow. */
-
 import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";

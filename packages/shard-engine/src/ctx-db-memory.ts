@@ -38,8 +38,6 @@
  * missed call site would not fail loudly, it would serve a silently empty table.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- silences the FILENAME rule only (it wants "context-database-memory.ts"); no identifier in this file trips it. "ctx-db-memory" mirrors its parent "ctx-db.ts", the established public module name that ten sibling `ctx-db-*` modules already follow. */
-
 import { sql as dsql } from "drizzle-orm";
 
 import type { SchemaLike, SqlExec, TableDefinitionLike } from "./ctx-db";

@@ -14,7 +14,6 @@
  * which compiles it into a correlated `[NOT] EXISTS (...)`. The global column
  * path resolves relations to flat clauses upstream and omits the hook.
  */
-/* eslint-disable no-restricted-syntax -- every `sql\`…\`` here is a drizzle tagged-template SQL builder, not a string conversion; the rule misfires on the inner TemplateLiteral. */
 import { LunoraError } from "@lunora/errors";
 import type { SQL } from "drizzle-orm";
 import { sql } from "drizzle-orm";
@@ -388,6 +387,7 @@ const serverInList =
 
         if (items.length <= literalMax) {
             const list = sql.join(
+                // eslint-disable-next-line no-restricted-syntax -- drizzle tagged-template SQL binding a value, not a string conversion
                 items.map((item) => sql`${item}`),
                 sql`, `,
             );

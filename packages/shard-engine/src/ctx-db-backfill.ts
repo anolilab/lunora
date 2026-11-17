@@ -13,8 +13,6 @@
  * unchanged.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-backfill" mirrors its parent "ctx-db.ts" (the established public module name). */
-
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { analyzedSearchText, ftsTableName, planBackfillPass, searchIndexProfile } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
@@ -356,8 +354,6 @@ const backfillSearchIndexPages = (sql: SqlExec, tableName: string, index: Search
     }
 };
 
-/* eslint-disable no-secrets/no-secrets -- the JSDoc names the sql-store backfill entry point, not a credential */
-
 /**
  * Run every declared search index — including the `staged: true` ones the
  * migration pass skips — forward, by default to completion. This is the
@@ -366,7 +362,7 @@ const backfillSearchIndexPages = (sql: SqlExec, tableName: string, index: Search
  * to index a page at a time.
  *
  * SHARD-LOCAL tables only. A `.global()` table lives on the SQL backend and is
- * skipped here; its twin is `backfillSqlSearchIndexes` in `@lunora/sql-store`
+ * skipped here; its twin is backfillSqlSearchIndexes in `@lunora/sql-store`
  * (reached through the D1/Hyperdrive global writer). Someone who declared
  * `staged: true` on a `.global()` table and ran only the RPC named above would
  * otherwise watch it report zero pages and no error, forever.
@@ -380,7 +376,6 @@ const backfillSearchIndexPages = (sql: SqlExec, tableName: string, index: Search
  * Idempotent and resumable: an index already recorded as complete is skipped,
  * and an interrupted run picks up from its recorded cursor.
  */
-/* eslint-enable no-secrets/no-secrets */
 const backfillSearchIndexes = (sql: SqlExec, schema: SchemaLike, options: { maxPages?: number } = {}): SearchBackfillProgress => {
     if (!isFtsAvailable(sql)) {
         // No FTS5 engine means no companions to fill; searches already fall back

@@ -27,8 +27,6 @@
  * stop typing the string at all.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @lunora/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
-
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import {
@@ -454,16 +452,13 @@ interface CtxDbOptions {
 /** Upper bound on nested trigger re-entry (a handler's `ctx.db` write refires triggers). */
 const MAX_TRIGGER_DEPTH = 50;
 
-/* eslint-disable no-secrets/no-secrets -- JSDoc names a stable error-kind constant, not a secret */
-
 /**
  * Options accepted by `count()`. Alias of {@link RestrictableQueryOptions} so
  * the RLS middleware (`@lunora/server` §3.2) and the aggregate reader (§3.1)
  * share a single option surface. When `restrictsCounts` is `true`, the reader
- * throws `LunoraError("COUNT_RLS_UNSUPPORTED")` (422) rather than scanning,
+ * throws a `COUNT_RLS_UNSUPPORTED` LunoraError (422) rather than scanning,
  * matching kitcn's documented behavior for counts in an RLS-restricted context.
  */
-/* eslint-enable no-secrets/no-secrets */
 type CountArgs = RestrictableQueryOptions;
 
 /**

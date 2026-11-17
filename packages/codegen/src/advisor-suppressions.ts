@@ -77,34 +77,8 @@ const SOURCE_EXTENSION = /\.(?:ts|tsx|js|mts)$/u;
 
 const normaliseFile = (file: string): string => file.replace(LUNORA_PREFIX, "").replace(SOURCE_EXTENSION, "");
 
-/** A JSONC line that holds no key: blank or a line comment. */
-const isNonKeyLine = (trimmed: string): boolean => trimmed === "" || trimmed.startsWith("//");
-
-/** 1-based index of the first line after `line` that is not blank or a comment, or `undefined`. */
-const nextKeyLine = (lines: ReadonlyArray<string>, line: number): number | undefined => {
-    let inBlock = false;
-
-    for (let index = line; index < lines.length; index += 1) {
-        const trimmed = (lines[index] ?? "").trim();
-
-        if (inBlock) {
-            inBlock = !trimmed.includes("*/");
-        } else if (trimmed.startsWith("/*")) {
-            // A block comment that does not close on its own line hides the lines up to `*/`.
-            inBlock = !trimmed.slice(2).includes("*/");
-        } else if (!isNonKeyLine(trimmed)) {
-            return index + 1;
-        }
-    }
-
-    return undefined;
-};
-
 /** The wrangler config names, in the order the config reader resolves them. */
 const WRANGLER_FILES: ReadonlyArray<string> = ["wrangler.jsonc", "wrangler.json"];
-
-/** The first quoted key a JSONC line opens with. */
-const LEADING_KEY = /^\s*"((?:[^"\\]|\\.)*)"\s*:/u;
 
 /**
  * The span a `.ts` directive attaches to: the smallest node starting at the next token after the
@@ -202,21 +176,59 @@ const tsDirectivesOf = (sourceFile: SourceFile, display: string, key: string): P
     return directives;
 };
 
+/** Scanner kinds that are whitespace or comments (the public typings do not expose `ts.isTrivia`). */
+const TRIVIA_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
+    ts.SyntaxKind.ConflictMarkerTrivia,
+    ts.SyntaxKind.MultiLineCommentTrivia,
+    ts.SyntaxKind.NewLineTrivia,
+    ts.SyntaxKind.ShebangTrivia,
+    ts.SyntaxKind.SingleLineCommentTrivia,
+    ts.SyntaxKind.WhitespaceTrivia,
+]);
+
+interface JsoncToken {
+    kind: ts.SyntaxKind;
+    start: number;
+    /** The unquoted text of a string literal. */
+    value: string;
+}
+
 /**
- * Where each `//` comment in a JSONC text starts. JSONC is lexically a subset of JS, so the TypeScript scanner
- * tells a line comment from the same text inside a block comment or a string.
+ * The tokens of a JSONC text that are not whitespace or comments, and where each `//` comment starts. JSONC
+ * is lexically a subset of JS, so the TypeScript scanner tells a line comment from the same text inside a
+ * block comment or a string, and finds a key however comments are laid out around it.
  */
-const lineCommentOffsetsOf = (text: string): ReadonlySet<number> => {
+const scanJsonc = (text: string): { lineComments: ReadonlySet<number>; tokens: ReadonlyArray<JsoncToken> } => {
     const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, text);
-    const offsets = new Set<number>();
+    const lineComments = new Set<number>();
+    const tokens: JsoncToken[] = [];
 
     for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
         if (kind === ts.SyntaxKind.SingleLineCommentTrivia) {
-            offsets.add(scanner.getTokenStart());
+            lineComments.add(scanner.getTokenStart());
+        } else if (!TRIVIA_KINDS.has(kind)) {
+            tokens.push({ kind, start: scanner.getTokenStart(), value: scanner.getTokenValue() });
         }
     }
 
-    return offsets;
+    return { lineComments, tokens };
+};
+
+/**
+ * The first line holding code at or after `offset`, and the key that code opens with: a string followed by `:`.
+ * `key` is `undefined` when the code there is not a key (`}`, a value).
+ */
+const nextKeyOf = (tokens: ReadonlyArray<JsoncToken>, text: string, offset: number): { key: string | undefined; line: number } | undefined => {
+    const index = tokens.findIndex((token) => token.start >= offset);
+    const token = tokens[index];
+
+    if (token === undefined) {
+        return undefined;
+    }
+
+    const isKey = token.kind === ts.SyntaxKind.StringLiteral && tokens[index + 1]?.kind === ts.SyntaxKind.ColonToken;
+
+    return { key: isKey ? token.value : undefined, line: text.slice(0, token.start).split("\n").length };
 };
 
 /**
@@ -233,7 +245,7 @@ const wranglerDirectivesOf = (projectRoot: string): ParsedDirective[] => {
     const source = readFileSync(join(projectRoot, name), "utf8");
     const lines = source.split("\n");
     const directives: ParsedDirective[] = [];
-    const lineComments = lineCommentOffsetsOf(source);
+    const { lineComments, tokens } = scanJsonc(source);
     let offset = 0;
 
     lines.forEach((text, index) => {
@@ -256,8 +268,9 @@ const wranglerDirectivesOf = (projectRoot: string): ParsedDirective[] => {
 
         const separator = rest.indexOf("--");
         const reason = separator === -1 ? "" : rest.slice(separator + 2).trim();
-        const first = nextKeyLine(lines, index + 1);
-        const variable = first === undefined ? undefined : LEADING_KEY.exec(lines[first - 1] ?? "")?.[1];
+        // `offset` is now the start of the next line, so a key written after the directive on its own line is not one.
+        const next = nextKeyOf(tokens, source, offset);
+        const variable = next?.key;
 
         directives.push({
             display: name,
@@ -265,7 +278,7 @@ const wranglerDirectivesOf = (projectRoot: string): ParsedDirective[] => {
             line: index + 1,
             reason,
             rule,
-            span: first === undefined ? undefined : { first, last: first },
+            span: next === undefined ? undefined : { first: next.line, last: next.line },
             ...(variable === undefined ? {} : { variable }),
         });
     });

@@ -247,11 +247,32 @@ describe("argument-taint", () => {
         });
 
         it("accepts a key read off a database row fetched by the caller's identity", () => {
-            expect.assertions(2);
+            expect.assertions(9);
 
+            const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
+
+            // As a prefix, only a column that names the caller: the row's id, or the one the read matched on.
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row.ownerId}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row._id}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row[\`ownerId\`]}/\${args.key ?? args.other}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row[("ownerId" as const)]}/\${args.key ?? args.other}\`);`))).toBe(true);
             expect(
                 isScopedByIdentity(
-                    sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.key}/\${args.k}\`);`),
+                    sinkArgument(`const row = await ctx.db.files.findFirst({ where: { "ownerId": ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.k}\`);`),
+                ),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const { "ownerId": owner } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${owner}/\${args.k}\`);`,
+                    ),
+                ),
+            ).toBe(true);
+            // As the whole key, any column of the caller's own row: a stored reference the caller cannot repoint.
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(row.storageKey);`))).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const { storageKey } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(storageKey);`),
                 ),
             ).toBe(true);
             expect(
@@ -259,6 +280,370 @@ describe("argument-taint", () => {
                     sinkArgument(`const uid = ctx.auth.userId;\nconst row = await ctx.db.files.findFirst({ where: { ownerId: uid } });\nSINK(row.key);`),
                 ),
             ).toBe(true);
+        });
+
+        it("reads an identity column through a type assertion on the row", () => {
+            expect.assertions(2);
+
+            const read = `ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } })`;
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${(await ${read} as File)._id}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${((await ${read}) satisfies File).ownerId}/\${args.k}\`);`))).toBe(true);
+        });
+
+        it("rejects a caller fallback behind a prefix that can drop the identity", () => {
+            expect.assertions(11);
+
+            // Nested compositions are flattened before ordering, so a caller part ahead of the identity counts.
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${\`\${args.tenant}/\${ctx.auth.userId}\`}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${args.tenant}/\${\`\${ctx.auth.userId}/\${args.key ?? args.other}\`}\`);`))).toBe(false);
+            // A local bound to a lossy call is no more the identity than the call written inline.
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId.slice(0, 0);\nSINK(\`\${uid}/\${args.key ?? args.other}\`);`))).toBe(false);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId[0]}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${String(ctx.auth.userId.length)}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId.length}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid!.length}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row._id.length}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId.slice(0, 0)}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(ctx.auth.userId.slice(0, 0) + "/" + (args.key ?? args.other));`))).toBe(false);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId && "shared"}/\${args.key ?? args.other}\`);`))).toBe(false);
+        });
+
+        it("follows a where filter held in a local and an AND branch to the owner column", () => {
+            expect.assertions(5);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const filter = { ownerId: ctx.auth.userId };\nconst row = await ctx.db.files.findFirst({ where: (filter as Filter) });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(true);
+
+            const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const filter = { ownerId: ctx.auth.userId };\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`),
+                ),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(sinkArgument(`const where = { ownerId: ctx.auth.userId };\nconst row = await ctx.db.files.findFirst({ where });\n${sink}`)),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { AND: [{ ownerId: ctx.auth.userId }, { status: "active" }] } });\n${sink}`,
+                    ),
+                ),
+            ).toBe(true);
+            // A local that is reassigned may no longer hold the caller's filter.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `let filter = { ownerId: ctx.auth.userId };\nfilter = { ownerId: args.owner };\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
+        it("refuses a prefix that is not the caller id itself, asserted or not", () => {
+            expect.assertions(11);
+
+            // A computed `where` column lets the caller choose what the caller id is matched against.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { [args.field]: ctx.auth.userId } });\nSINK(\`\${row.id}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+
+            // A `let` bound to the caller id can be assigned a caller-chosen value before use.
+            expect(
+                isScopedByIdentity(sinkArgument(`let { userId } = ctx.auth;\nuserId = args.userId;\nSINK(\`\${userId}/\${args.key ?? args.other}\`);`)),
+            ).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`let uid = ctx.auth.userId;\nuid = args.userId;\nSINK(\`\${uid}/\${args.key ?? args.other}\`);`))).toBe(
+                false,
+            );
+            // Array destructuring binds a whole row, not its id column.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const [id] = await ctx.db.files.findMany({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${id}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+
+            // An `OR` arm by a caller-supplied id selects a row the caller chose, so its id is not the caller's.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { OR: [{ ownerId: ctx.auth.userId }, { id: args.id }] } });\nSINK(\`\${row.id}/\${args.k ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(sinkArgument(`const me = await ctx.db.users.get(ctx.auth.userId);\nSINK(\`\${me._id}/\${args.k ?? args.other}\`);`)),
+            ).toBe(true);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const { ...id } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${id}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.getIdentity}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const { getIdentity } = ctx.auth;\nSINK(\`\${getIdentity}/\${args.key ?? args.other}\`);`))).toBe(false);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${(ctx.auth.userId as string)[0]}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${(row._id as string).length}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
+        it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
+            expect.assertions(33);
+
+            const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
+            const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
+
+            // A comma expression evaluates to its last operand.
+            expect(
+                isScopedByIdentity(sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: (ctx.auth.userId, args.ownerId) } });\n${sink}`)),
+            ).toBe(false);
+            // A spread in the query object can replace the whole `where`.
+            expect(
+                isScopedByIdentity(sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId }, ...args.query });\n${sink}`)),
+            ).toBe(false);
+            // A filter aliased into another object can be written through the alias.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const where = { ownerId: ctx.auth.userId };\nconst holder = { value: where };\nholder.value.ownerId = args.ownerId;\nconst row = await ctx.db.files.findFirst({ where });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            // Without a fallback too: the plain composed-key path reads the same row.
+            expect(isScopedByIdentity(sinkArgument(`${owned}row.ownerId = args.ownerId;\nSINK(\`\${row.ownerId}/\${args.key}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}row.storageKey = args.key;\nSINK(row.storageKey);`))).toBe(false);
+            // A field written on the row after the read replaces what the key emits, however the write is spelled.
+            expect(isScopedByIdentity(sinkArgument(`${owned}row.ownerId = args.ownerId;\n${sink}`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}({ owner: row.ownerId } = args);\n${sink}`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}[row.ownerId] = args.owners;\n${sink}`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}for (row.ownerId of args.owners) {}\n${sink}`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}for (row.ownerId in args.owners) {}\n${sink}`))).toBe(false);
+            // A spread in the query object can select another row, so its id is not the caller's either.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId }, ...args.query });\nSINK(\`\${row!._id}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}Object.assign(row, args.patch);\n${sink}`))).toBe(false);
+            // Reading fields, destructuring and a spread copy leave the row intact.
+            expect(isScopedByIdentity(sinkArgument(`${owned}const { status } = row;\n${sink}`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`${owned}const copy = { ...row };\n${sink}`))).toBe(true);
+            // A returned row is a live alias the caller can write through.
+            expect(isScopedByIdentity(sinkArgument(`${owned}const expose = () => row;\nexpose().ownerId = args.ownerId;\n${sink}`))).toBe(false);
+            // A getter on the filter can rewrite the owner predicate when the query reads it.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const filter = { ownerId: ctx.auth.userId, get status() { filter.ownerId = args.ownerId; return "active"; } };\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            // A direct optional read off a read that can find nothing is \`undefined\` for every caller with no row.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`SINK(\`\${(await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }))?.ownerId}/\${args.key}\`);`),
+                ),
+            ).toBe(false);
+            // A …OrThrow read cannot come back empty, so `?.` on it is harmless.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirstOrThrow({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row?.ownerId}/\${args.key}\`);`,
+                    ),
+                ),
+            ).toBe(true);
+            // Passing the row to a call may write into it.
+            expect(isScopedByIdentity(sinkArgument(`${owned}mutate(row);\n${sink}`))).toBe(false);
+            // An optional read is \`undefined\` for every caller the read finds nothing for.
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row?.ownerId}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row?.ownerId}/\${args.key}\`);`))).toBe(false);
+            // A findMany answers a page envelope, not a row: its "ownerId" is undefined for every caller.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `SINK(\`\${(await ctx.db.files.findMany({ where: { ownerId: ctx.auth.userId } }) as any).ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            // A `select` that leaves the column out reads it as undefined for every caller; one that lists it keeps it.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ select: ["name"], where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ select: ["ownerId"], where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(true);
+            // The same with bracket access, straight off the read.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`SINK(\`\${(await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }))?.["ownerId"]}/\${args.key}\`);`),
+                ),
+            ).toBe(false);
+
+            // The owner value must be the caller id, not an expression that merely mentions it.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: args.ownerId + ctx.auth.userId.slice(0, 0) } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: { eq: args.ownerId ?? ctx.auth.userId } } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId, [args.field]: args.ownerId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId, ...args.where } });\n${sink}`)),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const filter = { ownerId: ctx.auth.userId };\nfilter.ownerId = args.owner;\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const filter = { ownerId: ctx.auth.userId };\nObject.assign(filter, args.where);\nconst row = await ctx.db.files.findFirst({ where: filter });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { AND: [{ ownerId: { ne: ctx.auth.userId } }, { status: "active" }] } });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: { eq: ctx.auth.userId } } });\n${sink}`)),
+            ).toBe(true);
+        });
+
+        it("counts only a direct predicate of the read's own where as an identity column", () => {
+            expect.assertions(2);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { author: { ownerId: ctx.auth.userId } } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { OR: [{ ownerId: ctx.auth.userId }, { id: args.id }] } });\nSINK(\`\${row.ownerId}/\${args.k}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
+        it("judges a whole-key or id column by the query's effective where", () => {
+            expect.assertions(7);
+
+            // A spread before `where` cannot replace it; the `where` written after wins at runtime.
+            const pinnedAfterSpread = `const row = await ctx.db.files.findFirst({ ...args.query, where: { ownerId: ctx.auth.userId } });\n`;
+
+            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(\`\${row._id}/\${args.key ?? args.other}\`);`))).toBe(true);
+            // ...but it can supply a `select` that projects the column away, leaving it undefined for every caller.
+            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(row.storageKey);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${pinnedAfterSpread}SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ select: ["ownerId"], ...args.query, where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ ...args.query, select: ["ownerId"], where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(true);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId }, ...args.query });\nSINK(row!.storageKey);`),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { OR: [{ ownerId: ctx.auth.userId }, { id: args.id }] } });\nSINK(row.storageKey);`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
+        it("rejects a shared column of the caller's own row as a key prefix", () => {
+            expect.assertions(4);
+
+            const me = `const me = await ctx.db.users.get(ctx.auth.userId);\n`;
+
+            expect(isScopedByIdentity(sinkArgument(`${me}SINK(\`\${me.plan}/\${args.k}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`${me}const prefix = me.locale;\nSINK(\`\${prefix}/\${args.k}\`);`))).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const { plan } = await ctx.db.users.findFirst({ where: { _id: ctx.auth.userId } });\nSINK(\`\${plan}/\${args.k}\`);`),
+                ),
+            ).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${(await ctx.db.users.findFirst({ where: { _id: ctx.auth.userId } })).plan}/\${args.k}\`);`))).toBe(
+                false,
+            );
         });
 
         it("rejects a key read off a database write, even one that stamps the caller's identity", () => {
@@ -277,6 +662,45 @@ describe("argument-taint", () => {
             expect.assertions(1);
 
             expect(isScopedByIdentity(sinkArgument(`const row = await ctx.db.get("files", args.id);\nSINK(row.key);`))).toBe(false);
+        });
+
+        it("accepts a caller fallback whose alternatives all land after the identity prefix", () => {
+            expect.assertions(10);
+
+            // A prefix factored into a local is judged by its own parts.
+            expect(
+                isScopedByIdentity(sinkArgument(`const prefix = \`\${ctx.auth.userId}/\${args.tenant}\`;\nSINK(\`\${prefix}/\${args.key ?? args.other}\`);`)),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(sinkArgument(`const prefix = \`\${args.tenant}/\${ctx.auth.userId}\`;\nSINK(\`\${prefix}/\${args.key ?? args.other}\`);`)),
+            ).toBe(false);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(ctx.auth.userId + "/" + args.folder + "/" + (args.key ?? args.other));`))).toBe(true);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId + "/".repeat(1)}\${args.key ?? args.other}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid!}/\${args.key ?? args.other}\`);`))).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`SINK(\`\${(await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } }))._id}/\${args.key ?? args.other}\`);`),
+                ),
+            ).toBe(true);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId}/\${args.key ?? args.other}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid}/\${args.key || "default"}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`SINK(ctx.auth.userId + "/" + (args.key ?? args.other));`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const k = \`\${ctx.auth.userId}/\${args.flag ? args.a : args.b}\`;\nSINK(k);`))).toBe(true);
+        });
+
+        it("rejects a caller fallback that can supply the whole key or the segment before the identity", () => {
+            expect.assertions(6);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${args.tenant}/\${ctx.auth.userId}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(args.tenant + "/" + ctx.auth.userId + "/" + (args.key ?? args.other));`))).toBe(false);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(args.key ?? \`\${ctx.auth.userId}/x\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${args.key ?? args.other}/\${ctx.auth.userId}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK((args.key ?? args.other) + "/" + ctx.auth.userId);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.env.PREFIX}/\${args.key ?? args.other}\`);`))).toBe(false);
         });
 
         it("rejects a key scoped only by a server-trusted ctx value that names no caller", () => {

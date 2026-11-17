@@ -2,19 +2,24 @@ import type {
     ArrowFunction,
     BindingElement,
     CallExpression,
+    ElementAccessExpression,
     FunctionDeclaration,
     FunctionExpression,
     Identifier,
     MethodDeclaration,
     Node as TsNode,
+    ObjectLiteralElementLike,
+    ObjectLiteralExpression,
     ParameterDeclaration,
+    PropertyAccessExpression,
     VariableDeclaration,
 } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { bindingKeyName, descendantsOfKind, isConstDeclaration, unwrapExpression } from "./discover/ast";
+import { bindingKeyName, descendantsOfKind, findObjectProperty, isConstDeclaration, propertyKeyName, unwrapExpression } from "./discover/ast";
 import { declarationOf, isReassignedBinding, referencedSymbolOf } from "./discover/attribution";
 import { contextTrustPathOf, isHandlerArgsParameter, referencesContext } from "./discover/context-root";
+import { staticPropertyName } from "./discover/property-name";
 
 /**
  * The parameter binding element that declares `name`, searched from the
@@ -273,6 +278,9 @@ const invokedBy = (chain: TsNode): CallExpression | undefined => {
 /** The `ctx.db` methods that read rows; a write returns whatever it wrote, so its arguments do not bind the row to anyone. */
 const DB_READ_METHODS: ReadonlySet<string> = new Set(["find", "findFirst", "findFirstOrThrow", "findMany", "findUnique", "first", "get", "unique"]);
 
+/** The read methods that return one row, or none. `findMany` answers a page envelope, so nothing read off it is a row's column. */
+const SINGLE_ROW_READS: ReadonlySet<string> = new Set(["findFirst", "findUnique", "first", "get", "unique"]);
+
 /** Whether `call` invokes a `ctx.db` row read (`ctx.db.files.findFirst(…)`, `ctx.db.get(…)`), not a write. */
 const isDatabaseReadCall = (call: CallExpression): boolean => {
     const callee = call.getExpression();
@@ -355,16 +363,355 @@ const insideDatabaseCallWithin = (identifier: TsNode, within: TsNode): boolean =
     return false;
 };
 
+/** Fields that name the row itself, so they differ for every caller that owns one. */
+const ROW_ID_FIELDS: ReadonlySet<string> = new Set(["_id", "id"]);
+
+/**
+ * The field read off a row `source` yields, through any `await`, parentheses, `!` or type assertion
+ * (`(await ctx.db.files.findFirst(…)).key`, `row.key`), and the expression that reads it.
+ * `field` is `undefined` when the row itself is used.
+ */
+const rowFieldReadOf = (source: TsNode): { field: string | undefined; read: TsNode } => {
+    let current = source;
+
+    for (let parent = current.getParent(); ; parent = current.getParent()) {
+        if (
+            Node.isAwaitExpression(parent) ||
+            Node.isParenthesizedExpression(parent) ||
+            Node.isNonNullExpression(parent) ||
+            Node.isAsExpression(parent) ||
+            Node.isSatisfiesExpression(parent) ||
+            Node.isTypeAssertion(parent)
+        ) {
+            current = parent;
+            continue;
+        }
+
+        if (Node.isPropertyAccessExpression(parent) && parent.getExpression() === current) {
+            return { field: parent.getName(), read: parent };
+        }
+
+        if (Node.isElementAccessExpression(parent) && parent.getExpression() === current) {
+            const argument = unwrapExpression(parent.getArgumentExpression());
+            const isStaticKey = Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument);
+
+            return { field: isStaticKey ? argument.getLiteralValue() : undefined, read: parent };
+        }
+
+        return { field: undefined, read: current };
+    }
+};
+
+/** The `ctx.auth` member that names the caller; `getIdentity` is a method shared by every caller. */
+const CALLER_ID_MEMBER = "userId";
+
+/** `node` without the parentheses, `await`, `!` and type assertions around it, none of which change the value. */
+const strippedValue = (node: TsNode): TsNode => {
+    let current = node;
+
+    for (;;) {
+        const next = Node.isNonNullExpression(current) || Node.isAwaitExpression(current) ? current.getExpression() : unwrapExpression(current);
+
+        if (next === undefined || next === current) {
+            return current;
+        }
+
+        current = next;
+    }
+};
+
+/** Whether `value` is the caller's id itself (`ctx.auth.userId`, or a local bound to it), not merely an expression that mentions it. */
+const isCallerId = (value: TsNode): boolean => {
+    const path = contextTrustPathOf(strippedValue(value));
+
+    return path?.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
+};
+
+/** The value a `key: value` or shorthand `{ key }` property holds; `undefined` for any other member. */
+const propertyValueOf = (property: TsNode | undefined): TsNode | undefined => {
+    if (Node.isPropertyAssignment(property)) {
+        return property.getInitializer();
+    }
+
+    return Node.isShorthandPropertyAssignment(property) ? property.getNameNode() : undefined;
+};
+
+/** The outermost parentheses, `!` or type assertion around `node`, none of which change the value it passes on. */
+const valueWrapperOf = (node: TsNode): TsNode => {
+    let current = node;
+
+    for (let parent = current.getParent(); ; parent = current.getParent()) {
+        if (
+            !(
+                Node.isParenthesizedExpression(parent) ||
+                Node.isNonNullExpression(parent) ||
+                Node.isAsExpression(parent) ||
+                Node.isSatisfiesExpression(parent) ||
+                Node.isTypeAssertion(parent)
+            )
+        ) {
+            return current;
+        }
+
+        current = parent;
+    }
+};
+
+/** The other uses of the local `identifier`: every identifier in its file bound to the same declaration, minus the declaring name. */
+const usesOfLocal = (identifier: Identifier): Identifier[] => {
+    const declaration = declarationOf(identifier);
+
+    return identifier
+        .getSourceFile()
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .filter((use) => use.getText() === identifier.getText() && declarationOf(use) === declaration)
+        .filter((use) => {
+            const parent = use.getParent();
+
+            return !((Node.isVariableDeclaration(parent) || Node.isBindingElement(parent)) && parent.getNameNode() === use);
+        });
+};
+
+/** Whether `node`, past any value-preserving wrapper, is passed straight to a `ctx.db` row read as an argument. */
+const isDatabaseReadArgument = (node: TsNode): boolean => {
+    const call = valueWrapperOf(node).getParent();
+
+    return Node.isCallExpression(call) && isDatabaseReadCall(call) && call.getArguments().includes(valueWrapperOf(node));
+};
+
+/**
+ * Whether the local `identifier` is only ever handed to a `ctx.db` read: as the query object itself, or as the
+ * `where` of a query object written inline in that call. Any other use (`filter.ownerId = …`, `Object.assign`,
+ * `{ value: filter }`) can change or alias the object, so its initializer no longer says what it holds.
+ */
+const isOnlyQueried = (identifier: Identifier): boolean =>
+    usesOfLocal(identifier).every((use) => {
+        if (isDatabaseReadArgument(use)) {
+            return true;
+        }
+
+        const wrapped = valueWrapperOf(use);
+        const property = wrapped.getParent();
+        const holder = property?.getParent();
+        const isWhere =
+            (Node.isPropertyAssignment(property) && property.getNameNode() !== wrapped && propertyKeyName(property) === "where") ||
+            (Node.isShorthandPropertyAssignment(property) && property.getName() === "where");
+
+        return isWhere && holder !== undefined && isDatabaseReadArgument(holder);
+    });
+
+/** The object literal `node` is, written inline or held by a local that is never repointed and only handed to a `ctx.db` read. */
+const objectLiteralOf = (node: TsNode | undefined): ObjectLiteralExpression | undefined => {
+    const value = unwrapExpression(node);
+
+    if (Node.isObjectLiteralExpression(value)) {
+        return value;
+    }
+
+    const initializer = Node.isIdentifier(value) && isOnlyQueried(value) ? unwrapExpression(trustedInitializerOf(value)) : undefined;
+
+    return Node.isObjectLiteralExpression(initializer) ? initializer : undefined;
+};
+
+/** Whether a predicate `value` equates its column to the caller: the caller id itself, or `{ eq: callerId }`. */
+const equatesToCaller = (value: TsNode): boolean => {
+    const operand = unwrapExpression(value) ?? value;
+
+    if (!Node.isObjectLiteralExpression(operand)) {
+        return isCallerId(value);
+    }
+
+    const [only, ...rest] = operand.getProperties();
+    const eq = rest.length === 0 && Node.isPropertyAssignment(only) && propertyKeyName(only) === "eq" ? only.getInitializer() : undefined;
+
+    return eq !== undefined && isCallerId(eq);
+};
+
+/**
+ * Whether a later member of `object` can replace `property` at runtime: a spread, the same key written
+ * again, or a computed key whose name is only known at runtime (`[args.field]: …`).
+ */
+const isOverriddenLater = (object: ObjectLiteralExpression, property: ObjectLiteralElementLike): boolean => {
+    const members = object.getProperties();
+    const key = Node.isSpreadAssignment(property) ? undefined : propertyKeyName(property);
+
+    return members.slice(members.indexOf(property) + 1).some((later) => {
+        if (Node.isSpreadAssignment(later)) {
+            return true;
+        }
+
+        const laterKey = staticPropertyName(later.getNameNode());
+
+        return laterKey === undefined || laterKey === key;
+    });
+};
+
+/** Whether `object` has a member that runs code when the query is evaluated (a getter, setter or method), which can rewrite it. */
+const hasExecutableMember = (object: ObjectLiteralExpression): boolean =>
+    object.getProperties().some((member) => Node.isGetAccessorDeclaration(member) || Node.isSetAccessorDeclaration(member) || Node.isMethodDeclaration(member));
+
+/**
+ * Whether the `where` object `filter` pins `field` (any column when `undefined`) to the caller on every row it
+ * admits: directly, or in any `AND` branch. A filter with a getter or method pins nothing: evaluating it can
+ * rewrite the owner predicate before the query reads it.
+ */
+const pinsFieldToCaller = (filter: ObjectLiteralExpression, field: string | undefined): boolean =>
+    !hasExecutableMember(filter) &&
+    filter.getProperties().some((property) => {
+        const value = propertyValueOf(property);
+
+        if (value === undefined || Node.isSpreadAssignment(property) || isOverriddenLater(filter, property)) {
+            return false;
+        }
+
+        // A computed column (`[args.field]: uid`) lets the caller pick which column the caller id is matched against.
+        const key = staticPropertyName(property.getNameNode());
+
+        if (key === undefined) {
+            return false;
+        }
+
+        if (key === "AND") {
+            const branches = unwrapExpression(value);
+
+            return (
+                Node.isArrayLiteralExpression(branches) &&
+                branches.getElements().some((branch) => {
+                    const object = objectLiteralOf(branch);
+
+                    return object !== undefined && pinsFieldToCaller(object, field);
+                })
+            );
+        }
+
+        return (field === undefined || key === field) && equatesToCaller(value);
+    });
+
+/** Whether the query object `argument` has a `where` that pins `field` (any column when `undefined`) to the caller. */
+const pinsReadToCaller = (argument: TsNode, field: string | undefined): boolean => {
+    const queryArgs = objectLiteralOf(argument);
+    const where = queryArgs === undefined ? undefined : findObjectProperty(queryArgs, "where");
+    // `{ where: …, ...args.query }` can replace the whole filter.
+    const filter =
+        queryArgs === undefined || where === undefined || hasExecutableMember(queryArgs) || isOverriddenLater(queryArgs, where)
+            ? undefined
+            : objectLiteralOf(propertyValueOf(where));
+
+    return filter !== undefined && pinsFieldToCaller(filter, field);
+};
+
+/**
+ * Whether every row `read` can return is the caller's: fetched by the caller's id (`ctx.db.users.get(ctx.auth.userId)`),
+ * or through a `where` that pins some column to the caller and that no later spread or computed key can replace. A
+ * spread before `where` is harmless: the `where` written after it wins.
+ */
+const isPinnedToCaller = (read: CallExpression): boolean =>
+    read.getArguments().some((argument) => isCallerId(argument) || pinsReadToCaller(argument, undefined));
+
+/**
+ * Whether `field` of a row returned by the identity-bound `read` differs per caller: the row's
+ * id, or a column the read matched against the caller (`ownerId` in `where: { ownerId:
+ * ctx.auth.userId }`). Any other column (`me.plan`, `me.locale`) can hold the same value for
+ * every caller, so it scopes a key no more than `ctx.env.PREFIX` does.
+ */
+const isIdentityField = (read: CallExpression, field: string | undefined): boolean => {
+    if (field === undefined) {
+        return false;
+    }
+
+    // The row's own id is the caller's only when the read is pinned to the caller on every path: fetched by the
+    // caller's id (`ctx.db.users.get(ctx.auth.userId)`), or through a `where` that pins some column to the caller.
+    // A caller id in one `OR` arm, or a query a spread or computed key can rewrite, selects rows the caller chose.
+    if (ROW_ID_FIELDS.has(field)) {
+        return isPinnedToCaller(read);
+    }
+
+    // Only a predicate of the read's own `where`, directly or in an `AND` branch, binds every returned row: one
+    // inside a relation filter (`where: { author: { ownerId: uid } }`) constrains another row, and one in an
+    // `OR` arm a single branch.
+    return read.getArguments().some((argument) => pinsReadToCaller(argument, field));
+};
+
+/** The columns a `select` projection always keeps, whatever it lists. */
+const SELECT_SYSTEM_FIELDS: ReadonlySet<string> = new Set(["_creationTime", "_id"]);
+
+/**
+ * Whether the row `read` returns still carries `field`: no `select`, or a `select` of literal names that lists it. A
+ * projected-away column reads `undefined` for every caller, so it scopes nothing; a `select` that is not a literal list
+ * keeps only the system fields as far as this can tell. A spread (`...args.query`) or computed key can supply a
+ * `select` of the caller's choosing, so with no literal `select` after it the projection is unknown.
+ */
+const keepsColumn = (read: CallExpression, field: string): boolean =>
+    SELECT_SYSTEM_FIELDS.has(field) ||
+    read.getArguments().every((argument) => {
+        const query = objectLiteralOf(argument);
+
+        if (query === undefined) {
+            return true;
+        }
+
+        const members = query.getProperties();
+        const select = members.findLast((member) => !Node.isSpreadAssignment(member) && propertyKeyName(member) === "select");
+
+        if (hasExecutableMember(query)) {
+            return false;
+        }
+
+        if (select === undefined) {
+            return !members.some((member) => Node.isSpreadAssignment(member) || staticPropertyName(member.getNameNode()) === undefined);
+        }
+
+        if (isOverriddenLater(query, select)) {
+            return false;
+        }
+
+        const names = unwrapExpression(propertyValueOf(select));
+
+        return (
+            Node.isArrayLiteralExpression(names) &&
+            names.getElements().some((name) => (Node.isStringLiteral(name) || Node.isNoSubstitutionTemplateLiteral(name)) && name.getLiteralValue() === field)
+        );
+    });
+
+/** Whether `read`'s row, consumed through `source`, scopes a key whose whole value is `wholeKey`. */
+const rowScopesKey = (read: CallExpression, source: TsNode, field: string | undefined, wholeKey: TsNode | undefined): boolean => {
+    const callee = read.getExpression();
+
+    const singleRow = Node.isPropertyAccessExpression(callee) && (SINGLE_ROW_READS.has(callee.getName()) || callee.getName().endsWith("OrThrow"));
+
+    if (!isIdentityBoundRead(read) || !singleRow || (field !== undefined && !keepsColumn(read, field))) {
+        return false;
+    }
+
+    // Used as the entire key, a field of the caller's own row is a stored reference the caller cannot repoint, as long as
+    // the row is the caller's on every query path.
+    const whole = wholeKey !== undefined && unwrapExpression(source) === unwrapExpression(wholeKey) && isPinnedToCaller(read);
+
+    return whole || isIdentityField(read, field);
+};
+
+/**
+ * Whether `use` reads a row field with `?.` off a read that can find nothing: then the field is `undefined` for every
+ * caller with no row, and they all share one key prefix. A `…OrThrow` read throws instead, so `?.` there is harmless.
+ */
+const isOptionalReadOfNullableRow = (use: TsNode, read: CallExpression): boolean => {
+    const callee = read.getExpression();
+    const throwsWhenAbsent = Node.isPropertyAccessExpression(callee) && callee.getName().endsWith("OrThrow");
+
+    return (Node.isPropertyAccessExpression(use) || Node.isElementAccessExpression(use)) && use.hasQuestionDotToken() && !throwsWhenAbsent;
+};
+
 /**
  * True when `node` is, or textually contains, a value reference to a key source the
  * caller cannot choose: the caller's identity (a ctx path whose first segment is
  * `auth`, `ctx.auth.userId`), or a value read from the database through a read that
  * is itself bound to that identity (see {@link isIdentityBoundRead}). A row fetched
- * by a caller-supplied id is not such a source. Narrower than {@link referencesContext}:
- * `ctx.env.PREFIX` and `ctx.now` are server-trusted but name neither a caller nor a
- * stored record.
+ * by a caller-supplied id is not such a source, and a field of a caller's row scopes
+ * only when it is `wholeKey` or names the caller (see {@link isIdentityField}).
+ * Narrower than {@link referencesContext}: `ctx.env.PREFIX` and `ctx.now` are
+ * server-trusted but name neither a caller nor a stored record.
  */
-const referencesScopedKeySource = (node: TsNode): boolean =>
+const referencesScopedKeySource = (node: TsNode, wholeKey?: TsNode): boolean =>
     valueIdentifiersOf(node).some((identifier) => {
         const outermost = outermostChainOf(identifier);
         const root = contextTrustPathOf(outermost)?.[0];
@@ -379,7 +726,13 @@ const referencesScopedKeySource = (node: TsNode): boolean =>
         // A fallback read (`args.key ?? (await ownedRead()).key`) is only taken when the caller sends nothing.
         const call = root === "db" && !isAlternativeOf(identifier, node) ? invokedBy(outermost) : undefined;
 
-        return call !== undefined && isIdentityBoundRead(call);
+        if (call === undefined) {
+            return false;
+        }
+
+        const { field, read } = rowFieldReadOf(call);
+
+        return !isOptionalReadOfNullableRow(read, call) && rowScopesKey(call, read, field, wholeKey);
     });
 
 /** A function whose body can hold an identity guard: the handler itself, or a helper it calls. */
@@ -518,9 +871,6 @@ const databaseChainOf = (node: TsNode | undefined): DatabaseChain | undefined =>
 
     return undefined;
 };
-
-/** The read methods that return one row, or none. */
-const SINGLE_ROW_READS: ReadonlySet<string> = new Set(["findFirst", "findUnique", "first", "get", "unique"]);
 
 /**
  * The single-row read a chain ends in. `selfEnforcing` is true for a `…OrThrow` variant, which throws on a
@@ -913,6 +1263,247 @@ const ownedRowInitializerOf = (node: TsNode): TsNode | undefined => {
     return initializer !== undefined && isDatabaseReadSource(initializer) ? initializer : undefined;
 };
 
+/** The `ctx.db` row read under any `await` in `node`, or `undefined`. */
+const databaseReadOf = (node: TsNode): CallExpression | undefined => {
+    const current = unawaited(node);
+
+    return Node.isCallExpression(current) && isDatabaseReadCall(current) ? current : undefined;
+};
+
+/** The column a destructured `element` takes from the row; `undefined` below the top level of the pattern. */
+const destructuredFieldOf = (element: TsNode | undefined): string | undefined => {
+    // Only a top-level `{ column }` binds a column: `const { ...rest } = row` binds an object of the remaining
+    // columns, and `const [row] = await findMany(…)` a whole row.
+    if (
+        !Node.isBindingElement(element) ||
+        !Node.isObjectBindingPattern(element.getParent()) ||
+        element.getDotDotDotToken() !== undefined ||
+        Node.isBindingElement(element.getParent().getParent())
+    ) {
+        return undefined;
+    }
+
+    return bindingKeyName(element);
+};
+
+/**
+ * Whether `node` is written: the target of an assignment, including from inside a destructuring pattern
+ * (`({ a: row.ownerId } = x)`, `[row.ownerId] = x`), a `for…of` / `for…in` target, or the operand of
+ * `delete`, `++` or `--`.
+ */
+const isWriteTarget = (node: TsNode): boolean => {
+    let current = node;
+    let parent = current.getParent();
+
+    // Climb out of any pattern the node sits in as a target; a value position in an object literal climbs too, which is
+    // harmless: it only ends in a write when that literal is itself an assignment target.
+    while (
+        Node.isParenthesizedExpression(parent) ||
+        Node.isArrayLiteralExpression(parent) ||
+        Node.isObjectLiteralExpression(parent) ||
+        Node.isSpreadElement(parent) ||
+        Node.isSpreadAssignment(parent) ||
+        Node.isShorthandPropertyAssignment(parent) ||
+        (Node.isPropertyAssignment(parent) && parent.getNameNode() !== current)
+    ) {
+        current = parent;
+        parent = current.getParent();
+    }
+
+    if (Node.isBinaryExpression(parent)) {
+        const operator = parent.getOperatorToken().getKind();
+
+        return parent.getLeft() === current && operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment;
+    }
+
+    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
+        return parent.getInitializer() === current;
+    }
+
+    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
+        const operator = parent.getOperatorToken();
+
+        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
+    }
+
+    return Node.isDeleteExpression(parent);
+};
+
+/**
+ * Whether every use of the local `identifier` leaves its fields as read: reads (`row.ownerId`, `const { _id } = row`),
+ * a spread copy (`{ ...row }`) or a `return`. A write anywhere in a chain on it, an alias, or passing it to a call can
+ * change the field the key emits, since the callee may write into it.
+ */
+const isReadOnlyLocal = (identifier: Identifier): boolean =>
+    usesOfLocal(identifier).every((use) => {
+        const wrapped = valueWrapperOf(use);
+        const parent = wrapped.getParent();
+
+        // Destructuring and a spread copy the row's fields without writing into it. A `return` hands out the row itself,
+        // and a write through the returned alias would go unseen here, so it does not count.
+        if ((Node.isVariableDeclaration(parent) && Node.isObjectBindingPattern(parent.getNameNode())) || Node.isSpreadAssignment(parent)) {
+            return true;
+        }
+
+        return (
+            (Node.isPropertyAccessExpression(parent) || Node.isElementAccessExpression(parent)) &&
+            parent.getExpression() === wrapped &&
+            !isWriteTarget(valueWrapperOf(outermostChainOf(parent)))
+        );
+    });
+
+/**
+ * Whether the local `identifier` names a key source the caller cannot choose, one hop back. A
+ * local holding a whole row (`const row = await ctx.db.files.findFirst(…)`) is judged by the
+ * field read off it here; a destructured one (`const { key } = await …`) by the field it took.
+ */
+const bindingScopesKey = (identifier: TsNode, wholeKey: TsNode | undefined): boolean => {
+    const isWhole = wholeKey !== undefined && unwrapExpression(identifier) === unwrapExpression(wholeKey);
+    const trusted = trustedInitializerOf(identifier);
+
+    if (trusted !== undefined) {
+        const read = databaseReadOf(trusted);
+
+        if (read === undefined) {
+            return referencesScopedKeySource(trusted, isWhole ? trusted : undefined);
+        }
+
+        // `const row` still allows `row.ownerId = args.ownerId`, so a row local counts only while nothing writes into it.
+        if (Node.isIdentifier(identifier) && !isReadOnlyLocal(identifier)) {
+            return false;
+        }
+
+        const { field, read: use } = rowFieldReadOf(identifier);
+
+        if (isOptionalReadOfNullableRow(use, read)) {
+            return false;
+        }
+
+        return rowScopesKey(read, use, field, wholeKey);
+    }
+
+    const owned = ownedRowInitializerOf(identifier);
+    const read = owned === undefined ? undefined : databaseReadOf(owned);
+
+    return read !== undefined && Node.isIdentifier(identifier) && rowScopesKey(read, identifier, destructuredFieldOf(declarationOf(identifier)), wholeKey);
+};
+
+/**
+ * The parts of a key built by concatenation, in order: template spans and `+` operands, with
+ * nested templates and `+` chains flattened into them. A single part for anything else.
+ */
+const keyPartsOf = (node: TsNode, followLocal = true): TsNode[] => {
+    const value = strippedValue(node);
+
+    if (Node.isTemplateExpression(value)) {
+        return value.getTemplateSpans().flatMap((span) => keyPartsOf(span.getExpression(), followLocal));
+    }
+
+    if (Node.isBinaryExpression(value) && value.getOperatorToken().getKind() === SyntaxKind.PlusToken) {
+        return [...keyPartsOf(value.getLeft(), followLocal), ...keyPartsOf(value.getRight(), followLocal)];
+    }
+
+    // A prefix factored into a local (`const prefix = \`${uid}/${args.tenant}\``) is judged by its parts, one hop deep.
+    const initializer = followLocal && Node.isIdentifier(value) ? trustedInitializerOf(value) : undefined;
+    const composed = initializer === undefined ? undefined : strippedValue(initializer);
+
+    if (
+        composed !== undefined &&
+        (Node.isTemplateExpression(composed) || (Node.isBinaryExpression(composed) && composed.getOperatorToken().getKind() === SyntaxKind.PlusToken))
+    ) {
+        return keyPartsOf(composed, false);
+    }
+
+    return [value];
+};
+
+const isFixedTextPart = (part: TsNode): boolean => Node.isStringLiteral(part) || Node.isNoSubstitutionTemplateLiteral(part) || Node.isNumericLiteral(part);
+
+/** Whether `access` reads an identity column straight off an owned row: `row._id`, `(await ownedRead()).ownerId`. */
+const isOwnedIdentityColumn = (access: ElementAccessExpression | PropertyAccessExpression): boolean => {
+    const base = strippedValue(access.getExpression());
+    const baseInitializer = Node.isIdentifier(base) ? trustedInitializerOf(base) : undefined;
+
+    // `const row` still allows `row.ownerId = args.ownerId`, so a row local counts only while nothing writes into it.
+    if (Node.isIdentifier(base) && baseInitializer !== undefined && !isReadOnlyLocal(base)) {
+        return false;
+    }
+
+    const read = databaseReadOf(base) ?? (baseInitializer === undefined ? undefined : databaseReadOf(baseInitializer));
+
+    return (
+        read !== undefined && !isOptionalReadOfNullableRow(access, read) && rowScopesKey(read, access, rowFieldReadOf(access.getExpression()).field, undefined)
+    );
+};
+
+/** Whether `identifier` is destructured as a whole field from the caller's identity (`const { userId } = ctx.auth`) or an owned row's identity column. */
+const isDestructuredIdentity = (identifier: Identifier): boolean => {
+    const declaration = declarationOf(identifier);
+    const field = destructuredFieldOf(declaration);
+    const source = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration)?.getInitializer() : undefined;
+    const sourcePath = source === undefined ? undefined : contextTrustPathOf(strippedValue(source));
+
+    if (sourcePath !== undefined) {
+        return sourcePath.length === 1 && sourcePath[0] === "auth" && field === CALLER_ID_MEMBER;
+    }
+
+    const owned = ownedRowInitializerOf(identifier);
+    const read = owned === undefined ? undefined : databaseReadOf(owned);
+
+    return read !== undefined && rowScopesKey(read, identifier, field, undefined);
+};
+
+/**
+ * Whether `part` is the caller's identity itself, unaltered: `ctx.auth.userId`, an identity column read
+ * straight off an owned row (`row._id`, `(await ownedRead())._id`), or a local bound to one of those.
+ * Anything computed from the identity (`.length`, `[0]`, `.slice(0, 0)`, `uid && "x"`) can yield the same
+ * text for every caller, so it is not.
+ */
+const isIntactIdentityPart = (part: TsNode, followLocal = true): boolean => {
+    const value = strippedValue(part);
+    const declaration = Node.isIdentifier(value) ? declarationOf(value) : undefined;
+
+    // `contextTrustPathOf` follows a local to what it was declared from; a `let` assigned again may hold anything.
+    if ((Node.isVariableDeclaration(declaration) || Node.isBindingElement(declaration)) && isReassignedBinding(declaration)) {
+        return false;
+    }
+
+    const path = contextTrustPathOf(value);
+
+    if (path !== undefined) {
+        return path.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
+    }
+
+    if (Node.isPropertyAccessExpression(value) || Node.isElementAccessExpression(value)) {
+        return isOwnedIdentityColumn(value);
+    }
+
+    if (!Node.isIdentifier(value)) {
+        return false;
+    }
+
+    const trusted = trustedInitializerOf(value);
+
+    return trusted === undefined ? isDestructuredIdentity(value) : followLocal && isIntactIdentityPart(trusted, false);
+};
+
+/**
+ * Whether `identifier`, a caller value in a fallback position, lands after the caller's identity in
+ * `within`: `within` is built by concatenation, its first part that is not fixed text is the intact
+ * identity, and `identifier` sits in a later part. Whichever alternative is then taken, it is appended
+ * under the caller's own prefix. The structure is checked as written, so a caller part ahead of the
+ * identity (`${args.tenant}/${uid}/${args.a ?? args.b}`), an identity after the fallback, or an identity
+ * altered on the way (`${uid.slice(0, 0)}/…`) all leave the fallback refused.
+ */
+const followsIdentityPrefix = (identifier: TsNode, within: TsNode): boolean => {
+    const parts = keyPartsOf(within);
+    const leading = parts.findIndex((part) => !isFixedTextPart(part));
+    const holder = parts.findIndex((part) => part.getPos() <= identifier.getPos() && identifier.getEnd() <= part.getEnd());
+    const first = parts[leading];
+
+    return first !== undefined && leading < holder && isIntactIdentityPart(first);
+};
+
 /** True when `node` is, or textually contains, a value reference to the `args` binding. */
 export const referencesArgs = (node: TsNode): boolean => referencesBinding(node, "args");
 
@@ -1123,37 +1714,35 @@ export const isScopedByContext = (node: TsNode): boolean => {
  */
 export const isScopedByIdentity = (node: TsNode): boolean => {
     // A caller value on any fallback path (`row?.storageKey ?? args.key`) is the key whenever the scoped
-    // side is missing, so nothing the key also reads can scope it.
+    // side is missing, so nothing the key also reads can scope it, unless every alternative lands
+    // after an identity prefix (`${ctx.auth.userId}/${args.key ?? args.other}`).
     const expanded = trustedInitializerOf(node) ?? node;
 
-    if (valueIdentifiersOf(expanded).some((identifier) => isAlternativeOf(identifier, expanded) && reachesArgsWithinOneHop(outermostChainOf(identifier)))) {
+    if (
+        valueIdentifiersOf(expanded).some(
+            (identifier) =>
+                isAlternativeOf(identifier, expanded) && reachesArgsWithinOneHop(outermostChainOf(identifier)) && !followsIdentityPrefix(identifier, expanded),
+        )
+    ) {
         return false;
     }
 
-    if (referencesScopedKeySource(node)) {
+    if (referencesScopedKeySource(node, node)) {
         return true;
     }
 
-    const initializer = trustedInitializerOf(node) ?? ownedRowInitializerOf(node);
-
-    if (initializer !== undefined && referencesScopedKeySource(initializer)) {
+    if (bindingScopesKey(node, node)) {
         return true;
     }
 
-    const composed = initializer ?? node;
+    const composed = trustedInitializerOf(node) ?? node;
     const identifiers = Node.isIdentifier(composed) ? [composed] : composed.getDescendantsOfKind(SyntaxKind.Identifier);
 
-    return identifiers.some((identifier) => {
+    return identifiers.some(
         // `args.key ?? uid` is the caller's key whenever one is sent, whatever `uid` holds, and a value passed into a
         // `ctx.db` call does not scope the key either: only an identity-bound read does, through the direct branch.
-        if (isAlternativeOf(identifier, composed) || insideDatabaseCallWithin(identifier, composed)) {
-            return false;
-        }
-
-        const boundInitializer = trustedInitializerOf(identifier) ?? ownedRowInitializerOf(identifier);
-
-        return boundInitializer !== undefined && referencesScopedKeySource(boundInitializer);
-    });
+        (identifier) => !isAlternativeOf(identifier, composed) && !insideDatabaseCallWithin(identifier, composed) && bindingScopesKey(identifier, composed),
+    );
 };
 
 /**
