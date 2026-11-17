@@ -705,6 +705,12 @@ interface TrackResult {
 }
 ```
 
+### `USAGE_NEVER_DUE` (const)
+
+```ts
+const USAGE_NEVER_DUE: number;
+```
+
 ### `UsageEvent` (interface)
 
 ```ts
@@ -988,6 +994,12 @@ const subtractMoney: (a: Money, b: Money) => Money;
 
 ```ts
 const toMoneyJSON: (m: Money) => MoneyJSON;
+```
+
+### `usageFirstDueAt` (const)
+
+```ts
+const usageFirstDueAt: (event: Pick<UsageEvent, "createdAt" | "mode" | "quantity">) => number;
 ```
 
 ### `usagePeriodStart` (const)

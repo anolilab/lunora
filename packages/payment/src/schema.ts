@@ -136,7 +136,9 @@ const usageEvents = defineTable({
 })
     .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
     .index("by_reference_feature_created", ["referenceId", "featureId", "createdAt"])
-    .index("by_reference_created", ["referenceId", "createdAt"]);
+    .index("by_reference_created", ["referenceId", "createdAt"])
+    // The usage sweep's range read: unreported rows whose `reportRetryAt` has passed, and no others.
+    .index("by_provider_unreported_due", ["provider", "reportedToProvider", "reportRetryAt"]);
 
 // The table names and key stay literal so `.extend(paymentExtension)` adds exactly
 // `payment_customers | … | payment_usageEvents`; row types come from codegen.

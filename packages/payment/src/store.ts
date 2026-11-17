@@ -6,6 +6,7 @@
  * behind the same interface for production without touching call sites.
  */
 import type { Customer, PaymentSession, ProviderId, Subscription, UsageEvent } from "./types";
+import { usageFirstDueAt } from "./usage-due";
 
 const customerKey = (provider: ProviderId, referenceId: string): string => `${provider}:${referenceId}`;
 
@@ -54,7 +55,7 @@ export interface PaymentStore {
     listSubscriptionsByReference: (referenceId: string) => Promise<Subscription[]>;
 
     /**
-     * Usage events that still owe an upstream forward and are due at `now`, oldest first, at most `limit`.
+     * Usage events that still owe an upstream forward and are due at `now`, earliest-due first (then oldest), at most `limit`.
      *
      * "Owes a forward" is narrower than `reportedToProvider === false`: only an
      * ADDITIVE event with a positive `quantity` qualifies. A `"set"` event's
@@ -62,8 +63,10 @@ export interface PaymentStore {
      * recorded and is not recoverable afterwards, and a non-positive quantity was
      * never sent, so neither is a retry candidate — returning them would make the
      * sweep re-send the same rows forever (or double-count on an additive meter).
-     * An event whose `reportRetryAt` is later than `now` is skipped, and the walk
-     * continues past it, so failing rows cannot fill every batch.
+     * An event whose `reportRetryAt` is later than `now` is skipped, so failing rows
+     * cannot fill every batch, and a store with an index on that column should not
+     * read them at all: the backlog of deferred rows grows while a reference has no
+     * provider customer, and the sweep runs on every reconcile tick.
      *
      * Read by `reconcile` to retry a forward the provider rejected transiently;
      * without it a single 5xx loses that metered unit upstream for good, which for
@@ -220,16 +223,10 @@ export class MemoryPaymentStore implements PaymentStore {
     }
 
     public listUnreportedUsage(provider: ProviderId, limit: number, now: number): Promise<UsageEvent[]> {
+        const dueAt = (event: UsageEvent): number => event.reportRetryAt ?? usageFirstDueAt(event);
         const pending = [...this.usageEvents.values()]
-            .filter(
-                (event) =>
-                    event.provider === provider &&
-                    !event.reportedToProvider &&
-                    event.mode !== "set" &&
-                    event.quantity > 0 &&
-                    (event.reportRetryAt === undefined || event.reportRetryAt <= now),
-            )
-            .toSorted((a, b) => a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
+            .filter((event) => event.provider === provider && !event.reportedToProvider && event.mode !== "set" && event.quantity > 0 && dueAt(event) <= now)
+            .toSorted((a, b) => dueAt(a) - dueAt(b) || a.createdAt - b.createdAt || a.idempotencyKey.localeCompare(b.idempotencyKey));
 
         return Promise.resolve(pending.slice(0, Math.max(0, limit)));
     }

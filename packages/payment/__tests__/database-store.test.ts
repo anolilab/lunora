@@ -5,13 +5,14 @@ import { describe, expect, it } from "vitest";
 
 import { createPayment } from "../src/create-payment";
 import type { PaymentDatabase, PaymentRow } from "../src/database-store";
-import { createDatabasePaymentStore } from "../src/database-store";
+import { createDatabasePaymentStore, PAYMENT_TABLES } from "../src/database-store";
 import { money } from "../src/money";
 import type { CreemClientLike } from "../src/providers/creem";
 import { createCreemAdapter } from "../src/providers/creem";
 import paymentExtension from "../src/schema";
 import { MemoryPaymentStore } from "../src/store";
 import type { Customer, PaymentSession, Subscription } from "../src/types";
+import { USAGE_NEVER_DUE } from "../src/usage-due";
 
 /** A `PaymentDatabase` double that also reports how many rows it handed out. */
 type ProbedDatabase = PaymentDatabase & { readonly rowsRead: () => number };
@@ -46,12 +47,16 @@ const makeDb = (): ProbedDatabase => {
         return created;
     };
 
-    // Equality, plus the `{ gte }` range operator `ctx.db` accepts (the only one the store uses).
-    // A column the row never wrote reads as SQL NULL, so `{ col: null }` matches it, as `ctx.db` does.
+    // Equality, plus the `{ gte }` / `{ lte }` range operators `ctx.db` accepts (the ones the store uses).
+    // A column the row never wrote reads as SQL NULL, so `{ col: null }` matches it and no range does, as `ctx.db` does.
     const matches = (row: PaymentRow, where: Record<string, unknown>): boolean =>
         Object.entries(where).every(([key, value]) => {
             if (typeof value === "object" && value !== null && "gte" in value) {
-                return (row[key] as number) >= (value.gte as number);
+                return typeof row[key] === "number" && row[key] >= (value.gte as number);
+            }
+
+            if (typeof value === "object" && value !== null && "lte" in value) {
+                return typeof row[key] === "number" && row[key] <= (value.lte as number);
             }
 
             return (row[key] ?? null) === value;
@@ -697,22 +702,23 @@ describe("createDatabasePaymentStore", () => {
         };
 
         await expect(keys(999)).resolves.toStrictEqual(["evt_2", "evt_3"]);
-        await expect(keys(1000)).resolves.toStrictEqual(["evt_0", "evt_1"]);
+
+        await store.markUsageReported("stripe", "evt_2");
+        await store.markUsageReported("stripe", "evt_3");
+
+        await expect(keys(999)).resolves.toStrictEqual([]);
         await expect(store.listUnreportedUsage("stripe", 1, 1000)).resolves.toMatchObject([{ idempotencyKey: "evt_0", reportRetryAt: 1000 }]);
     });
 
-    it("listUnreportedUsage pages past non-candidate rows until it has `limit` of them", async () => {
+    it("listUnreportedUsage never reads non-forwardable rows", async () => {
         expect.assertions(2);
 
-        // The additive/positive predicate is still applied in memory (the port's
-        // `where` is equality-only), so a chunk can come back entirely filtered
-        // out. The scan has to follow the cursor rather than stop short.
+        // `set` markers never owe a forward. Recorded as never due, they sit outside the sweep's
+        // range read instead of being fetched and dropped on every sweep.
         const db = makeDb();
         const store = createDatabasePaymentStore(db);
 
         for (let index = 0; index < 60; index += 1) {
-            // Only every 10th row is a retry candidate; the rest are `set`
-            // markers, which are never re-sent.
             // eslint-disable-next-line no-await-in-loop -- seeding a deterministic ledger; order matters
             await store.recordUsage({
                 createdAt: index,
@@ -726,11 +732,59 @@ describe("createDatabasePaymentStore", () => {
             });
         }
 
-        const pending = await store.listUnreportedUsage("stripe", 3, Number.POSITIVE_INFINITY);
+        const pending = await store.listUnreportedUsage("stripe", 3, 1_000_000);
 
         expect(pending.map((event) => event.idempotencyKey)).toStrictEqual(["evt_0000", "evt_0010", "evt_0020"]);
-        // Still bounded — chunks of 3, not the whole 60-row match set at once.
-        expect(db.rowsRead()).toBeLessThan(60);
+        expect(db.rowsRead()).toBe(3);
+    });
+
+    it("listUnreportedUsage does not read a backlog of rows deferred past `now`", async () => {
+        expect.assertions(2);
+
+        // Regression (#1607): deferred rows were skipped in memory, so once fewer than `limit`
+        // rows were due every sweep read the whole deferred backlog.
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+        const backlog = 500;
+
+        for (let index = 0; index < backlog; index += 1) {
+            // eslint-disable-next-line no-await-in-loop -- seeding a deterministic ledger; order matters
+            await store.recordUsage({
+                createdAt: index,
+                featureId: "tokens",
+                idempotencyKey: `evt_${String(index).padStart(4, "0")}`,
+                provider: "stripe",
+                quantity: 1,
+                referenceId: "user_1",
+                ...(index < backlog - 2 ? { reportRetryAt: 10_000 } : {}),
+                reportedToProvider: false,
+            });
+        }
+
+        const pending = await store.listUnreportedUsage("stripe", 10, 5000);
+
+        expect(pending.map((event) => event.idempotencyKey)).toStrictEqual(["evt_0498", "evt_0499"]);
+        expect(db.rowsRead()).toBe(2);
+    });
+
+    it("listUnreportedUsage stamps rows recorded before reportRetryAt was written, then lists the due ones", async () => {
+        expect.assertions(3);
+
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+        const legacy = { featureId: "tokens", provider: "stripe", quantity: 1, referenceId: "user_1", reportedToProvider: false };
+
+        // Inserted straight through the port, as an older store wrote them: no `reportRetryAt`.
+        await db.insert(PAYMENT_TABLES.usageEvents, { ...legacy, createdAt: 1, idempotencyKey: "old_add" });
+        await db.insert(PAYMENT_TABLES.usageEvents, { ...legacy, createdAt: 2, idempotencyKey: "old_set", mode: "set" });
+
+        await expect(store.listUnreportedUsage("stripe", 10, 100)).resolves.toMatchObject([{ idempotencyKey: "old_add", reportRetryAt: 1 }]);
+
+        const { rows } = await db.findMany(PAYMENT_TABLES.usageEvents, { idempotencyKey: "old_set" });
+
+        expect(rows[0]?.["reportRetryAt"]).toBe(USAGE_NEVER_DUE);
+        // Stamped once: nothing is left without a `reportRetryAt` for later sweeps to re-stamp.
+        await expect(db.findMany(PAYMENT_TABLES.usageEvents, { reportRetryAt: null })).resolves.toMatchObject({ rows: [] });
     });
 
     it("releaseEvent rolls back a claim so the id can be re-processed", async () => {

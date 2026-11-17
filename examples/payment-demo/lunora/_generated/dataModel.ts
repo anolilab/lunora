@@ -129,7 +129,7 @@ export interface IndexNamesByTable {
     payment_referenceRevisions: "by_reference";
     payment_sessions: "by_provider_session" | "by_provider_subscription" | "by_reference";
     payment_subscriptions: "by_provider_subscription" | "by_reference" | "by_state";
-    payment_usageEvents: "by_idempotency" | "by_reference_feature_created" | "by_reference_created";
+    payment_usageEvents: "by_idempotency" | "by_reference_feature_created" | "by_reference_created" | "by_provider_unreported_due";
     ratelimit_buckets: "by_key" | "by_ts";
 }
 
