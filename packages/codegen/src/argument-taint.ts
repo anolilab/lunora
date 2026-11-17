@@ -593,6 +593,13 @@ const pinsReadToCaller = (argument: TsNode, field: string | undefined): boolean 
 };
 
 /**
+ * Whether every row `read` can return is the caller's: fetched by the caller's id (`ctx.db.users.get(ctx.auth.userId)`),
+ * or through a `where` that pins some column to the caller, with no spread or computed key that could rewrite the query.
+ */
+const isPinnedToCaller = (read: CallExpression): boolean =>
+    !hasRuntimeQueryOverride(read) && read.getArguments().some((argument) => isCallerId(argument) || pinsReadToCaller(argument, undefined));
+
+/**
  * Whether `field` of a row returned by the identity-bound `read` differs per caller: the row's
  * id, or a column the read matched against the caller (`ownerId` in `where: { ownerId:
  * ctx.auth.userId }`). Any other column (`me.plan`, `me.locale`) can hold the same value for
@@ -607,7 +614,7 @@ const isIdentityField = (read: CallExpression, field: string | undefined): boole
     // caller's id (`ctx.db.users.get(ctx.auth.userId)`), or through a `where` that pins some column to the caller.
     // A caller id in one `OR` arm, or a query a spread or computed key can rewrite, selects rows the caller chose.
     if (ROW_ID_FIELDS.has(field)) {
-        return !hasRuntimeQueryOverride(read) && read.getArguments().some((argument) => isCallerId(argument) || pinsReadToCaller(argument, undefined));
+        return isPinnedToCaller(read);
     }
 
     // Only a predicate of the read's own `where`, directly or in an `AND` branch, binds every returned row: one
@@ -622,8 +629,9 @@ const rowScopesKey = (read: CallExpression, source: TsNode, field: string | unde
         return false;
     }
 
-    // Used as the entire key, a field of the caller's own row is a stored reference the caller cannot repoint.
-    const whole = wholeKey !== undefined && unwrapExpression(source) === unwrapExpression(wholeKey);
+    // Used as the entire key, a field of the caller's own row is a stored reference the caller cannot repoint, as long as
+    // the row is the caller's on every query path.
+    const whole = wholeKey !== undefined && unwrapExpression(source) === unwrapExpression(wholeKey) && isPinnedToCaller(read);
 
     return whole || isIdentityField(read, field);
 };

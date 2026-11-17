@@ -518,6 +518,23 @@ describe("argument-taint", () => {
             ).toBe(false);
         });
 
+        it("rejects a whole-key column of a row the query does not pin to the caller", () => {
+            expect.assertions(2);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId }, ...args.query });\nSINK(row!.storageKey);`),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { OR: [{ ownerId: ctx.auth.userId }, { id: args.id }] } });\nSINK(row.storageKey);`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
         it("rejects a shared column of the caller's own row as a key prefix", () => {
             expect.assertions(4);
 
