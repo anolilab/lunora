@@ -1089,6 +1089,9 @@ const bindingScopesKey = (identifier: TsNode, wholeKey: TsNode | undefined): boo
     return read !== undefined && Node.isIdentifier(identifier) && rowScopesKey(read, identifier, destructuredFieldOf(declarationOf(identifier)), wholeKey);
 };
 
+/** The `ctx.auth` member that names the caller; `getIdentity` is a method shared by every caller. */
+const CALLER_ID_MEMBER = "userId";
+
 /** `node` without the parentheses, `await`, `!` and type assertions around it, none of which change the value. */
 const strippedValue = (node: TsNode): TsNode => {
     let current = node;
@@ -1141,7 +1144,7 @@ const isDestructuredIdentity = (identifier: Identifier): boolean => {
     const sourcePath = source === undefined ? undefined : contextTrustPathOf(strippedValue(source));
 
     if (sourcePath !== undefined) {
-        return sourcePath.length === 1 && sourcePath[0] === "auth" && field !== undefined;
+        return sourcePath.length === 1 && sourcePath[0] === "auth" && field === CALLER_ID_MEMBER;
     }
 
     const owned = ownedRowInitializerOf(identifier);
@@ -1161,7 +1164,7 @@ const isIntactIdentityPart = (part: TsNode, followLocal = true): boolean => {
     const path = contextTrustPathOf(value);
 
     if (path !== undefined) {
-        return path[0] === "auth" && path.length === 2;
+        return path.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
     }
 
     if (Node.isPropertyAccessExpression(value) || Node.isElementAccessExpression(value)) {

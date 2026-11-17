@@ -346,8 +346,11 @@ describe("argument-taint", () => {
             ).toBe(false);
         });
 
-        it("refuses a lossy projection of the identity hidden behind a type assertion", () => {
-            expect.assertions(2);
+        it("refuses a prefix that is not the caller id itself, asserted or not", () => {
+            expect.assertions(4);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.getIdentity}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const { getIdentity } = ctx.auth;\nSINK(\`\${getIdentity}/\${args.key ?? args.other}\`);`))).toBe(false);
 
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${(ctx.auth.userId as string)[0]}/\${args.key ?? args.other}\`);`))).toBe(false);
             expect(
