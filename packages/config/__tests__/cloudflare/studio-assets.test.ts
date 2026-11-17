@@ -28,7 +28,26 @@ const inferred = (): InferredBindings =>
 
 let root: string;
 
-const writeProject = (wrangler: Record<string, unknown>, dependencies: Record<string, string> = {}): void => {
+/** A Worker composed with the generated app, whose loaders read the documents through the binding. */
+const COMPOSED_ENTRY = `import { defineApp } from "../lunora/_generated/app";\n\nexport default defineApp().build();\n`;
+
+/** A hand-written `createWorker` entry, the Expo example's shape: it imports the spec itself and never reads `ASSETS`. */
+const HAND_WRITTEN_ENTRY = [
+    `import { createWorker } from "lunorash/runtime";`,
+    ``,
+    `const openApiSpec = () => import("../lunora/_generated/openapi").then((module) => module.openApiSpec);`,
+    ``,
+    `export default { fetch: (request: Request, env: never, ctx: never) => createWorker({ openApiSpec }).fetch(request, env, ctx) };`,
+    ``,
+].join("\n");
+
+const writeEntry = (source: string): void => {
+    mkdirSync(join(root, "src"), { recursive: true });
+    writeFileSync(join(root, "src", "server.ts"), source, "utf8");
+};
+
+const writeProject = (wrangler: Record<string, unknown>, dependencies: Record<string, string> = {}, entry: string = COMPOSED_ENTRY): void => {
+    writeEntry(entry);
     writeFileSync(join(root, "package.json"), `${JSON.stringify({ dependencies, name: "app" }, undefined, 4)}\n`, "utf8");
     writeFileSync(
         join(root, "wrangler.jsonc"),
@@ -91,6 +110,22 @@ describe("studio documents as Workers Static Assets", () => {
             writeProject(wrangler, dependencies);
 
             expect(studioAssetsPlan(root, { main: "src/server.ts", ...wrangler })).toBeUndefined();
+        });
+
+        it("keeps them in the bundle for a hand-written entry, which never reads the binding", () => {
+            expect.assertions(1);
+
+            writeProject({}, {}, HAND_WRITTEN_ENTRY);
+
+            expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
+        });
+
+        it("does not read a doc comment or a type-only import of defineApp as composing the app", () => {
+            expect.assertions(1);
+
+            writeProject({}, {}, `import type { defineApp } from "../lunora/_generated/app";\n\n/** Not built with \`defineApp()\`. */\n${HAND_WRITTEN_ENTRY}`);
+
+            expect(studioAssetsPlan(root, { main: "src/server.ts" })).toBeUndefined();
         });
 
         it.each(["node", "celld"])("keeps them in the bundle on %s, which has no Workers Static Assets", (target) => {
@@ -158,6 +193,19 @@ describe("studio documents as Workers Static Assets", () => {
 
             expect(readWrangler()["assets"]).toBeUndefined();
             expect(result.updated).toContain("assets (Studio documents block removed)");
+        });
+
+        // The Expo example committed this block: its entry imports the spec itself, and a fresh clone has no `.lunora/`.
+        it("removes the block it wrote from a hand-written entry, and creates no assets directory", () => {
+            expect.assertions(3);
+
+            writeProject({ assets: OWNED }, {}, HAND_WRITTEN_ENTRY);
+
+            const result = reconcileWranglerBindings(root, inferred());
+
+            expect(readWrangler()["assets"]).toBeUndefined();
+            expect(result.updated).toContain("assets (Studio documents block removed)");
+            expect(existsSync(join(root, STUDIO_ASSETS_DIRECTORY))).toBe(false);
         });
 
         it("keeps a block that differs from the one it writes", () => {

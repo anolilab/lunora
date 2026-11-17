@@ -20,8 +20,6 @@
         { "tag": "v2", "new_sqlite_classes": ["AdminRevocationDO"] },
     ],
     "observability": { "enabled": true, "head_sampling_rate": 1, "redact_query_string": true },
-    // Studio's documents as Workers Static Assets; codegen writes this block and the files.
-    "assets": { "binding": "ASSETS", "directory": ".lunora/studio-assets", "run_worker_first": true },
     // `AUTH_SECRET` is a secret: `.dev.vars` locally (see `.dev.vars.example`),
     // `wrangler secret put AUTH_SECRET` in production.
     //

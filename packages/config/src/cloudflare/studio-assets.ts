@@ -28,6 +28,7 @@ import { detectFramework } from "../detect-framework";
 import { readProjectDependencyNames, readProjectManifest } from "../project-manifest";
 import bindingNameOwner from "./binding-name-owner";
 import { isPlainObject } from "./guards";
+import { scanAppChains } from "./worker-entry-checks";
 import type { WranglerShape } from "./wrangler-shape";
 
 /** The directory of the Lunora-owned `assets` block, relative to `wrangler.jsonc`. `.lunora/` is Lunora's gitignored state directory. */
@@ -90,7 +91,8 @@ const bundledByWrangler = (projectRoot: string, parsed: StudioAssetsShape): bool
  * `assets` block of its own anywhere (an `env.<name>` block replaces the
  * top-level one whole), or only the one Lunora wrote, no legacy Workers Sites
  * `site` block (wrangler refuses one beside `assets`), and no other binding
- * named `ASSETS` in any environment.
+ * named `ASSETS` in any environment. And only for a project that composes its
+ * Worker with the generated `defineApp`, the one entry that reads the binding.
  *
  * An omitted `target` resolves the way codegen does (`lunora.config.*`, then
  * Cloudflare), so a caller that has no `--target` cannot write a block for a
@@ -113,7 +115,10 @@ const studioAssetsPlan = (projectRoot: string, parsed: StudioAssetsShape | undef
         (block) => isPlainObject(block) && bindingNameOwner(block, STUDIO_ASSETS_BINDING) !== undefined,
     );
 
-    if (ownAssets || nameTaken || !bundledByWrangler(projectRoot, parsed)) {
+    // Only the generated app's `defineApp` emits the loaders that read the binding. A hand-written `createWorker`
+    // entry imports the documents itself and never reads `ASSETS`, so a block for it would only point wrangler at a
+    // gitignored directory a fresh clone does not have, which wrangler refuses. Checked last: it scans the project.
+    if (ownAssets || nameTaken || !bundledByWrangler(projectRoot, parsed) || scanAppChains(projectRoot, new Set()) === undefined) {
         return undefined;
     }
 

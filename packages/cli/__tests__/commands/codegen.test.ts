@@ -331,7 +331,12 @@ describe("lunora codegen", () => {
     describe("studio documents as static assets", () => {
         const wranglerPath = (): string => join(workdir, "wrangler.jsonc");
 
-        const writeWorkerProject = (assets?: Record<string, unknown>): void => {
+        const writeWorkerProject = (
+            assets?: Record<string, unknown>,
+            entry = `import { defineApp } from "../lunora/_generated/app";\n\nexport default defineApp().build();\n`,
+        ): void => {
+            mkdirSync(join(workdir, "src"), { recursive: true });
+            writeFileSync(join(workdir, "src", "server.ts"), entry, "utf8");
             writeFileSync(
                 join(workdir, "package.json"),
                 `${JSON.stringify({ dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" }, name: "app" })}\n`,
@@ -373,6 +378,22 @@ describe("lunora codegen", () => {
             chmodSync(wranglerPath(), 0o444);
 
             expect(() => runCodegenCommand({ cwd: workdir, logger: silentLogger() })).toThrow(/EACCES|EPERM/);
+        });
+
+        // The Expo example's shape: its entry imports the spec itself, so the block only pointed a fresh clone at a missing directory.
+        it("removes the block it wrote for a hand-written entry, which never reads ASSETS", () => {
+            expect.assertions(3);
+
+            writeWorkerProject(
+                { binding: "ASSETS", directory: ".lunora/studio-assets", run_worker_first: true },
+                `import { createWorker } from "lunorash/runtime";\n\nexport default { fetch: (request: Request, env: never, ctx: never) => createWorker({}).fetch(request, env, ctx) };\n`,
+            );
+
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(parseJsonc(readFileSync(wranglerPath(), "utf8"))).not.toHaveProperty("assets");
+            expect(existsSync(join(workdir, ".lunora", "studio-assets"))).toBe(false);
+            expect(readFileSync(join(workdir, "lunora", "_generated", "app.ts"), "utf8")).not.toContain("loadStudioDocument(");
         });
 
         it("leaves a project's own assets block alone and keeps the documents in the bundle", () => {
