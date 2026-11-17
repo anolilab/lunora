@@ -167,7 +167,7 @@ export interface OverageOrgInput {
 }
 
 export interface OverageFleetPorts {
-    /** Advance the platform-side watermark after a successful debit (forward-only upstream). */
+    /** Advance the platform-side watermark, before the debit is attempted (forward-only upstream). */
     advanceWatermark: (organizationId: string, periodStart: number, debitedCredits: number) => Promise<void>;
     ledger: CreditsLedgerPort;
     /** Balance can't cover the owed delta — suspend via the C1 machinery. */
@@ -190,8 +190,9 @@ export interface OverageFleetSummary {
 
 /**
  * Reconcile every org's overage for the period. Per-org failures are isolated
- * (one org's Creem error never blocks the fleet), the watermark only advances
- * after the debit succeeded, and exhausted orgs go to the suspension hook.
+ * (one org's Creem error never blocks the fleet), the watermark advances before
+ * the debit (so a failed debit under-bills rather than double-bills), and
+ * exhausted orgs go to the suspension hook.
  */
 export const reconcileAllOverages = async (organizations: ReadonlyArray<OverageOrgInput>, ports: OverageFleetPorts): Promise<OverageFleetSummary> => {
     const summary: OverageFleetSummary = { debitedCredits: 0, debitedOrgs: 0, exhausted: 0 };
@@ -221,8 +222,10 @@ export const reconcileAllOverages = async (organizations: ReadonlyArray<OverageO
                 await ports.onRecovered?.(organization.organizationId);
             }
         } catch {
-            // Isolated: a provider blip on one org is retried on the next run
-            // (the watermark did not advance, so nothing is lost or doubled).
+            // Isolated: one org's failure never blocks the fleet. A failed watermark
+            // write is retried next run with the same reference; a debit that fails
+            // after the watermark advanced is not retried — that delta goes unbilled,
+            // which is the chosen direction (never a double charge).
         }
     }
 
