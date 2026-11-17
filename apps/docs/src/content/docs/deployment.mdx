@@ -839,12 +839,13 @@ OpenAPI and OpenRPC specs and the architecture manifest. They grow with the app
 never loads one before that route's first request. Where they live depends on
 how the Worker is built:
 
-| Build                                                                                                                              | Where the documents live                                                                           |
-| ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| wrangler bundles the Worker (no `@lunora/vite` / `@lunora/rspack`, no framework), Cloudflare target, no `assets` block of your own | Workers Static Assets, outside the Worker script                                                   |
-| Vite or Rsbuild                                                                                                                    | their own chunks of the Worker, loaded with `import()`                                             |
-| a project with its own `assets` block                                                                                              | in the Worker bundle, loaded with `import()` (your assets directory is your client build's output) |
-| `--target node` / `celld`                                                                                                          | in the Worker bundle, loaded with `import()` (no Workers Static Assets)                            |
+| Build                                                                                                                                                                             | Where the documents live                                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| wrangler bundles the Worker (no `@lunora/vite` / `@lunora/rspack`, no framework), Cloudflare target, no `assets` block of your own, entry composed with the generated `defineApp` | Workers Static Assets, outside the Worker script                                                   |
+| an entry that calls `createWorker` itself                                                                                                                                         | wherever that entry loads them from (usually `import()` of `lunora/_generated/openapi`)            |
+| Vite or Rsbuild                                                                                                                                                                   | their own chunks of the Worker, loaded with `import()`                                             |
+| a project with its own `assets` block                                                                                                                                             | in the Worker bundle, loaded with `import()` (your assets directory is your client build's output) |
+| `--target node` / `celld`                                                                                                                                                         | in the Worker bundle, loaded with `import()` (no Workers Static Assets)                            |
 
 In the first case codegen writes each document to
 `.lunora/studio-assets/_lunora/studio/<name>.json`, and `lunora codegen`, the
