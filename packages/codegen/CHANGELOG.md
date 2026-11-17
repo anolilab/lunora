@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.422](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.421...@lunora/codegen@1.0.0-alpha.422) (2026-11-17)
+
+- fix(codegen): fail closed on ctx paths the ip-read analysis loses (#1605) (#1613)
+
 ## @lunora/codegen [1.0.0-alpha.421](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.420...@lunora/codegen@1.0.0-alpha.421) (2026-11-17)
 
 - fix(codegen): refine identity-scope rules and wrangler directive keys (#1612)
