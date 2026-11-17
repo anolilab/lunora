@@ -86,8 +86,7 @@ const IP_LIKE = /^[\d.:a-f]{3,45}$/iu;
 /**
  * Identify the caller, using only a header the platform itself sets.
  *
- * `x-forwarded-for` is deliberately NOT consulted. On a deployment behind
- * Netlify it is redundant, and anywhere else it is caller-controlled — so
+ * `x-forwarded-for` is deliberately NOT consulted. It is caller-controlled, so
  * honouring it hands an attacker an unlimited number of private buckets simply
  * by rotating the value. Validating its *shape* does not help: valid-looking
  * addresses are free to invent. Anything we cannot attribute shares one bucket
@@ -95,7 +94,7 @@ const IP_LIKE = /^[\d.:a-f]{3,45}$/iu;
  * single unattributed caller lock the endpoint.
  */
 const callerKey = (request: Request): { key: string; limit: "mcp" | "unidentified" } => {
-    const platformIp = request.headers.get("x-nf-client-connection-ip")?.trim() ?? "";
+    const platformIp = request.headers.get("cf-connecting-ip")?.trim() ?? "";
 
     return IP_LIKE.test(platformIp) ? { key: platformIp, limit: "mcp" } : { key: "unidentified", limit: "unidentified" };
 };

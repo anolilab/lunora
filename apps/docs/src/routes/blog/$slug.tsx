@@ -1,15 +1,69 @@
-import { executeMdxSync } from "@fumadocs/mdx-remote/client";
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { staticFunctionMiddleware } from "@tanstack/start-static-server-functions";
+import type { TOCItemType } from "fumadocs-core/toc";
 import defaultMdxComponents from "fumadocs-ui/mdx";
+import type { MDXContent } from "mdx/types";
 import type { ComponentProps } from "react";
+import { use } from "react";
 
-import { coverImageUrl, createSeoHead, SITE_URL } from "@/lib/seo";
+import { coverImageUrl, createSeoHead, ogImagePath, SITE_URL } from "@/lib/seo";
 import type { BlogPostMeta, PostLink, RelatedPost } from "@/pages/blog/content";
 import BlogPost from "@/pages/blog/content";
 
 import { NotFound } from "../../pages/not-found";
+
+interface PostBody {
+    default: MDXContent;
+    toc: TOCItemType[];
+}
+
+// Compiled to components at build time by the fumadocs-mdx Vite plugin, one chunk
+// per post. Compiling at request time and running the result needs `new Function`,
+// which workerd forbids, so every post page answered 500 on the Worker.
+const postBodies = import.meta.glob<PostBody>("/src/content/blog/*.{md,mdx}");
+const loadedBodies = new Map<string, Promise<PostBody>>();
+
+/**
+ * The post's compiled body, imported once per slug. The loader awaits it so the
+ * server render reads it without suspending; on hydration the loader does not
+ * run, so the component suspends until the chunk arrives and React keeps the
+ * server HTML meanwhile.
+ */
+const loadBody = (slug: string): Promise<PostBody> => {
+    const cached = loadedBodies.get(slug);
+
+    if (cached) {
+        return cached;
+    }
+
+    // blog-source lists `.md` posts too, so a body glob of `.mdx` alone would 404 them.
+    const mdxPath = `/src/content/blog/${slug}.mdx`;
+    const path = Object.hasOwn(postBodies, mdxPath) ? mdxPath : `/src/content/blog/${slug}.md`;
+
+    if (!Object.hasOwn(postBodies, path)) {
+        throw notFound();
+    }
+
+    const tracked = postBodies[path]().then(
+        (body) => {
+            // React's `use()` reads a promise carrying these synchronously instead of suspending.
+            void Object.assign(tracked, { status: "fulfilled", value: body });
+
+            return body;
+        },
+        (error: unknown) => {
+            // A failed chunk load must not be cached, or the post stays broken until reload.
+            loadedBodies.delete(slug);
+
+            throw error;
+        },
+    );
+
+    loadedBodies.set(slug, tracked);
+
+    return tracked;
+};
 
 /** How many posts the "Keep reading" grid shows. */
 const KEEP_READING = 6;
@@ -59,14 +113,13 @@ const toLink = (post?: { slug: string; title?: string }): PostLink | null => {
 };
 
 const buildPost = async (slug: string) => {
-    const { getCompiledPost, listBlogPosts } = await import("@/lib/blog-source");
-    const post = await getCompiledPost(slug);
+    const { getPost, listBlogPosts } = await import("@/lib/blog-source");
+    const data = getPost(slug);
 
-    if (!post) {
+    if (!data) {
         return null;
     }
 
-    const { data } = post;
     const words = data.content.trim().split(WORD_SPLIT).filter(Boolean).length;
     const readingMinutes = Math.max(1, Math.round(words / 200));
 
@@ -101,7 +154,6 @@ const buildPost = async (slug: string) => {
     });
 
     return {
-        compiled: post.mdx,
         meta: {
             author: data.author,
             category: data.category,
@@ -133,8 +185,8 @@ const mdxComponents = {
 };
 
 const RouteComponent = () => {
-    const { compiled, meta, next, prev, related, slug } = Route.useLoaderData();
-    const { default: MdxContent, toc } = executeMdxSync(compiled);
+    const { meta, next, prev, related, slug } = Route.useLoaderData();
+    const { default: MdxContent, toc } = use(loadBody(slug));
 
     return (
         <BlogPost next={next} post={meta} prev={prev} related={related} slug={slug} toc={toc}>
@@ -145,19 +197,22 @@ const RouteComponent = () => {
 
 export const Route = createFileRoute("/blog/$slug")({
     component: RouteComponent,
-    // Posts are static for the life of a deployment (compiled MDX is memoised in
-    // blog-source), so don't re-run the loader on client-side navigation.
+    // Posts are static for the life of a deployment, so don't re-run the loader on
+    // client-side navigation.
     staleTime: Number.POSITIVE_INFINITY,
     loader: async ({ params }) => {
         // In the browser this reads the prerendered result for the slug; every post
         // is prerendered, so a missing one means the post does not exist.
-        const data = await loadPost({ data: params.slug }).catch((error: unknown) => {
-            if (import.meta.env.SSR) {
-                throw error;
-            }
+        const [data] = await Promise.all([
+            loadPost({ data: params.slug }).catch((error: unknown) => {
+                if (import.meta.env.SSR) {
+                    throw error;
+                }
 
-            return null;
-        });
+                return null;
+            }),
+            loadBody(params.slug),
+        ]);
 
         if (!data) {
             throw notFound();
@@ -171,16 +226,10 @@ export const Route = createFileRoute("/blog/$slug")({
             return {};
         }
 
-        const ogParameters = new URLSearchParams({
-            description: loaderData.meta.description ?? "",
-            eyebrow: loaderData.meta.category ?? "Blog",
-            title: loaderData.meta.title,
-        });
-
         // A post that ships real cover art should share it. The generated card is
         // the fallback for the posts that have none — which was every post until
         // now, because this ignored `meta.image` entirely.
-        const cover = coverImageUrl(loaderData.meta.image) ?? `${SITE_URL}/api/og?${ogParameters.toString()}`;
+        const cover = coverImageUrl(loaderData.meta.image) ?? `${SITE_URL}${ogImagePath(`blog/${loaderData.slug}`)}`;
 
         const seo = createSeoHead({
             description: loaderData.meta.description ?? `${loaderData.meta.title} — Lunora blog`,

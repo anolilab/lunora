@@ -1,4 +1,4 @@
-import { extname, join, relative } from "node:path";
+import { extname } from "node:path";
 
 import type { MetaData, PageData, Source, VirtualFile } from "fumadocs-core/source";
 import { loader } from "fumadocs-core/source";
@@ -23,7 +23,9 @@ const files: [string, string][] = Object.entries(
 
 const virtualFiles: VirtualFile[] = files.flatMap(([file, content]): VirtualFile[] => {
     const extension = extname(file);
-    const virtualPath = relative("src/content/blog", join(process.cwd(), file));
+    // Glob keys are root-relative (`/src/content/blog/...`), so the path is derived from
+    // the key itself. Resolving against `process.cwd()` breaks in the Worker prerender.
+    const virtualPath = file.slice("/src/content/blog/".length);
 
     if (extension === ".mdx" || extension === ".md") {
         const parsed = matter(content);
@@ -60,34 +62,6 @@ const toTime = (value?: string): number => {
 
     return new Date(value).getTime();
 };
-
-interface CompiledPost {
-    data: BlogFrontmatter;
-    mdx: string;
-}
-
-// Compiling MDX is the expensive part of loading a post — shiki (via rehypeCode)
-// re-highlights on every call. The compiler is heavy, so load it lazily; this
-// keeps list-only consumers (the index route, RSS, sitemap) from bundling it.
-//
-// `onError: "ignore"` on remarkImage is required: it reads each image off the
-// filesystem (`./public`) to inject width/height, but the deployed server
-// function runs with a different cwd and doesn't ship the static assets, so the
-// read fails at runtime. Ignoring it lets the post compile (the image still
-// renders, just without baked dimensions) instead of throwing. The prerendered
-// build still bakes dimensions in because cwd is the app root there.
-const loadCompiler = async () => {
-    const { createCompiler } = await import("@fumadocs/mdx-remote");
-
-    return createCompiler({ development: false, remarkImageOptions: { onError: "ignore" } });
-};
-
-let compilerPromise: ReturnType<typeof loadCompiler> | undefined;
-
-// Blog content is bundled per deployment (see the import.meta.glob note above)
-// and therefore static, so compile each post at most once and reuse it. Only
-// real posts are cached, so requests for unknown slugs can't grow the map.
-const compiledPosts = new Map<string, CompiledPost>();
 
 export interface BlogFrontmatter {
     author?: string;
@@ -143,32 +117,5 @@ export const listBlogPosts = (): BlogPostSummary[] =>
         })
         .toSorted((a, b) => toTime(b.publishedAt) - toTime(a.publishedAt));
 
-/**
- * Compile a post's MDX to its renderable form, memoised by slug. Returns
- * undefined for an unknown slug (without caching it). Server-only.
- */
-export const getCompiledPost = async (slug: string): Promise<CompiledPost | undefined> => {
-    const cached = compiledPosts.get(slug);
-
-    if (cached) {
-        return cached;
-    }
-
-    const page = source.getPage([slug]);
-
-    if (!page) {
-        return undefined;
-    }
-
-    const data = page.data as BlogFrontmatter;
-
-    compilerPromise ??= loadCompiler();
-
-    const compiler = await compilerPromise;
-    const { compiled } = await compiler.compile({ source: data.content });
-    const entry: CompiledPost = { data, mdx: compiled };
-
-    compiledPosts.set(slug, entry);
-
-    return entry;
-};
+/** A post's frontmatter and raw body, or undefined for an unknown slug. Server-only. */
+export const getPost = (slug: string): BlogFrontmatter | undefined => source.getPage([slug])?.data;

@@ -125,7 +125,7 @@ const TableOfContents: FC<{ items: TOCItemType[] }> = ({ items }) => {
 /** `CATEGORY · DATE`, the index's meta line, reused for the related tiles. */
 const RelatedCard: FC<{ post: RelatedPost }> = ({ post }) => (
     <Link className="group flex flex-col gap-4" params={{ slug: post.slug }} to="/blog/$slug">
-        <Cover category={post.category} image={post.image} title={post.title} />
+        <Cover image={post.image} slug={post.slug} title={post.title} />
         <div className="flex flex-col gap-2.5">
             <MetaLine category={post.category} publishedAt={post.publishedAt} />
             <h3 className="text-base font-medium text-balance text-ink transition-colors group-hover:text-ink-muted">{post.title}</h3>
