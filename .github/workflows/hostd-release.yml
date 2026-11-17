@@ -74,8 +74,12 @@
                       version="${INPUT_VERSION#v}"
                   fi
 
-                  if ! [[ "${version}" =~ ^[0-9][A-Za-z0-9_.+~-]{0,63}$ ]]; then
-                      echo "::error::Not a release version: expected e.g. 1.0.0 or 1.0.0-alpha.1, at most 64 characters of [A-Za-z0-9_.+~-]."
+                  # Strict semver, the grammar `hostd-release latest-pointer` parses: a looser
+                  # check let `1foo` through here and fail only after the assets were published.
+                  semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+
+                  if [ "${#version}" -gt 64 ] || ! [[ "${version}" =~ ${semver} ]]; then
+                      echo "::error::Not a release version: expected semver such as 1.0.0 or 1.0.0-alpha.1, at most 64 characters."
                       exit 1
                   fi
 
@@ -525,7 +529,12 @@
                   mkdir -p "${current}"
 
                   if gh release view hostd-latest > /dev/null 2>&1; then
-                      gh release download hostd-latest --pattern latest.json --dir "${current}" || true
+                      # Download without masking failures: a pointer computed from a missing
+                      # current file can move a channel backward. Only a release that never
+                      # had the asset starts from empty.
+                      if gh release view hostd-latest --json assets -q '.assets[].name' | grep -qx latest.json; then
+                          gh release download hostd-latest --pattern latest.json --dir "${current}"
+                      fi
                   else
                       gh release create hostd-latest --target "${SHA}" --prerelease --latest=false \
                           --title "lunora-hostd: newest releases" \

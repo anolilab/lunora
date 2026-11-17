@@ -383,6 +383,9 @@ mod tests {
     #[test]
     fn the_pointer_refuses_a_version_boxes_could_not_order() {
         assert!(next_latest_pointer(&json!({}), "nightly").unwrap_err().contains("not a semantic version"));
+        // Starts with a digit, which the release workflow's old version check took for a version:
+        // its strict-semver check must refuse whatever this does, or assets publish first.
+        assert!(next_latest_pointer(&json!({}), "1foo").is_err());
     }
 
     #[test]
