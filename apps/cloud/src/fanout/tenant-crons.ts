@@ -59,15 +59,23 @@ const dispatchCronTick = async (dispatch: TenantDispatch, tick: CronTick): Promi
  */
 export const runTenantCrons = async (ports: TenantCronPorts): Promise<void> => {
     const serving = await servingDeployments(ports.store, ports.live, ports.now.getTime());
-
-    await Promise.all(
+    const perFleet = await Promise.all(
         ports.fleets.map(async ({ dispatch, target }) => {
             const targets = await cronTargets(
                 serving.filter((row) => storedTarget(row.target) === target),
                 ports.secretEncryptionKey,
             );
 
-            await fanOutCron({ dispatch: (tick) => dispatchCronTick(dispatch, tick), now: ports.now, targets });
+            return targets.map((cronTarget) => {
+                return { ...cronTarget, dispatch };
+            });
         }),
     );
+    // Every fleet's targets in one fan-out, so the tick cap is per invocation rather than per fleet.
+    const { skipped } = await fanOutCron({ dispatch: (tick, target) => dispatchCronTick(target.dispatch, tick), now: ports.now, targets: perFleet.flat() });
+
+    if (skipped > 0) {
+        // eslint-disable-next-line no-console -- a count only; the one record that a tenant's tick did not run
+        console.warn(`[cron] ${String(skipped)} due tenant cron tick(s) skipped this minute: over the per-invocation cap`);
+    }
 };

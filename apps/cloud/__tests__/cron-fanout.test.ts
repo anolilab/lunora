@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { CronTarget } from "../src/fanout/cron";
-import { cronDue, dueTicks, fanOutCron } from "../src/fanout/cron";
+import { CRON_DISPATCH_CONCURRENCY, cronDue, dueTicks, fanOutCron, MAX_CRON_TICKS_PER_INVOCATION } from "../src/fanout/cron";
 
 // 2026-06-15 09:05 UTC is a Monday.
 const at = (iso: string): Date => new Date(iso);
@@ -63,7 +63,7 @@ describe(fanOutCron, () => {
         const dispatch = vi.fn<(tick: { scriptName: string }) => Promise<boolean>>().mockResolvedValue(true);
         const result = await fanOutCron({ dispatch, now: at("2026-06-15T00:00:00Z"), targets });
 
-        expect(result).toStrictEqual({ delivered: 2, failed: 0 });
+        expect(result).toStrictEqual({ delivered: 2, failed: 0, skipped: 0 });
         expect(dispatch).toHaveBeenCalledTimes(2);
     });
 
@@ -78,6 +78,39 @@ describe(fanOutCron, () => {
 
         const result = await fanOutCron({ dispatch, now: at("2026-06-15T00:00:00Z"), targets });
 
-        expect(result).toStrictEqual({ delivered: 1, failed: 1 });
+        expect(result).toStrictEqual({ delivered: 1, failed: 1, skipped: 0 });
+    });
+
+    it("caps the ticks of one invocation, reports the overflow, and bounds how many are in flight", async () => {
+        expect.assertions(5);
+
+        const many: CronTarget[] = Array.from({ length: MAX_CRON_TICKS_PER_INVOCATION + 37 }, (_, index) => {
+            return { adminToken: "t", cronSpecs: ["* * * * *"], scriptName: `app-${String(index)}` };
+        });
+        let inFlight = 0;
+        let peak = 0;
+        const dispatch = vi.fn<(tick: { scriptName: string }) => Promise<boolean>>().mockImplementation(async () => {
+            inFlight += 1;
+            peak = Math.max(peak, inFlight);
+            // Yield so every worker the pool started is in flight before any finishes.
+            await Promise.resolve();
+            inFlight -= 1;
+
+            return true;
+        });
+
+        const result = await fanOutCron({ dispatch, now: at("2026-06-15T00:00:00Z"), targets: many });
+
+        expect(result).toStrictEqual({ delivered: MAX_CRON_TICKS_PER_INVOCATION, failed: 0, skipped: 37 });
+        expect(dispatch).toHaveBeenCalledTimes(MAX_CRON_TICKS_PER_INVOCATION);
+        expect(peak).toBeLessThanOrEqual(CRON_DISPATCH_CONCURRENCY);
+        expect(peak).toBeGreaterThan(1);
+
+        // The next minute's window starts elsewhere, so the overflow is not always the same tenants.
+        const next = vi.fn<(tick: { scriptName: string }) => Promise<boolean>>().mockResolvedValue(true);
+
+        await fanOutCron({ dispatch: next, now: at("2026-06-15T00:01:00Z"), targets: many });
+
+        expect(next.mock.calls[0]?.[0].scriptName).not.toBe(dispatch.mock.calls[0]?.[0].scriptName);
     });
 });

@@ -10,6 +10,7 @@
  * expressions and compute which tenant ticks are due. The I/O (reading live
  * targets, dispatching) is injected so it stays unit-testable.
  */
+import mapPooled from "../lib/map-pooled";
 
 /** A live tenant deployment that declares cron expressions. */
 export interface CronTarget {
@@ -125,26 +126,52 @@ export const dueTicks = (targets: ReadonlyArray<CronTarget>, now: Date): CronTic
 };
 
 /**
- * Deliver each due tick through the injected `dispatch`. Best-effort: a failed
- * tenant tick is counted and skipped, never aborting the rest of the fan-out.
+ * Ticks delivered per `scheduled()` invocation. The fan-out shares that
+ * invocation's ~1000-subrequest budget with the uptime sweep, which spends up
+ * to ~800 of it (200 probes plus ~3 D1 writes each, `src/uptime/sweep.ts`);
+ * every tick is one dispatch subrequest, so 100 leaves room for the reads the
+ * sweeps make before either starts.
  */
-export const fanOutCron = async (options: {
-    dispatch: (tick: CronTick) => Promise<boolean>;
+export const MAX_CRON_TICKS_PER_INVOCATION = 100;
+
+/** Ticks in flight at once: a tenant's handler is the slow part, and a burst of 100 at once would all contend for the same minute. */
+export const CRON_DISPATCH_CONCURRENCY = 10;
+
+const MINUTE_MS = 60_000;
+
+/**
+ * Deliver the due ticks through the injected `dispatch`, at most
+ * {@link CRON_DISPATCH_CONCURRENCY} at a time and {@link MAX_CRON_TICKS_PER_INVOCATION}
+ * in all. Past the cap the rest are skipped this minute and counted, never
+ * carried over: a cron tick is for its minute. The window starts at a
+ * different tick each minute, so an overflow does not starve the same tenants
+ * every time. Best-effort: a failed tenant tick is counted and skipped, never
+ * aborting the rest of the fan-out.
+ */
+export const fanOutCron = async <T extends CronTarget>(options: {
+    dispatch: (tick: CronTick, target: T) => Promise<boolean>;
     now: Date;
-    targets: ReadonlyArray<CronTarget>;
-}): Promise<{ delivered: number; failed: number }> => {
-    const ticks = dueTicks(options.targets, options.now);
-    const outcomes = await Promise.all(
-        ticks.map(async (tick) => {
-            try {
-                return await options.dispatch(tick);
-            } catch {
-                return false;
-            }
-        }),
-    );
+    targets: ReadonlyArray<T>;
+}): Promise<{ delivered: number; failed: number; skipped: number }> => {
+    const due: { target: T; tick: CronTick }[] = [];
+
+    for (const target of options.targets) {
+        for (const tick of dueTicks([target], options.now)) {
+            due.push({ target, tick });
+        }
+    }
+
+    const start = due.length === 0 ? 0 : (Math.floor(options.now.getTime() / MINUTE_MS) * MAX_CRON_TICKS_PER_INVOCATION) % due.length;
+    const window = [...due.slice(start), ...due.slice(0, start)].slice(0, MAX_CRON_TICKS_PER_INVOCATION);
+    const outcomes = await mapPooled(window, CRON_DISPATCH_CONCURRENCY, async ({ target, tick }) => {
+        try {
+            return await options.dispatch(tick, target);
+        } catch {
+            return false;
+        }
+    });
 
     const delivered = outcomes.filter(Boolean).length;
 
-    return { delivered, failed: outcomes.length - delivered };
+    return { delivered, failed: outcomes.length - delivered, skipped: due.length - window.length };
 };
