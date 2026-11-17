@@ -351,12 +351,14 @@ describe("node websocket upgrades", () => {
             });
         });
 
+        const closeEvents = () => shardDo.calls.filter((call) => call.functionPath === "sockets:chat" && call.args["kind"] === "close");
+
         await waitFor(() => shardDo.closeSockets() > 0);
-        await waitFor(() => client.readyState === WebSocket.CLOSED);
+        // The client can observe CLOSED before the server's close handler has reported to the shard, so wait on the
+        // report itself.
+        await waitFor(() => client.readyState === WebSocket.CLOSED && closeEvents().length > 0);
 
-        const closeEvents = shardDo.calls.filter((call) => call.functionPath === "sockets:chat" && call.args["kind"] === "close");
-
-        expect(closeEvents).toHaveLength(1);
+        expect(closeEvents()).toHaveLength(1);
         expect(client.readyState).toBe(WebSocket.CLOSED);
     });
 
