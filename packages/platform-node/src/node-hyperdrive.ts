@@ -61,6 +61,11 @@ const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the Hyperdrive database URL is not a valid URL");
     }
 
+    // Refused here rather than left to the driver, whose error may echo the URL and its password.
+    if (parsed.hostname === "" || database === "") {
+        throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the Hyperdrive database URL needs both a host and a database name");
+    }
+
     const defaultPort = DEFAULT_PORTS[parsed.protocol];
 
     if (defaultPort === undefined) {

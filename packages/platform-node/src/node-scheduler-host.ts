@@ -151,6 +151,19 @@ interface NodeDeclaredCron {
     name: string;
 }
 
+/**
+ * Parse `expression` and prove it has a next occurrence. A parse alone does not:
+ * `0 0 31 4,6,9,11 *` parses, then `next()` finds no date, and `armCron` would
+ * swallow that and never fire it.
+ */
+const assertNextRun = (expression: string, label: string): void => {
+    try {
+        parse(expression, CRON_PARSE_OPTIONS).next();
+    } catch {
+        throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: ${label} has cron expression "${expression}", which is invalid or never occurs`);
+    }
+};
+
 /** Key prefix of a declared cron's row, keeping them apart from rows `cron()` registered. */
 const DECLARED_CRON_PREFIX = "declared:";
 
@@ -732,9 +745,9 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 throw new Error("platform closed: cannot register a cron");
             }
 
-            // Parse before writing: an invalid expression must fail the caller's
-            // await rather than land a row that can never be armed.
-            parse(expression, CRON_PARSE_OPTIONS);
+            // Checked before writing: an invalid or never-occurring expression must
+            // fail the caller's await rather than land a row that can never be armed.
+            assertNextRun(expression, `cron for ${functionPath}`);
 
             const row: CronRow = {
                 args: serialize(args ?? {}),
@@ -871,7 +884,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 }
 
                 names.add(cron.name);
-                parse(cron.expression, CRON_PARSE_OPTIONS);
+                assertNextRun(cron.expression, `cron job "${cron.name}"`);
             }
 
             const rows: CronRow[] = crons.map((cron) => {

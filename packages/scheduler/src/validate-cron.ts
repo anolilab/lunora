@@ -45,7 +45,9 @@ const isValidCronExpression = (schedule: string): boolean => {
     }
 
     try {
-        parse(fields.join(" "), CRON_PARSE_OPTIONS);
+        // `next()` too: `0 0 31 4,6,9,11 *` parses but never occurs, and a trigger
+        // that can never fire is as broken as one that does not parse.
+        parse(fields.join(" "), CRON_PARSE_OPTIONS).next();
 
         return true;
     } catch {
@@ -89,7 +91,7 @@ const assertValidCronExpression = (schedule: string, context = "cron expression"
     if (!isValidCronExpression(schedule)) {
         throw new LunoraError(
             "INTERNAL",
-            `@lunora/scheduler: invalid ${context} "${schedule}" — expected a standard 5- or 6-field cron expression (e.g. "0 * * * *")`,
+            `@lunora/scheduler: invalid ${context} "${schedule}" — expected a standard 5- or 6-field cron expression (e.g. "0 * * * *") that occurs on at least one date`,
         );
     }
 

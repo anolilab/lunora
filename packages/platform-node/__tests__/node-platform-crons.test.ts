@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createNodePlatform } from "../src/node-platform";
@@ -114,6 +115,62 @@ describe("createNodePlatform declared crons", () => {
                 path: join(directory, "shard.sqlite3"),
             }),
         ).toThrow(/"nightly"/u);
+    });
+
+    it("drops every declared cron when a restart omits the option, keeping cron() rows", async () => {
+        expect.assertions(3);
+
+        const path = join(directory, "shard.sqlite3");
+        const first = createNodePlatform({
+            crons: { "* * * * *": [{ args: {}, functionPath: "reports:declared", name: "declared" }] },
+            onDispatch: () => undefined,
+            path,
+        });
+
+        await first.scheduler.cron?.("* * * * *", "reports:dynamic", {});
+        first.close();
+
+        const onDispatch = dispatchSpy();
+        const second = createNodePlatform({
+            onDispatch: async (functionPath, args) => {
+                onDispatch(functionPath, args);
+            },
+            path,
+        });
+
+        try {
+            await vi.advanceTimersByTimeAsync(MINUTE);
+
+            expect(onDispatch).not.toHaveBeenCalledWith("reports:declared", expect.anything());
+            expect(onDispatch).toHaveBeenCalledWith("reports:dynamic", {});
+        } finally {
+            second.close();
+        }
+
+        const database = new Database(path, { readonly: true });
+
+        try {
+            expect(
+                database
+                    .prepare<[], { key: string }>("SELECT key FROM _lunora_scheduler_crons")
+                    .all()
+                    .map((row) => row.key),
+            ).toStrictEqual(["* * * * * reports:dynamic"]);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("refuses a job whose schedule parses but never occurs, naming the job", () => {
+        expect.assertions(1);
+
+        expect(() =>
+            createNodePlatform({
+                crons: { "0 0 31 4,6,9,11 *": [{ args: {}, functionPath: "reports:never", name: "thirty-first" }] },
+                onDispatch: () => undefined,
+                path: join(directory, "shard.sqlite3"),
+            }),
+        ).toThrow(/"thirty-first".*never occurs/u);
     });
 
     it("refuses a workflow-targeted cron at construction instead of never firing it", () => {

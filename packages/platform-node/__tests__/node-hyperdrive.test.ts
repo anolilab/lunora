@@ -74,6 +74,16 @@ describe(createNodeHyperdrive, () => {
         expect(() => createNodeHyperdrive(url)).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.not.stringContaining("%ZZ") }));
     });
 
+    it.each([
+        ["host", "postgres:///orders"],
+        ["database name", "postgres://u@db"],
+        ["database name after a slash", "postgres://u@db/"],
+    ])("refuses a URL with no %s, without echoing it", (_part, url) => {
+        expect.assertions(1);
+
+        expect(() => createNodeHyperdrive(url)).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.not.stringContaining(url) }));
+    });
+
     it("keeps the password out of the error for an unparseable URL", () => {
         expect.assertions(2);
 

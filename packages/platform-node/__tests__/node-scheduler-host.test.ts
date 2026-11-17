@@ -178,6 +178,20 @@ describe("createNodeSchedulerHost", () => {
             }
         });
 
+        it("refuses a cron() schedule that parses but never occurs", async () => {
+            expect.assertions(1);
+
+            const database = new Database(":memory:");
+            const host = createNodeSchedulerHost(database);
+
+            try {
+                await expect(host.scheduler.cron?.("0 0 31 4,6,9,11 *", "reports:never", {})).rejects.toThrow(/never occurs/u);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
         it("refuses two declared crons with the same name", () => {
             expect.assertions(1);
 

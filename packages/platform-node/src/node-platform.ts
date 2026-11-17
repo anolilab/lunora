@@ -267,10 +267,11 @@ export type NodePlatformOptions<
      * (`_generated/crons.ts`). Each job is armed on the scheduler and delivered
      * through the same `onDispatch` a scheduled job uses, so it needs `onFetch`
      * (or your own `onDispatch`) to reach a shard; a non-empty map with neither
-     * throws. Job names must be unique, and schedules are read as UTC. When passed, the map is the
-     * whole declared set: a job declared by an earlier run and absent here is
-     * deleted, so pass `{}` rather than omitting it for an app with no crons.
-     * Omit it only when you do not want this host to manage declared crons.
+     * throws. Job names must be unique, every schedule must have a next
+     * occurrence, and schedules are read as UTC. The map is the whole declared
+     * set: a job declared by an earlier run and absent here is deleted, and
+     * omitting the option deletes them all. Crons registered through
+     * `scheduler.cron()` are not declared and are left alone.
      */
     crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
 
@@ -362,9 +363,9 @@ export const createNodePlatform = <
 
         teardown.push(disposeScheduler);
 
-        if (options.crons !== undefined) {
-            declareCrons(deliverableCrons(options.crons, options.onDispatch !== undefined || options.onFetch !== undefined));
-        }
+        // The `crons` option owns every declared row: omitting it declares none, so a
+        // job an earlier run declared stops firing instead of re-arming from its row.
+        declareCrons(options.crons === undefined ? [] : deliverableCrons(options.crons, options.onDispatch !== undefined || options.onFetch !== undefined));
 
         // Queues, workflows, object storage and global tables are all composed here
         // rather than left for a caller to assemble: `NODE_CAPABILITIES` rates all
