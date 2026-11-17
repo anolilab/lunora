@@ -269,6 +269,7 @@ var buildBindingManifest = (config) => {
 
 // packages/cli/src/util/cloud-client.ts
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join as joinNative, relative } from "node:path";
 
 // node_modules/.pnpm/@visulima+fs@7.0.0_@visulima+yaml@2.0.0_ini@7.0.0_json5@2.2.3_jsonc-parser@3.3.1_smol-toml@1.9.0/node_modules/@visulima/fs/dist/index.js
 import { createRequire as h } from "node:module";
@@ -1600,27 +1601,28 @@ var assetFilesOf = (root) => {
   const realRoot = realpathSync(root);
   const visited = /* @__PURE__ */ new Set();
   const files = [];
-  const visit = (directory) => {
+  const visit = (directory, prefix) => {
     const realDirectory = realpathSync(directory);
     if (visited.has(realDirectory)) {
       return;
     }
     visited.add(realDirectory);
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const full = en(directory, entry.name);
+      const full = joinNative(directory, entry.name);
+      const path = `${prefix}${entry.name}`;
       const real = realpathSync(full);
-      const inside = nn(realRoot, real);
-      if (inside.startsWith("..") || v(inside)) {
-        throw new Error(`asset "/${nn(root, full)}" is a symlink that leads outside the assets directory`);
+      const inside = relative(realRoot, real);
+      if (inside.startsWith("..") || isAbsolute(inside)) {
+        throw new Error(`asset "/${path}" is a symlink that leads outside the assets directory`);
       }
       if (statSync(real).isDirectory()) {
-        visit(full);
+        visit(full, `${path}/`);
       } else {
-        files.push({ file: real, path: nn(root, full) });
+        files.push({ file: real, path });
       }
     }
   };
-  visit(root);
+  visit(root, "");
   return files;
 };
 var collectAssets = (directory, wranglerAssets) => {
