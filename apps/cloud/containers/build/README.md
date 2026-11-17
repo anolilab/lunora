@@ -253,6 +253,11 @@ arbitrary code execution by design. The container is the boundary.
   regular-file `<module>.map` (or a `sourceMappingURL` that resolves beside the
   module), never reads a file a sourcemap names, and reports only repo-relative
   paths, capped.
+- Every install and build runs as its own process group (`run.mjs`), and the
+  whole group is SIGKILLed on timeout and again once the command exits, so a
+  backgrounded process cannot linger into the next tenant's build on a reused
+  instance. A process that `setsid`s out of the group is not caught; that
+  needs per-build uid isolation or recycling the instance.
 - Start it with egress restricted to the package registry —
   `enableInternet: false` plus `allowedHosts` on the `defineContainer` side.
 

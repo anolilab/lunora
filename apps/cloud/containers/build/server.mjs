@@ -41,6 +41,7 @@ import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
 
 import { readRelease, releaseFailure } from "./release.mjs";
+import run from "./run.mjs";
 // Imported here, at start-up, never lazily: `/srv` is writable by the user
 // tenant builds run as, so a module first loaded after a build ran could be one
 // that build replaced.
@@ -105,69 +106,6 @@ const readBody = async (request, limit) => {
 
     return Buffer.concat(chunks);
 };
-
-/**
- * Run a command and hand each output line to `onLine` as it arrives.
- *
- * `shell: false` (the default, kept explicit) is the security-relevant part:
- * arguments never become a shell string, so a branch or commit value that
- * reaches an argument cannot inject a command. Resolves with the exit code —
- * a non-zero code is a result, not a throw, matching the exec contract.
- * @param {string} command Executable to run.
- * @param {string[]} args Arguments, passed unshelled.
- * @param {{ cwd?: string, env?: Record<string, string>, label?: string, timeoutMs?: number }} options Spawn options, the wall-clock kill, and how the phase is named if it fires.
- * @param {(line: string, stream: "stderr" | "stdout") => void} onLine Called once per output line.
- * @returns {Promise<number>} The process exit code.
- */
-const run = (command, args, options, onLine) =>
-    new Promise((resolve, reject) => {
-        const child = spawn(command, args, { ...options, shell: false, stdio: ["ignore", "pipe", "pipe"] });
-
-        // Line-buffered per stream: a chunk boundary lands mid-line often
-        // enough that unbuffered forwarding produces split log lines.
-        const pending = { stderr: "", stdout: "" };
-
-        const pump = (stream, name) => {
-            stream.setEncoding("utf8");
-            stream.on("data", (text) => {
-                pending[name] += text;
-
-                const lines = pending[name].split("\n");
-
-                pending[name] = lines.pop() ?? "";
-
-                for (const line of lines) {
-                    onLine(line.slice(0, MAX_LOG_LINE_CHARS), name);
-                }
-            });
-        };
-
-        pump(child.stdout, "stdout");
-        pump(child.stderr, "stderr");
-
-        const timer = setTimeout(() => {
-            child.kill("SIGKILL");
-            reject(new BuildError(`${options.label ?? "the command"} exceeded ${options.timeoutMs ?? BUILD_TIMEOUT_MS}ms and was killed`));
-        }, options.timeoutMs ?? BUILD_TIMEOUT_MS);
-
-        child.on("error", (error) => {
-            clearTimeout(timer);
-            reject(error);
-        });
-
-        child.on("close", (code) => {
-            clearTimeout(timer);
-
-            // Flush whatever the process wrote without a trailing newline.
-            for (const name of ["stdout", "stderr"]) {
-                if (pending[name] !== "") {
-                    onLine(pending[name].slice(0, MAX_LOG_LINE_CHARS), name);
-                }
-            }
-
-            resolve(code ?? 0);
-        });
-    });
 
 /**
  * Collect the built Worker module out of an out-dir: `lunora build`'s
