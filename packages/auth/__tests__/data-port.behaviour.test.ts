@@ -374,6 +374,53 @@ describe("auth data port", () => {
         expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "u1" }]);
     });
 
+    it("treats a renamed session table on the DO-backed auth object as a live credential", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+        const object = new LunoraAuthDO(
+            { storage: createDoStorage(database) },
+            () => {
+                return { secret: SECRET, session: { modelName: "sessions" } };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
+        const { dataPort } = createDoAuthWiring({
+            internalSecret: INTERNAL_SECRET,
+            namespace: {
+                get: () => {
+                    return { fetch: async (request: Request) => object.fetch(request) };
+                },
+                idFromName: (name) => name,
+            },
+        });
+
+        // The first read materialises the object's schema, `sessions` included.
+        await collect(dataPort!);
+        database
+            .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('u1', 'Ada', 'ada@example.test', 1, 1, 1)`)
+            .run();
+        database
+            .prepare(`INSERT INTO "sessions" ("id", "token", "userId", "expiresAt", "createdAt", "updatedAt") VALUES ('s1', 'live-token', 'u1', 9, 1, 1)`)
+            .run();
+
+        const exported = await collect(dataPort!);
+
+        expect(exported.map((row) => row.table)).toStrictEqual(["user"]);
+
+        const forged = { doc: { createdAt: 1, expiresAt: 9, id: "s2", token: "forged", updatedAt: 1, userId: "u1" }, table: "sessions" };
+
+        await expect(dataPort!.importRows([forged])).resolves.toMatchObject({ inserted: 0 });
+        await expect(dataPort!.replaceRows!([forged])).resolves.toMatchObject({ inserted: 0 });
+
+        const replaced = await dataPort!.replaceRows!([
+            { doc: { createdAt: 1, email: "ada@example.test", emailVerified: 1, id: "u1", name: "Ada", updatedAt: 1 }, table: "user" },
+        ]);
+
+        expect(replaced.errors).toStrictEqual([]);
+        expect(database.prepare(`SELECT "id" FROM "sessions"`).all()).toEqual([]);
+    });
+
     it("never writes or deletes the audit log in a replace, and refuses rows of unmovable tables", async () => {
         expect.hasAssertions();
 

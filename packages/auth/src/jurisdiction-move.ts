@@ -154,6 +154,12 @@ interface MoveOrder {
 }
 
 interface MoveContext {
+    /**
+     * The live-credential tables by their physical names, renamed models included
+     * (`authCredentialTableNames`). The export, import and replace ops leave them
+     * out; the move itself still copies them. Known once `prepare` has run.
+     */
+    credentialTables: () => string[];
     /** Called after a purge, so the object materialises its schema again on its next request. */
     onPurge: () => void;
     order: () => MoveOrder;
@@ -752,7 +758,8 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
             // An allow-list of this object's own tables, matched exactly as `sqlite_master`
             // spells them: SQLite resolves names case-insensitively, so a deny-list
             // (`!isReservedTable`) let `"SESSION"` or `"_LUNORA_MOVE"` through to the real table.
-            const importable = new Set(tableNames(storage).filter((name) => !isUnmovableAuthTable(name)));
+            const credentials = new Set(context.credentialTables());
+            const importable = new Set(tableNames(storage).filter((name) => !isUnmovableAuthTable(name) && !credentials.has(name)));
 
             return insertAuthRows(
                 { all: (query, parameters) => Promise.resolve(all(storage, query, ...parameters)) },
@@ -783,7 +790,10 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
         case "replace": {
             context.prepare();
 
-            const tables = sortTables(listMovableTables(storage), context.order()).map((table) => table.name);
+            const credentials = context.credentialTables();
+            const tables = sortTables(listMovableTables(storage), context.order())
+                .map((table) => table.name)
+                .filter((name) => !credentials.includes(name));
             const reader = { all: (query: string, parameters: ReadonlyArray<unknown>) => Promise.resolve(all(storage, query, ...parameters)) };
 
             return replaceAuthRows(
@@ -798,7 +808,7 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
                     }),
                 (body["rows"] ?? []) as { doc: Row; table: string }[],
                 tables,
-                [],
+                credentials,
                 body["dryRun"] === true,
             );
         }
@@ -811,7 +821,13 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
         case "tables": {
             context.prepare();
 
-            return { tables: sortTables(listMovableTables(storage), context.order()).map((table) => table.name) };
+            const credentials = context.credentialTables();
+
+            return {
+                tables: sortTables(listMovableTables(storage), context.order())
+                    .map((table) => table.name)
+                    .filter((name) => !credentials.includes(name)),
+            };
         }
         case "write": {
             return writePage(storage, assertKnownTable(storage, body["table"]), {
