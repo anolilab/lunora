@@ -121,6 +121,12 @@ export const create = mutation
             if (cell?.status !== "active") {
                 throw new LunoraError("UNPROCESSABLE", "that cell is not accepting new organizations");
             }
+
+            // A named cell must still honour the requested residency, or picking a cell by id
+            // would place an EU-only organization on a US cell.
+            if (arguments_.jurisdiction !== undefined && cell.jurisdiction !== arguments_.jurisdiction) {
+                throw new LunoraError("UNPROCESSABLE", `that cell is not in jurisdiction "${arguments_.jurisdiction}"`);
+            }
         }
 
         if (!cellId) {
