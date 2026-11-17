@@ -108,6 +108,7 @@ describe("the box session object in workerd", () => {
             status: "pending",
         })) as string;
 
+    // A real ECDSA key, an enrolment, the socket handshake and a job round trip: past the 5 s default on a CI runner.
     it("authenticates a box over a hibernatable socket, records it online, and runs a job end to end", async () => {
         const key = await boxKey();
         const boxId = await enrolledBox(key.publicKey);
@@ -141,7 +142,7 @@ describe("the box session object in workerd", () => {
         expect(lines).toStrictEqual(["celld diagnose: ok"]);
 
         socket.close(1000, "done");
-    });
+    }, 20_000);
 
     it("refuses a box that signs with the wrong key", async () => {
         const key = await boxKey();

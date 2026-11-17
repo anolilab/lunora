@@ -95,10 +95,8 @@ describe(createDeployPacer, () => {
 
         for (let index = 0; index < 1300; index += 1) {
             platform
-                .run(() => {
+                .run(async () => {
                     ran += 1;
-
-                    return Promise.resolve();
                 })
                 .catch(() => undefined);
         }
@@ -115,15 +113,13 @@ describe(createDeployPacer, () => {
         const platform = pacer.schedulerFor(WFP);
 
         // Exhaust the platform account's 1,200 tokens; one more cell converge then waits for good (the clock is frozen).
-        await Promise.all(Array.from({ length: 1200 }, () => platform.run(() => Promise.resolve())));
+        await Promise.all(Array.from({ length: 1200 }, () => platform.run(async () => {})));
 
         let waiting = true;
 
         platform
-            .run(() => {
+            .run(async () => {
                 waiting = false;
-
-                return Promise.resolve();
             })
             .catch(() => undefined);
 

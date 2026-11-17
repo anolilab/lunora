@@ -7,11 +7,7 @@ describe(ConvergeScheduler, () => {
     it("returns task results and passes values through when budget is ample", async () => {
         const scheduler = new ConvergeScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) });
 
-        const results = await Promise.all([
-            scheduler.run(() => Promise.resolve(1)),
-            scheduler.run(() => Promise.resolve(2)),
-            scheduler.run(() => Promise.resolve(3)),
-        ]);
+        const results = await Promise.all([scheduler.run(async () => 1), scheduler.run(async () => 2), scheduler.run(async () => 3)]);
 
         expect(results).toStrictEqual([1, 2, 3]);
     });
@@ -60,7 +56,7 @@ describe(ConvergeScheduler, () => {
         const metered = new ConvergeScheduler({ bucket, now: () => clock });
         const unmetered = new ConvergeScheduler({ maxConcurrent: 1 });
 
-        await expect(Promise.all([unmetered.run(() => Promise.resolve("a")), unmetered.run(() => Promise.resolve("b"))])).resolves.toStrictEqual(["a", "b"]);
+        await expect(Promise.all([unmetered.run(async () => "a"), unmetered.run(async () => "b")])).resolves.toStrictEqual(["a", "b"]);
         expect(unmetered.idle()).toBe(true);
 
         await metered.run(() => Promise.resolve());
