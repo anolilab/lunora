@@ -848,6 +848,143 @@ const requireMember = async (ctx, channelId) => {
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    const NESTED_SINK = "return ctx.storage.attachments.getSignedUrl(message.meta.key, { expiresIn: 60 });";
+
+    it.each([
+        ["Object.assign on a nested holder", "Object.assign(message.meta, { key: ctx.auth.userId });"],
+        ["a call handed a nested holder", "mutate(message.meta);"],
+        ["a write through an alias of a nested holder", "const m = message.meta;\n    m.key = ctx.auth.userId;"],
+        ["a method on a nested holder", "message.meta.reset();"],
+    ])("reports a helper guard handed the row that changes the nested key through %s", (_label, extra) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);", NESTED_SINK, rowHelper(extra)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a helper guard handed the nested holder that rewrites the key", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx, channelId, meta) => {
+    const userId = ctx.auth.userId;
+    const row = await ctx.db.query("members").withIndex("by_channel_user", (q) => q.eq("channelId", channelId).eq("userId", userId)).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+    Object.assign(meta, { key: userId });
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId, message.meta);", NESTED_SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    /** A helper guard handed the whole row and a caller value; `before` runs ahead of its membership read on `field`. */
+    const suppliedHelper = (before: string, field: string): string => `const requireMember = async (ctx, message, supplied) => {
+    ${before}
+    const row = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId: ${field} } });
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+    it.each([
+        ["Object.assign on the field's holder", "Object.assign(message.channel, { id: supplied });", "message.channel.id"],
+        ["a write through a const alias of the field's holder", "const meta = message.meta;\n    meta.channelId = supplied;", "message.meta.channelId"],
+    ])("reports a helper guard that replaces the field it checks through %s", (_label, before, field) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message, args.channelId);", SINK, suppliedHelper(before, field)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a destructured parameter", "(ctx, channelId, { meta })", "meta.key = channelId;"],
+        ["a rest parameter", "(ctx, channelId, ...rest)", "rest[0].meta.key = channelId;"],
+    ])("reports a helper guard that receives the row in %s", (_label, parameters, rewrite) => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async ${parameters} => {
+    const row = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId } });
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+    ${rewrite}
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId, message);", NESTED_SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts a row edited only after the sink has read its key", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId);",
+                "const url = await ctx.storage.attachments.getSignedUrl(message.attachmentKey, { expiresIn: 60 });\n    message.attachmentKey = args.key;\n    return url;",
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a later edit inside a loop that runs the sink again", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId);",
+                "for (const key of args.keys) {\n        await ctx.storage.attachments.getSignedUrl(message.attachmentKey, { expiresIn: 60 });\n        message.attachmentKey = key;\n    }",
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a string fallback", `"userId", ctx.auth.userId ?? "anon"`, ""],
+        ["an empty-string or", `"userId", userId || ""`, ""],
+        ["a module constant", `"userId", ctx.auth.userId ?? ANONYMOUS`, `const ANONYMOUS = "anon";\n`],
+    ])("accepts a helper whose identity read has %s", (_label, predicate, prelude) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, prelude + HELPER.replace(`"userId", userId`, predicate)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("accepts an inline guard whose identity has a fixed fallback", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId ?? "anon", channelId: message.channelId } });
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["serialises a nested holder", "console.log(JSON.stringify(message.meta));"],
+        ["destructures a field of a nested holder", "const { label } = message.meta;\n    void label;"],
+        ["reads the nested key", "void message.meta.key.length;"],
+    ])("accepts a helper guard handed the row that only %s", (_label, extra) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);", NESTED_SINK, rowHelper(extra)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it.each([
         ["a spread copy", "const copy = { ...message };\n    copy.meta.storageKey = args.key;"],
         ["a destructured holder", "const { meta } = message;\n    meta.storageKey = args.key;"],
