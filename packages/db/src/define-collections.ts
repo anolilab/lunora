@@ -1,4 +1,3 @@
-/* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
 import type { FunctionReference, LunoraClient, ReplayCredential, SubscriptionError } from "@lunora/client";
 import { isAuthReplayFailure } from "@lunora/client";
 import type { Collection, Transaction } from "@tanstack/db";
@@ -35,7 +34,7 @@ type IsAny<T> = 0 extends 1 & T ? true : false;
 type RowOfList<TList> = IsAny<TList> extends true ? Row : TList extends FunctionReference<infer _K, infer _A, infer R> ? Element<R> & Row : never;
 
 /** Maps a write through the durable outbox: optimistic insert + a retried mutation. */
-export interface InsertBinding<TRow extends Row, TInput> {
+interface InsertBinding<TRow extends Row, TInput> {
     /** The Lunora mutation that persists the row. */
     mutation: FunctionReference;
     /** Build the optimistic row to insert from the action input + the generated client id. */
@@ -46,7 +45,7 @@ export interface InsertBinding<TRow extends Row, TInput> {
 
 /** Declarative binding of a Lunora table to a live collection (+ optional write action). */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Def" reads well for a declarative collection definition; "Definition" is noise
-export interface CollectionDef<TList extends FunctionReference, TInput = never> {
+interface CollectionDef<TList extends FunctionReference, TInput = never> {
     /** Row key extractor — defaults to `row._id`. */
     getKey?: (row: RowOfList<TList>) => string;
     /** Optional write binding — present iff this collection is written through the outbox. */
@@ -255,7 +254,7 @@ const holdGate = (hold: CredentialHold, token: null | string, now: number): "exp
 };
 
 /** A queued write that was permanently dropped, passed to {@link DefineCollectionsOptions.onWriteRejected}. */
-export interface WriteRejectedEvent {
+interface WriteRejectedEvent {
     /**
      * The machine-readable reason — the server's error `code` (e.g. `CONFLICT`,
      * `FORBIDDEN`), or `UNKNOWN_MUTATION_FN` when the write referenced a collection
@@ -277,7 +276,7 @@ export interface WriteRejectedEvent {
 }
 
 /** Options for {@link defineCollections}. */
-export interface DefineCollectionsOptions {
+interface DefineCollectionsOptions {
     /**
      * Invoked when a leadership change occurs across tabs (only the leader tab
      * drains the durable outbox). Informational — useful for diagnostics; the
@@ -317,7 +316,7 @@ export interface DefineCollectionsOptions {
 
 /** The wired data layer `defineCollections` returns. */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Db" matches the package name `@lunora/db`
-export interface LunoraDb<D extends Record<string, AnyDef>> {
+interface LunoraDb<D extends Record<string, AnyDef>> {
     /** Optimistic, durable, retried write actions — present for `insert` collections. */
     actions: { [K in keyof D]: D[K] extends { insert: object } ? (input: InputOf<D[K]>) => { id: string; transaction: Transaction } : never };
     /** The live, synced collections — feed these to `useLiveQuery`. */
@@ -353,7 +352,7 @@ export interface LunoraDb<D extends Record<string, AnyDef>> {
  * built from the copy can silently read stale data (see the `@lunora/db` docs,
  * "One source of truth per table").
  */
-export const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D, options: DefineCollectionsOptions = {}): LunoraDb<D> => {
+const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D, options: DefineCollectionsOptions = {}): LunoraDb<D> => {
     assertSecureRandom("defineCollections");
 
     const collections: Record<string, Collection<Row, string>> = {};
@@ -683,3 +682,6 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Luno
 
     return { actions, collections, executor, pendingCount: () => executor.getPendingCount(), scope } as unknown as LunoraDb<D>;
 };
+
+export type { CollectionDef, DefineCollectionsOptions, InsertBinding, LunoraDb, WriteRejectedEvent };
+export { defineCollections };

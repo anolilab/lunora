@@ -1,4 +1,3 @@
-/* eslint-disable import/exports-last -- a helpers module: public constants/types are declared next to the code they support */
 import type { OutboxMutation, OutboxSink } from "@lunora/client";
 import { isAuthReplayFailure } from "@lunora/client";
 import type { Collection } from "@tanstack/db";
@@ -28,7 +27,7 @@ const OUTBOX_DRAIN_INTERVAL_MS = 1000;
  * exists but is missing these members, and on older runtimes it is absent
  * entirely.
  */
-export const assertSecureRandom = (entryPoint: string): void => {
+const assertSecureRandom = (entryPoint: string): void => {
     // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is the WEB Crypto global, and the whole point of the check is a runtime that lacks it; the rule is matching Node's unrelated experimental global of the same name.
     const webCrypto = globalThis.crypto as { getRandomValues?: unknown; randomUUID?: unknown } | undefined;
 
@@ -50,7 +49,7 @@ export const assertSecureRandom = (entryPoint: string): void => {
  * write, so a db app's direct mutations ride the same durable executor as its
  * collection inserts instead of the standalone {@link OutboxSink} fallback.
  */
-export const OUTBOX_MUTATION_FN_NAME = "__lunora_outbox__";
+const OUTBOX_MUTATION_FN_NAME = "__lunora_outbox__";
 
 /**
  * Provenance stamped on a durable write at enqueue time: the two questions a
@@ -61,7 +60,7 @@ export const OUTBOX_MUTATION_FN_NAME = "__lunora_outbox__";
  * `__lunora_outbox__` handler) check the same fields; they drifted apart once
  * already, and only one of them had the identity guard.
  */
-export interface WriteProvenance extends Record<string, unknown> {
+interface WriteProvenance extends Record<string, unknown> {
     /**
      * The CDC cursor the write was composed against, persisted so the replay can
      * hand it straight back to `client.mutation`.
@@ -85,7 +84,7 @@ export interface WriteProvenance extends Record<string, unknown> {
 }
 
 /** The metadata an outbox-routed transaction carries so its replay can call `client.mutation`. */
-export interface OutboxMutationMetadata extends WriteProvenance {
+interface OutboxMutationMetadata extends WriteProvenance {
     args: Record<string, unknown>;
     clientId: string;
     functionPath: string;
@@ -105,7 +104,7 @@ interface OutboxTransaction {
  * drives. Declared structurally so `@lunora/db`'s outbox glue doesn't widen its
  * coupling to the executor's full surface (and stays unit-testable with a fake).
  */
-export interface OutboxExecutor {
+interface OutboxExecutor {
     createOfflineTransaction: (options: {
         autoCommit?: boolean;
         idempotencyKey?: string;
@@ -140,7 +139,7 @@ const outboxCarriers = new WeakMap<OutboxExecutor, Collection<Row, string>>();
  * coexist in one process); the executor's registry key — what the serializer
  * persists — stays the stable reserved name.
  */
-export const createOutboxCarrier = (): Collection<Row, string> =>
+const createOutboxCarrier = (): Collection<Row, string> =>
     createCollection<Row, string>({
         getKey: (row) => row._id,
         id: `${OUTBOX_MUTATION_FN_NAME}:${safeRandomUUID()}`,
@@ -156,7 +155,7 @@ export const createOutboxCarrier = (): Collection<Row, string> =>
     });
 
 /** Associate an executor with its transport carrier (called by `defineCollections`). */
-export const registerOutboxCarrier = (executor: OutboxExecutor, carrier: Collection<Row, string>): void => {
+const registerOutboxCarrier = (executor: OutboxExecutor, carrier: Collection<Row, string>): void => {
     outboxCarriers.set(executor, carrier);
 };
 
@@ -188,7 +187,7 @@ const rememberOutboxRejection = (mutation: OutboxMutation): void => {
  * so the map holds only writes still awaiting a verdict. `undefined` for a write
  * that carried no optimistic update, or one whose verdict already landed.
  */
-export const takeOutboxRejection = (idempotencyKey: string): (() => void) | undefined => {
+const takeOutboxRejection = (idempotencyKey: string): (() => void) | undefined => {
     const onRejected = outboxRejections.get(idempotencyKey);
 
     outboxRejections.delete(idempotencyKey);
@@ -197,7 +196,7 @@ export const takeOutboxRejection = (idempotencyKey: string): (() => void) | unde
 };
 
 /** Tuning for {@link createExecutorOutboxSink}. */
-export interface ExecutorOutboxSinkOptions {
+interface ExecutorOutboxSinkOptions {
     /** Max persisted-but-unconfirmed writes before `enqueue` rejects with `OFFLINE_QUEUE_OVERFLOW` (default 1000, matching `OfflineQueue`). */
     maxItems?: number;
     /** `mutationFns` key the replay handler is registered under (default {@link OUTBOX_MUTATION_FN_NAME}). */
@@ -218,7 +217,7 @@ export interface ExecutorOutboxSinkOptions {
  * optimistic write back).
  * Second: the identity guard lives in the replay handler (`defineCollections`), which drops a write whose captured `identity` no longer matches — see {@link OutboxMutationMetadata}.
  */
-export const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOutboxSinkOptions = {}): OutboxSink => {
+const createExecutorOutboxSink = (executor: OutboxExecutor, options: ExecutorOutboxSinkOptions = {}): OutboxSink => {
     const maxItems = options.maxItems ?? 1000;
     const mutationFunctionName = options.mutationFnName ?? OUTBOX_MUTATION_FN_NAME;
 
@@ -305,17 +304,17 @@ export const createExecutorOutboxSink = (executor: OutboxExecutor, options: Exec
 };
 
 /** A row carrying the Lunora document id. */
-export type Row = Record<string, unknown> & { _id: string };
+type Row = Record<string, unknown> & { _id: string };
 
 /** The subset of a TanStack DB sync write channel that {@link makeDiffEmit} drives. */
-export interface SyncWriter<T extends object> {
+interface SyncWriter<T extends object> {
     begin: () => void;
     commit: () => void;
     write: (message: { type: "insert" | "update"; value: T } | { key: string; type: "delete" }) => void;
 }
 
 /** Index a row list into a keyed map. */
-export const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T) => string): Map<string, T> =>
+const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T) => string): Map<string, T> =>
     new Map(rows.map((row): [string, T] => [getKey(row), row]));
 
 /**
@@ -347,7 +346,7 @@ export const toMap = <T extends object>(rows: ReadonlyArray<T>, getKey: (row: T)
  * writes, and leave the restarted collection permanently empty. The map's job is
  * incremental-diff state for one live session, not a durable cache.
  */
-export const makeDiffEmit =
+const makeDiffEmit =
     <T extends object>(syncedJson: Map<string, string>, writer: SyncWriter<T>) =>
     (next: Map<string, T>): void => {
         writer.begin();
@@ -393,7 +392,7 @@ export const makeDiffEmit =
  * on it (CONFLICT vs FORBIDDEN vs …) exactly like the client's
  * `MutationSettledEvent`, rather than a message-only error.
  */
-export const toNonRetriable = (error: unknown): NonRetriableError => {
+const toNonRetriable = (error: unknown): NonRetriableError => {
     if (error instanceof NonRetriableError) {
         return error;
     }
@@ -425,7 +424,7 @@ export const toNonRetriable = (error: unknown): NonRetriableError => {
  * The caller decides what those mean: `defineCollections` holds the write for a
  * fresh credential, and a bound mutator (never retried) settles it.
  */
-export const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise<void> => {
+const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise<void> => {
     try {
         await mutate();
     } catch (error) {
@@ -461,7 +460,7 @@ export const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise
  * write without a word. Mirrored here so every write it drops is reported and
  * rolled back like any other rejection.
  */
-export const terminalVerdict = (error: unknown): NonRetriableError | undefined => {
+const terminalVerdict = (error: unknown): NonRetriableError | undefined => {
     if (error instanceof NonRetriableError) {
         return error;
     }
@@ -487,7 +486,7 @@ export const terminalVerdict = (error: unknown): NonRetriableError | undefined =
  * attempts, not a UI signal. A consumer that wants to show real connectivity
  * should read `navigator.onLine` itself, separately from this detector.
  */
-export const createOptimisticOnlineDetector = (): OnlineDetector => {
+const createOptimisticOnlineDetector = (): OnlineDetector => {
     const intervals = new Set<ReturnType<typeof setInterval>>();
 
     return {
@@ -513,4 +512,20 @@ export const createOptimisticOnlineDetector = (): OnlineDetector => {
             };
         },
     };
+};
+
+export type { ExecutorOutboxSinkOptions, OutboxExecutor, OutboxMutationMetadata, Row, SyncWriter, WriteProvenance };
+export {
+    assertSecureRandom,
+    createExecutorOutboxSink,
+    createOptimisticOnlineDetector,
+    createOutboxCarrier,
+    makeDiffEmit,
+    OUTBOX_MUTATION_FN_NAME,
+    registerOutboxCarrier,
+    runOutboxMutation,
+    takeOutboxRejection,
+    terminalVerdict,
+    toMap,
+    toNonRetriable,
 };
