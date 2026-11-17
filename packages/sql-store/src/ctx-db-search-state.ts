@@ -14,8 +14,6 @@
  * row per search companion, keyed by the companion's table name.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search-state" mirrors its parent "ctx-db.ts", the established module name in this package. */
-
 import type { BackfillState } from "@lunora/search-core";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { searchCoverageSurvives } from "@lunora/search-core";

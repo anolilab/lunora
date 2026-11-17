@@ -14,8 +14,6 @@
  * the store core, so there is no cycle back to `ctx-db.ts`.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-search" mirrors its parent "ctx-db.ts", the established module name in this package. */
-
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { planBackfillPass, searchTextUnchanged } from "@lunora/search-core";
