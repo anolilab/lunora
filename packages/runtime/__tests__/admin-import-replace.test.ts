@@ -100,11 +100,15 @@ interface ShardEntry {
 /**
  * The cluster, with a hook to make a shard unreachable for one RPC: `refuse`
  * answers `true` for a `(shardKey, functionPath, args)` that must fail as if the
- * shard never answered.
+ * shard never answered. `before` runs ahead of an RPC and holds it until it
+ * settles, to interleave two requests at a chosen point.
  */
 const buildCluster = () => {
     const shards = new Map<string, ShardEntry>();
-    const hooks: { refuse?: (shardKey: string, functionPath: string, args: Record<string, unknown>) => boolean } = {};
+    const hooks: {
+        before?: (shardKey: string, functionPath: string, args: Record<string, unknown>) => Promise<void>;
+        refuse?: (shardKey: string, functionPath: string, args: Record<string, unknown>) => boolean;
+    } = {};
 
     // `__root__` is the default shard: it holds no `messages`, only the audit log.
     for (const key of [...SHARD_KEYS, "__root__"]) {
@@ -131,6 +135,8 @@ const buildCluster = () => {
                     if (hooks.refuse?.(name, body.functionPath, body.args)) {
                         throw new Error("shard unreachable");
                     }
+
+                    await hooks.before?.(name, body.functionPath, body.args);
 
                     return shard.fetch(request);
                 },
@@ -589,6 +595,46 @@ describe("admin import — staged replace", () => {
     });
 });
 
+describe("admin import — concurrent commits of one session", () => {
+    afterEach(closeCluster);
+
+    it("refuses a second commit while the first runs a step, so it never prunes keys from records the first dropped", async () => {
+        expect.assertions(3);
+
+        await seed();
+
+        const stores = createStores();
+        const cache = stores.kv.get("CACHE")!;
+        const worker = workerWith({ ...stores.options });
+        const base64 = (value: string): string => Buffer.from(value).toString("base64");
+
+        cache.set("created-since", { value: new TextEncoder().encode("new") });
+        await postImport(worker, "?mode=replace&tables=messages&stage=raced", [
+            { doc: { format: 2, sections: ["kv"] }, table: "$lunora" },
+            message("m1", "c1", "as snapshotted"),
+            { doc: { key: "kept", namespace: "CACHE", value: base64("as snapshotted") }, table: "$kv" },
+        ]);
+
+        // The first commit is held just before it pages the KV records; the second runs to its end meanwhile.
+        let second: Response | undefined;
+
+        cluster.hooks.before = async (_key, functionPath) => {
+            if (second === undefined && functionPath.endsWith(":importStagedRows")) {
+                cluster.hooks.before = undefined;
+                second = await postSession(worker, "commit", "raced");
+            }
+        };
+
+        const first = await postSession(worker, "commit", "raced");
+
+        expect([first.status, second?.status]).toStrictEqual([200, 409]);
+        await expect(second?.json()).resolves.toMatchObject({
+            error: { message: expect.stringMatching(/another commit of import session "raced" is running its kv step/u) },
+        });
+        expect(Object.fromEntries([...cache].map(([key, entry]) => [key, Buffer.from(entry.value).toString()]))).toStrictEqual({ kept: "as snapshotted" });
+    });
+});
+
 const IMPORT_BATCH_BYTES = 900_000;
 
 const randomBytes = (size: number): Uint8Array<ArrayBuffer> => {
@@ -730,7 +776,7 @@ describe("admin import — staged replace of chunked sections", () => {
         let refused = false;
 
         cluster.hooks.refuse = (_key, functionPath, args) => {
-            if (!refused && functionPath.endsWith(":importManifest") && args["op"] === "advance" && args["step"] === "storage") {
+            if (!refused && functionPath.endsWith(":importManifest") && args["op"] === "advance" && args["step"] === "storage" && "stepResult" in args) {
                 refused = true;
 
                 return true;

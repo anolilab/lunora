@@ -37,6 +37,12 @@ const IMPORT_STAGE_TTL_MS: number = 24 * 60 * 60 * 1000;
 /** How long an open session lives after its last batch (any shard). */
 const IMPORT_MANIFEST_TTL_MS: number = 60 * 60 * 1000;
 
+/**
+ * How long a commit step's claim holds. A commit that fails releases its claim;
+ * one that dies cannot, so a retry takes the step over once this lapses.
+ */
+const IMPORT_STEP_CLAIM_MS: number = 10 * 60 * 1000;
+
 /** One staged row, with the source line it came from (for error attribution at commit). */
 interface StagedImportRow {
     doc: Record<string, unknown>;
@@ -57,6 +63,13 @@ type ManifestState = "aborting" | "committed" | "committing" | "open";
 interface ImportManifest {
     /** Staging requests begun so far — a commit is refused when one began after its prepare. */
     batches: number;
+
+    /**
+     * Commit steps a commit request is running, by the claimant it minted. Two
+     * concurrent commits of one session must never run a step twice: the one that
+     * lags would read records the other's `committed` already dropped.
+     */
+    claims?: Record<string, { by: string; until: number }>;
     expiresAt: number;
     /** Minted with the manifest; every shard, D1 row and storage chunk of the session carries it. */
     generation: string;
@@ -477,13 +490,51 @@ const touchImportManifest = (sql: SqlExec, session: string, touch: ManifestTouch
 /** A manifest transition, each a compare-and-set against the state it expects. */
 type ManifestChange =
     | { batches: number; state: "committing" }
+    | { claim: string; step: string }
+    | { claimant: string; step: string; stepResult: ImportStepResult }
+    | { release: string; step: string }
     | { state: "aborting" }
-    | { state: "committed" }
-    | { step: string; stepResult: ImportStepResult };
+    | { state: "committed" };
+
+/** Why a commit step cannot be claimed (or recorded) by `claimant`, or `undefined` when it can. */
+const stepRefusal = (manifest: ImportManifest, step: string, claimant: string, now: number, recording: boolean): LunoraError | undefined => {
+    if (manifest.steps[step] !== undefined) {
+        return conflictError("IMPORT_STEP_DONE", `import session "${manifest.session}" already ran its ${step} step — send the commit again for its totals`);
+    }
+
+    const claim = manifest.claims?.[step];
+    const mine = claim?.by === claimant;
+
+    if (recording ? !mine : claim !== undefined && !mine && claim.until >= now) {
+        return conflictError(
+            "IMPORT_STEP_CLAIMED",
+            `another commit of import session "${manifest.session}" is running its ${step} step — send the commit again later`,
+        );
+    }
+
+    return undefined;
+};
+
+/** Why `manifest` cannot take a step's claim, release or record, or `undefined` when it can. */
+const stepChangeRefusal = (manifest: ImportManifest, change: Extract<ManifestChange, { step: string }>, now: number): LunoraError | undefined => {
+    if (manifest.state !== "committing") {
+        return conflictError("IMPORT_SESSION_NOT_COMMITTING", `import session "${manifest.session}" is ${manifest.state}`);
+    }
+
+    if ("release" in change) {
+        return undefined;
+    }
+
+    return "claim" in change ? stepRefusal(manifest, change.step, change.claim, now, false) : stepRefusal(manifest, change.step, change.claimant, now, true);
+};
 
 /** Why `manifest` cannot take `change`, or `undefined` when it can. */
-const transitionRefusal = (manifest: ImportManifest, change: ManifestChange): LunoraError | undefined => {
-    if ("step" in change || change.state === "committed") {
+const transitionRefusal = (manifest: ImportManifest, change: ManifestChange, now: number): LunoraError | undefined => {
+    if ("step" in change) {
+        return stepChangeRefusal(manifest, change, now);
+    }
+
+    if (change.state === "committed") {
         return manifest.state === "committing"
             ? undefined
             : conflictError("IMPORT_SESSION_NOT_COMMITTING", `import session "${manifest.session}" is ${manifest.state}`);
@@ -515,10 +566,29 @@ const transitionRefusal = (manifest: ImportManifest, change: ManifestChange): Lu
         : conflictError("IMPORT_SESSION_CHANGED", `import session "${manifest.session}" took another batch after the commit's prepare — commit again`);
 };
 
+/** The manifest fields `change` rewrites, once {@link transitionRefusal} has let it through. */
+const applied = (manifest: ImportManifest, change: ManifestChange, now: number): Partial<ImportManifest> => {
+    if (!("step" in change)) {
+        return { state: change.state };
+    }
+
+    const { [change.step]: held, ...others } = manifest.claims ?? {};
+
+    if ("claim" in change) {
+        return { claims: { ...others, [change.step]: { by: change.claim, until: now + IMPORT_STEP_CLAIM_MS } } };
+    }
+
+    if ("release" in change) {
+        return { claims: held === undefined || held.by === change.release ? others : { ...others, [change.step]: held } };
+    }
+
+    return { claims: others, steps: { ...manifest.steps, [change.step]: change.stepResult } };
+};
+
 /**
  * Move `session`'s manifest on: `committing` before the first write (only from
- * a clean `open` with no batch since the prepare), a finished `step`,
- * `committed`, or `aborting`. Every transition is a compare-and-set on the
+ * a clean `open` with no batch since the prepare), a step claimed, released or
+ * finished by the commit that claimed it, `committed`, or `aborting`. Every transition is a compare-and-set on the
  * state it expects, so a commit and an abort cannot both proceed.
  */
 const advanceImportManifest = (sql: SqlExec, session: string, change: ManifestChange, now: number): ImportManifest => {
@@ -528,16 +598,13 @@ const advanceImportManifest = (sql: SqlExec, session: string, change: ManifestCh
         throw new LunoraError("IMPORT_SESSION_NOT_FOUND", `import session "${session}" does not exist or has expired`, { status: 404 });
     }
 
-    const refusal = transitionRefusal(manifest, change);
+    const refusal = transitionRefusal(manifest, change, now);
 
     if (refusal !== undefined) {
         throw refusal;
     }
 
-    const next: ImportManifest =
-        "step" in change
-            ? { ...manifest, expiresAt: now + IMPORT_MANIFEST_TTL_MS, steps: { ...manifest.steps, [change.step]: change.stepResult } }
-            : { ...manifest, expiresAt: now + IMPORT_MANIFEST_TTL_MS, state: change.state };
+    const next: ImportManifest = { ...manifest, ...applied(manifest, change, now), expiresAt: now + IMPORT_MANIFEST_TTL_MS };
 
     writeImportManifest(sql, next);
     // The section records ride this shard's own session record, so it lives as long as the manifest.
@@ -575,6 +642,7 @@ export {
     dropImportSession,
     IMPORT_MANIFEST_TTL_MS,
     IMPORT_STAGE_TTL_MS,
+    IMPORT_STEP_CLAIM_MS,
     markShardImportCommitted,
     readImportManifest,
     readShardImportSession,

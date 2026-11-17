@@ -7,6 +7,7 @@ import {
     dropImportSession,
     IMPORT_MANIFEST_TTL_MS,
     IMPORT_STAGE_TTL_MS,
+    IMPORT_STEP_CLAIM_MS,
     markShardImportCommitted,
     readImportManifest,
     readShardImportSession,
@@ -189,6 +190,43 @@ describe("import staging", () => {
         dropImportManifest(harness.sql, "raced", NOW);
 
         expect(readImportManifest(harness.sql, "raced", NOW)).toBeUndefined();
+    });
+
+    it("lets one commit at a time run a step, records it only for its claimant, and never runs it again", () => {
+        expect.assertions(9);
+
+        const opened = openSession("claimed");
+        const result = { deleted: {}, inserted: { $kv: 1 } };
+
+        expect(() => advanceImportManifest(harness.sql, "claimed", { claim: "a", step: "kv" }, NOW)).toThrow(/is open/u);
+
+        advanceImportManifest(harness.sql, "claimed", { batches: opened.batches, state: "committing" }, NOW);
+        advanceImportManifest(harness.sql, "claimed", { claim: "a", step: "kv" }, NOW);
+
+        expect(() => advanceImportManifest(harness.sql, "claimed", { claim: "b", step: "kv" }, NOW)).toThrow(/another commit/u);
+        expect(() => advanceImportManifest(harness.sql, "claimed", { claimant: "b", step: "kv", stepResult: result }, NOW)).toThrow(/another commit/u);
+
+        // Someone else's release leaves the claim; the holder's own frees it.
+        advanceImportManifest(harness.sql, "claimed", { release: "b", step: "kv" }, NOW);
+
+        expect(() => advanceImportManifest(harness.sql, "claimed", { claim: "b", step: "kv" }, NOW)).toThrow(/another commit/u);
+
+        advanceImportManifest(harness.sql, "claimed", { release: "a", step: "kv" }, NOW);
+        advanceImportManifest(harness.sql, "claimed", { claim: "b", step: "kv" }, NOW);
+
+        const recorded = advanceImportManifest(harness.sql, "claimed", { claimant: "b", step: "kv", stepResult: result }, NOW);
+
+        expect(recorded.steps["kv"]).toStrictEqual(result);
+        expect(recorded.claims).toStrictEqual({});
+        expect(() => advanceImportManifest(harness.sql, "claimed", { claim: "a", step: "kv" }, NOW)).toThrow(/already ran/u);
+
+        // A claim whose commit died lapses, and only then can another commit take the step over.
+        advanceImportManifest(harness.sql, "claimed", { claim: "a", step: "storage" }, NOW);
+
+        expect(() => advanceImportManifest(harness.sql, "claimed", { claim: "b", step: "storage" }, NOW + IMPORT_STEP_CLAIM_MS)).toThrow(/another commit/u);
+        expect(advanceImportManifest(harness.sql, "claimed", { claim: "b", step: "storage" }, NOW + IMPORT_STEP_CLAIM_MS + 1).claims?.["storage"]?.by).toBe(
+            "b",
+        );
     });
 
     it("refuses a session id that could escape a storage prefix", () => {

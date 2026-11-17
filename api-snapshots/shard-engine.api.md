@@ -1298,6 +1298,10 @@ interface ImportError {
 ```ts
 interface ImportManifest {
     batches: number;
+    claims?: Record<string, {
+        by: string;
+        until: number;
+    }>;
     expiresAt: number;
     generation: string;
     globals: boolean;
@@ -1512,12 +1516,19 @@ type ManifestChange = {
     batches: number;
     state: "committing";
 } | {
+    claim: string;
+    step: string;
+} | {
+    claimant: string;
+    step: string;
+    stepResult: ImportStepResult;
+} | {
+    release: string;
+    step: string;
+} | {
     state: "aborting";
 } | {
     state: "committed";
-} | {
-    step: string;
-    stepResult: ImportStepResult;
 };
 ```
 

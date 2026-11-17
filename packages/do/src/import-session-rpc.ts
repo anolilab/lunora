@@ -235,7 +235,21 @@ const commit = async (shard: ImportSessionShard, args: Record<string, unknown>, 
 /** A manifest transition off the wire; anything else is refused rather than guessed. */
 const parseChange = (args: Record<string, unknown>): ManifestChange => {
     if (typeof args["step"] === "string") {
-        return { step: args["step"], stepResult: args["stepResult"] as ImportStepResult };
+        const { step } = args;
+
+        if (typeof args["claim"] === "string") {
+            return { claim: args["claim"], step };
+        }
+
+        if (typeof args["release"] === "string") {
+            return { release: args["release"], step };
+        }
+
+        if (typeof args["claimant"] === "string") {
+            return { claimant: args["claimant"], step, stepResult: args["stepResult"] as ImportStepResult };
+        }
+
+        throw new LunoraError("BAD_REQUEST", "a commit step's transition needs the `claim`, `release` or `claimant` of the commit running it", { status: 400 });
     }
 
     switch (args["state"]) {
@@ -329,6 +343,12 @@ const handleImportSessionRpc = async (shard: ImportSessionShard, functionPath: s
         }
         case ADMIN_FUNCTIONS.importStagedRows: {
             const session = assertImportSessionId(args["session"]);
+            const state = readImportManifest(shard.sql, session, now)?.state;
+
+            // `committed` drops these records: a lagging commit paging them then would read none and prune what it never wrote.
+            if (state !== "committing") {
+                throw new LunoraError("IMPORT_SESSION_NOT_COMMITTING", `import session "${session}" is ${state ?? "gone"}, not committing`, { status: 409 });
+            }
 
             return stagedImportPage(shard.sql, session, {
                 afterSeq: typeof args["afterSeq"] === "number" ? args["afterSeq"] : 0,

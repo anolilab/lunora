@@ -118,6 +118,8 @@ const SESSION_STATUS: Readonly<Record<string, number>> = {
     IMPORT_SESSION_NOT_FOUND: 404,
     IMPORT_SESSION_REJECTED: 409,
     IMPORT_SESSION_STALE: 409,
+    IMPORT_STEP_CLAIMED: 409,
+    IMPORT_STEP_DONE: 409,
 };
 
 const SESSION_PATTERN = /^[\w-]{1,64}$/u;
@@ -467,10 +469,17 @@ const assertCommittable = (options: WorkerOptions, manifest: ImportManifest, glo
     }
 };
 
-/** Run one step unless the manifest says it already ran, and record it. */
+/**
+ * Run one step unless the manifest says it already ran, and record it. The step
+ * is claimed on the root shard first: `manifest` is this request's own earlier
+ * read, so a concurrent commit of the same session may be running the step right
+ * now — the claim refuses this one (409) instead of running it twice. A step
+ * that throws gives its claim back, so the retry need not wait out the lease.
+ */
 const runStep = async (
     context: ImportSessionContext,
     manifest: ImportManifest,
+    claimant: string,
     step: string,
     run: () => Promise<ImportStepResult>,
 ): Promise<ImportManifest> => {
@@ -478,9 +487,17 @@ const runStep = async (
         return manifest;
     }
 
-    const stepResult = await run();
+    const { session } = manifest;
 
-    return advance(context, manifest.session, { step, stepResult });
+    await advance(context, session, { claim: claimant, step });
+
+    try {
+        return await advance(context, session, { claimant, step, stepResult: await run() });
+    } catch (error: unknown) {
+        await advance(context, session, { release: claimant, step }).catch(() => undefined);
+
+        throw error;
+    }
 };
 
 /** Raised inside a step to end the commit as `partial`, carrying what went wrong. */
@@ -535,10 +552,11 @@ const runCommitSteps = async (
 ): Promise<ImportManifest> => {
     const { options } = context;
     const { session } = start;
+    const claimant = crypto.randomUUID();
     let manifest = start;
 
     if (scope.targets.length > 0) {
-        manifest = await runStep(context, manifest, "shards", async () => {
+        manifest = await runStep(context, manifest, claimant, "shards", async () => {
             const result = await commitShards(context, start, scope.targets, scope.shardScope, false);
 
             if (result.errors.length > 0 || result.failed.length > 0) {
@@ -552,7 +570,7 @@ const runCommitSteps = async (
     const staging = options.importGlobalsStaging;
 
     if (scope.globalScope.length > 0 && staging) {
-        manifest = await runStep(context, manifest, "globals", async () => {
+        manifest = await runStep(context, manifest, claimant, "globals", async () => {
             const result = await staging
                 .commit({ generation: start.generation, session, staged: start.globals, tables: scope.globalScope })
                 .catch(rethrowCoded);
@@ -567,7 +585,7 @@ const runCommitSteps = async (
 
     for (const section of REPLACE_SECTIONS.filter((name) => start.sections.includes(name))) {
         // eslint-disable-next-line no-await-in-loop -- steps run in order: auth, then KV, then storage
-        manifest = await runStep(context, manifest, section, async () => {
+        manifest = await runStep(context, manifest, claimant, section, async () => {
             const result = await commitSection(options, refOf(start), section, stagedRecords(context, session, section)).catch((error: unknown) => {
                 throw sectionFailure(section, error);
             });
