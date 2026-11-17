@@ -68,7 +68,8 @@ export const handleTelemetryRoute = async (request: Request, environment: Router
         const result = await context.runMutation<{ alerts: AlertDelivery[]; incidents: number; issues: number }>(api.telemetry.ingest, {
             deployKey: body.deployKey,
             deploymentId: body.deploymentId,
-            events,
+            // `telemetry.ingest` refuses more than 500 events outright; trim like the observations.
+            events: events.slice(0, 500),
             observations,
             organizationId: body.organizationId,
         });

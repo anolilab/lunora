@@ -137,6 +137,8 @@ const otlpAuthorize = async (request: Request, context: LunoraActionContext): Pr
 
 /** Per-request caps; excess is dropped and reported via OTLP `partialSuccess`. */
 const MAX_OTLP_OBSERVATIONS = 1000;
+/** `telemetry.ingest` refuses a call carrying more error events than this, losing the whole batch. */
+const MAX_OTLP_ERROR_EVENTS = 500;
 const MAX_OTLP_LOG_RECORDS = 500;
 const MAX_OTLP_METRIC_POINTS = 500;
 
@@ -210,10 +212,12 @@ export const handleOtlpTracesRoute = (request: Request, environment: RouterEnv):
         const body = payload as OtlpTracePayload;
         const decoded = decodeObservations(body);
         const observations = decoded.slice(0, MAX_OTLP_OBSERVATIONS);
+        const events = decodeTelemetryEvents(body);
+        const keptEvents = events.slice(0, MAX_OTLP_ERROR_EVENTS);
 
         await context.runMutation(api.telemetry.ingest, {
             deployKey: auth.key,
-            events: decodeTelemetryEvents(body),
+            events: keptEvents,
             observations,
             organizationId: auth.organizationId,
         });
@@ -223,7 +227,9 @@ export const handleOtlpTracesRoute = (request: Request, environment: RouterEnv):
             .archiveSpans(observations, auth.organizationId)
             .catch(() => undefined);
 
-        return decoded.length - observations.length;
+        // An error span past the event cap still lands as an observation, so it is
+        // rejected only in part; the larger of the two shortfalls is what the caller lost.
+        return Math.max(decoded.length - observations.length, events.length - keptEvents.length);
     });
 
 /**

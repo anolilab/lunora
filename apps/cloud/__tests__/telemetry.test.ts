@@ -615,7 +615,7 @@ describe(handleTelemetryRoute, () => {
         });
     };
 
-    const environment = (runMutation = vi.fn<() => Promise<unknown>>()): RouterEnv =>
+    const environment = (runMutation: unknown = vi.fn<() => Promise<unknown>>()): RouterEnv =>
         ({
             __lunoraCtx: { runAction: vi.fn<() => Promise<unknown>>(), runMutation, runQuery: vi.fn<() => Promise<unknown>>() },
         }) as unknown as RouterEnv;
@@ -639,5 +639,23 @@ describe(handleTelemetryRoute, () => {
 
         // Parsed, then refused for the missing credentials, not for its size.
         expect(response.status).toBe(400);
+    });
+
+    it("hands the ingest at most its 500-event cap, so a large error batch is not refused whole", async () => {
+        const runMutation = vi.fn<(reference: unknown, args: { events: unknown[] }) => Promise<unknown>>(() =>
+            Promise.resolve({ alerts: [], incidents: 0, issues: 0 }),
+        );
+        const spans = Array.from({ length: 501 }, (_unused, index) => {
+            return { endTimeUnixNano: "1700000000100000000", name: "f", spanId: `s${String(index)}`, status: { code: 2 }, traceId: `t${String(index)}` };
+        });
+        const request = new Request("https://control.lunora.app/v1/telemetry", {
+            body: JSON.stringify({ deployKey: "k", organizationId: "org_1", resourceSpans: [{ scopeSpans: [{ scope: { name: "@lunora/runtime" }, spans }] }] }),
+            method: "POST",
+        });
+
+        const response = await handleTelemetryRoute(request, environment(runMutation));
+
+        expect(response.status).toBe(200);
+        expect(runMutation.mock.calls[0]?.[1].events).toHaveLength(500);
     });
 });

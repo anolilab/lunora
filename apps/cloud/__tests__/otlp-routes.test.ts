@@ -73,6 +73,40 @@ describe("oTLP ingest routes", () => {
         expect(body.partialSuccess.rejectedSpans).toBe(100);
     });
 
+    it("trims error events to the ingest cap instead of losing the batch", async () => {
+        const ingested: number[] = [];
+        // Mirrors `telemetry.ingest`, which refuses a call over 500 events.
+        const capped = {
+            ...context,
+            runMutation: async (_reference: unknown, args: { events: unknown[] }): Promise<unknown> => {
+                if (args.events.length > 500) {
+                    throw new Error("batch too large (max 500 events)");
+                }
+
+                ingested.push(args.events.length);
+
+                return { alerts: [], incidents: 0, issues: 0 };
+            },
+        };
+        const spans = Array.from({ length: 501 }, (_unused, index) => {
+            return { ...okSpan(index), status: { code: 2, message: "boom" } };
+        });
+        const response = await createDeployRouter().fetch(
+            new Request("https://cloud.test/v1/traces", {
+                body: JSON.stringify({ resourceSpans: [{ scopeSpans: [{ scope: { name: "@lunora/runtime" }, spans }] }] }),
+                headers: { authorization: "Bearer valid", "content-type": "application/json" },
+                method: "POST",
+            }),
+            { __lunoraCtx: capped },
+        );
+
+        const body = await readJson<{ partialSuccess: { rejectedSpans: number } }>(response);
+
+        expect(response.status).toBe(200);
+        expect(ingested).toStrictEqual([500]);
+        expect(body.partialSuccess.rejectedSpans).toBe(1);
+    });
+
     it("accepts an OTLP/protobuf body (no longer 415s it)", async () => {
         const response = await post("/v1/traces", new Uint8Array(), { authorization: "Bearer valid", "content-type": "application/x-protobuf" });
 
