@@ -178,6 +178,47 @@ describe("createNodeSchedulerHost", () => {
             }
         });
 
+        it("does not start a second run when a retained cron is re-declared mid-run", async () => {
+            expect.assertions(4);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            const releases: (() => void)[] = [];
+            const onDispatch = vi.fn<(functionPath: string) => Promise<void>>(
+                async () =>
+                    new Promise<void>((resolve) => {
+                        releases.push(resolve);
+                    }),
+            );
+            const host = createNodeSchedulerHost(database, { onDispatch });
+            const declared = [{ args: {}, expression: "* * * * *", functionPath: "reports:slow", name: "slow" }];
+
+            try {
+                host.declareCrons(declared);
+                // 12:01 tick starts and stays pending; the refresh lands mid-run.
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+                host.declareCrons(declared);
+                await vi.advanceTimersByTimeAsync(2 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+
+                releases[0]?.();
+                await vi.advanceTimersByTimeAsync(0);
+
+                // The settled run re-armed exactly one timer for the next minute.
+                expect(vi.getTimerCount()).toBe(1);
+
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(2);
+                expect(vi.getTimerCount()).toBe(0);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
         it("refuses a cron() schedule that parses but never occurs", async () => {
             expect.assertions(1);
 

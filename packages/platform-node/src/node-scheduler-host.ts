@@ -412,6 +412,14 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     /** Armed cron tick timers, keyed by cron key. */
     const cronTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+    /**
+     * Cron keys whose tick is awaiting `onDispatch`. Kept apart from `cronTimers`,
+     * which drops a key the moment its timer fires: without this, a `declareCrons`
+     * or `cron()` during a slow run would arm a fresh timer that starts a second run
+     * alongside the first.
+     */
+    const runningCrons = new Set<string>();
+
     const toStatus = (row: JobRow): ScheduledJobStatus => {
         return {
             attempts: row.attempts,
@@ -645,6 +653,12 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * schedule that should fire once a month.
      */
     const armCron = (row: CronRow): void => {
+        // A running tick re-reads its row and re-arms when it settles, so it picks up
+        // this definition (or its removal) then; arming now would overlap the run.
+        if (runningCrons.has(row.key)) {
+            return;
+        }
+
         const existing = cronTimers.get(row.key);
 
         if (existing !== undefined) {
@@ -678,6 +692,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
         const timer = setTimeout(() => {
             cronTimers.delete(row.key);
+            runningCrons.add(row.key);
 
             (async (): Promise<void> => {
                 try {
@@ -689,6 +704,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                     });
                 } catch {
                     // See the docstring: a dropped tick must not stop the schedule.
+                } finally {
+                    runningCrons.delete(row.key);
                 }
 
                 // `closed` checked alongside `isOpen()`: a tick that lands
