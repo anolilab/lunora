@@ -9,8 +9,6 @@
  * it. `ctx-db.ts` re-exports these so existing import sites are unchanged.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-idempotency" mirrors its parent "ctx-db.ts" (the established public module name). */
-
 import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";

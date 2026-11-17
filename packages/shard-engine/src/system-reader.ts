@@ -31,8 +31,6 @@
  */
 import { LunoraError } from "@lunora/errors";
 
-/* eslint-disable unicorn/prevent-abbreviations -- `Doc`/`SystemDoc`/`ScheduledFunctionDoc` are the deliberate public API names for `ctx.db.system` (they mirror Convex's `Doc` naming and the spec the consuming `@lunora/server` types re-export); `doc`/`docs` is the domain term for a stored document throughout the DO ORM (see ctx-db.ts). Renaming would break the documented surface. */
-
 /** The system tables `ctx.db.system` can read. */
 type SystemTableName = "_scheduled_functions" | "_storage";
 
@@ -339,8 +337,6 @@ const createSystemReader = (options: SystemReaderOptions = {}): SystemDatabaseRe
         query: queryReader,
     };
 };
-
-/* eslint-enable unicorn/prevent-abbreviations */
 
 export type {
     ScheduledFunctionDoc,

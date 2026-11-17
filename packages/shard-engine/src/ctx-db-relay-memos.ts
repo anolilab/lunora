@@ -33,8 +33,6 @@
  * `ctx-db-relay-shapes.ts` is.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-relay-memos" mirrors its siblings "ctx-db-relay-shapes" / "ctx-db-shape-poke-cursor" (the established module naming). */
-
 import { sql as dsql } from "drizzle-orm";
 
 import type { SqlExec } from "./ctx-db";

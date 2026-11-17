@@ -26,8 +26,6 @@
  * to make honest, and it touches the store only through `SqlExec`.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-schedule-outbox" mirrors its parent "ctx-db.ts" (the established public module name). */
-
 import { LunoraError } from "@lunora/errors";
 import { isPlainObject } from "@lunora/wire";
 import { sql as dsql } from "drizzle-orm";

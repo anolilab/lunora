@@ -14,8 +14,6 @@
  * existing import sites (shard-do, the index barrel, tests) are unchanged.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-migrations" mirrors its parent "ctx-db.ts" (the established public module name). */
-
 import { LunoraError } from "@lunora/errors";
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { ftsTableName } from "@lunora/search-core";
@@ -128,9 +126,16 @@ class BlockedUniqueIndexError extends LunoraError {}
  * optional `.unique()` column read as a duplicate and a `CREATE UNIQUE INDEX`
  * that would have SUCCEEDED is refused.
  */
-const assertNoDuplicatesUnder = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, refs: ReadonlyArray<SQL>, situation: string): void => {
+const assertNoDuplicatesUnder = (
+    sql: SqlExec,
+    indexName: string,
+    tableName: string,
+    expressions: SQL,
+    references: ReadonlyArray<SQL>,
+    situation: string,
+): void => {
     const nonNull = dsql.join(
-        refs.map((reference) => dsql`${reference} IS NOT NULL`),
+        references.map((reference) => dsql`${reference} IS NOT NULL`),
         dsql` AND `,
     );
     const duplicates = runDrizzle(sql, dsql`SELECT 1 FROM ${dsql.identifier(tableName)} WHERE ${nonNull} GROUP BY ${expressions} HAVING COUNT(*) > 1 LIMIT 1`);
@@ -168,7 +173,14 @@ const assertNoDuplicatesUnder = (sql: SqlExec, indexName: string, tableName: str
  * are separate statements and the throw propagates), which is the safe
  * direction — a slower index is a working one.
  */
-const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean, refs: ReadonlyArray<SQL>): void => {
+const dropIndexIfShapeChanged = (
+    sql: SqlExec,
+    indexName: string,
+    tableName: string,
+    expressions: SQL,
+    unique: boolean,
+    references: ReadonlyArray<SQL>,
+): void => {
     const existing = runDrizzle<{ sql: null | string }>(
         sql,
         dsql`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ${indexName} COLLATE NOCASE AND tbl_name = ${tableName} COLLATE NOCASE`,
@@ -207,7 +219,7 @@ const dropIndexIfShapeChanged = (sql: SqlExec, indexName: string, tableName: str
     // already carry the same catalog-parsing logic, and a guard on one
     // destructive DDL path but not the other is worse than the duplication.
     if (unique) {
-        assertNoDuplicatesUnder(sql, indexName, tableName, expressions, refs, "cannot be re-created with its new column list");
+        assertNoDuplicatesUnder(sql, indexName, tableName, expressions, references, "cannot be re-created with its new column list");
     }
 
     runDrizzle(sql, dsql`DROP INDEX IF EXISTS ${dsql.identifier(indexName)}`);
@@ -233,9 +245,9 @@ const indexIsHeld = (sql: SqlExec, indexName: string, tableName: string): boolea
  * index (a declared `unique: true` index, a `.unique()` column) go through here,
  * so neither can reach `CREATE UNIQUE INDEX` unguarded.
  */
-const createIndexGuarded = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean, refs: ReadonlyArray<SQL>): void => {
+const createIndexGuarded = (sql: SqlExec, indexName: string, tableName: string, expressions: SQL, unique: boolean, references: ReadonlyArray<SQL>): void => {
     if (unique && !indexIsHeld(sql, indexName, tableName)) {
-        assertNoDuplicatesUnder(sql, indexName, tableName, expressions, refs, "cannot be created");
+        assertNoDuplicatesUnder(sql, indexName, tableName, expressions, references, "cannot be created");
     }
 
     runDrizzle(sql, createIndexSql(indexName, tableName, expressions, unique));
@@ -417,14 +429,14 @@ const migrateSecondaryIndexes = (sql: SqlExec, tableName: string, definition: Ta
         const indexName = `${tableName}_${index.name}`;
 
         const unique = index.unique ?? false;
-        const refs = index.fields.map((field) => jsonPathSql(field));
-        const fields = dsql.join(refs, dsql`, `);
+        const references = index.fields.map((field) => jsonPathSql(field));
+        const fields = dsql.join(references, dsql`, `);
         const expressions = unique ? fields : dsql`${fields}, ${INDEX_SORT_KEYS}`;
 
         declared.add(indexName);
         deferIfBlocked(blocked, () => {
-            dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, refs);
-            createIndexGuarded(sql, indexName, tableName, expressions, unique, refs);
+            dropIndexIfShapeChanged(sql, indexName, tableName, expressions, unique, references);
+            createIndexGuarded(sql, indexName, tableName, expressions, unique, references);
             recordFrameworkIndex(sql, indexName, tableName);
         });
     }

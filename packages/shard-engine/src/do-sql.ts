@@ -85,7 +85,6 @@ const DOC_ORIGINALS_KEY = "__originals__";
  * compare-and-swap and every already-stored row depend on.
  * @throws LunoraError `BAD_REQUEST` when the document declares the reserved {@link DOC_ORIGINALS_KEY} field, or holds a value no codec can store (a class instance, a cycle, nesting past the wire codec's 64-level cap)
  */
-// eslint-disable-next-line unicorn/prevent-abbreviations -- "DocJson" mirrors the established `DOC_COLUMN`/`__doc__` naming this module already uses throughout.
 const encodeDocJson = (document: Record<string, unknown>): string => {
     // Refuse the reserved key rather than clobber it. Both outcomes of letting
     // it through are silent data loss ON WRITE: a projected document overwrites
@@ -153,7 +152,6 @@ const encodeDocJson = (document: Record<string, unknown>): string => {
  * written while `bigint`s were stored tagged in place (the sentinel decodes;
  * there is nothing to un-project).
  */
-// eslint-disable-next-line unicorn/prevent-abbreviations -- see encodeDocJson above.
 const decodeDocJson = (raw: string): Record<string, unknown> => {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     // `encodeWire` output carries the tag verbatim, so a row without it decodes to a copy of what `JSON.parse` returned;

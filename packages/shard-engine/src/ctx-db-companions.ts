@@ -22,8 +22,6 @@
  * its dependencies — mirroring `ctx-db-rank-page`'s `RankPageDeps`.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db-companions" mirrors its parent "ctx-db.ts" (the established public module name); `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
-
 // eslint-disable-next-line import/no-extraneous-dependencies -- @lunora/search-core is a devDependency on purpose: packem inlines it into this bundle, so it is not a published runtime dep
 import { analyzedSearchText, ftsTableName, searchTextUnchanged } from "@lunora/search-core";
 import type { SQL } from "drizzle-orm";
@@ -51,6 +49,7 @@ import {
     serializeSqlValue,
     unwrapSql,
 } from "./do-sql";
+// eslint-disable-next-line unicorn/prevent-abbreviations -- `param` is ./drizzle's exported bind-value helper; aliasing it here would hide which helper binds
 import { param, WORKERD_SQLITE_LIMITS } from "./drizzle";
 import { ftsPurgeDocument, ftsWriteDocument } from "./fts-companion";
 import { encodeGeohash, GEO_DEFAULT_PRECISION } from "./geo";
