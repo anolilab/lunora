@@ -176,6 +176,17 @@ export const ingest = mutation
             await assertRowInOrg(context, "deployments", arguments_.deploymentId, arguments_.organizationId, "deployment");
         }
 
+        // Usage rows carry no project, so a row without a deployment counts against
+        // the whole org's bill and spend caps. A project-scoped key may meter only
+        // its own project's deployments; anything else is org-wide authority it lacks.
+        if (key.projectId != null) {
+            const deployment = arguments_.deploymentId === undefined ? null : await context.db.get("deployments", arguments_.deploymentId);
+
+            if (deployment?.projectId !== key.projectId) {
+                throw new LunoraError("FORBIDDEN", "a project-scoped deploy key may only report usage for a deployment of its own project");
+            }
+        }
+
         const id = await context.db.insert("platformUsage", {
             createdAt: context.now,
             deploymentId: arguments_.deploymentId,

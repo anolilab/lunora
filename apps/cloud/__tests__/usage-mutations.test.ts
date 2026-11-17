@@ -537,4 +537,37 @@ describe("usage.ingest", () => {
 
         await expect(ingest.handler(ctx, ingestArgs() as never)).resolves.toBeDefined();
     });
+
+    describe("with a project-scoped key", () => {
+        /** Key `dk_a` is scoped to project A; `dep_a` belongs to A and `dep_b` to B, both in org_1. */
+        const projectCtx = async (): Promise<MutationCtx> => {
+            const hashedKey = await hashDeployKey("production:org_1|secret");
+
+            return makeCtx({
+                deployKeys: [{ _id: "dk_a", capability: "deploy", hashedKey, organizationId: "org_1", projectId: "proj_a" }],
+                deployments: [
+                    { _id: "dep_a", organizationId: "org_1", projectId: "proj_a" },
+                    { _id: "dep_b", organizationId: "org_1", projectId: "proj_b" },
+                ],
+            }).ctx;
+        };
+
+        it("refuses usage with no deployment, which would bill the whole org", async () => {
+            const ctx = await projectCtx();
+
+            await expect(ingest.handler(ctx, ingestArgs() as never)).rejects.toMatchObject({ code: "FORBIDDEN" });
+        });
+
+        it("refuses usage for another project's deployment", async () => {
+            const ctx = await projectCtx();
+
+            await expect(ingest.handler(ctx, ingestArgs({ deploymentId: "dep_b" }) as never)).rejects.toMatchObject({ code: "FORBIDDEN" });
+        });
+
+        it("accepts usage for its own project's deployment", async () => {
+            const ctx = await projectCtx();
+
+            await expect(ingest.handler(ctx, ingestArgs({ deploymentId: "dep_a" }) as never)).resolves.toBeDefined();
+        });
+    });
 });
