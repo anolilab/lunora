@@ -92,6 +92,22 @@ describe(deliverQueueBatch, () => {
         expect(batch.messages[1]?.retry).toHaveBeenCalledWith();
     });
 
+    it("forwards the tenant's binding as the queue, not the platform's per-project queue name", async () => {
+        expect.assertions(1);
+
+        const send = vi.fn<ReturnType<Dispatch>>(async () => Response.json({ retry: [] }));
+        const batch = { ...batchFor("shop"), queue: tenantResourceName("shop", { binding: "QUEUE_JOBS", type: "queue_producer" }) };
+
+        await deliverQueueBatch(batch, {
+            dispatches: new Map([["cloudflare-wfp", vi.fn<Dispatch>(() => send)]]),
+            live: [live("shop", "org_ok")],
+            now: NOW,
+            store: memoryStore({ organizations }),
+        });
+
+        expect(JSON.parse(send.mock.calls[0]?.[1] ?? "{}")).toMatchObject({ queue: "queue-jobs" });
+    });
+
     it.each([
         ["suspended", "org_suspended"],
         ["over its cap", "org_over"],

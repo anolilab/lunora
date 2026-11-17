@@ -537,6 +537,13 @@ export const aliasOfResourceName = (name: string): string | undefined => {
     return isReleaseAlias(alias) && separator + 2 < name.length ? alias : undefined;
 };
 
+/** The binding part of a {@link tenantResourceName}, in its resource form (`QUEUE_JOBS` → `queue-jobs`), or `undefined` for a name it did not produce. */
+export const bindingOfResourceName = (name: string): string | undefined => {
+    const alias = aliasOfResourceName(name);
+
+    return alias === undefined ? undefined : name.slice(alias.length + 2);
+};
+
 /**
  * A single managed-tier release to converge onto the project's one tenant.
  *

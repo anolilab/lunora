@@ -14,7 +14,7 @@ import type { ControlPlaneStore } from "../d1-store";
 import { controlPlaneDatabase } from "../d1-store";
 import { resolveAdminToken } from "../deploy/admin-token";
 import type { TargetId } from "../provision-contract";
-import { storedTarget } from "../provision-contract";
+import { bindingOfResourceName, storedTarget } from "../provision-contract";
 import readJson from "../read-json";
 import type { TargetFleet } from "../targets/driver";
 import { registeredFleets } from "../targets/registry";
@@ -46,9 +46,9 @@ export interface QueueBatchLike {
  * token. Returns the message ids the tenant asked to retry; a delivery failure
  * throws and the caller retries the whole batch.
  *
- * ponytail: `queue` is the platform's per-project queue name, not the name the
- * tenant's wrangler config declared; map it back when a tenant needs to route
- * several queues by their own names.
+ * The tenant knows its queues by declared name and binding, never by this
+ * platform's per-project queue name, so the alias prefix is stripped and the
+ * binding (in its resource form) is what the tenant's registry resolves.
  */
 const dispatchQueueBatch = async (dispatch: TenantDispatch, target: { adminToken: string; resourceRef: string }, batch: QueueBatchLike): Promise<string[]> => {
     const response = await dispatch(target)(
@@ -57,7 +57,7 @@ const dispatchQueueBatch = async (dispatch: TenantDispatch, target: { adminToken
             messages: batch.messages.map((message) => {
                 return { body: message.body, id: message.id };
             }),
-            queue: batch.queue,
+            queue: bindingOfResourceName(batch.queue) ?? batch.queue,
         }),
         "application/json",
     );
