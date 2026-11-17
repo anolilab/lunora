@@ -418,7 +418,7 @@ describe("argument-taint", () => {
         });
 
         it("refuses an owner predicate that a spread, a field write or a negation can undo", () => {
-            expect.assertions(31);
+            expect.assertions(33);
 
             const sink = `SINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`;
             const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
@@ -497,6 +497,21 @@ describe("argument-taint", () => {
                     ),
                 ),
             ).toBe(false);
+            // A `select` that leaves the column out reads it as undefined for every caller; one that lists it keeps it.
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ select: ["name"], where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ select: ["ownerId"], where: { ownerId: ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(true);
             // The same with bracket access, straight off the read.
             expect(
                 isScopedByIdentity(

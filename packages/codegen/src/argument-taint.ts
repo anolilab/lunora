@@ -632,13 +632,42 @@ const isIdentityField = (read: CallExpression, field: string | undefined): boole
     return read.getArguments().some((argument) => pinsReadToCaller(argument, field));
 };
 
+/** The columns a `select` projection always keeps, whatever it lists. */
+const SELECT_SYSTEM_FIELDS: ReadonlySet<string> = new Set(["_creationTime", "_id"]);
+
+/**
+ * Whether the row `read` returns still carries `field`: no `select`, or a `select` of literal names that lists it. A
+ * projected-away column reads `undefined` for every caller, so it scopes nothing; a `select` that is not a literal list
+ * keeps only the system fields as far as this can tell.
+ */
+const keepsColumn = (read: CallExpression, field: string): boolean =>
+    SELECT_SYSTEM_FIELDS.has(field) ||
+    read.getArguments().every((argument) => {
+        const select = propertyValueOf(
+            objectLiteralOf(argument)
+                ?.getProperties()
+                .find((member) => !Node.isSpreadAssignment(member) && propertyKeyName(member) === "select"),
+        );
+
+        if (select === undefined) {
+            return true;
+        }
+
+        const names = unwrapExpression(select);
+
+        return (
+            Node.isArrayLiteralExpression(names) &&
+            names.getElements().some((name) => (Node.isStringLiteral(name) || Node.isNoSubstitutionTemplateLiteral(name)) && name.getLiteralValue() === field)
+        );
+    });
+
 /** Whether `read`'s row, consumed through `source`, scopes a key whose whole value is `wholeKey`. */
 const rowScopesKey = (read: CallExpression, source: TsNode, field: string | undefined, wholeKey: TsNode | undefined): boolean => {
     const callee = read.getExpression();
 
     const singleRow = Node.isPropertyAccessExpression(callee) && (SINGLE_ROW_READS.has(callee.getName()) || callee.getName().endsWith("OrThrow"));
 
-    if (!isIdentityBoundRead(read) || !singleRow) {
+    if (!isIdentityBoundRead(read) || !singleRow || (field !== undefined && !keepsColumn(read, field))) {
         return false;
     }
 
