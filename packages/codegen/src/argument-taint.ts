@@ -12,7 +12,7 @@ import type {
 } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { bindingKeyName, descendantsOfKind, isConstDeclaration, unwrapExpression } from "./discover/ast";
+import { bindingKeyName, descendantsOfKind, isConstDeclaration, propertyKeyName, unwrapExpression } from "./discover/ast";
 import { declarationOf, isReassignedBinding, referencedSymbolOf } from "./discover/attribution";
 import { contextTrustPathOf, isHandlerArgsParameter, referencesContext } from "./discover/context-root";
 
@@ -406,7 +406,7 @@ const isIdentityField = (read: CallExpression, field: string | undefined): boole
             (property) => {
                 const value = Node.isPropertyAssignment(property) ? property.getInitializer() : property.getNameNode();
 
-                return property.getName() === field && value !== undefined && readsCallerIdentity(value);
+                return propertyKeyName(property) === field && value !== undefined && readsCallerIdentity(value);
             },
         ),
     );
@@ -1002,7 +1002,7 @@ const destructuredFieldOf = (element: TsNode | undefined): string | undefined =>
         return undefined;
     }
 
-    return element.getPropertyNameNode()?.getText() ?? element.getName();
+    return bindingKeyName(element);
 };
 
 /**
@@ -1039,29 +1039,37 @@ const scopesKeyPart = (part: TsNode): boolean =>
         (identifier) => !isAlternativeOf(identifier, part) && !insideDatabaseCallWithin(identifier, part) && bindingScopesKey(identifier, undefined),
     );
 
+/** Whether `parent`, a template or `+` concatenation, opens with an identity-scoped part before `child` and no caller part ahead of it. */
+const opensWithIdentityBefore = (child: TsNode, parent: TsNode): boolean => {
+    if (Node.isTemplateSpan(child) && Node.isTemplateExpression(parent)) {
+        const spans = parent.getTemplateSpans();
+        const leading = spans.slice(0, spans.indexOf(child)).map((span) => span.getExpression());
+        const firstScoped = leading.findIndex((part) => scopesKeyPart(part));
+
+        return firstScoped !== -1 && !leading.slice(0, firstScoped).some((part) => reachesArgsWithinOneHop(part));
+    }
+
+    // The left side folds every earlier operand, so any caller value in it may precede the identity.
+    return (
+        Node.isBinaryExpression(parent) &&
+        parent.getOperatorToken().getKind() === SyntaxKind.PlusToken &&
+        child === parent.getRight() &&
+        scopesKeyPart(parent.getLeft()) &&
+        !reachesArgsWithinOneHop(parent.getLeft())
+    );
+};
+
 /**
- * Whether some template or `+` concatenation between `identifier` and `within` puts an
- * identity-scoped part before the one holding `identifier`. Whatever that part then
- * resolves to, it is appended under the caller's own prefix. A scoped part after it does
- * not count: `${args.a ?? args.b}/${uid}` lets the caller choose the leading segment.
+ * Whether some template or `+` concatenation between `identifier` and `within` opens with an
+ * identity-scoped part before the one holding `identifier`, with no caller-supplied part ahead
+ * of that identity. Whatever the later part then resolves to, it is appended under the caller's
+ * own prefix. A scoped part after it does not count (`${args.a ?? args.b}/${uid}`), and neither
+ * does one behind a caller segment (`${args.tenant}/${uid}/${args.a ?? args.b}`): the caller
+ * chooses the leading segment there.
  */
 const followsIdentityPrefix = (identifier: TsNode, within: TsNode): boolean => {
     for (let child = identifier, parent = identifier.getParent(); parent !== undefined && child !== within; child = parent, parent = parent.getParent()) {
-        if (Node.isTemplateSpan(child) && Node.isTemplateExpression(parent)) {
-            const spans = parent.getTemplateSpans();
-            const earlier = spans.slice(0, spans.indexOf(child));
-
-            if (earlier.some((span) => scopesKeyPart(span.getExpression()))) {
-                return true;
-            }
-        }
-
-        if (
-            Node.isBinaryExpression(parent) &&
-            parent.getOperatorToken().getKind() === SyntaxKind.PlusToken &&
-            child === parent.getRight() &&
-            scopesKeyPart(parent.getLeft())
-        ) {
+        if (opensWithIdentityBefore(child, parent)) {
             return true;
         }
     }

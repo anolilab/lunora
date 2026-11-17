@@ -247,13 +247,25 @@ describe("argument-taint", () => {
         });
 
         it("accepts a key read off a database row fetched by the caller's identity", () => {
-            expect.assertions(5);
+            expect.assertions(7);
 
             const owned = `const row = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\n`;
 
             // As a prefix, only a column that names the caller: the row's id, or the one the read matched on.
             expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row.ownerId}/\${args.k}\`);`))).toBe(true);
             expect(isScopedByIdentity(sinkArgument(`${owned}SINK(\`\${row._id}/\${args.k}\`);`))).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const row = await ctx.db.files.findFirst({ where: { "ownerId": ctx.auth.userId } });\nSINK(\`\${row.ownerId}/\${args.k}\`);`),
+                ),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const { "ownerId": owner } = await ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } });\nSINK(\`\${owner}/\${args.k}\`);`,
+                    ),
+                ),
+            ).toBe(true);
             // As the whole key, any column of the caller's own row: a stored reference the caller cannot repoint.
             expect(isScopedByIdentity(sinkArgument(`${owned}SINK(row.storageKey);`))).toBe(true);
             expect(
@@ -313,7 +325,10 @@ describe("argument-taint", () => {
         });
 
         it("rejects a caller fallback that can supply the whole key or the segment before the identity", () => {
-            expect.assertions(4);
+            expect.assertions(6);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${args.tenant}/\${ctx.auth.userId}/\${args.key ?? args.other}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(args.tenant + "/" + ctx.auth.userId + "/" + (args.key ?? args.other));`))).toBe(false);
 
             expect(isScopedByIdentity(sinkArgument(`SINK(args.key ?? \`\${ctx.auth.userId}/x\`);`))).toBe(false);
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${args.key ?? args.other}/\${ctx.auth.userId}\`);`))).toBe(false);
