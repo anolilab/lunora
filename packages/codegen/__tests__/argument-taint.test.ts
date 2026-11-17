@@ -310,6 +310,25 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId && "shared"}/\${args.key ?? args.other}\`);`))).toBe(false);
         });
 
+        it("counts only a direct predicate of the read's own where as an identity column", () => {
+            expect.assertions(2);
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { author: { ownerId: ctx.auth.userId } } });\nSINK(\`\${row.ownerId}/\${args.key ?? args.other}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const row = await ctx.db.files.findFirst({ where: { OR: [{ ownerId: ctx.auth.userId }, { id: args.id }] } });\nSINK(\`\${row.ownerId}/\${args.k}\`);`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
         it("rejects a shared column of the caller's own row as a key prefix", () => {
             expect.assertions(4);
 

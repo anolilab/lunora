@@ -12,7 +12,7 @@ import type {
 } from "ts-morph";
 import { Node, SyntaxKind, VariableDeclarationKind } from "ts-morph";
 
-import { bindingKeyName, descendantsOfKind, isConstDeclaration, propertyKeyName, unwrapExpression } from "./discover/ast";
+import { bindingKeyName, descendantsOfKind, findObjectProperty, isConstDeclaration, propertyKeyName, unwrapExpression } from "./discover/ast";
 import { declarationOf, isReassignedBinding, referencedSymbolOf } from "./discover/attribution";
 import { contextTrustPathOf, isHandlerArgsParameter, referencesContext } from "./discover/context-root";
 
@@ -408,15 +408,25 @@ const isIdentityField = (read: CallExpression, field: string | undefined): boole
         return true;
     }
 
-    return read.getArguments().some((argument) =>
-        [...argument.getDescendantsOfKind(SyntaxKind.PropertyAssignment), ...argument.getDescendantsOfKind(SyntaxKind.ShorthandPropertyAssignment)].some(
-            (property) => {
+    // Only a direct predicate of the read's own `where` binds the returned row: one inside a relation filter
+    // (`where: { author: { ownerId: uid } }`) constrains another row, and one in an `OR` arm a single branch.
+    return read.getArguments().some((argument) => {
+        const where = Node.isObjectLiteralExpression(argument) ? findObjectProperty(argument, "where") : undefined;
+        const filter = Node.isPropertyAssignment(where) ? unwrapExpression(where.getInitializer()) : undefined;
+
+        return (
+            Node.isObjectLiteralExpression(filter) &&
+            filter.getProperties().some((property) => {
+                if (!Node.isPropertyAssignment(property) && !Node.isShorthandPropertyAssignment(property)) {
+                    return false;
+                }
+
                 const value = Node.isPropertyAssignment(property) ? property.getInitializer() : property.getNameNode();
 
                 return propertyKeyName(property) === field && value !== undefined && readsCallerIdentity(value);
-            },
-        ),
-    );
+            })
+        );
+    });
 };
 
 /** Whether `read`'s row, consumed through `source`, scopes a key whose whole value is `wholeKey`. */
