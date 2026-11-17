@@ -86,6 +86,7 @@ const FirewallEvents = ({ error, view }: { error?: string; view?: FirewallView }
                 <ColumnHeader labels={["When", "Action", "Host", "Path", "Source"]} />
                 <TableBody>
                     {view.events.map((event, index) => (
+                        // react-doctor-disable-next-line react-doctor/no-array-index-as-key -- a firewall event carries no id, and this read-only table is replaced whole on each fetch, so no row state can follow the wrong event
                         <TableRow key={`${event.datetime}-${String(index)}`}>
                             <TableCell className="font-mono text-xs">{event.datetime}</TableCell>
                             <TableCell>{event.action}</TableCell>

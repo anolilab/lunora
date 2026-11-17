@@ -202,6 +202,7 @@ export const runNotificationSweep = async (database: ControlPlaneDatabase, optio
     }
 
     const outcomes = await Promise.all(due.map((row) => deliverOne(database, row, channels.get(row.channelId), options)));
+    // react-doctor-disable-next-line react-doctor/server-sequential-independent-await -- deliveries and the prune write through the same D1 connection; overlapping them adds contention, not parallelism
     const pruned = await pruneFinished(database, options.now);
 
     return {

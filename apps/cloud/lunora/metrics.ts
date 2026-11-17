@@ -127,11 +127,11 @@ export const ingest = mutation
         points: v.array(metricPointInput),
     })
     .mutation(async ({ ctx: context, args }): Promise<{ ingested: number }> => {
-        const key = await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
-
         if (args.points.length > MAX_METRIC_POINTS) {
             throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_METRIC_POINTS)} points)`);
         }
+
+        const key = await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
 
         // Caller-supplied, and only its ORG is authorized above — without this a
         // tenant can attribute its rows to another org's deployment. Reads stay

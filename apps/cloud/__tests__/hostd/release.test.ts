@@ -337,6 +337,7 @@ describe(verifyReleaseManifest, () => {
     it("verifies a round trip through pretty-printed JSON with a PEM key", async () => {
         const { envelope, trusted } = signed();
 
+        // react-doctor-disable-next-line react-doctor/no-json-parse-stringify-clone -- not a clone: the test is that the envelope survives a pretty-printed JSON round trip
         await expect(verifyReleaseManifest(JSON.parse(JSON.stringify(envelope, undefined, 4)), trusted)).resolves.toStrictEqual({ envelope, ok: true });
     });
 

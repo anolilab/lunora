@@ -264,8 +264,6 @@ export const ingest = mutation
             incidents: number;
             issues: number;
         }> => {
-            const key = await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
-
             if (args.events.length > MAX_EVENTS) {
                 throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_EVENTS)} events)`);
             }
@@ -273,6 +271,8 @@ export const ingest = mutation
             if ((args.observations?.length ?? 0) > MAX_OBSERVATIONS) {
                 throw new LunoraError("BAD_REQUEST", `batch too large (max ${String(MAX_OBSERVATIONS)} observations)`);
             }
+
+            const key = await authorizeTelemetryKey(context, args.organizationId, args.deployKey);
 
             const { now } = context;
 

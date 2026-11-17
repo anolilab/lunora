@@ -44,11 +44,14 @@
                     "lunora/**",
                     "scripts/**",
                     "src/admin/**",
+                    "src/auth.ts",
                     "src/backup/**",
                     "src/billing/**",
                     "src/boxes/**",
                     "src/builds/**",
+                    "src/catalog/**",
                     "src/cloudflare/**",
+                    "src/cloudflare-accounts/**",
                     "src/deploy/**",
                     "src/dispatcher/**",
                     "src/domains/**",
@@ -58,8 +61,11 @@
                     "src/mail/**",
                     "src/mcp/**",
                     "src/metering/**",
+                    "src/notifications/**",
+                    "src/plans/**",
                     "src/provision.ts",
                     "src/secrets/**",
+                    "src/sweeps/**",
                     "src/tail/**",
                     "src/targets/**",
                     "src/telemetry/**",
@@ -95,6 +101,12 @@
                 // (`eslint.config.js`, `**/components/ui/**`).
                 "files": ["src/components/ui/**", "src/hooks/**", "src/lib/utils.ts"],
                 "rules": ["react-doctor/context-provider-value-from-unmemoized-local-literal", "react-hooks-js/set-state-in-effect"],
+            },
+            {
+                // The build box's vendored bundles (acorn, the release manifest verifier), written by
+                // `scripts/vendor-release-manifest.ts`: an edit here is overwritten by the next vendor run.
+                "files": ["containers/build/vendor/**"],
+                "rules": ["react-doctor/js-set-map-lookups"],
             },
             {
                 // `scripts/seed.ts` is a terminal dev script, not served code: it
