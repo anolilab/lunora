@@ -36,6 +36,20 @@ describe(createMcpRouteHandler, () => {
         expect(response.status).toBe(401);
     });
 
+    it.each([
+        ["null", null],
+        ["array", []],
+        ["number", 7],
+    ])("400s a %s JSON-RPC body instead of throwing", async (_label, body) => {
+        const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute], verifyKey: () => Promise.resolve(true) });
+        const response = await handler(
+            new Request("https://cloud/v1/mcp", { body: JSON.stringify(body), headers: { authorization: "Bearer dk_agent" }, method: "POST" }), // gitleaks:allow -- fabricated fixture token, not a credential
+            {},
+        );
+
+        expect(response.status).toBe(400);
+    });
+
     it("403s when the deploy key is invalid — before exposing tools/list", async () => {
         const verifyKey = vi.fn<(key: string, environment: unknown) => Promise<boolean>>(() => Promise.resolve(false));
         const handler = createMcpRouteHandler({ jsonError, routes: [rollbackRoute], verifyKey });

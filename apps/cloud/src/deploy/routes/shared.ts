@@ -78,6 +78,19 @@ export type RouterEnv = {
 
 export const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 
+/**
+ * The request's JSON body when it is an object, else `undefined`.
+ *
+ * `request.json()` resolves `null`, an array or a scalar just as readily as an
+ * object, and a handler that destructures or reads fields off one throws a
+ * `TypeError` the router turns into a 500 instead of the caller's 400.
+ */
+export const readJsonObject = async (request: Request): Promise<Record<string, unknown> | undefined> => {
+    const body: unknown = await request.json().catch(() => undefined);
+
+    return typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
+};
+
 /** Thrown by {@link requireContext}; caught by {@link withContext} at the route boundary. */
 export class MissingContextError extends Error {
     public constructor() {

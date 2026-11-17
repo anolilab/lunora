@@ -13,6 +13,7 @@
  * exactly what a direct HTTP caller gets — the MCP layer grants no privilege.
  */
 import type { RegisteredRoute } from "../deploy/route-registry";
+import { readJsonObject } from "../deploy/routes/shared";
 import type { McpTool } from "./tools";
 import { mcpToolRoutes } from "./tools";
 
@@ -57,11 +58,9 @@ export const createMcpRouteHandler = <Environment>(deps: McpHandlerDeps<Environm
             return deps.jsonError(403, "invalid or revoked deploy key");
         }
 
-        let rpc: JsonRpcRequest;
+        const rpc = (await readJsonObject(request)) as JsonRpcRequest | undefined;
 
-        try {
-            rpc = await request.json();
-        } catch {
+        if (!rpc) {
             return deps.jsonError(400, "invalid JSON body");
         }
 

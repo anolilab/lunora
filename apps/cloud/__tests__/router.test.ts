@@ -505,3 +505,42 @@ describe("pOST /v1/builds/dispatch", () => {
         expect(failed?.args?.["error"]).toMatch(/build runner is not configured: the control plane has no BUILD_RUNNER binding/u);
     });
 });
+
+describe("non-object JSON bodies", () => {
+    const adminPost = (path: string, body: unknown, token?: string): Request =>
+        new Request(`https://control.lunora.app${path}`, {
+            body: JSON.stringify(body),
+            headers: {
+                "cf-connecting-ip": "operator",
+                "content-type": "application/json",
+                ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+            },
+            method: "POST",
+        });
+
+    // `null` and `[]` parse fine, so only a shape check stops the handler reading fields off them.
+    it.each([
+        ["/v1/cells", null],
+        ["/v1/cells", []],
+        ["/v1/halts", null],
+        ["/v1/halts", []],
+        ["/v1/deployments/rollback", null],
+        ["/v1/deployments/rollback", []],
+        ["/v1/rollback", null],
+        ["/v1/rollback", []],
+    ])("400s POST %s with a %j body", async (path, body) => {
+        const router = createDeployRouter();
+        const runMutation = vi.fn<ActionPort>();
+        // The admin token authorizes only admin routes; the rollbacks take a deploy key or a session.
+        const token = path.endsWith("rollback") ? "dk_test" : "admin-secret"; // gitleaks:allow -- fabricated fixture token, not a credential
+        const response = await router.fetch(adminPost(path, body, token), {
+            __lunoraCtx: makeCtx({ runMutation, runQuery: vi.fn<ActionPort>() }),
+            LUNORA_ADMIN_TOKEN: "admin-secret",
+            RELEASES: {},
+        });
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toStrictEqual({ error: "invalid JSON body" });
+        expect(runMutation).not.toHaveBeenCalled();
+    });
+});

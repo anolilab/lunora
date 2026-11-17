@@ -17,7 +17,7 @@ import type { TargetId } from "../../provision-contract";
 import { isTargetId, TARGET_IDS, TARGETS } from "../../provision-contract";
 import { constantTimeEqual } from "../../security/constant-time-equal";
 import type { RouterEnv } from "./shared";
-import { jsonError, otlpBearer, rejected, requireContext, strictBearer } from "./shared";
+import { jsonError, otlpBearer, readJsonObject, rejected, requireContext, strictBearer } from "./shared";
 
 /** Whether `token` is the platform admin token. Fails closed: an unset token matches nothing. */
 const isAdminToken = (token: string, environment: RouterEnv): boolean =>
@@ -170,11 +170,9 @@ const isCellConfig = (value: unknown): value is Record<string, string> =>
 export const handleCellRegisterRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    let body: { cloudflareAccountId?: unknown; config?: unknown; dispatchNamespacePrefix?: unknown; jurisdiction?: unknown; name?: unknown; target?: unknown };
+    const body = await readJsonObject(request);
 
-    try {
-        body = await request.json();
-    } catch {
+    if (!body) {
         return jsonError(400, "invalid JSON body");
     }
 
@@ -220,11 +218,9 @@ export const handleCellRegisterRoute = async (request: Request, environment: Rou
  */
 export const handleHaltRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    let body: { action?: unknown; deploymentId?: unknown; organizationId?: unknown };
+    const body = await readJsonObject(request);
 
-    try {
-        body = await request.json();
-    } catch {
+    if (!body) {
         return jsonError(400, "invalid JSON body");
     }
 

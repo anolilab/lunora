@@ -39,7 +39,7 @@ import { createReleaseStore } from "../release-store";
 import type { ConvergeRecorder } from "../worker-classes";
 import { recordingDriver } from "../worker-classes";
 import type { LunoraActionContext, RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext, strictBearer } from "./shared";
+import { jsonError, readJsonObject, rejected, requireContext, strictBearer } from "./shared";
 
 interface EncryptedSecretRow {
     ciphertext: string;
@@ -301,20 +301,20 @@ export const createDeployRoutes = (
             return jsonError(500, "the RELEASES bucket is not configured");
         }
 
-        let body: { deploymentId?: string; organizationId?: string };
+        const body = await readJsonObject(request);
 
-        try {
-            body = await request.json();
-        } catch {
+        if (!body) {
             return jsonError(400, "invalid JSON body");
         }
 
-        if (!body.deploymentId || !body.organizationId) {
+        const { deploymentId, organizationId } = body;
+
+        if (typeof deploymentId !== "string" || !deploymentId || typeof organizationId !== "string" || !organizationId) {
             return jsonError(400, "deploymentId and organizationId are required");
         }
 
         try {
-            const result = await rollbackRelease({ deploymentId: body.deploymentId, key, organizationId: body.organizationId }, release);
+            const result = await rollbackRelease({ deploymentId, key, organizationId }, release);
 
             return Response.json({ ok: true, ...result });
         } catch (error) {
