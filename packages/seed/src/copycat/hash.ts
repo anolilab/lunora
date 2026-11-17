@@ -12,8 +12,6 @@
 
 import { cyrb53 } from "@lunora/values";
 
-/* eslint-disable no-bitwise -- cyrb53 and the key-folding are defined over XOR and unsigned shifts; the bit ops ARE the algorithm */
-
 /** Module-level salt mixed into every hash; overridden by {@link setHashKey}. */
 let hashSalt = 0;
 
@@ -99,6 +97,7 @@ const hashInput = (input: unknown): number => {
  */
 const setHashKey = (key: number | string | Uint32Array): void => {
     if (typeof key === "number") {
+        // eslint-disable-next-line no-bitwise -- `>>> 0` coerces the key to the unsigned 32-bit salt
         hashSalt = key >>> 0;
 
         return;
@@ -114,12 +113,11 @@ const setHashKey = (key: number | string | Uint32Array): void => {
     let folded = 0;
 
     for (const word of key) {
+        // eslint-disable-next-line no-bitwise -- XOR-multiply folding, coerced to unsigned 32-bit: the bit ops are the algorithm
         folded = Math.imul(folded ^ word, 2_654_435_761) >>> 0;
     }
 
     hashSalt = folded;
 };
-
-/* eslint-enable no-bitwise */
 
 export { hashInput, setHashKey };
