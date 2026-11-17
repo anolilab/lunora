@@ -280,6 +280,21 @@ describe("argument-taint", () => {
             ).toBe(true);
         });
 
+        it("reads an identity column through a type assertion on the row", () => {
+            expect.assertions(2);
+
+            const read = `ctx.db.files.findFirst({ where: { ownerId: ctx.auth.userId } })`;
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${(await ${read} as File)._id}/\${args.k}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${((await ${read}) satisfies File).ownerId}/\${args.k}\`);`))).toBe(true);
+        });
+
+        it("rejects a caller fallback behind a prefix that can drop the identity", () => {
+            expect.assertions(1);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId && "shared"}/\${args.key ?? args.other}\`);`))).toBe(false);
+        });
+
         it("rejects a shared column of the caller's own row as a key prefix", () => {
             expect.assertions(4);
 

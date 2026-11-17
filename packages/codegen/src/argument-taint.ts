@@ -359,7 +359,7 @@ const insideDatabaseCallWithin = (identifier: TsNode, within: TsNode): boolean =
 const ROW_ID_FIELDS: ReadonlySet<string> = new Set(["_id", "id"]);
 
 /**
- * The field read off a row `source` yields, through any `await`, parentheses or `!`
+ * The field read off a row `source` yields, through any `await`, parentheses, `!` or type assertion
  * (`(await ctx.db.files.findFirst(…)).key`, `row.key`), and the expression that reads it.
  * `field` is `undefined` when the row itself is used.
  */
@@ -367,7 +367,14 @@ const rowFieldReadOf = (source: TsNode): { field: string | undefined; read: TsNo
     let current = source;
 
     for (let parent = current.getParent(); ; parent = current.getParent()) {
-        if (Node.isAwaitExpression(parent) || Node.isParenthesizedExpression(parent) || Node.isNonNullExpression(parent)) {
+        if (
+            Node.isAwaitExpression(parent) ||
+            Node.isParenthesizedExpression(parent) ||
+            Node.isNonNullExpression(parent) ||
+            Node.isAsExpression(parent) ||
+            Node.isSatisfiesExpression(parent) ||
+            Node.isTypeAssertion(parent)
+        ) {
             current = parent;
             continue;
         }
