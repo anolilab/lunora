@@ -1,4 +1,3 @@
-/* eslint-disable unicorn/prevent-abbreviations -- "docs" is the user-facing CLI command name (lunora docs); renaming the identifiers would diverge from the command users type */
 import type { Command, CommandExecute, Toolbox } from "@visulima/cerebro";
 
 const docsCommand: Command = {

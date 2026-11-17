@@ -257,14 +257,12 @@ const GITIGNORE_ADDITIONS = [
  * env var, which Vite statically replaces at `vite dev` / build; unset it falls
  * back to the page origin.
  */
-/* eslint-disable no-secrets/no-secrets -- env-var docs read as high-entropy strings */
 const ENV_EXAMPLE = `# Lunora endpoint for the browser client.
 # Vite statically replaces \`import.meta.env.VITE_LUNORA_URL\` at \`vite dev\` / build.
 # Leave it unset to use the page origin; set it to point at a deployed Worker:
 #
 # VITE_LUNORA_URL=https://my-app.example.workers.dev
 `;
-/* eslint-enable no-secrets/no-secrets */
 
 /**
  * The dev-time deps every overlaid project needs on top of the framework adapter.

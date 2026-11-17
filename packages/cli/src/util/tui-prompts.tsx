@@ -12,7 +12,6 @@
  * or there are no options, never render — return the supplied default so
  * automation never blocks. Escape (and Ctrl-C) cancels back to the default too.
  */
-/* eslint-disable react-refresh/only-export-components, react-perf/jsx-no-new-function-as-prop -- render-once CLI prompt module, not an HMR app surface: components mount once per prompt and unmount on submit, so co-locating the promise-wrapping helpers is intended and inline callback/array props carry no re-render cost. */
 import type { BadgeSpec, MultiSelectOption, SelectOption } from "@lunora/config";
 import { ACCENT, BADGE_COLUMN_WIDTH, badgeLead, badgeWidth, isInteractive, LUNA_ART, LUNA_NAME, LUNA_SIGNOFF, padBadge } from "@lunora/config";
 import { render } from "@visulima/tui";
