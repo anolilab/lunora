@@ -135,11 +135,38 @@ const revertFailedRelease = async (
     write({ deploymentId, event: "reverting", to: previousDeploymentId });
 
     try {
-        await reprovision({ deploymentId: previousDeploymentId, key: input.key, organizationId: input.organizationId }, deps);
+        // Deploys of one project are not serialized: a newer release may have gone
+        // live while this one failed, and putting the older previous release back
+        // would undo it. Only the failed release or the one it replaced may be live.
+        const { reprovisioned } = await reprovision({ deploymentId: previousDeploymentId, key: input.key, organizationId: input.organizationId }, deps, {
+            liveAmong: [deploymentId, previousDeploymentId],
+        });
+
+        if (!reprovisioned) {
+            write({ deploymentId, event: "not_reverted", reason: "a newer release has gone live since; it stays" });
+
+            return;
+        }
+
         write({ deploymentId, event: "reverted", to: previousDeploymentId });
     } catch (error) {
         write({ deploymentId, error: error instanceof Error ? error.message : String(error), event: "revert_failed", to: previousDeploymentId });
     }
+};
+
+/** Run {@link revertFailedRelease}, unless the caller's `mayRevert` refuses it. */
+const revertUnlessRefused = async (
+    input: Parameters<typeof revertFailedRelease>[0],
+    deps: DeployHandlerDeps,
+    write: (frame: ReleaseFrame) => void,
+): Promise<void> => {
+    if (deps.mayRevert !== undefined && !(await deps.mayRevert())) {
+        write({ deploymentId: input.deploymentId, event: "not_reverted", reason: "a newer install has taken the project; its previous release stays" });
+
+        return;
+    }
+
+    await revertFailedRelease(input, deps, write);
 };
 
 /**
@@ -158,13 +185,7 @@ const settleFailedConverge = async (
         return;
     }
 
-    if (deps.mayRevert !== undefined && !(await deps.mayRevert())) {
-        write({ deploymentId: input.deploymentId, event: "not_reverted", reason: "a newer install has taken the project; its previous release stays" });
-
-        return;
-    }
-
-    await revertFailedRelease(input, deps, write);
+    await revertUnlessRefused(input, deps, write);
 };
 
 /** What a release ships: the deploy request body minus its credential, whichever transport carried it. */
@@ -385,13 +406,16 @@ const runRelease = async (release: RecordedRelease, deps: DeployHandlerDeps, wri
     }
 
     // Health-checked release: record it live and supersede the previous
-    // one (GAPS.md A1). An activation failure downgrades the release to
-    // failed, but the Worker already runs it — the record is what lags.
+    // one (GAPS.md A1). An activation failure fails the release, but the Worker
+    // already runs it, so the previous release goes back on first — the same
+    // revert a failed health check gets — or the record and the Worker disagree.
     if (outcome.status === "live" && deps.backend.activateDeployment) {
         try {
             await deps.backend.activateDeployment({ deploymentId, key });
             write({ deploymentId, event: "released" });
         } catch (error) {
+            await revertUnlessRefused({ deploymentId, key, organizationId, previousDeploymentId: release.previousDeploymentId }, deps, write);
+
             return fail("activate", error, "activation failed");
         }
     }

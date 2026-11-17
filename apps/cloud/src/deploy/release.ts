@@ -51,8 +51,19 @@ export interface ReleaseBackend {
     releaseTarget: (input: { deploymentId: string; key?: string; organizationId: string }) => Promise<ReleaseTarget>;
     /** Decrypted tenant env secrets to inject into the deployed Worker (§7). Optional. */
     resolveSecrets?: (input: { key?: string; kind: DeployKind; organizationId: string; projectId: string }) => Promise<Record<string, string>>; // secret-scanner:allow -- domain field name
-    /** Record a completed rollback: the target becomes live and the project pointer moves to it. */
-    rollbackDeployment: (input: { deploymentId: string; key?: string; organizationId: string }) => Promise<{ scriptName: string; version?: number }>;
+
+    /**
+     * Record a completed rollback: the target becomes live and the project pointer moves to it.
+     * `expectedLiveId` is the release that was live when the rollback was resolved (absent: none
+     * was); the record refuses with `CONFLICT` when another release went live since, because
+     * that release's deploy may have converged the Worker after the rollback did.
+     */
+    rollbackDeployment: (input: {
+        deploymentId: string;
+        expectedLiveId?: string;
+        key?: string;
+        organizationId: string;
+    }) => Promise<{ scriptName: string; version?: number }>;
 }
 
 export interface ReleaseDeps {
@@ -240,6 +251,9 @@ export const droppedStatefulClasses = (previous: DeployManifest, next: DeployMan
  * Put a stored release back on the project's stable Worker, with its spec
  * resolved by {@link resolveReleaseSpec}. The admin token is the target
  * deployment's own, so its row's sealed token keeps working with the studio proxy.
+ * Resolves to the live release it found, and whether it converged anything: with
+ * `liveAmong`, a live release outside that set means a newer deploy took the
+ * Worker, and nothing is provisioned over it.
  * @throws {LunoraError} `CONFLICT` when the release was pruned, or — with `keepClasses`, on a target that drops unbound classes — when it drops a stateful class (a Durable Object or a Workflow) the live release binds.
  */
 export const reprovision = async (
@@ -252,15 +266,26 @@ export const reprovision = async (
          * data (`TARGETS[target].dropsUnboundClasses`).
          */
         keepClasses?: boolean;
+
+        /**
+         * Converge only while the alias's live release, if it has one, is one of
+         * these. A revert passes the failed release and the one it replaced: any
+         * other live release is a newer deploy that already took the Worker.
+         */
+        liveAmong?: ReadonlyArray<string>;
         priority?: number;
     } = {},
-): Promise<void> => {
+): Promise<{ liveDeploymentId: string | undefined; reprovisioned: boolean }> => {
     const { deploymentId, key } = input;
     // Independent reads; `releaseTarget` still authorizes before anything is provisioned.
     const [target, release] = await Promise.all([deps.backend.releaseTarget(input), deps.releases.get(deploymentId)]);
 
     if (!release) {
         throw new LunoraError("CONFLICT", "this release's bundle is no longer retained; deploy it again instead of rolling back");
+    }
+
+    if (options.liveAmong !== undefined && target.liveDeploymentId !== undefined && !options.liveAmong.includes(target.liveDeploymentId)) {
+        return { liveDeploymentId: target.liveDeploymentId, reprovisioned: false };
     }
 
     // After `releaseTarget`, which authorized the caller for this organization.
@@ -320,6 +345,8 @@ export const reprovision = async (
     const driver = deps.driverFor(placement);
 
     await deps.pacer.schedulerFor(placement).run(() => driver.deploy(spec), { priority: options.priority });
+
+    return { liveDeploymentId: target.liveDeploymentId, reprovisioned: true };
 };
 
 /**
@@ -329,13 +356,16 @@ export const reprovision = async (
  * The pointer moves only after the provision succeeds, so a failed rollback
  * leaves both the Worker and the record on the current release. No health check
  * follows — the target already passed one when it first went live, and there is
- * nothing safer to fall back to than the release the operator chose.
+ * nothing safer to fall back to than the release the operator chose. The
+ * record carries the release that was live when the rollback was resolved, so a
+ * deploy that went live in between makes it refuse instead of marking a release
+ * live that the Worker no longer runs.
  */
 export const rollbackRelease = async (
     input: { deploymentId: string; key?: string; organizationId: string },
     deps: ReleaseDeps,
 ): Promise<{ scriptName: string; version?: number }> => {
-    await reprovision(input, deps, { keepClasses: true });
+    const { liveDeploymentId } = await reprovision(input, deps, { keepClasses: true });
 
-    return deps.backend.rollbackDeployment(input);
+    return deps.backend.rollbackDeployment({ ...input, ...(liveDeploymentId === undefined ? {} : { expectedLiveId: liveDeploymentId }) });
 };

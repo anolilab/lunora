@@ -187,7 +187,11 @@ describe("a catalog install's badge follows its deployment", () => {
     it("removes a catalog install's row when a rollback moves the project off its deployment", async () => {
         const store = storeWith(catalogProject, { userId: "user_owner" });
 
-        await rollback.handler(store.ctx, { id: "dep_normal_old" as Id<"deployments">, organizationId: ORG as Id<"organizations"> });
+        await rollback.handler(store.ctx, {
+            expectedLiveId: "dep_catalog" as Id<"deployments">,
+            id: "dep_normal_old" as Id<"deployments">,
+            organizationId: ORG as Id<"organizations">,
+        });
 
         expect(store.rows("catalogInstalls")).toStrictEqual([]);
         expect(store.rows("deployments").find((row) => row._id === "dep_normal_old")).toMatchObject({ status: "live" });
@@ -261,7 +265,11 @@ describe("a catalog install's badge follows its deployment", () => {
             { userId: "user_owner" },
         );
 
-        await rollback.handler(store.ctx, { id: "dep_normal_old" as Id<"deployments">, organizationId: ORG as Id<"organizations"> });
+        await rollback.handler(store.ctx, {
+            expectedLiveId: "dep_catalog" as Id<"deployments">,
+            id: "dep_normal_old" as Id<"deployments">,
+            organizationId: ORG as Id<"organizations">,
+        });
 
         expect(store.rows("catalogInstalls")).toMatchObject([{ _id: "install_2", status: "installing" }]);
     });
@@ -302,7 +310,11 @@ describe("a catalog install's badge follows its deployment", () => {
             { userId: "user_owner" },
         );
 
-        await rollback.handler(store.ctx, { id: "dep_catalog_old" as Id<"deployments">, organizationId: ORG as Id<"organizations"> });
+        await rollback.handler(store.ctx, {
+            expectedLiveId: "dep_catalog" as Id<"deployments">,
+            id: "dep_catalog_old" as Id<"deployments">,
+            organizationId: ORG as Id<"organizations">,
+        });
 
         expect(store.rows("catalogInstalls")).toStrictEqual([
             {
@@ -350,7 +362,11 @@ describe("a catalog install's badge follows its deployment", () => {
             { userId: "user_owner" },
         );
 
-        await rollback.handler(store.ctx, { id: "dep_p2_old" as Id<"deployments">, organizationId: ORG as Id<"organizations"> });
+        await rollback.handler(store.ctx, {
+            expectedLiveId: "dep_p2_live" as Id<"deployments">,
+            id: "dep_p2_old" as Id<"deployments">,
+            organizationId: ORG as Id<"organizations">,
+        });
 
         expect(store.writes.filter((write) => write.table === "catalogInstalls")).toStrictEqual([]);
         expect(store.rows("catalogInstalls")).toStrictEqual(catalogProject.catalogInstalls);

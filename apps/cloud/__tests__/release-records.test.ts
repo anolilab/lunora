@@ -128,11 +128,35 @@ describe("deployments.rollback", () => {
     it("records the target live, supersedes the release it replaced, and moves the pointer", async () => {
         const { ctx, patched } = makeCtx([deployment({ _id: "dep_old", createdAt: 1, status: "superseded" }), deployment({ _id: "dep_live" })]);
 
-        await expect(rollback.handler(ctx, { id: "dep_old" as never, organizationId: ORG as never })).resolves.toMatchObject({ scriptName: "app" });
+        await expect(
+            rollback.handler(ctx, { expectedLiveId: "dep_live" as never, id: "dep_old" as never, organizationId: ORG as never }),
+        ).resolves.toMatchObject({ scriptName: "app" });
 
         expect(patched.find((entry) => entry.id === "dep_old")?.patch).toMatchObject({ status: "live" });
         expect(patched.find((entry) => entry.id === "dep_live")?.patch).toMatchObject({ status: "superseded" });
         expect(pointerPatch(patched)).toStrictEqual({ activeDeploymentId: "dep_old", activeScriptName: "app" });
+    });
+
+    it("refuses when another release went live after the rollback was resolved, recording nothing", async () => {
+        const { ctx, patched } = makeCtx([
+            deployment({ _id: "dep_old", createdAt: 1, status: "superseded" }),
+            deployment({ _id: "dep_live", createdAt: 2, status: "superseded" }),
+            deployment({ _id: "dep_newer", createdAt: 3 }),
+        ]);
+
+        await expect(
+            rollback.handler(ctx, { expectedLiveId: "dep_live" as never, id: "dep_old" as never, organizationId: ORG as never }),
+        ).rejects.toMatchObject({
+            code: "CONFLICT",
+        });
+        expect(patched).toStrictEqual([]);
+    });
+
+    it("refuses when a release went live where the rollback saw none", async () => {
+        const { ctx, patched } = makeCtx([deployment({ _id: "dep_old", createdAt: 1, status: "superseded" }), deployment({ _id: "dep_newer", createdAt: 3 })]);
+
+        await expect(rollback.handler(ctx, { id: "dep_old" as never, organizationId: ORG as never })).rejects.toMatchObject({ code: "CONFLICT" });
+        expect(patched).toStrictEqual([]);
     });
 
     it("refuses a deployment that is not a retained release", async () => {

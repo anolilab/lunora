@@ -589,14 +589,20 @@ export const activate = mutation
  * owner/admin session) — an internal function is only as scoped as its caller.
  * The target must be a `superseded` (or still-`live`) release; it becomes `live`
  * and the release it replaced is `superseded`.
+ *
+ * `expectedLiveId` is the release the edge saw live when it resolved the
+ * rollback (absent: none was). The re-provision and this record are two steps, so
+ * a deploy can activate in between and own the Worker; recording the rollback
+ * then would claim a release the Worker no longer runs, so it is refused.
  */
 export const rollback = internalMutation
     .input({
         deployKey: v.optional(boundedString(LIMITS.token)),
+        expectedLiveId: v.optional(v.id("deployments")),
         id: v.id("deployments"),
         organizationId: v.id("organizations"),
     })
-    .mutation(async ({ ctx: context, args: { deployKey, id, organizationId } }): Promise<{ scriptName: string; version?: number }> => {
+    .mutation(async ({ ctx: context, args: { deployKey, expectedLiveId, id, organizationId } }): Promise<{ scriptName: string; version?: number }> => {
         const target = await context.db.get("deployments", id);
 
         if (target?.organizationId !== organizationId) {
@@ -619,6 +625,10 @@ export const rollback = internalMutation
 
         const { now } = context;
         const replaced = await liveRelease(context, target);
+
+        if (replaced?._id !== expectedLiveId) {
+            throw new LunoraError("CONFLICT", "another release went live while this rollback ran; roll back again from the current release");
+        }
 
         assertStatusMove(target.status, "live");
 

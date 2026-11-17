@@ -157,9 +157,10 @@ const releaseDeps = (context: LunoraActionContext, environment: RouterEnv, pacer
                 };
             },
             resolveSecrets: resolveSecrets(context, environment),
-            rollbackDeployment: ({ deploymentId, key, organizationId }) =>
+            rollbackDeployment: ({ deploymentId, expectedLiveId, key, organizationId }) =>
                 context.runMutation<{ scriptName: string; version?: number }>(internal.deployments.rollback, {
                     deployKey: key,
+                    ...(expectedLiveId === undefined ? {} : { expectedLiveId }),
                     id: deploymentId,
                     organizationId,
                 }),

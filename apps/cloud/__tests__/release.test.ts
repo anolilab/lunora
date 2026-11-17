@@ -298,15 +298,78 @@ describe("handler: one stable Worker per project", () => {
         expect(lines.some((line) => typeof line["event"] === "string" && line["event"].includes("revert"))).toBe(false);
     });
 
-    it("downgrades the release to failed when activation throws", async () => {
+    it("downgrades the release to failed when activation throws, putting the previous release back first", async () => {
+        const { deployed, provisioner } = capture();
+        const { store } = memoryReleaseStore();
+
+        await store.put("dep_prev", PREVIOUS);
+
         const lines = await readLines(
             await handleDeployRequest(
                 request({ bundle: BUNDLE, projectId: "proj_1", scriptName: "app" }),
-                deps(backendWith({ activateDeployment: () => Promise.reject(new Error("pointer swap failed")) })),
+                deps(
+                    backendWith({
+                        activateDeployment: () => Promise.reject(new Error("pointer swap failed")),
+                        createDeployment: () => Promise.resolve({ deploymentId: "dep_new", previousDeploymentId: "dep_prev", version: 2 }),
+                    }),
+                    { provisioner, releases: store },
+                ),
             ),
         );
 
+        // The Worker ends on the release the record still calls live, not on the one marked failed.
+        expect(deployed.map(({ bundle }) => bundle)).toStrictEqual(["export default { v: 2 }", "export default { v: 1 }"]);
+        expect(lines).toContainEqual({ deploymentId: "dep_new", event: "reverted", to: "dep_prev" });
         expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
+    });
+
+    it("does not revert a failed release over a newer one that went live meanwhile", async () => {
+        const { deployed, provisioner } = capture();
+        const { store } = memoryReleaseStore();
+
+        await store.put("dep_prev", PREVIOUS);
+
+        const lines = await readLines(
+            await handleDeployRequest(
+                request({ bundle: BUNDLE, projectId: "proj_1", scriptName: "app" }),
+                deps(
+                    backendWith({
+                        createDeployment: () => Promise.resolve({ deploymentId: "dep_new", previousDeploymentId: "dep_prev", version: 2 }),
+                        // A newer deploy activated while this one ran its health check.
+                        releaseTarget: () => Promise.resolve(releaseTarget({ liveDeploymentId: "dep_newer" })),
+                    }),
+                    { healthCheck: () => Promise.resolve(false), provisioner, releases: store },
+                ),
+            ),
+        );
+
+        expect(deployed.map(({ bundle }) => bundle)).toStrictEqual(["export default { v: 2 }"]);
+        expect(lines).toContainEqual(expect.objectContaining({ deploymentId: "dep_new", event: "not_reverted" }));
+        expect(lines.some((line) => line["event"] === "reverted")).toBe(false);
+        expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
+    });
+
+    it("still reverts when the previous release is the live one", async () => {
+        const { deployed, provisioner } = capture();
+        const { store } = memoryReleaseStore();
+
+        await store.put("dep_prev", PREVIOUS);
+
+        const lines = await readLines(
+            await handleDeployRequest(
+                request({ bundle: BUNDLE, projectId: "proj_1", scriptName: "app" }),
+                deps(
+                    backendWith({
+                        createDeployment: () => Promise.resolve({ deploymentId: "dep_new", previousDeploymentId: "dep_prev", version: 2 }),
+                        releaseTarget: () => Promise.resolve(releaseTarget({ liveDeploymentId: "dep_prev" })),
+                    }),
+                    { healthCheck: () => Promise.resolve(false), provisioner, releases: store },
+                ),
+            ),
+        );
+
+        expect(deployed).toHaveLength(2);
+        expect(lines).toContainEqual({ deploymentId: "dep_new", event: "reverted", to: "dep_prev" });
     });
 });
 
@@ -376,6 +439,50 @@ describe(rollbackRelease, () => {
 
         await expect(rollbackRelease({ deploymentId: "dep_prev", key: "k", organizationId: "org_1" }, release)).rejects.toThrow(/eu-1/u);
         expect(deployed).toHaveLength(0);
+    });
+
+    it("refuses to record the rollback when another release went live after it was resolved", async () => {
+        const { store } = memoryReleaseStore();
+        let live = "dep_live";
+        const recordedLive: string[] = [];
+        const expectedLive: (string | undefined)[] = [];
+
+        await store.put("dep_prev", PREVIOUS);
+
+        const release = deps(
+            backendWith({
+                releaseTarget: () => Promise.resolve(releaseTarget({ liveDeploymentId: live })),
+                // The record's own check, as `deployments.rollback` makes it against the current live row.
+                rollbackDeployment: ({ deploymentId, expectedLiveId }) => {
+                    expectedLive.push(expectedLiveId);
+
+                    if (expectedLiveId !== live) {
+                        return Promise.reject(Object.assign(new Error("another release went live"), { code: "CONFLICT" }));
+                    }
+
+                    recordedLive.push(deploymentId);
+
+                    return Promise.resolve({ scriptName: "app", version: 1 });
+                },
+            }),
+            {
+                provisioner: {
+                    deploy: (spec) => {
+                        // A deploy activates its release while the rollback converges.
+                        live = "dep_newer";
+
+                        return Promise.resolve({ url: `https://${spec.alias}.lunora.app` });
+                    },
+                    destroy: () => Promise.resolve(),
+                },
+                releases: store,
+            },
+        );
+
+        await expect(rollbackRelease({ deploymentId: "dep_prev", key: "k", organizationId: "org_1" }, release)).rejects.toMatchObject({ code: "CONFLICT" });
+        // The record is checked against the release live when the rollback was resolved, not the current one.
+        expect(expectedLive).toStrictEqual(["dep_live"]);
+        expect(recordedLive).toStrictEqual([]);
     });
 
     it("does not record the rollback when the provision fails", async () => {

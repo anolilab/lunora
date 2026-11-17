@@ -1349,7 +1349,7 @@ export interface Caller {
         planForScript: (args: { scriptName: unknown }) => Promise<{ plan: string; protected?: boolean; recursion?: "allow"; }>;
         pruneSuperseded: (args?: {}) => Promise<{ pruned: number; }>;
         releaseTarget: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; cronSpecs?: string[]; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; runtime?: "worker"; target?: string }>;
-        rollback: (args: { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ scriptName: string; version?: number; }>;
+        rollback: (args: { deployKey?: unknown; expectedLiveId?: Id<"deployments">; id: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ scriptName: string; version?: number; }>;
         updateStatus: (args: { bundleHash?: unknown; deployKey?: unknown; id: Id<"deployments">; status: "queued" | "provisioning" | "building" | "verifying" | "live" | "superseded" | "failed" | "destroyed"; url?: unknown }) => Promise<void>;
     };
     domains: {

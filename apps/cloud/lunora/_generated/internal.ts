@@ -70,7 +70,7 @@ export interface InternalApiTypes {
         ejectTarget: FunctionReference<"query", { deployKey: unknown; deploymentId: Id<"deployments"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;
         pruneSuperseded: FunctionReference<"mutation", {}, { pruned: number; }>;
         releaseTarget: FunctionReference<"query", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; cronSpecs?: string[]; kind: "dev" | "preview" | "production"; liveDeploymentId?: Id<"deployments">; projectId: Id<"projects">; runtime?: "worker"; target?: string }>;
-        rollback: FunctionReference<"mutation", { deployKey?: unknown; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
+        rollback: FunctionReference<"mutation", { deployKey?: unknown; expectedLiveId?: Id<"deployments">; id: Id<"deployments">; organizationId: Id<"organizations"> }, { scriptName: string; version?: number; }>;
     };
     domains: {
         markVerified: FunctionReference<"mutation", { id: Id<"domains">; organizationId: Id<"organizations">; verified: boolean }, void>;
