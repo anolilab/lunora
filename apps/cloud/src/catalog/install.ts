@@ -374,9 +374,14 @@ export const planInstall = (input: InstallInput, stored: ReadonlySet<string>): I
     }
 
     const hasVariables = Object.keys(variables.vars).length > 0;
+    const bundle = toBase64(main);
+
+    // The release carries the module as base64 from here on, as `collectStatic` does for each asset.
+    files.delete(manifest.main);
+
     const request: InstallRelease = {
         ...(upload.assets === undefined ? {} : { assets: upload.assets }),
-        bundle: toBase64(main),
+        bundle,
         kind: "production",
         manifest: { bindings, ...(hasVariables ? { vars: variables.vars } : {}) },
         projectId,

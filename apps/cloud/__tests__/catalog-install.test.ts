@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { CatalogManifest } from "../src/catalog/artifact";
+import { toBase64 } from "../src/catalog/fields";
 import type { InstallInput, InstallPorts, SealedSecret, VerifiedArtifact } from "../src/catalog/install";
 import { planInstall, runInstall } from "../src/catalog/install";
 import okOf from "./catalog-helpers";
@@ -92,7 +93,23 @@ const portsWith = (overrides: Partial<InstallPorts> = {}) => {
     return { calls, ports };
 };
 
+describe(toBase64, () => {
+    it.each([0, 1, 2, 3, 24_575, 24_576, 24_577, 100_000])("encodes %i bytes exactly as one whole-buffer encoding does", (length) => {
+        const input = Uint8Array.from({ length }, (_, index) => (index * 31 + 7) % 256);
+
+        expect(toBase64(input)).toBe(Buffer.from(input).toString("base64"));
+    });
+});
+
 describe(planInstall, () => {
+    it("hands the main module to the release as base64 and drops its bytes from the artifact", () => {
+        const input = baseInput();
+        const planned = okOf(planInstall(input, new Set()));
+
+        expect(planned.plan.request.bundle).toBe(Buffer.from("export default {};").toString("base64"));
+        expect(input.artifact.files.has("worker.js")).toBe(false);
+    });
+
     it("fails with the field the user must fill when a required var is missing", () => {
         const result = planInstall(baseInput({ artifact: formOf({ vars: [{ label: "Site name", name: "SITE_NAME", required: true }] }) }), new Set());
 
