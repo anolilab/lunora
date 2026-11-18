@@ -33,7 +33,7 @@ interface DomainRow {
     organizationId: string;
     projectId: string;
     txtToken: string;
-    verifiedAt?: number;
+    verifiedAt?: null | number;
 }
 
 interface ChannelRow {

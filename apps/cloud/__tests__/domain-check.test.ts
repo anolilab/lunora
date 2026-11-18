@@ -37,6 +37,14 @@ describe(reconcileDomain, () => {
     it("leaves a domain that was never verified quiet while it is pending", () => {
         expect(reconcileDomain({}, false, NOW)).toStrictEqual({ patch: { failedChecks: 0 }, transition: null });
     });
+
+    it("treats a cleared verifiedAt of null as pending, so a passing check verifies it", () => {
+        expect(reconcileDomain({ verifiedAt: null }, true, NOW)).toStrictEqual({ patch: { failedChecks: 0, verifiedAt: NOW }, transition: "domain.verified" });
+    });
+
+    it("keeps a pending domain with a null verifiedAt quiet when it fails", () => {
+        expect(reconcileDomain({ failedChecks: 1, verifiedAt: null }, false, NOW)).toStrictEqual({ patch: { failedChecks: 0 }, transition: null });
+    });
 });
 
 type Row = Record<string, unknown> & { _id: string };

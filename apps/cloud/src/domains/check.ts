@@ -10,7 +10,8 @@ export const FAILURES_BEFORE_UNVERIFIED = 2;
 /** The slice of a domain row the decision reads. */
 export interface DomainCheckState {
     failedChecks?: number;
-    verifiedAt?: number;
+    /** `null` once a check has failed: the stored row keeps the cleared stamp, so absent and `null` both mean pending. */
+    verifiedAt?: null | number;
 }
 
 /** What the check writes back, and the notification it earns, if any. */
@@ -28,14 +29,14 @@ export interface DomainCheckOutcome {
  */
 export const reconcileDomain = (state: DomainCheckState, verified: boolean, now: number): DomainCheckOutcome => {
     if (verified) {
-        if (state.verifiedAt === undefined) {
+        if (state.verifiedAt == null) {
             return { patch: { failedChecks: 0, verifiedAt: now }, transition: "domain.verified" };
         }
 
         return { patch: { failedChecks: 0, verifiedAt: state.verifiedAt }, transition: null };
     }
 
-    if (state.verifiedAt === undefined) {
+    if (state.verifiedAt == null) {
         return { patch: { failedChecks: 0 }, transition: null };
     }
 
