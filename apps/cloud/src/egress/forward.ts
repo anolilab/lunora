@@ -15,10 +15,13 @@ import type { EgressPolicy } from "./policy";
  * the host it is sent to, and one stamped for the first host would be refused
  * by the dispatcher on the next.
  *
- * The body is streamed to the first hop and never buffered. A stream can be
- * sent once, so a redirect that must resend a body (307/308, or a 301/302 that
- * keeps a non-POST method) is not replayed: its Location is checked and the 3xx
- * is returned to the tenant, which may follow it itself.
+ * Under `enforce` the body is streamed to the first hop and never buffered. A
+ * stream can be sent once, so a redirect that must resend a body (307/308, or a
+ * 301/302 that keeps a non-POST method) is not replayed: its Location is checked
+ * and the 3xx is returned to the tenant, which may follow it itself. Without a
+ * policy the walk only replaces `fetch`'s own redirect handling, so a body of up
+ * to {@link MAX_REPLAY_BYTES} is held to be resent, as `fetch` would; a larger
+ * one streams and gets the 3xx back.
  */
 
 /** Followed redirects per request under an enforcing policy (plan 477 §4.4). */
@@ -26,6 +29,9 @@ export const MAX_EGRESS_REDIRECTS = 5;
 
 /** Followed redirects without a policy: the fetch spec's own limit, so walking them here changes nothing. */
 const MAX_UNPOLICED_REDIRECTS = 20;
+
+/** The largest body held in memory to resend after a redirect, without a policy. */
+export const MAX_REPLAY_BYTES = 1024 * 1024;
 
 export type FetchLike = (request: Request) => Promise<Response>;
 
@@ -88,8 +94,8 @@ interface WalkRules {
 
 /** One request in a redirect walk. `followed` counts the redirects already taken to reach it. */
 interface Hop {
-    /** Streamed, so only the first hop can carry it: see the module comment. */
-    body: ReadableStream<Uint8Array> | null;
+    /** Bytes are resent after a redirect; a stream reaches only the first hop. See the module comment. */
+    body: ReadableStream<Uint8Array> | Uint8Array<ArrayBuffer> | null;
 
     /**
      * The tenant's Cloudflare fetch options (`cacheTtl`, `cacheEverything`, …). A hop is
@@ -121,9 +127,10 @@ const methodAfter = (method: string, status: number): string => {
 };
 
 /**
- * The hop after a redirect. The body is always gone: a hop that kept a body was
- * returned to the tenant instead (see `walk`). Credentials are dropped when the
- * redirect crosses origins.
+ * The hop after a redirect. The body goes with a method change; otherwise it is
+ * held bytes, since a stream that would have to be resent was returned to the
+ * tenant instead (see `walk`). Credentials are dropped when the redirect crosses
+ * origins.
  */
 const nextHop = (hop: Hop, method: string, target: string): Hop => {
     const headers = new Headers(hop.headers);
@@ -142,7 +149,7 @@ const nextHop = (hop: Hop, method: string, target: string): Hop => {
         headers.delete("cookie");
     }
 
-    return { body: null, cf: hop.cf, followed: hop.followed + 1, headers, method, url: target };
+    return { body: method === hop.method ? hop.body : null, cf: hop.cf, followed: hop.followed + 1, headers, method, url: target };
 };
 
 /** Fetch one hop; if it redirects, check the target origin before following it. */
@@ -172,7 +179,7 @@ const walk = async (hop: Hop, rules: WalkRules): Promise<Response> => {
 
     // A streamed body that the next hop would resend cannot be replayed. The
     // Location is already checked, so the tenant gets the 3xx instead.
-    if (hop.body !== null && method === hop.method) {
+    if (hop.body instanceof ReadableStream && method === hop.method) {
         return response;
     }
 
@@ -184,6 +191,57 @@ const walk = async (hop: Hop, rules: WalkRules): Promise<Response> => {
 };
 
 const unchanged: PrepareHop = (request) => Promise.resolve(request);
+
+/**
+ * Read a body into memory if it ends within `limit` bytes; otherwise a stream
+ * that yields what was read and then the rest, so nothing is lost and no more
+ * than `limit` is ever held.
+ */
+const holdUpTo = async (stream: ReadableStream<Uint8Array>, limit: number): Promise<ReadableStream<Uint8Array> | Uint8Array<ArrayBuffer>> => {
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+
+    for (;;) {
+        // eslint-disable-next-line no-await-in-loop -- a stream is read one chunk after another
+        const { done, value } = await reader.read();
+
+        if (done) {
+            const bytes = new Uint8Array(size);
+            let offset = 0;
+
+            for (const chunk of chunks) {
+                bytes.set(chunk, offset);
+                offset += chunk.byteLength;
+            }
+
+            return bytes;
+        }
+
+        chunks.push(value);
+        size += value.byteLength;
+
+        if (size > limit) {
+            return new ReadableStream<Uint8Array>({
+                cancel: (reason) => reader.cancel(reason),
+                pull: async (controller) => {
+                    const next = await reader.read();
+
+                    if (next.done) {
+                        controller.close();
+                    } else {
+                        controller.enqueue(next.value);
+                    }
+                },
+                start: (controller) => {
+                    for (const chunk of chunks) {
+                        controller.enqueue(chunk);
+                    }
+                },
+            });
+        }
+    }
+};
 
 export const forwardWithEgress = async (
     request: Request,
@@ -208,11 +266,12 @@ export const forwardWithEgress = async (
         return deniedTarget(nextLocation(response, request.url), allowed) ?? response;
     }
 
-    // Walk the redirects ourselves. The body is streamed, not buffered, and each
-    // hop is an explicit manual fetch.
+    // Walk the redirects ourselves, each hop an explicit manual fetch.
+    const body = request.body === null || enforcing ? request.body : await holdUpTo(request.body, MAX_REPLAY_BYTES);
+
     return walk(
         {
-            body: request.body,
+            body,
             cf: (request as { cf?: RequestInit["cf"] }).cf,
             followed: 0,
             headers: new Headers(request.headers),

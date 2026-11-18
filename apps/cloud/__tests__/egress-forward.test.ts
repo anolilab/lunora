@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { forwardWithEgress, MAX_EGRESS_REDIRECTS } from "../src/egress/forward";
+import { forwardWithEgress, MAX_EGRESS_REDIRECTS, MAX_REPLAY_BYTES } from "../src/egress/forward";
 import type { EgressPolicy } from "../src/egress/policy";
 import { API, recordingUpstream, redirect, scriptedUpstream } from "./_helpers/egress";
 
@@ -137,6 +137,38 @@ describe(forwardWithEgress, () => {
         expect(response.status).toBe(307);
         expect(response.headers.get("location")).toBe(`${API}/b`);
         expect(upstream).toHaveBeenCalledTimes(1);
+    });
+
+    it("resends an upload's body after a 307 when there is no policy, as fetch would", async () => {
+        const seen: { body: string; method: string; url: string }[] = [];
+        const upstream = recordingUpstream(async (hop, request) => {
+            seen.push({ body: await request.text(), method: request.method, url: request.url });
+
+            return hop === 0 ? redirect("https://uploads.example.org/b", 307) : new Response("stored", { status: 201 });
+        });
+
+        const response = await forwardWithEgress(new Request("https://tenant.example/a", { body: "payload", method: "PUT" }), undefined, upstream);
+
+        expect(response.status).toBe(201);
+        expect(seen).toStrictEqual([
+            { body: "payload", method: "PUT", url: "https://tenant.example/a" },
+            { body: "payload", method: "PUT", url: "https://uploads.example.org/b" },
+        ]);
+    });
+
+    it("streams a body over the replay limit whole, and returns its 307 when there is no policy", async () => {
+        const large = "x".repeat(MAX_REPLAY_BYTES + 1);
+        const sent: string[] = [];
+        const upstream = recordingUpstream(async (_hop, request) => {
+            sent.push(await request.text());
+
+            return redirect("https://uploads.example.org/b", 307);
+        });
+
+        const response = await forwardWithEgress(new Request("https://tenant.example/a", { body: large, method: "PUT" }), undefined, upstream);
+
+        expect(response.status).toBe(307);
+        expect(sent).toStrictEqual([large]);
     });
 
     it("returns a PUT's 301 to the tenant rather than replaying its streamed body", async () => {
