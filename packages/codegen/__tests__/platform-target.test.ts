@@ -1450,6 +1450,32 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         });
 
         it.each([
+            ["workerd", { exports: { ".": { node: "./node.js", workerd: "./worker.js" } } }],
+            ["worker", { exports: { node: "./node.js", worker: "./worker.js" } }],
+            ["browser, nested", { exports: { ".": { import: { browser: "./worker.js", default: "./node.js" } } } }],
+        ])("does not refuse a dual package's %s entry, which a Node process never loads", (_label, manifest) => {
+            expect.assertions(1);
+
+            writeNested("dualpkg/package.json", `${JSON.stringify({ name: "dualpkg", ...manifest })}\n`);
+            writeNested("dualpkg/worker.js", LOADS_ENV);
+            writeNested("dualpkg/node.js", "export const binding = () => process.env;\n");
+            write("send.ts", `import { binding } from "./dualpkg";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
+
+        it("still refuses a dual package whose node entry loads cloudflare:workers", () => {
+            expect.assertions(1);
+
+            writeNested("dualpkg/package.json", `${JSON.stringify({ exports: { node: "./node.js", workerd: "./worker.js" }, name: "dualpkg" })}\n`);
+            writeNested("dualpkg/worker.js", "export const binding = () => undefined;\n");
+            writeNested("dualpkg/node.js", LOADS_ENV);
+            write("send.ts", `import { binding } from "./dualpkg";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/dualpkg/node.js (cloudflare:workers)");
+        });
+
+        it.each([
             ["main", { main: "./entry.tsx" }, "entry.tsx"],
             ['exports["."]', { exports: { ".": { import: "./esm.tsx" } } }, "esm.tsx"],
         ])("follows a local package directory's %s entrypoint", (_label, manifest, entry) => {

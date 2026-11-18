@@ -132,10 +132,21 @@ const isFile = (path: string): boolean => {
 };
 
 /**
+ * The `exports` conditions only a Worker build matches. The Node target has no
+ * bundler of its own to read conditions from (its driver has no toolchain; the
+ * app runs in the operator's own Node process), so the walk cannot pick the one
+ * entry Node would and stays fail-closed over every other condition. It drops
+ * only these: a dual package's `workerd` or `worker` entry is the half a Node
+ * process never loads, and importing `cloudflare:workers` there is the point of it.
+ */
+const WORKER_ONLY_CONDITIONS: ReadonlySet<string> = new Set(["browser", "worker", "workerd"]);
+
+/**
  * Every string target in a `package.json` `exports` value: its `"."` entry, or
- * top-level conditions, and every nested condition or fallback array beneath.
- * A `null` anywhere is "no target", which `exports` uses to block a path, so it
- * contributes nothing rather than being walked.
+ * top-level conditions, and every nested condition or fallback array beneath,
+ * less the {@link WORKER_ONLY_CONDITIONS} branches. A `null` anywhere is "no
+ * target", which `exports` uses to block a path, so it contributes nothing
+ * rather than being walked.
  */
 const exportTargets = (value: unknown, atRoot = true): string[] => {
     if (typeof value === "string") {
@@ -152,7 +163,9 @@ const exportTargets = (value: unknown, atRoot = true): string[] => {
         return exportTargets(entries["."], false);
     }
 
-    return Object.values(entries).flatMap((target) => exportTargets(target, false));
+    return Object.entries(entries)
+        .filter(([condition]) => !WORKER_ONLY_CONDITIONS.has(condition))
+        .flatMap(([, target]) => exportTargets(target, false));
 };
 
 /** Whether `path` is an existing directory. */
