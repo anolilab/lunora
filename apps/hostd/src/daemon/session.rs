@@ -40,7 +40,7 @@ pub const SILENCE_TIMEOUT: Duration = Duration::from_secs(120);
 const SEND_CAPACITY: f64 = 100.0;
 const SEND_REFILL_PER_SECOND: f64 = 3.0;
 
-/// Frames queued behind the send budget before the oldest progress lines are dropped.
+/// Frames queued behind the send budget before progress lines are shed and reports refused.
 const MAX_OUTBOX: usize = 2000;
 
 /// Why the session ended for good.
@@ -122,7 +122,8 @@ impl SessionHandle {
         self.shared.authenticated.load(Ordering::SeqCst)
     }
 
-    /// Queue a frame. `false` when the session is not authenticated, so the caller can keep it for later.
+    /// Queue a frame. `false` when the session is not authenticated, or for a report when the outbox is full of
+    /// results and reports, so the caller can keep it for later.
     pub fn send(&self, message: BoxMessage) -> bool {
         if !self.ready() {
             return false;
@@ -131,14 +132,20 @@ impl SessionHandle {
         {
             let mut outbox = self.shared.outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 
-            outbox.push_back(message);
-
-            if outbox.len() > MAX_OUTBOX {
-                // Shed progress, never a result or a report.
-                let index = outbox.iter().position(|queued| matches!(queued, BoxMessage::Progress { .. })).unwrap_or(0);
-
-                outbox.remove(index);
+            if outbox.len() >= MAX_OUTBOX {
+                // A result is what the control plane waits on, so it always goes in, over the cap if need be.
+                // A report is refused rather than dropped: its queue keeps it for a later drain.
+                match outbox.iter().position(|queued| matches!(queued, BoxMessage::Progress { .. })) {
+                    Some(index) => {
+                        outbox.remove(index);
+                    }
+                    None if matches!(message, BoxMessage::Progress { .. }) => return true,
+                    None if matches!(message, BoxMessage::Report(_)) => return false,
+                    None => {}
+                }
             }
+
+            outbox.push_back(message);
         }
 
         self.shared.pump.notify_one();
@@ -437,7 +444,7 @@ mod tests {
     use crate::daemon::log::recording;
     use crate::daemon::testing::{FakePlane, Script};
     use crate::wire::codec::encode_cloud_message;
-    use crate::wire::types::{BoxResources, BoxVersions};
+    use crate::wire::types::{BoxResources, BoxVersions, ResultMessage};
 
     const BOX_ID: &str = "box_1";
 
@@ -685,6 +692,39 @@ mod tests {
             .collect();
 
         assert_eq!(windows, [0, 1]);
+    }
+
+    #[test]
+    fn keeps_every_result_and_refuses_reports_once_the_outbox_is_full() {
+        let (_, handle, _) = session("http://127.0.0.1:1", identity(), Logger::silent());
+        let result = |index: usize| BoxMessage::Result(ResultMessage { error: None, job_id: format!("job_{index}"), ok: true, url: None });
+        let report = |index: u64| BoxMessage::Report(ReportMessage { per_alias: vec![], window_end: index + 1, window_start: index });
+
+        handle.shared.authenticated.store(true, Ordering::SeqCst);
+
+        for index in 0..MAX_OUTBOX / 2 {
+            assert!(handle.send(result(index)));
+            assert!(handle.send(report(index as u64)));
+        }
+
+        assert!(handle.send(BoxMessage::Progress { job_id: "job_0".into(), line: "working".into() }));
+        assert!(!handle.send(report(MAX_OUTBOX as u64)));
+
+        for index in MAX_OUTBOX / 2..MAX_OUTBOX {
+            assert!(handle.send(result(index)));
+        }
+
+        let outbox = handle.shared.outbox.lock().unwrap();
+        let results: Vec<String> = outbox
+            .iter()
+            .filter_map(|message| match message {
+                BoxMessage::Result(result) => Some(result.job_id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(results, (0..MAX_OUTBOX).map(|index| format!("job_{index}")).collect::<Vec<_>>());
+        assert_eq!(outbox.iter().filter(|message| matches!(message, BoxMessage::Report(_))).count(), MAX_OUTBOX / 2);
     }
 
     #[test]
