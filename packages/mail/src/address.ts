@@ -166,4 +166,16 @@ const assertValidIdempotencyKey = (key: unknown): void => {
     }
 };
 
-export { assertSafeAddresses, assertSafeHeaderValue, assertValidIdempotencyKey, toAddress, toAddressList };
+/**
+ * Refuse a message with neither `text` nor `html`, before anything is queued or sent. Providers
+ * refuse it too, but `@visulima/email` reports that as a plain error with no status, which reads
+ * as transient: the message was retried until it reached the dead-letter queue. Empty strings
+ * count as missing, as they do there.
+ */
+const assertHasContent = (payload: { html?: string; text?: string }): void => {
+    if (!payload.text && !payload.html) {
+        throw new MailSendError({ message: "@lunora/mail: a message needs `text` or `html` content (or `react` to render them)", retryable: false });
+    }
+};
+
+export { assertHasContent, assertSafeAddresses, assertSafeHeaderValue, assertValidIdempotencyKey, toAddress, toAddressList };

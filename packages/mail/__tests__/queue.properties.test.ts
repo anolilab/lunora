@@ -125,7 +125,7 @@ const replay = async (steps: ReadonlyArray<Step>): Promise<Replay> => {
 
         try {
             // eslint-disable-next-line no-await-in-loop -- deliveries are sequential by construction: each depends on the store the last one left
-            await consumeQueuedSend(mailer, { idempotencyKey: key, subject: "Hi", to: "a@x.test" }, { sent: store, sentTtlSeconds: TTL_SECONDS });
+            await consumeQueuedSend(mailer, { idempotencyKey: key, subject: "Hi", text: "Hi", to: "a@x.test" }, { sent: store, sentTtlSeconds: TTL_SECONDS });
 
             if (outcome !== "okAckLost") {
                 acked.add(key);
