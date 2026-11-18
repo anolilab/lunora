@@ -750,7 +750,10 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
     const cloudflareImports = signals.cloudflareModuleImports ?? [];
 
     if (cloudflareImports.length > 0 && refusesCloudflareModules(matrix)) {
-        diagnostics.push(cloudflareModulesDiagnostic(matrix, target, cloudflareImports, matrix.features.cloudflareModules?.level));
+        // Refused means unrated or unsupported, so anything but `unsupported` here is the unrated case.
+        const level = matrix.features.cloudflareModules?.level === "unsupported" ? "unsupported" : undefined;
+
+        diagnostics.push(cloudflareModulesDiagnostic(matrix, target, cloudflareImports, level));
     }
 
     return { diagnostics, liveStreamsWithheld, signals: gatedSignals, usage: gated };
