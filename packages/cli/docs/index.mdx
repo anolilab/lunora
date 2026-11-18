@@ -826,7 +826,10 @@ Refused before codegen writes anything:
   adapter's output that `src/worker.ts` wraps, cannot be bundled, because this
   deploy runs no framework build. Point `main` at a hand-written worker entry
   that default-exports the fetch handler and exports `ShardDO` (the standalone
-  template's shape), or deploy the app to Cloudflare.
+  template's shape), or deploy the app to Cloudflare. An entry that exports no
+  default fetch handler or not every Durable Object class wrangler binds (an
+  adapter's output with no composed wrapper) fails the bundle with the same
+  advice.
 - **Flags with nothing to act on:** `--env`, `--migrate` and its
   `--migrate-url`, `--migrate-token`, `--migrate-yes` and
   `--migrate-allow-destructive`, `--health-check`, `--preview`, `--temporary`,
@@ -840,22 +843,31 @@ image binds `0.0.0.0`), `PORT` (default `8787`), `HOST` and `LUNORA_DATA_DIR`
 (`/data` in the image), plus `DATABASE_URL` when the app declares a Hyperdrive
 binding and one variable per `secrets_store_secrets[]` binding and
 `secrets.required` name. It refuses to start while a `secrets.required` name or
-`DATABASE_URL` is unset. Every container variable reaches the worker's `env`, as
-every `wrangler secret put` secret does on Cloudflare; the generated files carry
-names only, never a value. Wrangler `vars` are bundled as declared (a JSON object
+`DATABASE_URL` is unset. Only declared names reach the worker's `env`, as on
+Cloudflare: the wrangler `vars`, the `secrets.required` names, the
+`secrets_store_secrets[]` bindings, and the runtime's own `LUNORA_*`, `PORT` and
+`DATABASE_URL`. Any other variable a container host injects (cloud credentials,
+another service's token) stays out of reach of app code, so list every secret
+the app reads in `secrets.required`. The generated files carry names only, never
+a value. Wrangler `vars` are bundled as declared (a JSON object
 stays an object) and a set environment variable overrides one as a string.
 Every shard, the scheduler and the crons live in SQLite files under
 `LUNORA_DATA_DIR`, so mount a persistent volume there (a bind mount must be
 writable by uid 1000) and run one container per volume.
 
-On SIGTERM or SIGINT the server answers new requests with 503, waits for the
-responses in flight to be written, closes the listener (ending event streams and
-WebSockets), then drains `waitUntil` work, alarms and cron runs before closing
-the databases. A failed step is logged and the rest still run. A second signal
-exits at once. `waitUntil` failures, alarm and scheduled-job failures, a
-throwing fetch handler, unhandled rejections and uncaught exceptions are logged
-with their stack and cause; the last two also shut the server down with exit
-code 1.
+On SIGTERM or SIGINT the server stops accepting connections, waits for the
+responses in flight at that moment to be written (a request still arriving on an
+open connection gets a 503 and `Connection: close`), closes the listener (ending
+event streams and WebSockets), then drains `waitUntil` work, alarms and cron runs
+before closing the databases. The whole drain shares one deadline,
+`LUNORA_SHUTDOWN_TIMEOUT_MS` (default 8000, under `docker stop`'s 10 s grace);
+work still running when it passes is logged by name and the exit code is 1. A
+failed step is logged and the rest still run, and any fatal error during the
+shutdown also makes the exit code 1. A second signal exits at once. `waitUntil`
+failures, alarm and scheduled-job failures, a throwing fetch handler (logged by
+method and path, never its query string), unhandled rejections and uncaught
+exceptions are logged with their stack and cause; the last two also shut the
+server down with exit code 1.
 
 The deploy warns, by name, about every declared binding the server does not
 compose: static `assets`, queues, workflows, `.global()` tables, object

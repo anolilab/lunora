@@ -30,6 +30,12 @@ const NODE_DEPLOY_DIRECTORY = join(".lunora", "deploy", "node");
 // eslint-disable-next-line no-secrets/no-secrets -- an image digest is a public content hash, not a secret
 const NODE_IMAGE = "node:24.11.1-bookworm-slim@sha256:48abc13a19400ca3985071e287bd405a1d99306770eb81d61202fb6b65cf0b57";
 
+/** How long a shutdown drains before it closes the databases anyway; under `docker stop`'s default 10 s grace. */
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 8000;
+
+/** The variable that overrides {@link DEFAULT_SHUTDOWN_TIMEOUT_MS}. */
+const SHUTDOWN_TIMEOUT_VARIABLE = ["LUNORA", "SHUTDOWN", "TIMEOUT", "MS"].join("_");
+
 /** The port the server listens on when `PORT` is unset, matching `wrangler dev`'s default. */
 const DEFAULT_PORT = 8787;
 
@@ -267,6 +273,11 @@ const nodeDeployEnv = (project: NodeDeployProject): NodeDeployEnvVariable[] => [
     { description: `Port to listen on (default \`${String(DEFAULT_PORT)}\`).`, name: "PORT", required: false },
     { description: "Interface to bind (default `127.0.0.1`; the image sets `0.0.0.0`).", name: "HOST", required: false },
     {
+        description: `How long a shutdown waits for in-flight work before closing the databases anyway (default \`${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)}\`). Keep it below the container's stop timeout.`,
+        name: SHUTDOWN_TIMEOUT_VARIABLE,
+        required: false,
+    },
+    {
         description: "Directory the SQLite databases live in (default `./data`; the image sets `/data`, its volume). Back it up; it is the app's data.",
         name: "LUNORA_DATA_DIR",
         required: false,
@@ -311,10 +322,16 @@ const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cron
         durableObjects: project.durableObjects,
         hyperdrive: project.hyperdrive,
         requiredEnv: [...project.workerSecrets, ...(project.hyperdrive === undefined ? [] : ["DATABASE_URL"])],
+        workerSecrets: project.workerSecrets,
         storeSecrets: project.storeSecrets,
         vars: project.vars,
     };
     const primary = project.durableObjects.find((binding) => binding.name === "SHARD") ?? project.durableObjects[0];
+    // Named, not a namespace import: esbuild then fails the bundle when the entry does not export one of them, so an entry that
+    // is not a Lunora worker (a framework adapter exporting only \`fetch\`) is refused at deploy time instead of at startup.
+    const classNames = [...new Set(project.durableObjects.map((binding) => binding.className))];
+    const classImports = classNames.map((className, index) => `${className} as __lunoraDurableObject${String(index)}`).join(", ");
+    const classTable = classNames.map((className, index) => `${JSON.stringify(className)}: __lunoraDurableObject${String(index)}`).join(", ");
 
     return `import { mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -330,7 +347,7 @@ import {
     createNodeShardState,
 } from "@lunora/platform-node";
 
-import * as worker from ${JSON.stringify(projectSpecifier(projectRoot, project.entry))};
+import handler, { ${classImports} } from ${JSON.stringify(projectSpecifier(projectRoot, project.entry))};
 import { LUNORA_CRONS } from ${JSON.stringify(projectSpecifier(projectRoot, cronsModule))};
 
 const CONFIG = ${JSON.stringify(config, undefined, 4)};
@@ -348,7 +365,7 @@ if (missing.length > 0) {
     process.exit(1);
 }
 
-const handler = worker.default;
+const DURABLE_OBJECT_CLASSES = { ${classTable} };
 
 if (typeof handler?.fetch !== "function") {
     throw new TypeError("lunora: the worker entry has no default export with a fetch handler");
@@ -358,10 +375,21 @@ const dataDirectory = resolve(process.env.LUNORA_DATA_DIR ?? "data");
 
 mkdirSync(dataDirectory, { recursive: true });
 
-// Every container variable reaches env, as every \`wrangler secret put\` secret does on Cloudflare; a var's override is a string.
+// Only declared names reach env, as on Cloudflare: the wrangler vars, the secrets.required names, and what the runtime reads
+// itself (LUNORA_*, PORT, DATABASE_URL). A container host's other variables (cloud credentials, another service's token) stay
+// out of reach of app code. A var set in the environment overrides the bundled value as a string.
+const RUNTIME_ENV = ["PORT", "DATABASE_URL"];
 const env = { WORKER_ENV: "production", ...CONFIG.vars };
+const declaredNames = new Set([
+    ...Object.keys(CONFIG.vars),
+    ...CONFIG.workerSecrets,
+    ...RUNTIME_ENV,
+    ...Object.keys(process.env).filter((name) => name.startsWith("LUNORA_")),
+]);
 
-for (const [name, value] of Object.entries(process.env)) {
+for (const name of declaredNames) {
+    const value = process.env[name];
+
     if (value !== undefined) {
         env[name] = value;
     }
@@ -374,7 +402,7 @@ if (CONFIG.hyperdrive !== undefined) {
 }
 
 const instanceFactory = (className) => {
-    const DurableObject = worker[className];
+    const DurableObject = DURABLE_OBJECT_CLASSES[className];
 
     if (typeof DurableObject !== "function") {
         throw new TypeError(\`lunora: the worker entry does not export Durable Object class \${className}\`);
@@ -439,10 +467,25 @@ const track = (set, work) => {
     settled.finally(() => set.delete(settled));
 };
 
-/** Wait until \`set\` stays empty: work can add more work while it runs. */
-const drainSet = async (set) => {
-    while (set.size > 0) {
-        await Promise.all(set);
+/** Wait until \`set\` stays empty (work can add more work while it runs), or until the deadline passes. */
+const drainSet = async (set, { timeoutMs }) => {
+    let timer;
+    const expired = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+    });
+
+    try {
+        while (set.size > 0) {
+            if (!(await Promise.race([Promise.all(set).then(() => true), expired]))) {
+                console.error(\`lunora: shutdown deadline passed with \${String(set.size)} waitUntil task(s) still running\`);
+
+                return { pending: [...set].map(() => "waitUntil work"), timedOut: true };
+            }
+        }
+
+        return { pending: [], timedOut: false };
+    } finally {
+        clearTimeout(timer);
     }
 };
 
@@ -478,7 +521,21 @@ const publicUrl = process.env.LUNORA_ORIGIN_URL;
 
 console.log(\`lunora: listening on \${server.origin}\${publicUrl === undefined || publicUrl === "" ? "" : \` (public URL \${publicUrl})\`}\`);
 
+// One exit code for the whole process: a fatal error raised while a shutdown is already running must still end it non-zero.
+let exitCode = 0;
+
+const markFailed = () => {
+    exitCode = 1;
+};
+
+// The whole drain shares one deadline, kept under \`docker stop\`'s default 10 s grace so the databases are closed before a kill.
+const shutdownTimeoutMs = Number(process.env[${JSON.stringify(SHUTDOWN_TIMEOUT_VARIABLE)}] ?? ${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)});
+
 const shutdown = async (code) => {
+    if (code !== 0) {
+        markFailed();
+    }
+
     if (stopping) {
         return;
     }
@@ -486,23 +543,29 @@ const shutdown = async (code) => {
     stopping = true;
     console.log("lunora: shutting down, draining in-flight work");
 
-    let failed = code !== 0;
+    const deadlineAt = Date.now() + shutdownTimeoutMs;
+    const remaining = () => ({ timeoutMs: Math.max(0, deadlineAt - Date.now()) });
 
-    // A failed step is logged and the rest still run, so the databases are closed whatever went wrong before them.
+    // A failed step is logged and the rest still run, so the databases are closed whatever went wrong before them. A drain that
+    // ran out of time counts as a failure: the work it names was cut off.
     const step = async (label, run) => {
         try {
-            await run();
+            const results = [await run()].flat();
+
+            if (results.some((result) => result?.timedOut === true)) {
+                markFailed();
+            }
         } catch (error) {
-            failed = true;
+            markFailed();
             logError(\`\${label} failed during shutdown\`, error);
         }
     };
 
-    // Responses still being produced or written; event streams and WebSockets are endless, so close() ends them instead.
-    await step("waiting for in-flight requests", () => server.drain());
+    // Stops the listener, then waits for the responses in flight when it began; event streams and WebSockets are left to close().
+    await step("waiting for in-flight requests", () => server.drain(remaining()));
     await step("closing the HTTP server", () => server.close());
-    await step("draining waitUntil work", () => drainSet(background));
-    await step("draining shards", () => Promise.all([platform?.drain(), ...registries.map((registry) => registry.drain())]));
+    await step("draining waitUntil work", () => drainSet(background, remaining()));
+    await step("draining shards", () => Promise.all([platform?.drain(remaining()), ...registries.map((registry) => registry.drain(remaining()))]));
     await step("closing shards", () => {
         for (const registry of registries) {
             registry.close();
@@ -511,8 +574,14 @@ const shutdown = async (code) => {
         platform?.close();
     });
 
+    // The last steps can settle on microtasks alone, and Node reports an unhandled rejection only once the event loop turns:
+    // one turn here lets a fatal error raised at the very end of the drain reach its handler and the exit code.
+    await new Promise((resolve) => {
+        setImmediate(resolve);
+    });
+
     console.log("lunora: stopped");
-    process.exit(failed ? 1 : 0);
+    process.exit(exitCode);
 };
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
@@ -596,16 +665,19 @@ bind-mounted host directory must be writable by uid 1000, or the server fails at
 
 ## Shutdown
 
-On SIGTERM or SIGINT the server answers new requests with 503, waits for in-flight requests, closes the
-listener, then waits for background work, alarms and cron runs before closing the databases and exiting.
-Long-lived streams and WebSockets are closed rather than waited for. Give the container a stop timeout long
-enough for that (\`docker stop -t\`, \`stop_grace_period\`); a second signal exits without waiting.
+On SIGTERM or SIGINT the server stops accepting connections, waits for the requests in flight at that moment,
+then waits for background work, alarms and cron runs before closing the databases and exiting. Event streams
+and WebSockets are closed rather than waited for. The whole drain is bounded by \`${SHUTDOWN_TIMEOUT_VARIABLE}\`
+(default ${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)} ms, under \`docker stop\`'s 10 s grace); work still running then is logged by name
+and the server exits with code 1. A second signal exits without waiting.
 
 ## Environment
 
-Every variable set on the container reaches the worker's \`env\`, as every \`wrangler secret put\` secret does
-on Cloudflare, so set only what the app should read. No value is baked into \`server.mjs\`, this README or the
-Dockerfile; they carry names only.
+Only declared names reach the worker's \`env\`, as on Cloudflare: the wrangler \`vars\`, the \`secrets.required\`
+names, the \`secrets_store_secrets\` bindings, and what the runtime reads itself (\`LUNORA_*\`, \`PORT\`,
+\`DATABASE_URL\`). Any other variable on the container stays out of reach of app code, so a secret the app reads
+must be listed in \`secrets.required\` in wrangler.jsonc. No value is baked into \`server.mjs\`, this README or
+the Dockerfile; they carry names only.
 
 | Variable | Required | |
 | --- | --- | --- |
@@ -632,6 +704,54 @@ const betterSqliteVersion = (platformNodeManifest: string): string => {
 interface EsbuildApi {
     build: (options: Record<string, unknown>) => Promise<{ errors: unknown[] }>;
 }
+
+interface EsbuildFailure {
+    errors?: ReadonlyArray<{ text?: string }>;
+}
+
+const MISSING_EXPORT = /^No matching export in "[^"]+" for import "([^"]+)"$/u;
+
+/**
+ * The deploy's own message for an entry that lacks the default fetch handler or a bound Durable Object class: esbuild's
+ * "No matching export" names the symptom, this names the cause and the fix. `undefined` for any other failure.
+ */
+const missingExportRefusal = (error: unknown, project: NodeDeployProject, projectRoot: string): Error | undefined => {
+    const missing = ((error as EsbuildFailure).errors ?? []).flatMap((entry) => {
+        const name = MISSING_EXPORT.exec(entry.text ?? "")?.[1];
+
+        if (name === undefined) {
+            return [];
+        }
+
+        return [name === "default" ? "a default export with the fetch handler" : name];
+    });
+
+    if (missing.length === 0) {
+        return undefined;
+    }
+
+    return new Error(
+        `--target node serves the worker entry \`main\` names (${relative(projectRoot, project.entry)}), and it does not export ${missing.join(", ")}. The entry must default-export the fetch handler and export every Durable Object class wrangler binds, as the standalone template's src/server.ts does. A framework adapter's output is not such an entry: the Node container deploy does not run framework builds, so deploy this app to Cloudflare or point \`main\` at a hand-written worker entry`,
+        { cause: error },
+    );
+};
+
+/** Bundle the generated entry and the app into `server.mjs`. */
+const bundleServer = async (esbuild: EsbuildApi, directory: string, contents: string, projectRoot: string): Promise<void> => {
+    await esbuild.build({
+        // CommonJS dependencies bundled into ESM still call `require` for Node built-ins.
+        banner: { js: `import { createRequire as __lunoraCreateRequire } from "node:module";\nconst require = __lunoraCreateRequire(import.meta.url);` },
+        bundle: true,
+        external: [...EXTERNAL_MODULES],
+        format: "esm",
+        legalComments: "none",
+        logLevel: "silent",
+        outfile: join(directory, "server.mjs"),
+        platform: "node",
+        stdin: { contents, loader: "js", resolveDir: projectRoot, sourcefile: "lunora-node-server.mjs" },
+        target: "node22",
+    });
+};
 
 /**
  * Build the container context for the app at `projectRoot`. Codegen must already have run for the node target: the entry imports
@@ -665,19 +785,11 @@ const buildNodeContainer = async (projectRoot: string): Promise<NodeContainerArt
 
     mkdirSync(directory, { recursive: true });
 
-    await esbuild.build({
-        // CommonJS dependencies bundled into ESM still call `require` for Node built-ins.
-        banner: { js: `import { createRequire as __lunoraCreateRequire } from "node:module";\nconst require = __lunoraCreateRequire(import.meta.url);` },
-        bundle: true,
-        external: [...EXTERNAL_MODULES],
-        format: "esm",
-        legalComments: "none",
-        logLevel: "silent",
-        outfile: join(directory, "server.mjs"),
-        platform: "node",
-        stdin: { contents: renderServerEntry(projectRoot, project, cronsModule), loader: "js", resolveDir: projectRoot, sourcefile: "lunora-node-server.mjs" },
-        target: "node22",
-    });
+    try {
+        await bundleServer(esbuild, directory, renderServerEntry(projectRoot, project, cronsModule), projectRoot);
+    } catch (error: unknown) {
+        throw missingExportRefusal(error, project, projectRoot) ?? error;
+    }
 
     const env = nodeDeployEnv(project);
     const manifest = {

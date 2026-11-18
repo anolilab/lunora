@@ -77,6 +77,14 @@ export default {
         switch (url.pathname) {
             case "/__fixture/env":
                 return Response.json({ flags: env.FLAGS, limit: env.LIMIT });
+            case "/__fixture/bindings":
+                return Response.json({
+                    admin: env.LUNORA_ADMIN_TOKEN ?? null,
+                    hostSecret: env.AWS_SECRET_ACCESS_KEY ?? null,
+                    path: "PATH" in env,
+                    session: env.SESSION_SECRET ?? null,
+                    stripe: typeof (env.STRIPE_KEY as { get?: unknown } | undefined)?.get,
+                });
             case "/__fixture/background-fail":
                 ctx.waitUntil(Promise.reject(new Error("background boom", { cause: new Error("root cause of the boom") })));
 
@@ -87,6 +95,14 @@ export default {
                 return new Response("accepted");
             case "/__fixture/slow":
                 return new Response(await held(url.searchParams.get("hold")));
+            case "/__fixture/slow-then-reject": {
+                const text = await held(url.searchParams.get("hold"));
+
+                // A fatal error raised while the server is already shutting down.
+                void Promise.reject(new Error("late failure during shutdown"));
+
+                return new Response(text);
+            }
             case "/__fixture/nested":
                 // Background work that registers more background work while it runs.
                 ctx.waitUntil(
@@ -415,6 +431,34 @@ describe("lunora deploy --target node", () => {
             }
         });
 
+        it("hands the worker only declared names, keeping a host's other variables out of env", async () => {
+            expect.assertions(1);
+
+            const run = startServer(artifact, dataDirectory(), {
+                ...RUN_ENV,
+                // Injected by a container host for something else entirely; the app never declared it.
+                AWS_SECRET_ACCESS_KEY: "host-credential-91c0",
+                LUNORA_ADMIN_TOKEN: "admin-token",
+                STRIPE_KEY: "sk_runtime",
+            });
+
+            try {
+                const origin = await run.listening;
+                const response = await fetch(`${origin}/__fixture/bindings`);
+
+                await expect(response.json()).resolves.toStrictEqual({
+                    admin: "admin-token",
+                    hostSecret: null,
+                    path: false,
+                    session: "session-at-runtime",
+                    stripe: "function",
+                });
+            } finally {
+                run.child.kill("SIGTERM");
+                await run.exited;
+            }
+        });
+
         it("refuses to start without a secrets.required variable, naming it", async () => {
             expect.assertions(2);
 
@@ -548,6 +592,60 @@ describe("lunora deploy --target node", () => {
         );
 
         it(
+            "exits non-zero when a fatal error arrives during a shutdown that began cleanly",
+            async () => {
+                expect.assertions(2);
+
+                const hold = await holdServer();
+                const run = startServer(artifact, dataDirectory());
+
+                try {
+                    const origin = await run.listening;
+
+                    fetch(`${origin}/__fixture/slow-then-reject?hold=${encodeURIComponent(hold.url)}`).catch(() => undefined);
+                    await hold.arrived;
+                    run.child.kill("SIGTERM");
+                    await run.waitForStdout("lunora: shutting down");
+                    // Releasing the held request raises an unhandled rejection inside the running shutdown.
+                    hold.release("released");
+
+                    await expect(run.exited).resolves.toBe(1);
+                    expect(run.stderr()).toContain("late failure during shutdown");
+                } finally {
+                    run.child.kill("SIGKILL");
+                    await hold.close();
+                }
+            },
+            SERVER_TEST_TIMEOUT,
+        );
+
+        it(
+            "stops waiting at the shutdown deadline, naming the request it cut off",
+            async () => {
+                expect.assertions(2);
+
+                const hold = await holdServer();
+                const run = startServer(artifact, dataDirectory(), { ...RUN_ENV, LUNORA_SHUTDOWN_TIMEOUT_MS: "0" });
+
+                try {
+                    const origin = await run.listening;
+
+                    // Never released: without a deadline this request would hold the shutdown open until a kill.
+                    fetch(`${origin}/__fixture/slow?hold=${encodeURIComponent(hold.url)}`).catch(() => undefined);
+                    await hold.arrived;
+                    run.child.kill("SIGTERM");
+
+                    await expect(run.exited).resolves.toBe(1);
+                    expect(run.stderr()).toMatch(/drain deadline passed with 1 response\(s\) unfinished: GET \/__fixture\/slow/u);
+                } finally {
+                    run.child.kill("SIGKILL");
+                    await hold.close();
+                }
+            },
+            SERVER_TEST_TIMEOUT,
+        );
+
+        it(
             "waits at SIGTERM for background work that a running waitUntil registered",
             async () => {
                 expect.assertions(2);
@@ -638,6 +736,22 @@ describe("lunora deploy --target node", () => {
             expect(refused).toMatchObject({ code: 2, error: expect.stringContaining("does not run framework builds") });
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
             expect(existsSync(join(workdir, NODE_DEPLOY_DIRECTORY))).toBe(false);
+        });
+
+        it("refuses an entry that exports no Durable Object class, such as a framework adapter with no composed wrapper", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { main: "adapter/_worker.js" } });
+            // No composed src/worker.ts: the adapter is the whole entry, so only its missing exports can give it away.
+            rmSync(join(workdir, "src", "worker.ts"));
+            mkdirSync(join(workdir, "adapter"));
+            writeFileSync(join(workdir, "adapter", "_worker.js"), `export default { fetch: () => new Response("adapter") };\n`, "utf8");
+
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 1,
+                error: expect.stringContaining("adapter/_worker.js), and it does not export ShardDO"),
+            });
+            expect(existsSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"))).toBe(false);
         });
 
         it("refuses a secrets_store binding with the reserved LUNORA_ prefix, which could never start", async () => {
