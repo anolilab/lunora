@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import type { Server } from "node:http";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
+import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -572,6 +573,53 @@ describe("lunora deploy --target node", () => {
                 );
             },
         );
+
+        it.each(["http", "80.5", "-1", "65536"])("refuses to start when PORT is %j, instead of listening somewhere else", async (value) => {
+            expect.assertions(2);
+
+            const run = startServer(artifact, dataDirectory(), { ...RUN_ENV, PORT: value });
+            const outcome = await Promise.race([run.listening.then(() => "listening"), run.exited.then((code) => `exit ${String(code)}`)]);
+
+            run.child.kill("SIGKILL");
+            await run.exited;
+
+            expect(outcome).toBe("exit 1");
+            expect(run.stderr()).toContain(`PORT must be a whole number from 0 to 65535, such as 8787, and it is ${JSON.stringify(value)}`);
+        });
+
+        it("treats an empty PORT as unset and listens on 8787, not on a random port", async () => {
+            expect.assertions(2);
+
+            // Holds 8787 so the server's attempt is observable without depending on the port being free. Another process
+            // already holding it gives the same outcome.
+            const blocker = createNetServer();
+
+            await new Promise<void>((resolve) => {
+                blocker.once("error", () => {
+                    resolve();
+                });
+                blocker.listen(8787, "127.0.0.1", () => {
+                    resolve();
+                });
+            });
+
+            try {
+                const run = startServer(artifact, dataDirectory(), { ...RUN_ENV, HOST: "127.0.0.1", PORT: "" });
+                const outcome = await Promise.race([run.listening.then(() => "listening"), run.exited.then(() => "exited")]);
+
+                run.child.kill("SIGKILL");
+                await run.exited;
+
+                expect(outcome).toBe("exited");
+                expect(run.stderr()).toContain("127.0.0.1:8787");
+            } finally {
+                await new Promise<void>((resolve) => {
+                    blocker.close(() => {
+                        resolve();
+                    });
+                });
+            }
+        });
 
         it("refuses to start without a secrets.required variable, naming it", async () => {
             expect.assertions(2);
@@ -1373,6 +1421,48 @@ describe("lunora deploy --target node", () => {
             // The tsconfig's automatic runtime, as the build without a define uses, not React.createElement.
             expect(bundle).toContain("fixture-jsx-runtime");
             expect(bundle).toContain('"build-9"');
+        });
+
+        it("compiles JSX under a tsconfig jsx preserve while a define is set, as the bundle without one does", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { define: { __BUILD_ID__: '"build-9"' } } });
+            writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ compilerOptions: { jsx: "preserve" } }), "utf8");
+            writeFileSync(
+                join(workdir, "src", "view.tsx"),
+                `declare const __BUILD_ID__: string;\n\nexport const view = () => <main id={__BUILD_ID__} />;\n`,
+                "utf8",
+            );
+
+            const worker = join(workdir, "src", "worker.ts");
+
+            writeFileSync(
+                worker,
+                `import { view } from "./view";\n\n${readFileSync(worker, "utf8").replace(
+                    'case "/__fixture/env":',
+                    'case "/__fixture/view":\n                return Response.json(view());\n            case "/__fixture/env":',
+                )}`,
+                "utf8",
+            );
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+            // esbuild ignores a tsconfig preserve, so the app file reaches the bundle as JavaScript, never as raw JSX.
+            expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).toContain('React.createElement("main"');
+        });
+
+        it.each([
+            ["vars", { vars: { WORKER_ENV: "development" } }],
+            ["secrets.required", { secrets: { required: ["WORKER_ENV"] } }],
+        ])("refuses WORKER_ENV declared in %s, which could turn production into development", async (source, wrangler) => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { wrangler });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 2,
+                error: expect.stringContaining(`sets WORKER_ENV to production itself, and wrangler.jsonc also declares it in ${source}`),
+            });
         });
 
         it("allows secrets.required to list a name twice, which puts one key on env", async () => {

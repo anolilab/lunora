@@ -40,7 +40,10 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 8000;
 /** The variable that overrides {@link DEFAULT_SHUTDOWN_TIMEOUT_MS}. */
 const SHUTDOWN_TIMEOUT_VARIABLE = ["LUNORA", "SHUTDOWN", "TIMEOUT", "MS"].join("_");
 
-/** The port the server listens on when `PORT` is unset, matching `wrangler dev`'s default. */
+/** What the server tells the app it runs as; the dev server sets `development` instead. */
+const WORKER_ENV = "WORKER_ENV";
+
+/** The port the server listens on when `PORT` is unset or empty, matching `wrangler dev`'s default. */
 const DEFAULT_PORT = 8787;
 
 /**
@@ -352,6 +355,21 @@ const prototypeKeysUnderVariables = (text: string): string[] => {
     return found;
 };
 
+/**
+ * The server sets `WORKER_ENV` to `production` itself. A var, secret or binding of that name would replace it, and a var or
+ * secret can also be replaced from the container's environment: `development` there turns on development-only behaviour, such
+ * as mail capture, in production.
+ */
+const refuseWorkerEnvOverride = (sources: ReadonlyArray<{ names: ReadonlyArray<string>; source: string }>, configName: string): void => {
+    const setBy = sources.filter(({ names }) => names.includes(WORKER_ENV)).map(({ source }) => source);
+
+    if (setBy.length > 0) {
+        throw new Error(
+            `--target node sets ${WORKER_ENV} to production itself, and ${configName} also declares it in ${setBy.join(", ")}. Remove it: a ${WORKER_ENV} of development turns on development-only behaviour, such as mail capture, in production`,
+        );
+    }
+};
+
 /** `vars`: an object of environment variable names, since an override comes from the variable of the same name. */
 const declaredVariables = (value: unknown, configName: string): Record<string, unknown> => {
     if (value === undefined || value === null) {
@@ -488,16 +506,16 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     const workerSecrets = requiredSecretNames(parsed.secrets, configName);
     const variables = declaredVariables(parsed.vars, configName);
 
-    refuseEnvCollisions(
-        [
-            { names: Object.keys(variables), source: "vars" },
-            { names: workerSecrets, repeatable: true, source: "secrets.required" },
-            { names: storeSecrets, source: "secrets_store_secrets" },
-            { names: hyperdrive, source: "hyperdrive" },
-            { names: durableObjects.map((binding) => binding.name), source: "durable_objects.bindings" },
-        ],
-        configName,
-    );
+    const envSources = [
+        { names: Object.keys(variables), source: "vars" },
+        { names: workerSecrets, repeatable: true, source: "secrets.required" },
+        { names: storeSecrets, source: "secrets_store_secrets" },
+        { names: hyperdrive, source: "hyperdrive" },
+        { names: durableObjects.map((binding) => binding.name), source: "durable_objects.bindings" },
+    ];
+
+    refuseEnvCollisions(envSources, configName);
+    refuseWorkerEnvOverride(envSources, configName);
 
     const declared = parsed as Record<string, unknown>;
 
@@ -653,6 +671,16 @@ if (rawShutdownTimeout !== undefined && !(/^\\d+$/u.test(rawShutdownTimeout) && 
 
 const shutdownTimeoutMs = rawShutdownTimeout === undefined ? ${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)} : Number(rawShutdownTimeout);
 
+// Empty is unset, as a blank \`-e PORT=\` leaves it; Number() would read it as 0, a random port nothing routes to.
+const rawPort = process.env.PORT === "" ? undefined : process.env.PORT;
+
+if (rawPort !== undefined && !(/^\\d+$/u.test(rawPort) && Number(rawPort) <= 65_535)) {
+    console.error("lunora: refusing to start, PORT must be a whole number from 0 to 65535, such as ${String(DEFAULT_PORT)}, and it is %j", rawPort);
+    process.exit(1);
+}
+
+const port = rawPort === undefined ? ${String(DEFAULT_PORT)} : Number(rawPort);
+
 const DURABLE_OBJECT_CLASSES = { ${classTable} };
 
 if (typeof handler?.fetch !== "function") {
@@ -667,7 +695,7 @@ mkdirSync(dataDirectory, { recursive: true });
 // itself (LUNORA_*, PORT, DATABASE_URL). A container host's other variables (cloud credentials, another service's token) stay
 // out of reach of app code. A var set in the environment overrides the bundled value as a string.
 const RUNTIME_ENV = ["PORT", "DATABASE_URL"];
-const env = { WORKER_ENV: "production", ...CONFIG.vars };
+const env = { ${WORKER_ENV}: "production", ...CONFIG.vars };
 const declaredNames = new Set([
     ...Object.keys(CONFIG.vars),
     ...CONFIG.workerSecrets,
@@ -827,7 +855,7 @@ const server = await createNodeHttpServer({
     },
     host: process.env.HOST,
     origin: process.env.LUNORA_ORIGIN_URL,
-    port: Number(process.env.PORT ?? ${String(DEFAULT_PORT)}),
+    port,
 });
 
 // One exit code for the whole process: a fatal error raised while a shutdown is already running must still end it non-zero.
@@ -1232,6 +1260,8 @@ const appScopedPlugin = (
                         write: false,
                     });
 
+                    // Always plain JavaScript, so the "js" loader fits: esbuild ignores a tsconfig's `jsx: "preserve"` (only its own
+                    // `jsx` option preserves), and this build passes none.
                     return { contents: compiled.outputFiles?.[0]?.text ?? "", loader: "js", resolveDir: dirname(args.path) };
                 });
             }
