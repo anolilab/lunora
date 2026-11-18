@@ -612,6 +612,11 @@ const commitStorage = async (options: WorkerOptions, ref: SessionRef, records: A
     }
 
     const keep = new Set<string>();
+    // A record that names no bucket is written to the default bucket, so it is kept under that
+    // name: under "" the prune below would delete it again. The generated storage ops call it
+    // "default"; a worker that declares no such name is taken to mean its first bucket.
+    const declared = storageBucketsOf(options);
+    const defaultBucket = declared.includes("default") ? "default" : declared[0];
     let inserted = 0;
     let deleted = 0;
 
@@ -622,7 +627,7 @@ const commitStorage = async (options: WorkerOptions, ref: SessionRef, records: A
             throw new TypeError("a staged storage record does not parse");
         }
 
-        keep.add(`${record.where.bucket ?? ""}\u0000${record.key}`);
+        keep.add(`${record.where.bucket ?? defaultBucket ?? ""}\u0000${record.key}`);
         await writeObject(options, ref, record);
         inserted += 1;
     }

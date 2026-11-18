@@ -647,6 +647,33 @@ describe("admin import — staged replace of a bucket the worker does not declar
     });
 });
 
+describe("admin import — staged replace of a record that names no bucket", () => {
+    afterEach(closeCluster);
+
+    it("keeps the object in the default bucket it was written to, and prunes only the rest", async () => {
+        expect.assertions(2);
+
+        await seed();
+
+        const stores = createStores();
+        const bucket = stores.buckets.get("default")!;
+
+        bucket.set("stale.txt", { bytes: new TextEncoder().encode("live") });
+
+        const worker = workerWith({ ...stores.options });
+
+        await postImport(worker, "?mode=replace&tables=messages&stage=bucketless", [
+            { doc: { format: 2, sections: ["storage"] }, table: "$lunora" },
+            message("m1", "c1", "as snapshotted"),
+            { doc: { data: Buffer.from("back").toString("base64"), key: "kept.txt", last: true, offset: 0, size: 4 }, table: "$storage" },
+        ]);
+        const committed = await postSession(worker, "commit", "bucketless");
+
+        expect(committed.status).toBe(200);
+        expect([...bucket.keys()]).toStrictEqual(["kept.txt"]);
+    });
+});
+
 describe("admin import — staged replace of a section its header does not declare", () => {
     afterEach(closeCluster);
 
