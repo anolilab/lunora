@@ -184,6 +184,39 @@ describe("wranglerToAlchemy", () => {
         expect(source).not.toContain("AUTH");
     });
 
+    it("carries observability onto the worker and reports the settings Alchemy 2 cannot set", () => {
+        expect.assertions(2);
+
+        const { source, unsupported } = wranglerToAlchemy({
+            ...BASE,
+            observability: {
+                enabled: true,
+                head_sampling_rate: 0.1,
+                issues: { enabled: true },
+                logs: { destinations: ["otel"], persist: false },
+                redact_query_string: true,
+                traces: { enabled: true, head_sampling_rate: 0.5 },
+            },
+        });
+
+        expect(source).toContain(
+            `observability: { enabled: true, headSamplingRate: 0.1, logs: { enabled: true, invocationLogs: true, destinations: ["otel"], persist: false }, traces: { enabled: true, headSamplingRate: 0.5 } },`,
+        );
+        expect(unsupported).toStrictEqual([
+            "observability.redact_query_string (Alchemy 2 cannot set it; enable query-string redaction in the dashboard)",
+            "observability.issues (Alchemy 2 cannot set it; configure Workers Issues in the dashboard)",
+        ]);
+    });
+
+    it("carries a disabled observability block instead of falling back to Alchemy's logs-on default", () => {
+        expect.assertions(2);
+
+        const { source, unsupported } = wranglerToAlchemy({ ...BASE, observability: { enabled: false, redact_query_string: false } });
+
+        expect(source).toContain("observability: { enabled: false },");
+        expect(unsupported).toStrictEqual([]);
+    });
+
     it("reports module rules and source-map upload, which the emitted worker does not carry", () => {
         expect.assertions(1);
 

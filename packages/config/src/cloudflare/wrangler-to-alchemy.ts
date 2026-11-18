@@ -56,7 +56,7 @@
  * emitted source saying to set the real one before deploying to an account
  * that already has the namespace.
  */
-import type { WranglerQueueConsumer } from "./wrangler-config";
+import type { WranglerObservability, WranglerObservabilityTraces, WranglerQueueConsumer } from "./wrangler-config";
 
 /** A Durable Object binding as `wrangler.jsonc` spells it. */
 interface WranglerDurableObjectBinding {
@@ -83,6 +83,7 @@ interface WranglerConfigShape {
     /** `new_sqlite_classes` marks which DO classes get SQLite storage. */
     migrations?: ReadonlyArray<{ new_classes?: ReadonlyArray<string>; new_sqlite_classes?: ReadonlyArray<string>; tag?: string }>;
     name?: string;
+    observability?: WranglerObservability;
     queues?: { consumers?: ReadonlyArray<WranglerQueueConsumer>; producers?: ReadonlyArray<{ binding?: string; queue?: string }> };
     r2_buckets?: ReadonlyArray<{ binding?: string; bucket_name?: string }>;
     tail_consumers?: ReadonlyArray<{ service?: string }>;
@@ -180,7 +181,6 @@ const HANDLED_FIELDS = new Set([
     "migrations",
     "minify",
     "name",
-    // Alchemy 2 enables Workers Logs by default, which is what Lunora writes.
     "observability",
     "queues",
     "r2_buckets",
@@ -394,8 +394,69 @@ const collectUnsupported = (config: WranglerConfigShape, out: Emission): void =>
     }
 };
 
+/** `{ key: value, … }` source for the entries that are set, or `undefined` when none are. */
+const objectLiteral = (entries: Readonly<Record<string, string | undefined>>): string | undefined => {
+    const set = Object.entries(entries).filter((entry): entry is [string, string] => entry[1] !== undefined);
+
+    return set.length === 0 ? undefined : `{ ${set.map(([key, value]) => `${key}: ${value}`).join(", ")} }`;
+};
+
+const observabilityChannel = (channel: WranglerObservabilityTraces): Record<string, string | undefined> => {
+    return {
+        destinations: channel.destinations === undefined ? undefined : literal(channel.destinations),
+        headSamplingRate: channel.head_sampling_rate === undefined ? undefined : literal(channel.head_sampling_rate),
+        persist: channel.persist === undefined ? undefined : literal(channel.persist),
+    };
+};
+
+/**
+ * The worker's `observability` prop.
+ *
+ * Emitted whenever wrangler.jsonc has the block: without the prop Alchemy
+ * applies its own default (logs on, every request sampled), so a project that
+ * lowered its sampling or turned logs off would deploy at that default.
+ * Alchemy writes the script-upload metadata, which has no field for
+ * `redact_query_string` or `issues` — those are reported, since dropping the
+ * redaction silently puts every emailed `?token=` into Workers Logs.
+ */
+const emitObservability = (observability: WranglerObservability | undefined, out: Emission): string | undefined => {
+    if (observability === undefined) {
+        return undefined;
+    }
+
+    if (observability.redact_query_string === true) {
+        out.unsupported.push("observability.redact_query_string (Alchemy 2 cannot set it; enable query-string redaction in the dashboard)");
+    }
+
+    if (observability.issues !== undefined) {
+        out.unsupported.push("observability.issues (Alchemy 2 cannot set it; configure Workers Issues in the dashboard)");
+    }
+
+    // The API requires `enabled` (and `invocationLogs` on logs); wrangler
+    // leaves them optional, so its defaults are written out.
+    const enabled = observability.enabled ?? false;
+    const { logs, traces } = observability;
+
+    return objectLiteral({
+        enabled: String(enabled),
+        headSamplingRate: observability.head_sampling_rate === undefined ? undefined : literal(observability.head_sampling_rate),
+        logs:
+            logs === undefined
+                ? undefined
+                : objectLiteral({
+                      enabled: String(logs.enabled ?? enabled),
+                      invocationLogs: String(logs.invocation_logs ?? true),
+                      ...observabilityChannel(logs),
+                  }),
+        traces:
+            traces === undefined
+                ? undefined
+                : objectLiteral({ enabled: traces.enabled === undefined ? undefined : String(traces.enabled), ...observabilityChannel(traces) }),
+    });
+};
+
 /** The worker's props, one line each, omitting what the config does not set. */
-const workerProps = (config: WranglerConfigShape, workerName: string, env: ReadonlyArray<string>): string[] => {
+const workerProps = (config: WranglerConfigShape, workerName: string, env: ReadonlyArray<string>, observability: string | undefined): string[] => {
     const { assets } = config;
     const assetsProps =
         assets?.directory === undefined
@@ -425,6 +486,7 @@ const workerProps = (config: WranglerConfigShape, workerName: string, env: Reado
         config.triggers?.crons === undefined || config.triggers.crons.length === 0 ? undefined : `crons: ${literal(config.triggers.crons)},`,
         tailConsumers.length === 0 ? undefined : `tailConsumers: ${literal(tailConsumers)},`,
         config.workers_dev === undefined ? undefined : `workersDev: ${String(config.workers_dev)},`,
+        observability === undefined ? undefined : `observability: ${observability},`,
         env.length === 0 ? undefined : `env: {\n                ${env.join("\n                ")}\n            },`,
     ].filter((line): line is string => line !== undefined);
 };
@@ -457,6 +519,8 @@ const wranglerToAlchemy = (config: WranglerConfigShape): AlchemyTranslation => {
     emitConsumers(config, queueConsts, out);
     collectUnsupported(config, out);
 
+    const observability = emitObservability(config.observability, out);
+
     const indent = (lines: ReadonlyArray<string>): string[] => lines.map((line) => `        ${line}`);
 
     const source = [
@@ -478,7 +542,7 @@ const wranglerToAlchemy = (config: WranglerConfigShape): AlchemyTranslation => {
         ...indent(out.resources),
         ...(out.resources.length === 0 ? [] : [""]),
         `        const worker = yield* Cloudflare.Workers.Worker("Worker", {`,
-        ...workerProps(config, workerName, out.env).map((line) => `            ${line}`),
+        ...workerProps(config, workerName, out.env, observability).map((line) => `            ${line}`),
         "        });",
         ...(out.post.length === 0 ? [] : ["", ...indent(out.post)]),
         "",
