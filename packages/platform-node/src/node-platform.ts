@@ -140,21 +140,17 @@ const sameFile = (a: string, b: string): boolean => {
     }
 };
 
-/** A SQLite URI query asking for an in-memory database. */
-const MEMORY_MODE_QUERY = /[?&]mode=memory(?:&|$)/iu;
-
 /**
  * Refuse a mail path that does not name a durable database file. `:memory:` and
  * the empty string (which better-sqlite3 opens as a temporary file deleted on
- * close) lose the queue and the sent ledger with the process. A `file:` URI asking
- * for memory (`file::memory:`, any `mode=memory`) is refused too, though for a
- * different reason: better-sqlite3 does not read URIs, so it would quietly create
- * a file by that literal name in the working directory, which is not what the
- * caller asked for and not where they would look for their mail.
+ * close) lose the queue and the sent ledger with the process. Every `file:` URI
+ * is refused too, whatever it asks for: better-sqlite3 does not read URIs, so
+ * `file:mail.sqlite3` would quietly open a file literally named that in the
+ * working directory, which is not where the caller would look for their mail.
+ * Recognised by its prefix, as better-sqlite3 itself does, and never parsed.
  */
 const refuseNonDurableMailPath = (mailPath: string): void => {
     const trimmed = mailPath.trim();
-    const memoryUri = trimmed.toLowerCase().startsWith("file:") && (trimmed.includes(":memory:") || MEMORY_MODE_QUERY.test(trimmed));
 
     if (trimmed === "" || trimmed === ":memory:") {
         throw new LunoraError(
@@ -163,10 +159,10 @@ const refuseNonDurableMailPath = (mailPath: string): void => {
         );
     }
 
-    if (memoryUri) {
+    if (trimmed.toLowerCase().startsWith("file:")) {
         throw new LunoraError(
             "VALIDATION_ERROR",
-            `@lunora/platform-node: mail.path ${JSON.stringify(mailPath)} asks for an in-memory database, which is not durable — the mail queue must survive a restart, so give mail a database file (better-sqlite3 does not read URIs, and would create a file by that literal name instead)`,
+            `@lunora/platform-node: mail.path ${JSON.stringify(mailPath)} is a file: URI — pass a plain filesystem path instead (better-sqlite3 does not read URIs, and would open a file by that literal name)`,
         );
     }
 };

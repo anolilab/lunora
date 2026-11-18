@@ -1555,8 +1555,6 @@ describe(createNodeMailHost, () => {
         it.each([
             ["the empty string", ""],
             [":memory:", ":memory:"],
-            ["a file::memory: URI", "file::memory:"],
-            ["a mode=memory URI", "file:mail.sqlite3?mode=memory&cache=shared"],
         ])("refuses %s as mail.path, since the mail queue must be durable", (_label, mailPath) => {
             expect.assertions(1);
 
@@ -1833,6 +1831,26 @@ describe(createNodeMailHost, () => {
             // One of the pair is sent; the other is its duplicate and is acked unsent.
             expect(transport.sent.filter((payload) => payload.subject === "Digest").map((payload) => payload.text)).toStrictEqual(["Quarter", "Next quarter"]);
             expect(error.mock.calls.map(([line]) => logged(line).event)).not.toContain("lunora.mail.send_evidence_expired");
+        });
+    });
+
+    describe("seventeenth review", () => {
+        it.each([
+            ["a plain file: URI", "file:mail.sqlite3"],
+            ["a file::memory: URI", "file::memory:"],
+            ["a mode=memory URI", "file:mail.sqlite3?mode=memory&cache=shared"],
+        ])("refuses %s as mail.path, asking for a plain filesystem path", (_label, mailPath) => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-uri-"));
+
+            // better-sqlite3 reads none of these as a URI: each would open a file by its literal name.
+            expect(() =>
+                createNodePlatform({
+                    mail: { env: PRODUCTION, path: mailPath, transport: scriptedTransport(["ok"]) },
+                    path: join(directory ?? "", "shard.sqlite3"),
+                }),
+            ).toThrow(/is a file: URI — pass a plain filesystem path/u);
         });
     });
 });
