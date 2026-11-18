@@ -668,10 +668,15 @@ const isWriteTarget = (node: TsNode): boolean => {
     let current = node;
     let parent = current.getParent();
 
-    // Climb out of any pattern the node sits in as a target; a value position in an object literal climbs too, which is
-    // harmless: it only ends in a write when that literal is itself an assignment target.
+    // Climb out of any pattern the node sits in as a target, and out of the assertions a target may wear (`(id as
+    // string) = …`, `id! = …`); a value position in an object literal climbs too, which is harmless: it only ends in a
+    // write when that literal is itself an assignment target.
     while (
         Node.isParenthesizedExpression(parent) ||
+        Node.isAsExpression(parent) ||
+        Node.isSatisfiesExpression(parent) ||
+        Node.isNonNullExpression(parent) ||
+        Node.isTypeAssertion(parent) ||
         Node.isArrayLiteralExpression(parent) ||
         Node.isObjectLiteralExpression(parent) ||
         Node.isSpreadElement(parent) ||
@@ -744,11 +749,21 @@ const isInvoked = (node: TsNode): boolean => {
 const isTestOf = (node: TsNode): boolean => {
     const parent = node.getParent();
 
-    return (
-        (Node.isPrefixUnaryExpression(parent) && parent.getOperatorToken() === SyntaxKind.ExclamationToken) ||
-        (Node.isBinaryExpression(parent) && EQUALITY_OPERATORS.has(parent.getOperatorToken().getKind())) ||
-        Node.isTypeOfExpression(parent)
-    );
+    if (Node.isBinaryExpression(parent)) {
+        const operator = parent.getOperatorToken().getKind();
+        const other = unwrapExpression(parent.getLeft() === node ? parent.getRight() : parent.getLeft());
+
+        // A loose comparison with anything but `null` / `undefined` converts the object, running its `valueOf` or
+        // `toString`, which can write it (`row == 1` after `row.valueOf = function () { this.key = … }`).
+        return (
+            operator === SyntaxKind.EqualsEqualsEqualsToken ||
+            operator === SyntaxKind.ExclamationEqualsEqualsToken ||
+            ((operator === SyntaxKind.EqualsEqualsToken || operator === SyntaxKind.ExclamationEqualsToken) &&
+                (Node.isNullLiteral(other) || isUndefinedGlobal(other)))
+        );
+    }
+
+    return (Node.isPrefixUnaryExpression(parent) && parent.getOperatorToken() === SyntaxKind.ExclamationToken) || Node.isTypeOfExpression(parent);
 };
 
 /**
@@ -855,12 +870,35 @@ const isOverriddenOnTheWay = (node: TsNode): boolean => {
     return false;
 };
 
-/** Whether `query` is passed as an argument of a `ctx.db` row read. */
-const isReadQueryArgument = (query: TsNode): boolean => {
-    const wrapped = valueWrapperOf(query);
+/** Which calls count as row reads: the handler's `ctx.db` reads, or a helper's reads through its verified ctx parameter. */
+type ReadCallTest = (call: CallExpression) => boolean;
+
+/** Whether `use`, past its wrappers, is passed straight to a row read as an argument. */
+const isReadArgument = (use: TsNode, isRead: ReadCallTest): boolean => {
+    const wrapped = valueWrapperOf(use);
     const call = wrapped.getParent();
 
-    return Node.isCallExpression(call) && call.getArguments().includes(wrapped) && isDatabaseReadCall(call);
+    return Node.isCallExpression(call) && call.getArguments().includes(wrapped) && isRead(call);
+};
+
+/**
+ * Whether `query` is passed as an argument of a row read: written inline, or held by a `const` local
+ * (`const query = { where: … }; ctx.db.members.findFirst(query)`) whose every use is such an argument. Used
+ * anywhere else (`with: { members: query }`), the local is no query of the row the read returns.
+ */
+const isReadQueryArgument = (query: TsNode, isRead: ReadCallTest = isDatabaseReadCall): boolean => {
+    const wrapped = valueWrapperOf(query);
+    const holder = wrapped.getParent();
+
+    if (Node.isVariableDeclaration(holder) && isConstDeclaration(holder)) {
+        const initializer: TsNode | undefined = holder.getInitializer();
+        const name = holder.getNameNode();
+        const uses = Node.isIdentifier(name) && initializer === wrapped ? usesOfLocal(name) : [];
+
+        return uses.length > 0 && uses.every((use) => isReadArgument(use, isRead));
+    }
+
+    return isReadArgument(wrapped, isRead);
 };
 
 /**
@@ -868,18 +906,18 @@ const isReadQueryArgument = (query: TsNode): boolean => {
  * element of one, or a local's initializer (`const filter = { … }`), judged at each of its uses. A `where` under
  * `with` / `include` or any other nested query constrains related rows, not the row the read returns.
  */
-const isTopLevelWhere = (object: TsNode): boolean => {
+const isTopLevelWhere = (object: TsNode, isRead: ReadCallTest = isDatabaseReadCall): boolean => {
     const wrapped = valueWrapperOf(object);
     const holder = wrapped.getParent();
 
     if (Node.isPropertyAssignment(holder)) {
-        return staticPropertyName(holder.getNameNode()) === "where" && isReadQueryArgument(holder.getParent());
+        return staticPropertyName(holder.getNameNode()) === "where" && isReadQueryArgument(holder.getParent(), isRead);
     }
 
     if (Node.isArrayLiteralExpression(holder)) {
         const branches = valueWrapperOf(holder).getParent();
 
-        return Node.isPropertyAssignment(branches) && staticPropertyName(branches.getNameNode()) === "AND" && isTopLevelWhere(branches.getParent());
+        return Node.isPropertyAssignment(branches) && staticPropertyName(branches.getNameNode()) === "AND" && isTopLevelWhere(branches.getParent(), isRead);
     }
 
     if (Node.isVariableDeclaration(holder)) {
@@ -896,7 +934,7 @@ const isTopLevelWhere = (object: TsNode): boolean => {
  * operator directly under such a column. A relation filter inside `where` (`members: { userId: uid }`) constrains
  * other rows, as #1612 settled for owned-row columns.
  */
-const isTopLevelWhereMember = (property: TsNode): boolean => {
+const isTopLevelWhereMember = (property: TsNode, isRead: ReadCallTest = isDatabaseReadCall): boolean => {
     const object = property.getParent();
 
     if (!Node.isObjectLiteralExpression(object) || !(Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property))) {
@@ -908,10 +946,10 @@ const isTopLevelWhereMember = (property: TsNode): boolean => {
     if (key === "eq" || key === "in") {
         const column = valueWrapperOf(object).getParent();
 
-        return Node.isPropertyAssignment(column) && isTopLevelWhere(column.getParent());
+        return Node.isPropertyAssignment(column) && isTopLevelWhere(column.getParent(), isRead);
     }
 
-    return isTopLevelWhere(object);
+    return isTopLevelWhere(object, isRead);
 };
 
 /**
@@ -1019,7 +1057,7 @@ const isFilteredRowField = (node: TsNode, comparison: TsNode): boolean => {
  * an argument of a call that is no negating comparison (`ctx.db.users.get(uid)`, `q.eq("userId", uid)`), or one side
  * of an `===` / `==` a filter callback returns. A `NOT` or `OR` branch above it unpins the match.
  */
-const matchesCallerAt = (value: TsNode): boolean => {
+const matchesCallerAt = (value: TsNode, isRead: ReadCallTest): boolean => {
     const parent = value.getParent();
 
     if (Node.isArrayLiteralExpression(parent)) {
@@ -1037,7 +1075,7 @@ const matchesCallerAt = (value: TsNode): boolean => {
             !NON_MATCHING_OPERATORS.has(key) &&
             !UNPINNING_KEYS.has(key) &&
             !sitsInUnpinningBranch(parent) &&
-            isTopLevelWhereMember(parent) &&
+            isTopLevelWhereMember(parent, isRead) &&
             !isOverriddenOnTheWay(parent)
         );
     }
@@ -1048,7 +1086,7 @@ const matchesCallerAt = (value: TsNode): boolean => {
     if (Node.isCallExpression(parent)) {
         const callee = parent.getExpression();
         const method = Node.isPropertyAccessExpression(callee) ? callee.getName() : undefined;
-        const isQuery = method === "eq" || (method !== undefined && DB_READ_METHODS.has(method) && contextTrustPathOf(callee)?.[0] === "db");
+        const isQuery = method === "eq" || isRead(parent);
 
         return parent.getArguments().includes(value) && isQuery;
     }
@@ -1089,7 +1127,7 @@ const isValuePreservingCall = (call: TsNode, value: TsNode): boolean => {
  * `q.eq("userId", uid)`), or one side of a comparison a filter callback returns. Nested in another column's value
  * expression (`active: uid === args.victim && true`) it decides only that value, not the match.
  */
-const constrainsMatch = (node: TsNode): boolean => {
+const constrainsMatch = (node: TsNode, isRead: ReadCallTest = isDatabaseReadCall): boolean => {
     let current = outermostChainOf(node);
 
     for (let parent = current.getParent(); parent !== undefined; parent = current.getParent()) {
@@ -1114,7 +1152,7 @@ const constrainsMatch = (node: TsNode): boolean => {
         current = parent;
     }
 
-    return matchesCallerAt(current);
+    return matchesCallerAt(current, isRead);
 };
 
 /**
@@ -1150,6 +1188,32 @@ const isWholeFilterUse = (use: TsNode): boolean => {
 };
 
 /**
+ * The expressions that can become the value of `node`, past wrappers: the last operand of a comma, each branch of a
+ * conditional, each side of `??`, `||` or `&&`. `(await ownedRead(), args.victimId)` evaluates to `args.victimId`.
+ */
+const valueExpressionsOf = (node: TsNode): TsNode[] => {
+    const value = strippedValue(node);
+
+    if (Node.isConditionalExpression(value)) {
+        return [...valueExpressionsOf(value.getWhenTrue()), ...valueExpressionsOf(value.getWhenFalse())];
+    }
+
+    if (!Node.isBinaryExpression(value)) {
+        return [value];
+    }
+
+    const operator = value.getOperatorToken().getKind();
+
+    if (operator === SyntaxKind.CommaToken) {
+        return valueExpressionsOf(value.getRight());
+    }
+
+    return operator === SyntaxKind.QuestionQuestionToken || operator === SyntaxKind.BarBarToken || operator === SyntaxKind.AmpersandAmpersandToken
+        ? [...valueExpressionsOf(value.getLeft()), ...valueExpressionsOf(value.getRight())]
+        : [value];
+};
+
+/**
  * Whether `argument` names the caller's identity, directly or through a local whose initializer does,
  * with no alternative beside it: `ownerId: args.ownerId ?? ctx.auth.userId` selects the caller's row only when
  * nothing is sent, and `ownerId: ctx.auth.userId ?? args.ownerId` selects the caller's choice for an anonymous one.
@@ -1165,27 +1229,32 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
         }
 
         const initializer = trustedInitializerOf(identifier);
+        const values = initializer === undefined ? [] : valueExpressionsOf(initializer);
 
-        // A local is either an alias of the identity (`const uid = ctx.auth.userId`), placed where it is used, or a
-        // query object holding it (`const filter = { ownerId: uid }`), placed inside its initializer and used only as a
-        // whole filter: `where: { NOT: filter }` negates it however its own initializer reads.
-        const isQueryObject = Node.isObjectLiteralExpression(unwrapExpression(initializer));
+        // A local is judged by what becomes its value: the last operand of a comma, each branch of a conditional or
+        // fallback. Every one an identity makes it an alias (`const uid = ctx.auth.userId`), placed where it is used.
+        if (values.length > 0 && values.every((value) => contextTrustPathOf(value)?.[0] === "auth")) {
+            return constrainsMatch(identifier);
+        }
 
-        if (isQueryObject && !(Node.isIdentifier(identifier) && usesOfLocal(identifier).every((use) => isWholeFilterUse(use)))) {
+        // A single query object, list or filter predicate (`const filter = { ownerId: uid }`, `const ids = [uid]`,
+        // `const predicate = (m) => …`) is placed inside itself. A query object must also be used only as a whole
+        // filter: `where: { NOT: filter }` negates it however its own initializer reads.
+        const [only] = values;
+        const isQueryObject = Node.isObjectLiteralExpression(only);
+        const isPlacedInside = isQueryObject || Node.isArrayLiteralExpression(only) || Node.isArrowFunction(only) || Node.isFunctionExpression(only);
+
+        if (
+            values.length !== 1 ||
+            only === undefined ||
+            !isPlacedInside ||
+            (isQueryObject && !(Node.isIdentifier(identifier) && usesOfLocal(identifier).every((use) => isWholeFilterUse(use))))
+        ) {
             return false;
         }
 
-        return (
-            initializer !== undefined &&
-            valueIdentifiersOf(initializer).some((inner) => {
-                const isAlias = valueWrapperOf(outermostChainOf(inner)) === initializer;
-
-                return (
-                    contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth" &&
-                    !hasAlternativeWithin(inner, initializer) &&
-                    (isAlias ? constrainsMatch(identifier) : constrainsMatch(inner))
-                );
-            })
+        return valueIdentifiersOf(only).some(
+            (inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth" && !hasAlternativeWithin(inner, only) && constrainsMatch(inner),
         );
     });
 
@@ -1782,13 +1851,43 @@ const isIdentityReadOf = (node: TsNode, parameter: ParameterDeclaration): boolea
 };
 
 /**
+ * Whether `call` is a row read rooted at the helper's ctx parameter (`context.db.members.findFirst(…)`), whatever the
+ * parameter is named. A read rooted anywhere else is not the helper's query.
+ */
+const isParameterDatabaseRead = (call: CallExpression, parameter: ParameterDeclaration): boolean => {
+    const callee = call.getExpression();
+
+    if (!Node.isPropertyAccessExpression(callee) || !DB_READ_METHODS.has(callee.getName())) {
+        return false;
+    }
+
+    let surface: TsNode = callee;
+
+    while ((Node.isPropertyAccessExpression(surface) || Node.isElementAccessExpression(surface)) && !Node.isIdentifier(surface.getExpression())) {
+        surface = surface.getExpression();
+    }
+
+    const root = Node.isPropertyAccessExpression(surface) ? surface.getExpression() : undefined;
+
+    return (
+        Node.isPropertyAccessExpression(surface) &&
+        surface.getName() === "db" &&
+        Node.isIdentifier(root) &&
+        declarationOf(root)?.compilerNode === parameter.compilerNode
+    );
+};
+
+/**
  * Whether the read argument `argument` reads the caller's identity through `parameter` with no alternative beside it.
  * `victim ?? ctx.auth.userId` reads the identity only when nothing else is supplied, and `ctx.auth.userId ?? victim`
  * reads the victim for an anonymous caller, whose `userId` is null.
  */
 const argumentReadsIdentityOf = (argument: TsNode, parameter: ParameterDeclaration): boolean =>
     [argument, ...argument.getDescendants()].some(
-        (node) => isIdentityReadOf(node, parameter) && !hasAlternativeWithin(node, argument) && constrainsMatch(node),
+        (node) =>
+            isIdentityReadOf(node, parameter) &&
+            !hasAlternativeWithin(node, argument) &&
+            constrainsMatch(node, (call) => isParameterDatabaseRead(call, parameter)),
     );
 
 /** The declaration a variable statement makes, when it is a single `const` binding one identifier. */

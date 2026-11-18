@@ -180,6 +180,19 @@ const trustedThroughDefault = (element: BindingElement, path: ContextPath, hops:
 };
 
 /**
+ * The path an element of a `{ ctx, args }` options parameter binds: the ctx for its `ctx` key, nothing for any other.
+ * Under the trust policy a default (`({ args, ctx = args.fakeCtx })`) binds the caller's object whenever no ctx is
+ * passed, so it is judged like any other default.
+ */
+const optionsContextPath = (element: BindingElement, key: string, policy: Policy, hops: number): ContextPath | undefined => {
+    if (key !== "ctx") {
+        return undefined;
+    }
+
+    return policy === "trust" ? trustedThroughDefault(element, [], hops) : [];
+};
+
+/**
  * The {@link ContextPath} a destructured element binds: its key appended to the
  * path of what the pattern destructures — a handler's positional ctx, an
  * enclosing element's path, or a variable's initializer. In a handler's
@@ -198,7 +211,7 @@ const bindingContextPath = (element: BindingElement, policy: Policy, hops: numbe
 
     if (Node.isParameterDeclaration(holder)) {
         if (!isHandlerContextParameter(holder) || isOptionsPattern(holder)) {
-            return key === "ctx" ? [] : undefined;
+            return optionsContextPath(element, key, policy, hops);
         }
 
         base = [];

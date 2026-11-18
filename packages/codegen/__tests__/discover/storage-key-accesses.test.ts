@@ -1133,6 +1133,93 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it("reports a helper that rebinds its tied parameter through a type assertion before the read", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId);",
+                SINK,
+                HELPER.replace("const userId", `(channelId as string) = "general";\n    const userId`),
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports an inline guard whose filter rebinds a destructured row field through a type assertion", () => {
+        expect.assertions(1);
+
+        const filter = "({ userId, channelId }) => { (userId as string) = args.victim; return userId === ctx.auth.userId && channelId === message.channelId; }";
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a guarded row loosely compared after its valueOf was replaced", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                "await requireMember(ctx, message.channelId);\n    message.valueOf = function () {\n        this.attachmentKey = args.key;\n        return 1;\n    };\n    if (message == 1) {\n        void 0;\n    }",
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each(["message === undefined", "message != null", "message == undefined"])("accepts a guarded row tested with %s", (test) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`await requireMember(ctx, message.channelId);\n    if (${test}) {\n        void 0;\n    }`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["a comma after an owned read", "const victimId = (await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId } }), args.victimId);"],
+        ["a conditional with a caller branch", "const victimId = args.flag ? ctx.auth.userId : args.victimId;"],
+    ])("reports an inline guard whose identity local resolves through %s", (_label, local) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`${local}\n    ${inlineGuard("ctx.db.members.findFirst({ where: { userId: victimId, channelId: message.channelId } })")}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts a helper guard whose ctx parameter is named context", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (context, channelId) => {
+    const row = await context.db.members.findFirst({ where: { userId: context.auth.userId, channelId } });
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a helper guard whose identity goes to a read rooted elsewhere", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (context, channelId) => {
+    const row = await context.db.members.findFirst({ where: { channelId, userId: globalThis.other.db.get(context.auth.userId) } });
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("reports an inline guard whose filter repoints its row parameter", () => {
         expect.assertions(1);
 

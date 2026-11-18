@@ -747,6 +747,32 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(read("args.victim ?? ctx.auth.userId")))).toBe(false);
         });
 
+        it("rejects an identity read off a handler ctx parameter with a caller default", () => {
+            expect.assertions(2);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId}/\${args.k}\`);`, "{ args, ctx = args.fakeCtx }"))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId}/\${args.k}\`);`, "{ args, ctx }"))).toBe(true);
+        });
+
+        it("follows a query object held in a local to the read's own where", () => {
+            expect.assertions(2);
+
+            const sink = `SINK(\`\${row._id}/\${args.k}\`);`;
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const query = { where: { ownerId: ctx.auth.userId } };\nconst row = await ctx.db.files.findFirst(query);\n${sink}`),
+                ),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const query = { where: { ownerId: ctx.auth.userId } };\nconst row = await ctx.db.files.findFirst({ where: { id: args.id }, with: { owner: query } });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
         it("rejects, without crashing, an identity whose default names itself or a cycle", () => {
             expect.assertions(2);
 
