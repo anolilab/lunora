@@ -212,12 +212,25 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
     }
 
     const encoder = new TextEncoder();
+    // The release outlives its client: a CLI that disconnects mid-deploy cancels the
+    // stream, and an enqueue on it throws — inside the progress write that precedes
+    // each status write, so a cut-over Worker would stay recorded at an earlier status.
+    // Frames to a gone client are dropped instead.
+    let open = true;
     const stream = new ReadableStream<Uint8Array>({
+        cancel() {
+            open = false;
+        },
         async start(controller) {
             await started.run((frame) => {
-                controller.enqueue(encoder.encode(`${JSON.stringify(frame)}\n`));
+                if (open) {
+                    controller.enqueue(encoder.encode(`${JSON.stringify(frame)}\n`));
+                }
             });
-            controller.close();
+
+            if (open) {
+                controller.close();
+            }
         },
     });
 

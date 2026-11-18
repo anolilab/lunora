@@ -184,6 +184,39 @@ describe(handleDeployRequest, () => {
         expect(statuses).toStrictEqual(["provisioning", "failed"]);
     });
 
+    it("still records the release's statuses after the client cancels the stream", async () => {
+        const statuses: string[] = [];
+        const { promise: settled, resolve: settle } = Promise.withResolvers<undefined>();
+        const { promise: cancelled, resolve: cancel } = Promise.withResolvers<undefined>();
+        const backend = backendWith({
+            updateStatus: ({ status }) => {
+                statuses.push(status);
+
+                if (status === "live" || status === "failed") {
+                    settle(undefined);
+                }
+
+                return Promise.resolve();
+            },
+        });
+        // The converge waits for the disconnect, so every later frame meets a cancelled stream.
+        const gated: Provisioner = {
+            deploy: () =>
+                cancelled.then(() => {
+                    return { url: "https://proj.lunora.app" };
+                }),
+            destroy: () => Promise.resolve(),
+        };
+
+        const response = await handleDeployRequest(request("k", { bundle: BUNDLE, projectId: "proj_1", scriptName: "s" }), deps(backend, gated));
+
+        await response.body?.cancel();
+        cancel(undefined);
+        await settled;
+
+        expect(statuses).toStrictEqual(["provisioning", "live"]);
+    });
+
     it("counts a failed converge by step and bounded reason, never the message", async () => {
         const provisionFailed = vi.fn<NonNullable<DeployHandlerDeps["provisionFailed"]>>();
         const failing: Provisioner = { deploy: () => Promise.reject(new TypeError("fetch failed: acme.example.com")), destroy: () => Promise.resolve() };
