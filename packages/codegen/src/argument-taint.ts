@@ -616,6 +616,9 @@ const isReturnedPredicate = (comparison: TsNode): boolean => {
 /** The `ctx.auth` member that names the caller; `getIdentity` is a method shared by every caller. */
 const CALLER_ID_MEMBER = "userId";
 
+/** Whether a ctx path is the caller's id itself, `["auth", "userId"]`, and not another `ctx.auth` field. */
+const isCallerIdPath = (path: ReadonlyArray<string> | undefined): boolean => path?.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
+
 /** `node` without the parentheses, `await`, `!` and type assertions around it, none of which change the value. */
 const strippedValue = (node: TsNode): TsNode => {
     let current = node;
@@ -632,11 +635,7 @@ const strippedValue = (node: TsNode): TsNode => {
 };
 
 /** Whether `value` is the caller's id itself (`ctx.auth.userId`, or a local bound to it), not merely an expression that mentions it. */
-const isCallerId = (value: TsNode): boolean => {
-    const path = contextTrustPathOf(strippedValue(value));
-
-    return path?.length === 2 && path[0] === "auth" && path[1] === CALLER_ID_MEMBER;
-};
+const isCallerId = (value: TsNode): boolean => isCallerIdPath(contextTrustPathOf(strippedValue(value)));
 
 /** The `where` operators that match rows other than the value they are given, or the value's complement. */
 const NON_MATCHING_OPERATORS: ReadonlySet<string> = new Set(["contains", "gt", "gte", "isNull", "lt", "lte", "ne", "neq", "not", "notIn"]);
@@ -1224,7 +1223,8 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
             return false;
         }
 
-        if (contextTrustPathOf(outermostChainOf(identifier))?.[0] === "auth") {
+        // Only the caller's id names the caller: `ctx.auth.role` or `ctx.auth.orgId` is shared by everyone who holds it.
+        if (isCallerId(outermostChainOf(identifier))) {
             return constrainsMatch(identifier);
         }
 
@@ -1233,7 +1233,7 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
 
         // A local is judged by what becomes its value: the last operand of a comma, each branch of a conditional or
         // fallback. Every one an identity makes it an alias (`const uid = ctx.auth.userId`), placed where it is used.
-        if (values.length > 0 && values.every((value) => contextTrustPathOf(value)?.[0] === "auth")) {
+        if (values.length > 0 && values.every((value) => isCallerId(value))) {
             return constrainsMatch(identifier);
         }
 
@@ -1253,9 +1253,7 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
             return false;
         }
 
-        return valueIdentifiersOf(only).some(
-            (inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth" && !hasAlternativeWithin(inner, only) && constrainsMatch(inner),
-        );
+        return valueIdentifiersOf(only).some((inner) => isCallerId(outermostChainOf(inner)) && !hasAlternativeWithin(inner, only) && constrainsMatch(inner));
     });
 
 /**
@@ -1826,7 +1824,7 @@ const isDirectDestructuredIdentityOf = (node: TsNode, parameter: ParameterDeclar
 
     const source = accessPathOf(declaration.getInitializer());
 
-    return source?.path[0] === "auth" && bindsTo(source.root, parameter);
+    return source !== undefined && isCallerIdPath([...source.path, bindingKeyName(element)]) && bindsTo(source.root, parameter);
 };
 
 /**
@@ -1838,12 +1836,12 @@ const isIdentityReadOf = (node: TsNode, parameter: ParameterDeclaration): boolea
     const access = accessPathOf(node);
 
     if (access !== undefined && access.path.length > 0) {
-        return access.path[0] === "auth" && bindsTo(access.root, parameter);
+        return isCallerIdPath(access.path) && bindsTo(access.root, parameter);
     }
 
     const initializerAccess = accessPathOf(trustedInitializerOf(node));
 
-    if (initializerAccess?.path[0] === "auth" && bindsTo(initializerAccess.root, parameter)) {
+    if (initializerAccess !== undefined && isCallerIdPath(initializerAccess.path) && bindsTo(initializerAccess.root, parameter)) {
         return true;
     }
 

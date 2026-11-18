@@ -1182,10 +1182,47 @@ requireMember = async () => {};`;
     it.each([
         ["a comma after an owned read", "const victimId = (await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId } }), args.victimId);"],
         ["a conditional with a caller branch", "const victimId = args.flag ? ctx.auth.userId : args.victimId;"],
+        ["a conditional with a role branch", "const victimId = args.useRole ? ctx.auth.role : ctx.auth.userId;"],
+        ["a fallback to an organisation id", "const victimId = ctx.auth.orgId ?? ctx.auth.userId;"],
     ])("reports an inline guard whose identity local resolves through %s", (_label, local) => {
         expect.assertions(1);
 
         write("chat.ts", teamChat(`${local}\n    ${inlineGuard("ctx.db.members.findFirst({ where: { userId: victimId, channelId: message.channelId } })")}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts an inline guard whose identity local is the caller's id on every branch", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                `const uid = ctx.auth.userId;\n    const owner = args.x ? ctx.auth.userId : uid;\n    ${inlineGuard("ctx.db.members.findFirst({ where: { userId: owner, channelId: message.channelId } })")}`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["an inline role column", inlineGuard("ctx.db.members.findFirst({ where: { userId: ctx.auth.role, channelId: message.channelId } })")],
+        [
+            "a role in a named filter",
+            `const filter = { userId: ctx.auth.role };\n    ${inlineGuard("ctx.db.members.findFirst({ where: { AND: [filter, { channelId: message.channelId }] } })")}`,
+        ],
+    ])("reports an inline guard that matches the caller's role through %s", (_label, guard) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(guard));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports a helper guard that matches the caller's role", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, HELPER.replace(`"userId", userId`, `"userId", ctx.auth.role`)));
 
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
