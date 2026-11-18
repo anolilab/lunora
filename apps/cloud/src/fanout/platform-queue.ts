@@ -37,7 +37,7 @@ export const HELD_RETRY_DELAY_SECONDS = 43_200;
 
 /** A queue batch the platform consumer drains (Cloudflare `MessageBatch`, minimally typed). */
 export interface QueueBatchLike {
-    messages: ReadonlyArray<{ ack: () => void; body: unknown; id: string; retry: (options?: { delaySeconds?: number }) => void }>;
+    messages: ReadonlyArray<{ ack: () => void; attempts?: number; body: unknown; id: string; retry: (options?: { delaySeconds?: number }) => void }>;
     queue: string;
 }
 
@@ -63,7 +63,8 @@ const forwardBodies = (batch: QueueBatchLike, queue: string): { body: string; id
     const chunks: { bytes: number; ids: string[]; parts: string[] }[] = [];
 
     for (const message of batch.messages) {
-        const part = JSON.stringify({ body: message.body, id: message.id });
+        // `attempts` lets the tenant's retry policy see a message's last delivery.
+        const part = JSON.stringify({ attempts: message.attempts, body: message.body, id: message.id });
         // +1 for the separating comma.
         const bytes = encoder.encode(part).byteLength + 1;
         const last = chunks.at(-1);

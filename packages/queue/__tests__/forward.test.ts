@@ -30,6 +30,31 @@ describe(dispatchForwardedQueueBatch, () => {
         expect(result).toStrictEqual({ retry: [] });
     });
 
+    it("hands the handler the platform's delivery attempt, so a last delivery is seen as one", async () => {
+        expect.assertions(1);
+
+        const attempts: number[] = [];
+        const registry = registryOf((_context, batch) => {
+            for (const message of batch.messages) {
+                attempts.push(message.attempts);
+            }
+        });
+
+        await dispatchForwardedQueueBatch(
+            {
+                messages: [
+                    { attempts: 4, body: "last", id: "m1" },
+                    { body: "first", id: "m2" },
+                ],
+                queue: "queue-email",
+            },
+            registry,
+            { env: {} },
+        );
+
+        expect(attempts).toStrictEqual([4, 1]);
+    });
+
     it("still routes a batch forwarded under the declared name", async () => {
         expect.assertions(1);
 

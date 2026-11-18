@@ -88,4 +88,30 @@ describe(deliverQueueBatch, () => {
         expect(acked).toStrictEqual(["m1", "m2", "m3"]);
         expect(retried).toStrictEqual([]);
     });
+
+    it("forwards each message's delivery attempt, so the tenant's retry policy can see its last one", async () => {
+        expect.assertions(1);
+
+        const forwarded: unknown[] = [];
+        const dispatch: NonNullable<TargetFleet["dispatch"]> = () => async (_path, body) => {
+            forwarded.push(...(JSON.parse(body) as { messages: unknown[] }).messages);
+
+            return Response.json({ retry: [] });
+        };
+
+        await deliverQueueBatch(
+            {
+                messages: [{ ack: () => undefined, attempts: 4, body: "b", id: "m1", retry: () => undefined }],
+                queue: tenantResourceName("shop", { binding: "JOBS", type: "queue_producer" }),
+            },
+            {
+                dispatches: new Map([["cloudflare-wfp" as const, dispatch]]),
+                live: [{ adminToken: "admin", alias: "shop", organizationId: "org_ok", projectId: "p_shop", scriptName: "shop", target: "cloudflare-wfp" }],
+                now: Date.UTC(2026, 9, 9, 12),
+                store: memoryStore({ organizations: [{ _id: "org_ok", plan: "pro" }] }),
+            },
+        );
+
+        expect(forwarded).toStrictEqual([{ attempts: 4, body: "b", id: "m1" }]);
+    });
 });

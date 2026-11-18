@@ -697,6 +697,8 @@ type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: 
 
 /** One forwarded queue message: the platform's opaque `body` plus its id. */
 interface QueueForwardMessage {
+    /** The platform's delivery attempt of the message, which a retry policy needs to see a last delivery. */
+    attempts?: number;
     body: unknown;
     id: string;
 }

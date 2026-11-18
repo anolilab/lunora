@@ -164,6 +164,38 @@ describe("createWorker — the tenant queue fan-out endpoint", () => {
         ]);
     });
 
+    it("passes each message's delivery attempt through, and drops one that is not a positive integer", async () => {
+        expect.assertions(1);
+
+        const seen: QueueForwardBatch[] = [];
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            queueHandler: (batch) => {
+                seen.push(batch);
+            },
+            shardDO: shardNamespace(),
+        });
+
+        await worker.fetch(
+            post(QUEUE_PATH, {
+                messages: [
+                    { attempts: 4, body: 1, id: "m1" },
+                    { attempts: "4", body: 2, id: "m2" },
+                    { attempts: 0, body: 3, id: "m3" },
+                ],
+                queue: "jobs",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(seen[0]?.messages).toStrictEqual([
+            { attempts: 4, body: 1, id: "m1" },
+            { body: 2, id: "m2" },
+            { body: 3, id: "m3" },
+        ]);
+    });
+
     it("answers an empty retry list when the handler returns nothing", async () => {
         expect.assertions(1);
 

@@ -1784,6 +1784,7 @@ type QueueForwardHandler = (batch: QueueForwardBatch, env: unknown, context: Exe
 
 ```ts
 interface QueueForwardMessage {
+    attempts?: number;
     body: unknown;
     id: string;
 }

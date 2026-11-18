@@ -36,6 +36,7 @@ interface CapturedQueueMessage {
 ```ts
 interface ForwardedQueueBatch {
     messages: ReadonlyArray<{
+        attempts?: number;
         body: unknown;
         id: string;
     }>;

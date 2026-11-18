@@ -14,7 +14,8 @@ import type { MessageBatchLike, MessageLike } from "./types";
 
 /** A batch as the platform consumer forwards it (`QueueForwardBatch` in `@lunora/runtime`). */
 interface ForwardedQueueBatch {
-    messages: ReadonlyArray<{ body: unknown; id: string }>;
+    /** `attempts` is the platform's delivery attempt; absent from a platform that does not send it, which counts as the first. */
+    messages: ReadonlyArray<{ attempts?: number; body: unknown; id: string }>;
     queue: string;
 }
 
@@ -52,8 +53,8 @@ const dispatchForwardedQueueBatch = async (forwarded: ForwardedQueueBatch, regis
             ack: () => {
                 outcomes.set(message.id, "ack");
             },
-            // The forward protocol does not carry the platform's attempt count.
-            attempts: 1,
+            // The platform's count: a retry policy that sees only 1 never knows a delivery is the last.
+            attempts: message.attempts ?? 1,
             body: message.body,
             id: message.id,
             retry: () => {

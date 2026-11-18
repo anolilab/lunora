@@ -109,7 +109,7 @@ const buildTenantFanoutRoutes = (
     /**
      * `POST /_lunora/queue` — process a forwarded queue batch (the WfP workaround
      * for queue consumers). Admin-gated; the body is
-     * `{ "queue": "name", "messages": [{ "id": "...", "body": ... }] }`. Returns
+     * `{ "queue": "name", "messages": [{ "id": "...", "body": ..., "attempts": 1 }] }`. Returns
      * `{ "retry": [ids] }` so the platform consumer can retry only the failures.
      */
     const handleQueueDispatch = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
@@ -139,11 +139,17 @@ const buildTenantFanoutRoutes = (
         const queue = typeof body.queue === "string" ? body.queue : "";
         const messages = body.messages
             .filter(
-                (message): message is { body: unknown; id: string } =>
+                (message): message is { attempts?: unknown; body?: unknown; id: string } =>
                     typeof message === "object" && message !== null && typeof (message as { id?: unknown }).id === "string",
             )
             .map((message) => {
-                return { body: (message as { body?: unknown }).body, id: (message as { id: string }).id };
+                return {
+                    ...(typeof message.attempts === "number" && Number.isInteger(message.attempts) && message.attempts > 0
+                        ? { attempts: message.attempts }
+                        : {}),
+                    body: message.body,
+                    id: message.id,
+                };
             });
 
         if (await isPaused()) {
