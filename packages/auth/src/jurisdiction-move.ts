@@ -52,7 +52,8 @@ import { decodeWire, encodeWire } from "@lunora/wire";
 
 import { contentDigest } from "../../../shared/content-digest";
 import { quoteIdentifier } from "../../../shared/quote-identifier";
-import { insertAuthRows, isUnmovableAuthTable, replaceAuthRows } from "./data-port";
+import type { CredentialColumns } from "./data-port";
+import { insertAuthRows, isUnmovableAuthTable, redactCredentials, replaceAuthRows } from "./data-port";
 import type { DoStorageLike } from "./do-store";
 
 /** The internal route both halves of the move are served on. Not part of `/api/auth/*`. */
@@ -153,6 +154,14 @@ interface MoveOrder {
 }
 
 interface MoveContext {
+    /**
+     * The provider-token columns by physical names (`authCredentialColumns`): the
+     * export's `exportPage` nulls them and import and replace drop them, while the
+     * move's own `page` copies them — the move keeps the same deployment's users
+     * signed in to their providers, a backup must not. Known once `prepare` has run.
+     */
+    credentialColumns: () => CredentialColumns;
+
     /**
      * The live-credential tables by their physical names, renamed models included
      * (`authCredentialTableNames`). The export, import and replace ops leave them
@@ -665,7 +674,7 @@ const assertNotPurged = (storage: DoStorageLike): void => {
 };
 
 /** The ops served by the un-pinned object. */
-const SOURCE_OPS = new Set(["fingerprints", "manifest", "page", "pending", "purge", "tables"]);
+const SOURCE_OPS = new Set(["exportPage", "fingerprints", "manifest", "page", "pending", "purge", "tables"]);
 
 /**
  * Target: markers and the copy order, plus — only when asked, since it reads every
@@ -748,11 +757,20 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
 
             return beginMove(storage, body["tables"] as MovableTable[], { force: body["force"] === true, userTable: context.userTable() });
         }
+        // The admin export / import of the auth tables (`./data-port`): a page with the
+        // provider tokens nulled, the table list in copy order, and an append-only write.
+        case "exportPage": {
+            context.prepare();
+
+            const table = assertKnownTable(storage, body["table"]);
+            const page = readPage(storage, table, Number(body["after"] ?? 0));
+            const columns = context.credentialColumns();
+
+            return { last: page.last, rows: encodeWire(page.rows.map((row) => redactCredentials(row, table, columns))) };
+        }
         case "fingerprints": {
             return { fingerprints: Object.fromEntries(tableNames(storage).map((table) => [table, sourceFingerprint(storage, table)])) };
         }
-        // The admin export / import of the auth tables (`./data-port`) reuses `page` and
-        // adds these two: the table list in copy order, and an append-only write.
         case "import": {
             context.prepare();
 
@@ -766,6 +784,7 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
                 { all: (query, parameters) => Promise.resolve(all(storage, query, ...parameters)) },
                 (body["rows"] ?? []) as { doc: Row; table: string }[],
                 (table) => importable.has(table),
+                context.credentialColumns(),
             );
         }
         case "manifest": {
@@ -809,8 +828,7 @@ const dispatch = async (storage: DoStorageLike, body: Row, context: MoveContext)
                     }),
                 (body["rows"] ?? []) as { doc: Row; table: string }[],
                 tables,
-                credentials,
-                body["dryRun"] === true,
+                { clearTables: credentials, credentialColumns: context.credentialColumns(), dryRun: body["dryRun"] === true },
             );
         }
         case "rescan": {

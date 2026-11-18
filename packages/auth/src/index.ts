@@ -45,7 +45,7 @@ export {
 export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 export { createAuth, resolveAuthOptions } from "./create-auth";
 export type { AuthDataPortLike, AuthImportResult, AuthReplaceResult } from "./data-port";
-export { authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "./data-port";
+export { authCredentialColumns, authCredentialTableNames, authTableNames, createSqlAuthDataPort } from "./data-port";
 export { authDiscoveryPaths, authDiscoveryPathsFor, handleAuthDiscoveryRequest } from "./discovery";
 export { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 export type { AuthJurisdiction, AuthNamespaceLike, DoAuthWiring, DoAuthWiringOptions } from "./do-wiring";

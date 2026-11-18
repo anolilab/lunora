@@ -35,7 +35,8 @@ import type { AuthAuditEntry, ReadAuthAuditOptions } from "./audit";
 import { AUTH_AUDIT_TABLE, createAuthAuditReader, ensureAuthAuditTable } from "./audit";
 import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 import { createAuth, resolveAuthOptions } from "./create-auth";
-import { authCredentialTableNames, parentsFirst } from "./data-port";
+import type { CredentialColumns } from "./data-port";
+import { authCredentialColumns, authCredentialTableNames, parentsFirst } from "./data-port";
 import { handleAuthDiscoveryRequest } from "./discovery";
 import { authDoColumnAdditions, authDoSchemaStatements } from "./do-schema";
 import type { DoStorageLike } from "./do-store";
@@ -167,6 +168,9 @@ class LunoraAuthDO {
     /** Physical table names that decide the jurisdiction copy's order, known once `#ensureReady` has run. */
     #moveOrder: MoveOrder = { first: ["user"], last: [] };
 
+    /** The provider-token columns by physical names, renamed models and fields included, known once `#ensureReady` has run. */
+    #credentialColumns: CredentialColumns = {};
+
     /** Physical names of the live-credential tables, renamed models included, known once `#ensureReady` has run. */
     #credentialTables: string[] = [];
 
@@ -205,6 +209,7 @@ class LunoraAuthDO {
         const { tables } = getAuthTablesWithResolvedIndexes(resolved);
 
         this.#credentialTables = authCredentialTableNames(resolved);
+        this.#credentialColumns = authCredentialColumns(resolved);
 
         // The copy into a pinned object (and the data port's export) goes parents
         // first — every table after the tables it references — and the unbounded
@@ -384,6 +389,7 @@ class LunoraAuthDO {
         try {
             const body: Record<string, unknown> = await request.json();
             const result = await handleMoveRequest(this.#storage, body, {
+                credentialColumns: () => this.#credentialColumns,
                 credentialTables: () => this.#credentialTables,
                 // The tables are gone: materialise them again on the next request rather
                 // than serve it from a schema this instance still believes is applied.

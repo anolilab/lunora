@@ -6,8 +6,9 @@ import { describe, expect, it } from "vitest";
 import { AUTH_AUDIT_TABLE } from "../src/audit";
 import { LunoraAuthDO } from "../src/auth-do";
 import type { AuthDataPortLike } from "../src/data-port";
-import { authCredentialTableNames, authTableNames, createDoAuthDataPort, createSqlAuthDataPort } from "../src/data-port";
+import { authCredentialColumns, authCredentialTableNames, authTableNames, createDoAuthDataPort, createSqlAuthDataPort } from "../src/data-port";
 import { createDoAuthWiring } from "../src/do-wiring";
+import { MOVE_PATH } from "../src/jurisdiction-move";
 import { deviceAuthorization, jwt, oauthProvider } from "../src/plugins";
 import type { SqlExecutor } from "../src/sql-store";
 import createDoStorage from "./helpers/do-storage";
@@ -269,6 +270,97 @@ describe("auth data port", () => {
         for (const table of bearer) {
             expect(database.prepare(`SELECT * FROM "${table}"`).all()).toEqual([]);
         }
+    });
+
+    it("never exports, imports or restores the provider tokens on an account, renamed model and fields included", async () => {
+        expect.hasAssertions();
+
+        const options = { account: { fields: { accessToken: "access_token" }, modelName: "accounts" }, secret: SECRET };
+        const columns = authCredentialColumns(options);
+
+        expect(columns).toStrictEqual({ accounts: ["access_token", "refreshToken", "idToken", "accessTokenExpiresAt", "refreshTokenExpiresAt"] });
+
+        const database = new DatabaseSync(":memory:");
+
+        database.exec(`CREATE TABLE "user" ("id" text NOT NULL PRIMARY KEY, "email" text NOT NULL UNIQUE)`);
+        database.exec(
+            `CREATE TABLE "accounts" ("id" text NOT NULL PRIMARY KEY, "userId" text NOT NULL, "access_token" text, "refreshToken" text, "idToken" text, "accessTokenExpiresAt" integer, "refreshTokenExpiresAt" integer)`,
+        );
+        database.prepare(`INSERT INTO "user" VALUES ('u1', 'a@b.test')`).run();
+        database.prepare(`INSERT INTO "accounts" VALUES ('a1', 'u1', 'gho_live', 'ghr_live', 'eyJ.live', 9, 9)`).run();
+
+        const port = createSqlAuthDataPort(batchingExecutorOver(database), ["user", "accounts"], [], columns);
+        const exported = await collect(port);
+        const tokens = { access_token: null, accessTokenExpiresAt: null, idToken: null, refreshToken: null, refreshTokenExpiresAt: null };
+
+        expect(exported.find((row) => row.table === "accounts")?.doc).toStrictEqual({ id: "a1", userId: "u1", ...tokens });
+
+        const planted = { doc: { access_token: "planted", id: "a2", idToken: "planted", refreshToken: "planted", userId: "u1" }, table: "accounts" };
+
+        await expect(port.importRows([planted])).resolves.toStrictEqual({ conflicts: 0, errors: [], inserted: 1 });
+        expect(database.prepare(`SELECT * FROM "accounts" WHERE "id" = 'a2'`).get()).toEqual({ id: "a2", userId: "u1", ...tokens });
+
+        // A restore takes the account back without tokens: the user re-links on their next OAuth sign-in.
+        await expect(port.replaceRows!([{ doc: { email: "a@b.test", id: "u1" }, table: "user" }, planted])).resolves.toMatchObject({ errors: [] });
+        expect(database.prepare(`SELECT * FROM "accounts"`).all()).toEqual([{ id: "a2", userId: "u1", ...tokens }]);
+    });
+
+    it("nulls the provider tokens in the DO-backed auth object's export, while the move's own page still copies them", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+        const object = new LunoraAuthDO(
+            { storage: createDoStorage(database) },
+            () => {
+                return { secret: SECRET };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
+        const { dataPort } = createDoAuthWiring({
+            internalSecret: INTERNAL_SECRET,
+            namespace: {
+                get: () => {
+                    return { fetch: async (request: Request) => object.fetch(request) };
+                },
+                idFromName: (name) => name,
+            },
+        });
+
+        await collect(dataPort!);
+        database
+            .prepare(`INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES ('u1', 'Ada', 'ada@example.test', 1, 1, 1)`)
+            .run();
+        database
+            .prepare(
+                `INSERT INTO "account" ("id", "accountId", "providerId", "userId", "accessToken", "refreshToken", "idToken", "createdAt", "updatedAt") VALUES ('a1', 'gh-1', 'github', 'u1', 'gho_live', 'ghr_live', 'eyJ.live', 1, 1)`,
+            )
+            .run();
+
+        const exported = await collect(dataPort!);
+        const account = exported.find((row) => row.table === "account")?.doc;
+
+        expect(account).toMatchObject({ accessToken: null, accountId: "gh-1", idToken: null, refreshToken: null });
+
+        const planted = { ...account, accessToken: "planted", id: "a2", refreshToken: "planted" };
+
+        await expect(dataPort!.importRows([{ doc: planted, table: "account" }])).resolves.toMatchObject({ errors: [], inserted: 1 });
+        expect(database.prepare(`SELECT "accessToken", "refreshToken" FROM "account" WHERE "id" = 'a2'`).get()).toEqual({
+            accessToken: null,
+            refreshToken: null,
+        });
+
+        // The jurisdiction move keeps the same deployment's users linked: its page carries the tokens.
+        const moved = await object.fetch(
+            new Request(new URL(MOVE_PATH, "https://auth-do.invalid"), {
+                body: JSON.stringify({ after: 0, op: "page", table: "account" }),
+                headers: { "content-type": "application/json", "x-lunora-auth-do-secret": INTERNAL_SECRET },
+                method: "POST",
+            }),
+        );
+        const page: { rows: Record<string, unknown>[] } = await moved.json();
+        const { rows } = page;
+
+        expect(rows.find((row) => row["id"] === "a1")).toMatchObject({ accessToken: "gho_live", refreshToken: "ghr_live" });
     });
 
     it("names the live credential tables a replace clears", () => {

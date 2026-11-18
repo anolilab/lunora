@@ -349,7 +349,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
               `        // Captured before the branch so the narrowing survives — reading
         // \`this.authDeclaration.namespace\` again below would be optional all over again.
         const authDeclaration = this.authDeclaration;
-        const { authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
+        const { authCredentialColumns, authCredentialTableNames, authDiscoveryPathsFor, authTableNames, createAuthAdmin, createAuthAuditReader, createDoAuthWiring, createSqlAuthDataPort, d1Executor, handleAuthDiscoveryRequest, handleAuthRequest, resolveSessionIdentity } = deferred.auth;
         const authNamespace = authDeclaration?.namespace;
         const authD1 = authDeclaration?.d1;
 
@@ -430,6 +430,7 @@ const buildWorkerOptionLines = (options: ResolvedAppOptions): string[] => [
                       d1Executor(authD1(env) as never),
                       authTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
                       authCredentialTableNames(authInstance.options).filter((table) => options.resolveTableSharding?.(table) === undefined),
+                      authCredentialColumns(authInstance.options),
                   )
                 : undefined;
         }

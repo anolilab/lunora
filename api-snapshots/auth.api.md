@@ -1025,6 +1025,12 @@ const authAuditBeforeHook: () => ReturnType<typeof createAuthMiddleware>;
 const authAuditHook: (config: AuthAuditHookConfig) => ReturnType<typeof createAuthMiddleware>;
 ```
 
+### `authCredentialColumns` (const)
+
+```ts
+const authCredentialColumns: (options: LunoraAuthOptions) => Record<string, string[]>;
+```
+
 ### `authCredentialTableNames` (const)
 
 ```ts
@@ -1127,7 +1133,7 @@ const createSignUpInvitation: (auth: LunoraAuth, input: {
 ### `createSqlAuthDataPort` (const)
 
 ```ts
-const createSqlAuthDataPort: (executor: SqlExecutor, tables: ReadonlyArray<string>, credentialTables?: ReadonlyArray<string>) => AuthDataPortLike;
+const createSqlAuthDataPort: (executor: SqlExecutor, tables: ReadonlyArray<string>, credentialTables?: ReadonlyArray<string>, credentialColumns?: CredentialColumns) => AuthDataPortLike;
 ```
 
 ### `createSqlAuthStore` (const)
@@ -1975,6 +1981,10 @@ Re-exported from `@lunora/auth` — signature tracked in that section.
 
 ## `@lunora/auth/worker`
 
+### `authCredentialColumns` (const)
+
+Re-exported from `@lunora/auth` — signature tracked in that section.
+
 ### `authCredentialTableNames` (const)
 
 Re-exported from `@lunora/auth` — signature tracked in that section.
@@ -2124,6 +2134,12 @@ interface BaseSSOUserResolutionInput {
     providerUser: SSOProviderUserProfile;
     providerReference: SSOProviderReference;
 }
+```
+
+### `CredentialColumns` (type)
+
+```ts
+type CredentialColumns = Readonly<Record<string, ReadonlyArray<string>>>;
 ```
 
 ### `D1Like` (interface)
