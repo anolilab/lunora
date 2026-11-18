@@ -1692,6 +1692,9 @@ const clientBuildEnvironmentFor = (projectRoot: string, options: DeployCommandOp
 const CONTAINER_REFUSED_FLAGS: ReadonlyArray<[keyof DeployCommandOptions, string]> = [
     ["emitBindings", "--emit-bindings"],
     ["env", "--env"],
+    // The Node deploy bundles a hand-written worker entry and refuses a framework-composed one, so a framework build has no output
+    // it could use. `--no-framework-build` (false) asks for what it already does and passes.
+    ["frameworkBuild", "--framework-build"],
     ["healthCheck", "--health-check"],
     ["migrate", "--migrate"],
     ["migrateAllowDestructive", "--migrate-allow-destructive"],

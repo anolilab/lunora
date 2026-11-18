@@ -893,6 +893,7 @@ describe("lunora deploy --target node", () => {
             ["--migrate-yes", { migrateYes: true }],
             ["--migrate-allow-destructive", { migrateAllowDestructive: true }],
             ["--prebuilt", { skipCodegen: true }],
+            ["--framework-build", { frameworkBuild: true }],
         ])("refuses %s before writing anything", async (flag, options) => {
             expect.assertions(3);
 
@@ -903,6 +904,14 @@ describe("lunora deploy --target node", () => {
             expect(refused).toMatchObject({ code: 2, error: expect.stringContaining(`${flag} does not apply to --target node`) });
             expect(existsSync(join(workdir, NODE_DEPLOY_DIRECTORY))).toBe(false);
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+        });
+
+        it("accepts --no-framework-build, which asks for the framework-free bundle it already makes", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            await expect(deploy(workdir, { frameworkBuild: false })).resolves.toMatchObject({ code: 0 });
         });
 
         it("refuses --image for a target that does not deploy as a container, instead of deploying it", async () => {
@@ -1324,6 +1333,46 @@ describe("lunora deploy --target node", () => {
 
             expect(bundle).toContain('"build-42"');
             expect(bundle).toContain("from-the-alias");
+        });
+
+        it("compiles an app's JSX with its tsconfig jsxImportSource while a define is set", async () => {
+            expect.assertions(3);
+
+            const runtime = join(workdir, "vendor", "fixture-jsx");
+
+            writeFixture(workdir, { extraModules: { "fixture-jsx": runtime }, wrangler: { define: { __BUILD_ID__: '"build-9"' } } });
+            mkdirSync(runtime, { recursive: true });
+            writeFileSync(
+                join(runtime, "package.json"),
+                JSON.stringify({ exports: { "./jsx-runtime": "./jsx-runtime.js" }, name: "fixture-jsx", type: "module" }),
+                "utf8",
+            );
+            writeFileSync(join(runtime, "jsx-runtime.js"), `export const jsx = (type, props) => ({ props, runtime: "fixture-jsx-runtime", type });\n`, "utf8");
+            writeFileSync(join(workdir, "tsconfig.json"), JSON.stringify({ compilerOptions: { jsx: "react-jsx", jsxImportSource: "fixture-jsx" } }), "utf8");
+            writeFileSync(
+                join(workdir, "src", "view.tsx"),
+                `declare const __BUILD_ID__: string;\n\nexport const view = () => <main id={__BUILD_ID__} />;\n`,
+                "utf8",
+            );
+
+            const worker = join(workdir, "src", "worker.ts");
+
+            writeFileSync(
+                worker,
+                `import { view } from "./view";\n\n${readFileSync(worker, "utf8").replace(
+                    'case "/__fixture/env":',
+                    'case "/__fixture/view":\n                return Response.json(view());\n            case "/__fixture/env":',
+                )}`,
+                "utf8",
+            );
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+            const bundle = readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8");
+
+            // The tsconfig's automatic runtime, as the build without a define uses, not React.createElement.
+            expect(bundle).toContain("fixture-jsx-runtime");
+            expect(bundle).toContain('"build-9"');
         });
 
         it("allows secrets.required to list a name twice, which puts one key on env", async () => {

@@ -1075,8 +1075,7 @@ const writeLockfile = async (directory: string, spawner: Spawner): Promise<void>
 };
 
 interface EsbuildApi {
-    build: (options: Record<string, unknown>) => Promise<{ errors: unknown[] }>;
-    transform: (input: string, options: Record<string, unknown>) => Promise<{ code: string }>;
+    build: (options: Record<string, unknown>) => Promise<{ errors: unknown[]; outputFiles?: ReadonlyArray<{ text: string }> }>;
 }
 
 interface EsbuildFailure {
@@ -1162,29 +1161,12 @@ interface EsbuildPluginBuild {
     resolve: (path: string, options: { kind: string; pluginData: unknown; resolveDir: string }) => Promise<unknown>;
 }
 
-const TSX_FILE = /\.[cm]?tsx$/u;
-const TS_FILE = /\.[cm]?ts$/u;
-const JSX_FILE = /\.[cm]?jsx$/u;
-
 // esbuild plugin filters are Go regular expressions, which reject the `u` flag.
 const ANY_PATH = /.*/;
 const SCRIPT_FILE = /\.[cm]?[jt]sx?$/;
 
 /** Marks the resolve the alias hook starts itself, so it is not aliased a second time. */
 const ALIASED = Symbol("lunora-aliased");
-
-/** The loader for an app source file, by extension. */
-const loaderFor = (path: string): string => {
-    if (TSX_FILE.test(path)) {
-        return "tsx";
-    }
-
-    if (TS_FILE.test(path)) {
-        return "ts";
-    }
-
-    return JSX_FILE.test(path) ? "jsx" : "js";
-};
 
 /** The alias entry `specifier` matches: the key itself, or a subpath of it (`key/...`), as esbuild's own alias matches. */
 const aliasTarget = (alias: Record<string, string>, specifier: string): string | undefined => {
@@ -1204,9 +1186,8 @@ const aliasTarget = (alias: Record<string, string>, specifier: string): string |
 /**
  * Wrangler's define and alias, applied to the app's own files only, in the one bundle with the generated server: a define such
  * as `process.env` applied to the whole bundle would rewrite the server's own environment checks and platform-node. So
- * `define` is applied by transforming each app file's source, `alias` by resolving an app file's imports, and everything
- * else, packages and CommonJS included, bundles as normal. Unlike wrangler, neither reaches dependencies, and a transformed
- * file is compiled without the project's tsconfig (its JSX or decorator settings).
+ * `define` is applied by compiling each app file on its own, `alias` by resolving an app file's imports, and everything
+ * else, packages and CommonJS included, bundles as normal. Unlike wrangler, neither reaches dependencies.
  */
 const appScopedPlugin = (
     esbuild: EsbuildApi,
@@ -1239,13 +1220,19 @@ const appScopedPlugin = (
                         return undefined;
                     }
 
-                    const transformed = await esbuild.transform(readFileSync(args.path, "utf8"), {
+                    // A build of the one file, not a transform: a build reads the file's tsconfig (following `extends`) and picks the
+                    // loader by extension, as the server bundle does, so JSX and decorator settings stay the app's own.
+                    const compiled = await esbuild.build({
+                        bundle: false,
                         define: project.define,
-                        loader: loaderFor(args.path),
-                        sourcefile: args.path,
+                        entryPoints: [args.path],
+                        logLevel: "silent",
+                        platform: "node",
+                        target: "node22",
+                        write: false,
                     });
 
-                    return { contents: transformed.code, loader: "js", resolveDir: dirname(args.path) };
+                    return { contents: compiled.outputFiles?.[0]?.text ?? "", loader: "js", resolveDir: dirname(args.path) };
                 });
             }
         },
