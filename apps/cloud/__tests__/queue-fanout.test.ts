@@ -148,4 +148,42 @@ describe(deliverQueueBatch, () => {
             ["m3", { delaySeconds: 43_200 }],
         ]);
     });
+
+    it("holds, never acks, a batch whose owner's sealed admin token has no key to open it", async () => {
+        expect.assertions(1);
+
+        const outcomes: string[] = [];
+
+        await deliverQueueBatch(
+            {
+                messages: [
+                    {
+                        ack: () => outcomes.push("ack"),
+                        body: "b",
+                        id: "m1",
+                        retry: () => outcomes.push("retry"),
+                    },
+                ],
+                queue: tenantResourceName("shop", { binding: "JOBS", type: "queue_producer" }),
+            },
+            {
+                dispatches: new Map([["cloudflare-wfp" as const, () => () => Promise.resolve(Response.json({ retry: [] }))]]),
+                live: [
+                    {
+                        adminTokenCiphertext: "c2VhbGVk",
+                        adminTokenIv: "aXY=",
+                        alias: "shop",
+                        organizationId: "org_ok",
+                        projectId: "p_shop",
+                        scriptName: "shop",
+                        target: "cloudflare-wfp",
+                    },
+                ],
+                now: Date.UTC(2026, 9, 9, 12),
+                store: memoryStore({ organizations: [{ _id: "org_ok", plan: "pro" }] }),
+            },
+        );
+
+        expect(outcomes).toStrictEqual(["retry"]);
+    });
 });

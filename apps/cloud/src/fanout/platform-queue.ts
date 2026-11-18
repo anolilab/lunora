@@ -154,8 +154,8 @@ type QueueTarget = { adminToken: string; dispatch: TenantDispatch; kind: "delive
 
 /**
  * The live deployment that owns a per-project queue, with its admin token
- * decrypted in-process — or `held` when an emergency stop holds its alias or
- * its organization may not run.
+ * decrypted in-process — or `held` when an emergency stop holds its alias, its
+ * organization may not run, or its sealed token cannot be opened here.
  */
 const readQueueTarget = async (queue: string, ports: QueueDeliveryPorts): Promise<QueueTarget> => {
     const target = routeQueue(
@@ -183,7 +183,13 @@ const readQueueTarget = async (queue: string, ports: QueueDeliveryPorts): Promis
 
     const adminToken = await resolveAdminToken(target, ports.secretEncryptionKey);
 
-    return adminToken ? { adminToken, dispatch, kind: "deliver", resourceRef: resourceRefOf(target) } : undefined;
+    if (adminToken) {
+        return { adminToken, dispatch, kind: "deliver", resourceRef: resourceRefOf(target) };
+    }
+
+    // A sealed token with no key to open it is the control plane's misconfiguration,
+    // not an ownerless queue: hold the messages for a fixed deploy rather than ack them away.
+    return target.adminTokenCiphertext ? { kind: "held" } : undefined;
 };
 
 /** Route one batch to its tenant, then ack or retry each message. */
