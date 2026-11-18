@@ -855,64 +855,63 @@ const isOverriddenOnTheWay = (node: TsNode): boolean => {
     return false;
 };
 
+/** Whether `query` is passed as an argument of a `ctx.db` row read. */
+const isReadQueryArgument = (query: TsNode): boolean => {
+    const wrapped = valueWrapperOf(query);
+    const call = wrapped.getParent();
+
+    return Node.isCallExpression(call) && call.getArguments().includes(wrapped) && isDatabaseReadCall(call);
+};
+
 /**
- * Whether `node`, a member of a query object, sits in an argument of a `ctx.db` read: every enclosing object, array
- * and property up to the call belongs to the query. In any other call's argument (`mutate({ where: filter })`) the
- * object is handed to code that can rewrite what it holds before the real read.
+ * Whether `object` is the read's own top-level `where`: the `where` of a `ctx.db` read's query argument, an `AND`
+ * element of one, or a local's initializer (`const filter = { … }`), judged at each of its uses. A `where` under
+ * `with` / `include` or any other nested query constrains related rows, not the row the read returns.
  */
-const isInDatabaseReadArgument = (node: TsNode): boolean => {
-    let current = node;
+const isTopLevelWhere = (object: TsNode): boolean => {
+    const wrapped = valueWrapperOf(object);
+    const holder = wrapped.getParent();
 
-    for (let parent = current.getParent(); parent !== undefined; parent = current.getParent()) {
-        if (Node.isCallExpression(parent)) {
-            return parent.getArguments().includes(current) && isDatabaseReadCall(parent);
-        }
+    if (Node.isPropertyAssignment(holder)) {
+        return staticPropertyName(holder.getNameNode()) === "where" && isReadQueryArgument(holder.getParent());
+    }
 
-        const isQueryPart =
-            Node.isObjectLiteralExpression(parent) ||
-            Node.isArrayLiteralExpression(parent) ||
-            Node.isPropertyAssignment(parent) ||
-            Node.isShorthandPropertyAssignment(parent);
-        // `valueWrapperOf` climbs only through parentheses, `!` and type assertions, which pass the object on unchanged.
-        const isWrapper = valueWrapperOf(current) !== current;
+    if (Node.isArrayLiteralExpression(holder)) {
+        const branches = valueWrapperOf(holder).getParent();
 
-        if (!isQueryPart && !isWrapper) {
-            return false;
-        }
+        return Node.isPropertyAssignment(branches) && staticPropertyName(branches.getNameNode()) === "AND" && isTopLevelWhere(branches.getParent());
+    }
 
-        current = parent;
+    if (Node.isVariableDeclaration(holder)) {
+        const initializer: TsNode | undefined = holder.getInitializer();
+
+        return initializer === wrapped;
     }
 
     return false;
 };
 
 /**
- * Whether `node`, a member of a query object, belongs to the initializer of a local (`const filter = { userId: uid }`).
- * Such a filter is judged at every place it is used (see `isWholeFilterUse`); an object built anywhere else
- * (`m = { ...m, userId: uid }`) is no query at all.
+ * Whether `property` constrains the row a read returns: a column of the read's top-level `where`, or an `eq` / `in`
+ * operator directly under such a column. A relation filter inside `where` (`members: { userId: uid }`) constrains
+ * other rows, as #1612 settled for owned-row columns.
  */
-const isInLocalQueryObject = (node: TsNode): boolean => {
-    let current = node;
+const isTopLevelWhereMember = (property: TsNode): boolean => {
+    const object = property.getParent();
 
-    for (let parent = current.getParent(); parent !== undefined; parent = current.getParent()) {
-        if (Node.isVariableDeclaration(parent)) {
-            const initializer: TsNode | undefined = parent.getInitializer();
-
-            return initializer === current;
-        }
-
-        const isQueryPart = Node.isObjectLiteralExpression(parent) || Node.isArrayLiteralExpression(parent) || Node.isPropertyAssignment(parent);
-        // `valueWrapperOf` climbs only through parentheses, `!` and type assertions, which pass the object on unchanged.
-        const isWrapper = valueWrapperOf(current) !== current;
-
-        if (!isQueryPart && !isWrapper) {
-            return false;
-        }
-
-        current = parent;
+    if (!Node.isObjectLiteralExpression(object) || !(Node.isPropertyAssignment(property) || Node.isShorthandPropertyAssignment(property))) {
+        return false;
     }
 
-    return false;
+    const key = staticPropertyName(property.getNameNode());
+
+    if (key === "eq" || key === "in") {
+        const column = valueWrapperOf(object).getParent();
+
+        return Node.isPropertyAssignment(column) && isTopLevelWhere(column.getParent());
+    }
+
+    return isTopLevelWhere(object);
 };
 
 /**
@@ -938,7 +937,7 @@ const isCallerOnlyInList = (list: TsNode): boolean => {
                 Node.isPropertyAssignment(property) &&
                 staticPropertyName(property.getNameNode()) === "in" &&
                 !sitsInUnpinningBranch(property) &&
-                isInDatabaseReadArgument(property) &&
+                isTopLevelWhereMember(property) &&
                 !isOverriddenOnTheWay(property)
             );
         })
@@ -1038,7 +1037,7 @@ const matchesCallerAt = (value: TsNode): boolean => {
             !NON_MATCHING_OPERATORS.has(key) &&
             !UNPINNING_KEYS.has(key) &&
             !sitsInUnpinningBranch(parent) &&
-            (isInDatabaseReadArgument(parent) || isInLocalQueryObject(parent)) &&
+            isTopLevelWhereMember(parent) &&
             !isOverriddenOnTheWay(parent)
         );
     }
@@ -1130,7 +1129,7 @@ const isWholeFilterUse = (use: TsNode): boolean => {
         return (
             staticPropertyName(parent.getNameNode()) === "where" &&
             !sitsInUnpinningBranch(parent) &&
-            isInDatabaseReadArgument(parent) &&
+            isReadQueryArgument(parent.getParent()) &&
             !isOverriddenOnTheWay(parent)
         );
     }
@@ -1142,7 +1141,7 @@ const isWholeFilterUse = (use: TsNode): boolean => {
             Node.isPropertyAssignment(branches) &&
             staticPropertyName(branches.getNameNode()) === "AND" &&
             !sitsInUnpinningBranch(branches) &&
-            isInDatabaseReadArgument(branches) &&
+            isTopLevelWhere(branches.getParent()) &&
             !isOverriddenOnTheWay(branches)
         );
     }

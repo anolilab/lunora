@@ -1073,6 +1073,66 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it.each([
+        [
+            "a with relation's where",
+            "ctx.db.channels.findFirst({ where: { id: message.channelId }, with: { members: { where: { userId: ctx.auth.userId } } } })",
+        ],
+        [
+            "an include relation's where",
+            "ctx.db.channels.findFirst({ where: { id: message.channelId }, include: { members: { where: { userId: { eq: ctx.auth.userId } } } } })",
+        ],
+        ["a relation filter inside where", "ctx.db.channels.findFirst({ where: { id: message.channelId, members: { userId: ctx.auth.userId } } })"],
+        [
+            "an in list inside a relation filter",
+            "ctx.db.channels.findFirst({ where: { id: message.channelId, members: { userId: { in: [ctx.auth.userId] } } } })",
+        ],
+    ])("reports an inline guard whose identity only constrains %s", (_label, read) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(read)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a column", "ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId: message.channelId } })"],
+        ["an eq operator", "ctx.db.members.findFirst({ where: { userId: { eq: ctx.auth.userId }, channelId: message.channelId } })"],
+        ["an AND element", "ctx.db.members.findFirst({ where: { AND: [{ userId: ctx.auth.userId }, { channelId: message.channelId }] } })"],
+    ])("accepts an inline guard whose identity is in the read's own where as %s", (_label, read) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(read)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("accepts an inline guard whose named filter holds the identity as a shorthand", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                `const userId = ctx.auth.userId;\n    const filter = { userId };\n    ${inlineGuard("ctx.db.members.findFirst({ where: { AND: [filter, { channelId: message.channelId }] } })")}`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports an inline guard whose named shorthand filter holds a reassigned let", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(
+                `let userId = ctx.auth.userId;\n    userId = args.victim;\n    const filter = { userId };\n    ${inlineGuard("ctx.db.members.findFirst({ where: { AND: [filter, { channelId: message.channelId }] } })")}`,
+            ),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("reports an inline guard whose filter repoints its row parameter", () => {
         expect.assertions(1);
 
