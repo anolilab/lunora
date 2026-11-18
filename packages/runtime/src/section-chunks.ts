@@ -144,8 +144,17 @@ const parseChunk = (document: Record<string, unknown>): ChunkRecord | undefined 
         return undefined;
     }
 
+    let bytes: Uint8Array<ArrayBuffer>;
+
+    try {
+        bytes = fromBase64(data);
+    } catch {
+        // `atob` throws on a character outside the alphabet: one malformed chunk is that row's error, not the import's.
+        return undefined;
+    }
+
     return {
-        bytes: fromBase64(data),
+        bytes,
         lastSize: last === true ? (size as number) : undefined,
         offset,
         ...(typeof digest === "string" ? { sha256: digest } : {}),

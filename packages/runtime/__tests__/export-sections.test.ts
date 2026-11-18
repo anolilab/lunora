@@ -407,6 +407,21 @@ describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, 
         expect(stores.buckets.get("default")!.has("_lunora/uploads/state")).toBe(false);
     });
 
+    it("reports a chunk whose data is not base64 as that row's BAD_ROW and imports the rows after it", async () => {
+        expect.hasAssertions();
+
+        const stores = createStores();
+        const data = Buffer.from("hello").toString("base64");
+        const summary = await importInto(workerFor(stores.options), [
+            JSON.stringify({ doc: { data: "@@not base64@@", key: "k", last: true, namespace: "CACHE", offset: 0, size: 5 }, table: "$kv" }),
+            JSON.stringify({ doc: { data: "@@not base64@@", key: "bad.txt", last: true, offset: 0, size: 5 }, table: "$storage" }),
+            JSON.stringify({ doc: { data, key: "good.txt", last: true, offset: 0, size: 5 }, table: "$storage" }),
+        ]);
+
+        expect(summary.errors.map((error) => error.code)).toStrictEqual(["BAD_ROW", "BAD_ROW"]);
+        expect(stores.buckets.get("default")!.has("good.txt")).toBe(true);
+    });
+
     it("keeps two interleaved imports of the same key apart, each restoring its own bytes", async () => {
         expect.hasAssertions();
 
