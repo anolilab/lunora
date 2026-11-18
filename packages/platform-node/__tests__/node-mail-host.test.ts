@@ -2313,4 +2313,32 @@ describe(createNodeMailHost, () => {
             }).toThrow(/chain of more than 40 symlinks/u);
         });
     });
+
+    describe("twenty-fifth review", () => {
+        it("dedupes a send naming MAIL_FROM after a queued row of the same mail with no from", async () => {
+            expect.assertions(3);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
+            const welcome = { idempotencyKey: "welcome-uma", subject: "Welcome", text: "Hi", to: "uma@example.com" };
+
+            // A row stored without `from` (an older build, a raw producer): the mailer sends it from MAIL_FROM.
+            database
+                .prepare(
+                    "INSERT INTO _lunora_queue_messages (id, queue, body, content_type, visible_at, enqueued_at) VALUES ('legacy', 'lunora-mail', ?, 'json', ?, ?)",
+                )
+                .run(Buffer.from(JSON.stringify(welcome)), clock.now(), clock.now());
+
+            // The same mail, so the same key is no conflict.
+            await expect(mail.mailer.queue({ ...welcome, from: PRODUCTION.MAIL_FROM })).resolves.toStrictEqual({ queued: true });
+
+            await mail.poll();
+
+            // Sent once; the second row is its duplicate, acked unsent.
+            expect(transport.sent).toHaveLength(1);
+            expect(mail.deadLetters.list()).toStrictEqual([]);
+        });
+    });
 });

@@ -304,11 +304,13 @@ const recipientList = (value: unknown): unknown => {
 
 /**
  * The mail a body would send, hashed: only the fields `consumeQueuedSend` reads,
- * with recipients normalized as it normalizes them, so two bodies that send the
- * same mail never read as a conflict. The key itself is left out; it is what
- * the record is stored under.
+ * normalized as the mailer's send normalizes them (`from` falling back to the
+ * default sender, empty recipient lists dropped), so two bodies that send the
+ * same mail never read as a conflict. A row stored without `from` (an older
+ * build, a raw producer) and a send naming `MAIL_FROM` are the same mail. The key
+ * itself is left out; it is what the record is stored under.
  */
-const fingerprintOf = (body: unknown): string => {
+const fingerprintOf = (body: unknown, defaultFrom: string | undefined): string => {
     const fields = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
 
     return createHash("sha256")
@@ -316,7 +318,7 @@ const fingerprintOf = (body: unknown): string => {
             canonicalJson({
                 bcc: recipientList(fields.bcc),
                 cc: recipientList(fields.cc),
-                from: fields.from,
+                from: fields.from ?? defaultFrom,
                 headers: fields.headers,
                 html: fields.html,
                 replyTo: fields.replyTo,
@@ -391,7 +393,7 @@ type TakeOutcome = { delivery: number; firstDeliveredAt: number; outcome: "taken
  * order the rows are delivered in; delivery records it only for a row queued
  * before any record existed. Both tables are pruned at most once a minute.
  */
-const createKeyClaims = (database: Database.Database, clock: () => number): KeyClaims => {
+const createKeyClaims = (database: Database.Database, clock: () => number, fingerprintBody: (body: unknown) => string): KeyClaims => {
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_claims (key TEXT PRIMARY KEY, message_id TEXT NOT NULL, expires_at INTEGER NOT NULL)");
     database.exec("CREATE INDEX IF NOT EXISTS _lunora_mail_claims_expires ON _lunora_mail_claims (expires_at)");
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_keys (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, expires_at INTEGER NOT NULL)");
@@ -487,7 +489,7 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
 
         const row = liveRowFor(key);
 
-        return row === undefined ? undefined : { fingerprint: fingerprintOf(JSON.parse(row.body.toString("utf8")) as unknown), recorded: false };
+        return row === undefined ? undefined : { fingerprint: fingerprintBody(JSON.parse(row.body.toString("utf8")) as unknown), recorded: false };
     };
 
     const pruneDue = (now: number): void => {
@@ -729,6 +731,9 @@ const settleFailure = (consumer: MailConsumer, message: MessageBatchLike["messag
 interface MailConsumer {
     claims: KeyClaims;
     clock: () => number;
+
+    /** {@link fingerprintOf} under this host's default sender. */
+    fingerprint: (body: unknown) => string;
     mailer: Mailer;
 
     /**
@@ -768,7 +773,7 @@ const claimFor = (consumer: MailConsumer, message: MessageBatchLike["messages"][
     }
 
     try {
-        return consumer.claims.take(key, fingerprintOf(message.body), message.id, message.timestamp.getTime());
+        return consumer.claims.take(key, consumer.fingerprint(message.body), message.id, message.timestamp.getTime());
     } catch (error) {
         settleFailure(
             consumer,
@@ -961,7 +966,7 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
             }
 
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see above, for `consumer`
-            if (consumer.claims.reserve(key, fingerprintOf(stored), insert) === "conflict") {
+            if (consumer.claims.reserve(key, consumer.fingerprint(stored), insert) === "conflict") {
                 throw new LunoraError(
                     "VALIDATION_ERROR",
                     `@lunora/platform-node: idempotency key "${key}" was already queued with different content — a key names one message, so use a new key for new content`,
@@ -971,9 +976,13 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
     };
     // Built before the tables, so a refusal leaves nothing behind in the database.
     const mailer = buildMailer(env, queue, options.transport);
+    // `buildMailer` has refused a missing MAIL_FROM by now, so this is the sender every send defaults to.
+    const defaultFrom = env["MAIL_FROM"];
+    const fingerprint = (body: unknown): string => fingerprintOf(body, typeof defaultFrom === "string" ? defaultFrom : undefined);
     const consumer: MailConsumer = {
-        claims: createKeyClaims(database, clock),
+        claims: createKeyClaims(database, clock, fingerprint),
         clock,
+        fingerprint,
         mailer,
         sent: createSentLedger(database, clock),
         parking: new AsyncLocalStorage(),
