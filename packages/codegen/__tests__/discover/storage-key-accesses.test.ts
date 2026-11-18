@@ -794,6 +794,48 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
     });
 
+    it.each([
+        ["String inside ne", `ctx.db.members.findFirst({ where: { userId: { ne: String(ctx.auth.userId) }, channelId: message.channelId } })`],
+        ["String inside a NOT branch", `ctx.db.members.findFirst({ where: { NOT: { userId: String(ctx.auth.userId) }, channelId: message.channelId } })`],
+        ["String inside !==", `ctx.db.query("members").filter((m) => m.userId !== String(ctx.auth.userId) && m.channelId === message.channelId).first()`],
+        ["Boolean as a bare truthiness check", `ctx.db.query("members").filter((m) => Boolean(ctx.auth.userId) && m.channelId === message.channelId).first()`],
+        ["Boolean as an eq value", `ctx.db.members.findFirst({ where: { userId: { eq: Boolean(ctx.auth.userId) }, channelId: message.channelId } })`],
+        ["a helper call as a column value", `ctx.db.members.findFirst({ where: { userId: mask(ctx.auth.userId), channelId: message.channelId } })`],
+    ])("reports an inline guard whose identity is wrapped in %s", (_label, read) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(read)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["an eq value", `ctx.db.members.findFirst({ where: { userId: { eq: String(ctx.auth.userId) }, channelId: message.channelId } })`],
+        ["a column value", `ctx.db.members.findFirst({ where: { userId: String(ctx.auth.userId), channelId: message.channelId } })`],
+        ["an === filter", `ctx.db.query("members").filter((m) => m.userId === String(ctx.auth.userId) && m.channelId === message.channelId).first()`],
+    ])("accepts an inline guard whose identity is wrapped in String as %s", (_label, read) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(read)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a helper guard whose filter excludes a String-wrapped caller with !==", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx, channelId) => {
+    const row = await ctx.db.query("members").filter((m) => m.userId !== String(ctx.auth.userId) && m.channelId === channelId).first();
+    if (!row) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("reports a helper guard whose filter excludes the caller with !==", () => {
         expect.assertions(1);
 

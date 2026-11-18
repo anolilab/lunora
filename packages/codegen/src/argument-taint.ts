@@ -648,11 +648,15 @@ const matchesCallerAt = (value: TsNode): boolean => {
         return isValue && key !== undefined && !NON_MATCHING_OPERATORS.has(key) && !UNPINNING_KEYS.has(key) && !sitsInUnpinningBranch(parent);
     }
 
+    // Only a query takes the identity as a match: an `eq` predicate (`q.eq("userId", uid)`) or a `ctx.db` read
+    // (`ctx.db.users.get(uid)`). Any other call (`Boolean(uid)`, a helper) yields something else; `String(uid)` is
+    // walked through before this point.
     if (Node.isCallExpression(parent)) {
         const callee = parent.getExpression();
         const method = Node.isPropertyAccessExpression(callee) ? callee.getName() : undefined;
+        const isQuery = method === "eq" || (method !== undefined && DB_READ_METHODS.has(method) && contextTrustPathOf(callee)?.[0] === "db");
 
-        return parent.getArguments().includes(value) && (method === undefined || !NON_MATCHING_OPERATORS.has(method));
+        return parent.getArguments().includes(value) && isQuery;
     }
 
     if (!Node.isBinaryExpression(parent)) {
@@ -662,6 +666,22 @@ const matchesCallerAt = (value: TsNode): boolean => {
     const operator = parent.getOperatorToken().getKind();
 
     return (operator === SyntaxKind.EqualsEqualsEqualsToken || operator === SyntaxKind.EqualsEqualsToken) && isReturnedPredicate(parent);
+};
+
+/**
+ * Whether `call` hands back its sole argument `value` unchanged as a key: the platform's `String(value)`. The walk
+ * continues through it, so the constraint around the call (`ne`, `NOT`, `!==`) still decides.
+ */
+const isValuePreservingCall = (call: TsNode, value: TsNode): boolean => {
+    if (!Node.isCallExpression(call)) {
+        return false;
+    }
+
+    const callee = call.getExpression();
+    const [only, ...rest] = call.getArguments();
+    const declaration = Node.isIdentifier(callee) && callee.getText() === "String" ? declarationOf(callee) : undefined;
+
+    return only === value && rest.length === 0 && declaration?.getSourceFile().isDeclarationFile() === true;
 };
 
 /**
@@ -688,7 +708,7 @@ const constrainsMatch = (node: TsNode): boolean => {
             parent.getLeft() === current &&
             isFixedValue(parent.getRight());
 
-        if (!isWrapper && !isFixedFallback) {
+        if (!isWrapper && !isFixedFallback && !isValuePreservingCall(parent, current)) {
             break;
         }
 
