@@ -2141,4 +2141,55 @@ describe(createNodeMailHost, () => {
             expect(mail.deadLetters.list()).toMatchObject([{ attempts: 4, reason: "retries_exhausted" }]);
         });
     });
+
+    describe("twenty-first review", () => {
+        it("leaves pending a retries-exhausted send an operator requeued before the poll recorded its reason", async () => {
+            expect.assertions(3);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, {
+                env: PRODUCTION,
+                now: clock.now,
+                transport: scriptedTransport([new MailSendError({ message: "provider is down", retryable: true })]),
+            });
+
+            await mail.mailer.queue({ subject: "Receipt", text: "Thanks", to: "ada@example.com" });
+
+            for (let delivery = 0; delivery < 3; delivery += 1) {
+                clock.advance(MAIL_MAX_BACKOFF_MS);
+                // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
+                await mail.poll();
+            }
+
+            // The fourth delivery fails too, and the queue host parks the row as it settles the batch.
+            // The requeue lands after that settlement commits and before the poll's own finalizer.
+            const statement = Object.getPrototypeOf(database.prepare("SELECT 1")) as { run: (...parameters: unknown[]) => unknown };
+            const { run } = statement;
+            const requeued: boolean[] = [];
+
+            vi.spyOn(statement, "run").mockImplementation(function requeueAfterSettle(this: { source: string }, ...parameters: unknown[]) {
+                const result = run.apply(this, parameters);
+
+                if (this.source === "UPDATE _lunora_queue_messages SET state = 'dead' WHERE id = ?") {
+                    queueMicrotask(() => {
+                        requeued.push(...mail.deadLetters.list().map((parked) => mail.deadLetters.requeue(parked.id)));
+                    });
+                }
+
+                return result;
+            });
+
+            clock.advance(MAIL_MAX_BACKOFF_MS);
+            await mail.poll();
+            vi.mocked(statement.run).mockRestore();
+
+            expect(requeued).toStrictEqual([true]);
+            expect(database.prepare("SELECT state FROM _lunora_queue_messages").all()).toStrictEqual([{ state: "pending" }]);
+            expect(mail.deadLetters.list()).toStrictEqual([]);
+        });
+    });
 });

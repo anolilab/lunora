@@ -994,23 +994,31 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         `CREATE INDEX IF NOT EXISTS _lunora_mail_row_keys ON _lunora_queue_messages ((${ROW_KEY_SQL}), enqueued_at) WHERE queue = '${MAIL_QUEUE_NAME}'`,
     );
 
-    const park = database.prepare<[string]>(
-        `UPDATE _lunora_queue_messages SET state = 'dead' WHERE id = ? AND queue = '${MAIL_QUEUE_NAME}' AND state = 'pending'`,
+    // `attempts` is the delivery token: a claim increments it and nothing else changes it (a
+    // requeue keeps it), so a row whose count moved on belongs to a later delivery.
+    const park = database.prepare<[string, number]>(
+        `UPDATE _lunora_queue_messages SET state = 'dead' WHERE id = ? AND queue = '${MAIL_QUEUE_NAME}' AND state = 'pending' AND attempts = ?`,
     );
     // Why each parked send was parked, written in the same transaction that parks it.
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_parked (id TEXT PRIMARY KEY, reason TEXT NOT NULL)");
 
-    const recordReason = database.prepare<[string, MailParkReason, string, string]>(
-        "INSERT OR REPLACE INTO _lunora_mail_parked (id, reason) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM _lunora_queue_messages WHERE id = ? AND queue = ? AND state = 'dead')",
+    const recordReason = database.prepare<[string, MailParkReason, string, string, number]>(
+        "INSERT OR REPLACE INTO _lunora_mail_parked (id, reason) SELECT ?, ? WHERE EXISTS (SELECT 1 FROM _lunora_queue_messages WHERE id = ? AND queue = ? AND state = 'dead' AND attempts = ?)",
     );
     const reasonOf = database.prepare<[string], { reason: MailParkReason }>("SELECT reason FROM _lunora_mail_parked WHERE id = ?");
     const forgetReason = database.prepare<[string]>("DELETE FROM _lunora_mail_parked WHERE id = ?");
     // Each row's park and its reason commit together, under the write lock, as the reservation
     // does: apart, a stop or a failed reason write left a parked row that read as another reason.
-    // Recorded whoever parked it: on its last retry the queue host already has.
-    const parkWithReason = database.transaction((id: string, reason: MailParkReason): void => {
-        park.run(id);
-        recordReason.run(id, reason, id, MAIL_QUEUE_NAME);
+    // Both apply only while the row is still at the delivery that asked (`attempts`). On its last
+    // retry the queue host has already parked it when the batch settled, so only the reason is
+    // written: re-parking it would undo a requeue an operator made in between, which leaves the
+    // row pending, and a pending row is never moved back to dead.
+    const parkWithReason = database.transaction((id: string, reason: MailParkReason, attempts: number): void => {
+        if (attempts <= MAIL_MAX_RETRIES) {
+            park.run(id, attempts);
+        }
+
+        recordReason.run(id, reason, id, MAIL_QUEUE_NAME, attempts);
     });
 
     // Scoped to this queue, unlike the queue host's own requeue: the table is shared with the
@@ -1077,7 +1085,7 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
                 .finally(() => {
                     for (const [id, { attempts, reason }] of parking) {
                         try {
-                            parkWithReason.immediate(id, reason);
+                            parkWithReason.immediate(id, reason, attempts);
                         } catch (error) {
                             // Rolled back whole: the row stays pending under its long retry, not parked
                             // without its reason, and comes back to be judged again. The rest still park.
