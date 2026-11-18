@@ -50,8 +50,8 @@
  * `plans/234-node-host-findings.md`.
  */
 
-export type { DrainOptions, DrainResult, DrainTimer } from "./drain-deadline";
-export { DEFAULT_DRAIN_TIMEOUT_MS } from "./drain-deadline";
+export type { Drainable, DrainOptions, DrainResult, DrainTimer } from "./drain-deadline";
+export { DEFAULT_DRAIN_TIMEOUT_MS, drainTogether } from "./drain-deadline";
 export type { NodeDispatchInvocation, NodeDispatchRouteOptions } from "./node-dispatch-route";
 export { createNodeDispatchRoute, NODE_SCHEDULER_DISPATCH_PATH } from "./node-dispatch-route";
 export type { NodeGlobalContextDatabaseOptions, NodeGlobalStore, NodeGlobalStoreOptions } from "./node-global-store";

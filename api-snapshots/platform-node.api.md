@@ -42,6 +42,15 @@ interface DrainResult {
 type DrainTimer = (ms: number, onExpire: () => void) => () => void;
 ```
 
+### `Drainable` (interface)
+
+```ts
+interface Drainable {
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
+    idle: () => boolean;
+}
+```
+
 ### `NODE_SCHEDULER_DISPATCH_PATH` (const)
 
 ```ts
@@ -178,9 +187,11 @@ interface NodePlatform<Queues extends Record<string, {
     dispatch: (request: Request) => Promise<Response>;
     drain: (options?: DrainOptions) => Promise<DrainResult>;
     globalTables?: NodeGlobalStore;
+    idle: () => boolean;
     kv: ShardKvStore;
     objectStorage?: R2BucketLike;
     queues?: NodeQueueHost<Queues>;
+    rearmPersistedAlarms: () => string[];
     scheduler: SchedulerHost;
     shard: ShardHost;
     sockets: SocketHost;
@@ -341,6 +352,7 @@ interface NodeShardRegistry {
     drain: (options?: DrainOptions) => Promise<DrainResult>;
     idle: () => boolean;
     listShardKeys: (table?: string) => ReadonlyArray<string>;
+    rearmPersistedAlarms: () => string[];
     shardFor: (key: string) => NodeShard;
 }
 ```
@@ -574,6 +586,12 @@ const createNodeWorkflowHost: <Workflows extends Record<string, {
 
 ```ts
 const createNodeWorkflowStore: (database: Database.Database) => WorkflowStore;
+```
+
+### `drainTogether` (const)
+
+```ts
+const drainTogether: (parts: ReadonlyArray<Drainable>, options?: DrainOptions) => Promise<DrainResult>;
 ```
 
 ## `@lunora/platform-node/conformance`

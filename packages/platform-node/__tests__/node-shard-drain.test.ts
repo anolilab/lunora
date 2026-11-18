@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DrainTimer } from "../src/drain-deadline";
+import { drainTogether } from "../src/drain-deadline";
 import { createNodePlatform } from "../src/node-platform";
 import { createNodeShardRegistry } from "../src/node-shard-registry";
 import type { NodeServerEnd } from "../src/node-socket-pair";
@@ -832,6 +833,109 @@ describe("shard drain passes", () => {
         }).toThrow("resource(s) failed to close");
         // The platform's own database, closed after the registry, was still closed.
         expect(() => platform.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("re-arms a persisted alarm at startup, so it fires after a restart with no request to its shard", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-restore-"));
+        const first = createNodeShardRegistry({ directory });
+
+        await first.shardFor("quiet").shard.alarms.set(Date.now() + 1000);
+        // A shard with no alarm, which a restart must leave closed.
+        first.shardFor("idle");
+        first.close();
+
+        const fired = deferred();
+        const second = createNodeShardRegistry({
+            directory,
+            onAlarm: () => {
+                fired.release();
+            },
+        });
+
+        try {
+            expect(second.rearmPersistedAlarms()).toStrictEqual(["quiet"]);
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            await expect(fired.promise).resolves.toBeUndefined();
+        } finally {
+            second.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("does not re-arm an alarm whose handler deleted it before throwing", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const failed = deferred();
+        const registry = createNodeShardRegistry({
+            onAlarm: async (shard) => {
+                // The handler decides there is no next wakeup, then fails.
+                await shard.shard.alarms.delete();
+                failed.release();
+
+                throw new Error("alarm failed after deleting itself");
+            },
+        });
+
+        try {
+            const { shard } = registry.shardFor("a");
+
+            await shard.alarms.set(Date.now());
+            await vi.advanceTimersByTimeAsync(0);
+            await failed.promise;
+            await registry.drain({ timer: () => () => {} });
+
+            await expect(Promise.resolve(shard.alarms.get())).resolves.toBeNull();
+        } finally {
+            registry.close();
+            vi.useRealTimers();
+        }
+    });
+
+    it("drains several registries until all are idle in one pass, including work one hands another after it drained", async () => {
+        expect.assertions(1);
+
+        const gateA = deferred();
+        const gateB = deferred();
+        const events: string[] = [];
+        const first = createNodeShardRegistry();
+        const second = createNodeShardRegistry();
+
+        try {
+            // Work on the first registry that, once released, writes to the second, which the first pass found idle.
+            first.shardFor("a").shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await gateA.promise;
+                    second.shardFor("b").shard.waitUntil?.(
+                        (async (): Promise<void> => {
+                            await gateB.promise;
+                            events.push("second registry write");
+                        })(),
+                    );
+                })(),
+            );
+
+            const drained = drainTogether([first, second], { timer: () => () => {} }).then(() => events.push("drained"));
+
+            gateA.release();
+            await turn();
+            gateB.release();
+            await drained;
+
+            expect(events).toStrictEqual(["second registry write", "drained"]);
+        } finally {
+            first.close();
+            second.close();
+        }
     });
 
     it("keeps the process alive until the deadline, so a stalled shard cannot end it silently", async () => {

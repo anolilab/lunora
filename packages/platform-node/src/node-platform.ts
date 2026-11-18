@@ -18,8 +18,8 @@ import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory,
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
 import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
-import type { DrainOptions, DrainResult, DrainTimer } from "./drain-deadline";
-import { settlesBefore, startDrainDeadline } from "./drain-deadline";
+import type { DrainOptions, DrainResult } from "./drain-deadline";
+import { settlesBefore, startDrainDeadline, timerBoundTo } from "./drain-deadline";
 import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-route";
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
@@ -211,6 +211,12 @@ export interface NodePlatform<
      */
     globalTables?: NodeGlobalStore;
 
+    /**
+     * Whether nothing a {@link NodePlatform.drain} would wait for is running right now. Synchronous, so a caller draining
+     * several platforms or registries together can confirm they are all idle at one instant.
+     */
+    idle: () => boolean;
+
     /** Durable key-value storage backed by the same `better-sqlite3` database as `shard`. */
     kv: ShardKvStore;
 
@@ -225,6 +231,9 @@ export interface NodePlatform<
      * works when no queue exists to send to.
      */
     queues?: NodeQueueHost<Queues>;
+
+    /** Open every stored shard with a persisted alarm, so it is re-armed before traffic arrives. See `NodeShardRegistry.rearmPersistedAlarms`. */
+    rearmPersistedAlarms: () => string[];
     /** Delayed jobs and crons, persisted to the same database and re-armed on construction. */
     scheduler: SchedulerHost;
 
@@ -451,11 +460,15 @@ export const createNodePlatform = <
             }
         };
 
+        // Nothing a drain would wait for: host work, alarm deliveries, scheduler deliveries, or any shard's work.
+        const platformIdle = (): boolean => pendingBackground() === 0 && pendingAlarms() === 0 && pendingDispatches().waits.length === 0 && registry.idle();
+
         return {
             capabilities: NODE_CAPABILITIES,
             close,
             directory,
             dispatch: (request) => dispatch(request),
+            idle: platformIdle,
             // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
             // would let `close()` dispose a database a handler is still writing.
             drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
@@ -463,23 +476,7 @@ export const createNodePlatform = <
                 // started from the same options would expire on its own schedule, and an injected timer that keeps one callback
                 // would drop the first deadline, leaving the host's wait unbounded.
                 const deadline = startDrainDeadline(drainOptions);
-                const sharedTimer: DrainTimer = (_ms, onExpire) => {
-                    let armed = true;
-                    const forward = async (): Promise<void> => {
-                        await deadline.expired;
-
-                        if (armed) {
-                            onExpire();
-                        }
-                    };
-
-                    forward().catch(() => undefined);
-
-                    return () => {
-                        armed = false;
-                    };
-                };
-
+                const sharedTimer = timerBoundTo(deadline);
                 const failed: string[] = [];
 
                 try {
@@ -509,7 +506,7 @@ export const createNodePlatform = <
 
                         // Host work or a delivery can start shard work after the registry's drain already finished (a due job's
                         // delivery), so the drain is done only when all of it is idle at the same instant, checked synchronously.
-                        if (pendingBackground() === 0 && pendingAlarms() === 0 && pendingDispatches().waits.length === 0 && registry.idle()) {
+                        if (platformIdle()) {
                             return { failed, pending: [], timedOut: false };
                         }
                     }
@@ -520,6 +517,7 @@ export const createNodePlatform = <
             globalTables,
             kv,
             objectStorage,
+            rearmPersistedAlarms: () => registry.rearmPersistedAlarms(),
             queues,
             scheduler,
             shard,

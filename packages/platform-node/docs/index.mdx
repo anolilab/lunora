@@ -432,6 +432,13 @@ close handler is still running instead of waiting for it, and logs it. A shard
 that fails to close does not stop the others: every one is tried, each failure is
 logged, and `close()` then throws one `AggregateError` naming them.
 `NodePlatform.close()` runs all of its teardowns the same way.
+`rearmPersistedAlarms()` (on the registry and on `NodePlatform`) opens every
+stored shard that has a persisted alarm, so a restarted process fires it without
+waiting for a request to that shard; call it once before taking traffic. Shards
+without an alarm stay closed. `idle()` reports synchronously whether anything a
+drain would wait for is running, and `drainTogether(parts, options)` drains
+several registries or platforms under one deadline until all are idle in the same
+pass, since work on one can start work on another after it drained.
 
 ### `createNodeShardState`
 

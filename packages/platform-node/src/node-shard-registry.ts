@@ -51,6 +51,7 @@ import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import type { DirectShardDirectory, ShardHost, ShardKvStore, ShardStub, SocketHost } from "@lunora/platform";
+import Database from "better-sqlite3";
 
 import type { DrainOptions, DrainResult } from "./drain-deadline";
 import { settlesBefore, startDrainDeadline } from "./drain-deadline";
@@ -145,6 +146,28 @@ const shardKeyForFile = (directory: string, entry: string): string => {
     }
 
     return key;
+};
+
+/**
+ * Whether the shard file at `path` holds a persisted alarm, read through a short read-only connection so a shard without one is
+ * not opened. A file that cannot be read is reported and treated as holding one: opening it lets the host deal with it, while
+ * skipping it would lose its alarm without a trace.
+ */
+const hasPersistedAlarm = (path: string, key: string): boolean => {
+    let database: Database.Database | undefined;
+
+    try {
+        database = new Database(path, { fileMustExist: true, readonly: true });
+
+        return database.prepare("SELECT 1 FROM _lunora_alarm LIMIT 1").get() !== undefined;
+    } catch (error: unknown) {
+        // eslint-disable-next-line no-console -- the shard is opened anyway; this records why its alarm could not be checked
+        console.error("[@lunora/platform-node] could not check shard %s for a persisted alarm, so it is opened to re-arm any", key, error);
+
+        return true;
+    } finally {
+        database?.close();
+    }
 };
 
 /** What one shard still has running when a drain looks. */
@@ -258,6 +281,13 @@ export interface NodeShardRegistry {
      * cost of visiting shards that had nothing to say.
      */
     listShardKeys: (table?: string) => ReadonlyArray<string>;
+
+    /**
+     * Open every stored shard that has a persisted alarm, so the alarm is re-armed now rather than when something next sends
+     * that shard a request: after a restart an alarm would otherwise never fire on a shard nobody calls. Shards without one stay
+     * closed. Returns the keys it opened. A process serving the registry calls this once, before it takes traffic.
+     */
+    rearmPersistedAlarms: () => string[];
     /** Materialize (or reuse) the shard serving `key`. */
     shardFor: (key: string) => NodeShard;
 }
@@ -517,6 +547,25 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             idForName: (name) => name,
         },
         idle: () => pendingWork().waits.length === 0,
+        rearmPersistedAlarms: () => {
+            const { directory } = options;
+
+            if (directory === undefined) {
+                return [];
+            }
+
+            const rearmed: string[] = [];
+
+            for (const key of known) {
+                // Opening a shard re-arms its stored alarm; one with no alarm stays closed, so a restart opens only these.
+                if (!live.has(key) && hasPersistedAlarm(join(directory, `${encodeShardKey(key)}${SHARD_FILE_SUFFIX}`), key)) {
+                    shardFor(key);
+                    rearmed.push(key);
+                }
+            }
+
+            return rearmed;
+        },
         listShardKeys: () => [...known],
         shardFor,
     };

@@ -75,6 +75,65 @@ const startDrainDeadline = (options: DrainOptions = {}): DrainDeadline => {
     return { cancel, expired };
 };
 
+/**
+ * A {@link DrainTimer} that expires with `deadline` rather than on its own schedule, so a drain run inside another one shares its
+ * deadline instead of starting a second: an injected timer keeping one callback would otherwise drop the first.
+ */
+const timerBoundTo =
+    (deadline: DrainDeadline): DrainTimer =>
+    (_ms, onExpire) => {
+        let armed = true;
+        const forward = async (): Promise<void> => {
+            await deadline.expired;
+
+            if (armed) {
+                onExpire();
+            }
+        };
+
+        forward().catch(() => undefined);
+
+        return () => {
+            armed = false;
+        };
+    };
+
+/** Something that drains and can say, synchronously, whether it is idle: a registry, a platform. */
+interface Drainable {
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
+    idle: () => boolean;
+}
+
+/**
+ * Drain several parts under one deadline until all of them are idle in the same pass. Work on one part can start work on
+ * another after that one finished draining (a request handed between registries), so a pass that left any of them busy is
+ * followed by another, until the deadline.
+ */
+const drainTogether = async (parts: ReadonlyArray<Drainable>, options?: DrainOptions): Promise<DrainResult> => {
+    const deadline = startDrainDeadline(options);
+    const timer = timerBoundTo(deadline);
+    const failed: string[] = [];
+
+    try {
+        for (;;) {
+            // eslint-disable-next-line no-await-in-loop -- each pass waits for what the last one let start
+            const results = await Promise.all(parts.map(async (part) => part.drain({ timer })));
+
+            failed.push(...results.flatMap((result) => result.failed));
+
+            if (results.some((result) => result.timedOut)) {
+                return { failed, pending: results.flatMap((result) => result.pending), timedOut: true };
+            }
+
+            if (parts.every((part) => part.idle())) {
+                return { failed, pending: [], timedOut: false };
+            }
+        }
+    } finally {
+        deadline.cancel();
+    }
+};
+
 /** Wait for `work`, or for `deadline` to pass, whichever comes first. Resolves `true` when the work settled in time. */
 const settlesBefore = async (work: Promise<unknown>, deadline: DrainDeadline): Promise<boolean> =>
     Promise.race([
@@ -85,5 +144,5 @@ const settlesBefore = async (work: Promise<unknown>, deadline: DrainDeadline): P
         deadline.expired.then(() => false),
     ]);
 
-export type { DrainDeadline, DrainOptions, DrainResult, DrainTimer };
-export { DEFAULT_DRAIN_TIMEOUT_MS, settlesBefore, startDrainDeadline };
+export type { Drainable, DrainDeadline, DrainOptions, DrainResult, DrainTimer };
+export { DEFAULT_DRAIN_TIMEOUT_MS, drainTogether, settlesBefore, startDrainDeadline, timerBoundTo };

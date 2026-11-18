@@ -429,6 +429,10 @@ const createAlarms = (
      * open. `claimFailures` counts claims of this same timestamp that threw.
      */
     const fire = (ms: number, claimFailures = 0): void => {
+        // Captured before the handler runs: a handler that deletes (or resets) its own alarm and then throws has decided the
+        // next wakeup, so the retry for this delivery is superseded, not written over that decision.
+        const generation = alarmGeneration;
+
         // The timer is not a boundary, so the consume below would join an open
         // `BEGIN`: delivered now, then restored by that transaction's rollback
         // and delivered again.
@@ -503,7 +507,7 @@ const createAlarms = (
                 // eslint-disable-next-line no-console -- the alarm is retried silently, so the log is the only trace of why it failed
                 console.error("[@lunora/platform-node] alarm handler on shard %s threw; retrying with backoff", shardKey ?? "(unnamed)", error);
                 await new Promise<void>((resolve) => {
-                    writeRetry(resolve, ms);
+                    writeRetry(resolve, ms, generation);
                 });
             }),
         );
