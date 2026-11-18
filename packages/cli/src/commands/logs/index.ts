@@ -37,7 +37,11 @@ const logsCommand: Command = {
         },
         // --- local dev-server capture (--local) ---
         { description: "Read what the running dev server captured instead of tailing a deployment (no deploy needed)", name: "local", type: Boolean },
-        { description: "local: dev-server base URL when it is not on http://localhost:5173", name: "url", type: String },
+        {
+            description: "local: dev-server base URL (defaults to the running `lunora dev` server's, else http://localhost:5173)",
+            name: "url",
+            type: String,
+        },
         // --- durable-archive path (--durable) ---
         { description: "Read the durable log archive (pipelineLogSink → R2) via R2 SQL instead of tailing live", name: "durable", type: Boolean },
         { description: "durable: Iceberg table the Pipeline writes to (required with --durable)", name: "table", type: String },

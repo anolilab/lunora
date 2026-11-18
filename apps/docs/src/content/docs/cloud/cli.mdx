@@ -192,7 +192,9 @@ lunora logs --local --url http://localhost:5174  # when Vite picked another port
 ```
 
 `--local` reads the dev runtime's own capture, so it needs no deploy and no
-credentials. Lines are formatted by the same formatter `lunora dev` uses, so a
+credentials. It finds the server through `.lunora/dev.json`, so a backend-only
+`lunora dev` on wrangler's port (8787) is read without `--url`; with no running
+`lunora dev` it falls back to `http://localhost:5173`. Lines are formatted by the same formatter `lunora dev` uses, so a
 `ctx.log` call reads identically in both places.
 
 Two honest limits. The capture starts when the dev server does and holds only

@@ -1,8 +1,8 @@
 /**
  * Read-only SQL over the spans and console logs the LOCAL dev runtime captured.
  *
- * `@cloudflare/vite-plugin` (1.54+) runs the worker in workerd inside the Vite
- * process and records every request span and console line into an in-memory
+ * `@cloudflare/vite-plugin` (1.54+) and `wrangler dev` run the worker in workerd
+ * through Miniflare, which records every request span and console line into an in-memory
  * store, exposed at `POST /cdn-cgi/local/explorer/api/local/observability/query`
  * as read-only SQL. This module is the client for that endpoint.
  *
@@ -21,7 +21,7 @@
 /** The dev server's read-only observability endpoint (a `@cloudflare/vite-plugin` local API). */
 const LOCAL_EXPLORER_QUERY_PATH = "/cdn-cgi/local/explorer/api/local/observability/query";
 
-/** Where `lunora dev` serves by default. Overridable, because Vite walks the port up when 5173 is taken. */
+/** Where Vite serves by default: the fallback when no `.lunora/dev.json` names a running dev server. */
 const DEFAULT_DEV_SERVER_URL = "http://localhost:5173";
 
 /** Rows one local read returns unless `--limit` says otherwise. */
@@ -275,7 +275,8 @@ const queryLocalObservability = async (sql: string, options: LocalObservabilityO
     if (response.status === 404) {
         throw new LocalObservabilityError(
             `${base} is serving, but has no local observability endpoint. ` +
-                "It needs @cloudflare/vite-plugin 1.54 or newer — check that the dev server is a Lunora app and not another site on that port.",
+                "It needs @cloudflare/vite-plugin 1.54 or newer, or a `wrangler dev` recent enough to serve the Local Explorer API, " +
+                "and neither X_LOCAL_EXPLORER nor X_LOCAL_OBSERVABILITY set to false — check too that the server is a Lunora app and not another site on that port.",
         );
     }
 

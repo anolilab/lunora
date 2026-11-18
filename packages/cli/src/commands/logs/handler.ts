@@ -136,6 +136,7 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(async ({
 
     if (options.local === true) {
         return runLocalLogsCommand({
+            cwd,
             level: options.level,
             limit: options.limit,
             logger,

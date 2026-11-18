@@ -4,7 +4,7 @@
  * The other two paths both require a deploy: `handler.ts` streams a live Worker
  * with `wrangler tail`, and `durable.ts` reads the R2 archive. This one queries
  * the local dev runtime's own capture over the read-only SQL endpoint
- * `@cloudflare/vite-plugin` exposes, so the inner loop finally has a log reader
+ * `@cloudflare/vite-plugin` and `wrangler dev` both expose, so the inner loop finally has a log reader
  * with filters, scrollback and trace lookup instead of raw output scrolling past
  * in the Vite terminal.
  *
@@ -14,13 +14,15 @@
  * is not a Lunora event (a bare `console.log` from your own code, a runtime
  * line) passes through verbatim, which is the formatter's documented contract.
  */
-import { formatLunoraEvent } from "@lunora/config";
+import { formatLunoraEvent, readLiveDevServerState } from "@lunora/config";
 
 import type { LocalLogLine, LocalLogQuery } from "../../util/local-observability";
 import { DEFAULT_DEV_SERVER_URL, LOCAL_LOG_LEVELS, LocalObservabilityError, parseTimeBound, readLocalLogs } from "../../util/local-observability";
 import type { Logger } from "../../util/logger";
 
 interface LocalLogsCommandOptions {
+    /** Project root whose `.lunora/dev.json` names the running dev server when `url` is not given. */
+    cwd?: string;
     /** Inject a `fetch` double (tests). */
     fetch?: typeof globalThis.fetch;
     /** Console channel filter (`info` | `warn` | `error`). */
@@ -38,7 +40,7 @@ interface LocalLogsCommandOptions {
     traceId?: string;
     /** Upper time bound (epoch-millis or ISO 8601). */
     until?: string;
-    /** Dev-server base URL; defaults to {@link DEFAULT_DEV_SERVER_URL}. */
+    /** Dev-server base URL; defaults to the running dev server's, then {@link DEFAULT_DEV_SERVER_URL}. */
     url?: string;
 }
 
@@ -140,13 +142,13 @@ const runLocalLogsCommand = async (options: LocalLogsCommandOptions): Promise<Lo
         return { code: 1, lines: 0 };
     }
 
+    // The recorded URL first: a standalone `lunora dev` serves the worker on wrangler's port (8787), not
+    // Vite's, and `wrangler dev` exposes the same capture endpoint there.
+    const url = options.url ?? (options.cwd === undefined ? undefined : readLiveDevServerState(options.cwd)?.url) ?? DEFAULT_DEV_SERVER_URL;
     let lines: LocalLogLine[];
 
     try {
-        lines = await readLocalLogs(toQuery(options), {
-            ...(options.fetch ? { fetch: options.fetch } : {}),
-            ...(options.url === undefined ? {} : { url: options.url }),
-        });
+        lines = await readLocalLogs(toQuery(options), { ...(options.fetch ? { fetch: options.fetch } : {}), url });
     } catch (error) {
         // A `LocalObservabilityError` already names the fix; anything else gets the
         // command prefix so it is obvious which of the three sources failed.
@@ -161,7 +163,7 @@ const runLocalLogsCommand = async (options: LocalLogsCommandOptions): Promise<Lo
 
     if (lines.length === 0) {
         logger.info(
-            `No captured lines at ${options.url ?? DEFAULT_DEV_SERVER_URL}. The capture starts when the dev server does and holds what it has seen since — exercise your app, then read again.`,
+            `No captured lines at ${url}. The capture starts when the dev server does and holds what it has seen since — exercise your app, then read again.`,
         );
 
         return { code: 0, lines: 0 };
