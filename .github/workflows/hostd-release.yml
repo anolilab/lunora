@@ -549,8 +549,11 @@
                   if gh release view hostd-latest > /dev/null 2>&1; then
                       # Download without masking failures: a pointer computed from a missing
                       # current file can move a channel backward. Only a release that never
-                      # had the asset starts from empty.
-                      if gh release view hostd-latest --json assets -q '.assets[].name' | grep -qx latest.json; then
+                      # had the asset starts from empty. The lookup is its own command: in an
+                      # `if` condition a failed `gh` would read as the asset being absent.
+                      assets="$(gh release view hostd-latest --json assets -q '.assets[].name')"
+
+                      if grep -qx latest.json <<< "${assets}"; then
                           gh release download hostd-latest --pattern latest.json --dir "${current}"
                       fi
                   else
