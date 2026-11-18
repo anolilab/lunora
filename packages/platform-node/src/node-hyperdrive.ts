@@ -72,6 +72,38 @@ const tlsOnlyBinding = (connectionString: string, tlsOptions: ReadonlyArray<stri
 };
 
 const POSTGRES_PROTOCOLS: ReadonlySet<string> = new Set(["postgres:", "postgresql:"]);
+const DECIMAL = /^\d+$/u;
+const MAX_PORT = 65_535;
+
+/**
+ * The port a driver should use. The authority's port wins; without one, a
+ * Postgres URL may set it as `?port=`, which libpq and `pg` read, and which
+ * also picks the socket file (`.s.PGSQL.<port>`) in the `?host=` socket form.
+ * The default applies only when neither sets it.
+ */
+const resolvePort = (parsed: URL, defaultPort: number): number => {
+    if (parsed.port !== "") {
+        return Number(parsed.port);
+    }
+
+    const query = POSTGRES_PROTOCOLS.has(parsed.protocol) ? (parsed.searchParams.get("port") ?? undefined) : undefined;
+
+    if (query === undefined) {
+        return defaultPort;
+    }
+
+    const port = DECIMAL.test(query) ? Number(query) : Number.NaN;
+
+    if (!(port >= 1 && port <= MAX_PORT)) {
+        // The value is left out, like the rest of the URL.
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            "@lunora/platform-node: the Hyperdrive database URL's port query parameter must be a whole number from 1 to 65535",
+        );
+    }
+
+    return port;
+};
 
 const DEFAULT_PORTS: Readonly<Record<string, number>> = {
     "mariadb:": 3306,
@@ -146,6 +178,7 @@ const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the Hyperdrive database URL needs both a host and a database name");
     }
 
+    const port = resolvePort(parsed, defaultPort);
     const tlsOptions = tlsOptionNames(parsed.searchParams);
 
     if (tlsOptions.length > 0) {
@@ -157,7 +190,7 @@ const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL
         database,
         host,
         password,
-        port: parsed.port === "" ? defaultPort : Number(parsed.port),
+        port,
         user,
     };
 };

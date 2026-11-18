@@ -143,6 +143,39 @@ describe(createNodeHyperdrive, () => {
         expect(createNodeHyperdrive("postgres:///orders?host=%2Fvar%2Frun%2Fpostgresql").host).toBe("/var/run/postgresql");
     });
 
+    it.each([
+        ["postgres:///orders?host=/var/run/postgresql&port=5433", 5433],
+        ["postgresql://u@db/orders?port=6432", 6432],
+        ["postgres:///orders?host=/var/run/postgresql&port=1", 1],
+        ["postgres:///orders?host=/var/run/postgresql&port=65535", 65_535],
+    ])("reads the port query parameter of %s when the authority has none", (url, port) => {
+        expect.assertions(1);
+
+        expect(createNodeHyperdrive(url).port).toBe(port);
+    });
+
+    it("lets the authority port win over the port query parameter", () => {
+        expect.assertions(1);
+
+        expect(createNodeHyperdrive("postgres://u@db:5434/orders?port=5433").port).toBe(5434);
+    });
+
+    it("keeps the default port when neither the authority nor the query sets one", () => {
+        expect.assertions(1);
+
+        expect(createNodeHyperdrive("postgres:///orders?host=/var/run/postgresql").port).toBe(5432);
+    });
+
+    it.each(["0", "65536", "-1", "5433.0", "54a", "", " 5433", "0x15"])("refuses port=%j with a VALIDATION_ERROR that does not echo it", (value) => {
+        expect.assertions(1);
+
+        const url = `postgres:///orders?host=/var/run/postgresql&port=${encodeURIComponent(value)}`;
+
+        expect(() => createNodeHyperdrive(url)).toThrow(
+            expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.not.stringContaining("/var/run/postgresql") }),
+        );
+    });
+
     it("refuses an empty host with a host parameter on a protocol that does not read it", () => {
         expect.assertions(1);
 

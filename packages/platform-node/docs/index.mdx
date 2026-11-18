@@ -277,7 +277,8 @@ listening. `fetch` is required. `host` defaults to the loopback interface.
 Builds the `HYPERDRIVE` binding from a `postgres://`, `postgresql://`,
 `mysql://` or `mariadb://` URL, `process.env.DATABASE_URL` unless given. A
 Postgres URL may name a Unix socket the libpq way, `postgres:///db?host=/var/run/postgresql`,
-and the socket directory becomes `host`. A URL with any TLS option other than an
+and the socket directory becomes `host`. Without a port in the authority, a
+Postgres `?port=` (1 to 65535) sets `port`; the authority's port wins when both are set. A URL with any TLS option other than an
 explicit off (`sslmode=prefer` or `require`, `ssl=true`, `sslrootcert=…`) keeps it
 only in `connectionString`; the binding's discrete fields throw instead of letting
 a driver built from them connect without TLS, so build the driver from
