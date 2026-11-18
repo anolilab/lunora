@@ -10,31 +10,41 @@ import { makeCtx, owner } from "./_helpers/fake-ctx";
 const SECRET = "lineage-test-secret";
 const ROOT = "0123456789abcdef0123456789abcdef"; // eslint-disable-line no-secrets/no-secrets -- a test chain id, not a secret
 const NOW = 1_700_000_000_000;
+const HOST = "acme.lunora.app";
 
 describe("signed lineage", () => {
     it("verifies what it signed", async () => {
-        const header = await signLineage(SECRET, { depth: 3, root: ROOT }, NOW);
+        const header = await signLineage(SECRET, { depth: 3, root: ROOT }, NOW, HOST);
 
-        await expect(readLineage(header, SECRET, NOW + 1000)).resolves.toStrictEqual({ lineage: { depth: 3, root: ROOT }, status: "valid" });
+        await expect(readLineage(header, SECRET, NOW + 1000, HOST)).resolves.toStrictEqual({ lineage: { depth: 3, root: ROOT }, status: "valid" });
     });
 
     it("refuses a header whose depth was rewritten to reset the chain", async () => {
-        const header = await signLineage(SECRET, { depth: 15, root: ROOT }, NOW);
+        const header = await signLineage(SECRET, { depth: 15, root: ROOT }, NOW, HOST);
 
-        await expect(readLineage(header.replace("v1.15.", "v1.1."), SECRET, NOW)).resolves.toStrictEqual({ status: "invalid" });
+        await expect(readLineage(header.replace("v1.15.", "v1.1."), SECRET, NOW, HOST)).resolves.toStrictEqual({ status: "invalid" });
     });
 
     it("refuses a header signed with another key, a stale one, and garbage", async () => {
-        await expect(readLineage(await signLineage("not-the-key", { depth: 1, root: ROOT }, NOW), SECRET, NOW)).resolves.toStrictEqual({ status: "invalid" });
-        await expect(readLineage(await signLineage(SECRET, { depth: 1, root: ROOT }, NOW), SECRET, NOW + 120_000)).resolves.toStrictEqual({
+        await expect(readLineage(await signLineage("not-the-key", { depth: 1, root: ROOT }, NOW, HOST), SECRET, NOW, HOST)).resolves.toStrictEqual({
             status: "invalid",
         });
-        await expect(readLineage("v1.0.root.0.sig", SECRET, NOW)).resolves.toStrictEqual({ status: "invalid" });
+        await expect(readLineage(await signLineage(SECRET, { depth: 1, root: ROOT }, NOW, HOST), SECRET, NOW + 120_000, HOST)).resolves.toStrictEqual({
+            status: "invalid",
+        });
+        await expect(readLineage("v1.0.root.0.sig", SECRET, NOW, HOST)).resolves.toStrictEqual({ status: "invalid" });
+    });
+
+    it("refuses a header stamped for another host, so a captured one cannot be replayed at another tenant", async () => {
+        const header = await signLineage(SECRET, { depth: 16, root: ROOT }, NOW, "attacker.example");
+
+        await expect(readLineage(header, SECRET, NOW, HOST)).resolves.toStrictEqual({ status: "invalid" });
+        await expect(readLineage(header, SECRET, NOW, "ATTACKER.example")).resolves.toMatchObject({ status: "valid" });
     });
 
     it("is inert without a secret: a header is neither honoured nor refused", async () => {
-        await expect(readLineage("anything", undefined, NOW)).resolves.toStrictEqual({ status: "none" });
-        await expect(readLineage(null, SECRET, NOW)).resolves.toStrictEqual({ status: "none" });
+        await expect(readLineage("anything", undefined, NOW, HOST)).resolves.toStrictEqual({ status: "none" });
+        await expect(readLineage(null, SECRET, NOW, HOST)).resolves.toStrictEqual({ status: "none" });
     });
 });
 
@@ -43,7 +53,7 @@ describe(stampLineage, () => {
         const forged = new Request("https://acme.lunora.app/", { headers: { [LINEAGE_HEADER]: "v1.0.forged", "x-other": "kept" } });
         const stamped = await stampLineage(forged, { LUNORA_LINEAGE_SECRET: SECRET, lineage: `4.${ROOT}` }, NOW);
 
-        await expect(readLineage(stamped.headers.get(LINEAGE_HEADER), SECRET, NOW)).resolves.toStrictEqual({
+        await expect(readLineage(stamped.headers.get(LINEAGE_HEADER), SECRET, NOW, HOST)).resolves.toStrictEqual({
             lineage: { depth: 5, root: ROOT },
             status: "valid",
         });
@@ -81,7 +91,7 @@ const recursionPoints = (writeDataPoint: ReturnType<typeof metrics>) =>
         .map((point) => [point?.blobs?.[2], point?.doubles?.[0]]);
 
 const signedRequest = async (depth: number, host = "acme.lunora.app") =>
-    new Request(`https://${host}/`, { headers: { [LINEAGE_HEADER]: await signLineage(SECRET, { depth, root: ROOT }, Date.now()) } });
+    new Request(`https://${host}/`, { headers: { [LINEAGE_HEADER]: await signLineage(SECRET, { depth, root: ROOT }, Date.now(), host) } });
 
 afterEach(() => {
     vi.unstubAllGlobals();

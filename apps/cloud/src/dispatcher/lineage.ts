@@ -17,7 +17,10 @@
  *
  * So a tenant can neither forge a lower depth (it has no key, and the Outbound
  * Worker overwrites what it sets) nor strip its depth (the Outbound Worker
- * re-adds it on every request). What escapes it is documented in the README:
+ * re-adds it on every request). The signature also covers the host the request
+ * was sent to, because the Outbound Worker stamps every `fetch()`, a third-party
+ * origin's included: a header a tenant captures on a server it runs does not
+ * verify on another tenant's hostname. What escapes it is documented in the README:
  * calls that never leave through `fetch()` — Durable Object stubs, service
  * bindings — and loops through a third party that drops the header.
  */
@@ -71,14 +74,17 @@ export const parseLineageParameter = (value: unknown): Lineage | undefined => {
     return match ? { depth: Number(match[1]), root: match[2] ?? "" } : undefined;
 };
 
-/** The signed header for `lineage`, minted at `nowMs`. */
-export const signLineage = async (secret: string, lineage: Lineage, nowMs: number): Promise<string> => {
+/** What the MAC covers: the header's payload and, outside it, the host the request is addressed to. */
+const signedInput = (payload: string, host: string): Uint8Array<ArrayBuffer> => encoder.encode(`${payload}\0${host.toLowerCase()}`);
+
+/** The signed header for `lineage` on a request to `host`, minted at `nowMs`. */
+export const signLineage = async (secret: string, lineage: Lineage, nowMs: number, host: string): Promise<string> => {
     if (!ROOT.test(lineage.root) || !Number.isInteger(lineage.depth) || lineage.depth < 0 || lineage.depth > 9999) {
         throw new Error("invalid lineage");
     }
 
     const payload = `v1.${String(lineage.depth)}.${lineage.root}.${String(Math.floor(nowMs / 1000))}`;
-    const signature = await crypto.subtle.sign("HMAC", await hmacKey(secret), encoder.encode(payload));
+    const signature = await crypto.subtle.sign("HMAC", await hmacKey(secret), signedInput(payload, host));
 
     return `${payload}.${toHex(signature)}`;
 };
@@ -96,7 +102,10 @@ export const stampLineage = async (request: Request, env: { lineage?: string; LU
     const current = parseLineageParameter(env.lineage);
 
     if (current !== undefined && env.LUNORA_LINEAGE_SECRET) {
-        headers.set(LINEAGE_HEADER, await signLineage(env.LUNORA_LINEAGE_SECRET, { depth: current.depth + 1, root: current.root }, nowMs));
+        headers.set(
+            LINEAGE_HEADER,
+            await signLineage(env.LUNORA_LINEAGE_SECRET, { depth: current.depth + 1, root: current.root }, nowMs, new URL(request.url).hostname),
+        );
     }
 
     return new Request(request, { headers });
@@ -106,11 +115,12 @@ export const stampLineage = async (request: Request, env: { lineage?: string; LU
 export type InboundLineage = { lineage: Lineage; status: "valid" } | { status: "invalid" } | { status: "none" };
 
 /**
- * Verify an inbound header. `none` when there is no header, or no secret to
- * verify one with (the feature is not deployed — inert, never a refusal);
- * `invalid` for a malformed, forged or stale one; otherwise its lineage.
+ * Verify an inbound header on a request to `host`. `none` when there is no
+ * header, or no secret to verify one with (the feature is not deployed — inert,
+ * never a refusal); `invalid` for a malformed, forged or stale one, or one
+ * stamped for another host; otherwise its lineage.
  */
-export const readLineage = async (header: null | string, secret: string | undefined, nowMs: number): Promise<InboundLineage> => {
+export const readLineage = async (header: null | string, secret: string | undefined, nowMs: number, host: string): Promise<InboundLineage> => {
     if (header === null || !secret) {
         return { status: "none" };
     }
@@ -128,7 +138,7 @@ export const readLineage = async (header: null | string, secret: string | undefi
     }
 
     // `verify`, not a string compare: constant-time by construction.
-    const valid = await crypto.subtle.verify("HMAC", await hmacKey(secret), fromHex(signature), encoder.encode(`v1.${depth}.${root}.${issuedAt}`));
+    const valid = await crypto.subtle.verify("HMAC", await hmacKey(secret), fromHex(signature), signedInput(`v1.${depth}.${root}.${issuedAt}`, host));
 
     return valid ? { lineage: { depth: Number(depth), root }, status: "valid" } : { status: "invalid" };
 };

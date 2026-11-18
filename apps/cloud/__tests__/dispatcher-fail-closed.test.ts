@@ -249,7 +249,7 @@ describe("dispatcher refuses a lineage header it cannot verify outside developme
 
     it("still verifies a correctly signed header in production, so the chain depth is honoured", async () => {
         const dispatcher = await loadDispatcher();
-        const signed = await signLineage(SECRET, { depth: 1, root: "0123456789abcdef0123456789abcdef" }, Date.now()); // eslint-disable-line no-secrets/no-secrets -- a test chain id, not a secret;
+        const signed = await signLineage(SECRET, { depth: 1, root: "0123456789abcdef0123456789abcdef" }, Date.now(), "acme.lunora.app"); // eslint-disable-line no-secrets/no-secrets -- a test chain id, not a secret;
         const response = await dispatcher.fetch(new Request("https://acme.lunora.app/", { headers: { [LINEAGE_HEADER]: signed } }), environment(configured()));
 
         expect(response.status).toBe(200);

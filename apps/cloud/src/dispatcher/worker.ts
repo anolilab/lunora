@@ -414,7 +414,7 @@ const admitLineage = async (
 ): Promise<AdmittedRequest | Response> => {
     const cell = cellOf(env);
     const header = request.headers.get(LINEAGE_HEADER);
-    const inbound = await readLineage(header, env.LUNORA_LINEAGE_SECRET, Date.now());
+    const inbound = await readLineage(header, env.LUNORA_LINEAGE_SECRET, Date.now(), new URL(request.url).hostname);
 
     if (inbound.status === "invalid") {
         recordRecursion(env.PLATFORM_METRICS, { cell, depth: 0, outcome: "forged" });

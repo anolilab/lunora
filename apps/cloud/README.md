@@ -1114,8 +1114,11 @@ and stops the chain after 16 invocations:
 2. Every `fetch()` a tenant Worker makes passes through the Outbound Worker. It
    removes any lineage header the tenant set and stamps its own, signed with
    `LUNORA_LINEAGE_SECRET` (HMAC-SHA256, valid for 60 seconds), one hop deeper.
+   The signature covers the host the request is sent to, since the header also
+   goes to third-party origins.
 3. When the request comes back in, the dispatcher verifies the header. A forged,
-   altered or stale header gets `400` and the tenant never runs. At depth 16,
+   altered or stale header, or one stamped for another host, gets `400` and the
+   tenant never runs. At depth 16,
    under the org's default `terminate` policy, the dispatcher answers
    `508 Loop Detected` before the tenant runs. It records a `recursion` row in
    `PLATFORM_METRICS` and an audit entry in the org's log
