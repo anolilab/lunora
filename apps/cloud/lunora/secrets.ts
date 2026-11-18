@@ -3,6 +3,7 @@ import type { Doc as Document_, Id } from "./_generated/dataModel";
 import { internalQuery, mutation, query, v } from "./_generated/server";
 import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 import { rateLimit } from "./guards";
+import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -112,11 +113,13 @@ export const listEncrypted = query
             await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId, ["owner", "admin"]));
             await assertRowInOrg(context, "projects", projectId, organizationId, "project");
 
-            const { page } = await context.db.secrets.findMany({ where: { organizationId, projectId } });
+            // Every page: a deploy is provisioned from this list, so a secret past the first page would
+            // silently be missing from the Worker.
+            const rows = await collectAll<SecretRow>((cursor) => context.db.secrets.findMany({ cursor, where: { organizationId, projectId } }));
 
             // Kind-specific rows override shared ("all") rows of the same name.
             // `environment` is the row's own, not the requested kind: an "all" row is bound to "all".
-            return secretsForKind(page as SecretRow[], environment ?? "production").map((secret) => {
+            return secretsForKind(rows, environment ?? "production").map((secret) => {
                 return {
                     ciphertext: secret.ciphertext,
                     cipherVersion: secret.cipherVersion,
