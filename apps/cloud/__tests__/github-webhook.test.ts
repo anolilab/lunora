@@ -113,6 +113,47 @@ describe(handleGitHubWebhook, () => {
         expect(response.status).toBe(401);
     });
 
+    it("413s an oversized body before reading past the cap or checking its signature", async () => {
+        const chunk = new Uint8Array(1024 * 1024);
+        let pulled = 0;
+        // Chunked, so no content-length declares the size: only the running total can refuse it.
+        const body = new ReadableStream<Uint8Array>({
+            pull(controller) {
+                pulled += 1;
+
+                if (pulled > 40) {
+                    controller.close();
+
+                    return;
+                }
+
+                controller.enqueue(chunk);
+            },
+        });
+        const request = new Request("https://cloud/v1/github/webhook", {
+            body,
+            duplex: "half",
+            headers: { "x-hub-signature-256": "sha256=bad" },
+            method: "POST",
+        } as RequestInit);
+        const response = await handleGitHubWebhook(request, { resolveProject: resolveProject(true), secret });
+
+        expect(response.status).toBe(413);
+        expect(pulled).toBeLessThan(40);
+    });
+
+    it("413s a body whose declared length is over the cap without reading it", async () => {
+        const request = new Request("https://cloud/v1/github/webhook", {
+            body: prBody,
+            headers: { "content-length": String(26 * 1024 * 1024), "x-hub-signature-256": await sign(secret, prBody) },
+            method: "POST",
+        });
+        const response = await handleGitHubWebhook(request, { resolveProject: resolveProject(true), secret });
+
+        expect(response.status).toBe(413);
+        expect(request.bodyUsed).toBe(false);
+    });
+
     it("resolves the project and returns the preview script name", async () => {
         const response = await handleGitHubWebhook(await signedRequest(prBody), { resolveProject: resolveProject(true), secret });
 

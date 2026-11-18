@@ -7,6 +7,7 @@
 import type { PushChanges } from "../builds/paths";
 import { MAX_CHANGED_FILES } from "../builds/paths";
 import { forkPreviewScriptName, previewScriptName } from "../deploy/preview";
+import { declaresOver, readCappedBytes } from "../lib/read-capped-bytes";
 import { constantTimeEqual } from "../security/constant-time-equal";
 import type { CommitStatus } from "./app";
 
@@ -468,8 +469,24 @@ const handlePushEvent = async (
     return Response.json({ accepted: true, builds }, { status: 200 });
 };
 
+/** GitHub caps a webhook payload at 25 MB and drops larger events itself, so nothing genuine is bigger. */
+const MAX_WEBHOOK_BYTES = 25 * 1024 * 1024;
+
 export const handleGitHubWebhook = async (request: Request, options: GitHubWebhookHooks): Promise<Response> => {
-    const body = await request.text();
+    const tooLarge = Response.json({ error: `request body exceeds ${String(MAX_WEBHOOK_BYTES)} bytes` }, { status: 413 });
+
+    if (declaresOver(request, MAX_WEBHOOK_BYTES)) {
+        return tooLarge;
+    }
+
+    // Capped before the signature check: the body is unauthenticated until then, and HMAC needs all of it.
+    const bytes = await readCappedBytes(request.body, MAX_WEBHOOK_BYTES);
+
+    if (bytes === undefined) {
+        return tooLarge;
+    }
+
+    const body = new TextDecoder().decode(bytes);
 
     if (!(await verifyGitHubSignature(options.secret, body, request.headers.get("x-hub-signature-256")))) {
         return Response.json({ error: "invalid signature" }, { status: 401 });

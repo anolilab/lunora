@@ -4,6 +4,7 @@
  * requested kind to the key's ceiling, then stream the release's frames as
  * NDJSON (one JSON object per line).
  */
+import { declaresOver, readCappedBytes } from "../lib/read-capped-bytes";
 import { DEFAULT_RUNTIME, isProjectRuntime, PROJECT_RUNTIMES } from "../project-runtime";
 import type { DeployKind } from "../provision-contract";
 import type { DeployHandlerDeps } from "./release-core";
@@ -62,46 +63,6 @@ const MAX_BODY_BYTES = 100 * 1024 * 1024;
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
-/** The body's bytes, or `undefined` once the running total passes {@link MAX_BODY_BYTES} — a chunked body is never held past the cap. */
-const readCappedBytes = async (stream: ReadableStream<Uint8Array> | null): Promise<Uint8Array | undefined> => {
-    if (stream === null) {
-        return new Uint8Array(0);
-    }
-
-    const reader = stream.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-
-    for (;;) {
-        // eslint-disable-next-line no-await-in-loop -- a body is read in order; each chunk depends on the last
-        const { done, value } = await reader.read();
-
-        if (done) {
-            break;
-        }
-
-        total += value.byteLength;
-
-        if (total > MAX_BODY_BYTES) {
-            reader.cancel().catch(() => undefined);
-
-            return undefined;
-        }
-
-        chunks.push(value);
-    }
-
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-
-    for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-    }
-
-    return bytes;
-};
-
 /**
  * Read the JSON body, refusing anything over {@link MAX_BODY_BYTES} — checked
  * against `content-length` first so an honest oversized upload is refused
@@ -110,13 +71,11 @@ const readCappedBytes = async (stream: ReadableStream<Uint8Array> | null): Promi
  */
 const readBody = async (request: Request): Promise<{ body: DeployBody } | { response: Response }> => {
     const tooLarge = { response: json(413, { error: `request body exceeds ${String(MAX_BODY_BYTES)} bytes` }) };
-    const declared = Number(request.headers.get("content-length") ?? Number.NaN);
-
-    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    if (declaresOver(request, MAX_BODY_BYTES)) {
         return tooLarge;
     }
 
-    const bytes = await readCappedBytes(request.body);
+    const bytes = await readCappedBytes(request.body, MAX_BODY_BYTES);
 
     if (bytes === undefined) {
         return tooLarge;
