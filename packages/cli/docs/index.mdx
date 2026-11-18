@@ -802,7 +802,8 @@ The Node target has no hosted control plane, so `lunora deploy --target node`
 deploys to a container build context instead of publishing anything. It runs
 codegen for the target (into the configured `schemaDir`), bundles a generated
 server entry together with the worker entry wrangler's `main` names into one
-`server.mjs` with the project's own `esbuild`, and writes `.lunora/deploy/node/`:
+`server.mjs` with the project's own `esbuild` (applying the worker's wrangler `define` and `alias`, as wrangler's
+own build does), and writes `.lunora/deploy/node/`:
 
 | File                | What it is                                                                                                                                                                                                |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -839,6 +840,10 @@ Refused before codegen writes anything:
 - **A malformed `secrets`**: anything but `{ "required": [...] }` listing
   environment variable names (a misspelled key such as `require` included),
   which would otherwise deploy a server missing those secrets.
+- **A name declared twice on `env`**: a var, a `secrets.required` name, a
+  `secrets_store_secrets` binding, the Hyperdrive binding and the Durable Object
+  bindings all share one namespace, so a repeat (a var named `SHARD`) would
+  silently replace another; the error names both sources.
 - **A malformed binding entry**: a `durable_objects.bindings`, `hyperdrive` or
   `secrets_store_secrets` entry without a valid name, or `vars` that is not an
   object of environment variable names. The error names the section and index;

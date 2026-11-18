@@ -455,6 +455,15 @@ describe("lunora deploy --target node", () => {
             expect(buildFile.indexOf("USER node")).toBeLessThan(buildFile.indexOf('VOLUME ["/data"]'));
         });
 
+        it("force-closes the shards after its drain, so a close handler that never settles cannot keep a database open", () => {
+            expect.assertions(2);
+
+            const bundle = readFileSync(join(artifact, "server.mjs"), "utf8");
+
+            expect(bundle).toContain("registry.close({ force: true })");
+            expect(bundle).toContain("platform?.close({ force: true })");
+        });
+
         it("sends only what the Dockerfile copies to a builder", () => {
             expect.assertions(1);
 
@@ -1168,9 +1177,47 @@ describe("lunora deploy --target node", () => {
 
             await expect(deploy(workdir)).resolves.toMatchObject({
                 code: 2,
-                error: expect.stringContaining("STRIPE_KEY in wrangler.jsonc is both: the store binding would silently replace the plain secret"),
+                error: expect.stringContaining(
+                    "declares STRIPE_KEY (secrets.required and secrets_store_secrets) more than once: one would silently replace the other",
+                ),
             });
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+        });
+
+        it("refuses a var that shares a binding's name, naming both sources", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { wrangler: { vars: { LIMIT: 3, SHARD: "not a namespace" } } });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 2,
+                error: expect.stringContaining("declares SHARD (vars and durable_objects.bindings) more than once"),
+            });
+        });
+
+        it("bundles with the worker's wrangler define and alias, as wrangler's own build does", async () => {
+            expect.assertions(3);
+
+            writeFixture(workdir, { wrangler: { alias: { "fixture-alias": "./src/aliased.ts" }, define: { __BUILD_ID__: '"build-42"' } } });
+            writeFileSync(join(workdir, "src", "aliased.ts"), `export const aliasedMarker = "from-the-alias";\n`, "utf8");
+
+            const worker = join(workdir, "src", "worker.ts");
+
+            writeFileSync(
+                worker,
+                `import { aliasedMarker } from "fixture-alias";\n\ndeclare const __BUILD_ID__: string;\n\n${readFileSync(worker, "utf8").replace(
+                    'case "/__fixture/env":',
+                    'case "/__fixture/build":\n                return Response.json({ aliased: aliasedMarker, buildId: __BUILD_ID__ });\n            case "/__fixture/env":',
+                )}`,
+                "utf8",
+            );
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+            const bundle = readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8");
+
+            expect(bundle).toContain('"build-42"');
+            expect(bundle).toContain("from-the-alias");
         });
 
         it("refuses a secrets_store binding with the reserved LUNORA_ prefix, which could never start", async () => {

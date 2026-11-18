@@ -127,8 +127,12 @@ interface NodeWranglerConfig {
 
 /** What the generated server entry composes, read from the project's wrangler config. */
 interface NodeDeployProject {
+    /** Wrangler's `alias`, with relative targets resolved from the project root as wrangler resolves them from its config. */
+    alias: Record<string, string>;
     /** Wrangler's `triggers.crons`: on Cloudflare they reach the worker's `scheduled()`, which this server never calls. */
     cronTriggers: string[];
+    /** Wrangler's `define`: identifiers replaced with JavaScript expressions at bundle time, as wrangler's own build does. */
+    define: Record<string, string>;
     /** The `durable_objects.bindings[]` the server constructs. The shard binding (class `ShardDO` or `LunoraDO`) also carries crons. */
     durableObjects: { className: string; name: string }[];
     /** The worker entry wrangler's `main` names, absolute. */
@@ -274,6 +278,43 @@ const durableObjectEntries = (value: unknown, configName: string): { className: 
     });
 };
 
+/**
+ * Every name that lands on `env` comes from one place. Built in a fixed order (vars, then each secret, Hyperdrive and the
+ * Durable Objects), a later source would silently replace an earlier one, and the code reading it gets the wrong kind of value.
+ */
+const refuseEnvCollisions = (sources: ReadonlyArray<readonly [string, ReadonlyArray<string>]>, configName: string): void => {
+    const owners = new Map<string, string[]>();
+
+    for (const [source, names] of sources) {
+        for (const name of names) {
+            owners.set(name, [...(owners.get(name) ?? []), source]);
+        }
+    }
+
+    const collisions = [...owners].filter(([, from]) => from.length > 1).map(([name, from]) => `${name} (${from.join(" and ")})`);
+
+    if (collisions.length > 0) {
+        throw new Error(
+            `--target node puts every var, secret and binding on env under its own name, and ${configName} declares ${collisions.join(", ")} more than once: one would silently replace the other. Rename one of them`,
+        );
+    }
+};
+
+/** `define` or `alias`: an object of string values, refused otherwise rather than passed to the bundler half-read. */
+const stringMap = (value: unknown, section: string, configName: string): Record<string, string> => {
+    if (value === undefined || value === null) {
+        return {};
+    }
+
+    if (!isRecord(value) || !Object.values(value).every((entry) => typeof entry === "string")) {
+        throw new TypeError(
+            `--target node passes ${section} in ${configName} to its bundler, and it must be an object of strings, not ${JSON.stringify(value)}`,
+        );
+    }
+
+    return value as Record<string, string>;
+};
+
 /** `triggers.crons`: each a cron expression string. */
 const cronTriggerList = (value: unknown, configName: string): string[] => {
     const crons = isRecord(value) ? value.crons : undefined;
@@ -415,24 +456,36 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     }
 
     const workerSecrets = requiredSecretNames(parsed.secrets, configName);
-    const overlapping = storeSecrets.filter((name) => workerSecrets.includes(name));
+    const variables = declaredVariables(parsed.vars, configName);
 
-    // One env key cannot be both: the store binding object would replace the plain string, and the code expecting either breaks.
-    if (overlapping.length > 0) {
-        throw new Error(
-            `--target node puts each secrets.required name and each secrets_store_secrets binding on env under its own name, and ${overlapping.join(", ")} in ${configName} is both: the store binding would silently replace the plain secret. Keep one of them`,
-        );
-    }
+    refuseEnvCollisions(
+        [
+            ["vars", Object.keys(variables)],
+            ["secrets.required", workerSecrets],
+            ["secrets_store_secrets", storeSecrets],
+            ["hyperdrive", hyperdrive],
+            ["durable_objects.bindings", durableObjects.map((binding) => binding.name)],
+        ],
+        configName,
+    );
+
     const declared = parsed as Record<string, unknown>;
 
     return {
+        alias: Object.fromEntries(
+            Object.entries(stringMap(declared.alias, "alias", configName)).map(([name, target]) => [
+                name,
+                target.startsWith(".") ? resolve(projectRoot, target) : target,
+            ]),
+        ),
         cronTriggers: cronTriggerList(declared.triggers, configName),
+        define: stringMap(declared.define, "define", configName),
         durableObjects,
         entry: resolve(projectRoot, parsed.main),
         hyperdrive: hyperdrive[0],
         storeSecrets,
         unbound: [...Object.keys(declared).filter((key) => !COMPOSED_OR_CONFIG_KEYS.has(key) && isDeclared(declared[key])), ...external],
-        vars: declaredVariables(parsed.vars, configName),
+        vars: variables,
         workerSecrets,
     };
 };
@@ -785,12 +838,14 @@ const shutdown = async (code) => {
     await step("closing the HTTP server", () => server.close());
     await step("draining waitUntil work", () => drainSet(background, remaining()));
     await step("draining shards", () => Promise.all([platform?.drain(remaining()), ...registries.map((registry) => registry.drain(remaining()))]));
+    // Forced: the drains above have finished or reached their deadline, so a close handler still running now never settles, and
+    // its shard's database must not stay open at exit. platform-node logs any shard it closes that way.
     await step("closing shards", () => {
         for (const registry of registries) {
-            registry.close();
+            registry.close({ force: true });
         }
 
-        platform?.close();
+        platform?.close({ force: true });
     });
 
     // The last steps can settle on microtasks alone, and Node reports an unhandled rejection only once the event loop turns:
@@ -1052,12 +1107,22 @@ const deliveredCronSchedules = async (cronsModule: string): Promise<string[]> =>
 };
 
 /** Bundle the generated entry and the app into `server.mjs`. */
-const bundleServer = async (esbuild: EsbuildApi, directory: string, contents: string, projectRoot: string, external: ReadonlyArray<string>): Promise<void> => {
+const bundleServer = async (
+    esbuild: EsbuildApi,
+    directory: string,
+    contents: string,
+    projectRoot: string,
+    options: { alias: Record<string, string>; define: Record<string, string>; external: ReadonlyArray<string> },
+): Promise<void> => {
     await esbuild.build({
+        // Wrangler's own build applies these, so the container bundle must too: a Worker constant or module alias that only
+        // reached Cloudflare's bundle would leave the Node server reading an undefined global or importing the wrong module.
+        alias: options.alias,
         // CommonJS dependencies bundled into ESM still call `require` for Node built-ins.
         banner: { js: `import { createRequire as __lunoraCreateRequire } from "node:module";\nconst require = __lunoraCreateRequire(import.meta.url);` },
         bundle: true,
-        external: [...external],
+        define: options.define,
+        external: [...options.external],
         format: "esm",
         legalComments: "none",
         logLevel: "silent",
@@ -1110,7 +1175,11 @@ const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promis
     );
 
     try {
-        await bundleServer(esbuild, directory, renderServerEntry(projectRoot, project, cronsModule), projectRoot, ["better-sqlite3", ...Object.keys(optional)]);
+        await bundleServer(esbuild, directory, renderServerEntry(projectRoot, project, cronsModule), projectRoot, {
+            alias: project.alias,
+            define: project.define,
+            external: ["better-sqlite3", ...Object.keys(optional)],
+        });
     } catch (error: unknown) {
         throw missingExportRefusal(error, project, projectRoot, realPath(dirname(platformNodeManifest))) ?? unresolvedOptionalRefusal(error) ?? error;
     }
