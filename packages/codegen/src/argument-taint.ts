@@ -437,8 +437,10 @@ const isRootedIdentifier = (identifier: Identifier, callback: FunctionNode | und
 const isRequiredOperand = (node: TsNode, callback: FunctionNode | undefined): boolean => {
     const value = unwrapExpression(node) ?? node;
 
+    // `!args.skip` is a boolean the caller picks, so `ctx.auth.userId && !args.skip` still yields a null identity for an
+    // anonymous caller; a negation is a condition only when what it negates is one.
     if (Node.isPrefixUnaryExpression(value) && value.getOperatorToken() === SyntaxKind.ExclamationToken) {
-        return true;
+        return isRequiredOperand(value.getOperand(), callback);
     }
 
     if (Node.isBinaryExpression(value)) {
@@ -460,10 +462,60 @@ const isRequiredOperand = (node: TsNode, callback: FunctionNode | undefined): bo
     return !referencesBinding(value, "args") && valueIdentifiersOf(value).every((identifier) => isRootedIdentifier(identifier, callback));
 };
 
+/** The callback `node` sits in: its innermost function, when that function is passed as a call argument. */
+const callbackOf = (node: TsNode): FunctionNode | undefined => {
+    const enclosing = enclosingFunctionOf(node);
+    const holder = enclosing?.getParent();
+
+    return enclosing !== undefined && Node.isCallExpression(holder) && holder.getArguments().includes(enclosing) ? enclosing : undefined;
+};
+
 /**
- * Whether the whole `&&` chain `and` belongs to is a predicate: no operand can yield a caller-chosen value (see
- * {@link isRequiredOperand}). Only then is a compared identity a required condition; `uid === args.guard &&
- * args.victim` yields the caller's value once the caller passes their own id as the guard.
+ * Whether `node` sits where only its truthiness is used: the body or a `return` of a callback (a filter or find
+ * predicate), the condition of an `if`, loop or ternary, the operand of `!`, or one side of a comparison. Anywhere else
+ * (a column value in `where`, a call argument, an assignment, a template) its value flows on.
+ */
+const isPredicatePosition = (node: TsNode): boolean => {
+    const value = valueWrapperOf(node);
+    const parent = value.getParent();
+
+    if (Node.isArrowFunction(parent)) {
+        return parent.getBody() === value && callbackOf(value) !== undefined;
+    }
+
+    if (Node.isReturnStatement(parent)) {
+        return callbackOf(parent) !== undefined;
+    }
+
+    if (Node.isIfStatement(parent) || Node.isWhileStatement(parent) || Node.isDoStatement(parent)) {
+        return parent.getExpression() === value;
+    }
+
+    if (Node.isForStatement(parent)) {
+        const condition: TsNode | undefined = parent.getCondition();
+
+        return condition === value;
+    }
+
+    if (Node.isConditionalExpression(parent)) {
+        return parent.getCondition() === value;
+    }
+
+    if (Node.isPrefixUnaryExpression(parent)) {
+        return parent.getOperatorToken() === SyntaxKind.ExclamationToken;
+    }
+
+    return (
+        Node.isBinaryExpression(parent) &&
+        (EQUALITY_OPERATORS.has(parent.getOperatorToken().getKind()) || RELATIONAL_OPERATORS.has(parent.getOperatorToken().getKind()))
+    );
+};
+
+/**
+ * Whether the whole `&&` chain `and` belongs to is a required condition: decided by where the chain sits, not by
+ * what its operands are. As a value (`userId: ctx.auth.userId && "another-user"`, `active: uid === args.victim &&
+ * true`) it yields an operand. In a predicate position (see {@link isPredicatePosition}) it is a condition, unless an
+ * operand is caller-chosen (see {@link isRequiredOperand}): `ctx.auth.userId && !args.skip` lets the caller decide.
  */
 const isPredicateChain = (and: TsNode): boolean => {
     let top = and;
@@ -476,11 +528,7 @@ const isPredicateChain = (and: TsNode): boolean => {
         top = parent;
     }
 
-    const enclosing = enclosingFunctionOf(top);
-    const holder = enclosing?.getParent();
-    const callback = enclosing !== undefined && Node.isCallExpression(holder) && holder.getArguments().includes(enclosing) ? enclosing : undefined;
-
-    return isRequiredOperand(top, callback);
+    return isPredicatePosition(top) && isRequiredOperand(top, callbackOf(top));
 };
 
 /**
@@ -511,6 +559,69 @@ const hasAlternativeWithin = (node: TsNode, within: TsNode): boolean => {
     return false;
 };
 
+/** Whether `comparison` is the predicate a callback returns as a whole, alone or in a `&&` chain. */
+const isReturnedPredicate = (comparison: TsNode): boolean => {
+    let current = valueWrapperOf(comparison);
+
+    for (
+        let parent = current.getParent();
+        Node.isBinaryExpression(parent) && parent.getOperatorToken().getKind() === SyntaxKind.AmpersandAmpersandToken;
+        parent = current.getParent()
+    ) {
+        current = valueWrapperOf(parent);
+    }
+
+    const parent = current.getParent();
+
+    return (Node.isArrowFunction(parent) && parent.getBody() === current) || Node.isReturnStatement(parent);
+};
+
+/**
+ * Whether the identity read `node` decides which rows a read matches: it is, past wrappers and a fixed fallback, the
+ * value of a column in a query object (`ownerId: uid`, `{ eq: uid }`), an argument of a call (`ctx.db.users.get(uid)`,
+ * `q.eq("userId", uid)`), or one side of a comparison a filter callback returns. Nested in another column's value
+ * expression (`active: uid === args.victim && true`) it decides only that value, not the match.
+ */
+const constrainsMatch = (node: TsNode): boolean => {
+    let current = outermostChainOf(node);
+
+    for (let parent = current.getParent(); parent !== undefined; parent = current.getParent()) {
+        const isWrapper =
+            Node.isParenthesizedExpression(parent) ||
+            Node.isNonNullExpression(parent) ||
+            Node.isAsExpression(parent) ||
+            Node.isSatisfiesExpression(parent) ||
+            Node.isTypeAssertion(parent) ||
+            Node.isAwaitExpression(parent);
+        const operator = Node.isBinaryExpression(parent) ? parent.getOperatorToken().getKind() : undefined;
+        const isFixedFallback =
+            Node.isBinaryExpression(parent) &&
+            (operator === SyntaxKind.QuestionQuestionToken || operator === SyntaxKind.BarBarToken) &&
+            parent.getLeft() === current &&
+            isFixedValue(parent.getRight());
+
+        if (!isWrapper && !isFixedFallback) {
+            break;
+        }
+
+        current = parent;
+    }
+
+    const parent = current.getParent();
+
+    const columnValue: TsNode | undefined = Node.isPropertyAssignment(parent) ? parent.getInitializer() : undefined;
+
+    if (columnValue === current || Node.isShorthandPropertyAssignment(parent)) {
+        return true;
+    }
+
+    if (Node.isCallExpression(parent)) {
+        return parent.getArguments().includes(current);
+    }
+
+    return Node.isBinaryExpression(parent) && EQUALITY_OPERATORS.has(parent.getOperatorToken().getKind()) && isReturnedPredicate(parent);
+};
+
 /**
  * Whether `argument` names the caller's identity, directly or through a local whose initializer does,
  * with no alternative beside it: `ownerId: args.ownerId ?? ctx.auth.userId` selects the caller's row only when
@@ -523,16 +634,24 @@ const readsCallerIdentity = (argument: TsNode): boolean =>
         }
 
         if (contextTrustPathOf(outermostChainOf(identifier))?.[0] === "auth") {
-            return true;
+            return constrainsMatch(identifier);
         }
 
         const initializer = trustedInitializerOf(identifier);
 
+        // A local is either an alias of the identity (`const uid = ctx.auth.userId`), placed where it is used, or a
+        // query object holding it (`const filter = { ownerId: uid }`), placed inside its initializer.
         return (
             initializer !== undefined &&
-            valueIdentifiersOf(initializer).some(
-                (inner) => contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth" && !hasAlternativeWithin(inner, initializer),
-            )
+            valueIdentifiersOf(initializer).some((inner) => {
+                const isAlias = valueWrapperOf(outermostChainOf(inner)) === initializer;
+
+                return (
+                    contextTrustPathOf(outermostChainOf(inner))?.[0] === "auth" &&
+                    !hasAlternativeWithin(inner, initializer) &&
+                    (isAlias ? constrainsMatch(identifier) : constrainsMatch(inner))
+                );
+            })
         );
     });
 
@@ -1348,7 +1467,9 @@ const isIdentityReadOf = (node: TsNode, parameter: ParameterDeclaration): boolea
  * reads the victim for an anonymous caller, whose `userId` is null.
  */
 const argumentReadsIdentityOf = (argument: TsNode, parameter: ParameterDeclaration): boolean =>
-    [argument, ...argument.getDescendants()].some((node) => isIdentityReadOf(node, parameter) && !hasAlternativeWithin(node, argument));
+    [argument, ...argument.getDescendants()].some(
+        (node) => isIdentityReadOf(node, parameter) && !hasAlternativeWithin(node, argument) && constrainsMatch(node),
+    );
 
 /** The declaration a variable statement makes, when it is a single `const` binding one identifier. */
 const constDeclarationOf = (statement: TsNode): VariableDeclaration | undefined => {
@@ -2330,14 +2451,18 @@ export const isGuardedByIdentityCheck = (sinkCall: CallExpression, key: TsNode):
     const rowUses = usesOfLocal(rowName).filter((use) => mayRunBefore(use, sinkCall, enclosing));
 
     // A `const` row's fields stay writable: `row.key = args.key`, `row.channelId = args.channelId` or
-    // `Object.assign(row, args)` replaces what a guard vouched for, in the handler or in the guard helper. Handing
-    // the row to that helper is judged by what the helper does with it. One guard whose values all survive is enough.
+    // `Object.assign(row, args)` replaces what a guard vouched for, in the handler or in a guard helper. The row handed
+    // to any verified guard helper is judged by that helper's uses, against each guard's paths, so two stacked guards
+    // (`assertMember(ctx, row); assertOwner(ctx, row)`) do not count each other's call as an escape. One guard whose
+    // values all survive is enough.
+    const helperArguments = new Set(guards.flatMap((guard) => guard.helperArguments ?? []));
+    const helperUses = guards.flatMap((guard) => guard.helperUses ?? []);
+
     return guards.some((guard) => {
         const guardedPaths = guardedPathsOf(keyPath, guard.guardedPaths);
-        const { helperArguments = [], helperUses = [] } = guard;
 
         return (
-            rowUses.every((use) => helperArguments.includes(accessChainFrom(use).node) || keepsGuardedValues(use, guardedPaths)) &&
+            rowUses.every((use) => helperArguments.has(accessChainFrom(use).node) || keepsGuardedValues(use, guardedPaths)) &&
             helperUses.every(({ prefix, use }) => keepsGuardedValues(use, guardedPaths, prefix))
         );
     });

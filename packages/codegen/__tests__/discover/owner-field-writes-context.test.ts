@@ -263,11 +263,14 @@ export const create = ${kind}({
             expect(rowAt(discover(source, "posts.ts"), markerLine(source, "write"))).toBeDefined();
         });
 
-        it("keeps an owner bound by a plain ctx destructuring trusted", () => {
+        it.each([
+            ["a plain ctx destructuring", "const { userId } = ctx.auth;"],
+            ["a default that is the identity itself", "const { userId = ctx.auth.userId } = ctx.auth;"],
+        ])("keeps an owner bound by %s trusted", (_label, binding) => {
             expect.assertions(1);
 
             const source = `export const create = mutation({ handler: async ({ args, ctx }) => {
-    const { userId } = ctx.auth;
+    ${binding}
     await ctx.db.insert("posts", { userId, title: args.title }); // @write
 } });`;
 

@@ -160,6 +160,24 @@ const isOptionsPattern = (parameter: ParameterDeclaration): boolean =>
 type Policy = "discover" | "trust";
 
 /**
+ * `path` for the element that binds it under the trust policy, or `undefined` when a default can replace it. A default
+ * (`const { userId = args.victim } = ctx.auth`) is the value whenever the surface lacks the field, so it is trusted
+ * only when it is that same surface (`= ctx.auth.userId`).
+ */
+const trustedThroughDefault = (element: BindingElement, path: ContextPath, hops: number): ContextPath | undefined => {
+    const fallback = element.getInitializer();
+
+    if (fallback === undefined) {
+        return path;
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the element and expression resolvers recurse into each other
+    const fallbackPath = contextPathOf(fallback, "trust", hops);
+
+    return fallbackPath?.length === path.length && fallbackPath.every((segment, index) => segment === path[index]) ? path : undefined;
+};
+
+/**
  * The {@link ContextPath} a destructured element binds: its key appended to the
  * path of what the pattern destructures — a handler's positional ctx, an
  * enclosing element's path, or a variable's initializer. In a handler's
@@ -170,9 +188,7 @@ const bindingContextPath = (element: BindingElement, policy: Policy, hops: numbe
     const holder = element.getParent().getParent();
     const key = bindingKeyName(element);
 
-    // A default (`const { userId = args.victim } = ctx.auth`) is the value whenever the surface lacks the field,
-    // so the trust policy cannot vouch for what the binding holds.
-    if (element.getDotDotDotToken() !== undefined || (policy === "trust" && (isReassignedBinding(element) || element.getInitializer() !== undefined))) {
+    if (element.getDotDotDotToken() !== undefined || (policy === "trust" && isReassignedBinding(element))) {
         return undefined;
     }
 
@@ -191,7 +207,9 @@ const bindingContextPath = (element: BindingElement, policy: Policy, hops: numbe
         base = contextPathOf(holder.getInitializer(), policy, hops - 1);
     }
 
-    return base === undefined ? undefined : [...base, key];
+    const path = base === undefined ? undefined : [...base, key];
+
+    return policy === "trust" && path !== undefined ? trustedThroughDefault(element, path, hops) : path;
 };
 
 /** The {@link ContextPath} `node` denotes under `policy`, or `undefined` when it is no ctx surface. */

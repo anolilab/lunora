@@ -703,6 +703,70 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it.each([
+        ["an identity && literal as a column value", `userId: ctx.auth.userId && "another-user", channelId: message.channelId`],
+        [
+            "an identity comparison deciding an unrelated column",
+            "ownerId: args.victim, channelId: message.channelId, active: ctx.auth.userId === args.victim && true",
+        ],
+        ["an identity comparison as a plain column value", "ownerId: args.victim, channelId: message.channelId, active: ctx.auth.userId === args.victim"],
+    ])("reports an inline guard whose where holds %s", (_label, where) => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.members.findFirst({ where: { ${where} } });
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("reports an inline guard whose filter compares a column to the identity && a caller negation", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.query("members").filter((m) => m.ownerId === (ctx.auth.userId && !args.skip) && m.channelId === message.channelId).first();
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it("accepts an inline guard whose filter negates a row field beside the identity", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const membership = await ctx.db.query("members").filter((m) => !m.removed && m.userId === ctx.auth.userId && m.channelId === message.channelId).first();
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("accepts an inline guard whose identity default is the identity itself", () => {
+        expect.assertions(1);
+
+        write(
+            "chat.ts",
+            teamChat(`const { userId = ctx.auth.userId } = ctx.auth;
+    const membership = await ctx.db.members.findFirst({ where: { userId, channelId: message.channelId } });
+    if (!membership) {
+        throw new Error("forbidden");
+    }`),
+        );
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
     it("reports an inline guard whose identity comparison only gates a caller value with &&", () => {
         expect.assertions(1);
 
@@ -1028,6 +1092,34 @@ const requireMember = async (ctx, channelId) => {
         expect.assertions(1);
 
         write("chat.ts", teamChat("await requireMember(ctx, message);", SINK, rowHelper(`message.channelId = "general";`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    /** A second guard helper handed the whole row, checking the caller's membership of the row's team. */
+    const OWNER_HELPER = `const assertOwner = async (ctx, message) => {
+    const owner = await ctx.db.owners.findFirst({ where: { userId: ctx.auth.userId, teamId: message.teamId } });
+    if (!owner) {
+        throw new Error("FORBIDDEN");
+    }
+};`;
+
+    it("accepts two stacked guard helpers that are each handed the row", () => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);\n    await assertOwner(ctx, message);", SINK, `${rowHelper("")}\n${OWNER_HELPER}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a guard helper beside a non-guard call that writes the row", () => {
+        expect.assertions(1);
+
+        const audit = `const audit = async (ctx, message) => {
+    message.attachmentKey = ctx.auth.userId;
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message);\n    await audit(ctx, message);", SINK, `${rowHelper("")}\n${audit}`));
 
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
