@@ -55,6 +55,19 @@ const requireEqualsSpecifier = (declaration: ImportEqualsDeclaration): string | 
 };
 
 /**
+ * Whether an identifier is bound in its own file: a local `function require()`,
+ * a variable, a parameter or an import of that name. Such a `require` is the
+ * file's own function, not the CommonJS loader, which comes from the global or
+ * `module` scope and so has no declaration in the file. Only called for an
+ * identifier spelled `require`, so the type checker is reached for those alone.
+ */
+const isLocalBinding = (identifier: Node): boolean => {
+    const sourceFile = identifier.getSourceFile();
+
+    return (identifier.getSymbol()?.getDeclarations() ?? []).some((declaration) => declaration.getSourceFile() === sourceFile);
+};
+
+/**
  * The module an `import("…")` or `require("…")` call loads, when its argument is a
  * literal. A dynamic import fails only when it runs (the mail starter's
  * `cloudflare:email` send), but it still names a module the target does not have,
@@ -65,7 +78,7 @@ const requireEqualsSpecifier = (declaration: ImportEqualsDeclaration): string | 
 const loadCallSpecifier = (call: CallExpression): string | undefined => {
     const callee = call.getExpression();
     const [argument] = call.getArguments();
-    const loads = callee.getKind() === SyntaxKind.ImportKeyword || (Node.isIdentifier(callee) && callee.getText() === "require");
+    const loads = callee.getKind() === SyntaxKind.ImportKeyword || (Node.isIdentifier(callee) && callee.getText() === "require" && !isLocalBinding(callee));
 
     return loads && argument !== undefined && (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))
         ? argument.getLiteralValue()
@@ -156,30 +169,32 @@ const isOutsideAppCode = (root: string, path: string): boolean =>
         .some((segment) => segment === "_generated" || segment === "node_modules");
 
 /**
- * The app file a non-relative specifier names through an alias the project
+ * The file a non-relative specifier names through an alias the project
  * supports: `#lunora/*` from `package.json` `imports`, or a tsconfig `paths`
  * entry. Resolved exactly as the rest of discovery resolves an import (the
- * project's own compiler options and resolution host), and kept only when it
- * lands in app source under the project root: a package, or its `.d.ts`, is not
- * the app's to fix.
+ * project's own compiler options and resolution host). A package the specifier
+ * names is dropped here, where resolution says so; whether the file is followed
+ * is the same {@link isFollowable} rule a relative import's target meets, so a
+ * helper outside `lunora/`, or outside the project root, is followed either way.
  */
-const resolveAlias = (project: Project, root: string, filePath: string, specifier: string): string[] => {
+const resolveAlias = (project: Project, filePath: string, specifier: string): string[] => {
     const resolved = ts.resolveModuleName(specifier, filePath, project.getCompilerOptions(), project.getModuleResolutionHost()).resolvedModule;
-    const file = resolved?.resolvedFileName;
 
-    if (file === undefined || resolved?.isExternalLibraryImport === true || file.endsWith(".d.ts") || relative(root, file).startsWith("..")) {
-        return [];
-    }
-
-    return [file];
+    return resolved === undefined || resolved.isExternalLibraryImport === true ? [] : [resolved.resolvedFileName];
 };
 
-/** The app files a module's specifiers may reach, relative or through an alias, outside `_generated/` and `node_modules`. */
+/**
+ * Whether the walk follows into a file, for a relative and an alias target alike:
+ * anything but a declaration file, `node_modules` or `_generated/` output.
+ */
+const isFollowable = (root: string, file: string): boolean => !file.endsWith(".d.ts") && !isOutsideAppCode(root, file);
+
+/** The files a module's specifiers may reach, relative or through an alias, that the walk follows. */
 const appFilesReachedFrom = (project: Project, root: string, filePath: string, specifiers: ReadonlyArray<string>): string[] =>
     specifiers
         .filter((specifier) => !specifier.startsWith(CLOUDFLARE_SCHEME))
-        .flatMap((specifier) => (specifier.startsWith(".") ? resolveRelative(filePath, specifier) : resolveAlias(project, root, filePath, specifier)))
-        .filter((file) => !isOutsideAppCode(root, file));
+        .flatMap((specifier) => (specifier.startsWith(".") ? resolveRelative(filePath, specifier) : resolveAlias(project, filePath, specifier)))
+        .filter((file) => isFollowable(root, file));
 
 /**
  * One key per file: its real path, so a file reached through a symlinked

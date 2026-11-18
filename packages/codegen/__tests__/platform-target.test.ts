@@ -1355,6 +1355,47 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message).toContain("lunora/helpers/aliased.tsx (cloudflare:workers)");
         });
 
+        it("follows an alias whose target lies outside the project root, as a relative import would", () => {
+            expect.assertions(1);
+
+            // A monorepo `paths` entry into a sibling package: outside the project, still bundled.
+            const parent = mkdtempSync(join(tmpdir(), "lunora-alias-outside-"));
+            const project = join(parent, "app");
+
+            try {
+                cpSync(join(fixtureRoot, "lunora"), join(project, "lunora"), { recursive: true });
+                mkdirSync(join(parent, "shared"));
+                writeFileSync(join(parent, "shared", "helper.tsx"), LOADS_ENV, "utf8");
+                writeFileSync(join(project, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
+                writeFileSync(
+                    join(project, "tsconfig.json"),
+                    `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", paths: { "@shared/*": ["../shared/*"] }, target: "ES2022" } })}\n`,
+                    "utf8",
+                );
+                writeFileSync(
+                    join(project, "lunora", "send.ts"),
+                    `import { binding } from "@shared/helper.tsx";\n\nexport const use = () => binding();\n`,
+                    "utf8",
+                );
+
+                const { platformDiagnostics } = runCodegen({ projectRoot: project, wranglerQueueProducers: [] });
+                const refusal = platformDiagnostics.find((entry) => entry.message.includes("cloudflare:"));
+
+                expect(refusal?.message).toContain("../shared/helper.tsx (cloudflare:workers)");
+            } finally {
+                rmSync(parent, { force: true, recursive: true });
+            }
+        });
+
+        it("does not count a call to the file's own function named require as a loader", () => {
+            expect.assertions(1);
+
+            // A local declaration shadows the CommonJS loader; this loads nothing.
+            write("local.ts", `function require(name: string): string {\n    return name;\n}\n\nexport const label = require("cloudflare:workers");\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
+
         it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
             expect.assertions(1);
 
