@@ -343,7 +343,9 @@ const discoverCloudflareModuleImports = (project: Project, lunoraDirectory: stri
             ...listLunoraSourceFiles(lunoraDirectory),
             ...[rootSchema, ...(workerEntry === undefined ? [] : [workerEntry])].filter((file) => isFile(file)),
         ]),
-    ];
+        // The roots meet the rule a followed file does: a declaration is never bundled, so its
+        // type-only `cloudflare:workers` import (`lunora/env.d.ts`) is not the app's to answer for.
+    ].filter((file) => !isDeclaration(file));
     // Files the walk reads that the shared Project does not already hold are parsed here, in a
     // Project of its own, and never added to the shared one: every later pass over the shared
     // Project (suppression directives, for one) would otherwise judge them as app code, on every

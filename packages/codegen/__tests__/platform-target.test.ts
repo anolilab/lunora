@@ -1531,6 +1531,16 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message).toContain("lunora/blocked/entry.tsx (cloudflare:workers)");
         });
 
+        it("does not refuse a declaration file under lunora/ for its cloudflare:workers import", () => {
+            expect.assertions(1);
+
+            // Never bundled, and every import in a declaration is type-only, with or without `type`:
+            // the walk's roots skip declarations, as its followed files do.
+            write("env.d.ts", `import { Env as WorkerEnv } from "cloudflare:workers";\n\ndeclare global {\n    type AppEnv = WorkerEnv;\n}\n\nexport {};\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
+
         it("does not refuse a src/server/ helper the worker entry never imports", () => {
             expect.assertions(1);
 
