@@ -65,55 +65,76 @@ const buildUpsertWhere = (
  * stays assignable under bivariant parameter checking. That is the whole reason
  * the shared helper can serve both callers, hence the rule exemption.
  */
-/* eslint-disable @typescript-eslint/method-signature-style -- bivariant params: a more-specifically-typed writer must stay assignable to this structural type */
 export interface FacadeWriterLike {
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     aggregate(tableName: string, options: unknown): Promise<unknown>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     count(tableName: string, where?: unknown): Promise<number>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     delete(table: string, id: string, options?: { hard?: boolean }): Promise<void>;
     // Optional: some writers (e.g. the `.global()` path) have no batch method and
     // delete row-by-row instead, mirroring `@lunora/do`'s `DatabaseWriterLike`.
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     deleteMany?(table: string, ids: ReadonlyArray<string>, options?: { limit?: number }): Promise<{ deleted: number }>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     deleteWhere?(tableName: string, where: Record<string, unknown>, options?: { limit?: number }): Promise<{ deleted: number }>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     explain(tableName: string, args?: unknown): Promise<unknown>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     findMany(tableName: string, args?: unknown): Promise<unknown>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     get(table: string, id: string): Promise<unknown>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     groupBy(tableName: string, options: unknown): Promise<unknown>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     insert(tableName: string, document: Record<string, unknown>): Promise<string>;
     // Optional: see `deleteMany` above — not every writer provides a batch insert.
     // Returns (id | null)[] so skipDuplicates can slot nulls in input order; the
     // typed facade narrows to Id<T>[] when skipDuplicates is not requested.
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     insertMany?(
         tableName: string,
         documents: ReadonlyArray<Record<string, unknown>>,
         options?: { limit?: number; skipDuplicates?: boolean },
     ): Promise<(string | null)[]>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     patch(table: string, id: string, patch: Record<string, unknown>): Promise<void>;
     // Optional: see `deleteMany` above.
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     patchMany?(
         table: string,
         patches: ReadonlyArray<{ id: string; patch: Record<string, unknown> }>,
         options?: { limit?: number },
     ): Promise<{ patched: number }>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     patchWhere?(
         tableName: string,
         args: { patch: Record<string, unknown>; where: Record<string, unknown> },
         options?: { limit?: number },
     ): Promise<{ patched: number }>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     query(tableName: string): {
+        // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
         withGeoIndex(indexName: string, build: (q: unknown) => unknown): unknown;
+        // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
         withSearchIndex(indexName: string, search: (q: unknown) => unknown): unknown;
     };
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
     /** Per-relation facts for nested relation writes, published by the engine's writer; absent on a writer that declares none. */
     readonly relationWrites?: Readonly<Record<string, RelationWriteInfosLike>>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     replace(table: string, id: string, document: Record<string, unknown>): Promise<void>;
     // Optional: only writers over a `.softDelete()` schema implement it.
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps params bivariant so the RLS and mask writers stay assignable
     restore?(table: string, id: string): Promise<void>;
 }
-/* eslint-enable @typescript-eslint/method-signature-style */
 
 /** The per-table accessor object returned for the `ctx.db` table form. */
 export interface FacadeEntry {

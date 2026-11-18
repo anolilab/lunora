@@ -1,8 +1,6 @@
-/* eslint-disable no-secrets/no-secrets -- the referenced lint rule id in the doc comment, not a credential */
-
 /**
  * One `ctx.flags` read discovered lexically inside a `query(...)` handler body —
- * the input the `flag_read_in_subscription` lint consumes. Produced by the
+ * the input the flag_read_in_subscription lint consumes. Produced by the
  * codegen feeder, which walks each exported query's handler with ts-morph and
  * records reads of the flag-evaluation surface (`ctx.flags.boolean(...)`,
  * `ctx.flags.string(...)`, `ctx.flags.details.number(...)`, …).
@@ -29,5 +27,3 @@ export interface AdvisorFlagRead {
     /** 1-based line of the read, or `0` when unknown. */
     line: number;
 }
-
-/* eslint-enable no-secrets/no-secrets -- re-enable after the AdvisorFlagRead doc block */

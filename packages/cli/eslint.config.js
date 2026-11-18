@@ -90,6 +90,56 @@ export default createConfig(
             "unicorn/number-literal-case": "off",
         },
     },
+    // "docs" is the user-facing word here, not lazy shorthand: the `lunora docs`
+    // command, the `lunora-docs` MCP server and its `--docs-only` / `--docs-url`
+    // flags. Every other abbreviation stays reported. ESLint replaces rule options
+    // wholesale, so the preset's own allowList and replacements are repeated here.
+    {
+        files: ["src/**/*.{ts,tsx}"],
+        rules: {
+            "unicorn/prevent-abbreviations": [
+                "error",
+                {
+                    allowList: { i: true, j: true },
+                    replacements: {
+                        args: false,
+                        dev: false,
+                        dist: false,
+                        docs: false,
+                        env: false,
+                        params: false,
+                        pkg: false,
+                        prop: false,
+                        props: false,
+                        ref: false,
+                        src: false,
+                        utils: false,
+                    },
+                },
+            ],
+        },
+    },
+    // The CLI's `.tsx` is the Ink terminal UI. It is bundled into a Node binary and
+    // never served by Vite, so there is no Fast Refresh boundary to protect; and
+    // each prompt mounts once and unmounts on submit, rendering into third-party
+    // Ink inputs that are not memoized, so a stable callback identity buys nothing.
+    {
+        files: ["src/**/*.tsx"],
+        rules: {
+            "react-perf/jsx-no-new-function-as-prop": "off",
+            "react-refresh/only-export-components": "off",
+        },
+    },
+    // The init overlay files are mostly the source text of scaffolded projects
+    // (JSX/HTML markup, CSS, env docs), and code read as one string scores 4.0–4.2
+    // on the default entropy threshold of 4. Random API keys and tokens score well
+    // above 4.5, so the rule still guards these files at the higher threshold.
+    {
+        files: ["src/commands/init/overlay/**/*.ts"],
+        rules: {
+            "no-secrets/no-secrets": ["error", { tolerance: 4.5 }],
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code (loose
     // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
     // describe titles). Source files still enforce all of these.
