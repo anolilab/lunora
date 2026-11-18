@@ -26,7 +26,7 @@ import type { RouteParameters } from "../route-path";
 import type { BoxRouteEnvironment } from "./boxes";
 import { verifiedBoxRequest } from "./boxes";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
+import { jsonError, readJsonObject, rejected, requireContext } from "./shared";
 
 type HostdRouterEnv = BoxRouteEnvironment & RouterEnv & { LUNORA_ORIGIN_URL?: string };
 
@@ -37,14 +37,18 @@ type HostdRouterEnv = BoxRouteEnvironment & RouterEnv & { LUNORA_ORIGIN_URL?: st
  */
 export const handleHostdReleaseRoute = async (request: Request, environment: HostdRouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as null | { channel?: unknown; envelope?: unknown };
+    const body = await readJsonObject(request);
 
-    if (body?.channel !== undefined && body.channel !== "stable" && body.channel !== "canary") {
+    if (body === undefined) {
+        return jsonError(400, "invalid JSON body");
+    }
+
+    if (body.channel !== undefined && body.channel !== "stable" && body.channel !== "canary") {
         return jsonError(400, 'channel must be "stable" or "canary"');
     }
 
     // Exactly as a box verifies it: the pinned keys, never one the envelope brings.
-    const verified = await verifyReleaseManifest(body?.envelope, HOSTD_TRUSTED_RELEASE_KEYS);
+    const verified = await verifyReleaseManifest(body.envelope, HOSTD_TRUSTED_RELEASE_KEYS);
 
     if (!verified.ok) {
         return jsonError(422, `${verified.error.code}: ${verified.error.message}`);
@@ -54,7 +58,7 @@ export const handleHostdReleaseRoute = async (request: Request, environment: Hos
 
     try {
         const { created } = await context.runMutation<{ created: boolean }>(internal.hostd_releases.store, {
-            ...(body?.channel === undefined ? {} : { channel: body.channel }),
+            ...(body.channel === undefined ? {} : { channel: body.channel }),
             envelope: JSON.stringify(envelope),
             keyId: envelope.keyId,
             releaseId: envelope.manifest.releaseId,

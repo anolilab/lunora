@@ -80,6 +80,22 @@ describe("the release routes", () => {
         await expect(response.json()).resolves.toMatchObject({ error: expect.stringContaining("placeholder") as string });
     });
 
+    it("answers 400 to a release body that is not a JSON object, before verifying anything", async () => {
+        const post = (body: string) =>
+            createDeployRouter().fetch(
+                new Request("https://cloud.test/v1/hostd/releases", { body, headers: { authorization: "Bearer admin" }, method: "POST" }),
+                {
+                    __lunoraCtx: makeCtx({}).ctx as never,
+                    LUNORA_ADMIN_TOKEN: "admin",
+                },
+            );
+
+        for (const body of ["not json", "[]", "42", "null"]) {
+            // eslint-disable-next-line no-await-in-loop -- one request per malformed body; order does not matter
+            await expect(post(body)).resolves.toMatchObject({ status: 400 });
+        }
+    });
+
     it("serves the stored envelope to a box that signed its request, and nothing to one that did not", async () => {
         const key = await boxKey();
         const session = new TestBoxSession(fakeState(), memoryStore());
