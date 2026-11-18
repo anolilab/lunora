@@ -53,8 +53,13 @@ is not available — Cloudflare caps a Worker at three).
    good off-site dump.
 
 It no-ops unless `BACKUPS`, `CONTROL_PLANE_DATABASE_ID`,
-`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are all set, so a cell
-without backups configured still ticks rather than erroring every six hours.
+`CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN` are all set, so a local dev
+target still ticks rather than erroring every six hours. A deployed cell cannot
+ship without the first two: `deploy:check` refuses a `staging` or `production`
+block that binds no `BACKUPS` bucket (`lunora-cloud-backups[-staging]`, created
+in RUNBOOK step 1) or whose `vars.CONTROL_PLANE_DATABASE_ID` is not its `DB`
+binding's `database_id`. `CLOUDFLARE_API_TOKEN` is the cell token, a Worker
+secret the config cannot show; it needs D1 Edit for the export.
 
 **The bucket must be private.** The dump contains every sealed admin token and
 auth session in the cell. It is ciphertext — `SECRET_ENCRYPTION_KEY` seals the

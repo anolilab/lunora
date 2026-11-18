@@ -28,13 +28,17 @@ npx wrangler d1 create lunora-cloud-staging
 npx wrangler r2 bucket create lunora-cloud-telemetry-staging
 npx wrangler r2 bucket create lunora-cloud-releases-staging
 npx wrangler r2 bucket create lunora-cloud-tenant-backups-staging
+npx wrangler r2 bucket create lunora-cloud-backups-staging
 npx wrangler pipelines create lunora-cloud-telemetry-staging
 npx wrangler dispatch-namespace create lunora-staging
 ```
 
 Paste the D1 id, the account id and the control-plane URL over the
 `<replace-with-…>` placeholders in `wrangler.jsonc`, `dispatcher.wrangler.jsonc`
-and `tail.wrangler.jsonc` (staging blocks only).
+and `tail.wrangler.jsonc` (staging blocks only). The D1 id goes in twice in
+`wrangler.jsonc`: as the `DB` binding's `database_id` and as
+`vars.CONTROL_PLANE_DATABASE_ID`, which the control-plane backup sweep exports
+into `lunora-cloud-backups-staging` ([docs/RESTORE.md](./docs/RESTORE.md)).
 
 **Check:** `pnpm --filter @lunora/cloud run deploy:check staging` lists no
 placeholder for the cell.

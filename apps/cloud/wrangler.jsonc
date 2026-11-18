@@ -179,6 +179,15 @@
             "binding": "TENANT_BACKUPS",
             "bucket_name": "lunora-cloud-tenant-backups",
         },
+        {
+            // Dumps of this control plane's own D1 (src/backup/sweep.ts, docs/RESTORE.md).
+            // Private: a dump holds every sealed admin token and auth session in the
+            // cell. The sweep also needs `vars.CONTROL_PLANE_DATABASE_ID` (the D1 id
+            // the export REST call addresses), set per cell; `deploy:check` refuses a
+            // cell without both, since the sweep would otherwise skip every tick.
+            "binding": "BACKUPS",
+            "bucket_name": "lunora-cloud-backups",
+        },
     ],
     // The producer half of that archive. `src/telemetry/store.ts` reads it as
     // `env.TELEMETRY_PIPELINE` and no-ops when absent, so declaring the binding costs
@@ -307,6 +316,8 @@
                 "LUNORA_APP_DOMAIN": "staging.lunora.run",
                 "LUNORA_BOX_DOMAIN": "boxes.staging.lunora.run",
                 "LUNORA_CELL": "staging",
+                // The `DB` database_id above: the control-plane backup sweep exports it by id.
+                "CONTROL_PLANE_DATABASE_ID": "80084919-a895-439a-af22-657a3993087c",
                 "LUNORA_DISPATCH_NAMESPACE": "lunora-staging",
                 // The dataset `PLATFORM_METRICS` is bound to below, for the read-back.
                 "PLATFORM_METRICS_DATASET": "lunora_platform_metrics_staging",
@@ -331,6 +342,7 @@
                 { "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry-staging" },
                 { "binding": "RELEASES", "bucket_name": "lunora-cloud-releases-staging" },
                 { "binding": "TENANT_BACKUPS", "bucket_name": "lunora-cloud-tenant-backups-staging" },
+                { "binding": "BACKUPS", "bucket_name": "lunora-cloud-backups-staging" },
             ],
             "pipelines": [{ "binding": "TELEMETRY_PIPELINE", "stream": "lunora-cloud-telemetry-staging" }],
             "ai": { "binding": "AI" },
@@ -388,6 +400,8 @@
                 "LUNORA_APP_DOMAIN": "lunora.run",
                 "LUNORA_BOX_DOMAIN": "boxes.lunora.run",
                 "LUNORA_CELL": "default",
+                // The `DB` database_id above: the control-plane backup sweep exports it by id.
+                "CONTROL_PLANE_DATABASE_ID": "525d6b6c-46b6-42fe-acd0-667768570628",
                 "LUNORA_CONTROL_PLANE_SCRIPT": "lunora-cloud-production",
                 "LUNORA_DISPATCH_NAMESPACE": "lunora-production",
                 "LUNORA_OTLP_ENDPOINT": "https://lunora.cloud",
@@ -409,6 +423,7 @@
                 { "binding": "TELEMETRY_BUCKET", "bucket_name": "lunora-cloud-telemetry" },
                 { "binding": "RELEASES", "bucket_name": "lunora-cloud-releases" },
                 { "binding": "TENANT_BACKUPS", "bucket_name": "lunora-cloud-tenant-backups" },
+                { "binding": "BACKUPS", "bucket_name": "lunora-cloud-backups" },
             ],
             "pipelines": [{ "binding": "TELEMETRY_PIPELINE", "stream": "lunora-cloud-telemetry" }],
             "ai": { "binding": "AI" },

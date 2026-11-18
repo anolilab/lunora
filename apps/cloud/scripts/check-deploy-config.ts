@@ -65,6 +65,36 @@ if (environment !== "staging" && environment !== "production") {
     throw new Error(`unknown environment: ${environment}`);
 }
 
+interface ControlPlaneBlock {
+    d1_databases?: { binding?: string; database_id?: string }[];
+    r2_buckets?: { binding?: string }[];
+    vars?: Record<string, unknown>;
+}
+
+/**
+ * The control-plane D1 backup sweep (`src/backup/sweep.ts`) skips every tick without a
+ * `BACKUPS` bucket or the database id, which leaves the one unrecoverable store with no dump
+ * and nothing failing. A deployed cell is refused instead. The id must be the `DB` binding's
+ * own, or the sweep would back up some other database.
+ */
+const controlPlaneBackupFindings = (block: ControlPlaneBlock): string[] => {
+    const found: string[] = [];
+    const databaseId = block.d1_databases?.find((database) => database.binding === "DB")?.database_id;
+    const exported = block.vars?.["CONTROL_PLANE_DATABASE_ID"];
+
+    if (!block.r2_buckets?.some((bucket) => bucket.binding === "BACKUPS")) {
+        found.push(`wrangler.jsonc: env.${environment}.r2_buckets binds no BACKUPS bucket, so the control-plane D1 is never backed up`);
+    }
+
+    if (typeof exported !== "string" || exported === "") {
+        found.push(`wrangler.jsonc: env.${environment}.vars.CONTROL_PLANE_DATABASE_ID is unset, so the control-plane D1 is never backed up`);
+    } else if (exported !== databaseId) {
+        found.push(`wrangler.jsonc: env.${environment}.vars.CONTROL_PLANE_DATABASE_ID is not the DB binding's database_id (${String(databaseId)})`);
+    }
+
+    return found;
+};
+
 const appDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const findings: string[] = [];
 
@@ -84,10 +114,14 @@ for (const config of CONFIGS) {
             findings.push(`${config}: env.${environment}.${path} is still ${value}`);
         }
     }
+
+    if (config === "wrangler.jsonc") {
+        findings.push(...controlPlaneBackupFindings(block as ControlPlaneBlock));
+    }
 }
 
 if (findings.length > 0) {
-    console.error(`Refusing to deploy "${environment}" — ${String(findings.length)} unresolved placeholder(s):\n`);
+    console.error(`Refusing to deploy "${environment}" — ${String(findings.length)} unresolved finding(s):\n`);
 
     for (const finding of findings) {
         console.error(`  • ${finding}`);
@@ -99,6 +133,7 @@ if (findings.length > 0) {
             "Create the resources once per cell and paste the ids in:",
             "  wrangler d1 create lunora-cloud[-staging]",
             "  wrangler r2 bucket create lunora-cloud-telemetry[-staging]",
+            "  wrangler r2 bucket create lunora-cloud-backups[-staging]",
             "  wrangler pipelines create lunora-cloud-telemetry[-staging]",
             "",
             "The control-plane URLs are this cell's own reachable origin (the workers.dev",
