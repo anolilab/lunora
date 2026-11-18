@@ -308,10 +308,21 @@ const recordResumedOnto = async (deps: HaltConvergeDeps, target: DeploymentRow, 
     if (live?._id !== target._id) {
         await deps.database.patch("deployments", target._id, { liveAt: now, status: "live", updatedAt: now });
         await restoreInstallBadge(badge, target, now);
+    }
 
-        if (target.kind === "production") {
-            await deps.database.patch("projects", target.projectId, { activeDeploymentId: target._id, activeScriptName: target.scriptName });
-        }
+    if (target.kind !== "production") {
+        return;
+    }
+
+    // Outside the guard above: each write commits alone, so a retry after a failed
+    // pointer patch finds the target already live and must still repair the
+    // pointer. Only a pointer on this alias is moved — another alias's pointer is
+    // not this resume's to take.
+    const project = (await deps.database.get("projects", target.projectId)) as null | { activeDeploymentId?: null | string; activeScriptName?: null | string };
+    const onAlias = live?._id !== target._id || project?.activeScriptName === target.scriptName;
+
+    if (project !== null && onAlias && project.activeDeploymentId !== target._id) {
+        await deps.database.patch("projects", target.projectId, { activeDeploymentId: target._id, activeScriptName: target.scriptName });
     }
 };
 
