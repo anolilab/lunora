@@ -866,7 +866,13 @@ export const isSafeWebhookUrl = (destination: string): boolean => {
         return false;
     }
 
-    const host = url.hostname.toLowerCase().replaceAll(HOST_BRACKETS, "");
+    // A trailing dot names the same host fully qualified (`localhost.`), so it is
+    // dropped before the name checks rather than letting it slip past their suffixes.
+    let host = url.hostname.toLowerCase().replaceAll(HOST_BRACKETS, "");
+
+    while (host.endsWith(".")) {
+        host = host.slice(0, -1);
+    }
 
     if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
         return false;

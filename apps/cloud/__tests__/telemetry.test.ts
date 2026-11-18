@@ -191,6 +191,9 @@ describe(isSafeWebhookUrl, () => {
             "https://localhost/x",
             "https://svc.internal/x",
             "https://api.local/x",
+            "https://localhost.:8443/x", // fully qualified: the same host
+            "https://db.internal./x",
+            "https://printer.local../x",
             "https://127.0.0.1/x", // loopback
             "https://169.254.169.254/latest/meta-data", // cloud metadata
             "https://10.0.0.5/x",
