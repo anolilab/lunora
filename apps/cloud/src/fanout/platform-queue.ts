@@ -35,6 +35,15 @@ type TenantDispatch = NonNullable<TargetFleet["dispatch"]>;
  */
 export const HELD_RETRY_DELAY_SECONDS = 43_200;
 
+/**
+ * How long a batch no live release owns waits before it is offered again. The
+ * consumer cannot tell a deleted project from the gap while a release or its
+ * fleet registers, so it retries instead of acking: a gap clears within a few
+ * redeliveries, and a truly ownerless message exhausts the queue's `max_retries`
+ * and lands in its dead-letter queue rather than vanishing on the first batch.
+ */
+export const OWNERLESS_RETRY_DELAY_SECONDS = 300;
+
 /** A queue batch the platform consumer drains (Cloudflare `MessageBatch`, minimally typed). */
 export interface QueueBatchLike {
     messages: ReadonlyArray<{ ack: () => void; attempts?: number; body: unknown; id: string; retry: (options?: { delaySeconds?: number }) => void }>;
@@ -214,9 +223,15 @@ export const deliverQueueBatch = async (batch: QueueBatchLike, ports: QueueDeliv
         return;
     }
 
-    // No live release (or token) owns this queue: acked, since retrying an
-    // undeliverable message would only loop until it hits the retry limit.
-    const retry = target ? await dispatchQueueBatch(target.dispatch, target, batch) : new Map<string, number | undefined>();
+    if (target === undefined) {
+        batch.messages.forEach((message) => {
+            message.retry({ delaySeconds: OWNERLESS_RETRY_DELAY_SECONDS });
+        });
+
+        return;
+    }
+
+    const retry = await dispatchQueueBatch(target.dispatch, target, batch);
 
     for (const message of batch.messages) {
         if (retry.has(message.id)) {

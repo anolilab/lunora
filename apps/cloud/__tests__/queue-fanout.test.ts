@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { deliverQueueBatch, QUEUE_FORWARD_MAX_BODY_BYTES } from "../src/fanout/platform-queue";
+import { deliverQueueBatch, OWNERLESS_RETRY_DELAY_SECONDS, QUEUE_FORWARD_MAX_BODY_BYTES } from "../src/fanout/platform-queue";
 import { routeQueue } from "../src/fanout/queue";
 import { tenantResourceName } from "../src/provision-contract";
 import type { TargetFleet } from "../src/targets/driver";
@@ -185,5 +185,33 @@ describe(deliverQueueBatch, () => {
         );
 
         expect(outcomes).toStrictEqual(["retry"]);
+    });
+
+    it("retries, never acks, a batch no live release owns yet, so a gap between releases loses nothing", async () => {
+        expect.assertions(1);
+
+        const outcomes: [string, unknown][] = [];
+
+        await deliverQueueBatch(
+            {
+                messages: [
+                    {
+                        ack: () => outcomes.push(["ack", undefined]),
+                        body: "b",
+                        id: "m1",
+                        retry: (options?: { delaySeconds?: number }) => outcomes.push(["retry", options]),
+                    },
+                ],
+                queue: tenantResourceName("shop", { binding: "JOBS", type: "queue_producer" }),
+            },
+            {
+                dispatches: new Map([["cloudflare-wfp" as const, () => () => Promise.resolve(Response.json({ retry: [] }))]]),
+                live: [],
+                now: Date.UTC(2026, 9, 9, 12),
+                store: memoryStore({ organizations: [{ _id: "org_ok", plan: "pro" }] }),
+            },
+        );
+
+        expect(outcomes).toStrictEqual([["retry", { delaySeconds: OWNERLESS_RETRY_DELAY_SECONDS }]]);
     });
 });
