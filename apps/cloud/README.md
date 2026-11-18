@@ -1892,6 +1892,10 @@ unset.
 - **`alpha` → `cloud-staging`**, and a pushed **`cloud-v*` tag → `cloud-production`**
   (the environment accepts no branch, and needs approval). `workflow_dispatch` can target
   either; production needs the tag picked under "Use workflow from".
+- **The environments enforce those refs, not the workflow.** A dispatched or pushed
+  branch runs its own copy of the workflow and can drop its ref check. Set
+  `cloud-staging`'s deployment branches to `alpha` only, and `cloud-production`'s
+  to the `cloud-v*` tag pattern, protected by a tag ruleset.
 - A branch push fires when `apps/cloud/**`, `packages/**`, `shared/**`, `protocol/**` or the
   lockfile changes. The wider-than-`apps/cloud` path list is deliberate: the
   control plane bundles the workspace packages, so a package change _is_ a change

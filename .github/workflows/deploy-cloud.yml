@@ -10,6 +10,12 @@
 # Cut one with `git tag cloud-v<n> <commit> && git push origin cloud-v<n>`
 # (the `cloud-production` environment accepts nothing else, and needs approval).
 #
+# Those ref rules are enforced by the environments' deployment-branch policies,
+# not by this file: a dispatched or pushed branch runs its OWN copy of the
+# workflow, which can drop any check below and still be handed the secrets.
+# `cloud-staging` must therefore be limited to the `alpha` branch, and
+# `cloud-production` to `cloud-v*` tags (protect those with a tag ruleset).
+#
 # The path list is wider than `apps/cloud/**` on purpose. The control plane
 # BUNDLES the workspace packages rather than resolving them at runtime, so a
 # change to `packages/**` or `shared/**` is a change to the deployed bytes — the
@@ -120,7 +126,8 @@
                   fi
 
                   # A dispatch runs the chosen ref with the staging secrets, so it must be the
-                  # ref a push would deploy: an unreviewed branch never reaches the staging cell.
+                  # ref a push would deploy. A backstop that names the mistake: the
+                  # environment's branch policy is the gate, as a branch can edit this check out.
                   if [ "${name}" = "staging" ] && [ "${EVENT_NAME}" = "workflow_dispatch" ] && { [ "${REF_TYPE}" != "branch" ] || [ "${REF_NAME}" != "alpha" ]; }; then
                       echo "::error::Staging deploys from alpha only. Pick alpha under 'Use workflow from'."
                       exit 1

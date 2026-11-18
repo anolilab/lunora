@@ -407,4 +407,6 @@ the release's `manifest.json` is accepted.
   built on its own branch; until it ships, no box can enrol, whatever is set up
   above.
 - Production: repeat 1–7 with production names and the `cloud-production`
-  environment (give it a required reviewer).
+  environment (give it a required reviewer, and limit its deployment refs to the
+  `cloud-v*` tag pattern). Limit `cloud-staging`'s deployment branches to `alpha`:
+  the workflow's own ref check is only a backstop, as a branch runs its own copy.
