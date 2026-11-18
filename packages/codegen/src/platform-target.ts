@@ -599,14 +599,6 @@ const undeclaredSignalDiagnostic = (key: keyof PlatformSignals, matrix: Platform
     };
 };
 
-/**
- * The second gate pass: features an app DECLARES in its schema or a declaration
- * file, which have no `ctx.*` capability row for the first pass to notice.
- *
- * Lifted out of `gateAgainstMatrix` so that function stays readable — the two
- * passes answer different questions off different inputs, and only the shared
- * `reported` set couples them.
- */
 /** Whether `matrix` refuses `cloudflare:*` imports: rated `unsupported`, or not rated at all (fail closed). */
 const refusesCloudflareModules = (matrix: PlatformCapabilities): boolean => {
     const level = matrix.features.cloudflareModules?.level;
@@ -626,6 +618,14 @@ const needsCloudflareModuleWalk = (target: string): boolean => {
     return matrix !== undefined && refusesCloudflareModules(matrix);
 };
 
+/**
+ * The second gate pass: features an app DECLARES in its schema or a declaration
+ * file, which have no `ctx.*` capability row for the first pass to notice.
+ *
+ * Lifted out of `gateAgainstMatrix` so that function stays readable — the two
+ * passes answer different questions off different inputs, and only the shared
+ * `reported` set couples them.
+ */
 const gateSignalPass = (context: {
     diagnostics: PlatformDiagnostic[];
     gatedSignals: PlatformSignals;
