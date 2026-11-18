@@ -125,6 +125,13 @@ const drainTogether = async (parts: ReadonlyArray<Drainable>, options?: DrainOpt
             failed.push(...results.flatMap((result) => result.failed));
 
             if (results.some((result) => result.timedOut)) {
+                // A part that finished early can have recorded a failure since. Drained again under the passed deadline it
+                // returns at once with it; a part that already timed out is not, so its cut-off work is not logged twice.
+                // eslint-disable-next-line no-await-in-loop -- run once, on the way out
+                const late = await Promise.all(parts.filter((_part, index) => results[index]?.timedOut !== true).map(async (part) => part.drain({ timer })));
+
+                failed.push(...late.flatMap((result) => result.failed));
+
                 // Re-read from every part, not taken from the results: one that drained early and then gained work reports it.
                 return { failed, pending: parts.flatMap((part) => part.pending()), timedOut: true };
             }

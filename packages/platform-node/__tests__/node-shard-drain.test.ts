@@ -339,6 +339,52 @@ describe("shard drain passes", () => {
         }
     });
 
+    it("names, at the deadline, shard work host work started after the registry drained", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const { fire, timer } = manualTimer();
+        const never = deferred();
+        const hostGate = deferred();
+        const handed = deferred();
+        const platform = createNodePlatform({
+            onFetch: async (_request, shard) => {
+                shard.shard.waitUntil?.(never.promise);
+
+                return new Response("ok");
+            },
+        });
+
+        try {
+            // Host work that keeps running, and host work that, once released, leaves a shard with background work.
+            platform.shard.waitUntil?.(never.promise);
+            platform.shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await hostGate.promise;
+                    await resolveShard(platform.directory, "late").fetch(new Request("https://shard.internal/rpc"));
+                    handed.release();
+                })(),
+            );
+
+            const drained = platform.drain({ timer });
+
+            // The registry has drained idle by now; the shard gains its work afterwards.
+            await turn();
+            hostGate.release();
+            await handed.promise;
+            fire();
+
+            await expect(drained).resolves.toMatchObject({
+                pending: ["waitUntil work on the platform host", "shard late: 1 waitUntil task"],
+                timedOut: true,
+            });
+        } finally {
+            never.release();
+            platform.close();
+        }
+    });
+
     it("keeps a failed alarm's retry when shutdown follows it, so the alarm fires after a restart", async () => {
         expect.assertions(1);
 
@@ -1016,6 +1062,43 @@ describe("shard drain passes", () => {
         } finally {
             busy.close();
         }
+    });
+
+    it("collects, at the deadline, a failure a part recorded after its own drain finished", async () => {
+        expect.assertions(1);
+
+        const { fire, timer } = manualTimer();
+        const recorded: string[] = [];
+        // Drains clean at once, and records a failure only after that, while the other part runs into the deadline.
+        const early = {
+            drain: async () => {
+                return { failed: recorded.splice(0), pending: [], timedOut: false };
+            },
+            idle: () => true,
+            pending: () => [],
+        };
+        const stuck = {
+            drain: async (options?: { timer?: DrainTimer }) =>
+                new Promise<{ failed: string[]; pending: string[]; timedOut: boolean }>((resolve) => {
+                    options?.timer?.(0, () => {
+                        resolve({ failed: [], pending: ["stuck work"], timedOut: true });
+                    });
+                }),
+            idle: () => false,
+            pending: () => ["stuck work"],
+        };
+
+        const drained = drainTogether([early, stuck], { timer });
+
+        await turn();
+        recorded.push("shard x: a failure recorded after its drain returned");
+        fire();
+
+        await expect(drained).resolves.toStrictEqual({
+            failed: ["shard x: a failure recorded after its drain returned"],
+            pending: ["stuck work"],
+            timedOut: true,
+        });
     });
 
     it("reports a timed-out final pass instead of a clean drain", async () => {

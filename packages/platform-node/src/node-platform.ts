@@ -18,8 +18,8 @@ import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory,
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
 import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
-import type { DrainOptions, DrainResult } from "./drain-deadline";
-import { settlesBefore, startDrainDeadline, timerBoundTo } from "./drain-deadline";
+import type { Drainable, DrainOptions, DrainResult } from "./drain-deadline";
+import { drainTogether, settlesBefore, startDrainDeadline } from "./drain-deadline";
 import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-route";
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
@@ -463,65 +463,52 @@ export const createNodePlatform = <
             }
         };
 
-        // Nothing a drain would wait for: host work, alarm deliveries, scheduler deliveries, or any shard's work.
-        const platformIdle = (): boolean => pendingBackground() === 0 && pendingAlarms() === 0 && pendingDispatches().waits.length === 0 && registry.idle();
+        const hostPending = (): string[] => [
+            ...(pendingBackground() > 0 || pendingAlarms() > 0 ? ["waitUntil work on the platform host"] : []),
+            ...pendingDispatches().labels,
+        ];
+
+        // The platform's own work as one drainable part: host waitUntil work and alarm deliveries, and scheduler deliveries (a
+        // custom onDispatch, a cron tick), which write to the database the drain protects.
+        const host: Drainable = {
+            drain: async (drainOptions) => {
+                const deadline = startDrainDeadline(drainOptions);
+
+                try {
+                    const [hostSettled, dispatchesSettled] = await Promise.all([
+                        settlesBefore(drain(), deadline),
+                        settlesBefore(Promise.allSettled(pendingDispatches().waits), deadline),
+                    ]);
+
+                    if (hostSettled && dispatchesSettled) {
+                        return { failed: takeFailures(), pending: [], timedOut: false };
+                    }
+
+                    const pending = hostPending();
+
+                    // eslint-disable-next-line no-console -- the drain gives up on this work, so the log is the only record of it
+                    console.error("[@lunora/platform-node] platform drain deadline passed with work still running: %s", pending.join(", "));
+
+                    return { failed: takeFailures(), pending, timedOut: true };
+                } finally {
+                    deadline.cancel();
+                }
+            },
+            idle: () => pendingBackground() === 0 && pendingAlarms() === 0 && pendingDispatches().waits.length === 0,
+            pending: hostPending,
+        };
 
         return {
             capabilities: NODE_CAPABILITIES,
             close,
             directory,
             dispatch: (request) => dispatch(request),
-            idle: platformIdle,
-            pending: () => [
-                ...(pendingBackground() > 0 || pendingAlarms() > 0 ? ["waitUntil work on the platform host"] : []),
-                ...pendingDispatches().labels,
-                ...registry.pending(),
-            ],
+            idle: () => host.idle() && registry.idle(),
+            pending: () => [...host.pending(), ...registry.pending()],
             // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
-            // would let `close()` dispose a database a handler is still writing.
-            drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
-                // One deadline for the whole drain. The registry gets a timer bound to it rather than the caller's: a second timer
-                // started from the same options would expire on its own schedule, and an injected timer that keeps one callback
-                // would drop the first deadline, leaving the host's wait unbounded.
-                const deadline = startDrainDeadline(drainOptions);
-                const sharedTimer = timerBoundTo(deadline);
-                const failed: string[] = [];
-
-                try {
-                    for (;;) {
-                        // Scheduler deliveries (a custom onDispatch, a cron tick) write to the database this drain protects, so
-                        // they are busy work too, waited for alongside the host and the shards under the same deadline.
-                        const dispatches = pendingDispatches();
-                        // eslint-disable-next-line no-await-in-loop -- each pass waits for what the last one let start
-                        const [hostSettled, shards, dispatchesSettled] = await Promise.all([
-                            settlesBefore(drain(), deadline),
-                            registry.drain({ timer: sharedTimer }),
-                            settlesBefore(Promise.allSettled(dispatches.waits), deadline),
-                        ]);
-
-                        failed.push(...takeFailures(), ...shards.failed);
-
-                        if (!hostSettled || !dispatchesSettled || shards.timedOut) {
-                            const pending = [...(hostSettled ? [] : ["waitUntil work on the platform host"]), ...pendingDispatches().labels, ...shards.pending];
-
-                            if (!hostSettled || !dispatchesSettled) {
-                                // eslint-disable-next-line no-console -- the drain gives up on this work, so the log is the only record of it
-                                console.error("[@lunora/platform-node] platform drain deadline passed with work still running: %s", pending.join(", "));
-                            }
-
-                            return { failed, pending, timedOut: true };
-                        }
-
-                        // Host work or a delivery can start shard work after the registry's drain already finished (a due job's
-                        // delivery), so the drain is done only when all of it is idle at the same instant, checked synchronously.
-                        if (platformIdle()) {
-                            return { failed, pending: [], timedOut: false };
-                        }
-                    }
-                } finally {
-                    deadline.cancel();
-                }
-            },
+            // would let `close()` dispose a database a handler is still writing. Host work can start shard work after the
+            // registry drained (a due job's delivery), which drainTogether's passes, failures and pending re-read account for.
+            drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => drainTogether([host, registry], drainOptions),
             globalTables,
             kv,
             objectStorage,
