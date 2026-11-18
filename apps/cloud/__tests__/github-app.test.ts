@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { BuildRunnerPorts, ClaimedBuild } from "../src/builds/runner";
-import { createGitHubApp, DEFAULT_STATUS_CONTEXT, mintAppJwt, pkcs8FromPem } from "../src/github/app";
+import { createGitHubApp, DEFAULT_STATUS_CONTEXT, MAX_TARBALL_BYTES, mintAppJwt, pkcs8FromPem } from "../src/github/app";
 import runBuild from "./support/run-build";
 
 /**
@@ -209,6 +209,44 @@ const basePorts = (over: Partial<BuildRunnerPorts> = {}): BuildRunnerPorts => {
         ...over,
     };
 };
+
+describe("source tarball download", () => {
+    it("stops reading an undeclared-length tarball at the limit instead of buffering all of it", async () => {
+        // One chunk enqueued again and again: the stream is twice the limit long, but only
+        // what the reader keeps costs memory.
+        const chunk = new Uint8Array(8 * 1024 * 1024);
+        const chunks = (2 * MAX_TARBALL_BYTES) / chunk.byteLength;
+        let pulled = 0;
+        const body = new ReadableStream<Uint8Array>({
+            pull: (controller) => {
+                if (pulled === chunks) {
+                    controller.close();
+
+                    return;
+                }
+
+                pulled += 1;
+                controller.enqueue(chunk);
+            },
+        });
+        const fetchImpl = vi.fn<FetchSpy>(async (input) => (requestUrl(input).includes("access_tokens") ? Response.json({ token: "t" }) : new Response(body)));
+        const app = createGitHubApp({ apiBase: "https://api.test", appId: "1", fetch: fetchImpl, privateKeyPem: await generatePkcs8Pem() });
+
+        await expect(app?.downloadTarball({ commitSha: "abc", installationId: 1, repository: "a/b" })).rejects.toThrow("over the");
+        // Read just past the limit, then cancelled: the rest of the stream never arrives.
+        expect(pulled).toBeLessThan(chunks);
+    });
+
+    it("returns a tarball within the limit byte for byte", async () => {
+        const fetchImpl = vi.fn<FetchSpy>(async (input) =>
+            requestUrl(input).includes("access_tokens") ? Response.json({ token: "t" }) : new Response(new Uint8Array([1, 2, 3])),
+        );
+        const app = createGitHubApp({ apiBase: "https://api.test", appId: "1", fetch: fetchImpl, privateKeyPem: await generatePkcs8Pem() });
+        const tarball = await app?.downloadTarball({ commitSha: "abc", installationId: 1, repository: "a/b" });
+
+        expect([...new Uint8Array(tarball ?? new ArrayBuffer(0))]).toStrictEqual([1, 2, 3]);
+    });
+});
 
 describe("runBuild commit-status reporting", () => {
     it("reports pending before the work and success after it", async () => {

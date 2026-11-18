@@ -1,9 +1,9 @@
 /**
- * A request body's bytes, or `undefined` once the running total passes
+ * A body's bytes, or `undefined` once the running total passes
  * `maxBytes` — a chunked body has no declared length, so the cap is held while
  * it streams in and nothing past it is ever buffered.
  */
-export const readCappedBytes = async (stream: ReadableStream<Uint8Array> | null, maxBytes: number): Promise<Uint8Array | undefined> => {
+export const readCappedBytes = async (stream: ReadableStream<Uint8Array> | null, maxBytes: number): Promise<Uint8Array<ArrayBuffer> | undefined> => {
     if (stream === null) {
         return new Uint8Array(0);
     }

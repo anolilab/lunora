@@ -23,6 +23,7 @@
 
 import { fromBase64, toBase64Url } from "../../../../shared/base64";
 import type { PushChanges } from "../builds/paths";
+import { readCappedBytes } from "../lib/read-capped-bytes";
 
 const encoder = new TextEncoder();
 
@@ -149,7 +150,7 @@ const MAX_DESCRIPTION = 140;
  * the two refuse at the same point rather than one accepting what the other
  * will reject after the transfer.
  */
-const MAX_TARBALL_BYTES = 256 * 1024 * 1024;
+export const MAX_TARBALL_BYTES = 256 * 1024 * 1024;
 
 /**
  * Build the App client, or `null` when the credentials are absent.
@@ -239,15 +240,15 @@ export const createGitHubApp = (options: GitHubAppOptions): GitHubApp | null => 
                 throw new Error(`source tarball is ${String(declared)} bytes, over the ${String(MAX_TARBALL_BYTES)} limit`);
             }
 
-            const body = await response.arrayBuffer();
-
-            // And again after: `content-length` is absent on a chunked response,
+            // And while it streams: `content-length` is absent on a chunked response,
             // which is exactly the shape that would slip past the check above.
-            if (body.byteLength > MAX_TARBALL_BYTES) {
-                throw new Error(`source tarball is ${String(body.byteLength)} bytes, over the ${String(MAX_TARBALL_BYTES)} limit`);
+            const body = await readCappedBytes(response.body, MAX_TARBALL_BYTES);
+
+            if (body === undefined) {
+                throw new Error(`source tarball is over the ${String(MAX_TARBALL_BYTES)} limit`);
             }
 
-            return body;
+            return body.buffer;
         },
         listChangedFiles: async ({ base, head, installationId, repository }) => {
             const token = await installationToken(installationId);
