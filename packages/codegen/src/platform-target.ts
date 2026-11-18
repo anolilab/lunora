@@ -542,7 +542,7 @@ const cloudflareModulesDiagnostic = (
               level: "error",
               message: `${matrix.name} has no cloudflare:* built-in modules, so these app modules would fail to load on the "${target}" target: ${listed}.`,
               name: "platform_unsupported_feature",
-              remediation: `Remove the cloudflare:* imports from those modules (a type-only import is fine), or deploy to a target whose capability matrix marks "cloudflareModules" as native or emulated. For mail on Node, send through platform.mail.mailer instead of the registry starter.`,
+              remediation: `Remove the cloudflare:* imports from those modules (an \`import type { … }\` declaration is fine; inline \`type\` specifiers still load the module), or deploy to a target whose capability matrix marks "cloudflareModules" as native or emulated. For mail on Node, send through platform.mail.mailer instead of the registry starter.`,
               target,
           };
 };

@@ -1207,6 +1207,39 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(codegen().platformDiagnostics).toStrictEqual([]);
         });
 
+        /** The cloudflare: refusals codegen returned for the current project. */
+        const cloudflareRefusals = (): ReturnType<typeof codegen>["platformDiagnostics"] =>
+            codegen().platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"));
+
+        it("refuses an import with only inline type specifiers, which verbatim module syntax keeps as a load", () => {
+            expect.assertions(1);
+
+            // Emitted as `import {} from "cloudflare:workers"`: the module still loads.
+            write("context.ts", `import { type ExecutionContext } from "cloudflare:workers";\n\nexport const wrap = (context: ExecutionContext) => context;\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/context.ts (cloudflare:workers)");
+        });
+
+        it("refuses a dynamic import written as a backtick literal", () => {
+            expect.assertions(1);
+
+            write("send.ts", "export const load = async () => import(`cloudflare:email`);\n");
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/send.ts (cloudflare:email)");
+        });
+
+        it.each([
+            ["refuses", 'export { type ExecutionContext } from "cloudflare:workers";\n', 1],
+            ["lets through", 'export type { ExecutionContext } from "cloudflare:workers";\n', 0],
+        ])("%s a re-export of cloudflare:workers by the declaration's own type-only flag", (_verdict, source, refusals) => {
+            expect.assertions(1);
+
+            // Only a whole `export type` declaration is erased; `export { type X }` keeps `export {} from`.
+            write("reexport.ts", source);
+
+            expect(cloudflareRefusals()).toHaveLength(refusals);
+        });
+
         it.each([
             ["cloudflare", "native"],
             // celld implements the Workers API, so cloudflare:workers loads there: every shard imports it.

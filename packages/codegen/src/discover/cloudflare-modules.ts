@@ -17,24 +17,14 @@ interface CloudflareModuleImport {
 }
 
 /**
- * Whether an import declaration survives compilation. A type-only one erases,
- * and so does a named import whose every binding is `type`, which is how
- * `import type { Env } from "cloudflare:workers"` stays loadable anywhere. A
- * bare `import "cloudflare:…"` keeps its side effect, so it counts.
+ * Whether an import declaration loads its module at runtime. Only a whole
+ * `import type { … } from …` is erased. Under `verbatimModuleSyntax`, which the
+ * repo base and several templates set, `import { type Env } from "m"` is kept as
+ * `import {} from "m"` and still loads `m`, so inline `type` specifiers count.
+ * The rule does not read the app's tsconfig: a false refusal costs one keyword
+ * (`import type`) to fix, and a missed one fails at boot.
  */
-const loadsAtRuntime = (declaration: ImportDeclaration): boolean => {
-    if (declaration.isTypeOnly()) {
-        return false;
-    }
-
-    const clause = declaration.getImportClause();
-
-    if (clause === undefined || clause.getDefaultImport() !== undefined || clause.getNamespaceImport() !== undefined) {
-        return true;
-    }
-
-    return clause.getNamedImports().some((named) => !named.isTypeOnly());
-};
+const loadsAtRuntime = (declaration: ImportDeclaration): boolean => !declaration.isTypeOnly();
 
 /** The `cloudflare:*` specifiers a file loads: static imports, re-exports and `import("cloudflare:…")` calls. */
 const cloudflareSpecifiersOf = (sourceFile: SourceFile): string[] => {
@@ -51,6 +41,8 @@ const cloudflareSpecifiersOf = (sourceFile: SourceFile): string[] => {
         }
     }
 
+    // The same rule as imports: `export { type X } from "m"` keeps `export {} from "m"` under
+    // `verbatimModuleSyntax`, so only a whole `export type { … } from …` is erased.
     for (const declaration of sourceFile.getExportDeclarations()) {
         if (!declaration.isTypeOnly()) {
             note(declaration.getModuleSpecifierValue());
@@ -62,7 +54,12 @@ const cloudflareSpecifiersOf = (sourceFile: SourceFile): string[] => {
     for (const call of descendantsOfKind(sourceFile, SyntaxKind.CallExpression)) {
         const [argument] = call.getArguments();
 
-        if (call.getExpression().getKind() === SyntaxKind.ImportKeyword && argument !== undefined && Node.isStringLiteral(argument)) {
+        // A backtick literal with no substitutions is as static as a quoted one: import(`cloudflare:email`).
+        if (
+            call.getExpression().getKind() === SyntaxKind.ImportKeyword &&
+            argument !== undefined &&
+            (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))
+        ) {
             note(argument.getLiteralValue());
         }
     }
