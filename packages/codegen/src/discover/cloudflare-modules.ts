@@ -126,8 +126,13 @@ const isFile = (path: string): boolean => {
     }
 };
 
-/** Every string target in a `package.json` `exports` value: its `"."` entry, or top-level conditions. */
-const exportTargets = (value: unknown): string[] => {
+/**
+ * Every string target in a `package.json` `exports` value: its `"."` entry, or
+ * top-level conditions, and every nested condition or fallback array beneath.
+ * A `null` anywhere is "no target", which `exports` uses to block a path, so it
+ * contributes nothing rather than being walked.
+ */
+const exportTargets = (value: unknown, atRoot = true): string[] => {
     if (typeof value === "string") {
         return [value];
     }
@@ -137,9 +142,12 @@ const exportTargets = (value: unknown): string[] => {
     }
 
     const entries = value as Record<string, unknown>;
-    const root = Object.hasOwn(entries, ".") ? entries["."] : value;
 
-    return typeof root === "string" ? [root] : Object.values(root as Record<string, unknown>).flatMap((target) => exportTargets(target));
+    if (atRoot && Object.hasOwn(entries, ".")) {
+        return exportTargets(entries["."], false);
+    }
+
+    return Object.values(entries).flatMap((target) => exportTargets(target, false));
 };
 
 /** Whether `path` is an existing directory. */

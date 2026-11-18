@@ -1517,6 +1517,20 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message).toContain("lunora/localpkg/dist/index.tsx (cloudflare:workers)");
         });
 
+        it.each([
+            ['a null "." export', { exports: { ".": null }, main: "./entry.tsx" }],
+            ["a nested null condition", { exports: { ".": { default: "./entry.tsx", import: null } } }],
+        ])("treats %s as no target instead of crashing", (_label, manifest) => {
+            expect.assertions(1);
+
+            // `null` blocks a path in `exports`; the package's other entry still loads cloudflare:workers.
+            writeNested("blocked/package.json", `${JSON.stringify({ name: "blocked", ...manifest })}\n`);
+            writeNested("blocked/entry.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "./blocked";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/blocked/entry.tsx (cloudflare:workers)");
+        });
+
         it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
             expect.assertions(1);
 
