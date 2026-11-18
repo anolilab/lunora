@@ -1400,13 +1400,14 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         });
 
         it.each([
-            ["module.require", "module", "module"],
-            ["a loader object's require", "loaders", "loaders.node"],
-        ])('refuses %s("cloudflare:workers"), whatever require is called on', (_label, declared, receiver) => {
+            ["module.require", "module", "module.require"],
+            ["a loader object's require", "loaders", "loaders.node.require"],
+            ['module["require"]', "module", 'module["require"]'],
+        ])('refuses %s("cloudflare:workers"), whatever require is called on', (_label, declared, callee) => {
             expect.assertions(1);
 
             // Node's own loader, or any object's: a method named require is taken as one, failing closed.
-            write("method.ts", `declare const ${declared}: any;\n\nexport const workers = ${receiver}.require("cloudflare:workers");\n`);
+            write("method.ts", `declare const ${declared}: any;\n\nexport const workers = ${callee}("cloudflare:workers");\n`);
 
             expect(cloudflareRefusals()[0]?.message).toContain("lunora/method.ts (cloudflare:workers)");
         });
@@ -1467,6 +1468,19 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             } finally {
                 rmSync(parent, { force: true, recursive: true });
             }
+        });
+
+        it.each([
+            ["null", "null"],
+            ["an array", "[]"],
+            ["a string", '"./entry.js"'],
+        ])("reads a local package whose package.json parses to %s as having no entries", (_label, manifest) => {
+            expect.assertions(1);
+
+            writeNested("oddpkg/package.json", `${manifest}\n`);
+            write("send.ts", `import "./oddpkg";\n\nexport const use = () => undefined;\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
         });
 
         it.each([

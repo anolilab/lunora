@@ -57,6 +57,10 @@ const requireEqualsSpecifier = (declaration: ImportEqualsDeclaration): string | 
     return expression !== undefined && Node.isStringLiteral(expression) ? expression.getLiteralValue() : undefined;
 };
 
+/** Whether an element access's key is the literal `"require"` (`module["require"]`), quoted or a plain template. */
+const isRequireKey = (key: Node | undefined): boolean =>
+    key !== undefined && (Node.isStringLiteral(key) || Node.isNoSubstitutionTemplateLiteral(key)) && key.getLiteralValue() === "require";
+
 /**
  * The module an `import("…")` or `require("…")` call loads, when its argument is a
  * literal. A dynamic import fails only when it runs (the mail starter's
@@ -66,7 +70,8 @@ const requireEqualsSpecifier = (declaration: ImportEqualsDeclaration): string | 
  * a loader made locally (`const require = createRequire(import.meta.url)`) loads
  * the module as surely as the global one, so this fails closed, and a local
  * function of that name that loads nothing is refused until it is renamed. A method named
- * `require` counts the same way, whatever it is called on: `module.require` is Node's own
+ * `require` counts the same way, whatever it is called on and however it is spelled
+ * (`module.require`, `module["require"]`): `module.require` is Node's own
  * loader, and an object's `require` is assumed to be one. A backtick literal with no
  * substitutions is as static as a quoted one.
  */
@@ -76,7 +81,8 @@ const loadCallSpecifier = (call: CallExpression): string | undefined => {
     const loads =
         callee.getKind() === SyntaxKind.ImportKeyword ||
         (Node.isIdentifier(callee) && callee.getText() === "require") ||
-        (Node.isPropertyAccessExpression(callee) && callee.getName() === "require");
+        (Node.isPropertyAccessExpression(callee) && callee.getName() === "require") ||
+        (Node.isElementAccessExpression(callee) && isRequireKey(callee.getArgumentExpression()));
 
     if (!loads || argument === undefined) {
         return undefined;
@@ -199,13 +205,20 @@ const isDirectory = (path: string): boolean => {
  * directory has no readable manifest.
  */
 const packageEntries = (directory: string): string[] => {
-    let manifest: Record<string, unknown>;
+    let parsed: unknown;
 
     try {
-        manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8")) as Record<string, unknown>;
+        parsed = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
     } catch {
         return [];
     }
+
+    // `null`, an array or a primitive parses as JSON too, and names no entries.
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return [];
+    }
+
+    const manifest = parsed as Record<string, unknown>;
 
     return [...[manifest.main, manifest.module].filter((entry): entry is string => typeof entry === "string"), ...exportTargets(manifest.exports)];
 };
