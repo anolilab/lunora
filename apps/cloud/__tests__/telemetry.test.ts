@@ -658,4 +658,40 @@ describe(handleTelemetryRoute, () => {
         expect(response.status).toBe(200);
         expect(runMutation.mock.calls[0]?.[1].events).toHaveLength(500);
     });
+
+    it("stamps only the alerts it sent delivered, leaving a failed send firing for the drain to retry", async () => {
+        const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(new Response(null, { status: 200 })));
+
+        vi.stubGlobal("fetch", fetchMock);
+
+        try {
+            const runMutation = vi.fn<(reference: unknown, args: { ids?: string[] }) => Promise<unknown>>((_reference, args) =>
+                Promise.resolve(
+                    args.ids === undefined
+                        ? {
+                              alerts: [
+                                  { body: "b", channel: "webhook", destination: "https://hooks.example.com/ok", id: "al_sent", subject: "s" },
+                                  // Refused by the SSRF guard: the send throws.
+                                  { body: "b", channel: "webhook", destination: "http://localhost/hook", id: "al_failed", subject: "s" },
+                              ],
+                              incidents: 0,
+                              issues: 1,
+                          }
+                        : { delivered: args.ids.length },
+                ),
+            );
+            const request = new Request("https://control.lunora.app/v1/telemetry", {
+                body: JSON.stringify({ deployKey: "k", organizationId: "org_1", resourceSpans: [] }),
+                method: "POST",
+            });
+
+            const response = await handleTelemetryRoute(request, environment(runMutation));
+
+            expect(response.status).toBe(200);
+            expect(runMutation).toHaveBeenCalledTimes(2);
+            expect(runMutation.mock.calls[1]?.[1].ids).toStrictEqual(["al_sent"]);
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
 });

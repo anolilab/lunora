@@ -81,25 +81,34 @@ export const handleTelemetryRoute = async (request: Request, environment: Router
         // Tier every span to the columnar archive (scales past D1's hot window).
         await store.archiveSpans(observations, body.organizationId ?? "").catch(() => undefined);
 
-        // Deliver any alerts the ingest fired (best-effort), then stamp them delivered.
-        // An "owners & admins" alert is left `firing` for the drain, which can read
-        // the members and the auth plane its addresses come from.
+        // Deliver any alerts the ingest fired (best-effort), then stamp the sent ones
+        // delivered. An "owners & admins" alert is left `firing` for the drain, which
+        // can read the members and the auth plane its addresses come from — and so is
+        // one whose send failed, so the drain retries it rather than it reading as sent.
         const inline = result.alerts.filter((alert) => !(alert.channel === "email" && alert.destination === ORG_ADMINS_DESTINATION));
+        const sent = await Promise.all(
+            inline.map(async (alert) =>
+                deliverAlert(environment, alert).then(
+                    () => alert.id,
+                    () => undefined,
+                ),
+            ),
+        );
+        const delivered = sent.filter((id) => id !== undefined);
 
-        if (inline.length > 0) {
-            await Promise.all(inline.map((alert) => deliverAlert(environment, alert).catch(() => undefined)));
+        if (delivered.length > 0) {
             // Alerts have already gone out, so a failure here must not fail the
             // ingest — but it must not be invisible either: unmarked alerts are
             // re-delivered on the next sweep, so a failure means duplicate pages.
             await context
                 .runMutation(internal.alerts.markDelivered, {
-                    ids: inline.map((alert) => alert.id),
+                    ids: delivered,
                     organizationId: body.organizationId,
                 })
                 .catch((error: unknown) => {
                     // eslint-disable-next-line no-console -- delivered-but-unmarked alerts will re-fire; surface it
                     console.error("[alerts] markDelivered failed; alerts may be re-delivered", {
-                        count: inline.length,
+                        count: delivered.length,
                         error: error instanceof Error ? error.message : String(error),
                         organizationId: body.organizationId,
                     });
