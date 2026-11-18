@@ -315,7 +315,29 @@ pub fn write_release_directory(directory: &Path, release: &StoredRelease, job: &
     };
     let config = celld_config_from_release(&release.manifest, &options).map_err(|error| JobError::new(codes::RELEASE_INVALID, error.message))?;
 
+    // A retried deployment id names the directory its running release is in, and a failed deploy
+    // rolls back to that release's files: stage the new one beside it and swap only once it is whole.
+    let mut staging_name = directory.file_name().unwrap_or_default().to_owned();
+
+    staging_name.push(".staging");
+
+    let staging = directory.with_file_name(staging_name);
+
+    remove_all(&staging)?;
+
+    if let Err(error) = lay_out_release(&staging, release, &config) {
+        let _ = remove_all(&staging);
+
+        return Err(error);
+    }
+
     remove_all(directory)?;
+    fs::rename(&staging, directory)?;
+
+    Ok(config)
+}
+
+fn lay_out_release(directory: &Path, release: &StoredRelease, config: &Value) -> Result<(), JobError> {
     create_dir_all_with_mode(directory, 0o750)?;
     write_file(&directory.join(CELLD_RELEASE_MAIN), &decode_base64(&release.bundle), 0o640)?;
 
@@ -356,11 +378,11 @@ pub fn write_release_directory(directory: &Path, release: &StoredRelease, job: &
     let mut contents = Vec::new();
     let mut serializer = serde_json::Serializer::with_formatter(&mut contents, serde_json::ser::PrettyFormatter::with_indent(b"    "));
 
-    serde::Serialize::serialize(&config, &mut serializer).map_err(|error| JobError::new(codes::JOB_FAILED, error.to_string()))?;
+    serde::Serialize::serialize(config, &mut serializer).map_err(|error| JobError::new(codes::JOB_FAILED, error.to_string()))?;
     contents.push(b'\n');
     write_file(&directory.join(RELEASE_CONFIG_FILE), &contents, 0o600)?;
 
-    Ok(config)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -550,6 +572,30 @@ mod tests {
 
         assert_eq!(error, invalid("asset \"/../../etc/passwd\" resolves outside the release"));
         assert!(!root.path().join("etc").exists());
+    }
+
+    #[test]
+    fn a_release_that_fails_to_write_leaves_the_one_already_there() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("dep_1");
+
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("worker.js"), "running").unwrap();
+
+        // `/a` is written as a file, so `/a/b` cannot get its parent directory.
+        let release = StoredRelease {
+            assets: Some(ReleaseAssets {
+                config: None,
+                files: vec![ReleaseAsset { content: "AA==".into(), path: "/a".into() }, ReleaseAsset { content: "AA==".into(), path: "/a/b".into() }],
+                rules: None,
+            }),
+            bundle: b64("new"),
+            manifest: json!({ "bindings": [{ "binding": "ASSETS", "type": "assets" }] }),
+        };
+
+        assert!(write_release_directory(&directory, &release, &deploy_job()).is_err());
+        assert_eq!(fs::read_to_string(directory.join("worker.js")).unwrap(), "running");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
     }
 
     async fn signed(server: &TestServer) -> (SignedFetch, tempfile::TempDir) {
