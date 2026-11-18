@@ -47,11 +47,11 @@ const isPerformed = (from: Status, to: Status): boolean => PERFORMED.some(([a, b
 const REFUSED: ReadonlyArray<Move> = STATUSES.flatMap((from) => STATUSES.filter((to) => !isPerformed(from, to)).map((to): Move => [from, to]));
 
 /** The phases the orchestrator reports through `updateStatus`; every other status has its own writer. */
-const REPORTED: ReadonlyArray<Status> = ["provisioning", "verifying", "live", "failed"];
+const REPORTED: ReadonlySet<Status> = new Set(["failed", "live", "provisioning", "verifying"]);
 
 type ReportedMove = readonly [Status, "failed" | "live" | "provisioning" | "verifying"];
 
-const isReported = (move: Move): move is ReportedMove => REPORTED.includes(move[1]);
+const isReported = (move: Move): move is ReportedMove => REPORTED.has(move[1]);
 
 const deploymentRow = (status: Status): Row => {
     return {
