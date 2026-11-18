@@ -257,6 +257,10 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     let debounce: NodeJS.Timeout | undefined;
     let running: { host: NodeAppHost; server: { close: () => Promise<void> } } | undefined;
     let stopped = false;
+    // Until the first version serves, a change only marks a reload for afterwards: one started mid-startup would race it for
+    // the port, and one left armed after a failed start would compose a host nobody stops.
+    let starting = true;
+    let reloadAfterStart = false;
 
     const unwatch = (): void => {
         for (const watcher of watchers) {
@@ -267,6 +271,12 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     };
 
     const scheduleReload = (): void => {
+        if (starting) {
+            reloadAfterStart = true;
+
+            return;
+        }
+
         clearTimeout(debounce);
         debounce = setTimeout(() => {
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the reload and the watch reference each other
@@ -410,6 +420,8 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     try {
         await serve(await prepare());
     } catch (error: unknown) {
+        stopped = true;
+        clearTimeout(debounce);
         unwatch();
 
         throw error;
@@ -440,6 +452,15 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     });
 
     logger.info(`node: serving ${relative(projectRoot, project.entry)} on @lunora/platform-node at http://localhost:${String(port)}`);
+
+    starting = false;
+
+    // A read through a call: the watchers set the flag across the awaits above, which narrowing here cannot see.
+    const reloadMarked = (): boolean => reloadAfterStart;
+
+    if (reloadMarked()) {
+        scheduleReload();
+    }
 
     let settle: (code: number) => void = () => {};
     const exited = new Promise<number>((_resolve) => {

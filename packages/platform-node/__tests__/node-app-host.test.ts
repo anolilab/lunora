@@ -262,6 +262,81 @@ describe(createNodeAppHost, () => {
         }
     });
 
+    it("refuses a shard write that resumes after the deadline closed its database, and keeps no part of it", async () => {
+        expect.assertions(4);
+
+        let release: () => void = () => {};
+        const gate = new Promise<void>((resolve) => {
+            release = resolve;
+        });
+        let started: () => void = () => {};
+        const requestStarted = new Promise<void>((resolve) => {
+            started = resolve;
+        });
+
+        class SlowWriter {
+            private readonly state: NodeShardState;
+
+            public constructor(state: NodeShardState) {
+                this.state = state;
+            }
+
+            public async fetch(): Promise<Response> {
+                const { sql } = this.state.storage;
+
+                sql.exec("CREATE TABLE IF NOT EXISTS hits (n INTEGER)");
+                started();
+                // Still running when the drain's deadline passes; it resumes against the database the close released.
+                await gate;
+                sql.exec("INSERT INTO hits (n) VALUES (1)");
+
+                return new Response("ok");
+            }
+        }
+
+        const options = {
+            dataDirectory: join(directory, "state"),
+            durableObjects: [{ className: "SlowWriter", name: "COUNTER" }],
+            worker: { default: worker.default, SlowWriter },
+        };
+        const first = createNodeAppHost(options);
+        const inFlight = first.fetch(new Request("https://app.local/tenant-a"));
+
+        await requestStarted;
+
+        let expire: () => void = () => {};
+        const closing = first.close({
+            timer: (_ms, onExpire) => {
+                expire = onExpire;
+
+                return () => {};
+            },
+        });
+
+        expire();
+
+        const drained = await closing;
+
+        expect(drained.timedOut).toBe(true);
+        expect(drained.pending.length).toBeGreaterThan(0);
+
+        release();
+
+        // The connection is closed, so the write throws instead of landing on a disposed database.
+        await expect(inFlight).rejects.toThrow(/not open/u);
+
+        const second = createNodeAppHost({ ...options, durableObjects: [{ className: "Counter", name: "COUNTER" }], worker });
+
+        try {
+            const response = await second.fetch(new Request("https://app.local/tenant-a"));
+
+            // Only the second host's own write: nothing of the cut-off request was kept.
+            await expect(response.json()).resolves.toMatchObject({ count: 1 });
+        } finally {
+            await second.close();
+        }
+    });
+
     it("closes the platforms it built when a later binding cannot be composed, so their crons never fire", async () => {
         expect.assertions(2);
 

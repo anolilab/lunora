@@ -392,6 +392,37 @@ export default crons;
         }
     });
 
+    it("leaves no reload armed when the first start fails after its load saw a changed file", async () => {
+        expect.assertions(2);
+
+        writeFixture(workdir);
+
+        // A first session generates `_generated/*`, so the start below fails at the listener rather than at the load.
+        const generating = await startDev(workdir);
+
+        await generating.stop();
+
+        // A modification time after the load began: the load marks a reload, which a failed start must not leave behind.
+        const later = new Date(Date.now() + 60_000);
+
+        utimesSync(join(workdir, "src", "worker.ts"), later, later);
+        // Not advanced: a reload timer the start armed stays pending, where the count below sees it.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+        const { logger } = milestoneLogger();
+        const platform: PlatformNode = {
+            ...realPlatform,
+            createNodeHttpServer: async () => {
+                throw new Error("listen EADDRINUSE");
+            },
+        };
+
+        await expect(
+            startNodeDevWorker({ codegenWatch: false, logger, platform, port: await findAvailablePort(18_870), projectRoot: workdir }),
+        ).rejects.toThrow(/EADDRINUSE/u);
+        expect(vi.getTimerCount()).toBe(0);
+    });
+
     it("keeps the session up when the reloaded listener cannot bind, and serves on the next change", async () => {
         // `hasAssertions`: the error check runs inside `vi.waitFor`, which retries it an indeterminate number of times.
         expect.hasAssertions();
