@@ -3,10 +3,12 @@ import { LunoraError } from "@lunora/server";
 import { foldMetricSeries } from "../src/telemetry/metric-series";
 import type { MetricSeries } from "../src/telemetry/metrics-read";
 import { createMetricsReader, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry/metrics-read";
+import type { Doc as Document_ } from "./_generated/dataModel";
 import { action, internalMutation, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg, assertTelemetryInKeyProject, authorizeTelemetryKey } from "./authz";
 import { rateLimit } from "./guards";
+import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -152,9 +154,6 @@ export const ingest = mutation
         return { ingested: args.points.length };
     });
 
-/** Recent metric points scanned before folding into exact series (bounds the read). */
-const METRIC_SCAN_LIMIT = 5000;
-
 /**
  * Exact per-metric series from the D1 `metricPoints` store over `[from, to]` —
  * every stored point averaged per bucket (precise, not sampled like the AE
@@ -174,13 +173,17 @@ export const series = query
         const from = args.from ?? context.now - DEFAULT_METRICS_WINDOW_MS;
         const to = args.to ?? context.now;
 
-        const { page } = await context.db.metricPoints.findMany({
-            limit: METRIC_SCAN_LIMIT,
-            orderBy: [{ at: "desc" }],
-            where: { organizationId: args.organizationId },
-        });
+        // The range is in the query (`by_org_at`), not filtered after it: a bounded read of the
+        // org's newest rows dropped in-range points once a busier or future-dated tail filled it.
+        const rows = await collectAll<Document_<"metricPoints">>((cursor) =>
+            context.db.metricPoints.findMany({
+                cursor,
+                orderBy: [{ at: "desc" }],
+                where: { at: { gte: from, lte: to }, organizationId: args.organizationId },
+            }),
+        );
 
-        const points = page.map((row) => absentForNull(row)).filter((row) => row.at >= from && row.at <= to);
+        const points = rows.map((row) => absentForNull(row));
 
         return foldMetricSeries(points).map((point) => toView(point));
     });
