@@ -225,10 +225,10 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
     const timeoutMs = options.lookupTimeoutMs ?? PLAN_LOOKUP_TIMEOUT_MS;
     const maxStaleMs = (options.maxStaleHours ?? PLAN_MAX_STALE_HOURS_DEFAULT) * 3_600_000;
     const report = options.onStore ?? (() => undefined);
-    const hasStore = options.planStore !== undefined;
     const cache = new Map<string, CachedVerdict>();
-    // When the control plane last failed a lookup, with a store bound. Failure backoff only applies
-    // with a store: without one a failed lookup is refused at once, so there is nothing to protect.
+    // When the control plane last failed a lookup. Inside the backoff window a request goes straight to
+    // the fallback, store or no store: every lookup is bounded by the timeout, so without the backoff an
+    // outage would add that wait to each request and keep loading a control plane that is down.
     let lastFailureAt: number | undefined;
 
     const readStore = async (scriptName: string): Promise<StoredRead> => {
@@ -254,12 +254,10 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
         return decision.facts;
     };
 
-    const backingOff = (): boolean => hasStore && lastFailureAt !== undefined && now() - lastFailureAt < LOOKUP_FAILURE_BACKOFF_MS;
+    const backingOff = (): boolean => lastFailureAt !== undefined && now() - lastFailureAt < LOOKUP_FAILURE_BACKOFF_MS;
 
     const failed = (scriptName: string, cached: CachedVerdict | undefined): Promise<PlanFacts> => {
-        if (hasStore) {
-            lastFailureAt = now();
-        }
+        lastFailureAt = now();
 
         return fallback(scriptName, cached);
     };

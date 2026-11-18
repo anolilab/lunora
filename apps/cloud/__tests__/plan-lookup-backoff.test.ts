@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { createPlanResolver, LOOKUP_FAILURE_BACKOFF_MS } from "../src/plans/plan-resolver";
+import { createPlanResolver, LOOKUP_FAILURE_BACKOFF_MS, UNAVAILABLE_PLAN } from "../src/plans/plan-resolver";
 import { answer, down, HOUR, spiedStore, T0 } from "./_helpers/plan-fixtures";
 
 describe("plan lookup failure backoff", () => {
@@ -108,7 +108,7 @@ describe("plan lookup failure backoff", () => {
         expect(facts).toStrictEqual({ plan: "enterprise" });
     });
 
-    it("does not back off when no store is bound, so a failed lookup is retried on the next request", async () => {
+    it("backs off with no store bound too, refusing at once instead of waiting out another lookup", async () => {
         const clock = { now: T0 };
         const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(down);
         const resolve = createPlanResolver({
@@ -119,8 +119,13 @@ describe("plan lookup failure backoff", () => {
         });
 
         await resolve("acme-app");
+        clock.now += LOOKUP_FAILURE_BACKOFF_MS - 1;
+        const backedOff = await resolve("acme-app");
+        clock.now += 1;
         await resolve("acme-app");
 
+        // Inside the window the lookup is skipped and the never-seen tenant refused; once it passes, asked again.
+        expect(backedOff).toStrictEqual({ plan: UNAVAILABLE_PLAN });
         expect(fetch).toHaveBeenCalledTimes(2);
     });
 });
