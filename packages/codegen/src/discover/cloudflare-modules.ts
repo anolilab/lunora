@@ -97,12 +97,16 @@ const isFile = (path: string): boolean => {
 };
 
 /**
- * The file a relative specifier names, as the bundler resolves it: the exact
- * path, a TypeScript source written as its emitted extension, the path with each
- * bundled extension, or a directory's `index`. `undefined` when nothing matches,
- * which the build itself reports.
+ * Every file a relative specifier may name: the exact path, a TypeScript source
+ * written as its emitted extension, the path with each bundled extension, and a
+ * directory's `index`. All of them, not the first that exists, so the answer does
+ * not depend on matching the bundler's resolution order (esbuild tries `.tsx`
+ * before `.ts`, for one). When two siblings share a base name, a `cloudflare:*`
+ * import in either is reported: that fails closed, at the cost of a false refusal
+ * when only the other one is bundled, which an explicit extension fixes. Empty
+ * when nothing matches, which the build itself reports.
  */
-const resolveRelative = (fromFile: string, specifier: string): string | undefined => {
+const resolveRelative = (fromFile: string, specifier: string): string[] => {
     const base = resolve(dirname(fromFile), specifier);
     const written = BUNDLED_EXTENSIONS.find((extension) => base.endsWith(extension));
     const candidates = [
@@ -111,7 +115,7 @@ const resolveRelative = (fromFile: string, specifier: string): string | undefine
         ...BUNDLED_EXTENSIONS.map((extension) => join(base, `index${extension}`)),
     ];
 
-    return candidates.find((candidate) => isFile(candidate));
+    return candidates.filter((candidate) => isFile(candidate));
 };
 
 /**
@@ -120,6 +124,10 @@ const resolveRelative = (fromFile: string, specifier: string): string | undefine
  * a sharded schema) or `node_modules` is not followed.
  */
 const isOutsideAppCode = (path: string): boolean => path.split(sep).some((segment) => segment === "_generated" || segment === "node_modules");
+
+/** The app files a module's relative specifiers may reach, outside `_generated/` and `node_modules`. */
+const appFilesReachedFrom = (filePath: string, specifiers: ReadonlyArray<string>): string[] =>
+    specifiers.flatMap((specifier) => (specifier.startsWith(".") ? resolveRelative(filePath, specifier) : [])).filter((file) => !isOutsideAppCode(file));
 
 /**
  * Every app module the worker bundle would load from `lunora/` that loads a
@@ -149,12 +157,10 @@ const discoverCloudflareModuleImports = (project: Project, lunoraDirectory: stri
             found.push({ module: relative(root, filePath) || basename(filePath), specifiers: cloudflare });
         }
 
-        for (const specifier of specifiers) {
-            const reached = specifier.startsWith(".") ? resolveRelative(filePath, specifier) : undefined;
-
-            if (reached !== undefined && !seen.has(reached) && !isOutsideAppCode(reached)) {
-                seen.add(reached);
-                pending.push(reached);
+        for (const file of appFilesReachedFrom(filePath, specifiers)) {
+            if (!seen.has(file)) {
+                seen.add(file);
+                pending.push(file);
             }
         }
     }

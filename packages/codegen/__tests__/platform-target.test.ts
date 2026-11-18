@@ -1255,6 +1255,17 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message).toContain(`lunora/${file} (cloudflare:workers)`);
         });
 
+        it("refuses a .tsx sibling the bundler may pick over a clean .ts of the same name", () => {
+            expect.assertions(1);
+
+            // esbuild resolves ./helper to helper.tsx first; the gate walks both rather than guess.
+            write("helper.ts", "export const binding = () => undefined;\n");
+            writeNested("helper.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "./helper";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helper.tsx (cloudflare:workers)");
+        });
+
         it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
             expect.assertions(1);
 
