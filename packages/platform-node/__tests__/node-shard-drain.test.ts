@@ -1018,6 +1018,67 @@ describe("shard drain passes", () => {
         }
     });
 
+    it("reports a timed-out final pass instead of a clean drain", async () => {
+        expect.assertions(1);
+
+        const { fire, timer } = manualTimer();
+        let passes = 0;
+        // Idle whenever asked, but its second drain (the pass that began idle) runs into the deadline.
+        const late = {
+            drain: async (options?: { timer?: DrainTimer }) => {
+                passes += 1;
+
+                if (passes === 1) {
+                    return { failed: [], pending: [], timedOut: false };
+                }
+
+                return new Promise<{ failed: string[]; pending: string[]; timedOut: boolean }>((resolve) => {
+                    options?.timer?.(0, () => {
+                        resolve({ failed: [], pending: ["late work"], timedOut: true });
+                    });
+                });
+            },
+            idle: () => true,
+            pending: () => (passes > 1 ? ["late work"] : []),
+        };
+
+        const drained = drainTogether([late], { timer });
+
+        await turn();
+        fire();
+
+        await expect(drained).resolves.toStrictEqual({ failed: [], pending: ["late work"], timedOut: true });
+    });
+
+    it("keeps a shard whose deferred close failed live, reporting the failure and closing it on the next close()", async () => {
+        expect.assertions(3);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const handler = deferred();
+        const registry = createNodeShardRegistry();
+        const shard = registry.shardFor("waiting");
+
+        shard.inbound.onClose(async () => handler.promise);
+        // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+        (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+        // Unforced: the database is disposed once the close handler settles, and that dispose fails.
+        registry.close();
+        vi.spyOn(Database.prototype, "close").mockImplementationOnce(() => {
+            throw new Error("database is busy");
+        });
+        handler.release();
+
+        await expect(registry.drain()).resolves.toMatchObject({
+            failed: ["shard waiting failed to close after its socket close handler settled"],
+        });
+        expect(printed(logged)).toContainEqual(expect.stringContaining("shard waiting failed to close after its socket close handler settled"));
+
+        registry.close();
+
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
     it("re-arms the readable shards when one stored shard file is corrupt, logging the bad one", async () => {
         expect.assertions(3);
 

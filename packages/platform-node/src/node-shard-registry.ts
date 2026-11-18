@@ -247,7 +247,8 @@ export interface NodeShardRegistryOptions {
 export interface NodeShardRegistry {
     /**
      * Dispose every live shard. Safe to call more than once. A shard whose socket close handler is still running is disposed
-     * once it settles, unless `force` is set: then it is disposed now and named in a log line. A shutdown passes `force` after
+     * once it settles, unless `force` is set: then it is disposed now and named in a log line. Such a shard stays live until
+     * its dispose succeeds; a failure then is logged, reported by the next `drain()`, and retried by the next `close()`. A shutdown passes `force` after
      * its drain has finished or reached its deadline, so a handler that never settles cannot keep a database open at exit.
      */
     close: (options?: { force?: boolean }) => void;
@@ -340,6 +341,10 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
      * drops out of the result set.
      */
     const known = new Set<string>();
+    /** Shards an unforced close() left to dispose once their socket close handler settles. */
+    const deferredClose = new Set<string>();
+    /** Deferred disposals that failed, held for the next drain() to report. */
+    const lateCloseFailures: string[] = [];
 
     if (options.directory !== undefined) {
         mkdirSync(options.directory, { recursive: true });
@@ -416,7 +421,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
     // What is still running, across every shard live now: re-read on each pass, so a shard opened during the last
     // pass, or one that gained background work after its own drain resolved, is seen.
     /** Every live shard's recorded failures, cleared as they are reported. */
-    const takeAllFailures = (): string[] => [...live.values()].flatMap((entry) => entry.takeFailures());
+    const takeAllFailures = (): string[] => [...lateCloseFailures.splice(0), ...[...live.values()].flatMap((entry) => entry.takeFailures())];
 
     const pendingWork = (): { labels: string[]; waits: Promise<unknown>[] } => {
         const counts = new Map<string, ShardWorkCounts>();
@@ -490,10 +495,27 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
                 } else if (closeOptions?.force === true) {
                     forced.push(key);
                     dispose(key, entry);
-                } else {
+                } else if (!deferredClose.has(key)) {
+                    // Stays live until its dispose succeeds: a failure after this close() returned is logged and reported by
+                    // the next drain(), and the next close() retries it.
+                    deferredClose.add(key);
                     pending
                         .finally(() => {
-                            dispose(key, entry);
+                            deferredClose.delete(key);
+
+                            // A forced close() since then already disposed it.
+                            if (live.get(key) !== entry) {
+                                return;
+                            }
+
+                            try {
+                                entry.dispose();
+                                live.delete(key);
+                            } catch (error: unknown) {
+                                // eslint-disable-next-line no-console -- no caller is left to throw to, so the log carries the cause
+                                console.error("[@lunora/platform-node] shard %s failed to close after its socket close handler settled", key, error);
+                                lateCloseFailures.push(`shard ${key} failed to close after its socket close handler settled`);
+                            }
                         })
                         .catch(() => undefined);
                 }
@@ -504,7 +526,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             const failedKeys = new Set(failed.map(({ key }) => key));
 
             for (const key of live.keys()) {
-                if (!failedKeys.has(key)) {
+                if (!failedKeys.has(key) && !deferredClose.has(key)) {
                     live.delete(key);
                 }
             }

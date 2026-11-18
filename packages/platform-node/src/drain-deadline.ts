@@ -107,9 +107,10 @@ interface Drainable {
 }
 
 /**
- * Drain several parts under one deadline until all of them are idle in the same pass. Work on one part can start work on
- * another after that one finished draining (a request handed between registries), so a pass that left any of them busy is
- * followed by another, until the deadline.
+ * Drain several parts under one deadline until a pass that began with every part idle also ends with every part idle. Work
+ * on one part can start work on another after that one finished draining (a request handed between registries), and a
+ * failure can be recorded after a part's own drain returned; the pass that begins idle collects it, and is held to the same
+ * deadline as any other.
  */
 const drainTogether = async (parts: ReadonlyArray<Drainable>, options?: DrainOptions): Promise<DrainResult> => {
     const deadline = startDrainDeadline(options);
@@ -117,7 +118,7 @@ const drainTogether = async (parts: ReadonlyArray<Drainable>, options?: DrainOpt
     const failed: string[] = [];
 
     try {
-        for (;;) {
+        for (let beganIdle = false; ;) {
             // eslint-disable-next-line no-await-in-loop -- each pass waits for what the last one let start
             const results = await Promise.all(parts.map(async (part) => part.drain({ timer })));
 
@@ -128,16 +129,13 @@ const drainTogether = async (parts: ReadonlyArray<Drainable>, options?: DrainOpt
                 return { failed, pending: parts.flatMap((part) => part.pending()), timedOut: true };
             }
 
-            if (parts.every((part) => part.idle())) {
-                // One more pass, immediate for parts that are idle: it collects a failure recorded after a part's own drain
-                // returned (work another part handed it, which failed), which the results above could not include.
-                // eslint-disable-next-line no-await-in-loop -- a final sweep, run once, after every part is idle
-                const sweep = await Promise.all(parts.map(async (part) => part.drain({ timer })));
+            const endedIdle = parts.every((part) => part.idle());
 
-                failed.push(...sweep.flatMap((result) => result.failed));
-
+            if (beganIdle && endedIdle) {
                 return { failed, pending: [], timedOut: false };
             }
+
+            beganIdle = endedIdle;
         }
     } finally {
         deadline.cancel();
