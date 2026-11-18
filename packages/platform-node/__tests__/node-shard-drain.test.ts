@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DrainTimer } from "../src/drain-deadline";
 import { createNodePlatform } from "../src/node-platform";
 import { createNodeShardRegistry } from "../src/node-shard-registry";
+import type { NodeServerEnd } from "../src/node-socket-pair";
 
 /** Each logged line as the console prints it: the format string with its arguments applied. */
 const printed = (spy: { mock: { calls: unknown[][] } }): string[] => spy.mock.calls.map((args) => format(...args));
@@ -755,6 +756,40 @@ describe("shard drain passes", () => {
             never.release();
             platform.close();
             vi.useRealTimers();
+        }
+    });
+
+    it("disposes a shard whose socket close handler never settles when forced, and logs it", () => {
+        expect.assertions(3);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const never = deferred();
+        const waiting = createNodeShardRegistry();
+        const forced = createNodeShardRegistry();
+
+        // One shard in each registry with a close handler that never settles, as a stuck webSocketClose would be.
+        const stuckShard = (registry: ReturnType<typeof createNodeShardRegistry>) => {
+            const shard = registry.shardFor("stuck");
+
+            shard.inbound.onClose(async () => never.promise);
+            // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+            (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+            return shard;
+        };
+        const waitingShard = stuckShard(waiting);
+        const forcedShard = stuckShard(forced);
+
+        try {
+            waiting.close();
+            forced.close({ force: true });
+
+            // Unforced, the database stays open for the handler; forced, it is closed now.
+            expect(() => waitingShard.sockets.accept({}, undefined, [])).not.toThrow();
+            expect(() => forcedShard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+            expect(printed(logged)).toContainEqual(expect.stringContaining("closed 1 shard(s) with a socket close handler still running: stuck"));
+        } finally {
+            never.release();
         }
     });
 

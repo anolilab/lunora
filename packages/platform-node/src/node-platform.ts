@@ -157,8 +157,12 @@ export interface NodePlatform<
      * any runtime socket map or durable row. A no-op instead of a throw would
      * be indistinguishable from a working call — exactly the silent-vanishing
      * this lifecycle exists to end.
+     *
+     * `force` is for a shutdown whose drain has finished or reached its deadline:
+     * a shard whose socket close handler is still running is disposed now (and
+     * logged) instead of once the handler settles. See `NodeShardRegistry.close`.
      */
-    close: () => void;
+    close: (options?: { force?: boolean }) => void;
     /** In-process shard directory (see `createNodeShardRegistry` for what it can and cannot do). */
     directory: ShardDirectory;
 
@@ -332,7 +336,7 @@ export const createNodePlatform = <
     // `close()` method, a `dispose()` method — and holding them here is what lets
     // both the failure path below and `close()` unwind the same list, so a fifth
     // resource cannot be added to one and forgotten in the other.
-    const teardown: (() => void)[] = [];
+    const teardown: ((closeOptions?: { force?: boolean }) => void)[] = [];
 
     const { database, dispose: disposeShard, drain, host: shard, pendingAlarms, pendingBackground, takeFailures } = createNodeShardHost(options);
 
@@ -342,8 +346,8 @@ export const createNodePlatform = <
         const kv = createNodeShardKvStore(database);
         const registry = createNodeShardRegistry(options);
 
-        teardown.push(() => {
-            registry.close();
+        teardown.push((closeOptions) => {
+            registry.close(closeOptions);
         });
 
         const { directory } = registry;
@@ -424,14 +428,14 @@ export const createNodePlatform = <
         const workflows =
             options.workflows === undefined ? undefined : createNodeWorkflowHost({ store: createNodeWorkflowStore(database), workflows: options.workflows });
 
-        const close = (): void => {
+        const close = (closeOptions?: { force?: boolean }): void => {
             // Reverse construction order, which puts the scheduler's timers ahead of
             // the connection they would fire against: `disposeShard` closes it, and a
             // job timer that fired in between would find it closed. Every teardown is
             // guarded on its own, so ordering makes the guard the backstop rather than
             // the mechanism. The copy keeps `close()` callable more than once.
             for (const undo of teardown.toReversed()) {
-                undo();
+                undo(closeOptions);
             }
         };
 
@@ -509,7 +513,9 @@ export const createNodePlatform = <
             shard,
             sockets,
             workflows,
-            [Symbol.dispose]: close,
+            [Symbol.dispose]: () => {
+                close();
+            },
         };
     } catch (error) {
         // Roll back what was already built. Nothing else can reach these — the

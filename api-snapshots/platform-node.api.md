@@ -171,7 +171,9 @@ interface NodePlatform<Queues extends Record<string, {
 }> = Record<string, never>> {
     [Symbol.dispose]: () => void;
     capabilities: PlatformCapabilities;
-    close: () => void;
+    close: (options?: {
+        force?: boolean;
+    }) => void;
     directory: ShardDirectory;
     dispatch: (request: Request) => Promise<Response>;
     drain: (options?: DrainOptions) => Promise<DrainResult>;
@@ -332,7 +334,9 @@ interface NodeShardHostOptions {
 
 ```ts
 interface NodeShardRegistry {
-    close: () => void;
+    close: (options?: {
+        force?: boolean;
+    }) => void;
     directory: DirectShardDirectory;
     drain: (options?: DrainOptions) => Promise<DrainResult>;
     idle: () => boolean;

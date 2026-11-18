@@ -426,7 +426,9 @@ write that fails (contention from another process) is tried again with backoff
 before the alarm is given up and logged. `idle()` answers the same question synchronously.
 It returns only when a full pass finds nothing running, or when its deadline
 passes, logging one line per shard with how many requests, alarms and
-`waitUntil` tasks it still had (never the request or its payload). Await it before `close()`, which does not wait.
+`waitUntil` tasks it still had (never the request or its payload). Await it before `close()`, which does not wait. `close({ force: true })`, for
+after a drain has finished or reached its deadline, disposes a shard whose socket
+close handler is still running instead of waiting for it, and logs it.
 
 ### `createNodeShardState`
 

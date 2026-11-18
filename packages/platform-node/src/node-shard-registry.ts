@@ -222,8 +222,12 @@ export interface NodeShardRegistryOptions {
 
 /** An in-process shard registry: placement, hosting, and the fan-out key set. */
 export interface NodeShardRegistry {
-    /** Dispose every live shard. Safe to call more than once. */
-    close: () => void;
+    /**
+     * Dispose every live shard. Safe to call more than once. A shard whose socket close handler is still running is disposed
+     * once it settles, unless `force` is set: then it is disposed now and named in a log line. A shutdown passes `force` after
+     * its drain has finished or reached its deadline, so a handler that never settles cannot keep a database open at exit.
+     */
+    close: (options?: { force?: boolean }) => void;
     /** The `ShardDirectory` to hand the runtime. */
     directory: DirectShardDirectory;
 
@@ -429,16 +433,27 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
     };
 
     return {
-        close: () => {
-            for (const entry of live.values()) {
-                // A route's close handler may still be writing; the database is disposed only once it settles.
+        close: (closeOptions) => {
+            const forced: string[] = [];
+
+            for (const [key, entry] of live) {
+                // A route's close handler may still be writing; the database is disposed only once it settles. Forced (after a
+                // drain's deadline) it is disposed now: a handler that never settles must not keep its database open at exit.
                 const pending = entry.drain();
 
                 if (pending === undefined) {
                     entry.dispose();
+                } else if (closeOptions?.force === true) {
+                    forced.push(key);
+                    entry.dispose();
                 } else {
                     pending.finally(entry.dispose).catch(() => undefined);
                 }
+            }
+
+            if (forced.length > 0) {
+                // eslint-disable-next-line no-console -- these shards are closed under a running handler, so the log is the only record of it
+                console.error("[@lunora/platform-node] closed %d shard(s) with a socket close handler still running: %s", forced.length, forced.join(", "));
             }
 
             live.clear();
