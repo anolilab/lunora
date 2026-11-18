@@ -437,10 +437,12 @@ Delivery is at-least-once, narrowed:
   a new use of the key, so a fresh pair of matching sends delivers one and
   dedupes the other. So a duplicate of an already-sent mail,
   left pending through a long gap, is refused rather than sent as a first send.
-- A failure after the provider accepted a send (updating the key's content record,
-  or releasing its claim) is logged as its own error,
-  `lunora.mail.content_record_failed` or `lunora.mail.claim_release_failed`. It is
-  never a refusal, never retries the send, and never stops the rest of the batch.
+- A failure after the provider accepted a send (recording it as sent, or releasing
+  its claim) is logged as its own error, `lunora.mail.sent_record_failed` or
+  `lunora.mail.claim_release_failed`. It is never a refusal, never retries the
+  send, and never stops the rest of the batch. The sent record and the extension of
+  the key's content record are one transaction, so the content record always
+  outlives the sent record and a later mail under the key is never acked unsent.
 - A crash after the provider accepted a send, and before its key was recorded,
   still redelivers. Only a provider that dedupes on the key (Resend) drops that
   repeat.

@@ -1713,7 +1713,7 @@ describe(createNodeMailHost, () => {
             }
         });
 
-        it("logs a failed content update after a send as its own error, never as a refusal", async () => {
+        it("logs a failed sent record and content update after a send as its own error, never as a refusal", async () => {
             expect.assertions(4);
 
             const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -1737,7 +1737,8 @@ describe(createNodeMailHost, () => {
             const events = error.mock.calls.map(([line]) => logged(line).event);
 
             expect(sent).toHaveLength(1);
-            expect(events).toContain("lunora.mail.content_record_failed");
+            // The content update shares the sent record's transaction, so both roll back together.
+            expect(events).toContain("lunora.mail.sent_record_failed");
             expect(events).not.toContain("lunora.mail.send_refused");
             expect(database.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get()).toStrictEqual({ n: 0 });
         });
@@ -2339,6 +2340,71 @@ describe(createNodeMailHost, () => {
             // Sent once; the second row is its duplicate, acked unsent.
             expect(transport.sent).toHaveLength(1);
             expect(mail.deadLetters.list()).toStrictEqual([]);
+        });
+    });
+
+    describe("twenty-sixth review", () => {
+        it("refuses a raw queue.send of a body with no idempotencyKey, instead of queueing it to be dropped", async () => {
+            expect.assertions(2);
+
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: scriptedTransport(["ok"]) });
+
+            await expect(mail.queue.send({ subject: "Hi", text: "Hi", to: "ada@example.com" })).rejects.toThrow(/needs an `idempotencyKey`/u);
+            expect(database.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get()).toStrictEqual({ n: 0 });
+        });
+
+        it("sends a later mail under a key whose sent record could not extend its content record", async () => {
+            expect.assertions(1);
+
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            const sent: string[] = [];
+            const transport: MailTransport = {
+                send: async (payload) => {
+                    sent.push(payload.text ?? "");
+
+                    if (sent.length === 1) {
+                        // The send takes two minutes, so the sent record would outlive the content
+                        // record written at its claim; and the content record cannot be extended.
+                        clock.advance(120_000);
+                        database.exec("CREATE TEMP TRIGGER keys_busy BEFORE UPDATE ON main._lunora_mail_keys BEGIN SELECT RAISE(ABORT, 'keys busy'); END");
+                    }
+
+                    return { id: `sent-${String(sent.length)}` };
+                },
+            };
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "notice-1", subject: "Notice", text: "First", to: "ada@example.com" });
+            await mail.poll();
+            database.exec("DROP TRIGGER keys_busy");
+            // Past the content record, inside what would have been the sent record's life.
+            clock.advance(15 * 24 * 60 * 60 * 1000 - 60_000);
+            await mail.mailer.queue({ idempotencyKey: "notice-1", subject: "Notice", text: "Second", to: "ada@example.com" });
+            await mail.poll();
+
+            // New content under a lapsed key is new mail, not a duplicate of the first.
+            expect(sent).toStrictEqual(["First", "Second"]);
+        });
+
+        it("refuses a mail.path that differs from the .global() store's only in case, before either exists", () => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-case-"));
+
+            const root = directory;
+
+            // One file on a case-insensitive volume (APFS, NTFS); with neither created, there is no telling.
+            expect(() =>
+                createNodePlatform({
+                    globalTablesPath: join(root, "Data.sqlite3"),
+                    mail: { env: PRODUCTION, path: join(root, "data.sqlite3"), transport: scriptedTransport(["ok"]) },
+                    path: join(root, "shard.sqlite3"),
+                }),
+            ).toThrow(/globalTablesPath/u);
         });
     });
 });

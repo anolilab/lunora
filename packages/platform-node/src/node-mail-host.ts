@@ -215,7 +215,7 @@ const LEDGER_PRUNE_INTERVAL_MS = 60_000;
  * and through an index, since each send writes two or three rows that live for
  * 15 days and the prune holds the write lock the shard and app queues share.
  */
-const createSentLedger = (database: Database.Database, clock: () => number): SentMailStore => {
+const createSentLedger = (database: Database.Database, clock: () => number, keepContent: (key: string) => void): SentMailStore => {
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_sent (key TEXT PRIMARY KEY, value TEXT NOT NULL, expires_at INTEGER NOT NULL)");
     database.exec("CREATE INDEX IF NOT EXISTS _lunora_mail_sent_expires ON _lunora_mail_sent (expires_at)");
 
@@ -225,6 +225,14 @@ const createSentLedger = (database: Database.Database, clock: () => number): Sen
     );
     const prune = database.prepare<[number]>("DELETE FROM _lunora_mail_sent WHERE expires_at <= ?");
     const forget = database.prepare<[string]>("DELETE FROM _lunora_mail_sent WHERE key = ?");
+    // A sent record and its key's content record extension commit together: the content record
+    // must outlive the sent record, or a later mail under the key, queued once the content record
+    // has lapsed, would find the sent record and be acked unsent as its duplicate. Should the
+    // write fail, neither lands, and the send is logged as sent but unrecorded.
+    const recordSent = database.transaction((key: string, value: string, expiresAt: number) => {
+        write.run(key, value, expiresAt);
+        keepContent(key);
+    });
     const markFailed = database.transaction((key: string, sendingKey: string, expiresAt: number) => {
         write.run(key, "failed", expiresAt);
         forget.run(sendingKey);
@@ -273,7 +281,12 @@ const createSentLedger = (database: Database.Database, clock: () => number): Sen
                 prunedAt = now;
             }
 
-            write.run(key, value, now + expirationTtl * 1000);
+            // An idempotency key is visible ASCII, so a key with a space is an attempt mark.
+            if (key.includes(" ")) {
+                write.run(key, value, now + expirationTtl * 1000);
+            } else {
+                recordSent.immediate(key, value, now + expirationTtl * 1000);
+            }
         },
     };
 };
@@ -335,7 +348,7 @@ interface KeyClaims {
     /** When the key was first delivered, while its history lives; `undefined` for a key never delivered. */
     firstDeliveredAt: (key: string) => number | undefined;
 
-    /** Keep the key's content record at least as long as the sent record a successful send just wrote. */
+    /** Keep the key's content record at least as long as a sent record; run by the sent ledger in the same transaction. */
     keepContent: (key: string) => void;
 
     release: (key: string, messageId: string) => void;
@@ -874,13 +887,8 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
 
         // Sent: nothing past this point is a send failure. An error here must neither be logged
         // as a refusal nor retry a message the provider already accepted.
+        // The key's content record was extended with the sent record, in its transaction.
         message.ack();
-
-        if (key !== undefined) {
-            afterSend(message, "lunora.mail.content_record_failed", () => {
-                consumer.claims.keepContent(key);
-            });
-        }
     } finally {
         if (key !== undefined) {
             // Non-fatal: an unreleased claim lapses with the row's lease. Thrown, it ended the
@@ -959,10 +967,13 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
             const key = idempotencyKeyOf(stored);
 
             if (key === undefined) {
-                // `consumeQueuedSend` refuses a body without a key; queued as-is so the refusal is logged there.
-                insert();
-
-                return;
+                // Refused here, at the caller, rather than queued for `consumeQueuedSend` to refuse
+                // and drop: the key is what every dedupe and claim on this host runs on.
+                // `mailer.queue()` always mints one, so only a raw `queue.send()` gets here.
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    "@lunora/platform-node: a queued mail body needs an `idempotencyKey` (a non-empty string) — queue through `mailer.queue()`, which mints one",
+                );
             }
 
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see above, for `consumer`
@@ -979,12 +990,15 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
     // `buildMailer` has refused a missing MAIL_FROM by now, so this is the sender every send defaults to.
     const defaultFrom = env["MAIL_FROM"];
     const fingerprint = (body: unknown): string => fingerprintOf(body, typeof defaultFrom === "string" ? defaultFrom : undefined);
+    const claims = createKeyClaims(database, clock, fingerprint);
     const consumer: MailConsumer = {
-        claims: createKeyClaims(database, clock, fingerprint),
+        claims,
         clock,
         fingerprint,
         mailer,
-        sent: createSentLedger(database, clock),
+        sent: createSentLedger(database, clock, (key) => {
+            claims.keepContent(key);
+        }),
         parking: new AsyncLocalStorage(),
     };
     // The one host allowed the reserved `lunora-mail` name.

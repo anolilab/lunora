@@ -175,7 +175,7 @@ const mailPathChain = (mailPath: string): string[] => {
  * Whether two paths name one file. Device and inode when both exist, because
  * `realpath` resolves symlinks but not hard links: a hard link to the shard's file
  * is another path to the same database. Canonical paths otherwise, for a file not
- * created yet, which no hard link can point at.
+ * created yet, which no hard link can point at, compared without case.
  */
 const sameFile = (a: string, b: string): boolean => {
     try {
@@ -187,7 +187,10 @@ const sameFile = (a: string, b: string): boolean => {
 
         return first.dev === second.dev && first.ino === second.ino;
     } catch {
-        return canonicalPath(a, { databaseFile: true }) === canonicalPath(b, { databaseFile: true });
+        // Case-insensitively, on every platform: on a case-insensitive volume (APFS, NTFS)
+        // `Mail.sqlite3` and `mail.sqlite3` are one file, and with no file to stat there is no way
+        // to tell which kind of volume this is. A false refusal costs a rename; a miss shares a file.
+        return canonicalPath(a, { databaseFile: true }).toLowerCase() === canonicalPath(b, { databaseFile: true }).toLowerCase();
     }
 };
 
