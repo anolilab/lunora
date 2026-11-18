@@ -66,13 +66,49 @@ const ADMIN_PATH = /^[\w-]+(?:\/[\w-]+)*$/iu;
 const ADMIN_METHODS = new Set(["GET", "POST"]);
 
 /**
- * The tenant's bulk data-movement routes: `export` reads every row (and, asked
- * for, every end user's auth data), `import` rewrites them. The proxy resolves
- * their admin target for owners and admins only.
+ * The tenant admin reads an org `member` may make through the proxy, each with
+ * the one verb the tenant serves it on; every other request is owner/admin.
+ * Named, not shaped, unlike {@link ADMIN_PATH}: the proxy carries the tenant's
+ * ROOT admin bearer, so a route the framework adds tomorrow — impersonation, CDC
+ * apply and token minting each arrived that way — must not reach a member until
+ * someone decides it should. The three POSTs are queries that take a body. Left
+ * out on purpose: `auth/*` (every end user's sessions, accounts and API keys),
+ * `tokens`, `kv/value`, `storage/object` and `storage/url` (raw values and signed
+ * blob URLs), and `export`, which carries all of it at once.
  */
-const DATA_MOVEMENT_PATH = /^(?:export|import)(?:\/|$)/iu;
+const MEMBER_READS: ReadonlyMap<string, "GET" | "POST"> = new Map([
+    ["architecture", "GET"],
+    ["backup/retention", "GET"],
+    ["cron-jobs", "GET"],
+    ["functions", "GET"],
+    ["global/facet", "GET"],
+    ["global/table", "GET"],
+    ["global/tables", "GET"],
+    ["kv/keys", "GET"],
+    ["kv/namespaces", "GET"],
+    ["logs/archive", "POST"],
+    ["openapi", "GET"],
+    ["openrpc", "GET"],
+    ["scheduled", "GET"],
+    ["scheduled/cron-runs", "GET"],
+    ["scheduled/dead", "GET"],
+    ["scheduled/history", "GET"],
+    ["scheduled/job", "GET"],
+    ["scheduled/status", "GET"],
+    ["shard-traffic", "POST"],
+    ["storage", "GET"],
+    ["storage/buckets", "GET"],
+    ["vector/indexes", "GET"],
+    ["vector/query", "POST"],
+    ["workflows/instance", "GET"],
+    ["workflows/instances", "GET"],
+]);
 
-export const isDataMovementPath = (path: string): boolean => DATA_MOVEMENT_PATH.test(path);
+/**
+ * Whether an org `member` may have this admin request forwarded. Exact-case:
+ * the tenant routes by exact path, so `Functions` is not the read `functions` is.
+ */
+export const isMemberAdminRead = (method: string, path: string): boolean => MEMBER_READS.get(path) === method;
 
 /** Whether a caller-supplied admin path is safe to append to the tenant's admin base. */
 const isAdminPath = (path: string): boolean => path.length > 0 && path.length <= 200 && ADMIN_PATH.test(path);

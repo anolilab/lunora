@@ -68,7 +68,7 @@ export interface InternalApiTypes {
         removeReleaseKey: FunctionReference<"mutation", { buildId: Id<"builds">; id: Id<"deployKeys"> }, void>;
     };
     deployments: {
-        adminTarget: FunctionReference<"query", { adminPath: string; deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
+        adminTarget: FunctionReference<"query", { adminMethod: string; adminPath: string; deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         cleanupExpiredPreviews: FunctionReference<"mutation", {}, { destroyed: number; }>;
         closePreview: FunctionReference<"mutation", { branch: unknown; projectId: Id<"projects"> }, { destroyed: number; }>;
         ejectTarget: FunctionReference<"query", { deployKey: unknown; deploymentId: Id<"deployments"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; organizationId: Id<"organizations">; projectSlug: string; scriptName: string; url: string; } | null>;

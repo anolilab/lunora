@@ -12,7 +12,7 @@ export const handleAdminRoute = async (request: Request, environment: RouterEnv)
     const adminBody = await readJsonObject(request);
     const organizationId = adminBody?.["organizationId"];
     const deploymentId = adminBody?.["deploymentId"];
-    // The target is resolved for this path: `adminTarget` decides the role from it.
+    // The target is resolved for this verb and path: `adminTarget` decides the role from them.
     const adminPath = adminBody?.["path"];
     const method = adminBody?.["method"] ?? "GET";
 
@@ -47,6 +47,7 @@ export const handleAdminRoute = async (request: Request, environment: RouterEnv)
                 },
                 resolveTarget: async (targetOrganizationId, targetDeploymentId) => {
                     const target = await context.runQuery<(StoredAdminToken & { url: string }) | null>(internal.deployments.adminTarget, {
+                        adminMethod: method,
                         adminPath,
                         deploymentId: targetDeploymentId,
                         organizationId: targetOrganizationId,

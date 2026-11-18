@@ -4,7 +4,7 @@ import { handleAdminRoute } from "../src/deploy/routes/admin-proxy";
 import type { RouterEnv } from "../src/deploy/routes/shared";
 
 /**
- * `adminTarget` takes the admin path to decide the caller's role, and the
+ * `adminTarget` takes the admin verb and path to decide the caller's role, and the
  * proxy forwards path and method to the tenant under its admin bearer. A value
  * of the wrong type must stop at the route as a 400, before either runs.
  */
@@ -53,6 +53,11 @@ describe("handleAdminRoute body validation", () => {
         const response = await handleAdminRoute(post(JSON.stringify(valid)), environment(ctx));
 
         expect(response.status).toBe(404);
-        expect(ctx.runQuery).toHaveBeenCalledWith(expect.anything(), { adminPath: "tables", deploymentId: "dep_1", organizationId: "org_1" });
+        expect(ctx.runQuery).toHaveBeenCalledWith(expect.anything(), {
+            adminMethod: "GET",
+            adminPath: "tables",
+            deploymentId: "dep_1",
+            organizationId: "org_1",
+        });
     });
 });

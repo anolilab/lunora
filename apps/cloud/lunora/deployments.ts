@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import { isDataMovementPath } from "../src/admin/proxy";
+import { isMemberAdminRead } from "../src/admin/proxy";
 import { highestPlan } from "../src/billing/plans";
 import type { AdmissionRow } from "../src/billing/spend";
 import { organizationServing } from "../src/billing/spend";
@@ -144,24 +144,25 @@ const pointProjectAt = async (context: MutationContext, deployment: DeploymentRo
  * is not yet live.
  */
 export const adminTarget = internalQuery
-    .input({ adminPath: v.string(), deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
+    .input({ adminMethod: v.string(), adminPath: v.string(), deploymentId: v.id("deployments"), organizationId: v.id("organizations") })
     .query(
         async ({
             ctx: context,
-            args: { adminPath, deploymentId, organizationId },
+            args: { adminMethod, adminPath, deploymentId, organizationId },
         }): Promise<null | { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string }> => {
             // Not bare `assertMember`. This resolves the tenant's ADMIN bearer for
             // the studio proxy, which forwards writes to the tenant's own admin
             // API — so a `viewer`, whose whole role is read-only, was able to
             // mutate tenant data through it. Roles are named explicitly here
             // rather than at the route, because the token is handed out here.
-            // Internal, and handed the admin path the proxy will forward: the role is
-            // decided here from the action itself, never from a flag a caller sets, and
-            // no browser can call this to collect a target for some other path. Export
-            // and import are owner/admin — an export carries every end user's data, an
-            // import rewrites it. The caller's identity still applies: the HTTP route's
-            // internal call runs under the session it was made with.
-            await assertMember(context, organizationId, isDataMovementPath(adminPath) ? ["owner", "admin"] : ["owner", "admin", "member"]);
+            // Internal, and handed the verb and path the proxy will forward: the role
+            // is decided here from the action itself, never from a flag a caller sets,
+            // and no browser can call this to collect a target for some other request.
+            // A member gets the named reads only; anything else — impersonating or
+            // removing an end user, a CDC apply, an export — is owner/admin. The
+            // caller's identity still applies: the HTTP route's internal call runs
+            // under the session it was made with.
+            await assertMember(context, organizationId, isMemberAdminRead(adminMethod, adminPath) ? ["owner", "admin", "member"] : ["owner", "admin"]);
 
             const deployment = await context.db.get("deployments", deploymentId);
             const hasToken = deployment?.adminToken ?? (deployment?.adminTokenCiphertext && deployment.adminTokenIv);

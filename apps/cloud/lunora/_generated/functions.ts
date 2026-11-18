@@ -652,10 +652,11 @@ return { "id": source["id"], "organizationId": source["organizationId"] };
 installCompiledValidatorMap(lunora_deployments_12.adminTarget.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["adminMethod"] !== "string") return DEFER;
 if (typeof source["adminPath"] !== "string") return DEFER;
 if (typeof source["deploymentId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
-return { "adminPath": source["adminPath"], "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
+return { "adminMethod": source["adminMethod"], "adminPath": source["adminPath"], "deploymentId": source["deploymentId"], "organizationId": source["organizationId"] };
 });
 installCompiledValidatorMap(lunora_deployments_12.listByProject.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
@@ -1355,7 +1356,7 @@ export interface Caller {
     };
     deployments: {
         activate: (args: { deployKey?: unknown; id: Id<"deployments"> }) => Promise<void>;
-        adminTarget: (args: { adminPath: string; deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
+        adminTarget: (args: { adminMethod: string; adminPath: string; deploymentId: Id<"deployments">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; url: string; } | null>;
         cleanupExpiredPreviews: (args?: {}) => Promise<{ destroyed: number; }>;
         closePreview: (args: { branch: unknown; projectId: Id<"projects"> }) => Promise<{ destroyed: number; }>;
         create: (args: { adminToken?: unknown; adminTokenCiphertext?: unknown; adminTokenIv?: unknown; bindings?: Array<{ name: unknown; target?: unknown; type: unknown }>; branch?: unknown; cronSpecs?: Array<unknown>; allowDeleteClasses?: Array<unknown>; deployKey?: unknown; statefulClasses?: Array<unknown>; kind: "production" | "preview" | "dev"; organizationId: Id<"organizations">; projectId: Id<"projects">; runtime?: "worker"; runtimeVersion?: unknown; scriptName: unknown }) => Promise<{ deploymentId: Id<"deployments">; previousDeploymentId?: Id<"deployments">; version: number }>;
