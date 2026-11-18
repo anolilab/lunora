@@ -1,3 +1,8 @@
+## @lunora/runtime [1.0.0-alpha.292](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.291...@lunora/runtime@1.0.0-alpha.292) (2026-11-18)
+
+- Updated dependency @lunora/platform@1.0.0-alpha.81
+- Updated dependency @lunora/bindings@1.0.0-alpha.152
+
 ## @lunora/runtime [1.0.0-alpha.291](https://github.com/anolilab/lunora/compare/@lunora/runtime@1.0.0-alpha.290...@lunora/runtime@1.0.0-alpha.291) (2026-11-17)
 
 - fix: studio asset follow-ups from #1499 (#1609)

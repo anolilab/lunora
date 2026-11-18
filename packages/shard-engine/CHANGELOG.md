@@ -1,3 +1,7 @@
+## @lunora/shard-engine [1.0.0-alpha.200](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.199...@lunora/shard-engine@1.0.0-alpha.200) (2026-11-18)
+
+- Updated dependency @lunora/platform@1.0.0-alpha.81
+
 ## @lunora/shard-engine [1.0.0-alpha.199](https://github.com/anolilab/lunora/compare/@lunora/shard-engine@1.0.0-alpha.198...@lunora/shard-engine@1.0.0-alpha.199) (2026-11-16)
 
 - fix(do): keep broadcast deltas off subscriptions served by re-execution (#1597)

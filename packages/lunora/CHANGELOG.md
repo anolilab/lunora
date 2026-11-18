@@ -1,3 +1,7 @@
+## lunorash [1.0.0-alpha.479](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.478...lunorash@1.0.0-alpha.479) (2026-11-18)
+
+- Updated dependency @lunora/platform@1.0.0-alpha.81
+
 ## lunorash [1.0.0-alpha.478](https://github.com/anolilab/lunora/compare/lunorash@1.0.0-alpha.477...lunorash@1.0.0-alpha.478) (2026-11-04)
 
 - Release 1.0.0-alpha.478. Commit a2f1851 set this version and it was never published, so it is released from HEAD.

@@ -1,3 +1,7 @@
+## @lunora/d1 [1.0.0-alpha.237](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.236...@lunora/d1@1.0.0-alpha.237) (2026-11-18)
+
+- Updated dependency @lunora/platform@1.0.0-alpha.81
+
 ## @lunora/d1 [1.0.0-alpha.236](https://github.com/anolilab/lunora/compare/@lunora/d1@1.0.0-alpha.235...@lunora/d1@1.0.0-alpha.236) (2026-11-09)
 
 - feat(cli): apply generated SQL migrations per stage (#1516)

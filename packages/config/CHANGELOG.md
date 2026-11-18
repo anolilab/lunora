@@ -1,3 +1,7 @@
+## @lunora/config [1.0.0-alpha.465](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.464...@lunora/config@1.0.0-alpha.465) (2026-11-18)
+
+- feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)
+
 ## @lunora/config [1.0.0-alpha.464](https://github.com/anolilab/lunora/compare/@lunora/config@1.0.0-alpha.463...@lunora/config@1.0.0-alpha.464) (2026-11-17)
 
 - fix: studio asset follow-ups from #1499 (#1609)

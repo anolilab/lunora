@@ -1,3 +1,7 @@
+## @lunora/platform [1.0.0-alpha.81](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.80...@lunora/platform@1.0.0-alpha.81) (2026-11-18)
+
+- feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)
+
 ## @lunora/platform [1.0.0-alpha.80](https://github.com/anolilab/lunora/compare/@lunora/platform@1.0.0-alpha.79...@lunora/platform@1.0.0-alpha.80) (2026-11-03)
 
 ### Bug Fixes

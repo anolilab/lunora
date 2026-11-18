@@ -1,3 +1,7 @@
+## @lunora/studio [1.0.0-alpha.386](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.385...@lunora/studio@1.0.0-alpha.386) (2026-11-18)
+
+- Updated dependency @lunora/bindings@1.0.0-alpha.152
+
 ## @lunora/studio [1.0.0-alpha.385](https://github.com/anolilab/lunora/compare/@lunora/studio@1.0.0-alpha.384...@lunora/studio@1.0.0-alpha.385) (2026-11-14)
 
 - feat(advisor): suppress one finding at one site with an inline directive (#1587)

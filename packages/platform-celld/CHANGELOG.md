@@ -1,3 +1,8 @@
+## @lunora/platform-celld [1.0.0-alpha.43](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.42...@lunora/platform-celld@1.0.0-alpha.43) (2026-11-18)
+
+- Updated dependency @lunora/platform@1.0.0-alpha.81
+- Updated dependency @lunora/platform-cloudflare@1.0.0-alpha.124
+
 ## @lunora/platform-celld [1.0.0-alpha.42](https://github.com/anolilab/lunora/compare/@lunora/platform-celld@1.0.0-alpha.41...@lunora/platform-celld@1.0.0-alpha.42) (2026-11-03)
 
 

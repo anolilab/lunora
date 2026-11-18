@@ -1,3 +1,7 @@
+## @lunora/scheduler [1.0.0-alpha.171](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.170...@lunora/scheduler@1.0.0-alpha.171) (2026-11-18)
+
+- feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)
+
 ## @lunora/scheduler [1.0.0-alpha.170](https://github.com/anolilab/lunora/compare/@lunora/scheduler@1.0.0-alpha.169...@lunora/scheduler@1.0.0-alpha.170) (2026-11-14)
 
 - security(scheduler): sign the timestamp and forwarded identity on dispatch (#1541)

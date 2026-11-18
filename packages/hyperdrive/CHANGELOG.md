@@ -1,3 +1,7 @@
+## @lunora/hyperdrive [1.0.0-alpha.231](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.230...@lunora/hyperdrive@1.0.0-alpha.231) (2026-11-18)
+
+- feat(platform-node): run crons, secrets and Hyperdrive on the Node target (#1551) (#1618)
+
 ## @lunora/hyperdrive [1.0.0-alpha.230](https://github.com/anolilab/lunora/compare/@lunora/hyperdrive@1.0.0-alpha.229...@lunora/hyperdrive@1.0.0-alpha.230) (2026-11-12)
 
 - fix(hyperdrive): run test files one at a time (#1594)
