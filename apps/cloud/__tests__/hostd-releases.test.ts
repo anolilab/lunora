@@ -294,9 +294,19 @@ describe("rolling a release out", () => {
     it("withdraws a halted rollback's flag with its intent", async () => {
         const records = memoryStore({ boxes: [{ _id: "box_1", allowDowngrade: true, desiredReleaseId: "hostd-v1_1_0", status: "offline" }] });
 
-        await withdrawDesiredRelease(records, "hostd-v1_1_0")(["box_1"]);
+        await withdrawDesiredRelease(records, { allowDowngrade: true, kind: "upgrade", manifestUrl: "https://cloud.test/m", releaseId: "hostd-v1_1_0" })([
+            "box_1",
+        ]);
 
         expect(records.tables["boxes"]?.[0]).toMatchObject({ allowDowngrade: false, desiredReleaseId: null });
+    });
+
+    it("leaves a rollback onto the same release alone when a rollout halts", async () => {
+        const records = memoryStore({ boxes: [{ _id: "box_1", allowDowngrade: true, desiredReleaseId: "hostd-v1_1_0", status: "offline" }] });
+
+        await withdrawDesiredRelease(records, { kind: "upgrade", manifestUrl: "https://cloud.test/m", releaseId: "hostd-v1_1_0" })(["box_1"]);
+
+        expect(records.tables["boxes"]?.[0]).toMatchObject({ allowDowngrade: true, desiredReleaseId: "hostd-v1_1_0" });
     });
 
     it("points boxes at a stored release, never a revoked one", async () => {

@@ -122,7 +122,7 @@ export const runHostdRollout = async (
         /** Run one job on one box; a refusal (offline, busy) is a failed upgrade, not an error. */
         dispatch: (boxId: string, job: UpgradeJob) => Promise<JobOutcome>;
         maxFailureRate?: number;
-        /** Clear `desiredReleaseId` on these boxes, where it still names this release. */
+        /** Clear `desiredReleaseId` on these boxes, where it is still this run's intent. */
         withdraw: (boxIds: string[]) => Promise<void>;
     },
 ): Promise<RolloutResult> => {
@@ -158,15 +158,23 @@ export const runHostdRollout = async (
     return { ...result, withdrawn: withdrawn.length };
 };
 
-/** A {@link runHostdRollout} `withdraw` port over the control-plane store: clears the intent only where it still names `releaseId`. */
+/** True while the row names `job`'s release with its `allowDowngrade`: a rollout and a rollback onto one release are different intents. */
+const desiresJob = (row: null | { allowDowngrade?: boolean | null; desiredReleaseId?: null | string }, job: UpgradeJob): boolean =>
+    row?.desiredReleaseId === job.releaseId && (row.allowDowngrade === true) === (job.allowDowngrade === true);
+
+/**
+ * A {@link runHostdRollout} `withdraw` port over the control-plane store: clears the intent only where it is still
+ * `job`'s. Matching the release id alone would let a halted rollout clear a rollback an operator started onto the
+ * same release since.
+ */
 export const withdrawDesiredRelease =
-    (database: ControlPlaneStore, releaseId: string) =>
+    (database: ControlPlaneStore, job: UpgradeJob) =>
     async (boxIds: string[]): Promise<void> => {
         for (const boxId of boxIds) {
             // eslint-disable-next-line no-await-in-loop -- re-read per box: a newer rollout may have re-pointed it since
-            const row = (await database.get("boxes", boxId)) as null | { desiredReleaseId?: null | string };
+            const row = (await database.get("boxes", boxId)) as null | { allowDowngrade?: boolean | null; desiredReleaseId?: null | string };
 
-            if (row?.desiredReleaseId === releaseId) {
+            if (desiresJob(row, job)) {
                 // eslint-disable-next-line no-await-in-loop -- see above
                 await database.patch("boxes", boxId, { allowDowngrade: false, desiredReleaseId: null });
             }
@@ -176,11 +184,8 @@ export const withdrawDesiredRelease =
 /** A {@link runHostdRollout} `desires` port over the control-plane store, read fresh for each box. */
 export const desiresRelease =
     (database: ControlPlaneStore, job: UpgradeJob) =>
-    async (boxId: string): Promise<boolean> => {
-        const row = (await database.get("boxes", boxId)) as null | { allowDowngrade?: boolean | null; desiredReleaseId?: null | string };
-
-        return row?.desiredReleaseId === job.releaseId && (row.allowDowngrade === true) === (job.allowDowngrade === true);
-    };
+    async (boxId: string): Promise<boolean> =>
+        desiresJob((await database.get("boxes", boxId)) as null | { allowDowngrade?: boolean | null; desiredReleaseId?: null | string }, job);
 
 interface DesiringBoxRow {
     _id: string;
@@ -235,7 +240,7 @@ export const resumeHostdRollouts = async (ports: {
             results[key] = await runHostdRollout(planned, {
                 desires: desiresRelease(ports.database, planned.job),
                 dispatch: ports.dispatch,
-                withdraw: withdrawDesiredRelease(ports.database, releaseId),
+                withdraw: withdrawDesiredRelease(ports.database, planned.job),
             });
         }
     }

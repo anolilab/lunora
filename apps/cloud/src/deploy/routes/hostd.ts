@@ -171,7 +171,7 @@ export const handleHostdRolloutRoute = async (request: Request, environment: Hos
                 runHostdRollout(planned, {
                     desires: desiresRelease(database, planned.job),
                     dispatch: upgradeDispatch(namespace),
-                    withdraw: withdrawDesiredRelease(database, releaseId),
+                    withdraw: withdrawDesiredRelease(database, planned.job),
                 }).then(
                     (result) => {
                         // eslint-disable-next-line no-console -- the run outlives the response; Workers Logs is its only record
