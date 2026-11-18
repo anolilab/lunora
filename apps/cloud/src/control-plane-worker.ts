@@ -70,9 +70,9 @@ const httpRouter = {
 };
 
 const buildWorker = (env: ControlPlaneEnv): LunoraWorker => {
-    // Non-null by construction: every caller awaits `ensureAuth` first — the
-    // Worker's `fetch`, and the build runner's alarm — and `scheduled` reaches
-    // it only after a request has.
+    // Null when a cron is this isolate's first invocation: `scheduled` does not
+    // bootstrap auth, which its jobs never need. `controlPlaneWorker` keeps such a
+    // build out of the cache.
     const auth = currentAuth();
 
     return createWorker({
@@ -104,9 +104,21 @@ const buildWorker = (env: ControlPlaneEnv): LunoraWorker => {
     });
 };
 
-/** This isolate's worker, built on first use. The caller has awaited `ensureAuth`. */
+/**
+ * This isolate's worker, built on first use. A build made before `ensureAuth`
+ * has run is served once and not cached: it captured no auth, so a request that
+ * reused it would get no `/api/auth/*` routes and resolve no identity.
+ */
 export const controlPlaneWorker = (env: ControlPlaneEnv): LunoraWorker => {
-    worker ??= buildWorker(env);
+    if (worker) {
+        return worker;
+    }
 
-    return worker;
+    const built = buildWorker(env);
+
+    if (currentAuth()) {
+        worker = built;
+    }
+
+    return built;
 };
