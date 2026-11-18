@@ -1,9 +1,10 @@
 import type { SessionSpan } from "../src/telemetry/session-rollup";
 import { foldSessions } from "../src/telemetry/session-rollup";
-import type { Id } from "./_generated/dataModel";
+import type { Doc as Document_, Id } from "./_generated/dataModel";
 import { query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember } from "./authz";
+import { collectAll } from "./paginate";
 import { boundedString, LIMITS } from "./validators";
 
 /**
@@ -119,13 +120,14 @@ export const get = query
             return [];
         }
 
-        const { page } = await context.db.observations.findMany({
-            where: { organizationId: args.organizationId, sessionId: args.sessionId },
-        });
+        // Drained: a long-running agent session outgrows one 1000-row page, and the
+        // drill-in promises every turn, not the first page's worth.
+        const rows = await collectAll<Document_<"observations">>((cursor) =>
+            context.db.observations.findMany({ cursor, where: { kind: "generation", organizationId: args.organizationId, sessionId: args.sessionId } }),
+        );
 
-        return page
+        return rows
             .map((row) => absentForNull(row))
-            .filter((row) => row.kind === "generation")
             .toSorted((a, b) => a.startedAt - b.startedAt)
             .map((row) => {
                 return {
