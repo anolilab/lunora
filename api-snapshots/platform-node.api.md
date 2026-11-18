@@ -171,6 +171,34 @@ interface NodeHyperdriveBinding {
 }
 ```
 
+### `NodeMailHost` (interface)
+
+```ts
+interface NodeMailHost {
+    deadLetters: {
+        list: () => {
+            attempts: number;
+            body: unknown;
+            id: string;
+        }[];
+        requeue: (id: string) => boolean;
+    };
+    mailer: Mailer;
+    poll: (now?: number) => Promise<number>;
+    queue: QueueLike;
+}
+```
+
+### `NodeMailHostOptions` (interface)
+
+```ts
+interface NodeMailHostOptions {
+    env?: MailEnv;
+    now?: () => number;
+    transport?: MailTransport;
+}
+```
+
 ### `NodePlatform` (interface)
 
 ```ts
@@ -190,6 +218,7 @@ interface NodePlatform<Queues extends Record<string, {
     globalTables?: NodeGlobalStore;
     idle: () => boolean;
     kv: ShardKvStore;
+    mail?: NodeMailHost;
     objectStorage?: R2BucketLike;
     pending: () => string[];
     queues?: NodeQueueHost<Queues>;
@@ -221,6 +250,7 @@ type NodePlatformOptions<Queues extends Record<string, {
     crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
     dispatch?: NodePlatformDispatchOptions;
     globalTablesPath?: string;
+    mail?: NodeMailHostOptions;
     objectStorageDirectory?: string;
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
     queues?: Queues;
@@ -485,6 +515,12 @@ const createNodeHttpServer: (options: NodeHttpServerOptions) => Promise<NodeHttp
 
 ```ts
 const createNodeHyperdrive: (url?: string | undefined) => NodeHyperdriveBinding;
+```
+
+### `createNodeMailHost` (const)
+
+```ts
+const createNodeMailHost: (database: Database.Database, options?: NodeMailHostOptions) => NodeMailHost;
 ```
 
 ### `createNodePlatform` (const)

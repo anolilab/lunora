@@ -35,8 +35,10 @@
  * the Cloudflare product bindings with no local
  * equivalent — Vectorize, Workers AI, Browser Rendering, Containers, Analytics
  * Engine, Pipelines. `ctx.secrets` reads environment variables through
- * `createNodeSecretBindings` (`./node-secrets`), and the Hyperdrive binding is
- * built from `DATABASE_URL` by `createNodeHyperdrive` (`./node-hyperdrive`).
+ * `createNodeSecretBindings` (`./node-secrets`), the Hyperdrive binding is
+ * built from `DATABASE_URL` by `createNodeHyperdrive` (`./node-hyperdrive`), and
+ * `@lunora/mail` sends are queued and delivered by `createNodeMailHost`
+ * (`./node-mail-host`) through Resend or a caller-supplied transport.
  *
  * `lunora deploy --target node` bundles an app into a container build context
  * whose generated entry composes this package (crons, `ctx.secrets`,
@@ -61,6 +63,8 @@ export { createNodeHttpServer } from "./node-http-server";
 export type { NodeHyperdriveBinding } from "./node-hyperdrive";
 export { createNodeHyperdrive } from "./node-hyperdrive";
 export { createNodeShardKvStore } from "./node-kv-store";
+export type { NodeMailHost, NodeMailHostOptions } from "./node-mail-host";
+export { createNodeMailHost } from "./node-mail-host";
 export type { NodeCronJob, NodePlatform, NodePlatformDispatchOptions, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
 export type { NodeProfileHandler, NodeProfileHandlerOptions } from "./node-profile-handler";

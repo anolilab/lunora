@@ -16,6 +16,8 @@
 import { LunoraError } from "@lunora/errors";
 import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
+import { isQueueDefinition, queueDefaultName } from "@lunora/queue";
+import type Database from "better-sqlite3";
 
 import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
 import type { Drainable, DrainOptions, DrainResult } from "./drain-deadline";
@@ -24,6 +26,8 @@ import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-rout
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
 import { createNodeShardKvStore } from "./node-kv-store";
+import type { NodeMailHost, NodeMailHostOptions } from "./node-mail-host";
+import { createNodeMailHost, MAIL_QUEUE_NAME } from "./node-mail-host";
 import type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 import { createNodeQueueHost } from "./node-queue-host";
 import { createNodeR2Bucket } from "./node-r2-bucket";
@@ -80,6 +84,33 @@ const deliverableCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCronJ
     }
 
     return declared;
+};
+
+/**
+ * The mail host, refusing an app queue under the mail queue's name: both hosts claim rows by queue
+ * name from the same table, so its messages would go to whichever host polled first.
+ */
+const composeMail = (
+    database: Database.Database,
+    options: NodeMailHostOptions | undefined,
+    queues: Record<string, { isLunoraQueue: true }> | undefined,
+): NodeMailHost | undefined => {
+    if (options === undefined) {
+        return undefined;
+    }
+
+    const clash = Object.entries(queues ?? {}).find(
+        ([exportName, value]) => (isQueueDefinition(value) ? (value.name ?? queueDefaultName(exportName)) : undefined) === MAIL_QUEUE_NAME,
+    );
+
+    if (clash !== undefined) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: queue "${clash[0]}" is named "${MAIL_QUEUE_NAME}", which \`mail\` already uses — rename it, or drop \`mail\` and consume it yourself`,
+        );
+    }
+
+    return createNodeMailHost(database, options);
 };
 
 /**
@@ -225,6 +256,12 @@ export interface NodePlatform<
     /** Durable key-value storage backed by the same `better-sqlite3` database as `shard`. */
     kv: ShardKvStore;
 
+    /**
+     * Queued mail delivery, or `undefined` when the caller passed no `mail`.
+     * Its queue lives in the shard's database beside the app's own queues.
+     */
+    mail?: NodeMailHost;
+
     /** The local-filesystem bucket, or `undefined` when the caller named no bucket directory. */
     objectStorage?: R2BucketLike;
 
@@ -315,6 +352,14 @@ export type NodePlatformOptions<
      * default, for the same reason the bucket has none.
      */
     globalTablesPath?: string;
+
+    /**
+     * Deliver `@lunora/mail` sends: a durable `lunora-mail` queue drained
+     * through Resend (`RESEND_API_KEY`) or the given `transport`, exposed as
+     * `platform.mail`. Omit when the app sends no mail. Throws here, not on the
+     * first send, when `MAIL_FROM` is unset or nothing can deliver.
+     */
+    mail?: NodeMailHostOptions;
 
     /**
      * Directory the object-storage bucket keeps its objects in, one file per
@@ -435,6 +480,8 @@ export const createNodePlatform = <
                       queues: options.queues,
                   });
 
+        const mail = composeMail(database, options.mail, options.queues);
+
         const objectStorage = options.objectStorageDirectory === undefined ? undefined : createNodeR2Bucket({ directory: options.objectStorageDirectory });
 
         // Its own connection and its own file: a `.global()` table is shared by every
@@ -537,6 +584,7 @@ export const createNodePlatform = <
             },
             globalTables,
             kv,
+            mail,
             objectStorage,
             rearmPersistedAlarms: () => registry.rearmPersistedAlarms(),
             queues,

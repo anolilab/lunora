@@ -240,8 +240,8 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
             note: "better-sqlite3 keeps no change log to rewind, and createNodeShardState deliberately exposes no bookmark methods rather than a stub that would report a restore that never happened, so getPitrBookmark / pitrRestore answer PITR_UNAVAILABLE. Recover from `lunora backup` snapshots instead (objectStorageBackups)",
         },
         mail: {
-            level: "unsupported",
-            note: "The queue tier this host lacked when the rating was written now exists (createNodeQueueHost), but nothing here composes a @lunora/mail transport or the queued-send consumer, so a send would be accepted and never delivered",
+            level: "emulated",
+            note: "createNodeMailHost (@lunora/platform-node, or createNodePlatform({ mail })) puts a durable lunora-mail queue on createNodeQueueHost and drains it through consumeQueuedSend, sending with Resend (RESEND_API_KEY) or a caller-supplied transport such as an SMTP client; a dev env captures as on Cloudflare. A failed send is retried and then parked by the queue host's policy, and each failure is logged. Construction throws when MAIL_FROM is unset or nothing can deliver, rather than queue mail that never goes out. Emulated, not native: Cloudflare Email Workers (the send_email binding) and inbound Email Routing do not exist here, delivery runs on the host's poll() like every queue on this target, and no sent-mail store is kept, so a redelivery after a crash relies on Resend's idempotency key to drop the repeat",
         },
         secrets: {
             level: "emulated",

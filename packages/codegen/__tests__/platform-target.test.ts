@@ -1157,12 +1157,13 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(viaFactory.generated.server).not.toContain(imagesField);
     });
 
-    it("gates mail on its import, since it has no ctx helper to read", () => {
+    it("lets a @lunora/mail import through on node, whose host queues and delivers the sends", () => {
         expect.assertions(1);
 
+        // Mail has no ctx helper, so the import is what the gate reads; createNodeMailHost serves it here.
         write("send.ts", `import { createMailer } from "@lunora/mail";\n\nexport const mailer = createMailer;\n`);
 
-        expect(codegen().platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["mail"]);
+        expect(codegen().platformDiagnostics).toStrictEqual([]);
     });
 
     it("emits ctx.secrets for node, which maps it onto process.env", () => {

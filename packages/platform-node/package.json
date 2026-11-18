@@ -61,6 +61,7 @@
     "dependencies": {
         "@lunora/d1": "^1.0.0-alpha.237",
         "@lunora/errors": ">=1.0.0-alpha.51 <2.0.0-0",
+        "@lunora/mail": "^1.0.0-alpha.139",
         "@lunora/platform": "^1.0.0-alpha.81",
         "@lunora/queue": "^1.0.0-alpha.144",
         "@lunora/runtime": "^1.0.0-alpha.292",
