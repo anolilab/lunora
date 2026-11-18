@@ -2,7 +2,7 @@ import { realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import type { CallExpression, ImportDeclaration, ImportEqualsDeclaration, Project, SourceFile } from "ts-morph";
-import { Node, SyntaxKind } from "ts-morph";
+import { Node, SyntaxKind, ts } from "ts-morph";
 
 import { descendantsOfKind, listLunoraSourceFiles } from "./ast";
 
@@ -155,9 +155,31 @@ const isOutsideAppCode = (root: string, path: string): boolean =>
         .split(sep)
         .some((segment) => segment === "_generated" || segment === "node_modules");
 
-/** The app files a module's relative specifiers may reach, outside `_generated/` and `node_modules`. */
-const appFilesReachedFrom = (root: string, filePath: string, specifiers: ReadonlyArray<string>): string[] =>
-    specifiers.flatMap((specifier) => (specifier.startsWith(".") ? resolveRelative(filePath, specifier) : [])).filter((file) => !isOutsideAppCode(root, file));
+/**
+ * The app file a non-relative specifier names through an alias the project
+ * supports: `#lunora/*` from `package.json` `imports`, or a tsconfig `paths`
+ * entry. Resolved exactly as the rest of discovery resolves an import (the
+ * project's own compiler options and resolution host), and kept only when it
+ * lands in app source under the project root: a package, or its `.d.ts`, is not
+ * the app's to fix.
+ */
+const resolveAlias = (project: Project, root: string, filePath: string, specifier: string): string[] => {
+    const resolved = ts.resolveModuleName(specifier, filePath, project.getCompilerOptions(), project.getModuleResolutionHost()).resolvedModule;
+    const file = resolved?.resolvedFileName;
+
+    if (file === undefined || resolved?.isExternalLibraryImport === true || file.endsWith(".d.ts") || relative(root, file).startsWith("..")) {
+        return [];
+    }
+
+    return [file];
+};
+
+/** The app files a module's specifiers may reach, relative or through an alias, outside `_generated/` and `node_modules`. */
+const appFilesReachedFrom = (project: Project, root: string, filePath: string, specifiers: ReadonlyArray<string>): string[] =>
+    specifiers
+        .filter((specifier) => !specifier.startsWith(CLOUDFLARE_SCHEME))
+        .flatMap((specifier) => (specifier.startsWith(".") ? resolveRelative(filePath, specifier) : resolveAlias(project, root, filePath, specifier)))
+        .filter((file) => !isOutsideAppCode(root, file));
 
 /**
  * One key per file: its real path, so a file reached through a symlinked
@@ -203,7 +225,7 @@ const discoverCloudflareModuleImports = (project: Project, lunoraDirectory: stri
             found.push({ module: relative(root, filePath) || basename(filePath), specifiers: cloudflare });
         }
 
-        for (const file of appFilesReachedFrom(root, filePath, specifiers)) {
+        for (const file of appFilesReachedFrom(project, root, filePath, specifiers)) {
             const key = fileKey(file);
 
             if (!seen.has(key)) {

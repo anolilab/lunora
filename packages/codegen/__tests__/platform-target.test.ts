@@ -1329,6 +1329,32 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message.match(/\(cloudflare:workers\)/gu)).toHaveLength(1);
         });
 
+        it("follows a #lunora/* alias import into the helper it names", () => {
+            expect.assertions(1);
+
+            // The templates' wiring: package.json `imports` maps the alias, bundler resolution reads it.
+            writeFileSync(
+                join(workdir, "package.json"),
+                `${JSON.stringify({
+                    // The packages the fixture schema's generated code imports, which a declared package.json is checked for.
+                    dependencies: { "@lunora/d1": "*", "@lunora/storage": "*" },
+                    imports: { "#lunora/*": "./lunora/*" },
+                    name: "alias-app",
+                    type: "module",
+                })}\n`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", target: "ES2022" }, include: ["lunora"] })}\n`,
+                "utf8",
+            );
+            writeNested("helpers/aliased.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "#lunora/helpers/aliased.tsx";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/helpers/aliased.tsx (cloudflare:workers)");
+        });
+
         it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
             expect.assertions(1);
 
