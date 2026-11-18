@@ -12,12 +12,13 @@
  * already models this ("or `undefined` for a host that has none"), and claiming
  * a toolchain here would mean inventing commands that cannot run.
  *
- * **What that costs the target, stated plainly.** `lunora deploy` and `lunora
- * dev` both refuse it at selection (`resolveRunnableTargetOrError` in
- * `@lunora/cli`) rather than after codegen has already rewritten `_generated/*`
- * for it. What this target IS good for is everything before that line:
- * `lunora codegen --target node` gates the emitted surface, and running the
- * result is the operator's own `@lunora/platform-node` process.
+ * **What that costs the target, stated plainly.** `lunora dev` refuses it at
+ * selection (`resolveRunnableTargetOrError` in `@lunora/cli`) rather than after
+ * codegen has already rewritten `_generated/*` for it. `lunora deploy` does
+ * not need a toolchain for it: it writes a container build context (a bundled
+ * `@lunora/platform-node` server, a Dockerfile, the env it reads) and builds
+ * the image only when asked (`resolveDeployTargetOrError`). Running and
+ * hosting that container is the operator's.
  *
  * That process is also where the target's gaps get reported. This file used to
  * carry an `infer`/`provision` pair naming them. Nothing ever called either

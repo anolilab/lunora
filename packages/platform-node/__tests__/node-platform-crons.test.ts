@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { resolveShard } from "@lunora/platform";
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -50,6 +51,98 @@ describe("createNodePlatform declared crons", () => {
                     ["billing:sweep", { region: "us" }],
                 ]),
             );
+        } finally {
+            platform.close();
+        }
+    });
+
+    it("starts no cron tick or job that comes due during a drain, and fires both after a restart", async () => {
+        expect.assertions(3);
+
+        const path = join(directory, "shard.sqlite3");
+        const crons = { "* * * * *": [{ args: {}, functionPath: "reports:tick", name: "tick" }] };
+        const during = dispatchSpy();
+        const first = createNodePlatform({
+            crons,
+            onDispatch: async (functionPath, args) => {
+                during(functionPath, args);
+            },
+            path,
+        });
+        let release: () => void = () => {};
+
+        await first.scheduler.schedule("reports:once", {}, { delayMs: 10_000 });
+        // Host work that holds the drain open while both come due.
+        first.shard.waitUntil?.(
+            new Promise<void>((resolve) => {
+                release = resolve;
+            }),
+        );
+
+        const drained = first.drain({ timer: () => () => {} });
+
+        await vi.advanceTimersByTimeAsync(2 * MINUTE);
+
+        expect(during).not.toHaveBeenCalled();
+
+        release();
+        await drained;
+        first.close();
+
+        const after = dispatchSpy();
+        const second = createNodePlatform({
+            crons,
+            onDispatch: async (functionPath, args) => {
+                after(functionPath, args);
+            },
+            path,
+        });
+
+        try {
+            await vi.advanceTimersByTimeAsync(MINUTE);
+
+            // Neither was lost: the job's row and the cron's declaration were kept, and both fire once the server is back.
+            expect(after).toHaveBeenCalledWith("reports:once", {});
+            expect(after).toHaveBeenCalledWith("reports:tick", {});
+        } finally {
+            second.close();
+        }
+    });
+
+    it("keeps jobs, crons and alarms running when a drain is refused for a bad timeout", async () => {
+        expect.assertions(4);
+
+        const onDispatch = dispatchSpy();
+        const fired: string[] = [];
+        const platform = createNodePlatform({
+            crons: { "* * * * *": [{ args: {}, functionPath: "reports:tick", name: "tick" }] },
+            // Optional: the platform's own host calls it with no shard, a registry shard with one.
+            onAlarm: (shard?: { shardKey: string }) => {
+                fired.push(shard?.shardKey ?? "platform");
+            },
+            onDispatch: async (functionPath, args) => {
+                onDispatch(functionPath, args);
+            },
+            onFetch: async (_request, shard) => {
+                await shard.shard.alarms.set(Date.now() + 1000);
+
+                return new Response("armed");
+            },
+            path: join(directory, "shard.sqlite3"),
+        });
+
+        try {
+            await resolveShard(platform.directory, "a").fetch(new Request("https://shard.internal/rpc"));
+            await platform.scheduler.schedule("reports:once", {}, { delayMs: 10_000 });
+
+            await expect(platform.drain({ timeoutMs: -1 })).rejects.toThrow("a drain timeoutMs must be a whole number of milliseconds");
+
+            await vi.advanceTimersByTimeAsync(MINUTE);
+
+            // Refused before anything was stopped, so everything still fires.
+            expect(onDispatch).toHaveBeenCalledWith("reports:once", {});
+            expect(onDispatch).toHaveBeenCalledWith("reports:tick", {});
+            expect(fired).toStrictEqual(["a"]);
         } finally {
             platform.close();
         }

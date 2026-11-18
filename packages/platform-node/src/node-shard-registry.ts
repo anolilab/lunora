@@ -51,7 +51,10 @@ import { join } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
 import type { DirectShardDirectory, ShardHost, ShardKvStore, ShardStub, SocketHost } from "@lunora/platform";
+import Database from "better-sqlite3";
 
+import type { DrainOptions, DrainResult } from "./drain-deadline";
+import { settlesBefore, startDrainDeadline } from "./drain-deadline";
 import { createNodeShardKvStore } from "./node-kv-store";
 import { createNodeShardHost } from "./node-shard-host";
 import type { NodeSocketHost } from "./node-socket-host";
@@ -145,6 +148,69 @@ const shardKeyForFile = (directory: string, entry: string): string => {
     return key;
 };
 
+/**
+ * Whether the shard file at `path` holds a persisted alarm, read through a short read-only connection so a shard without one is
+ * not opened. A file that cannot be read is reported and treated as holding one: opening it lets the host deal with it, while
+ * skipping it would lose its alarm without a trace.
+ */
+const hasPersistedAlarm = (path: string, key: string): boolean => {
+    let database: Database.Database | undefined;
+
+    try {
+        database = new Database(path, { fileMustExist: true, readonly: true });
+
+        return database.prepare("SELECT 1 FROM _lunora_alarm LIMIT 1").get() !== undefined;
+    } catch (error: unknown) {
+        // eslint-disable-next-line no-console -- the shard is opened anyway; this records why its alarm could not be checked
+        console.error("[@lunora/platform-node] could not check shard %s for a persisted alarm, so it is opened to re-arm any", key, error);
+
+        return true;
+    } finally {
+        database?.close();
+    }
+};
+
+/** What one shard still has running when a drain looks. */
+interface ShardWorkCounts {
+    alarms: number;
+    background: number;
+    closing: boolean;
+    requests: number;
+}
+
+const countOf = (amount: number, one: string, many: string): string => {
+    if (amount === 0) {
+        return "";
+    }
+
+    return `${String(amount)} ${amount === 1 ? one : many}`;
+};
+
+/** `shard <key>: 1 request in flight, 2 waitUntil tasks`: counts only, never a request or payload. */
+const describeShardWork = (key: string, pending: ShardWorkCounts): string => {
+    const parts = [
+        countOf(pending.requests, "request in flight", "requests in flight"),
+        countOf(pending.alarms, "alarm running", "alarms running"),
+        countOf(pending.background, "waitUntil task", "waitUntil tasks"),
+        pending.closing ? "a socket close handler running" : "",
+    ].filter((part) => part !== "");
+
+    return `shard ${key}: ${parts.join(", ")}`;
+};
+
+/** A shard the registry holds open, with the handles its close and drain use. */
+interface LiveShard {
+    alarmsSettled: () => Promise<unknown> | undefined;
+    dispose: () => void;
+    drain: () => Promise<void> | undefined;
+    drainHost: () => Promise<void>;
+    pendingAlarms: () => number;
+    pendingBackground: () => number;
+    shard: NodeShard;
+    suspendAlarms: () => void;
+    takeFailures: () => string[];
+}
+
 /** The contracts scoped to one shard key. */
 export interface NodeShard {
     /**
@@ -192,10 +258,32 @@ export interface NodeShardRegistryOptions {
 
 /** An in-process shard registry: placement, hosting, and the fan-out key set. */
 export interface NodeShardRegistry {
-    /** Dispose every live shard. Safe to call more than once. */
-    close: () => void;
+    /**
+     * Dispose every live shard, and refuse new work from then on: `shardFor`, a stub's `fetch` and `rearmPersistedAlarms`
+     * throw once this is called, so nothing reopens a shard. Safe to call more than once. A shard that a request or a socket
+     * close handler is still using is disposed once that work settles, unless `force` is set: then it is disposed now and
+     * named in a log line. A shard whose dispose fails stays live; a failure after close() returned is logged and reported by
+     * the next `drain()`, and the next `close()` retries it. A shutdown passes `force` after its drain has finished or
+     * reached its deadline, so work that never settles cannot keep a database open at exit.
+     */
+    close: (options?: { force?: boolean }) => void;
     /** The `ShardDirectory` to hand the runtime. */
     directory: DirectShardDirectory;
+
+    /**
+     * Wait until every shard is idle: no `onFetch` or `onAlarm` call in flight (a cron or scheduled job's delivery is one), no
+     * promise handed to a shard's `waitUntil` pending, and no socket close handler still running, across every live shard,
+     * including one opened while draining. Work that starts more work is waited for too. Bounded by `timeoutMs` (30 s by
+     * default); resolves with what was still running when it passed, which it also logs. A graceful shutdown awaits this, then
+     * calls {@link NodeShardRegistry.close}; `close()` alone does not wait for any of it.
+     */
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
+
+    /**
+     * Whether every shard is idle right now (nothing a {@link NodeShardRegistry.drain} would wait for). Synchronous, so a caller
+     * that drained several things can confirm all of them are still idle at one instant before it closes anything.
+     */
+    idle: () => boolean;
 
     /**
      * Every shard key this registry knows about — the set `@lunora/runtime`'s
@@ -209,13 +297,88 @@ export interface NodeShardRegistry {
      * cost of visiting shards that had nothing to say.
      */
     listShardKeys: (table?: string) => ReadonlyArray<string>;
+
+    /** What is running right now, one label per shard with its counts, as a drain that timed out would report it. */
+    pending: () => string[];
+
+    /**
+     * Open every stored shard that has a persisted alarm, so the alarm is re-armed now rather than when something next sends
+     * that shard a request: after a restart an alarm would otherwise never fire on a shard nobody calls. Shards without one stay
+     * closed. Returns the keys it opened. A process serving the registry calls this once, before it takes traffic.
+     */
+    rearmPersistedAlarms: () => string[];
     /** Materialize (or reuse) the shard serving `key`. */
     shardFor: (key: string) => NodeShard;
+
+    /**
+     * Stop arming and claiming alarms on every shard, including one opened afterwards, leaving each durable row to re-arm after
+     * a restart. A shutdown calls it before draining, so no alarm starts after the drain checked for running work. One-way;
+     * `close()` does it too.
+     */
+    suspendAlarms: () => void;
 }
 
 /** Build the in-process shard registry. */
 export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}): NodeShardRegistry => {
-    const live = new Map<string, { dispose: () => void; drain: () => Promise<void> | undefined; shard: NodeShard }>();
+    const live = new Map<string, LiveShard>();
+
+    /**
+     * `open` until close(); `closing` while a shard waits for the work using it; `closed` once every shard is disposed. Anything
+     * but `open` refuses new work: a request after close() would otherwise reopen a shard, or get one about to be disposed.
+     */
+    let state: "closed" | "closing" | "open" = "open";
+    /** Set by suspendAlarms() or close(): a shard opened from then on starts with its alarms suspended too. */
+    let alarmsSuspended = false;
+
+    const suspendAllAlarms = (): void => {
+        alarmsSuspended = true;
+
+        for (const entry of live.values()) {
+            entry.suspendAlarms();
+        }
+    };
+
+    const refuseUnlessOpen = (): void => {
+        if (state !== "open") {
+            throw new Error(`@lunora/platform-node: the shard registry is ${state}, so it opens no shard and takes no request`);
+        }
+    };
+
+    /**
+     * `onFetch` calls still running, by shard key, so {@link NodeShardRegistry.drain} can wait for them and say what it cut off,
+     * and a close reads one shard's without scanning the rest. Never the request itself: its URL or body can carry a secret.
+     * Alarms are tracked by their host, through the retry.
+     */
+    const inFlight = new Map<string, Set<Promise<unknown>>>();
+
+    const track = async <T>(shardKey: string, work: () => Promise<T> | T): Promise<T> => {
+        const running = Promise.resolve().then(work);
+        // Tracking only: the caller still receives `running` and its rejection.
+        const settled = running.then(
+            () => undefined,
+            () => undefined,
+        );
+        let calls = inFlight.get(shardKey);
+
+        if (calls === undefined) {
+            calls = new Set();
+            inFlight.set(shardKey, calls);
+        }
+
+        calls.add(settled);
+
+        settled
+            .finally(() => {
+                calls.delete(settled);
+
+                if (calls.size === 0 && inFlight.get(shardKey) === calls) {
+                    inFlight.delete(shardKey);
+                }
+            })
+            .catch(() => undefined);
+
+        return running;
+    };
 
     /**
      * Keys known to exist, whether or not their shard is currently live.
@@ -226,6 +389,10 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
      * drops out of the result set.
      */
     const known = new Set<string>();
+    /** Shards an unforced close() left to dispose once their socket close handler settles. */
+    const deferredClose = new Set<string>();
+    /** Deferred disposals that failed, held for the next drain() to report. */
+    const lateCloseFailures: string[] = [];
 
     if (options.directory !== undefined) {
         mkdirSync(options.directory, { recursive: true });
@@ -238,6 +405,8 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
     }
 
     const shardFor = (key: string): NodeShard => {
+        refuseUnlessOpen();
+
         const existing = live.get(key);
 
         if (existing !== undefined) {
@@ -253,10 +422,17 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         let shard: NodeShard;
 
         const {
+            alarmsSettled,
             database,
             dispose: disposeHost,
+            drain: drainHost,
             host,
+            pendingAlarms,
+            pendingBackground,
+            suspendAlarms,
+            takeFailures,
         } = createNodeShardHost({
+            // The host tracks each alarm delivery through its retry write, which a wrapper here would settle before.
             onAlarm: () => options.onAlarm?.(shard),
             path,
             shardKey: key,
@@ -272,8 +448,22 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             sockets: socketHost.socket,
         };
 
-        live.set(key, { dispose: disposeHost, drain: socketHost.drain, shard });
+        live.set(key, {
+            alarmsSettled,
+            dispose: disposeHost,
+            drain: socketHost.drain,
+            drainHost,
+            pendingAlarms,
+            pendingBackground,
+            shard,
+            suspendAlarms,
+            takeFailures,
+        });
         known.add(key);
+
+        if (alarmsSuspended) {
+            suspendAlarms();
+        }
 
         return shard;
     };
@@ -283,29 +473,236 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             fetch: async (request) => {
                 const shard = shardFor(key);
 
-                if (options.onFetch === undefined) {
+                const { onFetch } = options;
+
+                if (onFetch === undefined) {
                     return new Response(key);
                 }
 
-                return options.onFetch(request, shard);
+                return track(key, () => onFetch(request, shard));
             },
         };
     };
 
-    return {
-        close: () => {
-            for (const entry of live.values()) {
-                // A route's close handler may still be writing; the database is disposed only once it settles.
-                const pending = entry.drain();
+    // What is still running, across every shard live now: re-read on each pass, so a shard opened during the last
+    // pass, or one that gained background work after its own drain resolved, is seen.
+    /** Every live shard's recorded failures, cleared as they are reported. */
+    const takeAllFailures = (): string[] => [...lateCloseFailures.splice(0), ...[...live.values()].flatMap((entry) => entry.takeFailures())];
 
-                if (pending === undefined) {
-                    entry.dispose();
-                } else {
-                    pending.finally(entry.dispose).catch(() => undefined);
+    const pendingWork = (): { labels: string[]; waits: Promise<unknown>[] } => {
+        const counts = new Map<string, ShardWorkCounts>();
+        const countsFor = (shardKey: string): ShardWorkCounts => {
+            let entry = counts.get(shardKey);
+
+            if (entry === undefined) {
+                entry = { alarms: 0, background: 0, closing: false, requests: 0 };
+                counts.set(shardKey, entry);
+            }
+
+            return entry;
+        };
+        const waits: Promise<unknown>[] = [];
+
+        for (const [shardKey, calls] of inFlight) {
+            waits.push(...calls);
+            countsFor(shardKey).requests += calls.size;
+        }
+
+        for (const [key, entry] of live) {
+            const closing = entry.drain();
+            const background = entry.pendingBackground();
+            const alarmDeliveries = entry.pendingAlarms();
+
+            if (closing !== undefined) {
+                countsFor(key).closing = true;
+                waits.push(closing);
+            }
+
+            if (background > 0) {
+                countsFor(key).background = background;
+            }
+
+            if (alarmDeliveries > 0) {
+                countsFor(key).alarms = alarmDeliveries;
+            }
+
+            if (background > 0 || alarmDeliveries > 0) {
+                waits.push(entry.drainHost());
+            }
+        }
+
+        // One line per shard: its key and how much of each kind of work is left, so a cut-off drain is attributable.
+        const labels = [...counts].map(([key, pending]) => describeShardWork(key, pending));
+
+        return { labels, waits };
+    };
+
+    /**
+     * What a shard's dispose must wait for: requests already holding it, an alarm delivery already running (its handler and
+     * retry write), and a socket close handler still running.
+     */
+    const shardWaits = (key: string, entry: LiveShard): Promise<unknown>[] => {
+        const closing = entry.drain();
+        const alarms = entry.alarmsSettled();
+
+        return [...(inFlight.get(key) ?? []), ...(alarms === undefined ? [] : [alarms]), ...(closing === undefined ? [] : [closing])];
+    };
+
+    /** Once nothing holds the registry's shards any more, it has nothing left to close. */
+    const settleState = (): void => {
+        if (state !== "open" && live.size === 0) {
+            state = "closed";
+        }
+    };
+
+    /** Dispose one shard. A shard whose dispose throws stays live, so a later close() tries it again; returns the error. */
+    const disposeEntry = (key: string, entry: LiveShard): unknown => {
+        try {
+            entry.dispose();
+        } catch (error: unknown) {
+            return error ?? new Error(`shard ${key} failed to close`);
+        }
+
+        live.delete(key);
+
+        return undefined;
+    };
+
+    const disposeWhenIdle = (key: string, entry: LiveShard): void => {
+        const waits = shardWaits(key, entry);
+
+        if (waits.length > 0) {
+            Promise.allSettled(waits)
+                .then(() => {
+                    // A forced close() since then already disposed it.
+                    if (deferredClose.has(key) && live.get(key) === entry) {
+                        disposeWhenIdle(key, entry);
+                    }
+
+                    return undefined;
+                })
+                .catch(() => undefined);
+
+            return;
+        }
+
+        deferredClose.delete(key);
+
+        const error = disposeEntry(key, entry);
+
+        if (error !== undefined) {
+            // eslint-disable-next-line no-console -- no caller is left to throw to, so the log carries the cause
+            console.error("[@lunora/platform-node] shard %s failed to close after the work using it settled", key, error);
+            lateCloseFailures.push(`shard ${key} failed to close after the work using it settled`);
+        }
+
+        settleState();
+    };
+
+    /**
+     * Dispose a shard now, returning the error when that fails. It leaves deferredClose only once a dispose succeeds. When work
+     * still holds it (an open statement iterator is what makes better-sqlite3 refuse the close), the dispose is tried again
+     * once that work settles, as a deferred one is, so the registry can still reach `closed`.
+     */
+    const disposeNow = (key: string, entry: LiveShard, busy: boolean): unknown => {
+        const error = disposeEntry(key, entry);
+
+        if (error === undefined) {
+            deferredClose.delete(key);
+        } else if (busy && !deferredClose.has(key)) {
+            deferredClose.add(key);
+            disposeWhenIdle(key, entry);
+        }
+
+        return error;
+    };
+
+    /** Log what a close() forced and what failed, then throw the failures together so every shard was tried first. */
+    const reportClose = (forced: ReadonlyArray<string>, failed: ReadonlyArray<{ error: unknown; key: string }>): void => {
+        if (forced.length > 0) {
+            // eslint-disable-next-line no-console -- these shards are closed under running work, so the log is the only record of it
+            console.error(
+                "[@lunora/platform-node] closed %d shard(s) with a request, alarm handler or socket close handler still running: %s",
+                forced.length,
+                forced.join(", "),
+            );
+        }
+
+        for (const { error, key } of failed) {
+            // eslint-disable-next-line no-console -- the caller gets one aggregate error; each shard's own cause is recorded here
+            console.error("[@lunora/platform-node] shard %s failed to close", key, error);
+        }
+
+        if (failed.length > 0) {
+            throw new AggregateError(
+                failed.map(({ error }) => error),
+                `@lunora/platform-node: ${String(failed.length)} shard(s) failed to close: ${failed.map(({ key }) => key).join(", ")}`,
+            );
+        }
+    };
+
+    return {
+        close: (closeOptions) => {
+            if (state === "open") {
+                state = "closing";
+            }
+
+            const forced: string[] = [];
+            const failed: { error: unknown; key: string }[] = [];
+
+            // First, before any shard is disposed: no alarm is claimed from here on, so none starts that a dispose would cut
+            // short. Its durable row stays, and it fires after a restart.
+            suspendAllAlarms();
+
+            for (const [key, entry] of live) {
+                const waits = shardWaits(key, entry);
+
+                if (waits.length === 0 || closeOptions?.force === true) {
+                    // Forced (after a drain's deadline), a shard is disposed now: work that never settles must not keep its
+                    // database open at exit.
+                    if (waits.length > 0) {
+                        forced.push(key);
+                    }
+
+                    const error = disposeNow(key, entry, waits.length > 0);
+
+                    if (error !== undefined) {
+                        failed.push({ error, key });
+                    }
+                } else if (!deferredClose.has(key)) {
+                    // A request or close handler still using it: disposed once they settle. Until then it stays live, and a
+                    // dispose failing then is logged, reported by the next drain(), and retried by the next close().
+                    deferredClose.add(key);
+                    disposeWhenIdle(key, entry);
                 }
             }
 
-            live.clear();
+            settleState();
+
+            reportClose(forced, failed);
+        },
+        drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
+            const deadline = startDrainDeadline(drainOptions);
+
+            try {
+                // Done only when a full pass over every shard finds nothing running, not when the work one pass saw settles.
+                for (let work = pendingWork(); work.waits.length > 0; work = pendingWork()) {
+                    // Settled, not all-or-nothing: one shard's failure must not stop the drain from waiting for the others.
+                    // eslint-disable-next-line no-await-in-loop -- each pass waits for what it found before looking again
+                    if (!(await settlesBefore(Promise.allSettled(work.waits), deadline))) {
+                        const pending = pendingWork().labels;
+
+                        // eslint-disable-next-line no-console -- the drain gives up on these, so the log is the only record of what was cut off
+                        console.error("[@lunora/platform-node] shard drain deadline passed with work still running: %s", pending.join(", "));
+
+                        return { failed: takeAllFailures(), pending, timedOut: true };
+                    }
+                }
+
+                return { failed: takeAllFailures(), pending: [], timedOut: false };
+            } finally {
+                deadline.cancel();
+            }
         },
         directory: {
             get: (id) => stubFor(String(id)),
@@ -315,7 +712,38 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             // as `unknown`, so this is a legitimate if degenerate choice.
             idForName: (name) => name,
         },
+        idle: () => pendingWork().waits.length === 0,
+        pending: () => pendingWork().labels,
+        rearmPersistedAlarms: () => {
+            refuseUnlessOpen();
+
+            const { directory } = options;
+
+            if (directory === undefined) {
+                return [];
+            }
+
+            const rearmed: string[] = [];
+
+            for (const key of known) {
+                // Opening a shard re-arms its stored alarm; one with no alarm stays closed, so a restart opens only these.
+                if (!live.has(key) && hasPersistedAlarm(join(directory, `${encodeShardKey(key)}${SHARD_FILE_SUFFIX}`), key)) {
+                    // One unreadable shard fails only itself, as it would on its first request: the others still re-arm and the
+                    // process still starts.
+                    try {
+                        shardFor(key);
+                        rearmed.push(key);
+                    } catch (error: unknown) {
+                        // eslint-disable-next-line no-console -- the shard stays unopened; this records why its alarm was not re-armed
+                        console.error("[@lunora/platform-node] could not open shard %s to re-arm its persisted alarm", key, error);
+                    }
+                }
+            }
+
+            return rearmed;
+        },
         listShardKeys: () => [...known],
         shardFor,
+        suspendAlarms: suspendAllAlarms,
     };
 };

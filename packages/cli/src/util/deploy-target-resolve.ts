@@ -26,8 +26,20 @@ const resolveTargetOrError = (projectRoot: string, explicit?: string): { error?:
 };
 
 /**
+ * Targets `lunora deploy` ships as a container build context
+ * (`commands/deploy/node-container.ts`) instead of through a toolchain. Node
+ * has no control plane to publish to, so the deploy is the artifact an
+ * operator runs.
+ */
+const CONTAINER_DEPLOY_TARGETS: ReadonlySet<string> = new Set(["node"]);
+
+/** Whether `lunora deploy` ships `target` as a container build context. */
+const deploysAsContainer = (target: string): boolean => CONTAINER_DEPLOY_TARGETS.has(target);
+
+/**
  * Resolve a target for a command that must shell out to the host's CLI —
- * `lunora deploy` and `lunora dev`.
+ * `lunora dev`, `lunora build`, and `lunora deploy` for every target that is
+ * not a container deploy (see {@link resolveDeployTargetOrError}).
  *
  * A registered target is not necessarily a *runnable* one. `DeployDriver`
  * models the toolchain as optional, and the Node driver genuinely has none:
@@ -51,13 +63,33 @@ const resolveRunnableTargetOrError = (projectRoot: string, explicit?: string): {
 
     if (!isRunnableTarget(resolved.target)) {
         const runnable = runnableTargetIds();
+        const container = deploysAsContainer(resolved.target) ? ` \`lunora deploy --target ${resolved.target}\` builds it as a container.` : "";
 
         return {
-            error: `deploy target "${resolved.target}" has no command-line toolchain, so the Lunora CLI cannot deploy or serve it — it can only generate for it (\`lunora codegen --target ${resolved.target}\`). Deployable targets: ${runnable.join(", ")}`,
+            error: `deploy target "${resolved.target}" has no command-line toolchain, so the Lunora CLI cannot run it — it can generate for it (\`lunora codegen --target ${resolved.target}\`).${container} Deployable targets: ${runnable.join(", ")}`,
         };
     }
 
     return resolved;
 };
 
-export { resolveRunnableTargetOrError, resolveTargetOrError };
+/**
+ * The `lunora deploy` form of {@link resolveRunnableTargetOrError}: it also
+ * accepts a target the CLI deploys by writing a container build context rather
+ * than by running a toolchain. Resolved before anything is written, for the
+ * same reason as the toolchain check.
+ * @param projectRoot Directory containing `lunora.config.*`.
+ * @param explicit A caller-supplied target, if any.
+ * @returns the resolved target, or the message explaining why it was rejected.
+ */
+const resolveDeployTargetOrError = (projectRoot: string, explicit?: string): { error?: string; target?: string } => {
+    const resolved = resolveTargetOrError(projectRoot, explicit);
+
+    if (resolved.target !== undefined && deploysAsContainer(resolved.target)) {
+        return resolved;
+    }
+
+    return resolveRunnableTargetOrError(projectRoot, explicit);
+};
+
+export { deploysAsContainer, resolveDeployTargetOrError, resolveRunnableTargetOrError, resolveTargetOrError };

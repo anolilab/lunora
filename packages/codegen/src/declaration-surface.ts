@@ -83,6 +83,7 @@ import {
 } from "./platform-target";
 import { findProjectConfigFile } from "./project-config-path";
 import schemaDeclaresRelationGraph from "./relation-graph";
+import type { WorkerEntryCron } from "./run-codegen-types";
 
 /**
  * Reject a workflow and an agent that share a deployed `name` or generated
@@ -188,6 +189,7 @@ interface DeclarationSurface {
      * non-deterministic sends out of query/mutation handlers.
      */
     hasNotify: boolean;
+
     identity: IdentityIR | undefined;
     /** Carries the portability diagnostics; `usage` is already unpacked as the `featureUsage` field. */
     platformGate: PlatformGateResult;
@@ -202,6 +204,8 @@ interface DeclarationSurface {
     usesSandbox: boolean;
     /** The project depends on the `lunorash` umbrella, so generated files import through its subpaths. */
     useUmbrella: boolean;
+    /** {@link DeclarationSurface.entryCronTriggers} with the `createWorker` option behind each schedule. */
+    workerEntryCrons: ReadonlyArray<WorkerEntryCron>;
     workflows: ReadonlyArray<WorkflowIR>;
 }
 
@@ -264,7 +268,8 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
     // above. They produce no job — only schedules the wrangler reconciler has to
     // know it generated. Read beside the crons for that reason alone; nothing in
     // this phase consumes them.
-    const entryCronTriggers = discoverWorkerEntryCrons(project, lunoraDirectory);
+    const workerEntryCrons = discoverWorkerEntryCrons(project, lunoraDirectory);
+    const entryCronTriggers = [...new Set(workerEntryCrons.map((entry) => entry.cron))];
 
     // Intersect what the app uses with what the deploy target supports. For the
     // default Cloudflare target the matrix marks nothing unsupported, so the gate
@@ -393,6 +398,7 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         declaredDependencies,
         dependencies,
         entryCronTriggers,
+        workerEntryCrons,
         env,
         featureUsage,
         hasFlags,

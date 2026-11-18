@@ -225,6 +225,12 @@ interface NodeSchedulerHost {
      * left uncleared.
      */
     dispose: () => void;
+
+    /**
+     * Deliveries running now, one-shot jobs and cron ticks alike, each from its timer firing until the scheduler has
+     * recorded the outcome, labelled by job. A drain waits for these before the database the scheduler writes to is closed.
+     */
+    pendingDispatches: () => { labels: string[]; waits: Promise<unknown>[] };
     scheduler: SchedulerHost;
 
     /**
@@ -234,6 +240,13 @@ interface NodeSchedulerHost {
      * while how many failures it takes to get there is host policy.
      */
     simulateDeadLetter: (id: string) => Promise<boolean>;
+
+    /**
+     * Stop firing: clear every armed timer and arm none from then on, while rows are still written and kept. A shutdown calls
+     * it before draining, so no job or cron tick starts after the drain checked for running work; each then re-arms from its
+     * row after a restart. A delivery already running finishes. One-way; `dispose()` still ends the host.
+     */
+    suspend: () => void;
 }
 
 /**
@@ -250,6 +263,19 @@ const backoffFor = (attempts: number, retry: ScheduleOptions["retry"]): number =
 
 /** Build a durable, SQLite-backed scheduler over `database`. */
 const createNodeSchedulerHost = (database: Database.Database, options: NodeSchedulerHostOptions = {}): NodeSchedulerHost => {
+    /** In-flight deliveries, each with its job label; see {@link NodeSchedulerHost.pendingDispatches}. */
+    const dispatching = new Map<Promise<unknown>, { label: string }>();
+
+    const trackDispatch = (dispatch: { label: string }, run: Promise<unknown>): void => {
+        const settled = run.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        dispatching.set(settled, dispatch);
+        settled.finally(() => dispatching.delete(settled)).catch(() => undefined);
+    };
+
     database.exec(
         `CREATE TABLE IF NOT EXISTS _lunora_scheduler_jobs (
             id TEXT PRIMARY KEY,
@@ -396,6 +422,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * keeps the connection open for other work.
      */
     let closed = false;
+    /** Set by `suspend()`: rows are still written, but no timer is armed, so nothing fires until a restart re-arms them. */
+    let suspended = false;
 
     /**
      * Resolve once no transaction is open on the shared connection, or the host
@@ -455,6 +483,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     const armJob = (id: string, scheduledFor: number): void => {
         clearJobTimer(id);
 
+        if (suspended) {
+            return;
+        }
+
         const delay = Math.max(0, scheduledFor - Date.now());
 
         // `setTimeout` clamps any delay above 2^31 - 1 ms (~24.8 days) down to
@@ -472,12 +504,19 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         }
 
         const timer = setTimeout(() => {
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `armJob` and `deliver` are mutually recursive by nature (a retry re-arms, an arm delivers), so one of the two references has to precede its definition
-            deliver(id).catch(() => {
-                // `deliver` settles its own failures into the retry /
-                // dead-letter machinery; this only keeps the promise from
-                // floating.
-            });
+            const dispatch = { label: `scheduled job ${id}` };
+
+            trackDispatch(
+                dispatch,
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `armJob` and `deliver` are mutually recursive by nature (a retry re-arms, an arm delivers), so one of the two references has to precede its definition
+                deliver(id, (label) => {
+                    dispatch.label = label;
+                }).catch(() => {
+                    // `deliver` settles its own failures into the retry /
+                    // dead-letter machinery; this only keeps the promise from
+                    // floating.
+                }),
+            );
         }, delay);
 
         jobTimers.set(id, timer);
@@ -588,7 +627,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * reach it. None of them runs while another task holds a transaction open
      * either; see {@link FOREIGN_TRANSACTION_RETRY_MS}.
      */
-    const deliver = async (id: string): Promise<void> => {
+    const deliver = async (id: string, onLabel?: (label: string) => void): Promise<void> => {
         jobTimers.delete(id);
 
         if (!isOpen()) {
@@ -601,6 +640,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         if (row === undefined) {
             return;
         }
+
+        onLabel?.(`scheduled job ${row.function_path} (${id})`);
 
         const attempts = row.attempts + 1;
         const retry = decodeRetry(row.retry);
@@ -616,12 +657,16 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 succeedClaimedJob.run(attempts, completedAt, id, claim.stamp());
                 sweepTerminal.run(completedAt - TERMINAL_RETENTION_MS);
             }
-        } catch {
+        } catch (error: unknown) {
             await outsideForeignTransaction();
 
-            // Delivery failed. The catch is bare because *why* it failed is the
-            // handler's business; all this loop decides is whether any budget is
-            // left. `closed` is checked too: `dispose()` cleared `jobTimers` and
+            // Logged with the error object (its stack and cause): the retry below is silent, and a job that keeps failing
+            // would otherwise be parked with nothing on record saying why. All this loop decides is whether any budget is
+            // left.
+            // eslint-disable-next-line no-console -- the retry is silent, so the log is the only trace of why the job failed
+            console.error("[@lunora/platform-node] scheduled job %s (%s) failed on attempt %d", row.function_path, id, attempts, error);
+
+            // `closed` is checked too: `dispose()` cleared `jobTimers` and
             // may have run while this dispatch was in flight, and a re-arm after
             // that would mint a fresh timer nothing would ever clear.
             if (closed || !isOpen()) {
@@ -682,6 +727,11 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
         if (existing !== undefined) {
             clearTimeout(existing);
+            cronTimers.delete(row.key);
+        }
+
+        if (suspended) {
+            return undefined;
         }
 
         let nextAt: number;
@@ -747,29 +797,32 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             runningCrons.add(row.key);
 
-            (async (): Promise<void> => {
-                let failure: { error: unknown } | undefined;
+            trackDispatch(
+                { label: `cron ${describeCron(dispatched)}` },
+                (async (): Promise<void> => {
+                    let failure: { error: unknown } | undefined;
 
-                try {
-                    await options.onDispatch?.(dispatched.function_path, deserialize(dispatched.args) as Record<string, unknown>, {
-                        attempts: 0,
-                        // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
-                        id: `${row.key}:${String(nextAt)}`,
-                        scheduledFor: nextAt,
-                    });
-                } catch (error) {
-                    // See the docstring: a dropped tick must not stop the schedule, but it is logged.
-                    failure = { error };
-                } finally {
-                    runningCrons.delete(row.key);
-                }
+                    try {
+                        await options.onDispatch?.(dispatched.function_path, deserialize(dispatched.args) as Record<string, unknown>, {
+                            attempts: 0,
+                            // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
+                            id: `${row.key}:${String(nextAt)}`,
+                            scheduledFor: nextAt,
+                        });
+                    } catch (error) {
+                        // See the docstring: a dropped tick must not stop the schedule, but it is logged.
+                        failure = { error };
+                    } finally {
+                        runningCrons.delete(row.key);
+                    }
 
-                settleCronTick(dispatched, nextAt, failure);
-            })().catch((error: unknown) => {
-                // `settleCronTick` handles its own database failures, so this is a
-                // last resort; it still must not leave the job quiet.
-                recoverCron(dispatched, "failed to settle its tick", error);
-            });
+                    settleCronTick(dispatched, nextAt, failure);
+                })().catch((error: unknown) => {
+                    // `settleCronTick` handles its own database failures, so this is a
+                    // last resort; it still must not leave the job quiet.
+                    recoverCron(dispatched, "failed to settle its tick", error);
+                }),
+            );
         }, delay);
 
         cronTimers.set(row.key, timer);
@@ -988,7 +1041,23 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         }
     }
 
+    const clearTimers = (): void => {
+        for (const timer of jobTimers.values()) {
+            clearTimeout(timer);
+        }
+
+        for (const timer of cronTimers.values()) {
+            clearTimeout(timer);
+        }
+
+        jobTimers.clear();
+        cronTimers.clear();
+    };
+
     return {
+        pendingDispatches: () => {
+            return { labels: [...dispatching.values()].map((dispatch) => dispatch.label), waits: [...dispatching.keys()] };
+        },
         declareCrons: (crons) => {
             if (closed) {
                 throw new Error("platform closed: cannot declare crons");
@@ -1051,16 +1120,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             }
         },
         dispose: () => {
-            for (const timer of jobTimers.values()) {
-                clearTimeout(timer);
-            }
-
-            for (const timer of cronTimers.values()) {
-                clearTimeout(timer);
-            }
-
-            jobTimers.clear();
-            cronTimers.clear();
+            clearTimers();
             closed = true;
         },
         scheduler,
@@ -1079,6 +1139,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             parkJob.run((retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts) + 1, Date.now(), id);
 
             return true;
+        },
+        suspend: () => {
+            suspended = true;
+            clearTimers();
         },
     };
 };

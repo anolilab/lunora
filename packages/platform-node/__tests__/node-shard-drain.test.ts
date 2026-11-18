@@ -1,0 +1,1602 @@
+import { spawn } from "node:child_process";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { format } from "node:util";
+
+import { resolveShard } from "@lunora/platform";
+import Database from "better-sqlite3";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { DrainTimer } from "../src/drain-deadline";
+import { drainTogether } from "../src/drain-deadline";
+import { createNodePlatform } from "../src/node-platform";
+import { createNodeShardRegistry } from "../src/node-shard-registry";
+import type { NodeServerEnd } from "../src/node-socket-pair";
+
+/** Each logged line as the console prints it: the format string with its arguments applied. */
+const printed = (spy: { mock: { calls: unknown[][] } }): string[] => spy.mock.calls.map((args) => format(...args));
+
+/** This package's built entry, which the child-process test runs on plain Node. */
+const DIST_ENTRY = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.mjs");
+
+/** A promise the test settles by hand: work that is "in flight" until the test says otherwise. */
+const deferred = (): { promise: Promise<void>; release: () => void } => {
+    let release: () => void = () => {};
+    const promise = new Promise<void>((resolve) => {
+        release = resolve;
+    });
+
+    return { promise, release };
+};
+
+/** One full event-loop turn: every microtask a non-waiting drain would need to settle has run. */
+const turn = async (): Promise<void> =>
+    new Promise((resolve) => {
+        setImmediate(resolve);
+    });
+
+describe("shard drain", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("waits for an in-flight onFetch, such as a cron delivery, before the registry reports idle", async () => {
+        expect.assertions(1);
+
+        const gate = deferred();
+        const events: string[] = [];
+        const registry = createNodeShardRegistry({
+            onFetch: async () => {
+                await gate.promise;
+                events.push("fetch done");
+
+                return new Response("ok");
+            },
+        });
+
+        try {
+            const request = registry.directory.getByName("a").fetch(new Request("https://shard.internal/rpc"));
+            const drained = registry.drain().then(() => events.push("drained"));
+
+            await turn();
+            gate.release();
+            await Promise.all([request, drained]);
+
+            expect(events).toStrictEqual(["fetch done", "drained"]);
+        } finally {
+            registry.close();
+        }
+    });
+
+    it("waits for work a shard handed to waitUntil, and for work a request started there", async () => {
+        expect.assertions(1);
+
+        const gate = deferred();
+        const events: string[] = [];
+        const registry = createNodeShardRegistry({
+            onFetch: (_request, shard) => {
+                const background = async (): Promise<void> => {
+                    await gate.promise;
+                    events.push("background done");
+                };
+
+                shard.shard.waitUntil?.(background());
+
+                return new Response("ok");
+            },
+        });
+
+        try {
+            await registry.directory.getByName("a").fetch(new Request("https://shard.internal/rpc"));
+
+            const drained = registry.drain().then(() => events.push("drained"));
+
+            await turn();
+            gate.release();
+            await drained;
+
+            expect(events).toStrictEqual(["background done", "drained"]);
+        } finally {
+            registry.close();
+        }
+    });
+
+    it("includes the registry's shards in the platform's drain", async () => {
+        expect.assertions(1);
+
+        const gate = deferred();
+        const events: string[] = [];
+        const platform = createNodePlatform({
+            onFetch: async () => {
+                await gate.promise;
+                events.push("fetch done");
+
+                return new Response("ok");
+            },
+        });
+
+        try {
+            const request = resolveShard(platform.directory, "a").fetch(new Request("https://shard.internal/rpc"));
+            const drained = platform.drain().then(() => events.push("drained"));
+
+            await turn();
+            gate.release();
+            await Promise.all([request, drained]);
+
+            expect(events).toStrictEqual(["fetch done", "drained"]);
+        } finally {
+            platform.close();
+        }
+    });
+});
+
+/** A deadline the test fires by hand: no clock runs in these tests. */
+const manualTimer = (): { fire: () => void; timer: DrainTimer } => {
+    let onExpire: () => void = () => {};
+
+    return {
+        fire: () => {
+            onExpire();
+        },
+        timer: (_ms, expire) => {
+            onExpire = expire;
+
+            return () => {
+                onExpire = () => {};
+            };
+        },
+    };
+};
+
+describe("shard drain passes", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("sees waitUntil work added to a shard whose own drain already finished", async () => {
+        expect.assertions(2);
+
+        const gateA = deferred();
+        const gateB = deferred();
+        const events: string[] = [];
+        const registry = createNodeShardRegistry();
+
+        try {
+            const shardB = registry.shardFor("b");
+
+            // Shard a's background work, once released, hands new work to shard b, which the first pass already found idle.
+            registry.shardFor("a").shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await gateA.promise;
+                    shardB.shard.waitUntil?.(
+                        (async (): Promise<void> => {
+                            await gateB.promise;
+                            events.push("b done");
+                        })(),
+                    );
+                })(),
+            );
+
+            const drained = registry.drain().then((result) => {
+                events.push("drained");
+
+                return result;
+            });
+
+            gateA.release();
+            await turn();
+            gateB.release();
+
+            await expect(drained).resolves.toStrictEqual({ failed: [], pending: [], timedOut: false });
+            expect(events).toStrictEqual(["b done", "drained"]);
+        } finally {
+            registry.close();
+        }
+    });
+
+    it("sees a shard opened while draining", async () => {
+        expect.assertions(1);
+
+        const gateA = deferred();
+        const gateC = deferred();
+        const events: string[] = [];
+        const registry = createNodeShardRegistry();
+
+        try {
+            registry.shardFor("a").shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await gateA.promise;
+                    // A shard that did not exist when the drain began.
+                    registry.shardFor("c").shard.waitUntil?.(
+                        (async (): Promise<void> => {
+                            await gateC.promise;
+                            events.push("c done");
+                        })(),
+                    );
+                })(),
+            );
+
+            const drained = registry.drain().then(() => events.push("drained"));
+
+            gateA.release();
+            await turn();
+            gateC.release();
+            await drained;
+
+            expect(events).toStrictEqual(["c done", "drained"]);
+        } finally {
+            registry.close();
+        }
+    });
+
+    it("gives up at the deadline, naming each shard and how much work it still had, never the work itself", async () => {
+        expect.assertions(3);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const { fire, timer } = manualTimer();
+        const never = deferred();
+        const registry = createNodeShardRegistry({
+            onFetch: async () => {
+                await never.promise;
+
+                return new Response("never");
+            },
+        });
+
+        try {
+            registry.shardFor("stuck").shard.waitUntil?.(never.promise);
+            registry.shardFor("stuck").shard.waitUntil?.(never.promise);
+            registry.directory
+                .getByName("busy")
+                .fetch(new Request("https://shard.internal/rpc?token=secret-token-value", { body: '{"card":"4242"}', method: "POST" }))
+                .catch(() => undefined);
+
+            const drained = registry.drain({ timer });
+
+            fire();
+
+            const result = await drained;
+
+            expect(result).toStrictEqual({ failed: [], pending: ["shard busy: 1 request in flight", "shard stuck: 2 waitUntil tasks"], timedOut: true });
+            expect(printed(logged)).toContainEqual(expect.stringContaining("shard busy: 1 request in flight, shard stuck: 2 waitUntil tasks"));
+            expect(printed(logged).join("\n")).not.toMatch(/secret-token-value|4242/u);
+        } finally {
+            never.release();
+            registry.close();
+        }
+    });
+
+    it("runs the whole platform drain under one deadline, so one firing ends both the host and the shard waits", async () => {
+        expect.assertions(2);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        // Keeps only the last callback it was given, as a simple injected clock does: a second deadline would replace the first.
+        const { fire, timer } = manualTimer();
+        const never = deferred();
+        const platform = createNodePlatform();
+
+        try {
+            platform.shard.waitUntil?.(never.promise);
+            resolveShard(platform.directory, "stuck")
+                .fetch(new Request("https://shard.internal/rpc"))
+                .catch(() => undefined);
+
+            const drained = platform.drain({ timer });
+
+            fire();
+
+            await expect(drained).resolves.toStrictEqual({ failed: [], pending: ["waitUntil work on the platform host"], timedOut: true });
+            // Logged before the caller closes anything, so the cut-off work is on record.
+            expect(printed(logged)).toContainEqual(
+                expect.stringContaining("platform drain deadline passed with work still running: waitUntil work on the platform host"),
+            );
+        } finally {
+            never.release();
+            platform.close();
+        }
+    });
+
+    it("does not report idle while a shard request that host work started after the registry drained is still running", async () => {
+        expect.assertions(1);
+
+        const hostGate = deferred();
+        const requestGate = deferred();
+        const events: string[] = [];
+        const platform = createNodePlatform({
+            onFetch: async () => {
+                await requestGate.promise;
+                events.push("request done");
+
+                return new Response("ok");
+            },
+        });
+
+        try {
+            // Host background work that, once released, hands a request to a shard the registry already found idle, as a due
+            // job's delivery does. The host work itself finishes at once.
+            platform.shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await hostGate.promise;
+                    resolveShard(platform.directory, "late")
+                        .fetch(new Request("https://shard.internal/rpc"))
+                        .catch(() => undefined);
+                })(),
+            );
+
+            const drained = platform.drain().then(() => events.push("drained"));
+
+            hostGate.release();
+            await turn();
+            requestGate.release();
+            await drained;
+
+            expect(events).toStrictEqual(["request done", "drained"]);
+        } finally {
+            platform.close();
+        }
+    });
+
+    it("names, at the deadline, shard work host work started after the registry drained", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const { fire, timer } = manualTimer();
+        const never = deferred();
+        const hostGate = deferred();
+        const handed = deferred();
+        const platform = createNodePlatform({
+            onFetch: async (_request, shard) => {
+                shard.shard.waitUntil?.(never.promise);
+
+                return new Response("ok");
+            },
+        });
+
+        try {
+            // Host work that keeps running, and host work that, once released, leaves a shard with background work.
+            platform.shard.waitUntil?.(never.promise);
+            platform.shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await hostGate.promise;
+                    await resolveShard(platform.directory, "late").fetch(new Request("https://shard.internal/rpc"));
+                    handed.release();
+                })(),
+            );
+
+            const drained = platform.drain({ timer });
+
+            // The registry has drained idle by now; the shard gains its work afterwards.
+            await turn();
+            hostGate.release();
+            await handed.promise;
+            fire();
+
+            await expect(drained).resolves.toMatchObject({
+                pending: ["waitUntil work on the platform host", "shard late: 1 waitUntil task"],
+                timedOut: true,
+            });
+        } finally {
+            never.release();
+            platform.close();
+        }
+    });
+
+    it("keeps a failed alarm's retry when shutdown follows it, so the alarm fires after a restart", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-retry-"));
+        const arrived = deferred();
+        const failAlarm = deferred();
+        const releaseTransaction = deferred();
+        const transactionOpen = deferred();
+        const first = createNodeShardRegistry({
+            directory,
+            onAlarm: async () => {
+                arrived.release();
+                await failAlarm.promise;
+
+                throw new Error("alarm failed");
+            },
+        });
+
+        try {
+            const { shard } = first.shardFor("a");
+
+            await shard.alarms.set(Date.now());
+            await vi.advanceTimersByTimeAsync(0);
+            await arrived.promise;
+
+            // Another task's transaction is open when the handler fails, so the retry row has to wait for it to end.
+            const transaction = shard.transaction(async () => {
+                transactionOpen.release();
+                await releaseTransaction.promise;
+            });
+
+            await transactionOpen.promise;
+
+            // As a shutdown does: close the moment the drain reports the shard idle.
+            const shutDown = async (): Promise<void> => {
+                await first.drain({ timer: () => () => {} });
+                first.close();
+            };
+            const drained = shutDown();
+
+            failAlarm.release();
+            await turn();
+            releaseTransaction.release();
+            // A close that came too early ends this transaction's connection under it; that is the failure under test.
+            await transaction.catch(() => undefined);
+            // The deferred retry write runs on its own short timer once the transaction has ended.
+            await vi.advanceTimersByTimeAsync(50);
+            await drained;
+        } finally {
+            first.close();
+        }
+
+        const fired = deferred();
+        const second = createNodeShardRegistry({
+            directory,
+            onAlarm: () => {
+                fired.release();
+            },
+        });
+
+        try {
+            // Opening the shard re-arms its persisted alarm; the retry backoff is well under a second.
+            second.shardFor("a");
+            await vi.advanceTimersByTimeAsync(1000);
+
+            await expect(fired.promise).resolves.toBeUndefined();
+        } finally {
+            second.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it.each([2_147_483_648, -1, 1.5, Number.NaN])("refuses a drain timeoutMs of %d, which Node would run after 1 ms or never", async (timeoutMs) => {
+        expect.assertions(1);
+
+        const registry = createNodeShardRegistry();
+
+        try {
+            await expect(registry.drain({ timeoutMs })).rejects.toThrow("a drain timeoutMs must be a whole number of milliseconds from 0 to 2147483647");
+        } finally {
+            registry.close();
+        }
+    });
+
+    it("settles a failed alarm whose retry waits on a transaction that replaces the alarm timer, and the alarm survives a restart", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-retry-slot-"));
+        const arrived = deferred();
+        const failAlarm = deferred();
+        const transactionOpen = deferred();
+        const releaseTransaction = deferred();
+        const { fire, timer } = manualTimer();
+        const first = createNodeShardRegistry({
+            directory,
+            onAlarm: async () => {
+                arrived.release();
+                await failAlarm.promise;
+
+                throw new Error("alarm failed");
+            },
+        });
+        let result: unknown;
+
+        try {
+            const { shard } = first.shardFor("a");
+
+            await shard.alarms.set(Date.now());
+            await vi.advanceTimersByTimeAsync(0);
+            await arrived.promise;
+
+            // The handler fails while this transaction is open, so its retry has to wait; the transaction then commits a set,
+            // which re-arms the alarm timer, the slot the retry's wait used to share.
+            const transaction = shard.transaction(async () => {
+                transactionOpen.release();
+                await releaseTransaction.promise;
+                await shard.alarms.set(Date.now() + 5000);
+            });
+
+            await transactionOpen.promise;
+            failAlarm.release();
+            await turn();
+            releaseTransaction.release();
+            await transaction;
+
+            const drained = first.drain({ timer });
+
+            await vi.advanceTimersByTimeAsync(50);
+            await turn();
+            // Only reached by a drain still waiting: a stranded delivery would report the deadline instead of settling.
+            fire();
+            result = await drained;
+        } finally {
+            first.close();
+        }
+
+        expect(result).toStrictEqual({ failed: [], pending: [], timedOut: false });
+
+        const fired = deferred();
+        const second = createNodeShardRegistry({
+            directory,
+            onAlarm: () => {
+                fired.release();
+            },
+        });
+
+        try {
+            second.shardFor("a");
+            await vi.advanceTimersByTimeAsync(6000);
+
+            await expect(fired.promise).resolves.toBeUndefined();
+        } finally {
+            second.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("settles a retry still waiting when its shard closes, logging that it was given up", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const arrived = deferred();
+        const failAlarm = deferred();
+        const transactionOpen = deferred();
+        const never = deferred();
+        const registry = createNodeShardRegistry({
+            onAlarm: async () => {
+                arrived.release();
+                await failAlarm.promise;
+
+                throw new Error("alarm failed");
+            },
+        });
+
+        try {
+            const { shard } = registry.shardFor("a");
+
+            await shard.alarms.set(Date.now());
+            await vi.advanceTimersByTimeAsync(0);
+            await arrived.promise;
+
+            // A transaction that never ends: the retry can only wait, until the shard is closed under it.
+            shard
+                .transaction(async () => {
+                    transactionOpen.release();
+                    await never.promise;
+                })
+                .catch(() => undefined);
+            await transactionOpen.promise;
+            failAlarm.release();
+            await turn();
+        } finally {
+            // Forced, as a shutdown past its deadline closes: an unforced close waits for the delivery and its retry.
+            registry.close({ force: true });
+            never.release();
+            vi.useRealTimers();
+        }
+
+        expect(printed(logged)).toContainEqual(
+            expect.stringContaining("alarm retry on shard a given up: the database closed while it waited for another transaction to end"),
+        );
+    });
+
+    it("logs and reports an alarm retry that cannot be written, and still waits for every other shard", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-retry-fail-"));
+        const arrived = deferred();
+        const failAlarm = deferred();
+        const otherGate = deferred();
+        const events: string[] = [];
+        const registry = createNodeShardRegistry({
+            directory,
+            onAlarm: async () => {
+                arrived.release();
+                await failAlarm.promise;
+
+                throw new Error("alarm failed");
+            },
+        });
+
+        try {
+            await registry.shardFor("a").shard.alarms.set(Date.now());
+            await vi.advanceTimersByTimeAsync(0);
+            await arrived.promise;
+
+            // The alarm row is already consumed; dropping its table from another connection makes the retry's write throw,
+            // as a SQLITE_BUSY or a broken file would.
+            const file = readdirSync(directory).find((name) => name.endsWith(".sqlite3"));
+            const other = new Database(join(directory, String(file)));
+
+            other.exec("DROP TABLE _lunora_alarm");
+            other.close();
+
+            const otherShard = async (): Promise<void> => {
+                await otherGate.promise;
+                events.push("other shard done");
+            };
+
+            registry.shardFor("b").shard.waitUntil?.(otherShard());
+
+            const drained = registry.drain({ timer: () => () => {} }).then((result) => {
+                events.push("drained");
+
+                return result;
+            });
+
+            failAlarm.release();
+            // Every write attempt fails the same way; the backoff between them runs on the fake clock.
+            await vi.advanceTimersByTimeAsync(1000);
+            await turn();
+            otherGate.release();
+
+            const result = await drained;
+
+            expect(result).toStrictEqual({
+                failed: [expect.stringMatching(/^shard a: the retry of the alarm due .+ could not be written$/u)],
+                pending: [],
+                timedOut: false,
+            });
+            // The failure did not cut the drain short: the other shard's work was still waited for.
+            expect(events).toStrictEqual(["other shard done", "drained"]);
+
+            const line = printed(logged).find((entry) => entry.includes("could not be written")) ?? "";
+
+            expect(line).toContain("on shard a could not be written after 4 attempts, so that alarm is lost");
+            expect(line).toContain("no such table: _lunora_alarm");
+        } finally {
+            registry.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("tries a failed retry write again, so brief contention does not lose the alarm", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-retry-busy-"));
+        const arrived = deferred();
+        const failAlarm = deferred();
+        const first = createNodeShardRegistry({
+            directory,
+            onAlarm: async () => {
+                arrived.release();
+                await failAlarm.promise;
+
+                throw new Error("alarm failed");
+            },
+        });
+        let result: unknown;
+
+        try {
+            await first.shardFor("a").shard.alarms.set(Date.now());
+            await vi.advanceTimersByTimeAsync(0);
+            await arrived.promise;
+
+            // The first write fails (the table is gone, as under contention); the table is back before the next attempt.
+            const file = join(directory, String(readdirSync(directory).find((name) => name.endsWith(".sqlite3"))));
+            const other = new Database(file);
+
+            other.exec("DROP TABLE _lunora_alarm");
+
+            const drained = first.drain({ timer: () => () => {} });
+
+            failAlarm.release();
+            await turn();
+            other.exec("CREATE TABLE _lunora_alarm (id INTEGER PRIMARY KEY CHECK (id = 0), scheduled_for INTEGER NOT NULL)");
+            other.close();
+            await vi.advanceTimersByTimeAsync(150);
+            result = await drained;
+        } finally {
+            first.close();
+        }
+
+        expect(result).toStrictEqual({ failed: [], pending: [], timedOut: false });
+
+        const fired = deferred();
+        const second = createNodeShardRegistry({
+            directory,
+            onAlarm: () => {
+                fired.release();
+            },
+        });
+
+        try {
+            second.shardFor("a");
+            await vi.advanceTimersByTimeAsync(1000);
+
+            await expect(fired.promise).resolves.toBeUndefined();
+        } finally {
+            second.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("waits for a scheduler delivery running through a custom onDispatch before the platform reports idle", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const arrived = deferred();
+        const dispatchGate = deferred();
+        const events: string[] = [];
+        const platform = createNodePlatform({
+            onDispatch: async () => {
+                arrived.release();
+                await dispatchGate.promise;
+                events.push("dispatch done");
+            },
+        });
+
+        try {
+            await platform.scheduler.schedule("jobs:run", {}, { delayMs: 0 });
+            await vi.advanceTimersByTimeAsync(0);
+            await arrived.promise;
+
+            const drained = platform.drain({ timer: () => () => {} }).then(() => events.push("drained"));
+
+            await turn();
+            dispatchGate.release();
+            await drained;
+
+            expect(events).toStrictEqual(["dispatch done", "drained"]);
+        } finally {
+            platform.close();
+            vi.useRealTimers();
+        }
+    });
+
+    it("names every scheduled job and cron tick still running when the platform drain's deadline passes", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z"), toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const never = deferred();
+        const { fire, timer } = manualTimer();
+        const platform = createNodePlatform({
+            crons: { "* * * * *": [{ args: {}, functionPath: "reports:tick", name: "tick" }] },
+            onDispatch: async () => {
+                await never.promise;
+            },
+        });
+
+        try {
+            const job = await platform.scheduler.schedule("jobs:run", {}, { delayMs: 0 });
+
+            // The minute boundary: the cron tick and the job are both in flight now.
+            await vi.advanceTimersByTimeAsync(30_000);
+
+            const drained = platform.drain({ timer });
+
+            fire();
+
+            const result = await drained;
+
+            expect(result.pending).toStrictEqual(expect.arrayContaining([`scheduled job jobs:run (${job.id})`, 'cron job "tick" (reports:tick)']));
+            expect(printed(logged)).toContainEqual(expect.stringContaining(`platform drain deadline passed with work still running: `));
+        } finally {
+            never.release();
+            platform.close();
+            vi.useRealTimers();
+        }
+    });
+
+    it("disposes a shard whose socket close handler never settles when forced, and logs it", () => {
+        expect.assertions(3);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const never = deferred();
+        const waiting = createNodeShardRegistry();
+        const forced = createNodeShardRegistry();
+
+        // One shard in each registry with a close handler that never settles, as a stuck webSocketClose would be.
+        const stuckShard = (registry: ReturnType<typeof createNodeShardRegistry>) => {
+            const shard = registry.shardFor("stuck");
+
+            shard.inbound.onClose(async () => never.promise);
+            // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+            (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+            return shard;
+        };
+        const waitingShard = stuckShard(waiting);
+        const forcedShard = stuckShard(forced);
+
+        try {
+            waiting.close();
+            forced.close({ force: true });
+
+            // Unforced, the database stays open for the handler; forced, it is closed now.
+            expect(() => waitingShard.sockets.accept({}, undefined, [])).not.toThrow();
+            expect(() => forcedShard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+            expect(printed(logged)).toContainEqual(
+                expect.stringContaining("closed 1 shard(s) with a request, alarm handler or socket close handler still running: stuck"),
+            );
+        } finally {
+            never.release();
+        }
+    });
+
+    it("closes every shard when one fails to close, then reports that one", () => {
+        expect.assertions(4);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const registry = createNodeShardRegistry();
+        const first = registry.shardFor("a");
+        const second = registry.shardFor("b");
+
+        // The driver refuses the first close, as a busy connection does; the second shard must still be closed.
+        vi.spyOn(Database.prototype, "close").mockImplementationOnce(() => {
+            throw new Error("database is busy");
+        });
+
+        expect(() => {
+            registry.close({ force: true });
+        }).toThrow("1 shard(s) failed to close: a");
+        expect(() => second.sockets.accept({}, undefined, [])).toThrow("platform closed");
+        expect(printed(logged)).toContainEqual(expect.stringContaining("shard a failed to close"));
+        expect(first.shardKey).toBe("a");
+    });
+
+    it("runs every platform teardown when one throws, then reports it", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const platform = createNodePlatform();
+
+        // A request opens a registry shard, so its database is the first one the platform closes; that close fails.
+        await resolveShard(platform.directory, "stuck").fetch(new Request("https://shard.internal/rpc"));
+        vi.spyOn(Database.prototype, "close").mockImplementationOnce(() => {
+            throw new Error("database is busy");
+        });
+
+        expect(() => {
+            platform.close({ force: true });
+        }).toThrow("resource(s) failed to close");
+        // The platform's own database, closed after the registry, was still closed.
+        expect(() => platform.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("re-arms a persisted alarm at startup, so it fires after a restart with no request to its shard", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-restore-"));
+        const first = createNodeShardRegistry({ directory });
+
+        await first.shardFor("quiet").shard.alarms.set(Date.now() + 1000);
+        // A shard with no alarm, which a restart must leave closed.
+        first.shardFor("idle");
+        first.close();
+
+        const fired = deferred();
+        const second = createNodeShardRegistry({
+            directory,
+            onAlarm: () => {
+                fired.release();
+            },
+        });
+
+        try {
+            expect(second.rearmPersistedAlarms()).toStrictEqual(["quiet"]);
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            await expect(fired.promise).resolves.toBeUndefined();
+        } finally {
+            second.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("does not re-arm an alarm whose handler deleted it before throwing", async () => {
+        expect.assertions(1);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const failed = deferred();
+        const registry = createNodeShardRegistry({
+            onAlarm: async (shard) => {
+                // The handler decides there is no next wakeup, then fails.
+                await shard.shard.alarms.delete();
+                failed.release();
+
+                throw new Error("alarm failed after deleting itself");
+            },
+        });
+
+        try {
+            const { shard } = registry.shardFor("a");
+
+            await shard.alarms.set(Date.now());
+            await vi.advanceTimersByTimeAsync(0);
+            await failed.promise;
+            await registry.drain({ timer: () => () => {} });
+
+            await expect(Promise.resolve(shard.alarms.get())).resolves.toBeNull();
+        } finally {
+            registry.close();
+            vi.useRealTimers();
+        }
+    });
+
+    it("drains several registries until all are idle in one pass, including work one hands another after it drained", async () => {
+        expect.assertions(1);
+
+        const gateA = deferred();
+        const gateB = deferred();
+        const events: string[] = [];
+        const first = createNodeShardRegistry();
+        const second = createNodeShardRegistry();
+
+        try {
+            // Work on the first registry that, once released, writes to the second, which the first pass found idle.
+            first.shardFor("a").shard.waitUntil?.(
+                (async (): Promise<void> => {
+                    await gateA.promise;
+                    second.shardFor("b").shard.waitUntil?.(
+                        (async (): Promise<void> => {
+                            await gateB.promise;
+                            events.push("second registry write");
+                        })(),
+                    );
+                })(),
+            );
+
+            const drained = drainTogether([first, second], { timer: () => () => {} }).then(() => events.push("drained"));
+
+            gateA.release();
+            await turn();
+            gateB.release();
+            await drained;
+
+            expect(events).toStrictEqual(["second registry write", "drained"]);
+        } finally {
+            first.close();
+            second.close();
+        }
+    });
+
+    it("keeps a shard whose close failed, so a later close() retries and closes it", () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const registry = createNodeShardRegistry();
+        const shard = registry.shardFor("a");
+
+        vi.spyOn(Database.prototype, "close").mockImplementationOnce(() => {
+            throw new Error("database is busy");
+        });
+
+        expect(() => {
+            registry.close({ force: true });
+        }).toThrow("1 shard(s) failed to close: a");
+
+        // The retry finds the shard still tracked and closes it.
+        registry.close();
+
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("reports, at the deadline, work a part gained after its own drain finished", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const { fire, timer } = manualTimer();
+        const never = deferred();
+        const first = createNodeShardRegistry();
+        const second = createNodeShardRegistry();
+
+        try {
+            first.shardFor("a").shard.waitUntil?.(never.promise);
+
+            const drained = drainTogether([first, second], { timer });
+
+            // The second registry has already drained idle; it gains work before the deadline passes.
+            await turn();
+            second.shardFor("b").shard.waitUntil?.(never.promise);
+            fire();
+
+            await expect(drained).resolves.toMatchObject({ pending: ["shard a: 1 waitUntil task", "shard b: 1 waitUntil task"], timedOut: true });
+        } finally {
+            never.release();
+            first.close();
+            second.close();
+        }
+    });
+
+    it("collects a failure recorded after a part finished draining, before reporting all parts idle", async () => {
+        expect.assertions(1);
+
+        const otherWork = deferred();
+        const recorded: string[] = [];
+        // A part whose drain returns at once and whose failure is recorded only afterwards, while the other part still drains.
+        const early = {
+            drain: async () => {
+                return { failed: recorded.splice(0), pending: [], timedOut: false };
+            },
+            idle: () => true,
+            pending: () => [],
+        };
+        const busy = createNodeShardRegistry();
+
+        try {
+            busy.shardFor("b").shard.waitUntil?.(otherWork.promise);
+
+            const drained = drainTogether([early, busy], { timer: () => () => {} });
+
+            await turn();
+            recorded.push("shard x: a failure recorded after its drain returned");
+            otherWork.release();
+
+            await expect(drained).resolves.toStrictEqual({ failed: ["shard x: a failure recorded after its drain returned"], pending: [], timedOut: false });
+        } finally {
+            busy.close();
+        }
+    });
+
+    it("collects, at the deadline, a failure a part recorded after its own drain finished", async () => {
+        expect.assertions(1);
+
+        const { fire, timer } = manualTimer();
+        const recorded: string[] = [];
+        // Drains clean at once, and records a failure only after that, while the other part runs into the deadline.
+        const early = {
+            drain: async () => {
+                return { failed: recorded.splice(0), pending: [], timedOut: false };
+            },
+            idle: () => true,
+            pending: () => [],
+        };
+        const stuck = {
+            drain: async (options?: { timer?: DrainTimer }) =>
+                new Promise<{ failed: string[]; pending: string[]; timedOut: boolean }>((resolve) => {
+                    options?.timer?.(0, () => {
+                        resolve({ failed: [], pending: ["stuck work"], timedOut: true });
+                    });
+                }),
+            idle: () => false,
+            pending: () => ["stuck work"],
+        };
+
+        const drained = drainTogether([early, stuck], { timer });
+
+        await turn();
+        recorded.push("shard x: a failure recorded after its drain returned");
+        fire();
+
+        await expect(drained).resolves.toStrictEqual({
+            failed: ["shard x: a failure recorded after its drain returned"],
+            pending: ["stuck work"],
+            timedOut: true,
+        });
+    });
+
+    it("reports a timed-out final pass instead of a clean drain", async () => {
+        expect.assertions(1);
+
+        const { fire, timer } = manualTimer();
+        let passes = 0;
+        // Idle whenever asked, but its second drain (the pass that began idle) runs into the deadline.
+        const late = {
+            drain: async (options?: { timer?: DrainTimer }) => {
+                passes += 1;
+
+                if (passes === 1) {
+                    return { failed: [], pending: [], timedOut: false };
+                }
+
+                return new Promise<{ failed: string[]; pending: string[]; timedOut: boolean }>((resolve) => {
+                    options?.timer?.(0, () => {
+                        resolve({ failed: [], pending: ["late work"], timedOut: true });
+                    });
+                });
+            },
+            idle: () => true,
+            pending: () => (passes > 1 ? ["late work"] : []),
+        };
+
+        const drained = drainTogether([late], { timer });
+
+        await turn();
+        fire();
+
+        await expect(drained).resolves.toStrictEqual({ failed: [], pending: ["late work"], timedOut: true });
+    });
+
+    it("keeps a shard whose deferred close failed live, reporting the failure and closing it on the next close()", async () => {
+        expect.assertions(3);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const handler = deferred();
+        const registry = createNodeShardRegistry();
+        const shard = registry.shardFor("waiting");
+
+        shard.inbound.onClose(async () => handler.promise);
+        // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+        (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+        // Unforced: the database is disposed once the close handler settles, and that dispose fails.
+        registry.close();
+        vi.spyOn(Database.prototype, "close").mockImplementationOnce(() => {
+            throw new Error("database is busy");
+        });
+        handler.release();
+
+        await expect(registry.drain()).resolves.toMatchObject({
+            failed: ["shard waiting failed to close after the work using it settled"],
+        });
+        expect(printed(logged)).toContainEqual(expect.stringContaining("shard waiting failed to close after the work using it settled"));
+
+        registry.close();
+
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("refuses a request sent after close(), instead of reopening its shard", async () => {
+        expect.assertions(2);
+
+        const registry = createNodeShardRegistry({ onFetch: async () => new Response("served") });
+
+        await expect(registry.directory.getByName("a").fetch(new Request("https://shard/"))).resolves.toBeInstanceOf(Response);
+
+        registry.close();
+
+        await expect(registry.directory.getByName("a").fetch(new Request("https://shard/"))).rejects.toThrow(
+            "the shard registry is closed, so it opens no shard and takes no request",
+        );
+    });
+
+    it("hands out no shard after a forced close() that followed a pending unforced one", () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const handler = deferred();
+        const registry = createNodeShardRegistry();
+        const shard = registry.shardFor("waiting");
+
+        shard.inbound.onClose(async () => handler.promise);
+        // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+        (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+        try {
+            registry.close();
+
+            expect(() => registry.shardFor("waiting")).toThrow("the shard registry is closing");
+
+            registry.close({ force: true });
+
+            // Disposed by the forced close, and the key is not served again.
+            expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+            expect(() => registry.shardFor("waiting")).toThrow("the shard registry is closed");
+        } finally {
+            handler.release();
+        }
+    });
+
+    it("reopens no stored shard after shutdown, even one with a persisted alarm", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-closed-rearm-"));
+        const writer = createNodeShardRegistry({ directory });
+
+        await writer.shardFor("stored").shard.alarms.set(Date.now() + 1000);
+        writer.close();
+
+        // A second registry over the same files, as a server's non-primary registry is, shut down before it re-armed anything.
+        const registry = createNodeShardRegistry({ directory });
+
+        try {
+            registry.close({ force: true });
+
+            expect(() => registry.rearmPersistedAlarms()).toThrow("the shard registry is closed");
+            expect(registry.idle()).toBe(true);
+        } finally {
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("disposes a shard only after a request that started before close() settles", async () => {
+        expect.assertions(3);
+
+        const request = deferred();
+        const registry = createNodeShardRegistry({
+            onFetch: async () => {
+                await request.promise;
+
+                return new Response("served");
+            },
+        });
+        const shard = registry.shardFor("busy");
+        const response = registry.directory.getByName("busy").fetch(new Request("https://shard/"));
+
+        registry.close();
+
+        // The request still holds the shard, so its database stays open for it.
+        expect(() => shard.sockets.accept({}, undefined, [])).not.toThrow();
+
+        request.release();
+
+        await expect(response).resolves.toBeInstanceOf(Response);
+
+        await registry.drain();
+
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("claims no alarm that comes due during a deferred close, and keeps its row for a restart", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-closing-alarm-"));
+        const fired: string[] = [];
+        const handler = deferred();
+        const registry = createNodeShardRegistry({
+            directory,
+            onAlarm: (shard) => {
+                fired.push(shard.shardKey);
+            },
+        });
+
+        try {
+            const shard = registry.shardFor("a");
+
+            await shard.shard.alarms.set(Date.now() + 1000);
+            shard.inbound.onClose(async () => handler.promise);
+            // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+            (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+            // Deferred by the running close handler; the alarm comes due while the shard waits for it.
+            registry.close();
+            await vi.advanceTimersByTimeAsync(2000);
+            handler.release();
+            await registry.drain();
+
+            expect(fired).toStrictEqual([]);
+
+            const restarted = createNodeShardRegistry({ directory, onAlarm: () => {} });
+
+            try {
+                expect(restarted.rearmPersistedAlarms()).toStrictEqual(["a"]);
+            } finally {
+                restarted.close({ force: true });
+            }
+        } finally {
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("disposes a shard only after an alarm handler already running when close() began", async () => {
+        expect.assertions(2);
+
+        const arrived = deferred();
+        const gate = deferred();
+        const registry = createNodeShardRegistry({
+            onAlarm: async () => {
+                arrived.release();
+                await gate.promise;
+            },
+        });
+        const shard = registry.shardFor("a");
+
+        await shard.shard.alarms.set(Date.now());
+        await arrived.promise;
+
+        registry.close();
+
+        // The handler is still running, so its database stays open for it.
+        expect(() => shard.sockets.accept({}, undefined, [])).not.toThrow();
+
+        gate.release();
+        await registry.drain();
+
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("retries a forced dispose that failed once the work its deferred close waits for settles", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const handler = deferred();
+        const registry = createNodeShardRegistry();
+        const shard = registry.shardFor("waiting");
+
+        shard.inbound.onClose(async () => handler.promise);
+        // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+        (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+        registry.close();
+        vi.spyOn(Database.prototype, "close").mockImplementationOnce(() => {
+            throw new Error("database is busy");
+        });
+
+        expect(() => {
+            registry.close({ force: true });
+        }).toThrow("1 shard(s) failed to close: waiting");
+
+        handler.release();
+        await registry.drain();
+
+        // The deferred close was kept, so it tried again once the handler settled.
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("retries a forced dispose an open iterator refused once the request holding it settles, then reports closed", async () => {
+        expect.assertions(4);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const holding = deferred();
+        const gate = deferred();
+        const registry = createNodeShardRegistry({
+            onFetch: async (_request, shard) => {
+                // A streamed read keeps better-sqlite3's statement running, so the connection refuses to close under it.
+                const rows = shard.shard.sql.exec("SELECT 1 UNION ALL SELECT 2").raw?.()[Symbol.iterator]();
+
+                rows?.next();
+                holding.release();
+                await gate.promise;
+                rows?.return?.(undefined);
+
+                return new Response("served");
+            },
+        });
+        const shard = registry.shardFor("busy");
+        const response = registry.directory.getByName("busy").fetch(new Request("https://shard/"));
+
+        await holding.promise;
+
+        expect(() => {
+            registry.close({ force: true });
+        }).toThrow("1 shard(s) failed to close: busy");
+        expect(() => registry.shardFor("busy")).toThrow("the shard registry is closing");
+
+        gate.release();
+        await response;
+        await registry.drain();
+
+        // Retried once the request let go of its iterator: disposed, and nothing is left open.
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+        expect(() => registry.shardFor("busy")).toThrow("the shard registry is closed,");
+    });
+
+    it("claims no shard alarm that comes due during a platform drain, keeping its row for a restart", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-draining-alarm-"));
+        const fired: string[] = [];
+        const hold = deferred();
+        const platform = createNodePlatform({
+            directory,
+            // Optional: the platform's own host calls it with no shard, a registry shard with one.
+            onAlarm: (shard?: { shardKey: string }) => {
+                fired.push(shard?.shardKey ?? "platform");
+            },
+            onFetch: async (_request, shard) => {
+                await shard.shard.alarms.set(Date.now() + 1000);
+
+                return new Response("armed");
+            },
+        });
+
+        try {
+            await resolveShard(platform.directory, "a").fetch(new Request("https://shard.internal/rpc"));
+            platform.shard.waitUntil?.(hold.promise);
+
+            const drained = platform.drain({ timer: () => () => {} });
+
+            await vi.advanceTimersByTimeAsync(2000);
+            hold.release();
+            await drained;
+
+            expect(fired).toStrictEqual([]);
+        } finally {
+            platform.close();
+        }
+
+        const restarted = createNodeShardRegistry({ directory, onAlarm: () => {} });
+
+        try {
+            expect(restarted.rearmPersistedAlarms()).toStrictEqual(["a"]);
+        } finally {
+            restarted.close({ force: true });
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("waits only for a shard's own requests when closing it", async () => {
+        expect.assertions(3);
+
+        const gate = deferred();
+        const registry = createNodeShardRegistry({
+            onFetch: async () => {
+                await gate.promise;
+
+                return new Response("served");
+            },
+        });
+        const busy = registry.shardFor("busy");
+        const quiet = registry.shardFor("quiet");
+        const response = registry.directory.getByName("busy").fetch(new Request("https://shard/"));
+
+        registry.close();
+
+        // Another shard's request does not hold this one open.
+        expect(() => quiet.sockets.accept({}, undefined, [])).toThrow("platform closed");
+        expect(() => busy.sockets.accept({}, undefined, [])).not.toThrow();
+
+        gate.release();
+        await response;
+        await registry.drain();
+
+        expect(() => busy.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("re-arms the readable shards when one stored shard file is corrupt, logging the bad one", async () => {
+        expect.assertions(3);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-restore-corrupt-"));
+        const first = createNodeShardRegistry({ directory });
+
+        await first.shardFor("good").shard.alarms.set(Date.now() + 1000);
+        first.close();
+        writeFileSync(join(directory, "bad.sqlite3"), "this is not a database", "utf8");
+
+        const fired = deferred();
+        const second = createNodeShardRegistry({
+            directory,
+            onAlarm: () => {
+                fired.release();
+            },
+        });
+
+        try {
+            expect(second.rearmPersistedAlarms()).toStrictEqual(["good"]);
+            expect(printed(logged)).toContainEqual(expect.stringContaining("could not open shard bad to re-arm its persisted alarm"));
+
+            await vi.advanceTimersByTimeAsync(2000);
+
+            await expect(fired.promise).resolves.toBeUndefined();
+        } finally {
+            second.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("keeps the process alive until the deadline, so a stalled shard cannot end it silently", async () => {
+        expect.assertions(2);
+
+        // A child process, because only there can the event loop run empty: the stalled waitUntil has no I/O behind it, so the
+        // deadline's own timer is the one thing that can keep the process alive long enough to report.
+        const directory = mkdtempSync(join(tmpdir(), "lunora-drain-alive-"));
+        const script = join(directory, "drain.mjs");
+
+        writeFileSync(
+            script,
+            [
+                `import { createNodeShardRegistry } from ${JSON.stringify(pathToFileURL(DIST_ENTRY).href)};`,
+                "const registry = createNodeShardRegistry();",
+                'registry.shardFor("stalled").shard.waitUntil(new Promise(() => {}));',
+                "const result = await registry.drain({ timeoutMs: 0 });",
+                'console.log("RESULT", JSON.stringify(result));',
+            ].join("\n"),
+            "utf8",
+        );
+
+        try {
+            const child = spawn(process.execPath, [script], { stdio: ["ignore", "pipe", "pipe"] });
+            let stdout = "";
+
+            child.stdout.on("data", (chunk: Buffer) => {
+                stdout += chunk.toString("utf8");
+            });
+
+            const code = await new Promise<number | null>((resolve) => {
+                child.once("exit", resolve);
+            });
+
+            expect(code).toBe(0);
+            expect(stdout).toContain(`RESULT ${JSON.stringify({ failed: [], pending: ["shard stalled: 1 waitUntil task"], timedOut: true })}`);
+        } finally {
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+});
+
+describe("background failures", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("logs a rejected waitUntil with the error object, so its stack and cause print", async () => {
+        expect.assertions(2);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const registry = createNodeShardRegistry();
+        const failure = new Error("background write failed", { cause: new Error("disk full") });
+
+        try {
+            registry.shardFor("a").shard.waitUntil?.(Promise.reject(failure));
+            await registry.drain();
+
+            expect(printed(logged)).toContainEqual(expect.stringContaining("waitUntil on shard a failed"));
+            // The error object itself is the last argument, so the console prints its stack and cause.
+            expect((logged.mock.calls[0]?.at(-1) as Error).cause).toStrictEqual(new Error("disk full"));
+        } finally {
+            registry.close();
+        }
+    });
+
+    it("logs a scheduled job whose delivery throws, naming the job, before it is retried", async () => {
+        expect.assertions(2);
+
+        const failure = new Error("delivery refused");
+        const reported = deferred();
+        const logged = vi.spyOn(console, "error").mockImplementation((...parts: unknown[]) => {
+            if (parts.includes(failure)) {
+                reported.release();
+            }
+        });
+        const platform = createNodePlatform({
+            onDispatch: () => {
+                throw failure;
+            },
+        });
+
+        try {
+            await platform.scheduler.schedule("jobs:run", {}, { delayMs: 0, retry: { maxAttempts: 1 } });
+            await reported.promise;
+
+            expect(printed(logged)).toContainEqual(expect.stringContaining("scheduled job jobs:run"));
+            expect(logged.mock.calls[0]?.at(-1)).toBe(failure);
+        } finally {
+            platform.close();
+        }
+    });
+});

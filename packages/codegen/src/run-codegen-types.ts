@@ -120,6 +120,13 @@ export interface CodegenOptions {
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
 
+/** A schedule `createWorker` dispatches itself (not a `cronJobs()` job), and which of its options declared it. */
+export interface WorkerEntryCron {
+    cron: string;
+    /** `backupCron`: the nightly backup. `crons`: a key of `createWorker({ crons })`. */
+    handler: "backupCron" | "crons";
+}
+
 export interface CodegenResult {
     /**
      * The normalized advisor evidence the findings were produced from, so a
@@ -284,6 +291,12 @@ export interface CodegenResult {
      * checks stored rows against the schema reads the validators here.
      */
     schemaTables: ReadonlyArray<TableIR>;
+
+    /**
+     * The schedules the worker entry's `createWorker({ backupCron, crons })` handles itself, each with the option that declared
+     * it. They reach only the worker's `scheduled()`, so a host that never calls it (the Node container) names them.
+     */
+    workerEntryCrons: ReadonlyArray<WorkerEntryCron>;
 
     /**
      * Workflows discovered from `defineWorkflow` exports in

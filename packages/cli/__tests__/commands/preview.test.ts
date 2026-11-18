@@ -2416,7 +2416,7 @@ describe("lunora preview", { timeout: 120_000 }, () => {
 
         it.each([
             ["celld", /celld has no isolated previews/u],
-            ["node", /Node target has no `lunora deploy`/u],
+            ["node", /Node target deploys as a container/u],
         ])("refuses the %s target with what to do instead", async (target, message) => {
             expect.assertions(1);
 

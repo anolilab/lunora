@@ -3700,12 +3700,24 @@ importers:
       '@codspeed/vitest-plugin':
         specifier: catalog:test
         version: 5.7.1(supports-color@10.2.2)(tinybench@6.1.4)(vite@7.3.7(@types/node@26.6.4)(jiti@2.7.0)(lightningcss@1.33.0)(terser@5.51.2)(yaml@2.9.1))(vitest@4.1.11)
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../do
       '@lunora/payment':
         specifier: workspace:*
         version: link:../payment
+      '@lunora/platform-node':
+        specifier: workspace:*
+        version: link:../platform-node
+      '@lunora/server':
+        specifier: workspace:*
+        version: link:../server
       '@lunora/testing':
         specifier: workspace:*
         version: link:../testing
+      '@lunora/values':
+        specifier: workspace:*
+        version: link:../values
       '@types/node':
         specifier: catalog:types
         version: 26.6.4
