@@ -11,7 +11,7 @@ import { pendingDeliveryRow } from "../notifications/outbox";
 import { storedTarget } from "../provision-contract";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
-import type { TargetDriver } from "../targets/driver";
+import type { DomainOps } from "../targets/driver";
 import type { Placement } from "../targets/placement";
 import { placementOfDeployment, storeRowReader } from "../targets/placement";
 import { domainNotificationDetail, reconcileDomain } from "./check";
@@ -49,6 +49,12 @@ interface ProjectRow {
 }
 
 export interface DomainSweepOptions {
+    /**
+     * Tell project `projectId`'s placement its domains changed, as the domain routes do. A box
+     * serves the custom domains its pushed routing table names, so without this a domain the
+     * sweep verified or failed stayed served as before until something else pushed routes.
+     */
+    domainsChanged?: (projectId: string) => Promise<void>;
     now: number;
 
     /**
@@ -64,19 +70,43 @@ export interface DomainSweepOptions {
  * its driver's targets. A box-hosted domain points at the box, not the cell apex, so
  * checking every domain against the apex failed each one of those.
  */
+type ProjectRowReader = { get: (table: string, id: string) => Promise<unknown> };
+
+type DriverFor = (placement: Placement) => { domains: Pick<DomainOps, "domainsChanged" | "platformTargets"> };
+
+/** The domain operations of project `projectId`'s placement, or `undefined` when it is not placed anywhere reachable. */
+const projectDomainOps = async (
+    database: ProjectRowReader,
+    driverFor: DriverFor,
+    projectId: string,
+): Promise<Pick<DomainOps, "domainsChanged" | "platformTargets"> | undefined> => {
+    const project = (await database.get("projects", projectId)) as null | { placementRef?: null | string; target?: null | string };
+    const target = project === null ? undefined : storedTarget(project.target);
+
+    if (project === null || target === undefined) {
+        return undefined;
+    }
+
+    const placed = await placementOfDeployment({ placementRef: project.placementRef, target }, storeRowReader(database));
+
+    return "placement" in placed ? driverFor(placed.placement).domains : undefined;
+};
+
 export const projectPlatformTargets =
-    (database: { get: (table: string, id: string) => Promise<unknown> }, driverFor: (placement: Placement) => Pick<TargetDriver, "domains">) =>
+    (database: ProjectRowReader, driverFor: DriverFor) =>
     async (projectId: string): Promise<ReadonlyArray<string> | undefined> => {
-        const project = (await database.get("projects", projectId)) as null | { placementRef?: null | string; target?: null | string };
-        const target = project === null ? undefined : storedTarget(project.target);
+        const ops = await projectDomainOps(database, driverFor, projectId);
 
-        if (project === null || target === undefined) {
-            return undefined;
-        }
+        return ops?.platformTargets();
+    };
 
-        const placed = await placementOfDeployment({ placementRef: project.placementRef, target }, storeRowReader(database));
+/** The sweep's `domainsChanged` over the control-plane rows, resolving the placement as {@link projectPlatformTargets} does. */
+export const projectDomainsChanged =
+    (database: ProjectRowReader, driverFor: DriverFor) =>
+    async (projectId: string): Promise<void> => {
+        const ops = await projectDomainOps(database, driverFor, projectId);
 
-        return "placement" in placed ? driverFor(placed.placement).domains.platformTargets() : undefined;
+        await ops?.domainsChanged?.();
     };
 
 export interface DomainSweepResult {
@@ -101,6 +131,16 @@ const announce = async (database: ControlPlaneDatabase, domain: DomainRow, event
     for (const channel of targets) {
         // eslint-disable-next-line no-await-in-loop -- a handful of channels per transition; sequential keeps the writes simple
         await database.insert("notificationDeliveries", pendingDeliveryRow(channel, message, domain.organizationId, now));
+    }
+};
+
+/** Tell a domain's placement its domains changed, best-effort: the state is already written. */
+const tellPlacement = async (options: DomainSweepOptions, domain: DomainRow): Promise<void> => {
+    try {
+        await options.domainsChanged?.(domain.projectId);
+    } catch (error) {
+        // eslint-disable-next-line no-console -- the state is written; the box catches up on its next push or reconnect
+        console.warn("[domains]", `${domain.hostname} changed, but its target could not be told: ${error instanceof Error ? error.message : String(error)}`);
     }
 };
 
@@ -168,6 +208,10 @@ export const runDomainSweep = async (database: ControlPlaneDatabase, options: Do
         await database.patch("domains", domain._id, { ...outcome.patch, lastCheckedAt: options.now, updatedAt: options.now });
 
         if (outcome.transition !== null) {
+            // A transition is exactly when `verifiedAt` changed, which is what decides whether a box serves the hostname.
+            // eslint-disable-next-line no-await-in-loop -- transitions are rare; one push per changed domain
+            await tellPlacement(options, domain);
+
             // eslint-disable-next-line no-await-in-loop -- transitions are rare; sequential keeps the writes simple
             await announce(database, domain, outcome.transition, options.now);
 

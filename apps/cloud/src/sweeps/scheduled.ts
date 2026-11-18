@@ -36,7 +36,7 @@ import { runReadbackUsageSweep, teardownPorts } from "../deploy/sweeps";
 import { runTeardownSweep } from "../deploy/teardown";
 import { runCertificateSweep } from "../domains/certificate-sweep";
 import { localIssuer } from "../domains/issuers";
-import { expireUnverifiedDomains, projectPlatformTargets, runDomainSweep } from "../domains/sweep";
+import { expireUnverifiedDomains, projectDomainsChanged, projectPlatformTargets, runDomainSweep } from "../domains/sweep";
 import { createDohResolver } from "../domains/verify";
 import { edgeBudget } from "../edge/protection";
 import { engageAnomalyRateLimits, runEdgeRuleSweep } from "../edge/rules";
@@ -588,9 +588,12 @@ const sweepNotifications = async (database: ControlPlaneStore, env: ControlPlane
  * anyone clicking Verify.
  */
 const sweepDomains = async (database: ControlPlaneStore, env: ControlPlaneEnv): Promise<void> => {
+    const driverFor = (placement: Parameters<typeof resolveTargetDriver>[0]) => resolveTargetDriver(placement, env);
+
     await runDomainSweep(database, {
+        domainsChanged: projectDomainsChanged(database, driverFor),
         now: Date.now(),
-        platformTargets: projectPlatformTargets(database, (placement) => resolveTargetDriver(placement, env)),
+        platformTargets: projectPlatformTargets(database, driverFor),
         resolve: createDohResolver(),
     });
 };

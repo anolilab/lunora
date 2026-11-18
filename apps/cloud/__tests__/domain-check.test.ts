@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { FAILURES_BEFORE_UNVERIFIED, reconcileDomain } from "../src/domains/check";
-import { expireUnverifiedDomains, projectPlatformTargets, runDomainSweep } from "../src/domains/sweep";
+import { expireUnverifiedDomains, projectDomainsChanged, projectPlatformTargets, runDomainSweep } from "../src/domains/sweep";
 import type { DnsAnswer } from "../src/domains/verify";
 import type { ControlPlaneDatabase } from "../src/store";
 
@@ -226,6 +226,53 @@ describe(runDomainSweep, () => {
         await runDomainSweep(database, { now: NOW + 1000, platformTargets, resolve });
 
         expect(database.rows["domains"]?.[0]).toMatchObject({ failedChecks: 0, verifiedAt: 5 });
+    });
+
+    it("tells the placement when a check changes whether a domain is verified, and only then", async () => {
+        const database = fakeDatabase({
+            domains: [domainRow({ _id: "dom_1" })],
+            projects: [{ _id: "proj", name: "Acme", organizationId: "org" }],
+        });
+        const domainsChanged = vi.fn<(projectId: string) => Promise<void>>(async () => undefined);
+        const resolve = resolverFor({
+            "_lunora.app.example.com": txt("tok"),
+            "app.example.com": cname(`proj.${APP}`),
+        });
+
+        await runDomainSweep(database, { domainsChanged, now: NOW, platformTargets: apexTargets, resolve });
+        // Still verified on the next check: no transition, nothing for the box to rebuild.
+        await runDomainSweep(database, { domainsChanged, now: NOW + 1000, platformTargets: apexTargets, resolve });
+
+        expect(domainsChanged).toHaveBeenCalledTimes(1);
+        expect(domainsChanged).toHaveBeenCalledWith("proj");
+    });
+
+    it("reaches the box driver's domainsChanged through the project's placement", async () => {
+        const database = fakeDatabase({
+            boxes: [{ _id: "box_1", organizationId: "org", slug: "edge-1", status: "online" }],
+            domains: [domainRow({ _id: "dom_1" })],
+            projects: [{ _id: "proj", name: "Acme", organizationId: "org", placementRef: "box_1", target: "celld-vps" }],
+        });
+        const read = {
+            get: async (table: string, id: string): Promise<unknown> => database.rows[table]?.find((row) => row._id === id) ?? null,
+        };
+        const pushRoutes = vi.fn<() => Promise<void>>(async () => undefined);
+        const driverFor = () => {
+            return { domains: { domainsChanged: pushRoutes, issue: async () => undefined, platformTargets: () => [`edge-1.${BOX_DOMAIN}`] } };
+        };
+        const resolve = resolverFor({
+            "_lunora.app.example.com": txt("tok"),
+            "app.example.com": cname(`edge-1.${BOX_DOMAIN}`),
+        });
+
+        await runDomainSweep(database, {
+            domainsChanged: projectDomainsChanged(read, driverFor),
+            now: NOW,
+            platformTargets: projectPlatformTargets(read, driverFor),
+            resolve,
+        });
+
+        expect(pushRoutes).toHaveBeenCalledTimes(1);
     });
 
     it("leaves a domain whose project has no reachable placement unjudged", async () => {
