@@ -1411,6 +1411,26 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message).toContain("lunora/method.ts (cloudflare:workers)");
         });
 
+        it.each([
+            ["a dynamic import", "import"],
+            ["a require", "require"],
+        ])("refuses %s of a computed cloudflare: specifier, reported by its static head", (_label, loader) => {
+            expect.assertions(1);
+
+            // Which built-in is known only at runtime; that it is one is not.
+            write("computed.ts", `export const load = async (name: string) => ${loader}(\`cloudflare:\${name}\`);\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/computed.ts (cloudflare:*)");
+        });
+
+        it("does not resolve a fully dynamic specifier, or a template naming anything else", () => {
+            expect.assertions(1);
+
+            write("computed.ts", `export const load = async (name: string) => [await import(name), await import(\`./locale/\${name}\`)];\n`);
+
+            expect(cloudflareRefusals()).toStrictEqual([]);
+        });
+
         it("refuses a call to the file's own function named require, failing closed until it is renamed", () => {
             expect.assertions(1);
 

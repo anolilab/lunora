@@ -78,9 +78,24 @@ const loadCallSpecifier = (call: CallExpression): string | undefined => {
         (Node.isIdentifier(callee) && callee.getText() === "require") ||
         (Node.isPropertyAccessExpression(callee) && callee.getName() === "require");
 
-    return loads && argument !== undefined && (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))
-        ? argument.getLiteralValue()
-        : undefined;
+    if (!loads || argument === undefined) {
+        return undefined;
+    }
+
+    if (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument)) {
+        return argument.getLiteralValue();
+    }
+
+    // ``import(`cloudflare:${name}`)`` names some built-in, which one known only at runtime: refused
+    // on its static head, reported as `cloudflare:*`. A head naming anything else, or no literal at
+    // all (`import(name)`), is not resolved: there is no file to follow.
+    if (Node.isTemplateExpression(argument)) {
+        const head = argument.getHead().getLiteralText();
+
+        return head.startsWith(CLOUDFLARE_SCHEME) ? `${head}*` : undefined;
+    }
+
+    return undefined;
 };
 
 /**
