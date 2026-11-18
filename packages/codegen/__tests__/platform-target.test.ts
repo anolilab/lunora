@@ -1211,6 +1211,16 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         const cloudflareRefusals = (): ReturnType<typeof codegen>["platformDiagnostics"] =>
             codegen().platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"));
 
+        it("refuses the real registry mail starter on node, so no Node build can run it", () => {
+            expect.assertions(1);
+
+            // The file `lunora registry add mail` copies in, read from the repo rather than restated, so this
+            // notices if the starter ever changes how it loads its env or its send binding.
+            write("mailStarter.ts", readFileSync(join(here, "..", "..", "..", "registry", "mail", "mail.ts"), "utf8"));
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/mailStarter.ts (cloudflare:workers, cloudflare:email)");
+        });
+
         it("refuses an import with only inline type specifiers, which verbatim module syntax keeps as a load", () => {
             expect.assertions(1);
 
