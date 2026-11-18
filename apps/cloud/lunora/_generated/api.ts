@@ -132,7 +132,7 @@ export interface ApiTypes {
     metrics: {
         ingest: FunctionReference<"mutation", { deployKey: unknown; deploymentId?: Id<"deployments">; organizationId: Id<"organizations">; points: Array<{ at: number; functionPath?: string; kind: string; name: string; serviceName?: string; value: number }> }, { ingested: number; }>;
         list: FunctionReference<"action", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
-        series: FunctionReference<"query", { from?: number; organizationId: Id<"organizations">; to?: number }, { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]>;
+        series: FunctionReference<"query", { from?: number; organizationId: Id<"organizations">; to?: number }, { series: { firstValue: number; functionPath?: string; kind: string; lastValue: number; name: string; points: { t: number; value: number; }[]; trend: number }[]; truncated: boolean }>;
     };
     notifications: {
         channels: FunctionReference<"query", { organizationId: Id<"organizations"> }, { canManage: boolean; channels: { _id: Id<"notificationChannels">; createdAt: number; destination: string; enabled: boolean; events: ("deployment.live" | "deployment.failed" | "deployment.rolled_back" | "domain.verified" | "domain.failed" | "preview.expired")[]; hasSecret: boolean; kind: "webhook" | "slack" | "discord" | "telegram"; name: string }[] }>;

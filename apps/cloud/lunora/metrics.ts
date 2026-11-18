@@ -2,7 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import { foldMetricSeries } from "../src/telemetry/metric-series";
 import type { MetricSeries } from "../src/telemetry/metrics-read";
-import { createMetricsReader, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry/metrics-read";
+import { createMetricsReader, DEFAULT_METRICS_BUCKET_MS, DEFAULT_METRICS_WINDOW_MS } from "../src/telemetry/metrics-read";
 import type { Doc as Document_ } from "./_generated/dataModel";
 import { action, internalMutation, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
@@ -155,11 +155,25 @@ export const ingest = mutation
     });
 
 /**
+ * Page budget for one {@link series} run (10 pages of D1's 1000-row cap). The query is live, so it
+ * re-runs on every ingest into the org; draining a busy week of raw points each time is the cost
+ * that budget refuses. Store `groupBy` groups by stored columns only, so the bucket (a function
+ * of `at`) cannot be aggregated in the database.
+ */
+const SERIES_MAX_PAGES = 10;
+
+/** {@link series}' answer: `truncated` says the budget ran out before `from`, so older buckets are missing. */
+interface MetricSeriesRead {
+    series: MetricSeriesView[];
+    truncated: boolean;
+}
+
+/**
  * Exact per-metric series from the D1 `metricPoints` store over `[from, to]` —
  * every stored point averaged per bucket (precise, not sampled like the AE
- * {@link list}). A plain **query** (D1 read); members only. The UI prefers this
- * for the hot window and falls back to {@link list} (AE) only for ranges older
- * than D1 retention.
+ * {@link list}). A plain **query** (D1 read); members only. Reads newest-first
+ * within {@link SERIES_MAX_PAGES}; past it the answer is flagged `truncated` and
+ * covers only the newest part of the window.
  */
 export const series = query
     .input({
@@ -167,25 +181,43 @@ export const series = query
         organizationId: v.id("organizations"),
         to: v.optional(v.number()),
     })
-    .query(async ({ ctx: context, args }): Promise<MetricSeriesView[]> => {
+    .query(async ({ ctx: context, args }): Promise<MetricSeriesRead> => {
         await assertMember(context, args.organizationId);
 
         const from = args.from ?? context.now - DEFAULT_METRICS_WINDOW_MS;
         const to = args.to ?? context.now;
+        let truncated = false;
 
         // The range is in the query (`by_org_at`), not filtered after it: a bounded read of the
         // org's newest rows dropped in-range points once a busier or future-dated tail filled it.
-        const rows = await collectAll<Document_<"metricPoints">>((cursor) =>
-            context.db.metricPoints.findMany({
-                cursor,
-                orderBy: [{ at: "desc" }],
-                where: { at: { gte: from, lte: to }, organizationId: args.organizationId },
-            }),
+        const rows = await collectAll<Document_<"metricPoints">>(
+            (cursor) =>
+                context.db.metricPoints.findMany({
+                    cursor,
+                    orderBy: [{ at: "desc" }],
+                    where: { at: { gte: from, lte: to }, organizationId: args.organizationId },
+                }),
+            {
+                maxPages: SERIES_MAX_PAGES,
+                onTruncated: () => {
+                    truncated = true;
+                },
+            },
         );
 
-        const points = rows.map((row) => absentForNull(row));
+        let points = rows.map((row) => absentForNull(row));
 
-        return foldMetricSeries(points).map((point) => toView(point));
+        // The oldest bucket a cut-short read reached holds only some of its points; its average
+        // would be wrong, so drop it and keep every bucket shown exact.
+        const oldest = points.at(-1);
+
+        if (truncated && oldest !== undefined) {
+            const partialBucket = Math.floor(oldest.at / DEFAULT_METRICS_BUCKET_MS) * DEFAULT_METRICS_BUCKET_MS;
+
+            points = points.filter((point) => point.at >= partialBucket + DEFAULT_METRICS_BUCKET_MS);
+        }
+
+        return { series: foldMetricSeries(points).map((point) => toView(point)), truncated };
     });
 
 /** Exact metric points older than this are pruned from D1's hot window (matches span observations). */

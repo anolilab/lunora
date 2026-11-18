@@ -29,13 +29,18 @@ const MAX_PAGES = 100;
  */
 export const collectAll = async <TRow>(
     fetchPage: (cursor: null | string) => Promise<Page>,
-    /** Called when the read stopped at the page cap with rows left, for a reader that must not show a truncated read as the whole. */
-    onTruncated?: () => void,
+    options: {
+        /** A tighter page budget than the runaway stop, for a read that re-runs on every change (a live query). */
+        maxPages?: number;
+        /** Called when the read stopped at the page cap with rows left, for a reader that must not show a truncated read as the whole. */
+        onTruncated?: () => void;
+    } = {},
 ): Promise<TRow[]> => {
+    const maxPages = Math.min(options.maxPages ?? MAX_PAGES, MAX_PAGES);
     const rows: TRow[] = [];
     let cursor: null | string = null;
 
-    for (let index = 0; index < MAX_PAGES; index += 1) {
+    for (let index = 0; index < maxPages; index += 1) {
         // eslint-disable-next-line no-await-in-loop -- keyset pagination is sequential by construction
         const result = await fetchPage(cursor);
 
@@ -47,8 +52,8 @@ export const collectAll = async <TRow>(
 
         cursor = result.continueCursor;
 
-        if (index === MAX_PAGES - 1) {
-            onTruncated?.();
+        if (index === maxPages - 1) {
+            options.onTruncated?.();
         }
     }
 

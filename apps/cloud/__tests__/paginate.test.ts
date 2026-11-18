@@ -75,10 +75,18 @@ describe(collectAll, () => {
     it("says when it stopped at the cap, and not when the last page was the cap's", async () => {
         const truncated: string[] = [];
 
-        await collectAll(pagedTable(101, 1).fetchPage, () => truncated.push("101 rows"));
-        await collectAll(pagedTable(100, 1).fetchPage, () => truncated.push("100 rows"));
+        await collectAll(pagedTable(101, 1).fetchPage, { onTruncated: () => truncated.push("101 rows") });
+        await collectAll(pagedTable(100, 1).fetchPage, { onTruncated: () => truncated.push("100 rows") });
 
         expect(truncated).toStrictEqual(["101 rows"]);
+    });
+
+    it("stops at a caller's tighter page budget and says so", async () => {
+        const table = pagedTable(10, 2);
+        const truncated: string[] = [];
+
+        await expect(collectAll(table.fetchPage, { maxPages: 3, onTruncated: () => truncated.push("cut") })).resolves.toStrictEqual([0, 1, 2, 3, 4, 5]);
+        expect({ calls: table.calls, truncated }).toStrictEqual({ calls: [null, "2", "4"], truncated: ["cut"] });
     });
 
     it("returns an empty list for an empty table", async () => {

@@ -691,8 +691,10 @@ export const usageProgress = query
                 let complete = true;
                 const rows = await collectAll<{ deploymentId?: null | string; quantity: number }>(
                     (cursor) => context.db.platformUsage.findMany({ cursor, where: { kind, organizationId, periodStart } }),
-                    () => {
-                        complete = false;
+                    {
+                        onTruncated: () => {
+                            complete = false;
+                        },
                     },
                 );
 

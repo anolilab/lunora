@@ -20,7 +20,8 @@ interface MetricsSectionProps {
  * exact D1 `metricPoints` store, where every measurement in a bucket is averaged
  * (precise, not sampled). Each series shows its name, kind, last value, a
  * direction/trend badge, and an inline-SVG sparkline, and updates reactively as
- * new points land. Empty until a tenant emits measurements; never fabricates a
+ * new points land. A read too large for one live run is cut to its newest part
+ * and flagged, shown as a "partial data" notice. Empty until a tenant emits measurements; never fabricates a
  * series. (The sampled Analytics-Engine mirror, `metrics.list`, remains the
  * archive tier for windows older than the D1 hot retention.)
  *
@@ -37,7 +38,8 @@ interface MetricsSectionProps {
  */
 export const MetricsSection = ({ organizationId }: MetricsSectionProps): ReactElement => {
     const { from, to } = useTimeRange();
-    const series = useQuery(api.metrics.series, { from, organizationId, to });
+    const read = useQuery(api.metrics.series, { from, organizationId, to });
+    const series = read?.series;
 
     return (
         <div className="flex flex-col gap-6">
@@ -53,6 +55,15 @@ export const MetricsSection = ({ organizationId }: MetricsSectionProps): ReactEl
                     <TimeRangePicker />
                 </CardHeader>
             </Card>
+
+            {read?.truncated ? (
+                <Card>
+                    <CardContent className="text-muted-foreground py-4 text-sm">
+                        Partial data: this window holds more measurements than one live read covers, so only its most recent part is charted. Narrow the time
+                        range to see the rest.
+                    </CardContent>
+                </Card>
+            ) : null}
 
             {series === undefined ? (
                 <Card>

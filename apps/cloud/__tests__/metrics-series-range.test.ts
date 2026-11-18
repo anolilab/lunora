@@ -41,6 +41,8 @@ const d1MetricPoints = (rows: Row[]) => {
     };
 };
 
+type SeriesRead = { series: { points: { t: number; value: number }[] }[]; truncated: boolean };
+
 const point = (at: number, value: number): Row => {
     return { _id: `mp_${String(at)}`, at, createdAt: at, kind: "gauge", name: "queue_depth", organizationId: "org_1", value };
 };
@@ -60,18 +62,49 @@ describe("metrics.series", () => {
 
         (ctx.db as unknown as Record<string, unknown>)["metricPoints"] = d1MetricPoints([...newer, ...inWindow]);
 
-        const [only, ...rest] = (await series.handler(ctx, { from, organizationId: "org_1", to } as never)) as { points: { t: number; value: number }[] }[];
+        const read = (await series.handler(ctx, { from, organizationId: "org_1", to } as never)) as SeriesRead;
+        const [only, ...rest] = read.series;
 
         expect({
             buckets: only?.points.length,
             first: only?.points[0]?.t,
             others: rest.length,
+            truncated: read.truncated,
             values: [...new Set(only?.points.map((sample) => sample.value))],
         }).toStrictEqual({
             buckets: 100,
             first: from,
             others: 0,
+            truncated: false,
             values: [1],
         });
+    });
+
+    it("stops at its page budget, flags the read truncated and drops the bucket it cut into", async () => {
+        expect.assertions(1);
+
+        // 12 000 points one second apart: 12 D1 pages, past the 10-page budget of a live run.
+        const bucketMs = 15 * 60 * 1000;
+        const total = 12_000;
+        const inWindow = Array.from({ length: total }, (_, index) => point(index * 1000, 1));
+        const to = total * 1000;
+        const { ctx } = makeCtx({ members: [owner("org_1")] }, { now: to + 10_000 });
+        let pages = 0;
+        const table = d1MetricPoints(inWindow);
+
+        (ctx.db as unknown as Record<string, unknown>)["metricPoints"] = {
+            findMany: (args: Parameters<typeof table.findMany>[0]) => {
+                pages += 1;
+
+                return table.findMany(args);
+            },
+        };
+
+        const read = (await series.handler(ctx, { from: 0, organizationId: "org_1", to } as never)) as SeriesRead;
+        // Newest-first, 10 pages reach back to at = 2 000 000, inside the bucket starting at 1 800 000;
+        // that bucket was read only in part, so the first one charted is the next.
+        const firstKept = 3 * bucketMs;
+
+        expect({ first: read.series[0]?.points[0]?.t, pages, truncated: read.truncated }).toStrictEqual({ first: firstKept, pages: 10, truncated: true });
     });
 });
