@@ -859,9 +859,13 @@ binding and one variable per `secrets_store_secrets[]` binding and
 `DATABASE_URL` is unset. Only declared names reach the worker's `env`, as on
 Cloudflare: the wrangler `vars`, the `secrets.required` names, the
 `secrets_store_secrets[]` bindings, and the runtime's own `LUNORA_*`, `PORT` and
-`DATABASE_URL`. Any other variable a container host injects (cloud credentials,
-another service's token) stays out of reach of app code, so list every secret
-the app reads in `secrets.required`. No secret value is written into the generated
+`DATABASE_URL`. No other variable a container host injects (cloud credentials,
+another service's token) is passed through `env`, so list every secret the app
+reads in `secrets.required`. That is not a sandbox: `process.env` stays readable
+to the app and every dependency in the same process, so inject only the
+variables the app needs. A name that is both a `secrets.required` entry and a
+`secrets_store_secrets` binding is refused, since the binding would replace the
+plain secret. No secret value is written into the generated
 files: secrets appear by name only. The wrangler `vars` are the exception by
 design, bundled into `server.mjs` as defaults, so keep secrets out of `vars`.
 Crons and scheduled jobs are delivered to the shard binding, the one whose class

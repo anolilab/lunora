@@ -1784,10 +1784,10 @@ const runNodeContainerDeploy = async (options: DeployCommandOptions, target: str
 
     logger.success(`wrote the Node container build context to ${context} (${artifact.files.join(", ")})`);
 
-    // The server delivers the crons codegen declares through the platform scheduler; anything else in triggers.crons only reaches
-    // a worker's scheduled() handler (createWorker's backupCron or crons), which nothing calls in the container.
-    const declaredCrons = new Set(codegen.result?.cronTriggers);
-    const scheduledOnly = artifact.cronTriggers.filter((cron) => !declaredCrons.has(cron));
+    // The server delivers only the generated LUNORA_CRONS map, through the platform scheduler. Codegen's cronTriggers also lists
+    // createWorker's backupCron and crons keys, which reach nothing but scheduled(), never called here, so they count as unserved.
+    const deliveredCrons = new Set(artifact.deliveredCrons);
+    const scheduledOnly = artifact.cronTriggers.filter((cron) => !deliveredCrons.has(cron));
 
     if (scheduledOnly.length > 0) {
         logger.warn(

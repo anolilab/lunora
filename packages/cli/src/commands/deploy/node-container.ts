@@ -12,9 +12,9 @@
  * dev --target node` resolves the latter: both are heavy (a per-platform binary
  * and a native addon), and every other `lunora` install would pay for them.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { COMPOSED_WORKER_ENTRY, DURABLE_OBJECT_BINDINGS, resolveSchemaDirectory } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
@@ -153,8 +153,10 @@ interface NodeDeployEnvVariable {
 }
 
 interface NodeContainerArtifact {
-    /** Wrangler's `triggers.crons`, for the caller to compare with the crons codegen declares. */
+    /** Wrangler's `triggers.crons`, for the caller to compare with {@link NodeContainerArtifact.deliveredCrons}. */
     cronTriggers: string[];
+    /** The schedules the server delivers: the keys of the generated `LUNORA_CRONS` map, nothing `scheduled()` alone serves. */
+    deliveredCrons: string[];
     /** The build context, absolute. */
     directory: string;
     env: NodeDeployEnvVariable[];
@@ -413,6 +415,14 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     }
 
     const workerSecrets = requiredSecretNames(parsed.secrets, configName);
+    const overlapping = storeSecrets.filter((name) => workerSecrets.includes(name));
+
+    // One env key cannot be both: the store binding object would replace the plain string, and the code expecting either breaks.
+    if (overlapping.length > 0) {
+        throw new Error(
+            `--target node puts each secrets.required name and each secrets_store_secrets binding on env under its own name, and ${overlapping.join(", ")} in ${configName} is both: the store binding would silently replace the plain secret. Keep one of them`,
+        );
+    }
     const declared = parsed as Record<string, unknown>;
 
     return {
@@ -897,8 +907,9 @@ and the server exits with code 1. A second signal exits without waiting.
 
 Only declared names reach the worker's \`env\`, as on Cloudflare: the wrangler \`vars\`, the \`secrets.required\`
 names, the \`secrets_store_secrets\` bindings, and what the runtime reads itself (\`LUNORA_*\`, \`PORT\`,
-\`DATABASE_URL\`). Any other variable on the container stays out of reach of app code, so a secret the app reads
-must be listed in \`secrets.required\` in wrangler.jsonc. No secret value is written into \`server.mjs\`, this
+\`DATABASE_URL\`). No other variable is passed through \`env\`, so a secret the app reads must be listed in
+\`secrets.required\` in wrangler.jsonc. That is not a sandbox: \`process.env\` stays readable to the app and every
+dependency in this process, so inject only the variables the app needs. No secret value is written into \`server.mjs\`, this
 README or the Dockerfile: secrets appear by name only. The wrangler \`vars\` are the exception by design: their
 values are bundled into \`server.mjs\` as defaults (an environment variable of the same name overrides one), so
 keep secrets out of \`vars\`.
@@ -966,13 +977,24 @@ interface EsbuildFailure {
     errors?: ReadonlyArray<{ text?: string }>;
 }
 
+/** `path` with symlinks resolved, or as given when it does not exist. */
+const realPath = (path: string): string => {
+    try {
+        return realpathSync(path);
+    } catch {
+        return path;
+    }
+};
+
+const isInside = (path: string, directory: string): boolean => path === directory || path.startsWith(`${directory}${sep}`);
+
 const MISSING_EXPORT = /^No matching export in "([^"]+)" for import "([^"]+)"$/u;
 
 /**
  * The deploy's own message for an entry that lacks the default fetch handler or a bound Durable Object class: esbuild's
  * "No matching export" names the symptom, this names the cause and the fix. `undefined` for any other failure.
  */
-const missingExportRefusal = (error: unknown, project: NodeDeployProject, projectRoot: string): Error | undefined => {
+const missingExportRefusal = (error: unknown, project: NodeDeployProject, projectRoot: string, platformNodeDirectory: string): Error | undefined => {
     const unmatched = ((error as EsbuildFailure).errors ?? []).flatMap((entry) => {
         const match = MISSING_EXPORT.exec(entry.text ?? "");
 
@@ -980,7 +1002,9 @@ const missingExportRefusal = (error: unknown, project: NodeDeployProject, projec
     });
 
     // A missing platform-node export means the project's copy is older than this deploy needs, not that the entry is wrong.
-    if (unmatched.some((entry) => entry.file.includes("platform-node"))) {
+    // Matched by where the file really is, inside that package's directory, not by name: an app file named
+    // src/platform-node-worker.ts gets the ordinary missing-export message.
+    if (unmatched.some((entry) => isInside(realPath(resolve(entry.file)), platformNodeDirectory))) {
         const version = installedVersion(join(projectRoot, "package.json"), "@lunora/platform-node") ?? "unknown";
 
         return new Error(
@@ -1017,6 +1041,14 @@ const unresolvedOptionalRefusal = (error: unknown): Error | undefined => {
             cause: error,
         },
     );
+};
+
+/** The schedules the generated `LUNORA_CRONS` map delivers. A self-contained module, so loading it runs nothing of the app's. */
+const deliveredCronSchedules = async (cronsModule: string): Promise<string[]> => {
+    const { createJiti } = await import("jiti");
+    const crons = await createJiti(cronsModule).import<{ LUNORA_CRONS?: Record<string, unknown> }>(cronsModule);
+
+    return Object.keys(crons.LUNORA_CRONS ?? {});
 };
 
 /** Bundle the generated entry and the app into `server.mjs`. */
@@ -1080,7 +1112,7 @@ const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promis
     try {
         await bundleServer(esbuild, directory, renderServerEntry(projectRoot, project, cronsModule), projectRoot, ["better-sqlite3", ...Object.keys(optional)]);
     } catch (error: unknown) {
-        throw missingExportRefusal(error, project, projectRoot) ?? unresolvedOptionalRefusal(error) ?? error;
+        throw missingExportRefusal(error, project, projectRoot, realPath(dirname(platformNodeManifest))) ?? unresolvedOptionalRefusal(error) ?? error;
     }
 
     const sqliteVersion = installedVersion(platformNodeManifest, "better-sqlite3");
@@ -1112,6 +1144,7 @@ const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promis
         files: [".dockerignore", "Dockerfile", "package-lock.json", "package.json", "README.md", "server.mjs"],
         unbound: project.unbound,
         cronTriggers: project.cronTriggers,
+        deliveredCrons: await deliveredCronSchedules(cronsModule),
     };
 };
 

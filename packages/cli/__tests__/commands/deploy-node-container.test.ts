@@ -466,7 +466,7 @@ describe("lunora deploy --target node", () => {
         });
 
         it("names the secrets in the README but bakes no secret value into any generated file", () => {
-            expect.assertions(5);
+            expect.assertions(7);
 
             const files = readdirSync(artifact).filter((file) => file !== "node_modules");
             const contents = files.map((file) => readFileSync(join(artifact, file), "utf8")).join("\n");
@@ -477,6 +477,11 @@ describe("lunora deploy --target node", () => {
             // Truthful about what is bundled: secrets by name only, vars by value.
             expect(readme).toContain("No secret value is written into `server.mjs`");
             expect(readme).toContain("values are bundled into `server.mjs` as defaults");
+            // Honest about the boundary: env holds declared names only, but process.env is readable to anything in the process.
+            expect(readme).toContain("No other variable is passed through `env`");
+            expect(readme).toContain(
+                "`process.env` stays readable to the app and every\ndependency in this process, so inject only the variables the app needs",
+            );
             expect(Object.values(SECRET_VALUES).filter((value) => contents.includes(value))).toStrictEqual([]);
         });
 
@@ -1075,6 +1080,41 @@ describe("lunora deploy --target node", () => {
             );
         });
 
+        it("names a createWorker backupCron trigger, which codegen lists but only scheduled() would run", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { triggers: { crons: ["0 4 * * *"] } } });
+
+            const worker = join(workdir, "src", "worker.ts");
+
+            writeFileSync(
+                worker,
+                readFileSync(worker, "utf8").replace("createWorker({ shardDO: env.SHARD })", 'createWorker({ backupCron: "0 4 * * *", shardDO: env.SHARD })'),
+                "utf8",
+            );
+
+            const { logger, warnings } = recordingLogger();
+
+            await expect(runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" })).resolves.toMatchObject({
+                code: 0,
+            });
+            expect(warnings.join("\n")).toContain("will not fire (a createWorker backupCron or crons job on them does not run): 0 4 * * *");
+        });
+
+        it("gives an app file whose name contains platform-node the ordinary missing-export message, not the upgrade advice", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { main: "src/platform-node-worker.ts" } });
+            // The app's own entry, which happens to be named after the package and exports no ShardDO.
+            rmSync(join(workdir, "src", "worker.ts"));
+            writeFileSync(join(workdir, "src", "platform-node-worker.ts"), `export default { fetch: () => new Response("app") };\n`, "utf8");
+
+            const result = await deploy(workdir);
+
+            expect(result).toMatchObject({ code: 1, error: expect.stringContaining("(src/platform-node-worker.ts), and it does not export ShardDO") });
+            expect(result.error).not.toContain("predates");
+        });
+
         it("refuses a project whose @lunora/platform-node predates deadline-bounded drains", async () => {
             expect.assertions(1);
 
@@ -1114,6 +1154,23 @@ describe("lunora deploy --target node", () => {
                 code: 1,
                 error: expect.stringContaining("this project installs 1.0.0-alpha.200, which predates them, so every container shutdown would fail"),
             });
+        });
+
+        it("refuses a name that is both a secrets.required entry and a secrets_store binding, which would replace the plain secret", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, {
+                wrangler: {
+                    secrets: { required: ["SESSION_SECRET", "STRIPE_KEY"] },
+                    secrets_store_secrets: [{ binding: "STRIPE_KEY", secret_name: "stripe", store_id: "store" }],
+                },
+            });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 2,
+                error: expect.stringContaining("STRIPE_KEY in wrangler.jsonc is both: the store binding would silently replace the plain secret"),
+            });
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
         });
 
         it("refuses a secrets_store binding with the reserved LUNORA_ prefix, which could never start", async () => {
