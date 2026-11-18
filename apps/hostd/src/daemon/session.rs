@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use futures_util::{SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, StreamExt};
 use tokio::sync::Notify;
 use tokio::time::Instant;
 use tokio_tungstenite::tungstenite::Message;
@@ -179,6 +179,30 @@ async fn close(socket: &mut Socket, code: u16, reason: &str) {
     let _ = socket.close(Some(CloseFrame { code: CloseCode::from(code), reason: reason.to_owned().into() })).await;
 }
 
+/// Send queued frames while the budget lasts; `Err` once the socket refuses one.
+async fn send_queued<S: Sink<Message> + Unpin>(socket: &mut S, shared: &Shared, logger: &Logger, tokens: &mut f64) -> Result<(), ()> {
+    while *tokens >= 1.0 {
+        let next = shared.outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop_front();
+        let Some(message) = next else { break };
+
+        *tokens -= 1.0;
+
+        match encode_box_message(&message) {
+            Ok(text) => {
+                if socket.send(Message::text(text)).await.is_err() {
+                    // Back to the front, so a report the write never delivered is handed back with the rest.
+                    shared.outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push_front(message);
+
+                    return Err(());
+                }
+            }
+            Err(error) => logger.warn(&format!("dropped a {} frame the control plane would refuse: {error}", message.type_name())),
+        }
+    }
+
+    Ok(())
+}
+
 impl Session {
     pub fn new(box_id: String, control_plane: String, identity: Identity, logger: Logger, callbacks: SessionCallbacks) -> (Self, SessionHandle) {
         let shared = Arc::new(Shared {
@@ -318,20 +342,8 @@ impl Session {
                     tokens = (tokens + now.duration_since(refilled).as_secs_f64() * SEND_REFILL_PER_SECOND).min(SEND_CAPACITY);
                     refilled = now;
 
-                    while tokens >= 1.0 {
-                        let next = self.shared.outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pop_front();
-                        let Some(message) = next else { break };
-
-                        tokens -= 1.0;
-
-                        match encode_box_message(&message) {
-                            Ok(text) => {
-                                if socket.send(Message::text(text)).await.is_err() {
-                                    return lost(1006, "");
-                                }
-                            }
-                            Err(error) => self.logger.warn(&format!("dropped a {} frame the control plane would refuse: {error}", message.type_name())),
-                        }
+                    if send_queued(&mut socket, &self.shared, &self.logger, &mut tokens).await.is_err() {
+                        return lost(1006, "");
                     }
 
                     if !self.shared.outbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner).is_empty() {
@@ -642,6 +654,37 @@ mod tests {
         windows.extend(unsent);
         windows.sort_unstable();
         assert_eq!(windows, (0..REPORTS).collect::<Vec<_>>());
+    }
+
+    #[tokio::test]
+    async fn puts_back_a_report_the_socket_refused_to_write() {
+        let shared = Shared {
+            authenticated: AtomicBool::new(true),
+            outbox: Mutex::new(VecDeque::from([
+                BoxMessage::Report(ReportMessage { per_alias: vec![], window_end: 1, window_start: 0 }),
+                BoxMessage::Report(ReportMessage { per_alias: vec![], window_end: 2, window_start: 1 }),
+            ])),
+            pump: Notify::new(),
+            stop: Notify::new(),
+            stopped: AtomicBool::new(false),
+        };
+        let mut refusing = std::pin::pin!(futures_util::sink::unfold((), |(), _: Message| async { Err::<(), ()>(()) }));
+        let mut tokens = SEND_CAPACITY;
+
+        assert!(send_queued(&mut refusing, &shared, &Logger::silent(), &mut tokens).await.is_err());
+
+        let windows: Vec<u64> = shared
+            .outbox
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|message| match message {
+                BoxMessage::Report(report) => Some(report.window_start),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(windows, [0, 1]);
     }
 
     #[test]
