@@ -323,7 +323,10 @@ export interface NodePlatform<
 
     /**
      * Queued mail delivery, or `undefined` when the caller passed no `mail`.
-     * Its queue lives in the shard's database beside the app's own queues.
+     * Its queue, sent ledger and key records live in `mail.path`, a database file
+     * of its own on its own connection, never the shard's: construction refuses a
+     * path that is the shard's file, the `globalTablesPath` file, or a `.sqlite3`
+     * file in the shard registry's `directory`.
      */
     mail?: NodeMailHost;
 
