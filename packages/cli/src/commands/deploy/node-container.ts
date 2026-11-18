@@ -16,17 +16,19 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, relative, resolve, sep } from "node:path";
 
-import { resolveSchemaDirectory } from "@lunora/config";
+import { COMPOSED_WORKER_ENTRY, resolveSchemaDirectory } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 /** Where the build context is written, relative to the project root. `.lunora/` is already the CLI's gitignored state directory. */
 const NODE_DEPLOY_DIRECTORY = join(".lunora", "deploy", "node");
 
 /**
- * The image both stages build on: an exact Node LTS release, so a rebuild months later runs the same runtime. Debian rather than
- * Alpine because `better-sqlite3`'s native build and prebuilt binaries both target glibc.
+ * The image both stages build on: an exact Node LTS release, pinned by its multi-arch index digest so a rebuild months later runs
+ * the same bytes even if the tag is re-pushed. Debian rather than Alpine because `better-sqlite3`'s native build and prebuilt
+ * binaries both target glibc. Bump the tag and the digest together (`docker buildx imagetools inspect <tag>`).
  */
-const NODE_IMAGE = "node:24.11.1-bookworm-slim";
+// eslint-disable-next-line no-secrets/no-secrets -- an image digest is a public content hash, not a secret
+const NODE_IMAGE = "node:24.11.1-bookworm-slim@sha256:48abc13a19400ca3985071e287bd405a1d99306770eb81d61202fb6b65cf0b57";
 
 /** The port the server listens on when `PORT` is unset, matching `wrangler dev`'s default. */
 const DEFAULT_PORT = 8787;
@@ -35,29 +37,64 @@ const DEFAULT_PORT = 8787;
 const EXTERNAL_MODULES = ["better-sqlite3", "bufferutil", "utf-8-validate"] as const;
 
 /**
- * Wrangler keys that declare a binding the generated entry does not compose. Each is named at deploy time, so a request that
- * reads one fails where the operator was already told it would rather than in production.
+ * Top-level wrangler keys the generated entry composes, or that configure the Worker rather than bind something into `env`.
+ * Every other declared key is reported at deploy time as unbound: an allowlist, so a binding section wrangler adds later is
+ * named rather than silently missing from the container. `durable_objects` is checked per binding, since an external one is unbound.
  */
-const UNBOUND_BINDING_KEYS = [
-    "ai",
-    "analytics_engine_datasets",
-    "assets",
-    "browser",
-    "containers",
-    "d1_databases",
-    "images",
-    "kv_namespaces",
-    "pipelines",
-    "queues",
-    "r2_buckets",
-    "send_email",
-    "services",
-    "vectorize",
-    "workflows",
-] as const;
+const COMPOSED_OR_CONFIG_KEYS: ReadonlySet<string> = new Set([
+    "$schema",
+    "account_id",
+    "alias",
+    "base_dir",
+    "build",
+    "cache",
+    "compatibility_date",
+    "compatibility_flags",
+    "define",
+    "dev",
+    "durable_objects",
+    "env",
+    "find_additional_modules",
+    "first_party_worker",
+    "hyperdrive",
+    "jsx_factory",
+    "jsx_fragment",
+    "keep_names",
+    "keep_vars",
+    "legacy_env",
+    "limits",
+    "logpush",
+    "main",
+    "migrations",
+    "minify",
+    "name",
+    "no_bundle",
+    "node_compat",
+    "observability",
+    "placement",
+    "preserve_file_names",
+    "preview_urls",
+    "route",
+    "routes",
+    "rules",
+    "secrets",
+    "secrets_store_secrets",
+    "send_metrics",
+    "streaming_tail_consumers",
+    "tail_consumers",
+    "triggers",
+    "tsconfig",
+    "upload_source_maps",
+    "usage_model",
+    "vars",
+    "workers_dev",
+]);
+
+/** The prefix of the env vars the runtime reads as plain strings; `createNodeSecretBindings` refuses it as a secret name. */
+const RUNTIME_ENV_PREFIX = "LUNORA_";
 
 interface NodeWranglerConfig {
-    durable_objects?: { bindings?: ReadonlyArray<{ class_name?: unknown; name?: unknown; script_name?: unknown }> };
+    durable_objects?: { bindings?: ReadonlyArray<{ class_name?: unknown; name?: unknown; script_name?: unknown } | null> };
     hyperdrive?: ReadonlyArray<{ binding?: unknown } | null>;
     main?: unknown;
     secrets?: { required?: unknown } | null;
@@ -75,10 +112,10 @@ interface NodeDeployProject {
     hyperdrive: string | undefined;
     /** `secrets_store_secrets[].binding`: the names `ctx.secrets` reads, bound over env vars of the same name. */
     storeSecrets: string[];
-    /** Declared wrangler bindings the entry leaves unbound, by key. */
+    /** Declared wrangler bindings the entry leaves unbound: a section key, or `durable_objects.NAME` for an external class. */
     unbound: string[];
-    /** Plain `vars`, baked in as defaults the process environment overrides. */
-    vars: Record<string, string>;
+    /** Wrangler `vars` as declared (a JSON object stays an object, as on Cloudflare), baked in as defaults the environment overrides. */
+    vars: Record<string, unknown>;
     /** `secrets.required`: plain-string secrets the worker reads from `env`. */
     workerSecrets: string[];
 }
@@ -96,15 +133,55 @@ interface NodeContainerArtifact {
     env: NodeDeployEnvVariable[];
     /** Every file this run wrote, relative to {@link NodeContainerArtifact.directory}. */
     files: string[];
-    /** Declared wrangler bindings the server does not compose, by key. */
+    /** Declared wrangler bindings the server does not compose. */
     unbound: string[];
 }
+
+/** Whether a declared section binds anything: an empty list or object is no binding. */
+const isDeclared = (value: unknown): boolean => {
+    if (Array.isArray(value)) {
+        return value.length > 0;
+    }
+
+    if (typeof value === "object" && value !== null) {
+        return Object.keys(value).length > 0;
+    }
+
+    return value !== undefined && value !== null;
+};
+
+/**
+ * Refuse a worker the Node deploy cannot bundle. A framework project's worker is produced by a Cloudflare-targeted framework
+ * build — `@lunora/vite` composing `virtual:lunora/worker`, or an adapter's output wrapped by the composed `src/worker.ts` — and
+ * this deploy runs no framework build, so it would bundle a file that does not exist or the adapter without Lunora's routes.
+ */
+const frameworkRefusal = (projectRoot: string, main: string, configName: string): string | undefined => {
+    const reason = (detail: string): string =>
+        `--target node bundles the worker file \`main\` names in ${configName}, and ${detail}. The Node container deploy does not run framework builds: point \`main\` at a hand-written worker entry that default-exports the fetch handler and exports ShardDO (the standalone template's shape), or deploy this app to Cloudflare`;
+
+    if (main.startsWith("virtual:")) {
+        return reason(`\`${main}\` is composed by a framework build, not a file`);
+    }
+
+    const entry = resolve(projectRoot, main);
+
+    if (existsSync(join(projectRoot, COMPOSED_WORKER_ENTRY)) && entry !== resolve(projectRoot, COMPOSED_WORKER_ENTRY)) {
+        return reason(`\`${main}\` is a framework adapter's output, which ${COMPOSED_WORKER_ENTRY} wraps for Cloudflare`);
+    }
+
+    if (!existsSync(entry)) {
+        return reason(`\`${main}\` does not exist (a framework build writes it)`);
+    }
+
+    return undefined;
+};
 
 const stringNames = (entries: ReadonlyArray<{ binding?: unknown } | null> | undefined): string[] =>
     (entries ?? []).flatMap((entry) => (typeof entry?.binding === "string" ? [entry.binding] : []));
 
 /**
- * Read what the server entry has to compose, or throw naming what is missing or unservable.
+ * Read what the server entry has to compose, or throw naming what is missing or unservable. Reads the wrangler config only, so the
+ * deploy runs it before codegen writes anything.
  * @param projectRoot Directory containing the wrangler config.
  */
 const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
@@ -114,23 +191,37 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         throw new Error("--target node bundles the worker entry wrangler.jsonc names in `main`, and this project has no wrangler config");
     }
 
+    const configName = relative(projectRoot, configPath);
     const { parsed } = readWranglerJsonc<NodeWranglerConfig>(configPath);
 
     if (parsed === undefined || typeof parsed.main !== "string") {
-        throw new Error(`--target node bundles the worker entry \`main\` names, and ${relative(projectRoot, configPath)} has no \`main\``);
+        throw new Error(`--target node bundles the worker entry \`main\` names, and ${configName} has no \`main\``);
+    }
+
+    const refusal = frameworkRefusal(projectRoot, parsed.main, configName);
+
+    if (refusal !== undefined) {
+        throw new Error(refusal);
     }
 
     const durableObjects: NodeDeployProject["durableObjects"] = [];
+    const external: string[] = [];
 
     for (const binding of parsed.durable_objects?.bindings ?? []) {
-        // A binding to another worker's class has no class in this entry to construct.
-        if (typeof binding.name === "string" && typeof binding.class_name === "string" && binding.script_name === undefined) {
+        if (typeof binding?.name !== "string" || typeof binding.class_name !== "string") {
+            continue;
+        }
+
+        // A binding to another worker's class has no class in this entry to construct, and no other worker runs here.
+        if (binding.script_name === undefined) {
             durableObjects.push({ className: binding.class_name, name: binding.name });
+        } else {
+            external.push(`durable_objects.${binding.name}`);
         }
     }
 
     if (durableObjects.length === 0) {
-        throw new Error(`--target node serves the app's shard Durable Object, and ${relative(projectRoot, configPath)} declares no durable_objects binding`);
+        throw new Error(`--target node serves the app's shard Durable Object, and ${configName} declares no durable_objects binding of its own`);
     }
 
     const hyperdrive = stringNames(parsed.hyperdrive);
@@ -142,10 +233,14 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         );
     }
 
-    const variables: Record<string, string> = {};
+    const storeSecrets = stringNames(parsed.secrets_store_secrets);
+    const reserved = storeSecrets.filter((name) => name.startsWith(RUNTIME_ENV_PREFIX));
 
-    for (const [name, value] of Object.entries(parsed.vars ?? {})) {
-        variables[name] = typeof value === "string" ? value : JSON.stringify(value);
+    // `createNodeSecretBindings` throws on these at startup; refusing here keeps the deploy from writing an image that cannot start.
+    if (reserved.length > 0) {
+        throw new Error(
+            `--target node binds secrets_store_secrets over env vars of the same name, and ${reserved.join(", ")} uses the reserved ${RUNTIME_ENV_PREFIX} prefix, which the runtime reads as a plain string. Rename the binding in ${configName}`,
+        );
     }
 
     const required = parsed.secrets?.required;
@@ -155,13 +250,9 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         durableObjects,
         entry: resolve(projectRoot, parsed.main),
         hyperdrive: hyperdrive[0],
-        storeSecrets: stringNames(parsed.secrets_store_secrets),
-        unbound: UNBOUND_BINDING_KEYS.filter((key) => {
-            const value = declared[key];
-
-            return Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null;
-        }),
-        vars: variables,
+        storeSecrets,
+        unbound: [...Object.keys(declared).filter((key) => !COMPOSED_OR_CONFIG_KEYS.has(key) && isDeclared(declared[key])), ...external],
+        vars: { ...parsed.vars },
         workerSecrets: Array.isArray(required) ? required.filter((name): name is string => typeof name === "string") : [],
     };
 };
@@ -182,15 +273,21 @@ const nodeDeployEnv = (project: NodeDeployProject): NodeDeployEnvVariable[] => [
     },
     ...(project.hyperdrive === undefined
         ? []
-        : [{ description: `Postgres or MySQL URL the \`${project.hyperdrive}\` Hyperdrive binding connects to.`, name: "DATABASE_URL", required: true }]),
+        : [
+              {
+                  description: `Postgres or MySQL URL the \`${project.hyperdrive}\` Hyperdrive binding connects to. The server refuses to start without it.`,
+                  name: "DATABASE_URL",
+                  required: true,
+              },
+          ]),
     ...project.storeSecrets.map((name) => {
         return { description: "Read through `ctx.secrets`; rejected when unset or empty.", name, required: true };
     }),
     ...project.workerSecrets.map((name) => {
-        return { description: "Worker secret (`secrets.required` in wrangler.jsonc).", name, required: true };
+        return { description: "Worker secret (`secrets.required` in wrangler.jsonc). The server refuses to start without it.", name, required: true };
     }),
     ...Object.keys(project.vars).map((name) => {
-        return { description: "A wrangler `var`; the bundled value applies unless this is set.", name, required: false };
+        return { description: "A wrangler `var`; the bundled value applies unless this is set (an override is a string).", name, required: false };
     }),
 ];
 
@@ -204,11 +301,16 @@ const projectSpecifier = (projectRoot: string, path: string): string => `./${rel
  * requests do. Every other binding gets a registry of its own. One instance per shard lives for the process, as the runtime keeps
  * one per object: an instance built per request would lose its in-memory subscribers between a subscribe and the write that
  * should reach them.
+ *
+ * Shutdown runs in a fixed order, each step whether or not an earlier one failed: refuse new requests, wait for the in-flight
+ * ones to be written, close the listener (ending event streams and WebSockets), drain the worker's `waitUntil` work, drain every shard (in-flight requests, alarms, cron deliveries
+ * and their `waitUntil` work), then close the databases. Only names reach this file, never a secret's value.
  */
 const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cronsModule: string): string => {
     const config = {
         durableObjects: project.durableObjects,
         hyperdrive: project.hyperdrive,
+        requiredEnv: [...project.workerSecrets, ...(project.hyperdrive === undefined ? [] : ["DATABASE_URL"])],
         storeSecrets: project.storeSecrets,
         vars: project.vars,
     };
@@ -234,6 +336,18 @@ import { LUNORA_CRONS } from ${JSON.stringify(projectSpecifier(projectRoot, cron
 const CONFIG = ${JSON.stringify(config, undefined, 4)};
 const PRIMARY_BINDING = ${JSON.stringify(primary?.name)};
 
+// The error object, not its message: console.error prints its stack and its cause chain.
+const logError = (message, error) => {
+    console.error(\`lunora: \${message}\`, error);
+};
+
+const missing = CONFIG.requiredEnv.filter((name) => process.env[name] === undefined || process.env[name] === "");
+
+if (missing.length > 0) {
+    console.error(\`lunora: refusing to start, these required environment variables are not set: \${missing.join(", ")}\`);
+    process.exit(1);
+}
+
 const handler = worker.default;
 
 if (typeof handler?.fetch !== "function") {
@@ -244,6 +358,7 @@ const dataDirectory = resolve(process.env.LUNORA_DATA_DIR ?? "data");
 
 mkdirSync(dataDirectory, { recursive: true });
 
+// Every container variable reaches env, as every \`wrangler secret put\` secret does on Cloudflare; a var's override is a string.
 const env = { WORKER_ENV: "production", ...CONFIG.vars };
 
 for (const [name, value] of Object.entries(process.env)) {
@@ -313,57 +428,114 @@ for (const binding of CONFIG.durableObjects) {
     }
 }
 
-const pending = new Set();
+// Each set holds a settled-only copy of the work, so draining it never rejects; the work itself still reports its failure.
+const track = (set, work) => {
+    const settled = work.then(
+        () => undefined,
+        () => undefined,
+    );
+
+    set.add(settled);
+    settled.finally(() => set.delete(settled));
+};
+
+/** Wait until \`set\` stays empty: work can add more work while it runs. */
+const drainSet = async (set) => {
+    while (set.size > 0) {
+        await Promise.all(set);
+    }
+};
+
+const background = new Set();
 const context = {
     passThroughOnException: () => undefined,
     waitUntil: (promise) => {
-        const tracked = Promise.resolve(promise)
-            .catch(() => undefined)
-            .finally(() => pending.delete(tracked));
-
-        pending.add(tracked);
+        track(
+            background,
+            Promise.resolve(promise).catch((error) => {
+                logError("work handed to waitUntil failed", error);
+            }),
+        );
     },
 };
 
+let stopping = false;
+
 const server = await createNodeHttpServer({
-    fetch: async (request) => handler.fetch(request, env, context),
+    fetch: async (request) => {
+        if (stopping) {
+            return new Response("lunora: shutting down", { headers: { connection: "close", "retry-after": "1" }, status: 503 });
+        }
+
+        return handler.fetch(request, env, context);
+    },
     host: process.env.HOST,
     origin: process.env.LUNORA_ORIGIN_URL,
     port: Number(process.env.PORT ?? ${String(DEFAULT_PORT)}),
 });
 
-console.log(\`lunora: listening on \${server.origin}\`);
+const publicUrl = process.env.LUNORA_ORIGIN_URL;
 
-let stopping = false;
+console.log(\`lunora: listening on \${server.origin}\${publicUrl === undefined || publicUrl === "" ? "" : \` (public URL \${publicUrl})\`}\`);
 
-const stop = async () => {
+const shutdown = async (code) => {
     if (stopping) {
         return;
     }
 
     stopping = true;
-    await server.close();
-    await Promise.all(pending);
-    await platform?.drain();
+    console.log("lunora: shutting down, draining in-flight work");
 
-    for (const registry of registries) {
-        registry.close();
-    }
+    let failed = code !== 0;
 
-    platform?.close();
+    // A failed step is logged and the rest still run, so the databases are closed whatever went wrong before them.
+    const step = async (label, run) => {
+        try {
+            await run();
+        } catch (error) {
+            failed = true;
+            logError(\`\${label} failed during shutdown\`, error);
+        }
+    };
+
+    // Responses still being produced or written; event streams and WebSockets are endless, so close() ends them instead.
+    await step("waiting for in-flight requests", () => server.drain());
+    await step("closing the HTTP server", () => server.close());
+    await step("draining waitUntil work", () => drainSet(background));
+    await step("draining shards", () => Promise.all([platform?.drain(), ...registries.map((registry) => registry.drain())]));
+    await step("closing shards", () => {
+        for (const registry of registries) {
+            registry.close();
+        }
+
+        platform?.close();
+    });
+
+    console.log("lunora: stopped");
+    process.exit(failed ? 1 : 0);
 };
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.once(signal, () => {
-        stop().then(
-            () => process.exit(0),
-            (error) => {
-                console.error(error);
-                process.exit(1);
-            },
-        );
+    process.on(signal, () => {
+        if (stopping) {
+            // A second signal is the operator insisting: stop waiting for work that may never settle.
+            console.error(\`lunora: \${signal} again, exiting without waiting\`);
+            process.exit(1);
+        }
+
+        void shutdown(0);
     });
 }
+
+process.on("unhandledRejection", (reason) => {
+    logError("unhandled rejection", reason);
+    void shutdown(1);
+});
+
+process.on("uncaughtException", (error) => {
+    logError("uncaught exception", error);
+    void shutdown(1);
+});
 `;
 };
 
@@ -392,11 +564,11 @@ EXPOSE ${String(DEFAULT_PORT)}
 CMD ["node", "server.mjs"]
 `;
 
-const DOCKERIGNORE = `# Generated by \`lunora deploy --target node\`.
-node_modules
-data
-*.sqlite3*
-.env*
+// An allowlist: the context is reused across deploys, so a file left in it (a copied database, a .env) must not reach the builder.
+const DOCKERIGNORE = `# Generated by \`lunora deploy --target node\`. Only what the Dockerfile copies reaches the build context.
+*
+!package.json
+!server.mjs
 `;
 
 const renderReadme = (env: ReadonlyArray<NodeDeployEnvVariable>): string => {
@@ -419,7 +591,21 @@ Every shard, the scheduler and the crons live in SQLite files under \`LUNORA_DAT
 image, declared as a volume). Mount a persistent volume there; a container without one loses every row when
 it is removed. Run one container per volume: two processes on the same files both fire every cron.
 
+The image runs as its \`node\` user (uid 1000). A named volume inherits the image's \`/data\` ownership; a
+bind-mounted host directory must be writable by uid 1000, or the server fails at startup.
+
+## Shutdown
+
+On SIGTERM or SIGINT the server answers new requests with 503, waits for in-flight requests, closes the
+listener, then waits for background work, alarms and cron runs before closing the databases and exiting.
+Long-lived streams and WebSockets are closed rather than waited for. Give the container a stop timeout long
+enough for that (\`docker stop -t\`, \`stop_grace_period\`); a second signal exits without waiting.
+
 ## Environment
+
+Every variable set on the container reaches the worker's \`env\`, as every \`wrangler secret put\` secret does
+on Cloudflare, so set only what the app should read. No value is baked into \`server.mjs\`, this README or the
+Dockerfile; they carry names only.
 
 | Variable | Required | |
 | --- | --- | --- |
@@ -511,4 +697,4 @@ const buildNodeContainer = async (projectRoot: string): Promise<NodeContainerArt
 };
 
 export type { NodeContainerArtifact, NodeDeployEnvVariable };
-export { buildNodeContainer, NODE_DEPLOY_DIRECTORY, NODE_IMAGE };
+export { buildNodeContainer, NODE_DEPLOY_DIRECTORY, NODE_IMAGE, readNodeDeployProject };

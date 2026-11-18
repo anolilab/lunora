@@ -70,7 +70,7 @@ import type { PreDeployCommand } from "./checks";
 import { checkD1Placeholder, resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { generatedConfigPath, hasHyperdrivePlaceholder, provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
-import { buildNodeContainer } from "./node-container";
+import { buildNodeContainer, readNodeDeployProject } from "./node-container";
 import completeDeploy from "./post-deploy";
 import { offerMissingSecrets, warnDevVariablesNotPushed } from "./secrets";
 import type { DeployCommandData, DeployCommandOptions, DeployCommandResult } from "./types";
@@ -255,6 +255,7 @@ const runCodegenStep = async (
     jsonOutput: boolean,
     strictAdvisories: boolean,
     writeOutputs: boolean,
+    lunoraDirectory?: string,
 ): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
@@ -266,7 +267,15 @@ const runCodegenStep = async (
     }
 
     try {
-        const result = runCodegen({ apiSpec, dryRun: !writeOutputs, lazyFunctions, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd, target) });
+        const result = runCodegen({
+            apiSpec,
+            dryRun: !writeOutputs,
+            lazyFunctions,
+            lunoraDirectory,
+            projectRoot: cwd,
+            target,
+            ...wranglerCodegenInputs(cwd, target),
+        });
 
         if (writeOutputs) {
             reconcileStudioAssets(cwd, target, logger);
@@ -1685,9 +1694,37 @@ const CONTAINER_REFUSED_FLAGS: ReadonlyArray<[keyof DeployCommandOptions, string
     ["env", "--env"],
     ["healthCheck", "--health-check"],
     ["migrate", "--migrate"],
+    ["migrateAllowDestructive", "--migrate-allow-destructive"],
+    ["migrateToken", "--migrate-token"],
+    ["migrateUrl", "--migrate-url"],
+    ["migrateYes", "--migrate-yes"],
     ["preview", "--preview"],
+    // `build` and `prepare` refuse this target, so no earlier run wrote `_generated/*` for it: a bundle that skipped codegen would
+    // ship whatever another target's codegen left there.
+    ["skipCodegen", "--prebuilt"],
     ["temporary", "--temporary"],
 ];
+
+/**
+ * Why `options` cannot deploy as a container, before anything is written: a flag that has no meaning here, or an app the deploy
+ * cannot bundle (a framework build's worker, a reserved secret name). Reading the project is read-only, so a refused app keeps
+ * its `_generated/*` as it was.
+ */
+const containerDeployRefusal = (options: DeployCommandOptions, cwd: string, target: string): string | undefined => {
+    const refused = CONTAINER_REFUSED_FLAGS.filter(([key]) => options[key] !== undefined && options[key] !== false).map(([, flag]) => flag);
+
+    if (refused.length > 0) {
+        return `${refused.join(", ")} ${refused.length === 1 ? "does" : "do"} not apply to --target ${target}, which writes a container build context instead of a hosted deployment`;
+    }
+
+    try {
+        readNodeDeployProject(cwd);
+
+        return undefined;
+    } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error);
+    }
+};
 
 /**
  * `lunora deploy --target node`: codegen for the target, then the container build context `buildNodeContainer` writes, then
@@ -1696,14 +1733,12 @@ const CONTAINER_REFUSED_FLAGS: ReadonlyArray<[keyof DeployCommandOptions, string
 const runNodeContainerDeploy = async (options: DeployCommandOptions, target: string): Promise<DeployCommandResult> => {
     const { logger } = options;
     const cwd = options.cwd ?? process.cwd();
-    const refused = CONTAINER_REFUSED_FLAGS.filter(([key]) => options[key] !== undefined && options[key] !== false).map(([, flag]) => flag);
+    const refusal = containerDeployRefusal(options, cwd, target);
 
-    if (refused.length > 0) {
-        const message = `${refused.join(", ")} ${refused.length === 1 ? "acts" : "act"} on a hosted deployment, and --target ${target} writes a container build context instead`;
+    if (refusal !== undefined) {
+        logger.error(refusal);
 
-        logger.error(message);
-
-        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: message, validation: NO_VALIDATION };
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: refusal, validation: NO_VALIDATION };
     }
 
     const gateError = runOpenShardGate(cwd, options, "deploy", []);
@@ -1712,23 +1747,23 @@ const runNodeContainerDeploy = async (options: DeployCommandOptions, target: str
         return { code: gateError.code, descriptor: undefined, error: gateError.error, validation: NO_VALIDATION };
     }
 
-    if (options.skipCodegen !== true) {
-        const codegen = await runCodegenStep(
-            cwd,
-            isInteractive(options),
-            logger,
-            options.apiSpec,
-            resolveLazyFunctions(options.lazyFunctions),
-            target,
-            options.spawner,
-            options.format === "json",
-            resolveStrictAdvisories(options),
-            true,
-        );
+    const codegen = await runCodegenStep(
+        cwd,
+        isInteractive(options),
+        logger,
+        options.apiSpec,
+        resolveLazyFunctions(options.lazyFunctions),
+        target,
+        options.spawner,
+        options.format === "json",
+        resolveStrictAdvisories(options),
+        true,
+        // The directory the bundle reads `_generated/*` from, so a `schemaDir` project generates where it is bundled.
+        resolveSchemaDirectory(cwd),
+    );
 
-        if (codegen.error !== undefined) {
-            return { code: 1, descriptor: undefined, error: codegen.error, validation: NO_VALIDATION };
-        }
+    if (codegen.error !== undefined) {
+        return { code: 1, descriptor: undefined, error: codegen.error, validation: NO_VALIDATION };
     }
 
     let artifact: Awaited<ReturnType<typeof buildNodeContainer>>;
@@ -1751,7 +1786,7 @@ const runNodeContainerDeploy = async (options: DeployCommandOptions, target: str
 
     if (artifact.unbound.length > 0) {
         logger.warn(
-            `the Node server binds Durable Objects, crons, secrets, Hyperdrive and vars; these wrangler bindings are not bound, so reading one fails: ${artifact.unbound.join(", ")}`,
+            `the Node server binds its own Durable Objects, crons, secrets, Hyperdrive and vars; these wrangler bindings are not bound, so reading one fails: ${artifact.unbound.join(", ")}`,
         );
     }
 
@@ -1828,6 +1863,15 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 
     if (containerTarget !== undefined) {
         return runNodeContainerDeploy(options, containerTarget);
+    }
+
+    // Refused rather than ignored: a caller asking for an image would otherwise get a hosted deploy it did not ask for.
+    if (options.image !== undefined) {
+        const message = "--image builds the container a `--target node` deploy writes, and this deploy's target is not a container target";
+
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: message, validation: NO_VALIDATION };
     }
 
     // A refused deploy must not rewrite the project, and the client build rewrites `_generated/*` and `dist/`, so the refusals
@@ -1921,7 +1965,10 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         // link is only trusted when it was recorded for THIS `--env` — a
         // production-linked checkout must not silently supply its URL to a
         // `--env staging --migrate` run (see resolveWorkerUrl's env guard).
-        migrateUrl: resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
+        // A container deploy has no worker to migrate and refuses `--migrate-url`, so only the flag itself reaches it.
+        migrateUrl: deploysAsContainer(resolveDeployTargetOrError(cwd, options.target).target ?? "")
+            ? options.migrateUrl
+            : resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
         migrateAllowDestructive: options.migrateAllowDestructive === true,
         migrateYes: options.migrateYes === true,
         preview: options.preview === true,

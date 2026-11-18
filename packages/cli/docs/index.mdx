@@ -800,38 +800,68 @@ curl -fsS "$url/api/smoke"
 
 The Node target has no hosted control plane, so `lunora deploy --target node`
 deploys to a container build context instead of publishing anything. It runs
-codegen for the target, bundles a generated server entry together with the
-worker entry wrangler's `main` names into one `server.mjs` with the project's
-own `esbuild`, and writes `.lunora/deploy/node/`:
+codegen for the target (into the configured `schemaDir`), bundles a generated
+server entry together with the worker entry wrangler's `main` names into one
+`server.mjs` with the project's own `esbuild`, and writes `.lunora/deploy/node/`:
 
-| File            | What it is                                                                                                               |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `server.mjs`    | The app on `@lunora/platform-node`: every Durable Object binding, the declared crons, `ctx.secrets` and Hyperdrive wired |
-| `package.json`  | Only `better-sqlite3`, the one native module the bundle leaves out, at the version the project's platform-node runs      |
-| `Dockerfile`    | Two stages on a pinned Node LTS image: compiles `better-sqlite3` from source, then runs as the image's `node` user       |
-| `.dockerignore` | Keeps local data, `node_modules` and `.env*` files out of the build context                                              |
-| `README.md`     | The run command, the data volume, and every environment variable the server reads                                        |
+| File            | What it is                                                                                                                        |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `server.mjs`    | The app on `@lunora/platform-node`: the app's own Durable Object bindings, the declared crons, `ctx.secrets` and Hyperdrive wired |
+| `package.json`  | Only `better-sqlite3`, the one native module the bundle leaves out, at the version the project's platform-node runs               |
+| `Dockerfile`    | Two stages on a Node LTS image pinned by digest: compiles `better-sqlite3` from source, then runs as the image's `node` user      |
+| `.dockerignore` | An allowlist: only `package.json` and `server.mjs` reach the builder, whatever else the reused directory holds                    |
+| `README.md`     | The run command, the data volume and its permissions, the shutdown behaviour, and every environment variable the server reads     |
 
 Install `esbuild` and `@lunora/platform-node` in the project; the CLI resolves
 both from there. `--image <name>` also runs `docker build -t <name>` on the
 context when a Docker engine answers. Without one, or without the flag, the
 command prints the build command and stops. Nothing is pushed to a registry.
-`--dry-run` writes the context and builds no image. `--env`, `--migrate`,
-`--health-check`, `--preview`, `--temporary` and `--emit-bindings` act on a
-hosted deployment and are refused.
+`--dry-run` writes the context and builds no image. `--image` is refused for
+any other target.
+
+Refused before codegen writes anything:
+
+- **Framework projects.** A worker produced by a framework build, either
+  `main: "virtual:lunora/worker"` composed by `@lunora/vite` or a Cloudflare
+  adapter's output that `src/worker.ts` wraps, cannot be bundled, because this
+  deploy runs no framework build. Point `main` at a hand-written worker entry
+  that default-exports the fetch handler and exports `ShardDO` (the standalone
+  template's shape), or deploy the app to Cloudflare.
+- **Flags with nothing to act on:** `--env`, `--migrate` and its
+  `--migrate-url`, `--migrate-token`, `--migrate-yes` and
+  `--migrate-allow-destructive`, `--health-check`, `--preview`, `--temporary`,
+  `--emit-bindings`, and `--prebuilt`, since `lunora build` and `lunora prepare`
+  never generate for this target.
+- **A `secrets_store_secrets[]` binding named `LUNORA_*`**, which the runtime
+  reads as a plain string and which could therefore never start.
 
 The server reads `LUNORA_ORIGIN_URL` (the public URL; required, because the
 image binds `0.0.0.0`), `PORT` (default `8787`), `HOST` and `LUNORA_DATA_DIR`
 (`/data` in the image), plus `DATABASE_URL` when the app declares a Hyperdrive
 binding and one variable per `secrets_store_secrets[]` binding and
-`secrets.required` name. Wrangler `vars` are bundled as defaults that the
-environment overrides. Every shard, the scheduler and the crons live in SQLite
-files under `LUNORA_DATA_DIR`, so mount a persistent volume there and run one
-container per volume.
+`secrets.required` name. It refuses to start while a `secrets.required` name or
+`DATABASE_URL` is unset. Every container variable reaches the worker's `env`, as
+every `wrangler secret put` secret does on Cloudflare; the generated files carry
+names only, never a value. Wrangler `vars` are bundled as declared (a JSON object
+stays an object) and a set environment variable overrides one as a string.
+Every shard, the scheduler and the crons live in SQLite files under
+`LUNORA_DATA_DIR`, so mount a persistent volume there (a bind mount must be
+writable by uid 1000) and run one container per volume.
 
-Not covered yet: static `assets`, queues, workflows, `.global()` tables, object
-storage and mail are not composed by the generated entry, and the schema-drift
-gate does not run.
+On SIGTERM or SIGINT the server answers new requests with 503, waits for the
+responses in flight to be written, closes the listener (ending event streams and
+WebSockets), then drains `waitUntil` work, alarms and cron runs before closing
+the databases. A failed step is logged and the rest still run. A second signal
+exits at once. `waitUntil` failures, alarm and scheduled-job failures, a
+throwing fetch handler, unhandled rejections and uncaught exceptions are logged
+with their stack and cause; the last two also shut the server down with exit
+code 1.
+
+The deploy warns, by name, about every declared binding the server does not
+compose: static `assets`, queues, workflows, `.global()` tables, object
+storage, mail, `version_metadata`, a Durable Object bound from another worker
+(`script_name`), and any other binding section. The schema-drift gate does not
+run.
 
 ### `lunora preview`
 
