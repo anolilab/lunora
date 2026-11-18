@@ -311,7 +311,11 @@ pub async fn install_release(input: InstallInput<'_>) -> Result<Installed, JobEr
 
     let keep: HashSet<String> = std::iter::once(manifest.release_id.clone()).chain(running.clone()).collect();
 
-    prune_releases(input.install_dir, &keep)?;
+    // `current` already names the new release, so this is no longer a refusal: reported as one, the caller would keep
+    // running the old binaries against it. A release left behind is pruned by the next install.
+    if let Err(error) = prune_releases(input.install_dir, &keep) {
+        (input.progress)(&format!("warning: could not remove an old release from {}: {error}", input.install_dir));
+    }
 
     Ok(Installed { installed: true, previous: running })
 }
@@ -439,6 +443,30 @@ mod tests {
 
         assert_eq!(again.unwrap(), Installed { installed: false, previous: Some("hostd-v0_0_3".into()) });
         assert_eq!(lines, ["release hostd-v0_0_3 is the one running; nothing to install"]);
+    }
+
+    #[tokio::test]
+    async fn a_prune_that_fails_after_the_switch_still_reports_the_install() {
+        let directory = tempfile::tempdir().unwrap();
+        let install_dir = directory.path().to_str().unwrap();
+        let celld = gzip(&script("echo celld 0.6.0"));
+
+        for (id, version) in [("hostd-v0_0_1", "0.0.1"), ("hostd-v0_0_2", "0.0.2")] {
+            install(install_dir, &release(id, version, celld.clone()), false).await.0.unwrap();
+        }
+
+        // Contents a non-root user cannot remove (CI runs as one): the prune of hostd-v0_0_1 fails.
+        let stuck = directory.path().join("hostd-v0_0_1");
+
+        fs::set_permissions(&stuck, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let (result, lines) = install(install_dir, &release("hostd-v0_0_3", "0.0.3", celld), false).await;
+
+        fs::set_permissions(&stuck, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(result.unwrap(), Installed { installed: true, previous: Some("hostd-v0_0_2".into()) });
+        assert_eq!(current_release(install_dir).as_deref(), Some("hostd-v0_0_3"));
+        assert!(stuck.exists());
+        assert!(lines.last().unwrap().starts_with("warning: could not remove an old release from "), "{lines:?}");
     }
 
     #[tokio::test]
