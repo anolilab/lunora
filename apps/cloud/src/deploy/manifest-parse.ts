@@ -73,6 +73,20 @@ const isBindingType = (value: string, target: TargetId): value is BindingType =>
 /** Class-backed types the platform binds straight to an export of the tenant bundle. */
 const needsClassName = (type: BindingType): boolean => isStatefulType(type);
 
+const resourceErrorOf = (binding: string, type: BindingType, resource: unknown): string | undefined => {
+    if (resource !== undefined && (typeof resource !== "string" || !RESOURCE_NAME.test(resource))) {
+        return `binding ${binding}: resource must match ${RESOURCE_NAME.source}`;
+    }
+
+    // The queue name is what pairs a producer with its consumer; two unnamed
+    // ones would look paired here and never be attached by the provisioner.
+    if ((type === "queue_producer" || type === "queue_consumer") && resource === undefined) {
+        return `binding ${binding}: a ${type} binding needs a resource (the queue's name)`;
+    }
+
+    return undefined;
+};
+
 const parseBinding = (entry: unknown, index: number, target: TargetId): Parsed<BindingRequirement> => {
     if (!isRecord(entry) || typeof entry["binding"] !== "string" || typeof entry["type"] !== "string") {
         return { error: `manifest.bindings[${String(index)}] must be an object with string \`binding\` and \`type\`` };
@@ -96,8 +110,10 @@ const parseBinding = (entry: unknown, index: number, target: TargetId): Parsed<B
         return { error: `binding ${binding}: a ${type} binding needs a className` };
     }
 
-    if (resource !== undefined && (typeof resource !== "string" || !RESOURCE_NAME.test(resource))) {
-        return { error: `binding ${binding}: resource must match ${RESOURCE_NAME.source}` };
+    const resourceError = resourceErrorOf(binding, type, resource);
+
+    if (resourceError !== undefined) {
+        return { error: resourceError };
     }
 
     if (sqlite !== undefined && typeof sqlite !== "boolean") {

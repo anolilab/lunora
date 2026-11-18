@@ -118,6 +118,24 @@ describe("manifest validation by runtime", () => {
         expect(parsePayload({ manifest: both }, "app", "cloudflare-wfp", "worker")).toHaveProperty("value");
     });
 
+    it("refuses a queue binding that names no queue, which no consumer could be attached to", () => {
+        expect.assertions(2);
+
+        const unnamed = {
+            bindings: [
+                { binding: "JOB_QUEUE", type: "queue_producer" },
+                { binding: "jobs", type: "queue_consumer" },
+            ],
+        };
+
+        expect(parsePayload({ manifest: unnamed }, "app", "cloudflare-wfp", "worker")).toStrictEqual({
+            error: "binding JOB_QUEUE: a queue_producer binding needs a resource (the queue's name)",
+        });
+        expect(parsePayload({ manifest: { bindings: [unnamed.bindings[1]] } }, "app", "cloudflare-wfp", "lunora")).toStrictEqual({
+            error: "binding jobs: a queue_consumer binding needs a resource (the queue's name)",
+        });
+    });
+
     it("refuses a plain Worker's queue produced but never consumed, which nothing could ever read", () => {
         expect.assertions(3);
 
