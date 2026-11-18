@@ -317,11 +317,7 @@ pub fn write_release_directory(directory: &Path, release: &StoredRelease, job: &
 
     // A retried deployment id names the directory its running release is in, and a failed deploy
     // rolls back to that release's files: stage the new one beside it and swap only once it is whole.
-    let mut staging_name = directory.file_name().unwrap_or_default().to_owned();
-
-    staging_name.push(".staging");
-
-    let staging = directory.with_file_name(staging_name);
+    let staging = sibling(directory, ".staging");
 
     remove_all(&staging)?;
 
@@ -331,10 +327,59 @@ pub fn write_release_directory(directory: &Path, release: &StoredRelease, job: &
         return Err(error);
     }
 
-    remove_all(directory)?;
-    fs::rename(&staging, directory)?;
+    swap_into_place(&staging, directory, |from, to| fs::rename(from, to))?;
 
     Ok(config)
+}
+
+/// `<directory><suffix>`, beside `directory`.
+fn sibling(directory: &Path, suffix: &str) -> PathBuf {
+    let mut name = directory.file_name().unwrap_or_default().to_owned();
+
+    name.push(suffix);
+
+    directory.with_file_name(name)
+}
+
+/// Move `staging` to `directory`, never leaving a moment where a release that was in
+/// `directory` exists nowhere: it is renamed aside, not deleted, until the new one is in
+/// place, and renamed back if that fails. Portable renames, not `RENAME_EXCHANGE`, which
+/// macOS lacks.
+fn swap_into_place(staging: &Path, directory: &Path, rename: impl Fn(&Path, &Path) -> std::io::Result<()>) -> std::io::Result<()> {
+    let previous = sibling(directory, ".previous");
+
+    // A crash between the two renames below leaves the running release only under
+    // `.previous`; bring it back before deciding what to replace.
+    if fs::symlink_metadata(directory).is_err() && fs::symlink_metadata(&previous).is_ok() {
+        rename(&previous, directory)?;
+    }
+
+    remove_all(&previous)?;
+
+    let had_previous = match rename(directory, &previous) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            let _ = remove_all(staging);
+
+            return Err(error);
+        }
+    };
+
+    if let Err(error) = rename(staging, directory) {
+        if had_previous {
+            let _ = rename(&previous, directory);
+        }
+
+        let _ = remove_all(staging);
+
+        return Err(error);
+    }
+
+    // The new release is in place; a leftover `.previous` is cleared on the next write.
+    let _ = remove_all(&previous);
+
+    Ok(())
 }
 
 fn lay_out_release(directory: &Path, release: &StoredRelease, config: &Value) -> Result<(), JobError> {
@@ -594,6 +639,43 @@ mod tests {
         };
 
         assert!(write_release_directory(&directory, &release, &deploy_job()).is_err());
+        assert_eq!(fs::read_to_string(directory.join("worker.js")).unwrap(), "running");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_swap_whose_final_rename_fails_keeps_the_running_release() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("dep_1");
+        let staging = root.path().join("dep_1.staging");
+
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("worker.js"), "running").unwrap();
+        fs::create_dir_all(&staging).unwrap();
+        fs::write(staging.join("worker.js"), "new").unwrap();
+
+        let error =
+            swap_into_place(&staging, &directory, |from, to| if from == staging { Err(std::io::Error::other("rename refused")) } else { fs::rename(from, to) })
+                .unwrap_err();
+
+        assert_eq!(error.to_string(), "rename refused");
+        assert_eq!(fs::read_to_string(directory.join("worker.js")).unwrap(), "running");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn a_release_left_aside_by_a_crash_is_restored_before_the_next_swap() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("dep_1");
+        let staging = root.path().join("dep_1.staging");
+
+        fs::create_dir_all(root.path().join("dep_1.previous")).unwrap();
+        fs::write(root.path().join("dep_1.previous").join("worker.js"), "running").unwrap();
+        fs::create_dir_all(&staging).unwrap();
+
+        swap_into_place(&staging, &directory, |from, to| if from == staging { Err(std::io::Error::other("rename refused")) } else { fs::rename(from, to) })
+            .unwrap_err();
+
         assert_eq!(fs::read_to_string(directory.join("worker.js")).unwrap(), "running");
         assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
     }
