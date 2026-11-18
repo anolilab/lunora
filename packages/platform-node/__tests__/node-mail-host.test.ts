@@ -2248,4 +2248,69 @@ describe(createNodeMailHost, () => {
             expect(error.mock.calls.map(([line]) => logged(line).event)).not.toContain("lunora.mail.send_outcome_unknown");
         });
     });
+
+    describe("twenty-fourth review", () => {
+        /** A registry directory and, outside it, where a link to a mail file is made. */
+        const registryLayout = (): { outside: string; root: string; shards: string } => {
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-link-"));
+
+            const shards = join(directory, "shards");
+            const outside = join(directory, "config");
+
+            mkdirSync(shards);
+            mkdirSync(outside);
+
+            return { outside, root: directory, shards };
+        };
+
+        const composeWith = (layout: { root: string; shards: string }, mailPath: string): void => {
+            createNodePlatform({
+                directory: layout.shards,
+                mail: { env: PRODUCTION, path: mailPath, transport: scriptedTransport(["ok"]) },
+                path: join(layout.root, "shard.sqlite3"),
+            }).close();
+        };
+
+        it("refuses a mail.path outside the registry linking to a file not yet created inside it", () => {
+            expect.assertions(1);
+
+            const layout = registryLayout();
+            const link = join(layout.outside, "mail.sqlite3");
+
+            // Created on first open inside the registry's directory, and opened as a shard on the next start.
+            symlinkSync(join("..", "shards", "mail.sqlite3"), link);
+
+            expect(() => {
+                composeWith(layout, link);
+            }).toThrow(/inside the shard registry's directory/u);
+        });
+
+        it("follows a chain of links to a file not yet created inside the registry", () => {
+            expect.assertions(1);
+
+            const layout = registryLayout();
+            const first = join(layout.outside, "mail.sqlite3");
+            const second = join(layout.root, "hop.sqlite3");
+
+            symlinkSync(second, first);
+            symlinkSync(join(layout.shards, "mail.sqlite3"), second);
+
+            expect(() => {
+                composeWith(layout, first);
+            }).toThrow(/inside the shard registry's directory/u);
+        });
+
+        it("refuses a mail.path that is a symlink loop, whose target cannot be resolved", () => {
+            expect.assertions(1);
+
+            const layout = registryLayout();
+            const link = join(layout.outside, "mail.sqlite3");
+
+            symlinkSync(link, link);
+
+            expect(() => {
+                composeWith(layout, link);
+            }).toThrow(/chain of more than 40 symlinks/u);
+        });
+    });
 });

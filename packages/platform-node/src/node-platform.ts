@@ -13,7 +13,7 @@
  * need to guess at that shape.
  */
 
-import { readdirSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 import { LunoraError } from "@lunora/errors";
@@ -120,6 +120,57 @@ const canonicalPath = (path: string, { databaseFile }: { databaseFile: boolean }
     }
 };
 
+/** Linux's own limit on symlinks followed in one lookup (`MAXSYMLINKS`). */
+const MAX_SYMLINK_HOPS = 40;
+
+/**
+ * Every name a mail path passes through to the file it opens: the path itself, each
+ * symlink after it, and last the file, which may not exist yet. `realpath` cannot
+ * follow a link to a missing file, so a link outside the registry's directory to a
+ * file inside it read as outside, and better-sqlite3 then created the file there,
+ * where the next start opened it as a shard. Each relative target is resolved
+ * against its link's own directory. A chain past the hop limit (a loop) or a link
+ * that cannot be read is refused: failing closed, as the target is unknown.
+ */
+const mailPathChain = (mailPath: string): string[] => {
+    let current = resolve(mailPath.trim());
+    const chain = [current];
+
+    for (let hop = 0; hop <= MAX_SYMLINK_HOPS; hop += 1) {
+        let isLink: boolean;
+
+        try {
+            isLink = lstatSync(current).isSymbolicLink();
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+                return chain;
+            }
+
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: mail.path "${mailPath}" could not be resolved — pass a path it can check`, {
+                cause: error,
+            });
+        }
+
+        if (!isLink) {
+            return chain;
+        }
+
+        try {
+            current = resolve(dirname(current), readlinkSync(current));
+            chain.push(current);
+        } catch (error) {
+            throw new LunoraError("VALIDATION_ERROR", `@lunora/platform-node: mail.path "${mailPath}" is a symlink whose target could not be read`, {
+                cause: error,
+            });
+        }
+    }
+
+    throw new LunoraError(
+        "VALIDATION_ERROR",
+        `@lunora/platform-node: mail.path "${mailPath}" is a chain of more than ${String(MAX_SYMLINK_HOPS)} symlinks (a loop?) — pass the file itself`,
+    );
+};
+
 /**
  * Whether two paths name one file. Device and inode when both exist, because
  * `realpath` resolves symlinks but not hard links: a hard link to the shard's file
@@ -174,14 +225,17 @@ const refuseNonDurableMailPath = (mailPath: string): void => {
  * `shard.transaction()`, so mail would stall every shard request it overlapped.
  */
 const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptions, "directory" | "globalTablesPath" | "path">): void => {
-    const mail = canonicalPath(mailPath, { databaseFile: true });
+    // The owner checks judge the file the path opens; the registry check judges every name on
+    // the way, since the registry opens any *.sqlite3 entry in its directory, link or file.
+    const chain = mailPathChain(mailPath);
+    const target = chain.at(-1) ?? mailPath;
     const owners: [string, string | undefined][] = [
         ["the shard database (`path`)", platform.path],
         ["the .global() store (`globalTablesPath`)", platform.globalTablesPath],
     ];
 
     for (const [owner, ownerPath] of owners) {
-        if (ownerPath !== undefined && ownerPath !== ":memory:" && ownerPath !== "" && sameFile(ownerPath, mailPath)) {
+        if (ownerPath !== undefined && ownerPath !== ":memory:" && ownerPath !== "" && sameFile(ownerPath, target)) {
             throw new LunoraError(
                 "VALIDATION_ERROR",
                 `@lunora/platform-node: mail.path "${mailPath}" is ${owner} "${ownerPath}" — give mail a database file of its own`,
@@ -195,7 +249,16 @@ const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptio
         return;
     }
 
-    if (mail.endsWith(SHARD_FILE_SUFFIX) && dirname(mail) === canonicalPath(directory, { databaseFile: false })) {
+    const registry = canonicalPath(directory, { databaseFile: false });
+    // Where each name sits, its directory resolved but not the name: a link's own entry is what
+    // the registry lists.
+    const inRegistry = chain.some((name) => {
+        const entry = join(canonicalPath(dirname(name), { databaseFile: false }), basename(name));
+
+        return entry.endsWith(SHARD_FILE_SUFFIX) && dirname(entry) === registry;
+    });
+
+    if (inRegistry) {
         throw new LunoraError(
             "VALIDATION_ERROR",
             `@lunora/platform-node: mail.path "${mailPath}" is a ${SHARD_FILE_SUFFIX} file inside the shard registry's directory "${directory}", which would open it as a shard — move it out of that directory`,
@@ -211,7 +274,7 @@ const refuseSharedMailPath = (mailPath: string, platform: Pick<NodePlatformOptio
         return;
     }
 
-    const shared = entries.find((entry) => sameFile(join(directory, entry), mailPath));
+    const shared = entries.find((entry) => sameFile(join(directory, entry), target));
 
     if (shared !== undefined) {
         throw new LunoraError(
