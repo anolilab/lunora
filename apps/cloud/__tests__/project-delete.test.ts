@@ -27,7 +27,11 @@ const makeCtx = (tables: Record<string, Row[]>): { ctx: MutationCtx; deleted: st
     const patched: { id: string; patch: Row }[] = [];
     const matches = (row: Row, where: Row): boolean => Object.entries(where).every(([key, value]) => row[key] === value);
     const facade = (table: string) => {
-        return { findMany: (args?: { where?: Row }) => Promise.resolve({ page: (tables[table] ?? []).filter((row) => matches(row, args?.where ?? {})) }) };
+        // One page holding every match, marked done as the store marks a last page, so a draining reader stops.
+        return {
+            findMany: (args?: { where?: Row }) =>
+                Promise.resolve({ continueCursor: null, isDone: true, page: (tables[table] ?? []).filter((row) => matches(row, args?.where ?? {})) }),
+        };
     };
     const emptyQuery: { first: () => Promise<null>; withIndex: () => typeof emptyQuery } = { first: () => Promise.resolve(null), withIndex: () => emptyQuery };
 
