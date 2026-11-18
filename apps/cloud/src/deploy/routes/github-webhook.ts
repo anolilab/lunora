@@ -35,7 +35,8 @@ export const handleWebhookRoute = (request: Request, environment: RouterEnv): Pr
                 : context.runMutation(internal.github_installations.remove, { installationId: intent.installationId }));
         },
         // PR closed → retire its branch preview now rather than at its TTL.
-        onPreviewClose: ({ branch, projectId }) => context.runMutation<{ destroyed: number }>(internal.deployments.closePreview, { branch, projectId }),
+        onPreviewClose: ({ branch, installationId, repository }) =>
+            context.runMutation<{ destroyed: number }>(internal.deployments.closePreview, { branch, installationId, repository }),
         // PR upsert → server-side preview build (same pipeline, GAPS.md A3).
         onPreviewBuild: (intent) =>
             context.runMutation<BuildRecordResult>(internal.builds.recordPush, {

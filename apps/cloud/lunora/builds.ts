@@ -295,6 +295,22 @@ const recordProjectPush = async (
 };
 
 /**
+ * The projects connected to a repository whose organization has *claimed* the
+ * installation the event came through (staged-claim model,
+ * github-installations.ts). Each project is checked on its own: a spoofed RPC
+ * call must present a valid (org, installation) pair, and a squatted sibling
+ * project in another org is never reached.
+ */
+export const installedProjects = async (context: MutationContext, repository: string, installationId: number): Promise<Document_<"projects">[]> => {
+    const [{ page }, { page: installationPage }] = await Promise.all([
+        context.db.projects.findMany({ where: { githubRepo: githubRepoKey(repository) } }),
+        context.db.githubInstallations.findMany({ where: { installationId } }),
+    ]);
+
+    return page.filter((project) => installationPage.some((installation) => installation.organizationId === project.organizationId));
+};
+
+/**
  * Record a build for a push to a connected repository (GAPS.md A4). Resolves
  * the projects from the repository name itself — callers cannot aim it at an
  * arbitrary project. Every project in the repository whose org has claimed the
@@ -353,17 +369,7 @@ export const recordPush = internalMutation
             ctx: context,
             args: { before, branch, changes, commitSha, deliveryId, fromFork, installationId, pullRequest, repository, trigger },
         }): Promise<RecordPushResult> => {
-            const [{ page }, { page: installationPage }] = await Promise.all([
-                context.db.projects.findMany({ where: { githubRepo: githubRepoKey(repository) } }),
-                context.db.githubInstallations.findMany({ where: { installationId } }),
-            ]);
-
-            // Each project is checked on its own: it builds from this installation
-            // only when its own org has *claimed* it (staged-claim model,
-            // github-installations.ts). A spoofed RPC call must present a valid
-            // (org, installation) pair, and a squatted sibling project in another
-            // org never builds.
-            const candidates = page.filter((project) => installationPage.some((installation) => installation.organizationId === project.organizationId));
+            const candidates = await installedProjects(context, repository, installationId);
 
             if (candidates.length === 0) {
                 return [];

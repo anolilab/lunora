@@ -228,6 +228,7 @@ describe(handleGitHubWebhook, () => {
         const close = (headRepository: string): string =>
             JSON.stringify({
                 action: "closed",
+                installation: { id: 7 },
                 number: 9,
                 pull_request: { head: { ref: "feat/x", repo: { full_name: headRepository } } },
                 repository: { full_name: "acme/app" },
@@ -235,7 +236,7 @@ describe(handleGitHubWebhook, () => {
 
         const response = await handleGitHubWebhook(await signedRequest(close("acme/app")), hooks);
 
-        expect(closed).toStrictEqual([{ branch: "feat/x", projectId: "proj_1", repository: "acme/app" }]);
+        expect(closed).toStrictEqual([{ branch: "feat/x", installationId: 7, repository: "acme/app" }]);
         await expect(response.json()).resolves.toMatchObject({ previewClosed: { destroyed: 1 } });
 
         // A fork's branch name is the fork's own and may match one of ours.

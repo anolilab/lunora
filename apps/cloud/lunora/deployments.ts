@@ -16,6 +16,7 @@ import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
 import { assertMember, authorizeDeployKey } from "./authz";
+import { installedProjects } from "./builds";
 import { claimDeploymentAlias, refuseWhileTearingDown } from "./deployment-aliases";
 import { installBadgeOf, isWebUrl, onEnter, PHASE_TIMESTAMP, projectNameOf, releaseDetail } from "./deployment-lifecycle";
 import { orgEntitlements } from "./entitlements";
@@ -879,16 +880,24 @@ export const cleanupExpiredPreviews = internalMutation.mutation(async ({ ctx: co
 
 /**
  * Retire a closed pull request's preview: every preview release of `branch` in
- * the project is marked `destroyed`, and the teardown sweep reclaims its Worker
- * once its alias has nothing else alive — the same path an expired preview takes,
- * only without waiting out the TTL. SYSTEM only (the GitHub webhook route).
+ * each project the repository builds previews for (the candidates
+ * `builds.recordPush` records them for) is marked `destroyed`, and the teardown
+ * sweep reclaims its Worker once its alias has nothing else alive — the same
+ * path an expired preview takes, only without waiting out the TTL. SYSTEM only
+ * (the GitHub webhook route).
  */
 export const closePreview = internalMutation
-    .input({ branch: boundedString(LIMITS.gitRef), projectId: v.id("projects") })
-    .mutation(async ({ ctx: context, args: { branch, projectId } }): Promise<{ destroyed: number }> => {
+    .input({ branch: boundedString(LIMITS.gitRef), installationId: v.number(), repository: boundedString(LIMITS.token) })
+    .mutation(async ({ ctx: context, args: { branch, installationId, repository } }): Promise<{ destroyed: number }> => {
         const { now } = context;
-        const { page } = await context.db.deployments.findMany({ where: { branch, kind: "preview", projectId } });
-        const open = page.filter((deployment) => deployment.status !== "destroyed");
+        const open: DeploymentRow[] = [];
+
+        for (const project of await installedProjects(context, repository, installationId)) {
+            // eslint-disable-next-line no-await-in-loop -- a repository connects to a handful of projects
+            const { page } = await context.db.deployments.findMany({ where: { branch, kind: "preview", projectId: project._id } });
+
+            open.push(...page.filter((deployment) => deployment.status !== "destroyed"));
+        }
 
         for (const deployment of open) {
             assertStatusMove(deployment.status, "destroyed");

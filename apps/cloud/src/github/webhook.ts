@@ -106,7 +106,14 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
     }
 
     if (action === "closed") {
-        return { action: "remove", branch, fromFork: isForkHead(event, repository), number, repository };
+        return {
+            action: "remove",
+            branch,
+            fromFork: isForkHead(event, repository),
+            ...(installationId === undefined ? {} : { installationId }),
+            number,
+            repository,
+        };
     }
 
     return null;
@@ -328,8 +335,8 @@ export interface GitHubWebhookHooks {
             repository: string;
         },
     ) => Promise<BuildRecordResult>;
-    /** Retire a closed pull request's branch preview (`remove` events from the repository itself). */
-    onPreviewClose?: (intent: { branch: string; projectId: string; repository: string }) => Promise<{ destroyed: number }>;
+    /** Retire a closed pull request's branch preview in every project it was built for (`remove` events from the repository itself). */
+    onPreviewClose?: (intent: { branch: string; installationId: number; repository: string }) => Promise<{ destroyed: number }>;
     /** Record a build for a default-branch push (`push` events, GAPS.md A4). Returns one entry per candidate project; empty when the repo isn't connected. */
     onPush?: (intent: Delivery & PushIntent) => Promise<BuildRecordResult>;
 
@@ -430,9 +437,10 @@ const handlePullRequestIntent = async (intent: PreviewIntent, delivery: Delivery
         await reportSkip(previewBuild, target, options);
     }
 
+    // Every connected project, not just the one resolved above: the preview was built for each candidate.
     const previewClosed =
-        intent.action === "remove" && intent.fromFork === false && options.onPreviewClose
-            ? await options.onPreviewClose({ branch: intent.branch, projectId: project.projectId, repository: intent.repository })
+        intent.action === "remove" && intent.fromFork === false && intent.installationId !== undefined && options.onPreviewClose
+            ? await options.onPreviewClose({ branch: intent.branch, installationId: intent.installationId, repository: intent.repository })
             : undefined;
 
     return Response.json(

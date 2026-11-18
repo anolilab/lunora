@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { Doc, Id } from "../lunora/_generated/dataModel";
+import type { Doc } from "../lunora/_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../lunora/_generated/server";
 import { cleanupExpiredPreviews, closePreview, planForScript, pruneSuperseded } from "../lunora/deployments";
 import { orgForScript } from "../lunora/logs";
@@ -54,22 +54,38 @@ describe("deployment status union", () => {
 });
 
 describe("deployments.closePreview", () => {
-    it("destroys every not-yet-destroyed preview release of the branch in that project, and nothing else", async () => {
+    it("destroys the branch's not-yet-destroyed preview releases in every project the repository builds, and nothing else", async () => {
         const { ctx, patched } = makeCtx([
             { _id: "live", branch: "feat/x", kind: "preview", projectId: "proj_1", status: "live" },
             { _id: "superseded", branch: "feat/x", kind: "preview", projectId: "proj_1", status: "superseded" },
             { _id: "gone", branch: "feat/x", kind: "preview", projectId: "proj_1", status: "destroyed" },
             { _id: "other_branch", branch: "feat/y", kind: "preview", projectId: "proj_1", status: "live" },
-            { _id: "other_project", branch: "feat/x", kind: "preview", projectId: "proj_2", status: "live" },
+            { _id: "sibling", branch: "feat/x", kind: "preview", projectId: "proj_2", status: "live" },
+            { _id: "squatter", branch: "feat/x", kind: "preview", projectId: "proj_3", status: "live" },
+            { _id: "unconnected", branch: "feat/x", kind: "preview", projectId: "proj_4", status: "live" },
             { _id: "production", branch: "feat/x", kind: "production", projectId: "proj_1", status: "live" },
         ]);
+        const projects = [
+            { _id: "proj_1", githubRepo: "acme/app", organizationId: "org_1" },
+            { _id: "proj_2", githubRepo: "acme/app", organizationId: "org_1" },
+            // Connected to the repository, but its organization never claimed the installation.
+            { _id: "proj_3", githubRepo: "acme/app", organizationId: "org_2" },
+            { _id: "proj_4", githubRepo: "acme/other", organizationId: "org_1" },
+        ];
+        const db = ctx.db as unknown as Record<string, unknown>;
 
-        const result = await closePreview.handler(ctx, { branch: "feat/x", projectId: "proj_1" as Id<"projects"> });
+        db["projects"] = {
+            findMany: ({ where }: { where: Row }) => Promise.resolve({ page: projects.filter((row) => row.githubRepo === where["githubRepo"]) }),
+        };
+        db["githubInstallations"] = { findMany: () => Promise.resolve({ page: [{ installationId: 7, organizationId: "org_1" }] }) };
 
-        expect(result).toStrictEqual({ destroyed: 2 });
+        const result = await closePreview.handler(ctx, { branch: "feat/x", installationId: 7, repository: "Acme/App" });
+
+        expect(result).toStrictEqual({ destroyed: 3 });
         expect(patched.map((entry) => [entry.id, entry.patch["status"]])).toStrictEqual([
             ["live", "destroyed"],
             ["superseded", "destroyed"],
+            ["sibling", "destroyed"],
         ]);
     });
 });
