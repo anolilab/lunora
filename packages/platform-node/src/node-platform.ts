@@ -43,8 +43,9 @@ const DEFAULT_SHARD_KEY = "__root__";
  * Flatten the generated `LUNORA_CRONS` map into the declared set the scheduler
  * host arms. A workflow-targeted job is refused rather than skipped: nothing on
  * this host starts a workflow instance from a tick, and a skipped job would be a
- * declared cron that never fires. Codegen cannot catch it: `cronTriggers` rates
- * function and workflow jobs together, so this throw at startup is the check.
+ * declared cron that never fires. Codegen refuses it for this target
+ * (`cronWorkflowTriggers`); this throw is the backstop for an embedder that
+ * built without that gate.
  */
 const walkDeclaredCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>): NodeDeclaredCron[] =>
     Object.entries(crons).flatMap(([expression, jobs]) =>

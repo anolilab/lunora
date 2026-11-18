@@ -311,6 +311,9 @@ const buildDeclarationSurface = (options: DeclarationSurfaceOptions): Declaratio
         // `@lunora/server`, so the `featureUsage` arm (which keys `scheduler` on
         // a `@lunora/scheduler` import) cannot see one.
         cronTriggers: crons.length > 0,
+        // Apart from `cronTriggers`: a host can fire function crons and still
+        // have nothing that starts a workflow instance from a tick.
+        cronWorkflowTriggers: crons.some((job) => job.workflow !== undefined),
         crossShardFanout: schema.tables.some((table) => isShardByTable(table)),
         containerEgressPolicy: codeSignals.containerEgressPolicy,
         // Read off the container IR: the policy is deploy configuration codegen

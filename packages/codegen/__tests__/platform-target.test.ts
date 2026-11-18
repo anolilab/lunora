@@ -809,6 +809,39 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
     const codegen = (): ReturnType<typeof runCodegen> => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
+    const writeWorkflowCron = (): void => {
+        write(
+            "workflows.ts",
+            `import { defineWorkflow } from "@lunora/workflow";\n\nexport const digestPipeline = defineWorkflow({ handler: async () => undefined });\n`,
+        );
+        write(
+            "crons.ts",
+            `import { cronJobs } from "@lunora/server";\nimport { workflows } from "./_generated/api.js";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-digest", { hourUTC: 9, minuteUTC: 0 }, workflows.digestPipeline, {});\n\nexport default crons;\n`,
+        );
+    };
+
+    it("refuses a cron that starts a workflow on node, which has nothing to start one from a tick", () => {
+        expect.assertions(2);
+
+        // `cronTriggers` alone passed this app, which then failed at createNodePlatform.
+        writeWorkflowCron();
+
+        const result = codegen();
+        const diagnostic = result.platformDiagnostics.find((entry) => entry.message.includes("start a workflow"));
+
+        expect(diagnostic).toMatchObject({ level: "error", name: "platform_unsupported_feature", target: "node" });
+        expect(result.platformDiagnostics.filter((entry) => entry.message.includes("cron triggers"))).toStrictEqual([]);
+    });
+
+    it("lets a cron that starts a workflow through on cloudflare", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
+        writeWorkflowCron();
+
+        expect(codegen().platformDiagnostics).toStrictEqual([]);
+    });
+
     it("emits a declared cron for node, whose host walks LUNORA_CRONS into its scheduler", () => {
         expect.assertions(3);
 
