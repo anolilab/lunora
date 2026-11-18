@@ -152,8 +152,10 @@ the token in shell history and sudo's log; `--token` is now refused.
 The `upgrade` job does steps 2–4 inside the running daemon with the keys
 compiled into it, downloading each artifact itself and refusing a downgrade
 unless the job carries `allowDowngrade: true` (protocol §5.2), then exits for systemd to
-restart into the new release (or restarts the fleets in place when
-`lunora-hostd` itself did not change). The control plane sets `allowDowngrade`
+restart into the new release (or restarts the fleets in place, one at a
+time, when `lunora-hostd` itself did not change; a fleet that does not get
+healthy switches `current` back to the release before, the fleets already
+restarted are restarted on it, and the job fails). The control plane sets `allowDowngrade`
 only on a rollback an operator asks for — `POST /v1/hostd/rollout` with
 `allowDowngrade: true` (admin token, an audit-log entry per box), carried on by
 the hourly resume sweep and the reconnect replay; a normal rollout never sets it.

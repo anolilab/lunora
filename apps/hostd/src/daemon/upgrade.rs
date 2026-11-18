@@ -50,8 +50,8 @@ pub enum UpgradeOutcome {
     AlreadyRunning,
     /// `lunora-hostd` itself was replaced: exit once the result is sent, so systemd starts the new one.
     SelfReplaced,
-    /// Only celld or Caddy changed: restart every child on the new binaries.
-    RestartChildren,
+    /// Only celld or Caddy changed: restart every child on the new binaries, back on `previous` if one fails.
+    RestartChildren { previous: Option<String> },
 }
 
 /// Download `artifact` to `path`, refusing more bytes than it pins.
@@ -168,5 +168,5 @@ pub async fn run_upgrade(job: &UpgradeJob, options: UpgradeOptions<'_>, progress
         return Ok(UpgradeOutcome::SelfReplaced);
     }
 
-    Ok(UpgradeOutcome::RestartChildren)
+    Ok(UpgradeOutcome::RestartChildren { previous: outcome.previous })
 }

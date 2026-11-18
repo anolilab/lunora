@@ -9,7 +9,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use tokio::sync::Notify;
 
@@ -34,9 +33,6 @@ pub const MAX_CONCURRENT_JOBS: usize = 2;
 
 /// Progress lines one job may send; the rest are summarised in one line.
 pub const MAX_PROGRESS_LINES: usize = 400;
-
-/// How long a fleet may take to report healthy after a deploy or reload.
-pub const HEALTH_DEADLINE: Duration = Duration::from_secs(120);
 
 pub type Progress = Arc<dyn Fn(&str) + Send + Sync>;
 
@@ -189,7 +185,7 @@ async fn deploy(context: &JobContext, job: &DeployJob, progress: &Progress) -> R
     });
     context.supervisor.start_fleet(FleetLaunch { alias: job.alias.clone(), ports })?;
 
-    if let Err(error) = context.supervisor.wait_healthy(&job.alias, HEALTH_DEADLINE).await {
+    if let Err(error) = context.supervisor.wait_healthy(&job.alias).await {
         context.set_fleet(&job.alias, record(deployment, ports, FleetState::Failed));
 
         return Err(error);
@@ -254,7 +250,7 @@ async fn reload(context: &JobContext, alias: &str, progress: &Progress) -> Resul
         context.supervisor.start_fleet(FleetLaunch { alias: alias.to_owned(), ports })?;
     }
 
-    context.supervisor.wait_healthy(alias, HEALTH_DEADLINE).await?;
+    context.supervisor.wait_healthy(alias).await?;
     context.set_fleet(alias, record(previous.deployment_id, ports, FleetState::Running));
     (context.apply_edge)().await;
     progress(&format!("fleet {alias} is healthy"));

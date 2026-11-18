@@ -336,7 +336,16 @@ pub async fn run_daemon(options: DaemonOptions, stop: Arc<tokio::sync::Notify>) 
 
                 match outcome {
                     UpgradeOutcome::AlreadyRunning => {}
-                    UpgradeOutcome::RestartChildren => supervisor.restart_all(&*progress).await?,
+                    UpgradeOutcome::RestartChildren { previous } => {
+                        let restarted = supervisor.restart_all(previous.as_deref(), &*progress).await;
+
+                        // A failed restart switched `current` back: report the versions the box runs now.
+                        if restarted.is_err() {
+                            *lock(&versions) = installed_versions(&config.install_dir).await;
+                        }
+
+                        restarted?;
+                    }
                     // The job's result goes first; then systemd starts the new binary.
                     UpgradeOutcome::SelfReplaced => {
                         tokio::spawn(async move {

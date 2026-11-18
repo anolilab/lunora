@@ -32,6 +32,7 @@ use super::isolation::Isolation;
 use super::job_error::{JobError, codes};
 use super::log::Logger;
 use super::process::{Backoff, RESTART_BACKOFF, SupervisedOptions, SupervisedProcess};
+use super::release_install::switch_current;
 use crate::release::ReleaseComponent;
 
 /// How long a celld node may take to drain on SIGTERM (its own default bound is 40 s).
@@ -40,8 +41,8 @@ pub const CELLD_STOP_BUDGET: Duration = Duration::from_secs(45);
 /// How long Caddy may take to finish in-flight requests on SIGTERM.
 pub const CADDY_STOP_BUDGET: Duration = Duration::from_secs(10);
 
-/// How long a fleet may take to report healthy after a restart in an upgrade.
-const RESTART_HEALTH_DEADLINE: Duration = Duration::from_secs(120);
+/// How long a fleet may take to report healthy after a deploy, a reload or a restart in an upgrade.
+pub const HEALTH_DEADLINE: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FleetPorts {
@@ -131,6 +132,8 @@ pub struct SupervisorOptions {
     pub config: HostdConfig,
     /// The bucket credentials, re-read at each spawn so a rotated file takes effect on the next restart.
     pub credentials: Credentials,
+    /// How long [`Supervisor::wait_healthy`] waits.
+    pub health_deadline: Duration,
     pub logger: Logger,
     pub on_stderr: Option<OnStderr>,
 }
@@ -163,9 +166,9 @@ impl Supervisor {
         })
     }
 
-    /// The supervisor's defaults: the real restart backoff.
+    /// The supervisor's defaults: the real restart backoff and health deadline.
     pub fn options(config: HostdConfig, credentials: Credentials, logger: Logger, on_stderr: Option<OnStderr>) -> SupervisorOptions {
-        SupervisorOptions { backoff: RESTART_BACKOFF, config, credentials, logger, on_stderr }
+        SupervisorOptions { backoff: RESTART_BACKOFF, config, credentials, health_deadline: HEALTH_DEADLINE, logger, on_stderr }
     }
 
     /// Aliases with a node the supervisor keeps running.
@@ -271,7 +274,8 @@ impl Supervisor {
     }
 
     /// Resolve once `alias`'s node answers its health route with 200, polling every 250 ms.
-    pub async fn wait_healthy(&self, alias: &str, deadline: Duration) -> Result<(), JobError> {
+    pub async fn wait_healthy(&self, alias: &str) -> Result<(), JobError> {
+        let deadline = self.options.health_deadline;
         let Some((port, process)) = lock(&self.fleets).get(alias).map(|fleet| (fleet.launch.ports.public_port, Arc::clone(&fleet.process))) else {
             return Err(JobError::new(codes::NO_FLEET, format!("no fleet runs for {alias} on this box")));
         };
@@ -347,13 +351,51 @@ impl Supervisor {
         Ok(())
     }
 
+    /// Stop `launch`'s node, start it from `current` again and wait until it is healthy.
+    async fn restart_on_current(&self, launch: &FleetLaunch) -> Result<(), JobError> {
+        self.stop_fleet(&launch.alias).await;
+        self.start_fleet(launch.clone())?;
+        self.wait_healthy(&launch.alias).await
+    }
+
     /// Restart every child (after an `upgrade` swapped their binaries): fleets one at a time, then Caddy.
-    pub async fn restart_all(&self, progress: &(dyn Fn(&str) + Send + Sync)) -> Result<(), JobError> {
-        for alias in self.aliases() {
-            progress(&format!("restarting {alias}"));
+    ///
+    /// A fleet that fails on the new binaries points `current` back at `previous` (the install keeps it), and it
+    /// and the fleets already restarted are restarted on it. The fleets not reached yet and Caddy were never
+    /// stopped and still run the previous binaries, so the box is whole on the release it ran before; the job
+    /// fails with what went wrong.
+    pub async fn restart_all(&self, previous: Option<&str>, progress: &(dyn Fn(&str) + Send + Sync)) -> Result<(), JobError> {
+        let launches: Vec<FleetLaunch> = lock(&self.fleets).values().map(|fleet| fleet.launch.clone()).collect();
+
+        for (index, launch) in launches.iter().enumerate() {
+            progress(&format!("restarting {}", launch.alias));
+
             // One fleet at a time keeps the others serving.
-            self.restart_fleet(&alias).await?;
-            self.wait_healthy(&alias, RESTART_HEALTH_DEADLINE).await?;
+            let Err(error) = self.restart_on_current(launch).await else {
+                continue;
+            };
+            let Some(previous) = previous else {
+                return Err(error);
+            };
+
+            progress(&format!("{} failed on the new release: {}; switching back to {previous}", launch.alias, error.message));
+            switch_current(&self.options.config.install_dir, previous)?;
+
+            let mut still_failing = Vec::new();
+
+            for launch in &launches[..=index] {
+                if let Err(again) = self.restart_on_current(launch).await {
+                    still_failing.push(format!("{}: {}", launch.alias, again.message));
+                }
+            }
+
+            let restored = if still_failing.is_empty() {
+                format!("switched back to release {previous}")
+            } else {
+                format!("switched back to release {previous}, on which {} failed too", still_failing.join("; "))
+            };
+
+            return Err(JobError::new(error.code, format!("{}; {restored}", error.message)));
         }
 
         let caddy = lock(&self.caddy).clone();
@@ -467,6 +509,7 @@ mod tests {
             backoff: RESTART_BACKOFF,
             config: config(root, None),
             credentials,
+            health_deadline: Duration::from_millis(300),
             logger: Logger::silent(),
             on_stderr: Some(Arc::new(move |source, line| sink.lock().unwrap().push((source.clone(), line.to_owned())))),
         });
@@ -483,7 +526,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
 
-        let error = supervisor.wait_healthy("my-app", Duration::from_millis(300)).await.unwrap_err();
+        let error = supervisor.wait_healthy("my-app").await.unwrap_err();
 
         assert_eq!(error.code, codes::HEALTH_TIMEOUT);
         assert!(error.message.ends_with("; it printed:\nbooting"), "{}", error.message);
@@ -499,7 +542,109 @@ mod tests {
 
         supervisor.shutdown().await;
         assert!(!supervisor.is_running("my-app"));
-        assert_eq!(supervisor.wait_healthy("my-app", Duration::from_millis(1)).await.unwrap_err().code, codes::NO_FLEET);
+        assert_eq!(supervisor.wait_healthy("my-app").await.unwrap_err().code, codes::NO_FLEET);
         assert_eq!(supervisor.restart_fleet("my-app").await.unwrap_err().code, codes::NO_FLEET);
+    }
+
+    /// A celld that announces itself in `up-{port}` with `marker` and in `runs` with `{release} {port}`.
+    fn install_celld(root: &Path, release: &str, marker: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = root.join("opt").join(release);
+        let body = format!(
+            "#!/bin/sh\nwhile [ $# -gt 0 ]; do [ \"$1\" = --listen ] && listen=$2; shift; done\nport=${{listen##*:}}\necho \"{release} $port\" >> {root}/runs\n{marker}\nexec sleep 30\n",
+            root = root.display()
+        );
+
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("celld"), body).unwrap();
+        std::fs::set_permissions(directory.join("celld"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn runs(root: &Path) -> Vec<String> {
+        std::fs::read_to_string(root.join("runs")).unwrap_or_default().lines().map(str::to_owned).collect()
+    }
+
+    #[tokio::test]
+    async fn a_fleet_that_fails_on_the_new_release_puts_the_box_back_on_the_previous_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_owned();
+        let health_root = root.clone();
+        // A node is healthy once it has written `up-{port}`, unless it wrote "broken" there.
+        let health = move |request: &crate::daemon::signed_fetch::test_server::Recorded| {
+            use crate::daemon::signed_fetch::test_server::respond;
+
+            let port = request.headers.get("host").and_then(|host| host.to_str().ok()).and_then(|host| host.rsplit(':').next()).unwrap_or_default();
+            let up = std::fs::read_to_string(health_root.join(format!("up-{port}"))).unwrap_or_default();
+
+            respond(if up.is_empty() || up.trim() == "broken" { 503 } else { 200 }, "")
+        };
+        let serve = crate::daemon::signed_fetch::test_server::serve;
+        let (first, second) = (serve(health.clone()).await, serve(health).await);
+        let port_of = |origin: &str| origin.rsplit(':').next().unwrap().parse::<u16>().unwrap();
+        let (first_port, second_port) = (port_of(&first.origin), port_of(&second.origin));
+
+        install_celld(&root, "hostd-v0_0_1", r#"echo ok > "$(dirname "$0")/../../up-$port""#);
+        // The new celld runs for the first fleet and never gets healthy for the second.
+        install_celld(
+            &root,
+            "hostd-v0_0_2",
+            &format!(r#"if [ "$port" = {first_port} ]; then echo ok; else echo broken; fi > "$(dirname "$0")/../../up-$port""#),
+        );
+        std::os::unix::fs::symlink("hostd-v0_0_1", root.join("opt").join("current")).unwrap();
+
+        let supervisor = Supervisor::new(SupervisorOptions {
+            backoff: RESTART_BACKOFF,
+            config: config(&root, None),
+            credentials: Arc::new(BTreeMap::new),
+            health_deadline: Duration::from_secs(1),
+            logger: Logger::silent(),
+            on_stderr: None,
+        });
+
+        for (alias, port) in [("first", first_port), ("second", second_port)] {
+            supervisor.start_fleet(FleetLaunch { alias: alias.into(), ports: FleetPorts { internal_port: 1, public_port: port } }).unwrap();
+            supervisor.wait_healthy(alias).await.unwrap();
+        }
+
+        // The upgrade switched `current`; the nodes have not restarted yet.
+        switch_current(&root.join("opt").to_string_lossy(), "hostd-v0_0_2").unwrap();
+
+        for port in [first_port, second_port] {
+            std::fs::remove_file(root.join(format!("up-{port}"))).unwrap();
+        }
+
+        let progress = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&progress);
+        let error = supervisor.restart_all(Some("hostd-v0_0_1"), &move |line| sink.lock().unwrap().push(line.to_owned())).await.unwrap_err();
+
+        assert_eq!(error.code, codes::HEALTH_TIMEOUT);
+        assert!(error.message.ends_with("; switched back to release hostd-v0_0_1"), "{}", error.message);
+        assert_eq!(crate::daemon::release_install::current_release(&root.join("opt").to_string_lossy()).as_deref(), Some("hostd-v0_0_1"));
+        assert!(progress.lock().unwrap().iter().any(|line| line.starts_with("second failed on the new release")), "{progress:?}");
+
+        // Both fleets run the previous celld again: the one that failed and the one restarted before it.
+        let expected = [
+            format!("hostd-v0_0_1 {first_port}"),
+            format!("hostd-v0_0_1 {second_port}"),
+            format!("hostd-v0_0_2 {first_port}"),
+            format!("hostd-v0_0_2 {second_port}"),
+            format!("hostd-v0_0_1 {first_port}"),
+            format!("hostd-v0_0_1 {second_port}"),
+        ];
+
+        // The first fleet answered healthy from the file its new node wrote; its old node may still be starting.
+        for _ in 0..500 {
+            if runs(&root).len() >= expected.len() {
+                break;
+            }
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(runs(&root), expected);
+        assert!(supervisor.is_running("first") && supervisor.is_running("second"));
+
+        supervisor.shutdown().await;
     }
 }
