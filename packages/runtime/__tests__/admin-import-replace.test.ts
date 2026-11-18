@@ -593,6 +593,30 @@ describe("admin import — staged replace", () => {
                 .map((entry) => entry.detail?.["tables"]),
         ).toStrictEqual([["$storage"], ["$kv"], ["$auth"]]);
     });
+
+    it("prunes the default bucket of a worker that names its buckets as an empty list", async () => {
+        expect.assertions(2);
+
+        await seed();
+
+        const stores = createStores();
+        const bucket = stores.buckets.get("default")!;
+
+        bucket.set("created-since.txt", { bytes: new TextEncoder().encode("new") });
+
+        const worker = workerWith({ ...stores.options, storageBuckets: [] });
+
+        await postImport(worker, "?mode=replace&tables=messages&stage=empty-list", [
+            { doc: { format: 2, sections: ["storage"] }, table: "$lunora" },
+            message("m1", "c1", "as snapshotted"),
+            { doc: { data: Buffer.from("back").toString("base64"), key: "a.txt", last: true, offset: 0, size: 4 }, table: "$storage" },
+        ]);
+
+        const committed = await postSession(worker, "commit", "empty-list");
+
+        await expect(committed.json()).resolves.toMatchObject({ deleted: { $storage: 1 }, status: "committed" });
+        expect([...bucket.keys()]).toStrictEqual(["a.txt"]);
+    });
 });
 
 describe("admin import — staged replace of a section its header does not declare", () => {

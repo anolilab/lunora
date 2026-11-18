@@ -145,6 +145,14 @@ interface AuthDataPort {
     }>;
 }
 
+/**
+ * The buckets a section walks. A worker that names none — absent or `[]`, as the
+ * storage admin routes read it too — has only its default bucket, which `[]`
+ * would otherwise leave out: unexported, never swept, never pruned on a replace.
+ */
+const storageBucketsOf = (options: WorkerOptions): ReadonlyArray<string | undefined> =>
+    options.storageBuckets !== undefined && options.storageBuckets.length > 0 ? options.storageBuckets : [undefined];
+
 /** The sections this worker can export, out of those asked for. */
 const availableSections = (options: WorkerOptions, requested: ReadonlyArray<ExportSection>): ExportSection[] =>
     requested.filter((section) => {
@@ -350,7 +358,7 @@ const exportSectionRows = (
 
             if (storageList && storageDownload && sections.includes("storage")) {
                 // A single-bucket worker declares no names: its one bucket is the default.
-                yield* exportStorage(storageList, storageDownload, options.storageBuckets ?? [undefined]);
+                yield* exportStorage(storageList, storageDownload, storageBucketsOf(options));
             }
         })(),
     };
@@ -802,7 +810,7 @@ const sweepStaging = async (options: WorkerOptions, row: SectionRow, totals: Sec
     }
 
     try {
-        await sweepStaleStaging(store, options.storageBuckets ?? [undefined], Date.now());
+        await sweepStaleStaging(store, storageBucketsOf(options), Date.now());
     } catch (error) {
         rowError(totals, row, "RESTORE_STAGING_SWEEP_FAILED", `could not delete stale staged chunks: ${errorMessage(error)}`);
     }
@@ -870,5 +878,6 @@ export {
     parseStorageRecord,
     SECTION_CHUNK_BYTES,
     STORAGE_TABLE,
+    storageBucketsOf,
     storageObjects,
 };

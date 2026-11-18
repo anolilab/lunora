@@ -41,6 +41,7 @@ import {
     kvKeys,
     parseStorageRecord,
     STORAGE_TABLE,
+    storageBucketsOf,
     storageObjects,
 } from "./export-sections";
 import type { ImportRowError } from "./import-stream";
@@ -617,7 +618,7 @@ const commitStorage = async (options: WorkerOptions, ref: SessionRef, records: A
         inserted += 1;
     }
 
-    for (const bucket of options.storageBuckets ?? [undefined]) {
+    for (const bucket of storageBucketsOf(options)) {
         const doomed: string[] = [];
 
         // Lunora's own `_lunora/` objects are never listed here, so never deleted.

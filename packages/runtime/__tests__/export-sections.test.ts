@@ -245,6 +245,18 @@ describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, 
         expect(lines.map((line) => (JSON.parse(line) as { table: string }).table)).toStrictEqual(["$lunora", "todos", "$kv"]);
     });
 
+    it("exports the default bucket of a worker that names its buckets as an empty list", async () => {
+        expect.hasAssertions();
+
+        const stores = createStores();
+
+        stores.buckets.get("default")!.set("a.txt", { bytes: new Uint8Array([1]) });
+
+        const lines = await exportFrom(workerFor({ ...stores.options, storageBuckets: [] }), { sections: ["storage"], tables: ["todos"] });
+
+        expect(lines.map((line) => (JSON.parse(line) as { doc: { key?: string } }).doc.key).filter(Boolean)).toStrictEqual(["a.txt"]);
+    });
+
     it("refuses an unknown section name", async () => {
         expect.assertions(1);
 
