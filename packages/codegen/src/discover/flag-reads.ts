@@ -117,12 +117,10 @@ const readsInSourceFile = (sourceFile: SourceFile, relativePath: string): FlagRe
     return found;
 };
 
-/* eslint-disable no-secrets/no-secrets -- the referenced advisor lint rule id in the doc comment, not a credential */
-
 /**
  * Discover `ctx.flags` reads lexically inside the handler body of every exported
  * `query(...)` registration under the lunora source directory — the
- * `flag_read_in_subscription` lint input.
+ * flag_read_in_subscription lint input.
  *
  * `mutation(...)`, `action(...)` and `stream(...)` registrations are intentionally
  * skipped: a flag read is only hazardous where a live subscription can serve a
@@ -148,5 +146,3 @@ const discoverFlagReads = (project: Project, lunoraDirectory: string): FlagReadI
 };
 
 export default discoverFlagReads;
-
-/* eslint-enable no-secrets/no-secrets -- re-enable after the discoverFlagReads doc block */

@@ -1,3 +1,7 @@
+## @lunora/codegen [1.0.0-alpha.425](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.424...@lunora/codegen@1.0.0-alpha.425) (2026-11-18)
+
+- fix(codegen): see reassigned callback parameters in isReassignedBinding (#1627)
+
 ## @lunora/codegen [1.0.0-alpha.424](https://github.com/anolilab/lunora/compare/@lunora/codegen@1.0.0-alpha.423...@lunora/codegen@1.0.0-alpha.424) (2026-11-18)
 
 - fix(codegen)!: finish the identity-scope follow-ups (#1605) (#1614)

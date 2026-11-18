@@ -80,8 +80,6 @@ type HelperFragments = CapabilityShardFragments & { contextField: string };
 
 const EMPTY_HELPER_FRAGMENTS: HelperFragments = { build: "", configField: "", contextField: "", importLines: [], stub: "" };
 
-/* eslint-disable no-secrets/no-secrets -- the flagged string is the emitted `ShardDOConfig.shardRegistry` field name in the docblock below, not a credential. */
-
 /**
  * The shard registry wiring, for a schema with `.shardBy()` tables: the
  * `ShardDOConfig.shardRegistry` field, the `SHARDED_TABLES` constant and the
@@ -111,9 +109,6 @@ const SHARDED_TABLES: ReadonlySet<string> = new Set([${[...shardedTableNames].ma
 `,
     };
 };
-/* eslint-enable no-secrets/no-secrets */
-
-/* eslint-disable no-secrets/no-secrets -- the flagged string is the `flag_read_in_subscription` advisory's rule id, quoted in the docblock below, not a credential. */
 
 /**
  * `ctx.flags` (OpenFeature feature flags) fragments. A flag read is an external
@@ -158,8 +153,6 @@ const emitFlagsFragments = (hasFlags: boolean, flagsSpecifier: string): HelperFr
         stub: "",
     };
 };
-
-/* eslint-enable no-secrets/no-secrets */
 
 /**
  * `ctx.notify` / `ctx.push` (`@lunora/notify`) fragments. Mirrors
@@ -251,7 +244,6 @@ const emitFlagsOverrides = (
 const LUNORA_FLAG_KEYS = ${renderJsonData(flagKeys, `ReadonlyArray<{ key: string; type: "boolean" | "number" | "object" | "string" }>`)};
 `;
 
-    // eslint-disable-next-line no-secrets/no-secrets -- emitted source text, not a credential
     const mapFlagKeys = "LUNORA_FLAG_KEYS.map(async";
     const evaluateOverride = `
         protected override async evaluateFlags(context?: Record<string, unknown>): Promise<FlagsResult> {${clientBuild("undefined")}
@@ -277,7 +269,6 @@ const LUNORA_FLAG_KEYS = ${renderJsonData(flagKeys, `ReadonlyArray<{ key: string
         }
 `;
 
-    // eslint-disable-next-line no-secrets/no-secrets -- the emitted ShardDO override method name, not a secret
     const subscriptionOverride = `
         protected override runFlagSubscriptionRead(_functionPath: string, args: Record<string, unknown>, identity?: SubscriptionIdentity): Promise<unknown> {${clientBuild("() => flagsConfig.identify?.({ identity: identity?.identity ?? null, userId: identity?.userId ?? null })")}
             const key = typeof args.key === "string" ? args.key : "";
@@ -383,7 +374,6 @@ const emitAccessFragments = (): CapabilityShardFragments => {
  * `env.R2_SQL_ACCOUNT_ID`/`env.CLOUDFLARE_ACCOUNT_ID` + `env.R2_SQL_BUCKET`;
  * absent both, every method throws via `r2sqlStub`.
  */
-/* eslint-disable no-secrets/no-secrets -- the emitted ctx-builder reads conventional R2 SQL env var names (R2_SQL_ACCOUNT_ID / CLOUDFLARE_ACCOUNT_ID), not credentials */
 const emitR2sqlFragments = (): CapabilityShardFragments => {
     const r2sqlMissing =
         "ctx.r2sql: no R2 SQL credentials found. Set `R2_SQL_TOKEN`, `R2_SQL_ACCOUNT_ID` (or `CLOUDFLARE_ACCOUNT_ID`), and `R2_SQL_BUCKET` in your env/.dev.vars, or pass an `r2sql` config thunk to createShardDO().";
@@ -410,7 +400,6 @@ const emitR2sqlFragments = (): CapabilityShardFragments => {
         }),
     };
 };
-/* eslint-enable no-secrets/no-secrets */
 
 /**
  * `ctx.x402` (the x402 agent-wallet pay rail). Bespoke because `lazyX402Pay`
@@ -480,8 +469,6 @@ const renderBindingValue = (property: string, clientType: string, binding: Shard
     return `${local} ? ${construct} : ${property}Stub`;
 };
 
-/* eslint-disable no-secrets/no-secrets -- the flagged string is the emitted `markUnvouchableReads` helper name, not a credential. */
-
 /**
  * The `buildCtx` lines for a binding-resolving helper: resolve `config.<prop>`
  * else `env.<NAME>`, build the client, else fall to the stub — wrapped in
@@ -504,7 +491,6 @@ ${reads.map((method) => `${BUILD_INDENT}    ${JSON.stringify(method)},`).join("\
 ${BUILD_INDENT}]);
 `;
 };
-/* eslint-enable no-secrets/no-secrets */
 
 /**
  * The generic ShardDO wiring for a {@link ShardBindingFacet} row — the shape

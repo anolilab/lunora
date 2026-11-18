@@ -37,7 +37,6 @@ interface BuildContextParts {
     workflowsContextField: string;
 }
 
-/* eslint-disable no-secrets/no-secrets -- emitted ShardDO source, not credentials */
 const renderBuildContext = ({
     actionOnlyBuild,
     actionOnlyFields,
@@ -485,6 +484,5 @@ ${actionOnlyFields.map((field) => `                    delete descriptors.${fiel
             return ctx;
         }`;
 };
-/* eslint-enable no-secrets/no-secrets */
 
 export default renderBuildContext;

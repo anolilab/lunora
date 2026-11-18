@@ -5,7 +5,6 @@
  * varies by project.
  */
 
-/* eslint-disable no-secrets/no-secrets -- emitted ShardDO source, not credentials */
 const DISPATCH_RUN_SOURCE = `// Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -372,7 +371,6 @@ __SUBSCRIPTION_RUN__
                 },
             };
         }`;
-/* eslint-enable no-secrets/no-secrets */
 
 /**
  * The committed-error marker for a post-commit schedule failure. Only a rooms app needs it: the

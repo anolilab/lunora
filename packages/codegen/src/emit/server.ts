@@ -112,7 +112,6 @@ interface EmitServerOptions {
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
-/* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each declaration-driven fragment behind its own flag/length check to assemble dense generated TS; the branching is the per-feature emission contract, not refactorable logic */
 const emitServer = ({
     agents = [],
     authClaims = [],
@@ -130,9 +129,9 @@ const emitServer = ({
     topics = [],
     useUmbrella = false,
     workflows = [],
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- emitter that gates each declaration-driven fragment behind its own flag/length check; the branching is the per-feature emission contract
 }: EmitServerOptions = {}): string => {
     const base = baseSpecifiers(useUmbrella);
-    /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
     // The union of declared storage buckets, narrowing `ctx.storage.bucket(name)`.
     const storageBucketUnion = buildStorageBucketNames(schema ?? { tables: [], vectorIndexes: [] }, storageRuleBuckets)
         .map((name) => JSON.stringify(name))
@@ -740,7 +739,6 @@ export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
     id: <T extends TableName>(table: T) => ColumnValidator<IdOfTable<T>, IdOfTable<T>>;
 };
 `;
-    /* eslint-enable no-secrets/no-secrets */
 
     return server;
 };

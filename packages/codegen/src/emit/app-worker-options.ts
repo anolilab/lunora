@@ -1,4 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- emitted builder source: the string fragments are framework API type names (e.g. "SchedulerDeclaration<Env>"), not credentials. */
 import type { TableIR } from "../ir";
 import type { ResolvedAppOptions } from "./app-helpers";
 import { hasLiveStreamMounts, hasShardedTables } from "./app-helpers";

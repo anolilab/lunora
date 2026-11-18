@@ -356,6 +356,16 @@ describe("argument-taint", () => {
             ).toBe(false);
         });
 
+        it("does not trust a ctx field destructured in the handler's parameters once the handler reassigns it", () => {
+            expect.assertions(2);
+
+            const sink = `SINK(\`\${auth.userId}/\${args.key ?? args.other}\`);`;
+
+            expect(isScopedByIdentity(sinkArgument(sink, "{ ctx: { auth }, args }"))).toBe(true);
+            // The handler sits in a `const` initializer, but a parameter is not a `const` binding.
+            expect(isScopedByIdentity(sinkArgument(`auth = { userId: args.victim };\n${sink}`, "{ ctx: { auth }, args }"))).toBe(false);
+        });
+
         it("refuses a prefix that is not the caller id itself, asserted or not", () => {
             expect.assertions(11);
 
