@@ -17,7 +17,7 @@ import type { TargetId } from "../../provision-contract";
 import { isTargetId, TARGET_IDS, TARGETS } from "../../provision-contract";
 import { constantTimeEqual } from "../../security/constant-time-equal";
 import type { RouterEnv } from "./shared";
-import { jsonError, otlpBearer, readJsonObject, rejected, requireContext, strictBearer } from "./shared";
+import { jsonError, nonEmptyString, otlpBearer, readJsonObject, rejected, requireContext, strictBearer } from "./shared";
 
 /** Whether `token` is the platform admin token. Fails closed: an unset token matches nothing. */
 const isAdminToken = (token: string, environment: RouterEnv): boolean =>
@@ -92,12 +92,6 @@ export const handleTenantRecursionRoute = async (request: Request, environment: 
     return Response.json(result);
 };
 
-/** The `POST /v1/tenants/preview-auth` body — which preview, and the password being tried. */
-interface PreviewAuthBody {
-    password?: string;
-    scriptName?: string;
-}
-
 /**
  * `POST /v1/tenants/preview-auth` — verify a submitted preview password.
  *
@@ -113,16 +107,15 @@ interface PreviewAuthBody {
 export const handlePreviewAuthRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    const body = (await request.json().catch(() => null)) as null | PreviewAuthBody;
+    const body = await readJsonObject(request);
+    const scriptName = nonEmptyString(body?.["scriptName"]);
+    const password = nonEmptyString(body?.["password"]);
 
-    if (!body?.scriptName || !body.password) {
-        return jsonError(400, "scriptName and password are required");
+    if (!scriptName || !password) {
+        return jsonError(400, "scriptName and password are required strings");
     }
 
-    const result = await context.runQuery<{ ok: boolean }>(internal.projects.verifyPreviewPassword, {
-        password: body.password,
-        scriptName: body.scriptName,
-    });
+    const result = await context.runQuery<{ ok: boolean }>(internal.projects.verifyPreviewPassword, { password, scriptName });
 
     return Response.json(result);
 };

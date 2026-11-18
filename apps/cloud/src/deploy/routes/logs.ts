@@ -2,7 +2,7 @@ import { api } from "../../../lunora/_generated/api";
 import { internal } from "../../../lunora/_generated/internal";
 import { constantTimeEqual } from "../../security/constant-time-equal";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
+import { jsonError, nonEmptyString, readJsonObject, rejected, requireContext } from "./shared";
 
 /** One line in a {@link LogsBody} batch — the framework's `type:"log"` event minus the transport keys (`logs.ingest` validates it). */
 interface LogsLine {
@@ -17,13 +17,6 @@ interface LogsLine {
     userId?: string;
 }
 
-interface LogsBody {
-    deployKey?: string;
-    lines?: LogsLine[];
-    organizationId?: string;
-    scriptName?: string;
-}
-
 /**
  * `POST /v1/logs/ingest` — tenant runtime log ingestion (GAPS.md B2). The
  * dispatch-namespace tail worker maps each tenant `ctx.log` console event onto a
@@ -33,18 +26,23 @@ interface LogsBody {
 export const handleLogsIngestRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    const body = (await request.json().catch(() => null)) as LogsBody | null;
+    const body = await readJsonObject(request);
+    const deployKey = nonEmptyString(body?.["deployKey"]);
+    const organizationId = nonEmptyString(body?.["organizationId"]);
+    const scriptName = nonEmptyString(body?.["scriptName"]);
+    const lines = body?.["lines"];
 
-    if (!body?.deployKey || !body.organizationId || !body.scriptName || !Array.isArray(body.lines)) {
-        return jsonError(400, "deployKey, organizationId, scriptName and lines are required");
+    if (!deployKey || !organizationId || !scriptName || !Array.isArray(lines)) {
+        return jsonError(400, "deployKey, organizationId and scriptName are required strings, and lines a list");
     }
 
     try {
+        // Each line's structured shape is the mutation's to validate.
         const result = await context.runMutation<{ ingested: number }>(api.logs.ingest, {
-            deployKey: body.deployKey,
-            lines: body.lines,
-            organizationId: body.organizationId,
-            scriptName: body.scriptName,
+            deployKey,
+            lines: lines as LogsLine[],
+            organizationId,
+            scriptName,
         });
 
         return Response.json(result);
@@ -52,16 +50,6 @@ export const handleLogsIngestRoute = async (request: Request, environment: Route
         return rejected(error, "log ingestion rejected");
     }
 };
-
-/** One per-script batch in a {@link TailBody}. */
-interface TailBatchBody {
-    lines?: unknown[];
-    scriptName?: string;
-}
-
-interface TailBody {
-    batches?: TailBatchBody[];
-}
 
 /**
  * `POST /v1/logs/tail` — platform ingest for the dispatch-namespace tail worker
@@ -91,9 +79,10 @@ export const handleLogsTailRoute = async (request: Request, environment: RouterE
         return jsonError(403, "invalid tail secret");
     }
 
-    const body = (await request.json().catch(() => null)) as null | TailBody;
+    const body = await readJsonObject(request);
+    const batches: unknown = body?.["batches"];
 
-    if (!body || !Array.isArray(body.batches)) {
+    if (!Array.isArray(batches)) {
         return jsonError(400, "batches are required");
     }
 
@@ -103,15 +92,19 @@ export const handleLogsTailRoute = async (request: Request, environment: RouterE
 
     // One batch at a time, each on its own: a script whose ingest fails — over a
     // cap, or a store error — never costs another script (another org's) its lines.
-    for (const batch of body.batches) {
-        if (!batch.scriptName || !Array.isArray(batch.lines) || batch.lines.length === 0) {
+    for (const entry of batches as unknown[]) {
+        const batch = typeof entry === "object" && entry !== null ? (entry as { lines?: unknown; scriptName?: unknown }) : undefined;
+        const scriptName = nonEmptyString(batch?.scriptName);
+        const lines = batch?.lines;
+
+        if (!scriptName || !Array.isArray(lines) || lines.length === 0) {
             continue;
         }
 
         try {
             // Resolving the script belongs inside the try too: a failed lookup costs only this batch.
             // eslint-disable-next-line no-await-in-loop -- bounded per-flush script set; sequential keeps the resolver simple
-            const resolved = await context.runQuery<{ organizationId: string } | null>(internal.logs.orgForScript, { scriptName: batch.scriptName });
+            const resolved = await context.runQuery<{ organizationId: string } | null>(internal.logs.orgForScript, { scriptName });
 
             if (!resolved) {
                 continue;
@@ -121,9 +114,9 @@ export const handleLogsTailRoute = async (request: Request, environment: RouterE
 
             // eslint-disable-next-line no-await-in-loop -- see above
             const result = await context.runMutation<{ ingested: number }>(internal.logs.ingestInternal, {
-                lines: batch.lines,
+                lines,
                 organizationId: resolved.organizationId,
-                scriptName: batch.scriptName,
+                scriptName,
             });
 
             ingested += result.ingested;

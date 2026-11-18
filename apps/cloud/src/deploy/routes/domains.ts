@@ -18,16 +18,16 @@ import type { DomainCertificate, TargetDriver } from "../../targets/driver";
 import { registeredFleet, resolveTargetDriver } from "../../targets/registry";
 import { placementFor } from "./deploy";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
+import { isOptionalString, jsonError, nonEmptyString, readJsonObject, rejected, requireContext } from "./shared";
 
-interface DomainBody {
-    hostname?: string;
-    id?: string;
-    organizationId?: string;
-    projectId?: string; // secret-scanner:allow -- domain field name
-    redirectStatusCode?: number;
-    redirectTo?: string;
-}
+/** The `{ id, organizationId }` a domain verify or remove names, or `undefined` when either is not a non-empty string. */
+const readDomainTarget = async (request: Request): Promise<undefined | { id: string; organizationId: string }> => {
+    const body = await readJsonObject(request);
+    const id = nonEmptyString(body?.["id"]);
+    const organizationId = nonEmptyString(body?.["organizationId"]);
+
+    return id && organizationId ? { id, organizationId } : undefined;
+};
 
 interface DomainRowLike {
     certificateIssuer?: null | string;
@@ -78,29 +78,38 @@ const notifyDomainsChanged = async (driver: TargetDriver | undefined, hostname: 
 export const handleDomainAddRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    const body = (await request.json().catch(() => null)) as DomainBody | null;
+    const body = await readJsonObject(request);
+    const hostname = nonEmptyString(body?.["hostname"]);
+    const organizationId = nonEmptyString(body?.["organizationId"]);
+    const projectId = nonEmptyString(body?.["projectId"]);
+    const redirectTo = body?.["redirectTo"];
+    const redirectStatusCode = body?.["redirectStatusCode"];
 
-    if (!body?.hostname || !body.organizationId || !body.projectId) {
-        return jsonError(400, "hostname, organizationId and projectId are required");
+    if (!hostname || !organizationId || !projectId) {
+        return jsonError(400, "hostname, organizationId and projectId are required strings");
+    }
+
+    if (!isOptionalString(redirectTo) || (redirectStatusCode !== undefined && typeof redirectStatusCode !== "number")) {
+        return jsonError(400, "redirectTo, when given, is a string, and redirectStatusCode a number");
     }
 
     let result: { id: string; txtName: string; txtToken: string };
 
     try {
         result = await context.runMutation<{ id: string; txtName: string; txtToken: string }>(api.domains.add, {
-            hostname: body.hostname,
-            organizationId: body.organizationId,
-            projectId: body.projectId, // secret-scanner:allow -- domain field name
-            redirectStatusCode: body.redirectStatusCode,
-            redirectTo: body.redirectTo,
+            hostname,
+            organizationId,
+            projectId, // secret-scanner:allow -- domain field name
+            redirectStatusCode,
+            redirectTo,
         });
     } catch (error) {
         return rejected(error, "domain add failed");
     }
 
-    const driver = await driverFor(context, environment, body.organizationId, body.projectId).catch(() => undefined);
+    const driver = await driverFor(context, environment, organizationId, projectId).catch(() => undefined);
 
-    await notifyDomainsChanged(driver, body.hostname);
+    await notifyDomainsChanged(driver, hostname);
 
     return Response.json(result);
 };
@@ -130,10 +139,10 @@ const issueFor = async (driver: TargetDriver, domain: DomainRowLike): Promise<Do
 export const handleDomainVerifyRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    const body = (await request.json().catch(() => null)) as DomainBody | null;
+    const body = await readDomainTarget(request);
 
-    if (!body?.id || !body.organizationId) {
-        return jsonError(400, "id and organizationId are required");
+    if (!body) {
+        return jsonError(400, "id and organizationId are required strings");
     }
 
     try {
@@ -188,10 +197,10 @@ export const handleDomainVerifyRoute = async (request: Request, environment: Rou
  */
 export const handleDomainRemoveRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as DomainBody | null;
+    const body = await readDomainTarget(request);
 
-    if (!body?.id || !body.organizationId) {
-        return jsonError(400, "id and organizationId are required");
+    if (!body) {
+        return jsonError(400, "id and organizationId are required strings");
     }
 
     let target: RemovalTarget;

@@ -3,12 +3,7 @@ import { exportTenantSnapshot, TenantAdminError, tenantSender } from "../../back
 import type { StoredAdminToken } from "../admin-token";
 import { resolveAdminToken } from "../admin-token";
 import type { RouterEnv } from "./shared";
-import { jsonError, otlpBearer, rejected, requireContext } from "./shared";
-
-/** The `POST /v1/eject` body — which deployment to package. */
-interface EjectBody {
-    deploymentId?: string;
-}
+import { jsonError, nonEmptyString, otlpBearer, readJsonObject, rejected, requireContext } from "./shared";
 
 /**
  * `POST /v1/eject` — the no-lock-in exit hatch, over a deploy key (GAPS.md D2).
@@ -37,9 +32,10 @@ export const handleEjectRoute = async (request: Request, environment: RouterEnv)
         return jsonError(401, "missing Authorization: Bearer <deploy key>");
     }
 
-    const body = (await request.json().catch(() => null)) as EjectBody | null;
+    const body = await readJsonObject(request);
+    const deploymentId = nonEmptyString(body?.["deploymentId"]);
 
-    if (!body?.deploymentId) {
+    if (!deploymentId) {
         return jsonError(400, "deploymentId is required");
     }
 
@@ -52,7 +48,7 @@ export const handleEjectRoute = async (request: Request, environment: RouterEnv)
     let target: (StoredAdminToken & { organizationId: string; projectSlug: string; scriptName: string; url: string }) | null;
 
     try {
-        target = await context.runQuery(internal.deployments.ejectTarget, { deployKey: key, deploymentId: body.deploymentId });
+        target = await context.runQuery(internal.deployments.ejectTarget, { deployKey: key, deploymentId });
     } catch (error) {
         return rejected(error, "eject denied");
     }

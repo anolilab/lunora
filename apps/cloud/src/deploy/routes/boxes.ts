@@ -29,7 +29,7 @@ import { sha256Hex } from "../keys";
 import { createReleaseStore } from "../release-store";
 import type { RouteParameters } from "../route-path";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
+import { jsonError, nonEmptyString, readJsonObject, rejected, requireContext } from "./shared";
 
 /** What the box routes read off the Worker env, beyond the router's own. */
 export type BoxRouteEnvironment = {
@@ -159,10 +159,14 @@ export const handleBoxConnectRoute = (request: Request, environment: BoxRouterEn
     return boxSession(namespace, boxId).fetch(new Request(`https://box-session.internal/connect?box=${encodeURIComponent(boxId)}`, request));
 };
 
-interface RevokeBody {
-    id?: string;
-    organizationId?: string;
-}
+/** The `{ id, organizationId }` a box revoke or diagnose names, or `undefined` when either is not a non-empty string. */
+const readBoxTarget = async (request: Request): Promise<undefined | { id: string; organizationId: string }> => {
+    const body = await readJsonObject(request);
+    const id = nonEmptyString(body?.["id"]);
+    const organizationId = nonEmptyString(body?.["organizationId"]);
+
+    return id && organizationId ? { id, organizationId } : undefined;
+};
 
 /**
  * `POST /v1/boxes/revoke` — the one way to revoke a box: under the caller's
@@ -174,10 +178,10 @@ interface RevokeBody {
  */
 export const handleBoxRevokeRoute = async (request: Request, environment: BoxRouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as null | RevokeBody;
+    const body = await readBoxTarget(request);
 
-    if (!body?.id || !body.organizationId) {
-        return jsonError(400, "id and organizationId are required");
+    if (!body) {
+        return jsonError(400, "id and organizationId are required strings");
     }
 
     let revoked: { ipv4?: string; ipv6?: string; slug: string };
@@ -215,10 +219,10 @@ export const handleBoxRevokeRoute = async (request: Request, environment: BoxRou
  */
 export const handleBoxDiagnoseRoute = async (request: Request, environment: BoxRouterEnv): Promise<Response> => {
     const context = requireContext(environment);
-    const body = (await request.json().catch(() => null)) as null | RevokeBody;
+    const body = await readBoxTarget(request);
 
-    if (!body?.id || !body.organizationId) {
-        return jsonError(400, "id and organizationId are required");
+    if (!body) {
+        return jsonError(400, "id and organizationId are required strings");
     }
 
     const namespace = environment.BOX_SESSION;

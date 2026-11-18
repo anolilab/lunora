@@ -8,16 +8,16 @@ import { ORG_ADMINS_DESTINATION } from "../../telemetry/recipients";
 import { createCloudflareTelemetryStore } from "../../telemetry/store";
 import { OtlpBodyTooLargeError, readAllCapped } from "./otlp";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
+import { isOptionalString, jsonError, nonEmptyString, rejected, requireContext } from "./shared";
 
 /**
  * `POST /v1/telemetry` body — an OTLP `ExportTraceServiceRequest` (its
  * `resourceSpans`) plus the deploy-key/org fields that authenticate + route it.
  */
 interface TelemetryBody extends OtlpTracePayload {
-    deployKey?: string;
-    deploymentId?: string;
-    organizationId?: string;
+    deployKey?: unknown;
+    deploymentId?: unknown;
+    organizationId?: unknown;
 }
 
 /**
@@ -54,8 +54,11 @@ export const handleTelemetryRoute = async (request: Request, environment: Router
         return error instanceof OtlpBodyTooLargeError ? jsonError(413, error.message) : jsonError(400, "unreadable request body");
     }
 
-    if (!body?.deployKey || !body.organizationId) {
-        return jsonError(400, "deployKey and organizationId are required");
+    const deployKey = nonEmptyString(body?.deployKey);
+    const organizationId = nonEmptyString(body?.organizationId);
+
+    if (!body || !deployKey || !organizationId || !isOptionalString(body.deploymentId)) {
+        return jsonError(400, "deployKey and organizationId are required strings");
     }
 
     const events = decodeTelemetryEvents(body);
@@ -66,20 +69,20 @@ export const handleTelemetryRoute = async (request: Request, environment: Router
 
     try {
         const result = await context.runMutation<{ alerts: AlertDelivery[]; incidents: number; issues: number }>(api.telemetry.ingest, {
-            deployKey: body.deployKey,
+            deployKey,
             deploymentId: body.deploymentId,
             // `telemetry.ingest` refuses more than 500 events outright; trim like the observations.
             events: events.slice(0, 500),
             observations,
-            organizationId: body.organizationId,
+            organizationId,
         });
 
         const store = createCloudflareTelemetryStore(environment);
 
-        store.recordCounts({ incidents: result.incidents, issues: result.issues, organizationId: body.organizationId });
+        store.recordCounts({ incidents: result.incidents, issues: result.issues, organizationId });
         await store.archiveEvents(events).catch(() => undefined);
         // Tier every span to the columnar archive (scales past D1's hot window).
-        await store.archiveSpans(observations, body.organizationId ?? "").catch(() => undefined);
+        await store.archiveSpans(observations, organizationId).catch(() => undefined);
 
         // Deliver any alerts the ingest fired (best-effort), then stamp the sent ones
         // delivered. An "owners & admins" alert is left `firing` for the drain, which
@@ -103,14 +106,14 @@ export const handleTelemetryRoute = async (request: Request, environment: Router
             await context
                 .runMutation(internal.alerts.markDelivered, {
                     ids: delivered,
-                    organizationId: body.organizationId,
+                    organizationId,
                 })
                 .catch((error: unknown) => {
                     // eslint-disable-next-line no-console -- delivered-but-unmarked alerts will re-fire; surface it
                     console.error("[alerts] markDelivered failed; alerts may be re-delivered", {
                         count: delivered.length,
                         error: error instanceof Error ? error.message : String(error),
-                        organizationId: body.organizationId,
+                        organizationId,
                     });
                 });
         }

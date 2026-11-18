@@ -91,6 +91,15 @@ export const readJsonObject = async (request: Request): Promise<Record<string, u
     return typeof body === "object" && body !== null && !Array.isArray(body) ? (body as Record<string, unknown>) : undefined;
 };
 
+/**
+ * A body field when it is a non-empty string, else `undefined`. A truthiness check alone lets a
+ * number, object or array through to a mutation or a seal that expects a string.
+ */
+export const nonEmptyString = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
+
+/** Whether an optional body field is absent or a string. */
+export const isOptionalString = (value: unknown): value is string | undefined => value === undefined || typeof value === "string";
+
 /** Thrown by {@link requireContext}; caught by {@link withContext} at the route boundary. */
 export class MissingContextError extends Error {
     public constructor() {

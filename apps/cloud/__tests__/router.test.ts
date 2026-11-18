@@ -545,3 +545,80 @@ describe("non-object JSON bodies", () => {
         expect(runMutation).not.toHaveBeenCalled();
     });
 });
+
+describe("mistyped JSON body fields", () => {
+    const routerEnv = (runMutation: ActionPort, runQuery: ActionPort): Record<string, unknown> => {
+        return {
+            __lunoraCtx: makeCtx({ runMutation, runQuery }),
+            LUNORA_ADMIN_TOKEN: "admin-secret",
+            LUNORA_TAIL_SECRET: "tail-secret",
+            // A 32-byte key, base64: the secret route checks it is configured before it reads the body.
+            SECRET_ENCRYPTION_KEY: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        };
+    };
+
+    const SECRET = { name: "API_URL", organizationId: "org_1", projectId: "proj_1", value: "https://api.example.com" };
+
+    // Each field the handler hands on is a string (or, where noted, a number); a wrong type is the caller's 400.
+    it.each([
+        ["/v1/secrets", { ...SECRET, name: 7 }],
+        ["/v1/secrets", { ...SECRET, projectId: { $ne: "" } }],
+        ["/v1/secrets", { ...SECRET, organizationId: ["org_1"] }],
+        ["/v1/secrets", { ...SECRET, environment: "staging" }],
+        ["/v1/secrets", { ...SECRET, environment: 1 }],
+        ["/v1/domains", { hostname: "app.example.com", organizationId: "org_1", projectId: "proj_1", redirectTo: 5 }],
+        ["/v1/domains", { hostname: "app.example.com", organizationId: "org_1", projectId: "proj_1", redirectStatusCode: "301" }],
+        ["/v1/domains", { hostname: ["app.example.com"], organizationId: "org_1", projectId: "proj_1" }],
+        ["/v1/domains/remove", { id: 1, organizationId: "org_1" }],
+        ["/v1/boxes/revoke", { id: { id: "box_1" }, organizationId: "org_1" }],
+        ["/v1/notification-channels", { destination: "123", kind: "telegram", name: "ops", organizationId: "org_1", secret: 42 }],
+        ["/v1/invitations/send", { email: 5, organizationId: "org_1" }],
+        ["/v1/usage", { deployKey: "dk_1", kind: 3, organizationId: "org_1", periodStart: 0, quantity: 1 }],
+        ["/v1/usage", { deployKey: "dk_1", deploymentId: 9, kind: "requests", organizationId: "org_1", periodStart: 0, quantity: 1 }],
+        ["/v1/logs/ingest", { deployKey: "dk_1", lines: [], organizationId: "org_1", scriptName: 4 }],
+    ])("400s POST %s with %j before anything runs", async (path, body) => {
+        const runMutation = vi.fn<ActionPort>();
+        const runQuery = vi.fn<ActionPort>();
+
+        const response = await createDeployRouter().fetch(post(path, body), routerEnv(runMutation, runQuery));
+
+        expect(response.status).toBe(400);
+        expect(runMutation).not.toHaveBeenCalled();
+        expect(runQuery).not.toHaveBeenCalled();
+    });
+
+    it("400s a preview password that is not a string", async () => {
+        const ADMIN_BEARER = "admin-secret";
+        const runQuery = vi.fn<ActionPort>();
+        const request = new Request("https://control.lunora.app/v1/tenants/preview-auth", {
+            body: JSON.stringify({ password: 1234, scriptName: "acme-preview" }),
+            headers: {
+                authorization: `Bearer ${ADMIN_BEARER}`,
+                "cf-connecting-ip": "dispatcher",
+                "content-type": "application/json",
+            },
+            method: "POST",
+        });
+
+        const response = await createDeployRouter().fetch(request, routerEnv(vi.fn<ActionPort>(), runQuery));
+
+        expect(response.status).toBe(400);
+        expect(runQuery).not.toHaveBeenCalled();
+    });
+
+    it("skips a tail batch that is not an object or names no string script, and ingests the rest", async () => {
+        const runQuery = vi.fn<ActionPort>().mockResolvedValue({ organizationId: "org_9" });
+        const runMutation = vi.fn<ActionPort>().mockResolvedValue({ ingested: 1 });
+        const lines = [{ level: "info", message: "a" }];
+
+        const response = await createDeployRouter().fetch(
+            tailPost({ batches: [null, { lines, scriptName: 7 }, { lines, scriptName: "acme" }] }, "tail-secret"),
+            routerEnv(runMutation, runQuery),
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toStrictEqual({ failed: 0, ingested: 1, scripts: 1 });
+        expect(runQuery).toHaveBeenCalledTimes(1);
+        expect(runQuery.mock.calls[0]?.[1]).toStrictEqual({ scriptName: "acme" });
+    });
+});

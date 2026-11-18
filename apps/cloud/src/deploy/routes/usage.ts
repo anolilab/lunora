@@ -11,11 +11,10 @@
  */
 import { api } from "../../../lunora/_generated/api";
 import { internal } from "../../../lunora/_generated/internal";
-import type { UsageMeter as UsageKind } from "../../billing/spend";
 import { readAccountCosts } from "../../cloudflare-accounts/costs";
 import type { CloudflareAccountRow } from "../../cloudflare-accounts/store";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext, strictBearer } from "./shared";
+import { isOptionalString, jsonError, nonEmptyString, readJsonObject, rejected, requireContext, strictBearer } from "./shared";
 
 /** Product lines a cost read returns at most, and the longest product label kept — both from Cloudflare's answer. */
 const MAX_COST_PRODUCTS = 100;
@@ -111,15 +110,6 @@ export const handleCloudflareCostsRoute = async (request: Request, environment: 
     });
 };
 
-interface UsageBody {
-    deployKey?: string;
-    deploymentId?: string;
-    kind?: UsageKind;
-    organizationId?: string;
-    periodStart?: number;
-    quantity?: number;
-}
-
 /**
  * `POST /v1/usage` — platform metering ingestion (§4). Deploy-key authenticated
  * (the `usage.ingest` mutation verifies the key); the tenant data plane reports
@@ -128,20 +118,27 @@ interface UsageBody {
 export const handleUsageRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    const usage = (await request.json().catch(() => null)) as UsageBody | null;
+    const usage = await readJsonObject(request);
+    const deployKey = nonEmptyString(usage?.["deployKey"]);
+    const organizationId = nonEmptyString(usage?.["organizationId"]);
+    const kind = nonEmptyString(usage?.["kind"]);
+    const deploymentId = usage?.["deploymentId"];
+    const quantity = usage?.["quantity"];
+    const periodStart = usage?.["periodStart"];
 
-    if (!usage?.deployKey || !usage.organizationId || !usage.kind || typeof usage.quantity !== "number" || typeof usage.periodStart !== "number") {
-        return jsonError(400, "deployKey, organizationId, kind, quantity and periodStart are required");
+    if (!deployKey || !organizationId || !kind || typeof quantity !== "number" || typeof periodStart !== "number" || !isOptionalString(deploymentId)) {
+        return jsonError(400, "deployKey, organizationId and kind are required strings, quantity and periodStart numbers");
     }
 
     try {
         const id = await context.runMutation<string>(api.usage.ingest, {
-            deploymentId: usage.deploymentId,
-            deployKey: usage.deployKey,
-            kind: usage.kind,
-            organizationId: usage.organizationId,
-            periodStart: usage.periodStart,
-            quantity: usage.quantity,
+            deploymentId,
+            deployKey,
+            // Which meters exist is the mutation's validator to decide.
+            kind,
+            organizationId,
+            periodStart,
+            quantity,
         });
 
         return Response.json({ id });

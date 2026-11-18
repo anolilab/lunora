@@ -4,19 +4,13 @@ import { api } from "../../../lunora/_generated/api";
 import { currentAuth } from "../../auth";
 import { sendInvitationEmail } from "../../mail/notify";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected, requireContext } from "./shared";
-
-interface InviteBody {
-    email?: string;
-    organizationId?: string;
-    role?: string;
-}
+import { jsonError, nonEmptyString, readJsonObject, rejected, requireContext } from "./shared";
 
 type InviteRole = "admin" | "member" | "owner" | "viewer";
 
 const INVITE_ROLES: ReadonlyArray<InviteRole> = ["admin", "member", "owner", "viewer"];
 
-const isInviteRole = (value: string): value is InviteRole => (INVITE_ROLES as ReadonlyArray<string>).includes(value);
+const isInviteRole = (value: unknown): value is InviteRole => typeof value === "string" && (INVITE_ROLES as ReadonlyArray<string>).includes(value);
 
 /**
  * A sign-up link for an invited address with no account yet, or `undefined` when
@@ -67,14 +61,16 @@ const signUpInvitationFor = async (origin: string, email: string): Promise<strin
 export const handleInviteRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = requireContext(environment);
 
-    const invite = (await request.json().catch(() => null)) as InviteBody | null;
+    const body = await readJsonObject(request);
+    const organizationId = nonEmptyString(body?.["organizationId"]);
+    const email = nonEmptyString(body?.["email"]);
 
-    if (!invite?.organizationId || !invite.email) {
-        return jsonError(400, "organizationId and email are required");
+    if (!organizationId || !email) {
+        return jsonError(400, "organizationId and email are required strings");
     }
 
     // The dashboard sends no role; an invitee joins as a member unless the caller names one.
-    const role = invite.role ?? "member";
+    const role: unknown = body?.["role"] ?? "member";
 
     if (!isInviteRole(role)) {
         return jsonError(400, "role must be one of owner, admin, member, viewer");
@@ -84,8 +80,8 @@ export const handleInviteRoute = async (request: Request, environment: RouterEnv
 
     try {
         ({ token } = await context.runMutation<{ id: string; token: string }>(api.invitations.invite, {
-            email: invite.email,
-            organizationId: invite.organizationId,
+            email,
+            organizationId,
             role,
         }));
     } catch (error) {
@@ -96,9 +92,9 @@ export const handleInviteRoute = async (request: Request, environment: RouterEnv
     try {
         const { origin } = new URL(request.url);
         const acceptUrl = `${origin}/accept-invite?token=${encodeURIComponent(token)}`;
-        const signUpUrl = await signUpInvitationFor(origin, invite.email);
+        const signUpUrl = await signUpInvitationFor(origin, email);
 
-        await sendInvitationEmail(environment, { acceptUrl, ...(signUpUrl === undefined ? {} : { signUpUrl }), to: invite.email });
+        await sendInvitationEmail(environment, { acceptUrl, ...(signUpUrl === undefined ? {} : { signUpUrl }), to: email });
     } catch {
         return jsonError(502, "invitation was created but its email could not be sent");
     }

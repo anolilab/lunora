@@ -3,18 +3,9 @@ import { isNotificationEvent, isNotificationKind } from "../../notifications/eve
 import { encryptSecret } from "../../secrets/crypto";
 import { randomSecret } from "../keys";
 import type { RouterEnv } from "./shared";
-import { jsonError, rejected } from "./shared";
+import { isOptionalString, jsonError, nonEmptyString, readJsonObject, rejected } from "./shared";
 
 /** Body of `POST /v1/notification-channels`. Untrusted until narrowed below. */
-interface NotificationChannelBody {
-    destination?: string;
-    events?: unknown[];
-    kind?: unknown;
-    name?: string;
-    organizationId?: string;
-    secret?: string;
-}
-
 /** Seal a channel's secret at the edge. A response to return instead when the key is missing or sealing fails. */
 const sealChannelSecret = async (
     environment: RouterEnv,
@@ -49,15 +40,25 @@ export const handleNotificationChannelRoute = async (request: Request, environme
         return jsonError(500, "lunora context unavailable");
     }
 
-    const body = (await request.json().catch(() => null)) as NotificationChannelBody | null;
+    const body = await readJsonObject(request);
+    const organizationId = nonEmptyString(body?.["organizationId"]);
+    const name = nonEmptyString(body?.["name"]);
+    const destination = nonEmptyString(body?.["destination"]);
+    const kind = body?.["kind"];
+    const botToken = body?.["secret"];
+    const listed = body?.["events"];
 
-    if (!body?.organizationId || !body.name || !body.destination || !isNotificationKind(body.kind)) {
+    if (!organizationId || !name || !destination || !isNotificationKind(kind)) {
         return jsonError(400, "organizationId, name, kind and destination are required");
     }
 
-    const events = Array.isArray(body.events) ? body.events.filter(isNotificationEvent) : undefined;
-    const signingKey = body.kind === "webhook" ? randomSecret() : undefined;
-    const secret = body.kind === "telegram" ? body.secret?.trim() : signingKey;
+    if (!isOptionalString(botToken)) {
+        return jsonError(400, "secret, when given, is a string");
+    }
+
+    const events = Array.isArray(listed) ? listed.filter(isNotificationEvent) : undefined;
+    const signingKey = kind === "webhook" ? randomSecret() : undefined;
+    const secret = kind === "telegram" ? botToken?.trim() : signingKey;
     const sealing = await sealChannelSecret(environment, secret);
 
     if ("response" in sealing) {
@@ -68,11 +69,11 @@ export const handleNotificationChannelRoute = async (request: Request, environme
 
     try {
         const id = await context.runMutation(api.notifications.createChannel, {
-            destination: body.destination,
+            destination,
             ...(events === undefined ? {} : { events }),
-            kind: body.kind,
-            name: body.name,
-            organizationId: body.organizationId,
+            kind,
+            name,
+            organizationId,
             ...(sealed === undefined ? {} : { secretCiphertext: sealed.ciphertext, secretIv: sealed.iv }),
         });
 
