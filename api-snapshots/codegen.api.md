@@ -127,6 +127,7 @@ interface CodegenOptions {
         directory: string;
     };
     target?: string;
+    workerEntry?: string;
     wranglerQueueProducers: ReadonlyArray<WranglerQueueProducerIR>;
     wranglerVariables?: ReadonlyArray<WranglerVariableIR>;
 }
