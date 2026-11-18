@@ -3160,6 +3160,7 @@ interface WranglerConfigShape {
         tag?: string;
     }>;
     name?: string;
+    observability?: WranglerObservability;
     queues?: {
         consumers?: ReadonlyArray<WranglerQueueConsumer>;
         producers?: ReadonlyArray<{
