@@ -454,6 +454,9 @@ export const deployTables = {
         deploymentId: v.id("deployments"),
         // Bounded failure reason: the tenant's status + error message, never data.
         error: v.optional(v.string()),
+        // Last sign of life from the request running a `running` row, written every few
+        // minutes while it makes progress: what tells a long operation from a dead one.
+        heartbeatAt: v.optional(v.number()),
         // R2 key of the snapshot (backup rows); the source snapshot's key (restore rows).
         key: v.string(),
         // Off-site copy of a backup row's snapshot (`src/backup/offsite.ts`), set

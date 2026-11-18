@@ -30,14 +30,15 @@ import type { TenantBackupRecord } from "./tenant-policy";
 import {
     backupRetentionFor,
     isDueForBackup,
+    isInFlight,
     lastSuccessAt,
-    OPERATION_STALE_MS,
     RECORD_RETENTION_MS,
     snapshotsPastRetention,
     tenantBackupKey,
+    throttledHeartbeat,
 } from "./tenant-policy";
 import type { TenantBackupBucket, TenantSend } from "./tenant-transport";
-import { captureTenantSnapshot } from "./tenant-transport";
+import { captureTenantSnapshot, withHeartbeat } from "./tenant-transport";
 
 /** A live production deployment the sweep can snapshot. */
 export interface BackupTargetRow {
@@ -111,7 +112,7 @@ export const offsiteFields = (outcome: CopyOutcome | undefined): { offsiteError?
 
 /** Mark `running` rows whose owner died (request killed, isolate evicted) as failed, so they stop blocking their project. */
 const reapStale = async (database: ControlPlaneDatabase, rows: StoredBackupRow[], now: number): Promise<number> => {
-    const stale = rows.filter((row) => row.status === "running" && row.createdAt <= now - OPERATION_STALE_MS);
+    const stale = rows.filter((row) => row.status === "running" && !isInFlight(row, now));
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- a handful of rows at most; sequential keeps the writer simple
@@ -147,7 +148,13 @@ const snapshotOne = async (deps: TenantBackupSweepDeps, deployment: BackupTarget
             throw new Error("deployment has no usable admin token");
         }
 
-        const { bytes, offsite } = await captureTenantSnapshot({ bucket, key, ...(deps.offsite ? { offsite: deps.offsite } : {}), send });
+        const beat = throttledHeartbeat(() => database.patch("tenantBackups", id, { heartbeatAt: Date.now() }));
+        const { bytes, offsite } = await captureTenantSnapshot({
+            bucket,
+            key,
+            ...(deps.offsite ? { offsite: deps.offsite } : {}),
+            send: withHeartbeat(send, beat),
+        });
 
         if (offsite?.status === "failed") {
             deps.log?.(`[tenant-backup] ${deployment.alias} off-site copy failed: ${offsite.error ?? "unknown error"}`);

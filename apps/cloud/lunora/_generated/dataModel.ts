@@ -332,6 +332,7 @@ export interface Doc_tenantBackups {
     createdAt: number;
     deploymentId: Id<"deployments">;
     error?: string | null;
+    heartbeatAt?: number | null;
     key: string;
     offsiteError?: string | null;
     offsiteStatus?: "succeeded" | "failed" | null;
@@ -1413,6 +1414,7 @@ export interface Insert_tenantBackups {
     createdAt: number;
     deploymentId: Id<"deployments">;
     error?: string;
+    heartbeatAt?: number;
     key: string;
     offsiteError?: string;
     offsiteStatus?: "succeeded" | "failed";

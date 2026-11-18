@@ -22,6 +22,33 @@ import { copyObject, uploadStream } from "./multipart";
 /** One call into a tenant Worker's admin API, with the admin bearer already attached. */
 export type TenantSend = (path: string, body: string, contentType: "application/json" | "application/x-ndjson") => Promise<Response>;
 
+/**
+ * `send`, calling `beat` on every call and on every chunk of every response body
+ * as it is read: the steady progress of a snapshot streaming out of the tenant or
+ * a restore staging batch after batch, which is what keeps the operation's row
+ * from being reaped as dead while it runs.
+ */
+export const withHeartbeat =
+    (send: TenantSend, beat: () => Promise<void>): TenantSend =>
+    async (path, body, contentType) => {
+        await beat();
+
+        const response = await send(path, body, contentType);
+
+        if (response.body === null) {
+            return response;
+        }
+
+        const beating = new TransformStream<Uint8Array, Uint8Array>({
+            transform: async (chunk, controller) => {
+                await beat();
+                controller.enqueue(chunk);
+            },
+        });
+
+        return new Response(response.body.pipeThrough(beating), response);
+    };
+
 /** The subset of an R2 bucket binding tenant backups use. */
 export interface TenantBackupBucket extends MultipartBucket {
     delete: (keys: string | string[]) => Promise<void>;

@@ -142,6 +142,7 @@ export interface InternalApiTypes {
         beginBackup: FunctionReference<"mutation", { organizationId: Id<"organizations">; projectId: Id<"projects"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { backupId: string & { readonly __table: "tenantBackups"; }; key: string }>;
         beginRestore: FunctionReference<"mutation", { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }, { adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { preRestoreBackupId: string & { readonly __table: "tenantBackups"; }; preRestoreKey: string; restoreId: string & { readonly __table: "tenantBackups"; }; sourceKey: string }>;
         finish: FunctionReference<"mutation", { bytes?: number; error?: unknown; id: Id<"tenantBackups">; offsiteError?: unknown; offsiteStatus?: "succeeded" | "failed"; organizationId: Id<"organizations">; restoreConflicts?: number; restoreDeleted?: Record<string, number>; restoreInserted?: number; restoreRowErrors?: number; status: "succeeded" | "failed" }, null>;
+        heartbeat: FunctionReference<"mutation", { id: Id<"tenantBackups">; organizationId: Id<"organizations"> }, null>;
     };
     uptime: {
         prune: FunctionReference<"mutation", {}, { pruned: number; }>;
@@ -292,6 +293,7 @@ export const internal: InternalApiTypes = {
         beginBackup: { __lunoraRef: "tenant_backups:beginBackup" },
         beginRestore: { __lunoraRef: "tenant_backups:beginRestore" },
         finish: { __lunoraRef: "tenant_backups:finish" },
+        heartbeat: { __lunoraRef: "tenant_backups:heartbeat" },
     },
     uptime: {
         prune: { __lunoraRef: "uptime:prune" },

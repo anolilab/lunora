@@ -20,6 +20,8 @@ export type TenantBackupStatus = "failed" | "running" | "succeeded";
 export interface TenantBackupRecord {
     _id: string;
     createdAt: number;
+    /** Last sign of life from the request running the operation; D1 answers SQL NULL for one never written. */
+    heartbeatAt?: null | number;
     key?: string;
     operation: TenantBackupOperation;
     projectId: string;
@@ -35,12 +37,45 @@ export const BACKUP_INTERVAL_MS = 24 * HOUR_MS;
 export const BACKUP_RETRY_MS = 6 * HOUR_MS;
 
 /**
- * A `running` row older than this is treated as dead — the request or sweep that
- * owned it was killed mid-flight — so it no longer blocks the project and the
- * sweep marks it failed. Comfortably longer than a restore of the largest
- * snapshot the control plane will write.
+ * A `running` row with no sign of life for this long is treated as dead — the
+ * request or sweep that owned it was killed mid-flight — so it no longer blocks
+ * the project and the sweep marks it failed. A live operation proves itself with
+ * {@link HEARTBEAT_INTERVAL_MS} heartbeats, so this bounds how long a dead one
+ * blocks, not how long a live one may run.
  */
 export const OPERATION_STALE_MS = 30 * 60 * 1000;
+
+/** How often a running operation records that it is still alive: well inside {@link OPERATION_STALE_MS}. */
+export const HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Whether a row is an operation still in flight: `running`, and created or heard from
+ * within {@link OPERATION_STALE_MS}. Age alone is not death — a restore of a large
+ * snapshot can run past it while it keeps writing to the tenant.
+ */
+export const isInFlight = (row: TenantBackupRecord, now: number): boolean =>
+    row.status === "running" && Math.max(row.createdAt, row.heartbeatAt ?? 0) > now - OPERATION_STALE_MS;
+
+/**
+ * A heartbeat to call on every sign of progress: it runs `write` once
+ * {@link HEARTBEAT_INTERVAL_MS} has passed since the last one (or since it was
+ * made), so progress in small steps costs one write per interval. A failed
+ * write is not the operation's failure; the next beat tries again.
+ */
+export const throttledHeartbeat = (write: () => Promise<unknown>, clock: () => number = Date.now): (() => Promise<void>) => {
+    let last = clock();
+
+    return async () => {
+        const now = clock();
+
+        if (now - last < HEARTBEAT_INTERVAL_MS) {
+            return;
+        }
+
+        last = now;
+        await write().catch(() => undefined);
+    };
+};
 
 /** Failed attempts and restore records are dropped once this old; they hold no data. */
 export const RECORD_RETENTION_MS = 30 * 24 * HOUR_MS;
@@ -64,9 +99,9 @@ export const tenantBackupKey = (organizationId: string, alias: string, now: numb
 export const backupRetentionFor = (plan: string | undefined): number =>
     LUNORA_CLOUD_PLANS.plans[plan ?? "free"]?.limits?.["backupRetention"] ?? LUNORA_CLOUD_PLANS.plans["free"]?.limits?.["backupRetention"] ?? DEFAULT_RETENTION;
 
-/** The project's in-flight backup or restore, if any. A row past {@link OPERATION_STALE_MS} does not count. */
+/** The project's in-flight backup or restore, if any (see {@link isInFlight}). */
 export const activeOperation = <T extends TenantBackupRecord>(rows: ReadonlyArray<T>, projectId: string, now: number): T | undefined =>
-    rows.find((row) => row.projectId === projectId && row.status === "running" && row.createdAt > now - OPERATION_STALE_MS);
+    rows.find((row) => row.projectId === projectId && isInFlight(row, now));
 
 /**
  * Whether the sweep should take a scheduled snapshot of this project now: nothing

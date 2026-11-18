@@ -2,14 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 
 import { exportEndLine } from "../../../shared/export-end";
 import { internal } from "../lunora/_generated/internal";
-import { authorizeDownload, beginBackup, beginRestore, finish, list } from "../lunora/tenant-backups";
+import { authorizeDownload, beginBackup, beginRestore, finish, heartbeat, list } from "../lunora/tenant-backups";
 import { PART_BYTES, uploadStream } from "../src/backup/multipart";
 import { offsiteBucket } from "../src/backup/offsite";
-import { backupRetentionFor, isDueForBackup, OPERATION_STALE_MS, tenantBackupKey } from "../src/backup/tenant-policy";
+import {
+    backupRetentionFor,
+    HEARTBEAT_INTERVAL_MS,
+    isDueForBackup,
+    OPERATION_STALE_MS,
+    tenantBackupKey,
+    throttledHeartbeat,
+} from "../src/backup/tenant-policy";
 import type { BackupTargetRow } from "../src/backup/tenant-sweep";
 import { runTenantBackupSweep } from "../src/backup/tenant-sweep";
 import type { TenantBackupBucket, TenantSend } from "../src/backup/tenant-transport";
-import { captureTenantSnapshot, IMPORT_BATCH_BYTES, restoreTenantSnapshot } from "../src/backup/tenant-transport";
+import { captureTenantSnapshot, IMPORT_BATCH_BYTES, restoreTenantSnapshot, withHeartbeat } from "../src/backup/tenant-transport";
 import { createDeployRouter } from "../src/deploy/router";
 import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
 import type { DispatchNamespaceLike } from "../src/targets/cloudflare-wfp/dispatch";
@@ -181,6 +188,73 @@ describe("tenant backup policy", () => {
     });
 });
 
+describe("tenant operation liveness", () => {
+    it("keeps an operation older than the stale window in flight while it heartbeats, and lets it go once it stops", () => {
+        const old = NOW - 2 * OPERATION_STALE_MS;
+        const beating = [backupRow("a", "p1", old, { heartbeatAt: NOW - 60_000, status: "running" }), backupRow("b", "p1", NOW - 2 * DAY_MS)] as never;
+        const silent = [
+            backupRow("a", "p1", old, { heartbeatAt: NOW - OPERATION_STALE_MS, status: "running" }),
+            backupRow("b", "p1", NOW - 2 * DAY_MS),
+        ] as never;
+
+        expect([isDueForBackup(beating, "p1", NOW), isDueForBackup(silent, "p1", NOW)]).toStrictEqual([false, true]);
+    });
+
+    it("writes a heartbeat once per interval, however often progress is reported", async () => {
+        let clock = NOW;
+        const write = vi.fn<() => Promise<unknown>>(async () => undefined);
+        const beat = throttledHeartbeat(write, () => clock);
+
+        await beat();
+        clock += HEARTBEAT_INTERVAL_MS - 1;
+        await beat();
+
+        expect(write).not.toHaveBeenCalled();
+
+        clock += 1;
+        await beat();
+        await beat();
+
+        expect(write).toHaveBeenCalledTimes(1);
+    });
+
+    it("never fails the operation over a heartbeat that could not be written", async () => {
+        let clock = NOW;
+        const beat = throttledHeartbeat(
+            () => Promise.reject(new Error("d1 down")),
+            () => clock,
+        );
+
+        clock += HEARTBEAT_INTERVAL_MS;
+
+        await expect(beat()).resolves.toBeUndefined();
+    });
+
+    it("reports progress for every tenant call and every chunk of its answer", async () => {
+        const beat = vi.fn<() => Promise<void>>(async () => undefined);
+        const send = withHeartbeat(
+            async () =>
+                new Response(
+                    new ReadableStream<Uint8Array>({
+                        start: (controller) => {
+                            controller.enqueue(new Uint8Array([1]));
+                            controller.enqueue(new Uint8Array([2]));
+                            controller.close();
+                        },
+                    }),
+                    { status: 207 },
+                ),
+            beat,
+        );
+
+        const response = await send("/_lunora/admin/export", "{}", "application/json");
+
+        expect(response.status).toBe(207);
+        expect([...new Uint8Array(await response.arrayBuffer())]).toStrictEqual([1, 2]);
+        expect(beat).toHaveBeenCalledTimes(3);
+    });
+});
+
 describe(runTenantBackupSweep, () => {
     it("snapshots each due project, isolating a failing tenant, and never logs tokens or data", async () => {
         const { database, inserted, patched } = recordingDb({
@@ -288,6 +362,20 @@ describe(runTenantBackupSweep, () => {
         expect(inserted).toHaveLength(0);
         expect(result.reaped).toBe(1);
         expect(patched).toStrictEqual([{ id: "b_stuck", patch: expect.objectContaining({ status: "failed" }) }]);
+    });
+
+    it("never reaps a long operation that is still heartbeating", async () => {
+        const { database, patched } = recordingDb({
+            deployments: [deployment("dep_a", "p_a")],
+            organizations: [{ _id: "org_1", plan: "free" }],
+            projects: [{ _id: "p_a" }],
+            tenantBackups: [backupRow("r_long", "p_a", NOW - 2 * OPERATION_STALE_MS, { heartbeatAt: NOW - 60_000, operation: "restore", status: "running" })],
+        });
+
+        const result = await runTenantBackupSweep({ bucket: memoryBucket().bucket, database, now: NOW, senderFor: () => Promise.resolve(null) });
+
+        expect(result.reaped).toBe(0);
+        expect(patched).toStrictEqual([]);
     });
 
     it("applies each plan's retention and deletes a deleted project's snapshots", async () => {
@@ -803,6 +891,43 @@ describe("tenant backup mutations", () => {
         );
 
         await expect(beginBackup.handler(ctx, { organizationId: "org_1", projectId: "p_a" } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("refuses a backup while an operation older than the stale window keeps heartbeating", async () => {
+        const at = 1_700_000_000_000;
+        const { ctx } = makeCtx(
+            {
+                deployments: [live],
+                members: [owner("org_1")],
+                projects: [project],
+                tenantBackups: [backupRow("r_long", "p_a", at - 2 * OPERATION_STALE_MS, { heartbeatAt: at - 60_000, operation: "restore", status: "running" })],
+            },
+            { now: at },
+        );
+
+        await expect(beginBackup.handler(ctx, { organizationId: "org_1", projectId: "p_a" } as never)).rejects.toMatchObject({ code: "CONFLICT" });
+    });
+
+    it("records a heartbeat on a running row, and leaves a settled one as it is", async () => {
+        const at = 1_700_000_000_000;
+        const { ctx, ops } = makeCtx(
+            {
+                members: [owner("org_1")],
+                tenantBackups: [backupRow("b_run", "p_a", at - 1000, { status: "running" }), backupRow("b_done", "p_a", at - 1000)],
+            },
+            { now: at },
+        );
+
+        await heartbeat.handler(ctx, { id: "b_run", organizationId: "org_1" } as never);
+        await heartbeat.handler(ctx, { id: "b_done", organizationId: "org_1" } as never);
+
+        expect(ops.filter((op) => op.kind === "patch")).toStrictEqual([expect.objectContaining({ id: "b_run", patch: { heartbeatAt: at } })]);
+    });
+
+    it("lets only owners and admins record a heartbeat", async () => {
+        const { ctx } = makeCtx({ members: [member], tenantBackups: [backupRow("b_run", "p_a", 1000, { status: "running" })] }, { userId: "usr_2" });
+
+        await expect(heartbeat.handler(ctx, { id: "b_run", organizationId: "org_1" } as never)).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
     /** A `.global()` page stops at 1000 rows; the running operation sits past a full page of history. */

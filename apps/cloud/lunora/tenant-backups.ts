@@ -1,6 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
-import { activeOperation, OPERATION_STALE_MS, tenantBackupKey } from "../src/backup/tenant-policy";
+import { activeOperation, tenantBackupKey } from "../src/backup/tenant-policy";
 import { PLAIN_WORKER_NO_ADMIN } from "../src/project-runtime";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
@@ -105,10 +105,10 @@ const productionTarget = async (context: QueryContext, projectId: Id<"projects">
 /** Refuse when the project already has a backup or restore in flight. */
 const assertIdle = async (context: QueryContext, projectId: Id<"projects">, now: number): Promise<void> => {
     // Only the rows that can be in flight, filtered in the query: a page of the project's
-    // whole history stops at 1000 rows, and a running operation past it went unseen.
-    const { page: running } = await context.db.tenantBackups.findMany({
-        where: { createdAt: { gt: now - OPERATION_STALE_MS }, projectId, status: "running" },
-    });
+    // whole history stops at 1000 rows, and a running operation past it went unseen. Not
+    // filtered on age: a long operation's heartbeat, not its creation, says it is alive,
+    // and the sweep settles dead ones, so few `running` rows ever stand.
+    const { page: running } = await context.db.tenantBackups.findMany({ where: { projectId, status: "running" } });
     const busy = activeOperation(running, projectId, now);
 
     if (busy) {
@@ -264,6 +264,29 @@ export const finish = internalMutation
         const patch = Object.fromEntries(Object.entries(outcome).filter(([, value]) => value != null));
 
         await context.db.patch("tenantBackups", id, { ...patch, completedAt: context.now });
+
+        return null;
+    });
+
+/**
+ * Record that a backup or restore the router started is still making progress,
+ * so neither the sweep nor {@link assertIdle} reads it as dead while it runs.
+ * Owner/admin only, and only a `running` row of the caller's org. SYSTEM only (router).
+ */
+export const heartbeat = internalMutation
+    .input({ id: v.id("tenantBackups"), organizationId: v.id("organizations") })
+    .mutation(async ({ ctx: context, args: { id, organizationId } }): Promise<null> => {
+        await assertMember(context, organizationId, ["owner", "admin"]);
+
+        const row = await context.db.get("tenantBackups", id);
+
+        if (row?.organizationId !== organizationId) {
+            throw new LunoraError("NOT_FOUND", "backup not found in this organization");
+        }
+
+        if (row.status === "running") {
+            await context.db.patch("tenantBackups", id, { heartbeatAt: context.now });
+        }
 
         return null;
     });

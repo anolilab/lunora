@@ -293,6 +293,7 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
     "tenant_backups:beginBackup": lunora_tenant_backups_34.beginBackup as unknown as RegisteredLunoraFunction,
     "tenant_backups:beginRestore": lunora_tenant_backups_34.beginRestore as unknown as RegisteredLunoraFunction,
     "tenant_backups:finish": lunora_tenant_backups_34.finish as unknown as RegisteredLunoraFunction,
+    "tenant_backups:heartbeat": lunora_tenant_backups_34.heartbeat as unknown as RegisteredLunoraFunction,
     "tenant_backups:list": lunora_tenant_backups_34.list as unknown as RegisteredLunoraFunction,
     "traces:get": lunora_traces_35.get as unknown as RegisteredLunoraFunction,
     "traces:getArchived": lunora_traces_35.getArchived as unknown as RegisteredLunoraFunction,
@@ -1091,6 +1092,13 @@ if (typeof source["backupId"] !== "string") return DEFER;
 if (typeof source["organizationId"] !== "string") return DEFER;
 return { "backupId": source["backupId"], "organizationId": source["organizationId"] };
 });
+installCompiledValidatorMap(lunora_tenant_backups_34.heartbeat.args, (source) => {
+if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
+if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
+if (typeof source["id"] !== "string") return DEFER;
+if (typeof source["organizationId"] !== "string") return DEFER;
+return { "id": source["id"], "organizationId": source["organizationId"] };
+});
 installCompiledValidatorMap(lunora_tenant_backups_34.list.args, (source) => {
 if (typeof source !== "object" || source === null || Array.isArray(source)) return DEFER;
 if (Object.getPrototypeOf(source) !== Object.prototype && Object.getPrototypeOf(source) !== null) return DEFER;
@@ -1513,7 +1521,8 @@ export interface Caller {
         beginBackup: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { backupId: string & { readonly __table: "tenantBackups"; }; key: string }>;
         beginRestore: (args: { backupId: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<{ adminToken?: string; adminTokenCiphertext?: string; adminTokenIv?: string; alias: string; deploymentId: Id<"deployments">; resourceRef: string; scriptName: string; target?: string; url: string } & { preRestoreBackupId: string & { readonly __table: "tenantBackups"; }; preRestoreKey: string; restoreId: string & { readonly __table: "tenantBackups"; }; sourceKey: string }>;
         finish: (args: { bytes?: number; error?: unknown; id: Id<"tenantBackups">; offsiteError?: unknown; offsiteStatus?: "succeeded" | "failed"; organizationId: Id<"organizations">; restoreConflicts?: number; restoreDeleted?: Record<string, number>; restoreInserted?: number; restoreRowErrors?: number; status: "succeeded" | "failed" }) => Promise<null>;
-        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"tenantBackups">; createdAt: number; organizationId: Id<"organizations">; bytes?: null | number; projectId: Id<"projects">; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; trigger: "manual" | "scheduled" | "pre-restore"; error?: null | string; alias: string; completedAt?: null | number; offsiteError?: null | string; offsiteStatus?: null | "failed" | "succeeded"; operation: "backup" | "restore"; restoredFrom?: null | Id<"tenantBackups">; restoreConflicts?: null | number; restoreDeleted?: null | Record<string, number>; restoreInserted?: null | number; restoreRowErrors?: null | number }[]>;
+        heartbeat: (args: { id: Id<"tenantBackups">; organizationId: Id<"organizations"> }) => Promise<null>;
+        list: (args: { organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ _id: Id<"tenantBackups">; createdAt: number; organizationId: Id<"organizations">; bytes?: null | number; projectId: Id<"projects">; deploymentId: Id<"deployments">; status: "failed" | "running" | "succeeded"; trigger: "manual" | "scheduled" | "pre-restore"; error?: null | string; alias: string; completedAt?: null | number; heartbeatAt?: null | number; offsiteError?: null | string; offsiteStatus?: null | "failed" | "succeeded"; operation: "backup" | "restore"; restoredFrom?: null | Id<"tenantBackups">; restoreConflicts?: null | number; restoreDeleted?: null | Record<string, number>; restoreInserted?: null | number; restoreRowErrors?: null | number }[]>;
     };
     traces: {
         get: (args: { organizationId: Id<"organizations">; traceId: unknown }) => Promise<{ attributes?: Record<string, string>; completionTokens?: number; durationMs: number; endedAt: number; evaluations?: { label?: string; name: string; score: number; }[]; functionPath?: string; input?: string; kind?: "worker" | "container" | "generation"; level: "info" | "error"; model?: string; name: string; output?: string; parentSpanId?: string; promptTokens?: number; sessionId?: string; spanId: string; startedAt: number; statusMessage?: string; traceId: string }[]>;
@@ -1848,6 +1857,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
         beginBackup: (args) => callRegistered(context, "tenant_backups:beginBackup", args),
         beginRestore: (args) => callRegistered(context, "tenant_backups:beginRestore", args),
         finish: (args) => callRegistered(context, "tenant_backups:finish", args),
+        heartbeat: (args) => callRegistered(context, "tenant_backups:heartbeat", args),
         list: (args) => callRegistered(context, "tenant_backups:list", args),
     },
     traces: {

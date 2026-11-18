@@ -21,9 +21,10 @@ import { jsonError, rejected, requireContext } from "../deploy/routes/shared";
 import { targetOf } from "../targets/placement";
 import { targetFleet } from "../targets/registry";
 import { offsiteBucket } from "./offsite";
+import { throttledHeartbeat } from "./tenant-policy";
 import { offsiteFields } from "./tenant-sweep";
 import type { RestoreSummary, TenantBackupBucket, TenantSend } from "./tenant-transport";
-import { captureTenantSnapshot, restoreTenantSnapshot } from "./tenant-transport";
+import { captureTenantSnapshot, restoreTenantSnapshot, withHeartbeat } from "./tenant-transport";
 
 /** The deployment a begin* mutation resolved, admin token still sealed. */
 type TenantTarget = StoredAdminToken & { alias: string; resourceRef: string; scriptName: string; target?: string; url: string };
@@ -61,6 +62,10 @@ const settle = async (
     await context.runMutation(internal.tenant_backups.finish, { id, organizationId, ...outcome }).catch(() => undefined);
 };
 
+/** A heartbeat for the `running` rows `ids`: each stays visibly alive while the tenant calls make progress. */
+const heartbeatFor = (context: Context, organizationId: string, ids: ReadonlyArray<string>): (() => Promise<void>) =>
+    throttledHeartbeat(() => Promise.all(ids.map((id) => context.runMutation(internal.tenant_backups.heartbeat, { id, organizationId }))));
+
 /**
  * Take one snapshot into `key` (and the off-site copy, when configured) and
  * settle its row. A failed off-site copy is recorded on the row, not raised.
@@ -70,15 +75,17 @@ const snapshot = async (
     context: Context,
     environment: RouterEnv & { TENANT_BACKUPS: TenantBackupBucket },
     organizationId: string,
-    row: { id: string; key: string; target: TenantTarget },
+    row: { id: string; key: string; target: TenantTarget; waiting?: string },
 ): Promise<number> => {
     try {
         const offsite = offsiteBucket(environment);
+        // A restore's own row waits on its pre-restore snapshot, so it beats alongside it.
+        const beat = heartbeatFor(context, organizationId, row.waiting === undefined ? [row.id] : [row.id, row.waiting]);
         const { bytes, offsite: copied } = await captureTenantSnapshot({
             bucket: environment.TENANT_BACKUPS,
             key: row.key,
             ...(offsite ? { offsite } : {}),
-            send: await senderFor(row.target, environment),
+            send: withHeartbeat(await senderFor(row.target, environment), beat),
         });
 
         await settle(context, organizationId, row.id, { bytes, status: "succeeded", ...offsiteFields(copied) });
@@ -164,7 +171,12 @@ export const handleRestoreRoute = async (request: Request, environment: RouterEn
     }
 
     try {
-        await snapshot(context, env, organizationId, { id: started.preRestoreBackupId, key: started.preRestoreKey, target: started });
+        await snapshot(context, env, organizationId, {
+            id: started.preRestoreBackupId,
+            key: started.preRestoreKey,
+            target: started,
+            waiting: started.restoreId,
+        });
     } catch (error) {
         const reason = `pre-restore backup failed, nothing was restored: ${describe(error, "backup failed")}`;
 
@@ -182,7 +194,10 @@ export const handleRestoreRoute = async (request: Request, environment: RouterEn
             throw new Error("the snapshot object is missing from the backup bucket");
         }
 
-        summary = await restoreTenantSnapshot(await senderFor(started, env), source.body);
+        summary = await restoreTenantSnapshot(
+            withHeartbeat(await senderFor(started, env), heartbeatFor(context, organizationId, [started.restoreId])),
+            source.body,
+        );
     } catch (error) {
         const reason = describe(error, "restore failed");
 
