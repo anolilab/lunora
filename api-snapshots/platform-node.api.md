@@ -183,6 +183,7 @@ interface NodeMailHost {
         }[];
         requeue: (id: string) => boolean;
     };
+    drain: () => Promise<void>;
     mailer: Mailer;
     poll: (now?: number) => Promise<number>;
     queue: QueueLike;

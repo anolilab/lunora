@@ -209,10 +209,11 @@ export interface NodePlatform<
     dispatch: (request: Request) => Promise<Response>;
 
     /**
-     * Wait for every promise handed to `shard.waitUntil` to settle, and for the
-     * registry's shards to go idle (`NodeShardRegistry.drain`): in-flight
-     * `onFetch` and `onAlarm` calls, including cron and scheduled-job
-     * deliveries, and each shard's own `waitUntil` work.
+     * Wait for every promise handed to `shard.waitUntil` to settle, for every
+     * `mail.poll()` in flight, and for the registry's shards to go idle
+     * (`NodeShardRegistry.drain`): in-flight `onFetch` and `onAlarm` calls,
+     * including cron and scheduled-job deliveries, and each shard's own
+     * `waitUntil` work.
      *
      * Separate from `close()` because the two answer different questions:
      * `close()` releases handles and stays synchronous (it backs
@@ -355,7 +356,7 @@ export type NodePlatformOptions<
 
     /**
      * Deliver `@lunora/mail` sends: a durable `lunora-mail` queue drained
-     * through Resend (`RESEND_API_KEY`) or the given `transport`, exposed as
+     * through the given `transport` or, without one, Resend (`RESEND_API_KEY`), exposed as
      * `platform.mail`. Omit when the app sends no mail. Throws here, not on the
      * first send, when `MAIL_FROM` is unset or nothing can deliver.
      */
@@ -579,6 +580,9 @@ export const createNodePlatform = <
                 suspendScheduler();
                 suspendHostAlarms();
                 registry.suspendAlarms();
+
+                // Mail first: a poll in flight settles its rows through the database `close()` shuts.
+                await mail?.drain();
 
                 return drainTogether([host, registry], drainOptions);
             },
