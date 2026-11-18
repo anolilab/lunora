@@ -457,7 +457,9 @@ acked: check the provider's logs, then requeue it or let it lie. A refused or
 malformed send is logged as an error and dropped, since no retry changes it, and
 a send with neither `text` nor `html` is refused when it is queued.
 `deadLetters.list()` gives each parked send a `reason`: `retries_exhausted`,
-`idempotency_key_conflict`, `outcome_unknown` or `evidence_expired`. When the
+`idempotency_key_conflict`, `outcome_unknown` or `evidence_expired`, written in the
+same transaction that parks it, or `unknown` for a row parked with none recorded
+(treat that as `outcome_unknown`). When the
 ledger can neither mark a failed attempt nor clear its `sending` mark, both
 errors are logged (`lunora.mail.attempt_mark_failed`,
 `lunora.mail.attempt_mark_orphaned`) and the send is retried as before; a

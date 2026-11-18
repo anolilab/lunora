@@ -2040,4 +2040,105 @@ describe(createNodeMailHost, () => {
             expect(database.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get()).toStrictEqual({ n: 0 });
         });
     });
+
+    describe("twentieth review", () => {
+        /** A transport whose send may have landed and is not deduped: the send is parked as outcome_unknown. */
+        const smtpTimeout = (): MailTransport & { sent: SendPayload[] } =>
+            scriptedTransport([new MailSendError({ message: "SMTP timed out", outcomeUnknown: true, retryable: false })]);
+
+        it("parks no row without its reason when the reason cannot be written", async () => {
+            expect.assertions(2);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: smtpTimeout() });
+
+            database.exec("CREATE TRIGGER refuse_reason BEFORE INSERT ON _lunora_mail_parked BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END");
+
+            await mail.mailer.queue({ subject: "Invoice", text: "Due", to: "ada@example.com" });
+            await mail.poll().catch(() => undefined);
+
+            // Rolled back with its reason: still queued under its long retry, not parked as `unknown`.
+            expect(mail.deadLetters.list()).toStrictEqual([]);
+            expect(error.mock.calls.map(([line]) => logged(line).event)).toContain("lunora.mail.park_failed");
+        });
+
+        it("keeps the reason of a park that lands between a requeue's revive and its reason's removal", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: smtpTimeout() });
+
+            await mail.mailer.queue({ subject: "Invoice", text: "Due", to: "ada@example.com" });
+            await mail.poll();
+
+            const [parked] = mail.deadLetters.list();
+            const id = parked?.id ?? "";
+            // Another process on the same file, parking the row again with its own reason. With no
+            // busy wait, so it fails fast while the requeue holds the write lock, and is retried after.
+            const other = new Database(database.name, { timeout: 0 });
+            const parkElsewhere = (): void => {
+                other.transaction(() => {
+                    other.prepare("UPDATE _lunora_queue_messages SET state = 'dead' WHERE id = ?").run(id);
+                    other.prepare("INSERT OR REPLACE INTO _lunora_mail_parked (id, reason) VALUES (?, 'idempotency_key_conflict')").run(id);
+                })();
+            };
+            const statement = Object.getPrototypeOf(database.prepare("SELECT 1")) as { run: (...parameters: unknown[]) => unknown };
+            const { run } = statement;
+            const deferred: (() => void)[] = [];
+
+            vi.spyOn(statement, "run").mockImplementation(function interleave(this: { source: string }, ...parameters: unknown[]) {
+                const result = run.apply(this, parameters);
+
+                if (this.source.startsWith("UPDATE _lunora_queue_messages SET state = 'pending'")) {
+                    try {
+                        parkElsewhere();
+                    } catch {
+                        deferred.push(parkElsewhere);
+                    }
+                }
+
+                return result;
+            });
+
+            mail.deadLetters.requeue(id);
+            vi.mocked(statement.run).mockRestore();
+
+            for (const parkLater of deferred) {
+                parkLater();
+            }
+
+            other.close();
+
+            // The later park's reason is what an operator reads, not `unknown` from a removal that ran after it.
+            expect(mail.deadLetters.list()).toMatchObject([{ id, reason: "idempotency_key_conflict" }]);
+            expect(deferred).toHaveLength(1);
+        });
+
+        it("lists a send the queue host parked on its last retry as retries_exhausted", async () => {
+            expect.assertions(1);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const mail = createNodeMailHost(freshDatabase(), {
+                env: PRODUCTION,
+                now: clock.now,
+                transport: scriptedTransport([new MailSendError({ message: "provider is down", retryable: true })]),
+            });
+
+            await mail.mailer.queue({ subject: "Receipt", text: "Thanks", to: "ada@example.com" });
+
+            for (let delivery = 0; delivery < 4; delivery += 1) {
+                clock.advance(MAIL_MAX_BACKOFF_MS);
+                // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
+                await mail.poll();
+            }
+
+            expect(mail.deadLetters.list()).toMatchObject([{ attempts: 4, reason: "retries_exhausted" }]);
+        });
+    });
 });
