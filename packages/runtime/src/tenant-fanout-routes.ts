@@ -62,18 +62,21 @@ interface TenantFanoutRouteDeps {
      */
     dispatchScheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
 
-    /** Whether the deployment is paused; a paused tenant has its queue handler hold every forwarded message. */
+    /** Whether the deployment is paused; a paused tenant holds every forwarded message. */
     isPaused: () => Promise<boolean>;
 
     /** The app's forwarded-batch handler, off `WorkerOptions`. Absent when the app declares no queues. */
     queueHandler?: QueueForwardHandler;
+
+    /** Whether `queueHandler` holds a batch it is handed `hold` for, rather than running it. */
+    queueHandlerHolds: boolean;
 }
 
 /** Build the reserved fan-out route map merged into the worker's internal route table. */
 const buildTenantFanoutRoutes = (
     deps: TenantFanoutRouteDeps,
 ): Record<string, (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>> => {
-    const { assertAdmin, dispatchScheduled, isPaused, queueHandler } = deps;
+    const { assertAdmin, dispatchScheduled, isPaused, queueHandler, queueHandlerHolds } = deps;
 
     /**
      * `POST /_lunora/scheduled` — run a cron expression's jobs over HTTP, the
@@ -154,11 +157,22 @@ const buildTenantFanoutRoutes = (
                 };
             });
 
-        // Paused, the handler holds the batch as a native consumer does: a fresh
-        // delayed copy per message, the original acked. Answered as a delayed retry
-        // instead, each hold spent one of the platform's delivery attempts, and a
-        // pause past `max_retries` holds dead-lettered work that never ran.
-        const result = await queueHandler({ messages, queue }, env, context, (await isPaused()) ? { holdSeconds: PAUSED_QUEUE_RETRY_SECONDS } : undefined);
+        const paused = await isPaused();
+
+        // A handler that does not declare it holds would run, and ack, the batch:
+        // answered as a delayed retry, the work waits out the pause at the cost of
+        // one platform delivery attempt per hold.
+        if (paused && !queueHandlerHolds) {
+            return Response.json({
+                retry: messages.map((message) => message.id),
+                retryDelays: Object.fromEntries(messages.map((message) => [message.id, PAUSED_QUEUE_RETRY_SECONDS])),
+            });
+        }
+
+        // Paused, a holding handler holds the batch as a native consumer does: a
+        // fresh delayed copy per message, the original acked, so a pause past
+        // `max_retries` does not dead-letter work that never ran.
+        const result = await queueHandler({ messages, queue }, env, context, paused ? { holdSeconds: PAUSED_QUEUE_RETRY_SECONDS } : undefined);
 
         return Response.json({ retry: result?.retry ?? [], ...(result?.retryDelays === undefined ? {} : { retryDelays: result.retryDelays }) });
     };

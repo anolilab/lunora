@@ -2561,6 +2561,7 @@ interface WorkerOptions {
     queue?: QueueConsumerHandler;
     queueFetchImpl?: typeof fetch;
     queueHandler?: QueueForwardHandler;
+    queueHandlerHolds?: boolean;
     replicaReads?: boolean;
     resolveIdentity?: (request: Request, env: unknown, context?: ExecutionContextLike) => Promise<ResolvedIdentity | null> | ResolvedIdentity | null;
     resolveTableSharding?: AdminTableResolver;

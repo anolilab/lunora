@@ -622,6 +622,8 @@ const buildQueueConsumerLines = (options: ResolvedAppOptions): string[] => {
         // Set only while the deployment is paused, as for the native consumer above.
         `                    holdSeconds: hold?.holdSeconds,`,
         `                }),`,
+        // Without it a paused deployment never calls the handler above and retries every message instead.
+        `            queueHandlerHolds: true,`,
     ];
 };
 

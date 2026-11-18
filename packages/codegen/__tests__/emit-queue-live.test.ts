@@ -51,11 +51,13 @@ describe("generated worker options — forwarded queue batches", () => {
     });
 
     it("hands a paused deployment's hold to the forwarded batch, as to the native consumer", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
         const emitted = emit(false);
 
         expect(emitted).toContain("_context: ExecutionContextLike, hold?: { holdSeconds: number }): ReturnType<typeof dispatchForwardedQueueBatch> =>");
         expect(emitted).toContain("holdSeconds: hold?.holdSeconds,");
+        // The runtime hands `hold` only to a handler that declares it holds.
+        expect(emitted).toContain("            queueHandlerHolds: true,");
     });
 });

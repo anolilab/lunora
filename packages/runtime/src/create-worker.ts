@@ -722,7 +722,8 @@ interface QueueForwardResult {
  * here; return the ids to retry. Env-driven side effects
  * (sending mail, etc.) belong in the app's handler.
  *
- * `hold.holdSeconds` is set while the deployment is paused, as
+ * `hold.holdSeconds` is set while the deployment is paused, and only for a
+ * handler whose `WorkerOptions.queueHandlerHolds` is `true`, as
  * {@link TriggerTrace.holdSeconds} is for the native `queue()` entry: the handler
  * holds each message back that long instead of running it — a fresh delayed copy
  * sent through its own producer binding, then acked, so a long pause spends none
@@ -1674,6 +1675,15 @@ interface WorkerOptions {
      * message ids to retry; the rest are acked. Omit if the app has no queues.
      */
     queueHandler?: QueueForwardHandler;
+
+    /**
+     * Whether {@link WorkerOptions.queueHandler} honours its `hold` argument. Set,
+     * a paused deployment calls the handler with `hold` and it holds the batch
+     * itself. Unset, a paused deployment never calls the handler and answers every
+     * message as a delayed retry instead: a handler that ignored `hold` would run
+     * and ack work the pause was meant to stop. Codegen's handler sets it.
+     */
+    queueHandlerHolds?: boolean;
 
     /**
      * Serve one-shot **queries** from a read replica placed in the caller's
@@ -6604,6 +6614,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         dispatchScheduled: handleScheduled,
         isPaused,
         queueHandler: options.queueHandler,
+        queueHandlerHolds: options.queueHandlerHolds === true,
     });
 
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
