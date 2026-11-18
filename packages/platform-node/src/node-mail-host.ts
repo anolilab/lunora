@@ -22,6 +22,7 @@
  * Batches are claimed oldest first; a retried send goes behind newer ones.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 
 import { LunoraError } from "@lunora/errors";
@@ -49,6 +50,13 @@ const MAIL_BATCH_SIZE = 10;
 
 /** Retries after the first delivery before a send is parked — the queue host's default, stated so the log can tell. */
 const MAIL_MAX_RETRIES = 3;
+
+/**
+ * The first retry's delay after a plain retryable failure, doubled for each later one: 30 s,
+ * 60 s, 120 s. Neither queue host backs off on its own, and a retry due at once spent all three
+ * on the next few polls, parking a reset link over a provider outage of seconds.
+ */
+const MAIL_RETRY_BASE_SECONDS = 30;
 
 /** `send()`'s deadline, passed to the mailer so the lease below is computed from the same number. */
 const MAIL_SEND_TIMEOUT_MS = 60_000;
@@ -181,6 +189,10 @@ const logFailure = (level: "error" | "warn", event: string, attempts: number, er
     console[level](`[@lunora/platform-node] ${line}`);
 };
 
+/** The prefixes of `@lunora/mail`'s per-delivery attempt marks in the sent ledger (`sending <n> <key>`, `failed <n> <key>`). */
+const SENDING_MARK_PREFIX = "sending ";
+const FAILED_MARK_PREFIX = "failed ";
+
 /** How often the sent ledger drops expired rows. A read ignores them anyway, so this only bounds the table. */
 const LEDGER_PRUNE_INTERVAL_MS = 60_000;
 
@@ -200,6 +212,11 @@ const createSentLedger = (database: Database.Database, clock: () => number): Sen
         "INSERT INTO _lunora_mail_sent (key, value, expires_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value, expires_at = excluded.expires_at",
     );
     const prune = database.prepare<[number]>("DELETE FROM _lunora_mail_sent WHERE expires_at <= ?");
+    const forget = database.prepare<[string]>("DELETE FROM _lunora_mail_sent WHERE key = ?");
+    const markFailed = database.transaction((key: string, sendingKey: string, expiresAt: number) => {
+        write.run(key, "failed", expiresAt);
+        forget.run(sendingKey);
+    });
     let prunedAt = Number.NEGATIVE_INFINITY;
 
     return {
@@ -208,6 +225,28 @@ const createSentLedger = (database: Database.Database, clock: () => number): Sen
         // eslint-disable-next-line @typescript-eslint/require-await -- the contract is async for KV; SQLite is synchronous
         put: async (key, value, { expirationTtl }) => {
             const now = clock();
+
+            // `@lunora/mail` writes `failed <n> <key>` only once delivery n is known not to have gone
+            // out, so that delivery's `sending <n> <key>` mark means nothing any more. Dropped in the
+            // same write, and dropped alone when that write fails: a surviving sending mark without
+            // its failed mark makes a retry past the provider's dedupe window refuse, as if the send
+            // may have landed. A delete adds no row, so it can succeed where the insert could not.
+            // Should both fail, the error stays retryable: every automatic retry falls inside the
+            // window, where the marks are not read, and past it the refusal never sends a copy.
+            if (value === "failed" && key.startsWith(FAILED_MARK_PREFIX)) {
+                const mark = key.slice(FAILED_MARK_PREFIX.length);
+                const sendingKey = `${SENDING_MARK_PREFIX}${mark}`;
+
+                try {
+                    markFailed(key, sendingKey, now + expirationTtl * 1000);
+                } catch (error) {
+                    // Throws on its own failure, which `@lunora/mail` then logs as the unwritten mark it is.
+                    forget.run(sendingKey);
+                    logFailure("warn", "lunora.mail.attempt_mark_failed", Number.parseInt(mark, 10), error);
+                }
+
+                return;
+            }
 
             if (now - prunedAt >= LEDGER_PRUNE_INTERVAL_MS) {
                 prune.run(now);
@@ -631,7 +670,7 @@ const settleFailure = (message: MessageBatchLike["messages"][number], error: unk
         logFailure("warn", "lunora.mail.send_retry", message.attempts, error);
     }
 
-    message.retry(isOutcomeUnknownMailError(error) ? { delaySeconds: OUTCOME_UNKNOWN_RETRY_SECONDS } : undefined);
+    message.retry({ delaySeconds: isOutcomeUnknownMailError(error) ? OUTCOME_UNKNOWN_RETRY_SECONDS : MAIL_RETRY_BASE_SECONDS * 2 ** (message.attempts - 1) });
 };
 
 /** What the consumer needs besides the batch. */
@@ -641,8 +680,12 @@ interface MailConsumer {
     mailer: Mailer;
     sent: SentMailStore;
 
-    /** Rows found superseded during a batch, parked once the batch has settled. */
-    superseded: Set<string>;
+    /**
+     * The rows found superseded by the batches of the poll this runs in, parked once that poll has
+     * settled them. One set per poll: a shared one was parked and cleared by whichever overlapping
+     * poll finished first, before the batch that found a row had settled it, so it was never parked.
+     */
+    superseded: AsyncLocalStorage<Set<string>>;
 }
 
 /** Retry a send whose key another delivery holds: it is settled by then, and the ledger answers for it. */
@@ -713,7 +756,7 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
             message.attempts,
             new Error(`idempotency key "${String(key)}" belongs to different content; this send is parked in deadLetters, not sent`),
         );
-        consumer.superseded.add(message.id);
+        consumer.superseded.getStore()?.add(message.id);
         message.retry({ delaySeconds: MAX_DELAY_SECONDS });
 
         return;
@@ -870,7 +913,7 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         clock,
         mailer,
         sent: createSentLedger(database, clock),
-        superseded: new Set(),
+        superseded: new AsyncLocalStorage(),
     };
     // The one host allowed the reserved `lunora-mail` name.
     const host = createNodeQueueHost(
@@ -947,13 +990,14 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         },
         mailer,
         poll: async (now) => {
-            const run = host.poll(now).finally(() => {
-                for (const id of consumer.superseded) {
-                    park.run(id);
-                }
-
-                consumer.superseded.clear();
-            });
+            const superseded = new Set<string>();
+            const run = consumer.superseded
+                .run(superseded, async () => await host.poll(now))
+                .finally(() => {
+                    for (const id of superseded) {
+                        park.run(id);
+                    }
+                });
 
             inFlight.add(run);
 

@@ -14,6 +14,9 @@ import { createNodeQueueHost } from "../src/node-queue-host";
 
 const PRODUCTION = { MAIL_FROM: "Acme <noreply@acme.test>", NODE_ENV: "production" };
 
+/** The longest backoff the mail queue waits before a retry: 30 s doubled twice. */
+const MAIL_MAX_BACKOFF_MS = 120_000;
+
 /** The mail queue's lease: 10 sends × (60 s deadline + 40 s of ledger calls) + 60 s. */
 const MAIL_LEASE_MS = 10 * (60_000 + 40_000) + 60_000;
 
@@ -127,7 +130,7 @@ describe(createNodeMailHost, () => {
         expect(database.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get()).toStrictEqual({ n: 0 });
     });
 
-    it("retries a failed send on the next poll and logs the failure", async () => {
+    it("retries a failed send once its backoff has passed and logs the failure", async () => {
         expect.assertions(4);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -145,6 +148,7 @@ describe(createNodeMailHost, () => {
             queue: "lunora-mail",
         });
 
+        clock.advance(30_000);
         await mail.poll();
 
         // Same message, delivered on its second attempt, and nothing left to send.
@@ -166,6 +170,7 @@ describe(createNodeMailHost, () => {
 
         // The first delivery plus the queue host's default three retries.
         for (let delivery = 0; delivery < 4; delivery += 1) {
+            clock.advance(MAIL_MAX_BACKOFF_MS);
             // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
             await mail.poll();
         }
@@ -437,12 +442,14 @@ describe(createNodeMailHost, () => {
 
             const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
             const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
             const transport = scriptedTransport([new Error("connection refused")]);
-            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: startClock().now, transport });
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
 
             await mail.mailer.queue({ subject: "Receipt", text: "Thanks", to: "ada@example.com" });
 
             for (let delivery = 0; delivery < 4; delivery += 1) {
+                clock.advance(MAIL_MAX_BACKOFF_MS);
                 // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
                 await mail.poll();
             }
@@ -586,19 +593,21 @@ describe(createNodeMailHost, () => {
 
             // createNodeMailHost used on its own, sharing one connection with the app's queues.
             const database = freshDatabase();
+            const clock = startClock();
             const app = createNodeQueueHost(database, {
                 onBatch: () => undefined,
                 queues: { jobs: defineQueue({ handler: () => undefined, maxBatchTimeout: 0 }) },
             });
             const mail = createNodeMailHost(database, {
                 env: PRODUCTION,
-                now: startClock().now,
+                now: clock.now,
                 transport: scriptedTransport([new Error("connection refused")]),
             });
 
             await mail.mailer.queue({ subject: "Reset", text: "Link", to: "ada@example.com" });
 
             for (let delivery = 0; delivery < 4; delivery += 1) {
+                clock.advance(MAIL_MAX_BACKOFF_MS);
                 // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
                 await mail.poll();
             }
@@ -649,6 +658,7 @@ describe(createNodeMailHost, () => {
             // The failed attempt left marks under their own keys, never the key itself.
             expect(sentRecord()).toBeUndefined();
 
+            clock.advance(30_000);
             await mail.poll();
 
             expect(transport.sent).toHaveLength(2);
@@ -1564,8 +1574,9 @@ describe(createNodeMailHost, () => {
 
             const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
             const database = freshDatabase();
+            const clock = startClock();
             const transport = scriptedTransport(["ok"]);
-            const mail = createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport });
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
 
             await mail.mailer.queue({ idempotencyKey: "claim-1", subject: "Hi", text: "Hi", to: "ada@example.com" });
             // The claim's insert fails, as a locked or corrupt database would make it.
@@ -1580,6 +1591,7 @@ describe(createNodeMailHost, () => {
 
             // Retried, not dropped: once the claim works the send goes out.
             database.exec("DROP TRIGGER no_claims");
+            clock.advance(30_000);
             await mail.poll();
 
             expect(transport.sent).toHaveLength(1);
@@ -1762,6 +1774,7 @@ describe(createNodeMailHost, () => {
             // Nothing polls for 16 days; then the first attempt fails transiently.
             clock.advance(16 * 24 * 60 * 60 * 1000);
             await mail.poll();
+            clock.advance(30_000);
             await mail.poll();
 
             // Its first attempt was moments ago, so its evidence is fresh: retried and sent, not expired.
@@ -1837,6 +1850,135 @@ describe(createNodeMailHost, () => {
                     path: join(directory ?? "", "shard.sqlite3"),
                 }),
             ).toThrow(/is a file: URI — pass a plain filesystem path/u);
+        });
+    });
+
+    describe("eighteenth review", () => {
+        const DAY_MS = 24 * 60 * 60 * 1000;
+
+        it("parks a superseded row found by a poll that an overlapping poll outlives", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            const { entered, release, transport } = blockingTransport();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "welcome-10", subject: "Welcome", text: "Owner", to: "ada@example.com" });
+            // A row queued before any content record existed (an older build, a raw producer): same key,
+            // other content. Ahead of the owner in the claim's rowid order, so the batch finds it
+            // superseded first, then sends the owner, which the transport holds open.
+            database
+                .prepare(
+                    "INSERT INTO _lunora_queue_messages (rowid, id, queue, body, content_type, visible_at, enqueued_at) VALUES (0, 'legacy', 'lunora-mail', ?, 'json', ?, ?)",
+                )
+                .run(
+                    Buffer.from(JSON.stringify({ idempotencyKey: "welcome-10", subject: "Welcome", text: "Legacy", to: "bob@example.com" })),
+                    clock.now(),
+                    clock.now(),
+                );
+
+            const first = mail.poll();
+
+            // A second poll overlapping it claims nothing and finishes first, before the legacy row is
+            // settled. An operator then requeues whatever is parked, before the first poll settles.
+            await entered;
+
+            await expect(mail.poll()).resolves.toBe(0);
+
+            for (const parked of mail.deadLetters.list()) {
+                mail.deadLetters.requeue(parked.id);
+            }
+
+            release();
+            await first;
+
+            expect(mail.deadLetters.list()).toMatchObject([{ body: { text: "Legacy" }, id: "legacy" }]);
+        });
+
+        it("runs the platform's teardowns once, however often it is closed", () => {
+            expect.assertions(1);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-close-"));
+
+            const close = vi.spyOn(Database.prototype, "close");
+            const platform = createNodePlatform({
+                mail: { env: PRODUCTION, path: join(directory, "mail.sqlite3"), transport: scriptedTransport(["ok"]) },
+                path: join(directory, "shard.sqlite3"),
+            });
+
+            platform.close();
+
+            const once = close.mock.calls.length;
+
+            platform.close();
+            platform[Symbol.dispose]();
+
+            expect(close).toHaveBeenCalledTimes(once);
+        });
+
+        it("still sends a failed delivery's retry past the dedupe window when the failed mark cannot be written", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            const transport = scriptedTransport([new MailSendError({ message: "provider is down", retryable: true }), "ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
+
+            // The ledger refuses the failed mark, as a write the database cannot take would.
+            database.exec(
+                "CREATE TRIGGER refuse_failed_mark BEFORE INSERT ON _lunora_mail_sent WHEN NEW.value = 'failed' BEGIN SELECT RAISE(ABORT, 'disk I/O error'); END",
+            );
+
+            await mail.mailer.queue({ idempotencyKey: "reset-7", subject: "Reset", text: "Code 1234", to: "ada@example.com" });
+            await mail.poll();
+            // Retried a day later, past Resend's 24-hour window, where the attempt marks are read.
+            clock.advance(DAY_MS + 60_000);
+            await mail.poll();
+
+            // Delivery 1 never went out, so delivery 2 is sent, not refused as a possible repeat.
+            expect(transport.sent.map((payload) => payload.text)).toStrictEqual(["Code 1234", "Code 1234"]);
+            expect(mail.deadLetters.list()).toStrictEqual([]);
+        });
+
+        it("backs a plain retryable failure off 30 s, then 60 s, then 120 s before parking it", async () => {
+            expect.assertions(4);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const transport = scriptedTransport([new MailSendError({ message: "429 rate limited", retryable: true })]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ subject: "Verify", text: "Code 5678", to: "ada@example.com" });
+
+            /** Poll a second before the retry is due, then on it, and answer how many sends each had made. */
+            const pollAround = async (delayMs: number): Promise<[number, number]> => {
+                clock.advance(delayMs - 1000);
+                await mail.poll();
+
+                const early = transport.sent.length;
+
+                clock.advance(1000);
+                await mail.poll();
+
+                return [early, transport.sent.length];
+            };
+
+            await mail.poll();
+
+            // A send's own time is not on this clock, so each retry is due exactly its delay after the failure.
+            await expect(pollAround(30_000)).resolves.toStrictEqual([1, 2]);
+            await expect(pollAround(60_000)).resolves.toStrictEqual([2, 3]);
+            await expect(pollAround(120_000)).resolves.toStrictEqual([3, 4]);
+
+            expect(mail.deadLetters.list()).toMatchObject([{ attempts: 4, body: { subject: "Verify" } }]);
         });
     });
 });
