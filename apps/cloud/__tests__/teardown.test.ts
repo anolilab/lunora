@@ -9,6 +9,7 @@ const target = (id: string, overrides: Partial<TeardownTarget> = {}): TeardownTa
 
 const ports = (overrides: Partial<TeardownPorts>): TeardownPorts => {
     return {
+        aliasInUse: () => Promise.resolve(false),
         deleteRelease: () => Promise.resolve(),
         destroy: () => Promise.resolve(),
         listPending: () => Promise.resolve([]),
@@ -130,5 +131,58 @@ describe(runTeardownSweep, () => {
 
         expect(marked).toStrictEqual([]);
         expect(result).toStrictEqual({ failed: 1, tornDown: 0 });
+    });
+
+    it("keeps the tenant and the claim of an alias a release was created for since listPending read it", async () => {
+        const destroyed: string[] = [];
+        const released: string[] = [];
+        const marked: string[] = [];
+
+        const result = await runTeardownSweep(
+            ports({
+                aliasInUse: () => Promise.resolve(true),
+                destroy: (pending) => {
+                    destroyed.push(pending.alias);
+
+                    return Promise.resolve();
+                },
+                listPending: () => Promise.resolve([target("gone", { destroyWorker: true })]),
+                markTornDown: (id) => {
+                    marked.push(id);
+
+                    return Promise.resolve();
+                },
+                releaseAlias: (alias) => {
+                    released.push(alias);
+
+                    return Promise.resolve();
+                },
+            }),
+        );
+
+        // The destroyed row still drops its own bundle; the new release keeps the rest.
+        expect(destroyed).toStrictEqual([]);
+        expect(released).toStrictEqual([]);
+        expect(marked).toStrictEqual(["gone"]);
+        expect(result).toStrictEqual({ failed: 0, tornDown: 1 });
+    });
+
+    it("keeps the claim when a release for the alias is created while its tenant is destroyed", async () => {
+        const answers = [false, true];
+        const released: string[] = [];
+
+        await runTeardownSweep(
+            ports({
+                aliasInUse: () => Promise.resolve(answers.shift() ?? true),
+                listPending: () => Promise.resolve([target("gone", { destroyWorker: true })]),
+                releaseAlias: (alias) => {
+                    released.push(alias);
+
+                    return Promise.resolve();
+                },
+            }),
+        );
+
+        expect(released).toStrictEqual([]);
     });
 });

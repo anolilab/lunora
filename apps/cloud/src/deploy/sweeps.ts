@@ -74,6 +74,12 @@ export const teardownPorts = (
     canConverge: (target: TargetId) => boolean,
 ): TeardownPorts => {
     return {
+        aliasInUse: async (alias) => {
+            // `alias` is the script name every release of it is created under (`deployments.create`).
+            const rows = await drainTable<TeardownRow>(database, "deployments", { where: { scriptName: alias } });
+
+            return rows.some((row) => row.status !== "destroyed" && row.alias === alias);
+        },
         deleteRelease: ports.deleteRelease,
         destroy: async (target) => {
             const placed = await placementOfDeployment(target, ports.read);

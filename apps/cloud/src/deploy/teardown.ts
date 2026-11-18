@@ -41,6 +41,13 @@ export interface TeardownTarget {
 }
 
 export interface TeardownPorts {
+    /**
+     * Whether the alias has a deployment that is not `destroyed`, read now. The
+     * sweep re-asks right before each destructive step: `listPending` elects off
+     * a snapshot, and a release created for the alias since must keep its tenant
+     * and its claim on the alias.
+     */
+    aliasInUse: (alias: string) => Promise<boolean>;
     /** Delete a deployment's stored release. Idempotent. */
     deleteRelease: (id: string) => Promise<void>;
     /** Destroy the alias's tenant and its resources — through the driver of the placement its rows name. */
@@ -77,15 +84,20 @@ export const runTeardownSweep = async (ports: TeardownPorts): Promise<TeardownRe
 
     for (const target of targets) {
         try {
-            if (target.destroyWorker) {
+            // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small
+            if (target.destroyWorker && !(await ports.aliasInUse(target.alias))) {
                 // eslint-disable-next-line no-await-in-loop -- sequential teardown paces the target's API work; volumes are small
                 await ports.destroy(target);
 
                 // The alias is only free once its tenant and resources are gone.
                 // Released BEFORE `markTornDown` so a failure here leaves the row
-                // pending and the (idempotent) release retries next tick.
+                // pending and the (idempotent) release retries next tick. Asked
+                // again: a release created during the destroy still owns the claim.
                 // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small
-                await ports.releaseAlias(target.alias, target.projectId);
+                if (!(await ports.aliasInUse(target.alias))) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small
+                    await ports.releaseAlias(target.alias, target.projectId);
+                }
             }
 
             // eslint-disable-next-line no-await-in-loop -- sequential; volumes are small

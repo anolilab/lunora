@@ -219,6 +219,19 @@ describe(teardownPorts, () => {
         ]);
     });
 
+    it("reads whether an alias has a deployment that is not destroyed, now", async () => {
+        const database = fakeControlPlaneDb({
+            deployments: [
+                { _id: "old", alias: "a", kind: "preview", projectId: "prj_1", scriptName: "a", status: "destroyed" },
+                { _id: "new", alias: "b", kind: "preview", projectId: "prj_1", scriptName: "b", status: "queued" },
+            ],
+        });
+        const ports = teardownPorts(database, noop, 1000, everyTarget);
+
+        await expect(ports.aliasInUse("a")).resolves.toBe(false);
+        await expect(ports.aliasInUse("b")).resolves.toBe(true);
+    });
+
     it("stamps teardownAt + updatedAt on the deployments table when marking torn down", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const ports = teardownPorts(fakeControlPlaneDb({}, { patch }), noop, 5000, everyTarget);
