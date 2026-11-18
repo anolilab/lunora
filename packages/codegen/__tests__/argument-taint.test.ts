@@ -703,6 +703,90 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.env.PREFIX}/\${args.key ?? args.other}\`);`))).toBe(false);
         });
 
+        it("rejects a composed local whose own initializer falls back to a caller value", () => {
+            expect.assertions(4);
+
+            const owned = `(await ctx.db.files.findFirstOrThrow({ where: { ownerId: ctx.auth.userId } }))`;
+
+            expect(isScopedByIdentity(sinkArgument(`const selectedKey = ${owned}.ownerId ?? args.key;\nSINK(\`\${selectedKey}/\${args.name}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId ?? args.key;\nSINK(\`\${uid}/\${args.name}\`);`))).toBe(false);
+            // The same fallback after the identity prefix lands under the caller's own key space.
+            expect(isScopedByIdentity(sinkArgument(`const name = args.key ?? args.other;\nSINK(\`\${ctx.auth.userId}/\${name}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const uid = ctx.auth.userId;\nSINK(\`\${uid}/\${args.name}\`);`))).toBe(true);
+        });
+
+        it("judges a composed local by where its reference lands in the key", () => {
+            expect.assertions(2);
+
+            expect(isScopedByIdentity(sinkArgument(`const suffix = \`\${args.name ?? args.other}\`;\nSINK(\`\${ctx.auth.userId}/\${suffix}\`);`))).toBe(true);
+            expect(isScopedByIdentity(sinkArgument(`const prefix = \`\${args.name ?? args.other}\`;\nSINK(\`\${prefix}/\${ctx.auth.userId}\`);`))).toBe(false);
+        });
+
+        it("places a fallback inside an expanded local by its own part in the whole key", () => {
+            expect.assertions(4);
+
+            const identityLed = `const prefix = \`\${ctx.auth.userId}/\${args.a ?? args.b}\`;\n`;
+
+            // The identity leads the local, and the local leads the key.
+            expect(isScopedByIdentity(sinkArgument(`${identityLed}SINK(\`\${prefix}/file\`);`))).toBe(true);
+            // The fallback comes before the identity inside the local.
+            expect(isScopedByIdentity(sinkArgument(`const prefix = \`\${args.a ?? args.b}/\${ctx.auth.userId}\`;\nSINK(\`\${prefix}/file\`);`))).toBe(false);
+            // The local comes before the identity in the key.
+            expect(isScopedByIdentity(sinkArgument(`const suffix = \`\${args.a ?? args.b}/x\`;\nSINK(\`\${suffix}/\${ctx.auth.userId}\`);`))).toBe(false);
+            // A caller segment ahead of an identity-led local, as refused when written inline.
+            expect(isScopedByIdentity(sinkArgument(`${identityLed}SINK(\`\${args.tenant}/\${prefix}\`);`))).toBe(false);
+        });
+
+        it("rejects a row read whose owner predicate has any caller alternative", () => {
+            expect.assertions(2);
+
+            const read = (owner: string): string =>
+                `const row = await ctx.db.files.findFirst({ where: { ownerId: ${owner} } });\nSINK(\`\${row._id}/\${args.k}\`);`;
+
+            expect(isScopedByIdentity(sinkArgument(read("ctx.auth.userId ?? args.victim")))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(read("args.victim ?? ctx.auth.userId")))).toBe(false);
+        });
+
+        it("rejects an identity read off a handler ctx parameter with a caller default", () => {
+            expect.assertions(2);
+
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId}/\${args.k}\`);`, "{ args, ctx = args.fakeCtx }"))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`SINK(\`\${ctx.auth.userId}/\${args.k}\`);`, "{ args, ctx }"))).toBe(true);
+        });
+
+        it("follows a query object held in a local to the read's own where", () => {
+            expect.assertions(2);
+
+            const sink = `SINK(\`\${row._id}/\${args.k}\`);`;
+
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(`const query = { where: { ownerId: ctx.auth.userId } };\nconst row = await ctx.db.files.findFirst(query);\n${sink}`),
+                ),
+            ).toBe(true);
+            expect(
+                isScopedByIdentity(
+                    sinkArgument(
+                        `const query = { where: { ownerId: ctx.auth.userId } };\nconst row = await ctx.db.files.findFirst({ where: { id: args.id }, with: { owner: query } });\n${sink}`,
+                    ),
+                ),
+            ).toBe(false);
+        });
+
+        it("rejects, without crashing, an identity whose default names itself or a cycle", () => {
+            expect.assertions(2);
+
+            expect(isScopedByIdentity(sinkArgument(`const { userId = userId } = ctx.auth;\nSINK(\`\${userId}/\${args.name}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const { a = b, b = a } = ctx.auth;\nSINK(\`\${a}/\${args.name}\`);`))).toBe(false);
+        });
+
+        it("rejects an identity destructured with a default the caller can supply", () => {
+            expect.assertions(2);
+
+            expect(isScopedByIdentity(sinkArgument(`const { userId = args.victim } = ctx.auth;\nSINK(\`\${userId}/\${args.name}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const { userId } = ctx.auth;\nSINK(\`\${userId}/\${args.name}\`);`))).toBe(true);
+        });
+
         it("rejects a key scoped only by a server-trusted ctx value that names no caller", () => {
             expect.assertions(3);
 

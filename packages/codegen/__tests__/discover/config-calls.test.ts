@@ -175,7 +175,12 @@ describe("discoverConfigCalls", () => {
         const found = discoverConfigCalls(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ analyzable: true, callee: "createInboundEmailHandler", file: "src/server/index", presentKeys: ["dispatch", "parse"] });
+        expect(found[0]).toMatchObject({
+            analyzable: true,
+            callee: "createInboundEmailHandler",
+            file: "../src/server/index",
+            presentKeys: ["dispatch", "parse"],
+        });
     });
 
     // eslint-disable-next-line no-secrets/no-secrets -- an advisor rule id in a test title, not a credential

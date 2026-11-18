@@ -429,6 +429,28 @@ export const app = defineApp().extend(() => ({ allowUnauthenticatedShardAccess: 
         expect(named(advisories, "advisor_suppression_unused")).toHaveLength(0);
     });
 
+    it("keeps a root worker entry and a lunora/ file of the same relative path apart", () => {
+        expect.assertions(3);
+
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        mkdirSync(join(workdir, "lunora", "src"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "server.ts"), `export const unrelated = 1;\n`, "utf8");
+        writeFileSync(join(workdir, "src", "worker.ts"), OPEN_APP, "utf8");
+        writeFileSync(
+            join(workdir, "lunora", "src", "worker.ts"),
+            `// lunora-advisor-exempt ${SECRET_RULE} -- written for this file only
+export const unrelated = 1;
+`,
+            "utf8",
+        );
+
+        const { advisories } = runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
+
+        expect(named(advisories, SECRET_RULE)[0]?.metadata.file).toBe("../src/worker");
+        expect(named(advisories, SECRET_RULE)[0]?.suppressed).toBeUndefined();
+        expect(named(advisories, "advisor_suppression_unused")[0]?.metadata.file).toBe("lunora/src/worker.ts");
+    });
+
     it("matches a directive for a finding below the severity floor and hides its own warnings below the floor", () => {
         expect.assertions(2);
 

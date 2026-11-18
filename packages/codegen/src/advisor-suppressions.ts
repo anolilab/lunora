@@ -339,16 +339,16 @@ const applySuppressions = (project: Project, projectRoot: string, lunoraDirector
     const parsed: ParsedDirective[] = [...wranglerDirectivesOf(projectRoot)];
 
     // The project holds the `lunora/` tree plus the worker-entry files the security lints scan
-    // (`listSecurityScanFiles`), which report their file relative to the project root.
+    // (`listSecurityScanFiles`). Findings name every file relative to `lunora/`, a worker entry as
+    // `../src/worker`, so a root file never shares a key with a `lunora/` file of the same path.
     for (const sourceFile of project.getSourceFiles()) {
         const absolute = sourceFile.getFilePath();
-        const inside = relative(lunoraDirectory, absolute);
+        const inside = relative(lunoraDirectory, absolute).split(sep).join("/");
         const display = relativeDisplay(projectRoot, absolute);
+        const isLunora = inside !== "" && !inside.startsWith("..");
 
-        if (inside !== "" && !inside.startsWith("..")) {
-            parsed.push(...tsDirectivesOf(sourceFile, display, normaliseFile(inside.split(sep).join("/"))));
-        } else if (!display.startsWith("..") && !display.split("/").includes("node_modules") && !sourceFile.isDeclarationFile()) {
-            parsed.push(...tsDirectivesOf(sourceFile, display, normaliseFile(display)));
+        if (isLunora || (!display.startsWith("..") && !display.split("/").includes("node_modules") && !sourceFile.isDeclarationFile())) {
+            parsed.push(...tsDirectivesOf(sourceFile, display, normaliseFile(inside)));
         }
     }
 

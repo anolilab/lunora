@@ -93,7 +93,7 @@ describe("discoverExportSinks", () => {
         writeFileSync(join(workdir, "src", "server", "index.ts"), `export const archive = r2Sink({ name: "archive", prefix: "cdc" });`, "utf8");
 
         const sinks = discoverExportSinks(project, join(workdir, "lunora"));
-        const entrySink = sinks.find((sink) => sink.file === "src/server/index");
+        const entrySink = sinks.find((sink) => sink.file === "../src/server/index");
 
         expect(entrySink).toBeDefined();
         expect(entrySink).toMatchObject({ analyzable: true, factory: "r2Sink", presentKeys: ["name", "prefix"] });

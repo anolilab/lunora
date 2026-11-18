@@ -160,6 +160,39 @@ const isOptionsPattern = (parameter: ParameterDeclaration): boolean =>
 type Policy = "discover" | "trust";
 
 /**
+ * `path` for the element that binds it under the trust policy, or `undefined` when a default can replace it. A default
+ * (`const { userId = args.victim } = ctx.auth`) is the value whenever the surface lacks the field, so it is trusted
+ * only when it is that same surface (`= ctx.auth.userId`).
+ */
+const trustedThroughDefault = (element: BindingElement, path: ContextPath, hops: number): ContextPath | undefined => {
+    const fallback = element.getInitializer();
+
+    if (fallback === undefined) {
+        return path;
+    }
+
+    // Each hop through a default spends one, so a default naming itself (`const { userId = userId } = ctx.auth`) or a
+    // cycle of them (`{ a = b, b = a }`) runs out and stays untrusted instead of recursing forever.
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the element and expression resolvers recurse into each other
+    const fallbackPath = hops > 0 ? contextPathOf(fallback, "trust", hops - 1) : undefined;
+
+    return fallbackPath?.length === path.length && fallbackPath.every((segment, index) => segment === path[index]) ? path : undefined;
+};
+
+/**
+ * The path an element of a `{ ctx, args }` options parameter binds: the ctx for its `ctx` key, nothing for any other.
+ * Under the trust policy a default (`({ args, ctx = args.fakeCtx })`) binds the caller's object whenever no ctx is
+ * passed, so it is judged like any other default.
+ */
+const optionsContextPath = (element: BindingElement, key: string, policy: Policy, hops: number): ContextPath | undefined => {
+    if (key !== "ctx") {
+        return undefined;
+    }
+
+    return policy === "trust" ? trustedThroughDefault(element, [], hops) : [];
+};
+
+/**
  * The {@link ContextPath} a destructured element binds: its key appended to the
  * path of what the pattern destructures — a handler's positional ctx, an
  * enclosing element's path, or a variable's initializer. In a handler's
@@ -178,7 +211,7 @@ const bindingContextPath = (element: BindingElement, policy: Policy, hops: numbe
 
     if (Node.isParameterDeclaration(holder)) {
         if (!isHandlerContextParameter(holder) || isOptionsPattern(holder)) {
-            return key === "ctx" ? [] : undefined;
+            return optionsContextPath(element, key, policy, hops);
         }
 
         base = [];
@@ -189,7 +222,9 @@ const bindingContextPath = (element: BindingElement, policy: Policy, hops: numbe
         base = contextPathOf(holder.getInitializer(), policy, hops - 1);
     }
 
-    return base === undefined ? undefined : [...base, key];
+    const path = base === undefined ? undefined : [...base, key];
+
+    return policy === "trust" && path !== undefined ? trustedThroughDefault(element, path, hops) : path;
 };
 
 /** The {@link ContextPath} `node` denotes under `policy`, or `undefined` when it is no ctx surface. */
@@ -396,6 +431,21 @@ const ECHOING_CONTEXT_METHODS: ReadonlySet<string> = new Set([
  */
 const CALLBACK_RESULT_METHODS: ReadonlySet<string> = new Set(["catch", "flatMap", "map", "reduce", "reduceRight", "then"]);
 
+/** Whether `element`, or an element of the same destructuring that encloses it, has a default. */
+const hasDefaultedElement = (element: BindingElement): boolean => {
+    for (
+        let current: TsNode | undefined = element;
+        Node.isBindingElement(current) || Node.isObjectBindingPattern(current) || Node.isArrayBindingPattern(current);
+        current = current.getParent()
+    ) {
+        if (Node.isBindingElement(current) && current.getInitializer() !== undefined) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 /**
  * Whether `value` is a server-side value ROOTED in the handler's ctx, under
  * the trust policy: its member / call chain — through property and element
@@ -425,6 +475,12 @@ const isContextRooted = (value: TsNode, hops = MAX_CONTEXT_HOPS): boolean => {
 
     const declaration = declarationOf(current);
     const variable = Node.isBindingElement(declaration) ? declaration.getFirstAncestorByKind(SyntaxKind.VariableDeclaration) : declaration;
+
+    // `const { userId = args.victim } = ctx.auth`, or a default on any element enclosing it, holds the caller's value
+    // whenever the field is missing, so the rooted initializer does not vouch for it.
+    if (Node.isBindingElement(declaration) && hasDefaultedElement(declaration)) {
+        return false;
+    }
     const initializer = isConstDeclaration(variable) && hops > 0 ? variable.getInitializer() : undefined;
 
     return initializer !== undefined && isContextRooted(initializer, hops - 1);
