@@ -2,6 +2,7 @@ import { LunoraError } from "@lunora/server";
 
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
+import { collectAll } from "./paginate";
 
 type AliasOwnershipRow = Document_<"aliasOwnership">;
 
@@ -167,7 +168,8 @@ export const releaseIdleAliases = async (
     context: MutationContext,
     where: { organizationId: Id<"organizations"> } | { projectId: Id<"projects"> },
 ): Promise<void> => {
-    const { page: deployments } = await context.db.deployments.findMany({ where });
+    // Every page: a standing release past the first one still holds its alias.
+    const deployments = await collectAll<Document_<"deployments">>((cursor) => context.db.deployments.findMany({ cursor, where }));
     const claimed = new Set(pendingTeardown(deployments).map((row) => row.alias ?? row.scriptName));
     const { page: owned } = await context.db.aliasOwnership.findMany({ where });
 

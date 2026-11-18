@@ -114,10 +114,12 @@ const assertKeepsWorkerData = (
 };
 
 /** The live deployment of one alias + kind — the release currently on that alias's Worker. */
-const liveRelease = async (context: QueryContext, row: Pick<DeploymentRow, "alias" | "kind" | "projectId">): Promise<DeploymentRow | undefined> => {
-    const { page } = await context.db.deployments.findMany({ where: { projectId: row.projectId } }); // secret-scanner:allow -- domain field name
+const liveRelease = async (context: QueryContext, row: Pick<DeploymentRow, "kind" | "projectId" | "scriptName">): Promise<DeploymentRow | undefined> => {
+    // Filtered in the query: a busy project's history outgrows one page, and the live release must not fall off it.
+    // The script name is the alias, and unlike `alias` it is set on every row.
+    const { page } = await context.db.deployments.findMany({ where: { kind: row.kind, projectId: row.projectId, scriptName: row.scriptName, status: "live" } }); // secret-scanner:allow -- domain field name
 
-    return page.filter((d) => d.alias === row.alias && d.kind === row.kind && d.status === "live").toSorted((a, b) => b.createdAt - a.createdAt)[0];
+    return page.toSorted((a, b) => b.createdAt - a.createdAt)[0];
 };
 
 /**
@@ -466,9 +468,10 @@ export const create = mutation
         // updates it in place so its Durable Object data persists. `version`
         // numbers releases per (project, kind) for history and rollback; the
         // release itself is the payload the deploy handler stores under this id.
-        const { page: existing } = await context.db.deployments.findMany({ where: { projectId: arguments_.projectId } }); // secret-scanner:allow -- domain field name
+        // Every page: the data-loss guard and the version number need the alias's whole history, not its first 1000 rows.
+        const existing = await collectAll<DeploymentRow>((cursor) => context.db.deployments.findMany({ cursor, where: { projectId: arguments_.projectId } })); // secret-scanner:allow -- domain field name
         const version = 1 + Math.max(0, ...existing.filter((d) => d.kind === arguments_.kind).map((d) => d.version ?? 0));
-        const previous = await liveRelease(context, { alias: arguments_.scriptName, kind: arguments_.kind, projectId: arguments_.projectId }); // secret-scanner:allow -- domain field name
+        const previous = await liveRelease(context, { kind: arguments_.kind, projectId: arguments_.projectId, scriptName: arguments_.scriptName }); // secret-scanner:allow -- domain field name
 
         const { now } = context;
         // A row predating targets answers NULL, which is the default target.
@@ -551,8 +554,10 @@ export const activate = mutation
         }
 
         const { now } = context;
-        const { page } = await context.db.deployments.findMany({ where: { projectId: deployment.projectId } }); // secret-scanner:allow -- domain field name
-        const others = page.filter((d) => d._id !== id && d.alias === deployment.alias && d.kind === deployment.kind && d.status === "live");
+        const { page } = await context.db.deployments.findMany({
+            where: { kind: deployment.kind, projectId: deployment.projectId, scriptName: deployment.scriptName, status: "live" }, // secret-scanner:allow -- domain field name
+        });
+        const others = page.filter((d) => d._id !== id);
 
         // Releases of one alias are not serialized, so an older one can finish
         // converging after a newer one already went live. Recording it would hand

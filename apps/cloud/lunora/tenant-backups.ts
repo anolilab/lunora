@@ -82,10 +82,9 @@ const projectRows = async (context: QueryContext, projectId: Id<"projects">): Pr
  * alias with its own database, which is disposable by design.
  */
 const productionTarget = async (context: QueryContext, projectId: Id<"projects">): Promise<TenantTarget> => {
-    const { page } = await context.db.deployments.findMany({ where: { projectId } }); // secret-scanner:allow -- domain field name
-    const live = page
-        .filter((row) => row.kind === "production" && row.status === "live" && row.alias != null && row.url != null)
-        .toSorted((a, b) => b.createdAt - a.createdAt)[0];
+    // Filtered in the query, so a project with more than a page of releases still finds its live one.
+    const { page } = await context.db.deployments.findMany({ where: { kind: "production", projectId, status: "live" } }); // secret-scanner:allow -- domain field name
+    const live = page.filter((row) => row.alias != null && row.url != null).toSorted((a, b) => b.createdAt - a.createdAt)[0];
     const hasToken = live?.adminToken ?? (live?.adminTokenCiphertext && live.adminTokenIv);
 
     if (!live?.alias || !live.url || !hasToken) {

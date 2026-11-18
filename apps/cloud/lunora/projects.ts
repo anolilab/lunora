@@ -18,6 +18,7 @@ import { claimFirstFreeAlias, pendingTeardown, releaseIdleAliases } from "./depl
 import { queueCertificateReleases } from "./domains";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
+import { collectAll } from "./paginate";
 import { purgeScopedRows } from "./purge";
 import { deployTarget, placementHost } from "./tables/shared";
 import { boundedString, LIMITS } from "./validators";
@@ -272,7 +273,7 @@ export const setTarget = mutation
             return;
         }
 
-        const { page: deployments } = await context.db.deployments.findMany({ where: { projectId } });
+        const deployments = await collectAll<Document_<"deployments">>((cursor) => context.db.deployments.findMany({ cursor, where: { projectId } }));
         const pending = pendingTeardown(deployments);
 
         if (pending.length > 0) {
@@ -430,7 +431,7 @@ export const remove = mutation
 
         // Deployments transition rather than vanish, so the teardown sweep still
         // has something to tear down.
-        const { page: deployments } = await context.db.deployments.findMany({ where: { projectId: id } });
+        const deployments = await collectAll<Document_<"deployments">>((cursor) => context.db.deployments.findMany({ cursor, where: { projectId: id } }));
         const live = deployments.filter((row) => row.status !== "destroyed");
 
         for (const deployment of live) {
