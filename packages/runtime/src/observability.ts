@@ -12,7 +12,6 @@
  * error with a telemetry-pipeline failure).
  */
 
-/* eslint-disable no-secrets/no-secrets -- the entropy heuristic flags a CamelCase sink-context type name quoted in a doc comment below, not a credential */
 import { redactCredentials } from "@lunora/observability";
 
 import { toPlainOperatorContext } from "../../../shared/error-detail";
@@ -174,7 +173,7 @@ export interface ObservabilityEvent {
  * here under the runtime's historical names.
  *
  * `LogLevel` is the canonical `ctx.log` severity union (the five console tiers
- * plus `trace`/`fatal`); `ObservabilitySinkContext` is the shared per-event sink
+ * plus `trace`/`fatal`); ObservabilitySinkContext is the shared per-event sink
  * context (a `waitUntil` to keep a background send alive past the response).
  */
 export type LogLevel = ContextLogLevel;

@@ -1,4 +1,3 @@
-/* eslint-disable no-secrets/no-secrets -- camelCase identifiers in prose, not secrets */
 import type { EnvironmentProviders } from "@angular/core";
 import { inject, InjectionToken, makeEnvironmentProviders } from "@angular/core";
 import type { LunoraClientOptions } from "@lunora/client";
@@ -17,7 +16,7 @@ import { LunoraClient } from "@lunora/client";
  * gate their `client.subscribe(...)` / `client.stream(...)` on the Angular
  * browser platform, so an SSR
  * render opens no socket even though Node 22+ exposes a global `WebSocket` (see
- * `shouldOpenSubscription` in `./platform`). But **server-side data-loading** (a
+ * shouldOpenSubscription in `./platform`). But **server-side data-loading** (a
  * `query`/`mutation` run during SSR) with `""` builds a relative URL that native
  * `fetch` rejects (`TypeError: Failed to parse URL`); for that, pass an explicit
  * `url` to {@link provideLunora}.

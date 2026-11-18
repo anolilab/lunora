@@ -10,10 +10,8 @@
  * renderers (the envelope builder, CLI, overlay, MCP, Studio) import.
  */
 
-/* eslint-disable import/exports-last -- a data + types module: the public error-code types are declared next to the catalog they describe; grouping all exports at the end would scatter the taxonomy. */
-
 /** A catalog entry: the fixed metadata for one error `code`. */
-export interface ErrorCatalogEntry {
+interface ErrorCatalogEntry {
     /**
      * When `true`, this code's `message` must NOT cross the wire — an internal
      * failure or unhandled invariant may carry SQL fragments, file paths, or
@@ -32,7 +30,7 @@ export interface ErrorCatalogEntry {
  * codes (passing an explicit `status`); those are added here as their package is
  * migrated. The keys of this object form the {@link LunoraErrorCode} union.
  */
-export const ERROR_CATALOG = {
+const ERROR_CATALOG = {
     BAD_REQUEST: { status: 400, title: "Bad request" },
 
     /**
@@ -772,7 +770,7 @@ export const ERROR_CATALOG = {
 void (ERROR_CATALOG satisfies Record<string, ErrorCatalogEntry>);
 
 /** A well-known Lunora error code (a key of {@link ERROR_CATALOG}). */
-export type LunoraErrorCode = keyof typeof ERROR_CATALOG;
+type LunoraErrorCode = keyof typeof ERROR_CATALOG;
 
 /**
  * Look up a catalog entry by `code`, or `undefined` when the code isn't
@@ -783,7 +781,7 @@ export type LunoraErrorCode = keyof typeof ERROR_CATALOG;
  * `Object.hasOwn` to only ever return an own entry. Reused by the
  * `LunoraError` constructor and {@link isInternalCode}.
  */
-export const getCatalogEntry = (code: string): ErrorCatalogEntry | undefined =>
+const getCatalogEntry = (code: string): ErrorCatalogEntry | undefined =>
     Object.hasOwn(ERROR_CATALOG, code) ? (ERROR_CATALOG as Record<string, ErrorCatalogEntry>)[code] : undefined;
 
 /**
@@ -794,4 +792,7 @@ export const getCatalogEntry = (code: string): ErrorCatalogEntry | undefined =>
  * Throwing a `LunoraError` with any non-internal code is the author's vouch that
  * its message is client-safe; an unknown/unregistered code is treated as safe.
  */
-export const isInternalCode = (code: string): boolean => getCatalogEntry(code)?.internal === true;
+const isInternalCode = (code: string): boolean => getCatalogEntry(code)?.internal === true;
+
+export type { ErrorCatalogEntry, LunoraErrorCode };
+export { ERROR_CATALOG, getCatalogEntry, isInternalCode };

@@ -13,8 +13,6 @@ export type CloudflarePluginOptions = Record<string, unknown>;
  */
 export type OverlayPluginOptions = NonNullable<Parameters<typeof errorOverlayPlugin>[0]>;
 
-/* eslint-disable no-secrets/no-secrets -- false positive: a `{@link}` target in the doc block below, not a credential */
-
 /**
  * Shard Durable Object configuration for the AUTO-COMPOSED class-A worker.
  *
@@ -24,9 +22,9 @@ export type OverlayPluginOptions = NonNullable<Parameters<typeof errorOverlayPlu
  * The composed entry emitted `createShardDO()` bare, which left `cdc` and the
  * whole reactive query cache unreachable for every class-A template no matter
  * what the app wanted. `vite.config.ts` is the one place such an app configures
- * Lunora, so it is where these land — the same route
- * {@link LunoraPluginOptions.allowUnauthenticatedShardAccess} already takes into
- * the same emitted entry.
+ * Lunora, so it is where these land — the same route the
+ * allowUnauthenticatedShardAccess option of {@link LunoraPluginOptions} already
+ * takes into the same emitted entry.
  *
  * Deliberately only the PLAIN-DATA half of the generated `ShardDOConfig`. The
  * rest of that type is `(env) => …` factories (`scheduler`, `storage`,
@@ -56,8 +54,6 @@ export interface LunoraShardConfig {
     /** Resolution policy for a relation-crossing `where` whose child is co-located in this shard: `"auto"` (cost-based, the engine default), `"always"` (inline correlated EXISTS) or `"never"` (universal semijoin). All three return identical rows. */
     relationExistsPushDown?: "always" | "auto" | "never";
 }
-
-/* eslint-enable no-secrets/no-secrets -- re-enable after the LunoraShardConfig doc block */
 
 export interface LunoraPluginOptions {
     /**

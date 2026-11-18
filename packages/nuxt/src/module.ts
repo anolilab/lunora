@@ -66,7 +66,6 @@
  * the server) at build time, the same stance it already takes for `worker.ts`.
  */
 
-/* eslint-disable import/exports-last -- the public ModuleOptions type is declared next to the module definition it configures rather than grouped at the file end */
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -145,7 +144,7 @@ const lunoraTsSourceResolver = (rootDirectory: string): TsSourceResolverPlugin =
 const LUNORA_ROUTE_PREFIX = "/_lunora";
 
 /** Options for the `@lunora/nuxt` module (configurable under the `lunora` key in `nuxt.config`). */
-export interface ModuleOptions {
+interface ModuleOptions {
     /**
      * Module specifier of the Lunora app entry — its default export is the built
      * worker (`defineApp().build()` / `createWorker(...)`) and it re-exports
@@ -251,4 +250,5 @@ const lunoraNuxtModule: LunoraNuxtModule = defineNuxtModule<ModuleOptions>({
     },
 });
 
+export type { ModuleOptions };
 export default lunoraNuxtModule;

@@ -260,16 +260,20 @@ export type KvNamespaceListResult<Metadata = unknown> =
  * published types. `this: void` keeps the members usable as bare references, which
  * is what every `expect(double.query)` assertion in those tests does.
  */
-/* eslint-disable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type -- bivariant params (Cloudflare declares mutable arrays), and `this: void` is the `allowAsThisParameter` case the repo config does not enable */
 export interface VectorizeIndexLike {
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameter bivariant, so Cloudflare's mutable-array binding still fits
     deleteByIds(this: void, ids: ReadonlyArray<string>): Promise<VectorizeDeleteMutation>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameter bivariant, so Cloudflare's mutable-array binding still fits
     describe?(this: void): Promise<VectorizeIndexDetails>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameter bivariant, so Cloudflare's mutable-array binding still fits
     getByIds(this: void, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorizeVector>>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameter bivariant, so Cloudflare's mutable-array binding still fits
     insert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameter bivariant, so Cloudflare's mutable-array binding still fits
     query(this: void, vector: VectorValues, options?: VectorizeQueryOptions): Promise<VectorizeMatches>;
+    // eslint-disable-next-line @typescript-eslint/method-signature-style -- method syntax keeps the parameter bivariant, so Cloudflare's mutable-array binding still fits
     upsert(this: void, vectors: ReadonlyArray<VectorizeVector>): Promise<VectorizeUpsertMutation>;
 }
-/* eslint-enable @typescript-eslint/method-signature-style, @typescript-eslint/no-invalid-void-type */
 
 export type VectorMetric = "cosine" | "euclidean" | "dot-product";
 

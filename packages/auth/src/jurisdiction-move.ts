@@ -47,7 +47,6 @@
  * `done: true` means the source's fingerprint of every table matches the target's
  * record. Purge re-checks the same fingerprints inside the transaction that drops.
  */
-/* eslint-disable unicorn/no-null -- SQL NULL: a bound parameter or a hashed column value must be `null`, which `undefined` is not */
 import { LunoraError } from "@lunora/errors";
 import { decodeWire, encodeWire } from "@lunora/wire";
 
@@ -214,6 +213,7 @@ const countRows = (storage: DoStorageLike, table: string): number => Number(all(
 const encodeValues = (values: unknown[]): string => JSON.stringify(encodeWire(values));
 
 /** Digest of a row's values over `columns` (sorted), as a 64-bit integer. */
+// eslint-disable-next-line unicorn/no-null -- SQL NULL: a missing column hashes as `null`, which `undefined` is not
 const rowDigest = (row: Row, columns: string[]): bigint => BigInt(`0x${contentDigest(encodeValues(columns.map((column) => row[column] ?? null)))}`);
 
 /**
@@ -533,6 +533,7 @@ const applyRow = (storage: DoStorageLike, table: string, row: Row, context: { fo
         throw new TypeError(`${table} has too many columns to copy`);
     }
 
+    // eslint-disable-next-line unicorn/no-null -- SQL NULL: a bound key parameter must be `null`, which `undefined` is not
     const key = keys.map((column) => row[column] ?? null);
     const k = encodeValues(key);
     const h = rowDigest(row, columns).toString(16);

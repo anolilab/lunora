@@ -1,5 +1,3 @@
-/* eslint-disable jsdoc/check-indentation, jsdoc/no-multi-asterisks -- intentional nested bullet list + `*emphasis*` documenting the inbound security model */
-
 /**
  * `createInboundEmailHandler()` — the inbound counterpart to the outbound
  * `cloudflareSend` callback-injection pattern (`cloudflare-transport.ts`).
@@ -17,23 +15,22 @@
  * the dev capture sink uses (`from-env.ts`).
  *
  * SECURITY — inbound mail is untrusted and dispatch runs privileged:
- * - Cloudflare Email Routing authenticates only the *recipient* domain, not the
- *   *sender*. The envelope `from` and message body are trivially spoofable, so a
- *   handler MUST NOT make trust/authorization decisions on `email.from`. Gate on
- *   `email.authentication` (DKIM/SPF/DMARC verdicts) and/or the `verify` hook.
+ * - Cloudflare Email Routing authenticates only the *recipient* domain, not
+ * the *sender*. The envelope `from` and message body are trivially spoofable, so a
+ * handler MUST NOT make trust/authorization decisions on `email.from`. Gate on
+ * `email.authentication` (DKIM/SPF/DMARC verdicts) and/or the `verify` hook.
  * - `dispatchToLunoraFunction` marks the shard RPC a **trusted system dispatch**
- *   (the same marker the scheduler/cron path sets), so the target may be an
- *   `internalMutation`/`internalAction` — and it should be, because a public
- *   `mutation` reachable this way is equally reachable from any browser client,
- *   which can forge the whole message. The dispatch carries no caller identity,
- *   so an `rls()` policy on the target sees an anonymous caller rather than
- *   being bypassed. Combined with the spoofable sender, an inbound function must
- *   treat its input as fully attacker-controlled and do its own authorization.
+ * (the same marker the scheduler/cron path sets), so the target may be an
+ * `internalMutation`/`internalAction` — and it should be, because a public
+ * `mutation` reachable this way is equally reachable from any browser client,
+ * which can forge the whole message. The dispatch carries no caller identity,
+ * so an `rls()` policy on the target sees an anonymous caller rather than
+ * being bypassed. Combined with the spoofable sender, an inbound function must
+ * treat its input as fully attacker-controlled and do its own authorization.
  * - `onError` reasons are delivered to the (attacker-controlled) sender as a
- *   bounce, so the default never reflects internal error detail (see
- *   `rejectOnError`).
+ * bounce, so the default never reflects internal error detail (see
+ * `rejectOnError`).
  */
-/* eslint-enable jsdoc/check-indentation, jsdoc/no-multi-asterisks */
 import { LunoraError } from "@lunora/errors";
 
 import { toBase64 } from "../../../../shared/base64";
