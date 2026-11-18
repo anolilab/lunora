@@ -42,34 +42,78 @@ export interface QueueBatchLike {
 }
 
 /**
+ * The body cap of a tenant's `POST /_lunora/queue` (`QUEUE_DISPATCH_MAX_BODY_BYTES`
+ * in `@lunora/runtime`): a forward past it is refused before any handler runs.
+ */
+export const QUEUE_FORWARD_MAX_BODY_BYTES = 16 * 1_048_576;
+
+const encoder = new TextEncoder();
+
+/**
+ * Split a batch into forward bodies of at most {@link QUEUE_FORWARD_MAX_BODY_BYTES}.
+ * A full batch is 100 messages of up to 128 KiB, but JSON escaping grows a body
+ * up to sixfold (a control character becomes `\u00XX`), so a valid batch can
+ * serialize past the cap; whole, the tenant would refuse it every time until
+ * the queue drops it. One message alone always fits.
+ */
+const forwardBodies = (batch: QueueBatchLike, queue: string): { body: string; ids: string[] }[] => {
+    const prefix = '{"messages":[';
+    const suffix = `],"queue":${JSON.stringify(queue)}}`;
+    const envelopeBytes = encoder.encode(prefix + suffix).byteLength;
+    const chunks: { bytes: number; ids: string[]; parts: string[] }[] = [];
+
+    for (const message of batch.messages) {
+        const part = JSON.stringify({ body: message.body, id: message.id });
+        // +1 for the separating comma.
+        const bytes = encoder.encode(part).byteLength + 1;
+        const last = chunks.at(-1);
+
+        if (last !== undefined && last.bytes + bytes <= QUEUE_FORWARD_MAX_BODY_BYTES) {
+            last.bytes += bytes;
+            last.ids.push(message.id);
+            last.parts.push(part);
+        } else {
+            chunks.push({ bytes: envelopeBytes + bytes, ids: [message.id], parts: [part] });
+        }
+    }
+
+    return chunks.map(({ ids, parts }) => {
+        return { body: prefix + parts.join(",") + suffix, ids };
+    });
+};
+
+/**
  * Forward a batch to its tenant's `/_lunora/queue` endpoint, gated by its admin
- * token. Returns the message ids the tenant asked to retry; a delivery failure
- * throws and the caller retries the whole batch.
+ * token, in as many requests as its size needs ({@link forwardBodies}). Returns
+ * the message ids to retry: those the tenant asked to retry, and every message
+ * of a request that failed.
  *
  * The tenant knows its queues by declared name and binding, never by this
  * platform's per-project queue name, so the alias prefix is stripped and the
  * binding (in its resource form) is what the tenant's registry resolves.
  */
 const dispatchQueueBatch = async (dispatch: TenantDispatch, target: { adminToken: string; resourceRef: string }, batch: QueueBatchLike): Promise<string[]> => {
-    const response = await dispatch(target)(
-        "/_lunora/queue",
-        JSON.stringify({
-            messages: batch.messages.map((message) => {
-                return { body: message.body, id: message.id };
-            }),
-            queue: bindingOfResourceName(batch.queue) ?? batch.queue,
-        }),
-        "application/json",
-    );
+    const retry: string[] = [];
 
-    if (!response.ok) {
-        throw new Error(`queue forward failed: ${String(response.status)}`);
+    for (const { body, ids } of forwardBodies(batch, bindingOfResourceName(batch.queue) ?? batch.queue)) {
+        try {
+            // eslint-disable-next-line no-await-in-loop -- in order, one request at a time: each body may be up to the tenant's 16 MiB cap
+            const response = await dispatch(target)("/_lunora/queue", body, "application/json");
+
+            if (!response.ok) {
+                throw new Error(`queue forward failed: ${String(response.status)}`);
+            }
+
+            // eslint-disable-next-line no-await-in-loop -- see above
+            const result = await readJson<{ retry?: unknown }>(response);
+
+            retry.push(...(Array.isArray(result.retry) ? result.retry : []).filter((id): id is string => typeof id === "string"));
+        } catch {
+            retry.push(...ids);
+        }
     }
 
-    const result = await readJson<{ retry?: unknown }>(response);
-    const retry: unknown[] = Array.isArray(result.retry) ? result.retry : [];
-
-    return retry.filter((id): id is string => typeof id === "string");
+    return retry;
 };
 
 /** What {@link deliverQueueBatch} needs: the in-network paths, the live deployments, and the store their organizations are read from. */
@@ -147,11 +191,7 @@ export const deliverQueueBatch = async (batch: QueueBatchLike, ports: QueueDeliv
     let retry = new Set<string>();
 
     if (target) {
-        try {
-            retry = new Set(await dispatchQueueBatch(target.dispatch, target, batch));
-        } catch {
-            retry = new Set(batch.messages.map((message) => message.id));
-        }
+        retry = new Set(await dispatchQueueBatch(target.dispatch, target, batch));
     }
 
     for (const message of batch.messages) {

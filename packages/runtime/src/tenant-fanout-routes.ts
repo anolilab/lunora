@@ -40,10 +40,12 @@ const QUEUE_DISPATCH_PATH = "/_lunora/queue";
  * value PUT declares `KV_VALUE_MAX_BODY_BYTES`. Derived from what Cloudflare
  * Queues can hand a consumer: `max_batch_size` tops out at 100 messages and a
  * message may carry 128 KiB, so a full batch is 12.5 MiB of message bodies
- * before the forwarding envelope (`queue`, per-message `id`) and JSON string
- * escaping. 16 MiB covers that with the same ~1.3× headroom the KV cap allows
- * its 25 MiB value, and stays under the 32 MiB the KV and storage routes already
- * buffer, so it is not a new memory ceiling for the isolate.
+ * before the forwarding envelope (`queue`, per-message `id`). 16 MiB covers that
+ * with the same ~1.3× headroom the KV cap allows its 25 MiB value, and stays
+ * under the 32 MiB the KV and storage routes already buffer, so it is not a new
+ * memory ceiling for the isolate. JSON escaping can still grow a full batch past
+ * it (up to sixfold), so a forwarder splits a batch to fit rather than this
+ * route buffering the worst case.
  */
 const QUEUE_DISPATCH_MAX_BODY_BYTES: number = 16 * 1_048_576;
 
