@@ -38,6 +38,10 @@
  * `createNodeSecretBindings` (`./node-secrets`), and the Hyperdrive binding is
  * built from `DATABASE_URL` by `createNodeHyperdrive` (`./node-hyperdrive`).
  *
+ * `lunora deploy --target node` bundles an app into a container build context
+ * whose generated entry composes this package (crons, `ctx.secrets`,
+ * Hyperdrive from `DATABASE_URL`) and serves it with `createNodeHttpServer`.
+ *
  * `@lunora/config` ships a `node` **deploy** driver, so `--target node` resolves
  * for `provision` — which reports, once, which declared features this target
  * cannot serve, and writes nothing: there is no hosted control plane to deploy

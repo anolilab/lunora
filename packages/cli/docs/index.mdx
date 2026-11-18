@@ -796,6 +796,43 @@ fi
 curl -fsS "$url/api/smoke"
 ```
 
+#### Deploying to Node (`--target node`)
+
+The Node target has no hosted control plane, so `lunora deploy --target node`
+deploys to a container build context instead of publishing anything. It runs
+codegen for the target, bundles a generated server entry together with the
+worker entry wrangler's `main` names into one `server.mjs` with the project's
+own `esbuild`, and writes `.lunora/deploy/node/`:
+
+| File            | What it is                                                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `server.mjs`    | The app on `@lunora/platform-node`: every Durable Object binding, the declared crons, `ctx.secrets` and Hyperdrive wired |
+| `package.json`  | Only `better-sqlite3`, the one native module the bundle leaves out, at the version the project's platform-node runs      |
+| `Dockerfile`    | Two stages on a pinned Node LTS image: compiles `better-sqlite3` from source, then runs as the image's `node` user       |
+| `.dockerignore` | Keeps local data, `node_modules` and `.env*` files out of the build context                                              |
+| `README.md`     | The run command, the data volume, and every environment variable the server reads                                        |
+
+Install `esbuild` and `@lunora/platform-node` in the project; the CLI resolves
+both from there. `--image <name>` also runs `docker build -t <name>` on the
+context when a Docker engine answers. Without one, or without the flag, the
+command prints the build command and stops. Nothing is pushed to a registry.
+`--dry-run` writes the context and builds no image. `--env`, `--migrate`,
+`--health-check`, `--preview`, `--temporary` and `--emit-bindings` act on a
+hosted deployment and are refused.
+
+The server reads `LUNORA_ORIGIN_URL` (the public URL; required, because the
+image binds `0.0.0.0`), `PORT` (default `8787`), `HOST` and `LUNORA_DATA_DIR`
+(`/data` in the image), plus `DATABASE_URL` when the app declares a Hyperdrive
+binding and one variable per `secrets_store_secrets[]` binding and
+`secrets.required` name. Wrangler `vars` are bundled as defaults that the
+environment overrides. Every shard, the scheduler and the crons live in SQLite
+files under `LUNORA_DATA_DIR`, so mount a persistent volume there and run one
+container per volume.
+
+Not covered yet: static `assets`, queues, workflows, `.global()` tables, object
+storage and mail are not composed by the generated entry, and the schema-drift
+gate does not run.
+
 ### `lunora preview`
 
 An isolated copy of the app per pull request, and the way to remove it.
@@ -913,7 +950,8 @@ readable by anyone who can push a branch, that person can edit or delete every
 Worker, D1 database, KV namespace and R2 bucket on the account. If production
 shares the account, give previews an account of their own. It works on Cloudflare
 only. celld has no Wrangler environments, so deploy a separate config with its
-own `CELLD_BUCKET` instead. The Node target has no deploy.
+own `CELLD_BUCKET` instead. The Node target deploys as a container, which has
+no isolated previews: run a second container on its own data volume instead.
 
 ### `lunora build`
 

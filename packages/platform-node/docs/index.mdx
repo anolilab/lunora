@@ -39,6 +39,16 @@ tells you, once, which declared features this target cannot serve, and it has
 no toolchain to shell out to (no `wrangler`-equivalent), because there is
 nothing remote to deploy to, tail logs from, or store secrets in.
 
+`lunora deploy --target node` deploys to a container build context instead:
+a bundled `server.mjs` whose generated entry composes this package around the
+app's worker entry (every Durable Object binding, `crons: LUNORA_CRONS`,
+`createNodeSecretBindings` over the `secrets_store_secrets[]` names, and
+`createNodeHyperdrive` from `DATABASE_URL`), a Dockerfile on a pinned Node LTS
+image that compiles `better-sqlite3` and runs as a non-root user, and a README
+listing the environment it reads. The SQLite files live under
+`LUNORA_DATA_DIR` (`/data` in the image), which is the volume to mount. See
+`lunora deploy` in the CLI docs.
+
 Its API snapshot is gated at the **experimental** tier
 (`scripts/api-snapshot.js`): a diff here is a public-API change and must be
 reviewed as one. This package is Experimental: the snapshot records how its surface
@@ -136,7 +146,8 @@ Dev and test. It exists to run the same conformance suite
 (`@lunora/platform/conformance`, `@lunora/shard-engine/conformance`) against a
 second host so portability is a construction check rather than a claim, and it
 is a useful in-process double for exercising app code without Cloudflare
-credentials. It is not wired into `lunora dev`, is not a deploy target, and the
+credentials. It is not wired into `lunora dev`, deploys only as the container
+`lunora deploy --target node` writes (one process, which you host), and the
 capabilities above (one process, no distributed placement or failover, no
 Cloudflare product bindings) mean it is not a substitute for the Cloudflare
 host in anything that needs them.
