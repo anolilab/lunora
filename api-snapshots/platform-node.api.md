@@ -531,12 +531,14 @@ const createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly
 
 ```ts
 const createNodeShardHost: (options?: NodeShardHostOptions) => {
+    alarmsSettled: () => Promise<unknown> | undefined;
     database: Database.Database;
     dispose: () => void;
     drain: () => Promise<void>;
     host: ShardHost;
     pendingAlarms: () => number;
     pendingBackground: () => number;
+    suspendAlarms: () => void;
     takeFailures: () => string[];
 };
 ```

@@ -587,7 +587,8 @@ describe("shard drain passes", () => {
             failAlarm.release();
             await turn();
         } finally {
-            registry.close();
+            // Forced, as a shutdown past its deadline closes: an unforced close waits for the delivery and its retry.
+            registry.close({ force: true });
             never.release();
             vi.useRealTimers();
         }
@@ -834,7 +835,9 @@ describe("shard drain passes", () => {
             // Unforced, the database stays open for the handler; forced, it is closed now.
             expect(() => waitingShard.sockets.accept({}, undefined, [])).not.toThrow();
             expect(() => forcedShard.sockets.accept({}, undefined, [])).toThrow("platform closed");
-            expect(printed(logged)).toContainEqual(expect.stringContaining("closed 1 shard(s) with a request or socket close handler still running: stuck"));
+            expect(printed(logged)).toContainEqual(
+                expect.stringContaining("closed 1 shard(s) with a request, alarm handler or socket close handler still running: stuck"),
+            );
         } finally {
             never.release();
         }
@@ -1255,6 +1258,134 @@ describe("shard drain passes", () => {
         await registry.drain();
 
         expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("claims no alarm that comes due during a deferred close, and keeps its row for a restart", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-closing-alarm-"));
+        const fired: string[] = [];
+        const handler = deferred();
+        const registry = createNodeShardRegistry({
+            directory,
+            onAlarm: (shard) => {
+                fired.push(shard.shardKey);
+            },
+        });
+
+        try {
+            const shard = registry.shardFor("a");
+
+            await shard.shard.alarms.set(Date.now() + 1000);
+            shard.inbound.onClose(async () => handler.promise);
+            // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+            (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+            // Deferred by the running close handler; the alarm comes due while the shard waits for it.
+            registry.close();
+            await vi.advanceTimersByTimeAsync(2000);
+            handler.release();
+            await registry.drain();
+
+            expect(fired).toStrictEqual([]);
+
+            const restarted = createNodeShardRegistry({ directory, onAlarm: () => {} });
+
+            try {
+                expect(restarted.rearmPersistedAlarms()).toStrictEqual(["a"]);
+            } finally {
+                restarted.close({ force: true });
+            }
+        } finally {
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("disposes a shard only after an alarm handler already running when close() began", async () => {
+        expect.assertions(2);
+
+        const arrived = deferred();
+        const gate = deferred();
+        const registry = createNodeShardRegistry({
+            onAlarm: async () => {
+                arrived.release();
+                await gate.promise;
+            },
+        });
+        const shard = registry.shardFor("a");
+
+        await shard.shard.alarms.set(Date.now());
+        await arrived.promise;
+
+        registry.close();
+
+        // The handler is still running, so its database stays open for it.
+        expect(() => shard.sockets.accept({}, undefined, [])).not.toThrow();
+
+        gate.release();
+        await registry.drain();
+
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("retries a forced dispose that failed once the work its deferred close waits for settles", async () => {
+        expect.assertions(2);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const handler = deferred();
+        const registry = createNodeShardRegistry();
+        const shard = registry.shardFor("waiting");
+
+        shard.inbound.onClose(async () => handler.promise);
+        // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+        (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+        registry.close();
+        vi.spyOn(Database.prototype, "close").mockImplementationOnce(() => {
+            throw new Error("database is busy");
+        });
+
+        expect(() => {
+            registry.close({ force: true });
+        }).toThrow("1 shard(s) failed to close: waiting");
+
+        handler.release();
+        await registry.drain();
+
+        // The deferred close was kept, so it tried again once the handler settled.
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("waits only for a shard's own requests when closing it", async () => {
+        expect.assertions(3);
+
+        const gate = deferred();
+        const registry = createNodeShardRegistry({
+            onFetch: async () => {
+                await gate.promise;
+
+                return new Response("served");
+            },
+        });
+        const busy = registry.shardFor("busy");
+        const quiet = registry.shardFor("quiet");
+        const response = registry.directory.getByName("busy").fetch(new Request("https://shard/"));
+
+        registry.close();
+
+        // Another shard's request does not hold this one open.
+        expect(() => quiet.sockets.accept({}, undefined, [])).toThrow("platform closed");
+        expect(() => busy.sockets.accept({}, undefined, [])).not.toThrow();
+
+        gate.release();
+        await response;
+        await registry.drain();
+
+        expect(() => busy.sockets.accept({}, undefined, [])).toThrow("platform closed");
     });
 
     it("re-arms the readable shards when one stored shard file is corrupt, logging the bad one", async () => {

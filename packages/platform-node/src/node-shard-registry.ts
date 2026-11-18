@@ -200,12 +200,14 @@ const describeShardWork = (key: string, pending: ShardWorkCounts): string => {
 
 /** A shard the registry holds open, with the handles its close and drain use. */
 interface LiveShard {
+    alarmsSettled: () => Promise<unknown> | undefined;
     dispose: () => void;
     drain: () => Promise<void> | undefined;
     drainHost: () => Promise<void>;
     pendingAlarms: () => number;
     pendingBackground: () => number;
     shard: NodeShard;
+    suspendAlarms: () => void;
     takeFailures: () => string[];
 }
 
@@ -326,22 +328,37 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
     };
 
     /**
-     * `onFetch` calls still running, with their shard, so {@link NodeShardRegistry.drain} can wait for them and say what it cut
-     * off. Never the request itself: its URL or body can carry a secret. Alarms are tracked by their host, through the retry.
+     * `onFetch` calls still running, by shard key, so {@link NodeShardRegistry.drain} can wait for them and say what it cut off,
+     * and a close reads one shard's without scanning the rest. Never the request itself: its URL or body can carry a secret.
+     * Alarms are tracked by their host, through the retry.
      */
-    const inFlight = new Map<Promise<unknown>, { shardKey: string }>();
+    const inFlight = new Map<string, Set<Promise<unknown>>>();
 
-    const track = async <T>(call: { shardKey: string }, work: () => Promise<T> | T): Promise<T> => {
+    const track = async <T>(shardKey: string, work: () => Promise<T> | T): Promise<T> => {
         const running = Promise.resolve().then(work);
         // Tracking only: the caller still receives `running` and its rejection.
         const settled = running.then(
             () => undefined,
             () => undefined,
         );
+        let calls = inFlight.get(shardKey);
 
-        inFlight.set(settled, call);
+        if (calls === undefined) {
+            calls = new Set();
+            inFlight.set(shardKey, calls);
+        }
 
-        settled.finally(() => inFlight.delete(settled)).catch(() => undefined);
+        calls.add(settled);
+
+        settled
+            .finally(() => {
+                calls.delete(settled);
+
+                if (calls.size === 0 && inFlight.get(shardKey) === calls) {
+                    inFlight.delete(shardKey);
+                }
+            })
+            .catch(() => undefined);
 
         return running;
     };
@@ -388,12 +405,14 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         let shard: NodeShard;
 
         const {
+            alarmsSettled,
             database,
             dispose: disposeHost,
             drain: drainHost,
             host,
             pendingAlarms,
             pendingBackground,
+            suspendAlarms,
             takeFailures,
         } = createNodeShardHost({
             // The host tracks each alarm delivery through its retry write, which a wrapper here would settle before.
@@ -412,7 +431,17 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             sockets: socketHost.socket,
         };
 
-        live.set(key, { dispose: disposeHost, drain: socketHost.drain, drainHost, pendingAlarms, pendingBackground, shard, takeFailures });
+        live.set(key, {
+            alarmsSettled,
+            dispose: disposeHost,
+            drain: socketHost.drain,
+            drainHost,
+            pendingAlarms,
+            pendingBackground,
+            shard,
+            suspendAlarms,
+            takeFailures,
+        });
         known.add(key);
 
         return shard;
@@ -429,7 +458,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
                     return new Response(key);
                 }
 
-                return track({ shardKey: key }, () => onFetch(request, shard));
+                return track(key, () => onFetch(request, shard));
             },
         };
     };
@@ -451,10 +480,11 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
 
             return entry;
         };
-        const waits: Promise<unknown>[] = [...inFlight.keys()];
+        const waits: Promise<unknown>[] = [];
 
-        for (const call of inFlight.values()) {
-            countsFor(call.shardKey).requests += 1;
+        for (const [shardKey, calls] of inFlight) {
+            waits.push(...calls);
+            countsFor(shardKey).requests += calls.size;
         }
 
         for (const [key, entry] of live) {
@@ -486,11 +516,15 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         return { labels, waits };
     };
 
-    /** What a shard's dispose must wait for: requests already holding it, and a socket close handler still running. */
+    /**
+     * What a shard's dispose must wait for: requests already holding it, an alarm delivery already running (its handler and
+     * retry write), and a socket close handler still running.
+     */
     const shardWaits = (key: string, entry: LiveShard): Promise<unknown>[] => {
         const closing = entry.drain();
+        const alarms = entry.alarmsSettled();
 
-        return [...[...inFlight].filter(([, call]) => call.shardKey === key).map(([settled]) => settled), ...(closing === undefined ? [] : [closing])];
+        return [...(inFlight.get(key) ?? []), ...(alarms === undefined ? [] : [alarms]), ...(closing === undefined ? [] : [closing])];
     };
 
     /** Once nothing holds the registry's shards any more, it has nothing left to close. */
@@ -544,6 +578,30 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         settleState();
     };
 
+    /** Log what a close() forced and what failed, then throw the failures together so every shard was tried first. */
+    const reportClose = (forced: ReadonlyArray<string>, failed: ReadonlyArray<{ error: unknown; key: string }>): void => {
+        if (forced.length > 0) {
+            // eslint-disable-next-line no-console -- these shards are closed under running work, so the log is the only record of it
+            console.error(
+                "[@lunora/platform-node] closed %d shard(s) with a request, alarm handler or socket close handler still running: %s",
+                forced.length,
+                forced.join(", "),
+            );
+        }
+
+        for (const { error, key } of failed) {
+            // eslint-disable-next-line no-console -- the caller gets one aggregate error; each shard's own cause is recorded here
+            console.error("[@lunora/platform-node] shard %s failed to close", key, error);
+        }
+
+        if (failed.length > 0) {
+            throw new AggregateError(
+                failed.map(({ error }) => error),
+                `@lunora/platform-node: ${String(failed.length)} shard(s) failed to close: ${failed.map(({ key }) => key).join(", ")}`,
+            );
+        }
+    };
+
     return {
         close: (closeOptions) => {
             if (state === "open") {
@@ -553,21 +611,28 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             const forced: string[] = [];
             const failed: { error: unknown; key: string }[] = [];
 
+            // First, before any shard is disposed: no alarm is claimed from here on, so none starts that a dispose would cut
+            // short. Its durable row stays, and it fires after a restart.
+            for (const entry of live.values()) {
+                entry.suspendAlarms();
+            }
+
             for (const [key, entry] of live) {
                 const waits = shardWaits(key, entry);
 
                 if (waits.length === 0 || closeOptions?.force === true) {
                     // Forced (after a drain's deadline), a shard is disposed now: work that never settles must not keep its
-                    // database open at exit. It leaves deferredClose too, so its pending deferred dispose finds nothing to do.
+                    // database open at exit. It leaves deferredClose only once that succeeds; if it fails, a deferred dispose
+                    // still waiting for its work tries again when that settles.
                     if (waits.length > 0) {
                         forced.push(key);
                     }
 
-                    deferredClose.delete(key);
-
                     const error = disposeEntry(key, entry);
 
-                    if (error !== undefined) {
+                    if (error === undefined) {
+                        deferredClose.delete(key);
+                    } else {
                         failed.push({ error, key });
                     }
                 } else if (!deferredClose.has(key)) {
@@ -580,26 +645,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
 
             settleState();
 
-            if (forced.length > 0) {
-                // eslint-disable-next-line no-console -- these shards are closed under running work, so the log is the only record of it
-                console.error(
-                    "[@lunora/platform-node] closed %d shard(s) with a request or socket close handler still running: %s",
-                    forced.length,
-                    forced.join(", "),
-                );
-            }
-
-            for (const { error, key } of failed) {
-                // eslint-disable-next-line no-console -- the caller gets one aggregate error; each shard's own cause is recorded here
-                console.error("[@lunora/platform-node] shard %s failed to close", key, error);
-            }
-
-            if (failed.length > 0) {
-                throw new AggregateError(
-                    failed.map(({ error }) => error),
-                    `@lunora/platform-node: ${String(failed.length)} shard(s) failed to close: ${failed.map(({ key }) => key).join(", ")}`,
-                );
-            }
+            reportClose(forced, failed);
         },
         drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
             const deadline = startDrainDeadline(drainOptions);

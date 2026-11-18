@@ -192,9 +192,11 @@ const createAlarms = (
     shardKey?: string,
     trackDelivery: (delivery: Promise<void>) => void = () => {},
     onFailure: (label: string) => void = () => {},
-): { alarms: ShardAlarms; commit: () => void; dispose: () => void; rollback: () => void } => {
+): { alarms: ShardAlarms; commit: () => void; dispose: () => void; rollback: () => void; suspend: () => void } => {
     let alarmAt: number | undefined;
     let alarmTimeout: ReturnType<typeof setTimeout> | undefined;
+    /** Set by {@link suspend}: nothing is armed or claimed any more, so the durable row outlives this process for a restart. */
+    let suspended = false;
     let attempts = 0;
 
     /**
@@ -429,6 +431,10 @@ const createAlarms = (
      * open. `claimFailures` counts claims of this same timestamp that threw.
      */
     const fire = (ms: number, claimFailures = 0): void => {
+        if (suspended) {
+            return;
+        }
+
         // Captured before the handler runs: a handler that deletes (or resets) its own alarm and then throws has decided the
         // next wakeup, so the retry for this delivery is superseded, not written over that decision.
         const generation = alarmGeneration;
@@ -520,6 +526,10 @@ const createAlarms = (
      */
     const arm = (ms: number): void => {
         clearAlarmTimeout();
+
+        if (suspended) {
+            return;
+        }
 
         const delay = Math.max(0, ms - Date.now());
 
@@ -689,7 +699,19 @@ const createAlarms = (
     // the next tick rather than never — late, but delivered.
     armFromRow();
 
-    return { alarms, commit, dispose, rollback };
+    // Stop arming and claiming, without touching the row: a closing registry must not start a delivery its dispose would cut
+    // short, and the alarm then fires after a restart instead. A delivery already running finishes, retry write included.
+    const suspend = (): void => {
+        suspended = true;
+        clearAlarmTimeout();
+
+        if (resyncTimeout !== undefined) {
+            clearTimeout(resyncTimeout);
+            resyncTimeout = undefined;
+        }
+    };
+
+    return { alarms, commit, dispose, rollback, suspend };
 };
 
 /** Options for {@link createNodeShardHost}. */
@@ -793,12 +815,16 @@ interface NodeShardHostOptions {
 const createNodeShardHost = (
     options: NodeShardHostOptions = {},
 ): {
+    /** Settles once every alarm delivery running now (its handler and any retry write) has; `undefined` when none is. */
+    alarmsSettled: () => Promise<unknown> | undefined;
     database: Database.Database;
     dispose: () => void;
     drain: () => Promise<void>;
     host: ShardHost;
     pendingAlarms: () => number;
     pendingBackground: () => number;
+    /** Stop arming and claiming alarms, leaving the durable row for a restart. One-way: a closing registry calls it. */
+    suspendAlarms: () => void;
     /** The failures recorded since the last call, which a drain reports in its result; each is also logged when it happens. */
     takeFailures: () => string[];
 } => {
@@ -847,6 +873,7 @@ const createNodeShardHost = (
         alarms,
         commit: commitAlarms,
         dispose: disposeAlarms,
+        suspend: suspendAlarms,
         rollback: rollbackAlarms,
     } = createAlarms(
         database,
@@ -1036,12 +1063,14 @@ const createNodeShardHost = (
     // How many `waitUntil` promises are unsettled, so a registry drain can tell an idle shard from one that gained work after
     // its own drain resolved.
     return {
+        alarmsSettled: () => (deliveries.size === 0 ? undefined : Promise.allSettled(deliveries)),
         database,
         dispose,
         drain,
         host,
         pendingAlarms: () => deliveries.size,
         pendingBackground: () => background.size,
+        suspendAlarms,
         takeFailures: () => failures.splice(0),
     };
 };
