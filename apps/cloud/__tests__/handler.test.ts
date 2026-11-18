@@ -570,7 +570,8 @@ describe("deploy assets validation", () => {
                 }),
             ),
         ).resolves.toContain("the limit is 20000");
-    });
+        // About 100 MB of base64 bodies are built and parsed: under a second here, past 5s on a loaded CI runner.
+    }, 30_000);
 
     it("stores _headers and _redirects in the release and hands them to the target", async () => {
         const { provisioner, specs } = capture();
