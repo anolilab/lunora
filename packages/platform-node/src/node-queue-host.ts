@@ -165,12 +165,15 @@ const delayMs = (delaySeconds: number | undefined): number => {
 };
 
 /**
- * Validate and encode a message now, and return the insert that queues it.
- * Everything that can refuse the message (content type, the 128 KiB ceiling)
- * runs before the closure exists, so a caller can run the insert inside its own
- * transaction knowing it can only fail on the database itself.
+ * Validate and encode a message now, and return the insert that queues it with
+ * the value it will store. Everything that can refuse the message (content type,
+ * the 128 KiB ceiling) runs before the insert exists, so a caller can run it
+ * inside its own transaction knowing it can only fail on the database itself.
+ *
+ * `stored` is the encoded bytes decoded back: exactly what a consumer will read,
+ * which for a JSON body with a `toJSON()` differs from the object passed in.
  */
-type PreparedSend = (message: unknown, sendOptions?: QueueSendOptions) => () => void;
+type PreparedSend = (message: unknown, sendOptions?: QueueSendOptions) => { insert: () => void; stored: unknown };
 
 /**
  * The synchronous producers behind each host's async `QueueBindingLike`, keyed
@@ -434,8 +437,11 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
             const encoded = encodeMessage(message, contentType, queue.name);
             const delay = delayMs(sendOptions?.delaySeconds);
 
-            return () => {
-                enqueue(queue.name, encoded, contentType, delay, clock());
+            return {
+                insert: () => {
+                    enqueue(queue.name, encoded, contentType, delay, clock());
+                },
+                stored: decodeBody(encoded, contentType),
             };
         };
 
@@ -444,7 +450,7 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
         const binding: QueueBindingLike = {
             // eslint-disable-next-line @typescript-eslint/require-await -- the contract is async so a real binding can await the network; SQLite is synchronous
             send: async (message: unknown, sendOptions?: QueueSendOptions): Promise<unknown> => {
-                prepareSend(message, sendOptions)();
+                prepareSend(message, sendOptions).insert();
 
                 return undefined;
             },

@@ -1,4 +1,4 @@
-import { linkSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -1482,6 +1482,71 @@ describe(createNodeMailHost, () => {
                     mail: { env: PRODUCTION, path: mailPath, transport: scriptedTransport(["ok"]) },
                 }),
             ).toThrow(new RegExp(named.replaceAll(".", String.raw`\.`), "u"));
+        });
+    });
+
+    describe("tenth review", () => {
+        it("reserves the content it stores, so a payload whose toJSON() changes a field is delivered", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: startClock().now, transport });
+            const stored = { idempotencyKey: "serialised-1", subject: "Welcome", text: "As stored", to: "ada@example.com" };
+
+            // Valid mail either way, but JSON.stringify stores what toJSON() returns, not the object's own fields.
+            await mail.queue.send({ ...stored, text: "As passed", toJSON: () => stored });
+            await mail.poll();
+
+            expect(transport.sent.map((payload) => payload.text)).toStrictEqual(["As stored"]);
+            expect(mail.deadLetters.list()).toStrictEqual([]);
+        });
+
+        /** A `mail.sqlite3` symlink inside the registry directory, to a target outside it. */
+        const symlinkedMailPath = (): { link: string; root: string; shards: string; target: string } => {
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-symlink-"));
+
+            const root = directory;
+            const shards = join(root, "shards");
+
+            mkdirSync(shards);
+
+            return { link: join(shards, "mail.sqlite3"), root, shards, target: join(root, "elsewhere.sqlite3") };
+        };
+
+        /** The registry lists every *.sqlite3 entry without resolving it, so it would open the link as a shard. */
+        const composeOn = ({ link, root, shards }: { link: string; root: string; shards: string }): void => {
+            createNodePlatform({
+                directory: shards,
+                mail: { env: PRODUCTION, path: link, transport: scriptedTransport(["ok"]) },
+                path: join(root, "shard.sqlite3"),
+            }).close();
+        };
+
+        it("refuses a mail.path that is a symlink inside the registry directory to an existing file outside it", () => {
+            expect.assertions(1);
+
+            const paths = symlinkedMailPath();
+
+            new Database(paths.target).close();
+            symlinkSync(paths.target, paths.link);
+
+            expect(() => {
+                composeOn(paths);
+            }).toThrow(/shard registry/u);
+        });
+
+        it("refuses a mail.path that is a symlink inside the registry directory to a file not created yet", () => {
+            expect.assertions(1);
+
+            const paths = symlinkedMailPath();
+
+            symlinkSync(paths.target, paths.link);
+
+            expect(() => {
+                composeOn(paths);
+            }).toThrow(/shard registry/u);
         });
     });
 });

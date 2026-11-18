@@ -755,9 +755,12 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
 
             // Validated and encoded here, outside the transaction: a body the queue refuses (the
             // 128 KiB ceiling) throws before anything is reserved, so there is nothing to undo.
+            // The key and the fingerprint come from what will be STORED, not from `payload`:
+            // delivery fingerprints the stored body, and a `toJSON()` can make the two differ, which
+            // would reserve one content and queue another, to be parked at delivery as a conflict.
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `host` is assigned
-            const insert = preparedSendOf(host, "mail")(payload, delaySeconds === undefined ? undefined : { delaySeconds });
-            const key = idempotencyKeyOf(payload);
+            const { insert, stored } = preparedSendOf(host, "mail")(payload, delaySeconds === undefined ? undefined : { delaySeconds });
+            const key = idempotencyKeyOf(stored);
 
             if (key === undefined) {
                 // `consumeQueuedSend` refuses a body without a key; queued as-is so the refusal is logged there.
@@ -767,7 +770,7 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
             }
 
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see above, for `consumer`
-            if (consumer.claims.reserve(key, fingerprintOf(payload), insert) === "conflict") {
+            if (consumer.claims.reserve(key, fingerprintOf(stored), insert) === "conflict") {
                 throw new LunoraError(
                     "VALIDATION_ERROR",
                     `@lunora/platform-node: idempotency key "${key}" was already queued with different content — a key names one message, so use a new key for new content`,
