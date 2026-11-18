@@ -186,9 +186,25 @@ async fn deploy(context: &JobContext, job: &DeployJob, progress: &Progress) -> R
     context.supervisor.start_fleet(FleetLaunch { alias: job.alias.clone(), ports })?;
 
     if let Err(error) = context.supervisor.wait_healthy(&job.alias).await {
-        context.set_fleet(&job.alias, record(deployment, ports, FleetState::Failed));
+        let outcome = match restore_previous(context, &job.alias, previous.as_ref(), &job.deployment_id, &placement, progress).await {
+            Ok(restored) => {
+                let message = format!("{}; put deployment {} back", error.message, restored.deployment_id.as_deref().unwrap_or_default());
 
-        return Err(error);
+                context.set_fleet(&job.alias, restored);
+
+                message
+            }
+            Err(reason) => {
+                context.supervisor.stop_fleet(&job.alias).await;
+                context.set_fleet(&job.alias, record(deployment, ports, FleetState::Failed));
+
+                format!("{}; stopped the fleet: {reason}", error.message)
+            }
+        };
+
+        (context.apply_edge)().await;
+
+        return Err(JobError::new(error.code, outcome));
     }
 
     context.set_fleet(&job.alias, record(deployment, ports, FleetState::Running));
@@ -201,6 +217,57 @@ async fn deploy(context: &JobContext, job: &DeployJob, progress: &Progress) -> R
     }
 
     Ok(public_url_of(config, &job.alias))
+}
+
+/// After `alias`'s new release failed its health check, deploy the release the fleet ran before again, so celld's
+/// pointer names it rather than the one that failed (a running node adopts the pointer at its next poll), and
+/// restart the node on it. `Err` says why that was not possible: the caller then stops the node, which would
+/// otherwise serve the release that failed.
+async fn restore_previous(
+    context: &JobContext,
+    alias: &str,
+    previous: Option<&FleetRecord>,
+    failed: &str,
+    placement: &CelldPlacement,
+    progress: &Progress,
+) -> Result<FleetRecord, String> {
+    let Some(previous) = previous.filter(|record| record.state == FleetState::Running) else {
+        return Err("no healthy deployment ran before".to_owned());
+    };
+    let Some(deployment_id) = previous.deployment_id.as_deref().filter(|id| *id != failed) else {
+        return Err("no earlier deployment to put back".to_owned());
+    };
+    // Kept until a deploy after it gets healthy.
+    let directory = Path::new(&context.config.data_dir).join("releases").join(deployment_id);
+
+    if !directory.is_dir() {
+        return Err(format!("the files of deployment {deployment_id} are gone"));
+    }
+
+    progress(&format!("putting deployment {deployment_id} back"));
+
+    let celld_progress = Arc::clone(progress);
+
+    celld_deploy(
+        &context.config,
+        alias,
+        &directory.to_string_lossy(),
+        placement,
+        &(context.credentials)(),
+        Arc::new(move |line| celld_progress(&format!("celld: {line}"))),
+    )
+    .await
+    .map_err(|error| format!("could not put deployment {deployment_id} back: {}", error.message))?;
+
+    let restarted = async {
+        context.supervisor.restart_fleet(alias).await?;
+        context.supervisor.wait_healthy(alias).await
+    };
+
+    restarted.await.map_err(|error| format!("deployment {deployment_id} did not get healthy again: {}", error.message))?;
+    progress(&format!("fleet {alias} is healthy on deployment {deployment_id}"));
+
+    Ok(FleetRecord { updated_at: super::now_ms(), ..previous.clone() })
 }
 
 async fn destroy(context: &JobContext, alias: &str, delete_data: bool, progress: &Progress) -> Result<(), JobError> {
@@ -524,6 +591,150 @@ mod tests {
         queue.running = vec![("job_2".into(), Lock::Box)];
         assert!(!queue.runnable(&HostdJob::Diagnose), "nothing runs beside an upgrade, a diagnose included");
         assert!(!queue.runnable(&upgrade), "one upgrade at a time");
+    }
+
+    /// A box whose fake celld moves `pointer` on `deploy`, and whose node is healthy while `pointer` names `dep_1`.
+    struct DeployBox {
+        context: JobContext,
+        root: std::path::PathBuf,
+        _directory: tempfile::TempDir,
+        _plane: crate::daemon::signed_fetch::test_server::TestServer,
+    }
+
+    impl DeployBox {
+        async fn new() -> Self {
+            use std::os::unix::fs::PermissionsExt;
+
+            use base64::Engine;
+
+            use crate::daemon::signed_fetch::test_server::{respond, serve};
+
+            let directory = tempfile::tempdir().unwrap();
+            let root = directory.path().to_owned();
+            let pointer = root.join("pointer");
+            let release = serde_json::json!({
+                "bundle": base64::engine::general_purpose::STANDARD.encode("export default {};"),
+                "manifest": { "bindings": [], "compatibilityDate": "2026-04-01" },
+            })
+            .to_string();
+            let plane = serve(move |request| {
+                if request.target == crate::daemon::caddy::CELLD_HEALTH_PATH {
+                    let healthy = std::fs::read_to_string(&pointer).is_ok_and(|release| release.trim_end().ends_with("dep_1"));
+
+                    respond(if healthy { 200 } else { 503 }, "")
+                } else {
+                    respond(200, release.clone())
+                }
+            })
+            .await;
+            let port: u16 = plane.origin.rsplit(':').next().unwrap().parse().unwrap();
+            let binaries = root.join("opt").join("hostd-v0_0_0");
+
+            std::fs::create_dir_all(&binaries).unwrap();
+            std::fs::write(
+                binaries.join("celld"),
+                format!(
+                    "#!/bin/sh\nif [ \"$1\" = deploy ]; then echo \"$2\" > {}; echo '{{\"version\":\"v1\"}}'; exit 0; fi\nexec sleep 30\n",
+                    root.join("pointer").display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(binaries.join("celld"), std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::os::unix::fs::symlink("hostd-v0_0_0", root.join("opt").join("current")).unwrap();
+
+            let config = crate::daemon::config::parse_config(&serde_json::json!({
+                "boxId": "box_1",
+                "bucket": { "name": "b" },
+                "controlPlane": plane.origin,
+                "credentialsFile": root.join("bucket.env"),
+                "dataDir": root.join("data"),
+                "hostname": "box-1.boxes.lunora.app",
+                "installDir": root.join("opt"),
+                "keyFile": root.join("box.key"),
+                "ports": { "first": port, "last": port + 1 },
+            }))
+            .unwrap();
+            let logger = Logger::silent();
+            let client = super::super::http::no_redirect_client();
+            let identity = super::super::identity::generate_identity(&root.join("box.key")).unwrap();
+            let credentials: Credentials = Arc::new(BTreeMap::new);
+            let supervisor = Supervisor::new(super::super::supervisor::SupervisorOptions {
+                backoff: super::super::process::RESTART_BACKOFF,
+                config: config.clone(),
+                credentials: Arc::clone(&credentials),
+                health_deadline: std::time::Duration::from_secs(1),
+                logger: logger.clone(),
+                on_stderr: None,
+            });
+            let context = JobContext {
+                apply_edge: Arc::new(|| Box::pin(async {})),
+                caddy: Arc::new(CaddyController::new(config.caddy.clone(), &config.data_dir, &config.hostname, logger.clone(), client.clone())),
+                client: client.clone(),
+                credentials,
+                drop_routes: Arc::new(|_| {}),
+                isolation: IsolationReport { problems: Vec::new(), starts_fleets: true, status: crate::wire::types::IsolationStatus::SingleTrust },
+                logger,
+                signed_fetch: Arc::new(SignedFetch::new("box_1", &config.control_plane, identity, client)),
+                state: Arc::new(Mutex::new(HostdState::new())),
+                supervisor,
+                upgrade: Arc::new(|_, _| Box::pin(async { Ok(()) })),
+                config,
+            };
+
+            Self { context, root, _directory: directory, _plane: plane }
+        }
+
+        fn job(&self, deployment_id: &str) -> DeployJob {
+            DeployJob {
+                alias: "my-app".into(),
+                compatibility_date: None,
+                crons: Vec::new(),
+                deployment_id: deployment_id.into(),
+                release_url: format!("{}/v1/boxes/releases/{deployment_id}", self.context.config.control_plane),
+                vars: indexmap::IndexMap::new(),
+            }
+        }
+
+        fn pointer(&self) -> String {
+            std::fs::read_to_string(self.root.join("pointer")).unwrap().trim_end().to_owned()
+        }
+    }
+
+    fn no_progress() -> Progress {
+        Arc::new(|_| {})
+    }
+
+    #[tokio::test]
+    async fn a_deploy_that_does_not_get_healthy_puts_the_previous_one_back() {
+        let deploy_box = DeployBox::new().await;
+        let context = &deploy_box.context;
+
+        deploy(context, &deploy_box.job("dep_1"), &no_progress()).await.unwrap();
+
+        let error = deploy(context, &deploy_box.job("dep_2"), &no_progress()).await.unwrap_err();
+
+        assert_eq!(error.code, codes::HEALTH_TIMEOUT);
+        assert!(error.message.ends_with("; put deployment dep_1 back"), "{}", error.message);
+        assert!(deploy_box.pointer().ends_with("releases/dep_1"), "{}", deploy_box.pointer());
+        assert!(context.supervisor.is_running("my-app"));
+
+        let fleet = context.fleet("my-app").unwrap();
+
+        assert_eq!((fleet.deployment_id.as_deref(), fleet.state), (Some("dep_1"), FleetState::Running));
+
+        context.supervisor.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_first_deploy_that_does_not_get_healthy_stops_the_fleet() {
+        let deploy_box = DeployBox::new().await;
+        let context = &deploy_box.context;
+        let error = deploy(context, &deploy_box.job("dep_2"), &no_progress()).await.unwrap_err();
+
+        assert_eq!(error.code, codes::HEALTH_TIMEOUT);
+        assert!(error.message.ends_with("; stopped the fleet: no healthy deployment ran before"), "{}", error.message);
+        assert!(!context.supervisor.is_running("my-app"));
+        assert_eq!(context.fleet("my-app").unwrap().state, FleetState::Failed);
     }
 
     #[test]
