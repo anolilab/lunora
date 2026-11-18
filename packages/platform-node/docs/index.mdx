@@ -163,9 +163,14 @@ resolves `@lunora/platform-node` from the project and serves the worker entry
 `dev.port`, else 8787):
 
 - Codegen runs on every change under `lunora/`, as on Cloudflare. The app
-  reloads after each finished codegen run, and when a file the entry loaded
-  from outside `lunora/` changes. A reload restarts the listener, so open
-  sockets and streams reconnect.
+  reloads after each finished codegen run (not after a failed `postcodegen`),
+  and when a file the entry loaded from outside `lunora/` changes; with
+  `--no-codegen` it watches the files it loaded under `lunora/` too. A reload
+  restarts the listener, so open sockets and streams reconnect. The previous
+  version gets 5 s to finish its in-flight work and is then closed anyway, with
+  a warning naming what was cut off. A reload that fails to load keeps the
+  previous version serving; one that cannot bind the port logs it and serves
+  again on the next change.
 - Each `durable_objects` binding is composed over this host with the class the
   entry exports (`createNodeAppHost`). Shard data persists in `.lunora/node/`.
 - `env` carries the wrangler `vars`, `.dev.vars` (or `.env`) and
@@ -359,8 +364,15 @@ Composes a worker module (the one `wrangler.jsonc`'s `main` names) over one
 exported class per shard for the life of the host. `crons` (the generated
 `LUNORA_CRONS` map) is armed on the `shardBinding` platform (default `SHARD`)
 and delivered to its default shard; a host that declares crons without that
-binding throws. `fetch` is the worker's own, bound to that `env`; `close` waits
-for `waitUntil` work, then closes every platform, cron timers included.
+binding throws, and a binding that cannot be composed closes the platforms
+built before it. `fetch` is the worker's own, bound to that `env`. `close(options?)`
+drains under one deadline (`DrainOptions`, 30 s by default) the worker's
+`waitUntil` work and every platform (shard requests, alarms, cron deliveries and
+each shard's own `waitUntil` work), then force-closes every platform, cron timers
+included, whether or not the drain finished; it resolves with the `DrainResult`.
+`rearmPersistedAlarms()` opens every stored shard with a persisted alarm, so it
+fires without a request; call it once the host serves. A Durable Object that
+defines only one of `webSocketMessage` / `webSocketClose` gets that one.
 `lunora dev --target node` serves apps through it.
 
 ### `createNodeHttpServer`

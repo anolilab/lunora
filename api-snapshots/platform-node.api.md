@@ -77,8 +77,9 @@ interface NodeAppDurableObjectBinding {
 
 ```ts
 interface NodeAppHost {
-    close: () => Promise<void>;
+    close: (options?: DrainOptions) => Promise<DrainResult>;
     fetch: (request: Request) => Promise<Response>;
+    rearmPersistedAlarms: () => string[];
 }
 ```
 
@@ -86,9 +87,11 @@ interface NodeAppHost {
 
 ```ts
 interface NodeAppHostOptions {
+    crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
     dataDirectory?: string;
     durableObjects: ReadonlyArray<NodeAppDurableObjectBinding>;
     env?: Record<string, unknown>;
+    shardBinding?: string;
     worker: Record<string, unknown>;
 }
 ```
@@ -250,7 +253,7 @@ interface NodePlatform<Queues extends Record<string, {
     close: (options?: {
         force?: boolean;
     }) => void;
-    directory: ShardDirectory;
+    directory: DirectShardDirectory;
     dispatch: (request: Request) => Promise<Response>;
     drain: (options?: DrainOptions) => Promise<DrainResult>;
     globalTables?: NodeGlobalStore;
