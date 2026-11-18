@@ -551,7 +551,7 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             deadline.cancel();
 
             if (settled) {
-                return { pending: [], timedOut: false };
+                return { failed: [], pending: [], timedOut: false };
             }
 
             const pending = [...inFlight].filter(([response]) => responses.has(response)).map(([, label]) => label);
@@ -559,7 +559,7 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             // eslint-disable-next-line no-console -- the drain gives up on these, so the log is the only record of what was cut off
             console.error("[@lunora/platform-node] HTTP drain deadline passed with %d response(s) unfinished: %s", pending.length, pending.join(", "));
 
-            return { pending, timedOut: true };
+            return { failed: [], pending, timedOut: true };
         },
         origin: `http://${urlHost(host)}:${String(port)}`,
     };

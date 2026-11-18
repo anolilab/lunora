@@ -269,6 +269,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             pendingAlarms: () => number;
             pendingBackground: () => number;
             shard: NodeShard;
+            takeFailures: () => string[];
         }
     >();
 
@@ -335,6 +336,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             host,
             pendingAlarms,
             pendingBackground,
+            takeFailures,
         } = createNodeShardHost({
             // The host tracks each alarm delivery through its retry write, which a wrapper here would settle before.
             onAlarm: () => options.onAlarm?.(shard),
@@ -352,7 +354,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             sockets: socketHost.socket,
         };
 
-        live.set(key, { dispose: disposeHost, drain: socketHost.drain, drainHost, pendingAlarms, pendingBackground, shard });
+        live.set(key, { dispose: disposeHost, drain: socketHost.drain, drainHost, pendingAlarms, pendingBackground, shard, takeFailures });
         known.add(key);
 
         return shard;
@@ -376,6 +378,9 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
 
     // What is still running, across every shard live now: re-read on each pass, so a shard opened during the last
     // pass, or one that gained background work after its own drain resolved, is seen.
+    /** Every live shard's recorded failures, cleared as they are reported. */
+    const takeAllFailures = (): string[] => [...live.values()].flatMap((entry) => entry.takeFailures());
+
     const pendingWork = (): { labels: string[]; waits: Promise<unknown>[] } => {
         const counts = new Map<string, ShardWorkCounts>();
         const countsFor = (shardKey: string): ShardWorkCounts => {
@@ -444,18 +449,19 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             try {
                 // Done only when a full pass over every shard finds nothing running, not when the work one pass saw settles.
                 for (let work = pendingWork(); work.waits.length > 0; work = pendingWork()) {
+                    // Settled, not all-or-nothing: one shard's failure must not stop the drain from waiting for the others.
                     // eslint-disable-next-line no-await-in-loop -- each pass waits for what it found before looking again
-                    if (!(await settlesBefore(Promise.all(work.waits), deadline))) {
+                    if (!(await settlesBefore(Promise.allSettled(work.waits), deadline))) {
                         const pending = pendingWork().labels;
 
                         // eslint-disable-next-line no-console -- the drain gives up on these, so the log is the only record of what was cut off
                         console.error("[@lunora/platform-node] shard drain deadline passed with work still running: %s", pending.join(", "));
 
-                        return { pending, timedOut: true };
+                        return { failed: takeAllFailures(), pending, timedOut: true };
                     }
                 }
 
-                return { pending: [], timedOut: false };
+                return { failed: takeAllFailures(), pending: [], timedOut: false };
             } finally {
                 deadline.cancel();
             }

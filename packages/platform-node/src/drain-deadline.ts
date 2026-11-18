@@ -20,6 +20,11 @@ interface DrainOptions {
 
 /** How a `drain()` ended. */
 interface DrainResult {
+    /**
+     * Work that failed while the drain waited for it (an alarm retry that could not be written), one readable entry each. Each
+     * was also logged with its cause when it happened. A failure never stops the drain waiting for the rest.
+     */
+    failed: string[];
     /** What was still running when the deadline passed, one human-readable entry each. Empty when the drain completed. */
     pending: string[];
     /** `true` when the deadline passed before the work settled. */
@@ -72,7 +77,13 @@ const startDrainDeadline = (options: DrainOptions = {}): DrainDeadline => {
 
 /** Wait for `work`, or for `deadline` to pass, whichever comes first. Resolves `true` when the work settled in time. */
 const settlesBefore = async (work: Promise<unknown>, deadline: DrainDeadline): Promise<boolean> =>
-    Promise.race([work.then(() => true), deadline.expired.then(() => false)]);
+    Promise.race([
+        work.then(
+            () => true,
+            () => true,
+        ),
+        deadline.expired.then(() => false),
+    ]);
 
 export type { DrainDeadline, DrainOptions, DrainResult, DrainTimer };
 export { DEFAULT_DRAIN_TIMEOUT_MS, settlesBefore, startDrainDeadline };

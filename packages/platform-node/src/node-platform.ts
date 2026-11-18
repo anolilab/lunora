@@ -334,7 +334,7 @@ export const createNodePlatform = <
     // resource cannot be added to one and forgotten in the other.
     const teardown: (() => void)[] = [];
 
-    const { database, dispose: disposeShard, drain, host: shard, pendingAlarms, pendingBackground } = createNodeShardHost(options);
+    const { database, dispose: disposeShard, drain, host: shard, pendingAlarms, pendingBackground, takeFailures } = createNodeShardHost(options);
 
     teardown.push(disposeShard);
 
@@ -366,6 +366,7 @@ export const createNodePlatform = <
         const {
             declareCrons,
             dispose: disposeScheduler,
+            pendingDispatches,
             scheduler,
         } = createNodeSchedulerHost(database, { ...options, onDispatch: options.onDispatch ?? deliverJob });
         const { socket: sockets } = createNodeSocketHost(database);
@@ -463,26 +464,37 @@ export const createNodePlatform = <
                     };
                 };
 
+                const failed: string[] = [];
+
                 try {
                     for (;;) {
+                        // Scheduler deliveries (a custom onDispatch, a cron tick) write to the database this drain protects, so
+                        // they are busy work too, waited for alongside the host and the shards under the same deadline.
+                        const dispatches = pendingDispatches();
                         // eslint-disable-next-line no-await-in-loop -- each pass waits for what the last one let start
-                        const [hostSettled, shards] = await Promise.all([settlesBefore(drain(), deadline), registry.drain({ timer: sharedTimer })]);
+                        const [hostSettled, shards, dispatchesSettled] = await Promise.all([
+                            settlesBefore(drain(), deadline),
+                            registry.drain({ timer: sharedTimer }),
+                            settlesBefore(Promise.allSettled(dispatches.waits), deadline),
+                        ]);
 
-                        if (!hostSettled || shards.timedOut) {
-                            const pending = [...(hostSettled ? [] : ["waitUntil work on the platform host"]), ...shards.pending];
+                        failed.push(...takeFailures(), ...shards.failed);
 
-                            if (!hostSettled) {
+                        if (!hostSettled || !dispatchesSettled || shards.timedOut) {
+                            const pending = [...(hostSettled ? [] : ["waitUntil work on the platform host"]), ...pendingDispatches().labels, ...shards.pending];
+
+                            if (!hostSettled || !dispatchesSettled) {
                                 // eslint-disable-next-line no-console -- the drain gives up on this work, so the log is the only record of it
                                 console.error("[@lunora/platform-node] platform drain deadline passed with work still running: %s", pending.join(", "));
                             }
 
-                            return { pending, timedOut: true };
+                            return { failed, pending, timedOut: true };
                         }
 
-                        // Host work can start shard work after the registry's drain already finished (a due job's delivery),
-                        // so the drain is done only when both are idle at the same instant, checked synchronously.
-                        if (pendingBackground() === 0 && pendingAlarms() === 0 && registry.idle()) {
-                            return { pending: [], timedOut: false };
+                        // Host work or a delivery can start shard work after the registry's drain already finished (a due job's
+                        // delivery), so the drain is done only when all of it is idle at the same instant, checked synchronously.
+                        if (pendingBackground() === 0 && pendingAlarms() === 0 && pendingDispatches().waits.length === 0 && registry.idle()) {
+                            return { failed, pending: [], timedOut: false };
                         }
                     }
                 } finally {

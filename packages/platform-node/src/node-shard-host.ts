@@ -189,6 +189,7 @@ const createAlarms = (
     onAlarm?: () => Promise<void> | void,
     shardKey?: string,
     trackDelivery: (delivery: Promise<void>) => void = () => {},
+    onFailure: (label: string) => void = () => {},
 ): { alarms: ShardAlarms; commit: () => void; dispose: () => void; rollback: () => void } => {
     let alarmAt: number | undefined;
     let alarmTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -243,6 +244,20 @@ const createAlarms = (
     let waitingOnTransaction = false;
     let resyncTimeout: ReturnType<typeof setTimeout> | undefined;
 
+    /**
+     * Failed deliveries whose retry row waits for another task's transaction to end, each with the call that settles its
+     * tracked delivery. A queue of their own, polled on their own timer: in the alarm timer slot, a re-arm (a set, a commit,
+     * a resync) cancelled the wait and left the delivery pending forever, holding every drain until its deadline.
+     */
+    const waitingRetries = new Set<{ retry: () => void; settle: () => void }>();
+    let retryTimeout: ReturnType<typeof setTimeout> | undefined;
+
+    /**
+     * Bumped whenever a `set` or `delete` is applied. A retry still waiting from before it is superseded: that call owns the
+     * next wakeup (or its absence), as it did when the wait shared the timer slot.
+     */
+    let alarmGeneration = 0;
+
     const clearAlarmTimeout = (): void => {
         if (alarmTimeout !== undefined) {
             clearTimeout(alarmTimeout);
@@ -288,10 +303,10 @@ const createAlarms = (
      */
     // `onSettled` runs once the retry is decided and, when there is one, written: a drain waits for it, so a shutdown cannot
     // close the database between a failed delivery (whose row was already consumed) and the row that retries it.
-    const retryFailedDelivery = (onSettled: () => void = () => {}): void => {
-        if (!database.open || alarmAt !== undefined) {
-            // Nothing to retry against, or the handler rescheduled
-            // before it failed — that alarm owns the next wakeup.
+    const retryFailedDelivery = (onSettled: () => void, firedAt: number, generation = alarmGeneration): void => {
+        if (!database.open || alarmAt !== undefined || generation !== alarmGeneration) {
+            // Nothing to retry against, or the handler rescheduled before it failed, or a set or delete came after it — that
+            // alarm owns the next wakeup.
             onSettled();
 
             return;
@@ -300,9 +315,15 @@ const createAlarms = (
         // A retry row written inside another task's transaction would vanish
         // with its rollback, and the wakeup with it.
         if (database.inTransaction) {
-            afterTransaction(() => {
-                retryFailedDelivery(onSettled);
+            waitingRetries.add({
+                retry: () => {
+                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the guarded writer wraps this function
+                    writeRetry(onSettled, firedAt, generation);
+                },
+                settle: onSettled,
             });
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the poll and the retry call each other until the transaction ends
+            retryTimeout ??= setTimeout(pollWaitingRetries, FOREIGN_TRANSACTION_RETRY_MS);
 
             return;
         }
@@ -334,6 +355,50 @@ const createAlarms = (
         attempts = 0;
         armFromRow();
         onSettled();
+    };
+
+    /**
+     * Write a failed delivery's retry, guarded: the write itself can throw (`SQLITE_BUSY` from another process on the file,
+     * a broken table). Such a failure is logged with its cause and recorded for the drain's result, and the delivery still
+     * settles, so it never leaves a drain waiting, never rejects one, and is never dropped without a trace.
+     */
+    const writeRetry = (onSettled: () => void, firedAt: number, generation = alarmGeneration): void => {
+        try {
+            retryFailedDelivery(onSettled, firedAt, generation);
+        } catch (error: unknown) {
+            const due = new Date(firedAt).toISOString();
+
+            // eslint-disable-next-line no-console -- the alarm is lost here, so the log is the only record of it and of why
+            console.error(
+                "[@lunora/platform-node] the retry of the alarm due %s on shard %s could not be written, so that alarm is lost",
+                due,
+                shardKey ?? "(unnamed)",
+                error,
+            );
+            onFailure(`shard ${shardKey ?? "(unnamed)"}: the retry of the alarm due ${due} could not be written`);
+            onSettled();
+        }
+    };
+
+    /** Run the waiting retries once the transaction they wait for has ended; until then, look again shortly. */
+    const pollWaitingRetries = (): void => {
+        retryTimeout = undefined;
+
+        if (database.open && database.inTransaction) {
+            retryTimeout = setTimeout(pollWaitingRetries, FOREIGN_TRANSACTION_RETRY_MS);
+
+            return;
+        }
+
+        // A snapshot, cleared first: a retry that meets a new transaction queues itself again, and iterating the live set
+        // would visit that new entry in the same loop, forever.
+        const due = [...waitingRetries];
+
+        waitingRetries.clear();
+
+        for (const waiting of due) {
+            waiting.retry();
+        }
     };
 
     /**
@@ -415,7 +480,7 @@ const createAlarms = (
                 // eslint-disable-next-line no-console -- the alarm is retried silently, so the log is the only trace of why it failed
                 console.error("[@lunora/platform-node] alarm handler on shard %s threw; retrying with backoff", shardKey ?? "(unnamed)", error);
                 await new Promise<void>((resolve) => {
-                    retryFailedDelivery(resolve);
+                    writeRetry(resolve, ms);
                 });
             }),
         );
@@ -471,6 +536,7 @@ const createAlarms = (
                 return;
             }
 
+            alarmGeneration += 1;
             alarmAt = undefined;
             clearAlarmTimeout();
         },
@@ -497,6 +563,7 @@ const createAlarms = (
                 return;
             }
 
+            alarmGeneration += 1;
             alarmAt = ms;
             arm(ms);
         },
@@ -511,6 +578,7 @@ const createAlarms = (
         const { at } = pending;
 
         pending = undefined;
+        alarmGeneration += 1;
 
         if (at === undefined) {
             alarmAt = undefined;
@@ -570,6 +638,23 @@ const createAlarms = (
             clearTimeout(resyncTimeout);
             resyncTimeout = undefined;
         }
+
+        if (retryTimeout !== undefined) {
+            clearTimeout(retryTimeout);
+            retryTimeout = undefined;
+        }
+
+        // Settled, never dropped: a delivery left waiting would hold its drain until the deadline. Logged, since its retry is lost.
+        for (const waiting of waitingRetries) {
+            // eslint-disable-next-line no-console -- the retry is given up here, so the log is the only record of it
+            console.error(
+                "[@lunora/platform-node] alarm retry on shard %s given up: the database closed while it waited for another transaction to end",
+                shardKey ?? "(unnamed)",
+            );
+            waiting.settle();
+        }
+
+        waitingRetries.clear();
     };
 
     // Re-arm whatever the last process left behind. `Math.max(0, …)` inside
@@ -687,6 +772,8 @@ const createNodeShardHost = (
     host: ShardHost;
     pendingAlarms: () => number;
     pendingBackground: () => number;
+    /** The failures recorded since the last call, which a drain reports in its result; each is also logged when it happens. */
+    takeFailures: () => string[];
 } => {
     const database = new Database(options.path ?? ":memory:");
 
@@ -727,15 +814,38 @@ const createNodeShardHost = (
     const sql = createSql(database, assertOwnTurn);
     /** Alarm deliveries still running, each until its retry (if any) is written; `drain()` waits for them. */
     const deliveries = new Set<Promise<void>>();
+    /** Work that failed where nobody could be told: reported, then cleared, by the next drain's result. */
+    const failures: string[] = [];
     const {
         alarms,
         commit: commitAlarms,
         dispose: disposeAlarms,
         rollback: rollbackAlarms,
-    } = createAlarms(database, { assertOwnTurn, inside: () => transactionScope.getStore() === true }, options.onAlarm, options.shardKey, (delivery) => {
-        deliveries.add(delivery);
-        delivery.finally(() => deliveries.delete(delivery)).catch(() => undefined);
-    });
+    } = createAlarms(
+        database,
+        { assertOwnTurn, inside: () => transactionScope.getStore() === true },
+        options.onAlarm,
+        options.shardKey,
+        (delivery) => {
+            deliveries.add(delivery);
+            delivery
+                .then(() => deliveries.delete(delivery))
+                .catch((error: unknown) => {
+                    // Unreachable by construction (every failure path above is caught), so reaching it is a bug worth a record.
+                    deliveries.delete(delivery);
+                    // eslint-disable-next-line no-console -- an alarm delivery failed outside its own handling; this is its only record
+                    console.error(
+                        "[@lunora/platform-node] an alarm delivery on shard %s failed outside its retry handling",
+                        options.shardKey ?? "(unnamed)",
+                        error,
+                    );
+                    failures.push(`shard ${options.shardKey ?? "(unnamed)"}: an alarm delivery failed outside its retry handling`);
+                });
+        },
+        (label) => {
+            failures.push(label);
+        },
+    );
 
     /**
      * Background work handed to `waitUntil`, held until it settles.
@@ -882,8 +992,9 @@ const createNodeShardHost = (
      */
     const drain = async (): Promise<void> => {
         while (background.size > 0 || deliveries.size > 0) {
+            // Settled, not all-or-nothing: one failed task must not stop the drain from waiting for the rest.
             // eslint-disable-next-line no-await-in-loop -- sequential is the point: each pass drains the set as it stood, and background work that spawned more background work is picked up by the next iteration. Hoisting the await out would settle only the first generation.
-            await Promise.all([...background, ...deliveries]);
+            await Promise.allSettled([...background, ...deliveries]);
         }
     };
 
@@ -897,7 +1008,15 @@ const createNodeShardHost = (
 
     // How many `waitUntil` promises are unsettled, so a registry drain can tell an idle shard from one that gained work after
     // its own drain resolved.
-    return { database, dispose, drain, host, pendingAlarms: () => deliveries.size, pendingBackground: () => background.size };
+    return {
+        database,
+        dispose,
+        drain,
+        host,
+        pendingAlarms: () => deliveries.size,
+        pendingBackground: () => background.size,
+        takeFailures: () => failures.splice(0),
+    };
 };
 
 export type { NodeShardHostOptions };

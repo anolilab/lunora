@@ -225,6 +225,12 @@ interface NodeSchedulerHost {
      * left uncleared.
      */
     dispose: () => void;
+
+    /**
+     * Deliveries running now, one-shot jobs and cron ticks alike, each from its timer firing until the scheduler has
+     * recorded the outcome, labelled by job. A drain waits for these before the database the scheduler writes to is closed.
+     */
+    pendingDispatches: () => { labels: string[]; waits: Promise<unknown>[] };
     scheduler: SchedulerHost;
 
     /**
@@ -250,6 +256,19 @@ const backoffFor = (attempts: number, retry: ScheduleOptions["retry"]): number =
 
 /** Build a durable, SQLite-backed scheduler over `database`. */
 const createNodeSchedulerHost = (database: Database.Database, options: NodeSchedulerHostOptions = {}): NodeSchedulerHost => {
+    /** In-flight deliveries, each with its job label; see {@link NodeSchedulerHost.pendingDispatches}. */
+    const dispatching = new Map<Promise<unknown>, { label: string }>();
+
+    const trackDispatch = (dispatch: { label: string }, run: Promise<unknown>): void => {
+        const settled = run.then(
+            () => undefined,
+            () => undefined,
+        );
+
+        dispatching.set(settled, dispatch);
+        settled.finally(() => dispatching.delete(settled)).catch(() => undefined);
+    };
+
     database.exec(
         `CREATE TABLE IF NOT EXISTS _lunora_scheduler_jobs (
             id TEXT PRIMARY KEY,
@@ -472,12 +491,19 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         }
 
         const timer = setTimeout(() => {
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `armJob` and `deliver` are mutually recursive by nature (a retry re-arms, an arm delivers), so one of the two references has to precede its definition
-            deliver(id).catch(() => {
-                // `deliver` settles its own failures into the retry /
-                // dead-letter machinery; this only keeps the promise from
-                // floating.
-            });
+            const dispatch = { label: `scheduled job ${id}` };
+
+            trackDispatch(
+                dispatch,
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- `armJob` and `deliver` are mutually recursive by nature (a retry re-arms, an arm delivers), so one of the two references has to precede its definition
+                deliver(id, (label) => {
+                    dispatch.label = label;
+                }).catch(() => {
+                    // `deliver` settles its own failures into the retry /
+                    // dead-letter machinery; this only keeps the promise from
+                    // floating.
+                }),
+            );
         }, delay);
 
         jobTimers.set(id, timer);
@@ -588,7 +614,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * reach it. None of them runs while another task holds a transaction open
      * either; see {@link FOREIGN_TRANSACTION_RETRY_MS}.
      */
-    const deliver = async (id: string): Promise<void> => {
+    const deliver = async (id: string, onLabel?: (label: string) => void): Promise<void> => {
         jobTimers.delete(id);
 
         if (!isOpen()) {
@@ -601,6 +627,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         if (row === undefined) {
             return;
         }
+
+        onLabel?.(`scheduled job ${row.function_path} (${id})`);
 
         const attempts = row.attempts + 1;
         const retry = decodeRetry(row.retry);
@@ -751,29 +779,32 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
             runningCrons.add(row.key);
 
-            (async (): Promise<void> => {
-                let failure: { error: unknown } | undefined;
+            trackDispatch(
+                { label: `cron ${describeCron(dispatched)}` },
+                (async (): Promise<void> => {
+                    let failure: { error: unknown } | undefined;
 
-                try {
-                    await options.onDispatch?.(dispatched.function_path, deserialize(dispatched.args) as Record<string, unknown>, {
-                        attempts: 0,
-                        // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
-                        id: `${row.key}:${String(nextAt)}`,
-                        scheduledFor: nextAt,
-                    });
-                } catch (error) {
-                    // See the docstring: a dropped tick must not stop the schedule, but it is logged.
-                    failure = { error };
-                } finally {
-                    runningCrons.delete(row.key);
-                }
+                    try {
+                        await options.onDispatch?.(dispatched.function_path, deserialize(dispatched.args) as Record<string, unknown>, {
+                            attempts: 0,
+                            // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
+                            id: `${row.key}:${String(nextAt)}`,
+                            scheduledFor: nextAt,
+                        });
+                    } catch (error) {
+                        // See the docstring: a dropped tick must not stop the schedule, but it is logged.
+                        failure = { error };
+                    } finally {
+                        runningCrons.delete(row.key);
+                    }
 
-                settleCronTick(dispatched, nextAt, failure);
-            })().catch((error: unknown) => {
-                // `settleCronTick` handles its own database failures, so this is a
-                // last resort; it still must not leave the job quiet.
-                recoverCron(dispatched, "failed to settle its tick", error);
-            });
+                    settleCronTick(dispatched, nextAt, failure);
+                })().catch((error: unknown) => {
+                    // `settleCronTick` handles its own database failures, so this is a
+                    // last resort; it still must not leave the job quiet.
+                    recoverCron(dispatched, "failed to settle its tick", error);
+                }),
+            );
         }, delay);
 
         cronTimers.set(row.key, timer);
@@ -993,6 +1024,9 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
     }
 
     return {
+        pendingDispatches: () => {
+            return { labels: [...dispatching.values()].map((dispatch) => dispatch.label), waits: [...dispatching.keys()] };
+        },
         declareCrons: (crons) => {
             if (closed) {
                 throw new Error("platform closed: cannot declare crons");

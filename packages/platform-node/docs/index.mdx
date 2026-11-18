@@ -289,9 +289,15 @@ referenced while the drain runs: a drain waiting on a promise with no I/O behind
 it (a stalled shard `waitUntil`) keeps the process alive until the deadline
 fires, instead of letting it exit silently. `NodePlatform.drain()` runs its host
 and registry drains under that one deadline, repeating until both are idle at the
-same instant, since host work can start shard work after the registry drained. A `DrainResult`
-reports `timedOut` and the `pending` work, one readable label each, still
-running when the deadline passed.
+same instant, since host work can start shard work after the registry drained.
+Scheduler deliveries count as busy work too: a scheduled job or cron tick
+running through `onDispatch` (yours or the built-in one) is waited for until the
+scheduler has recorded its outcome, and named if the deadline passes first. A `DrainResult`
+reports `timedOut`, the `pending` work still running when the deadline passed,
+and the work that `failed` while the drain waited (an alarm retry that could not
+be written), one readable label each. Each failure is also logged with its cause
+when it happens, and drains wait with settled semantics, so one failure never
+stops them waiting for the rest.
 
 ### `createNodeHttpServer`
 
@@ -413,7 +419,9 @@ and scheduled-job deliveries included), no `waitUntil` work pending and no socke
 close handler running. Each pass re-reads every live shard, so work handed to a
 shard after its own drain finished, or a shard opened while draining, is seen;
 Alarm deliveries count until their retry, if any, is written, so a shutdown
-cannot lose a failed alarm. `idle()` answers the same question synchronously.
+cannot lose a failed alarm. A retry waiting for another task's transaction to end
+always settles: it is written once the transaction ends, superseded by a later
+`set` or `delete`, or, if the shard closes first, given up and logged. `idle()` answers the same question synchronously.
 It returns only when a full pass finds nothing running, or when its deadline
 passes, logging one line per shard with how many requests, alarms and
 `waitUntil` tasks it still had (never the request or its payload). Await it before `close()`, which does not wait.

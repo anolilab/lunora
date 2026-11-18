@@ -152,7 +152,7 @@ describe("createNodeHttpServer drain", () => {
             await reader?.read();
 
             // Resolves although the stream never ends; a drain that waited for it would hold the test here.
-            await expect(server.drain()).resolves.toStrictEqual({ pending: [], timedOut: false });
+            await expect(server.drain()).resolves.toStrictEqual({ failed: [], pending: [], timedOut: false });
         } finally {
             await server.close();
         }
@@ -224,7 +224,7 @@ describe("createNodeHttpServer drain", () => {
             firstGate.release();
 
             // The late request is still being handled, and the drain does not wait for it.
-            await expect(drained).resolves.toStrictEqual({ pending: [], timedOut: false });
+            await expect(drained).resolves.toStrictEqual({ failed: [], pending: [], timedOut: false });
 
             const firstAnswer = await connection.read("0\r\n\r\n");
 
@@ -267,7 +267,7 @@ describe("createNodeHttpServer drain", () => {
 
             fire();
 
-            await expect(drained).resolves.toStrictEqual({ pending: ["GET /stuck"], timedOut: true });
+            await expect(drained).resolves.toStrictEqual({ failed: [], pending: ["GET /stuck"], timedOut: true });
             expect(printed(logged)).toContainEqual(expect.stringContaining("GET /stuck"));
         } finally {
             never.release();

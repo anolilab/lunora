@@ -30,6 +30,7 @@ interface DrainOptions {
 
 ```ts
 interface DrainResult {
+    failed: string[];
     pending: string[];
     timedOut: boolean;
 }
@@ -276,6 +277,10 @@ interface NodeR2BucketOptions {
 interface NodeSchedulerHost {
     declareCrons: (crons: ReadonlyArray<NodeDeclaredCron>) => void;
     dispose: () => void;
+    pendingDispatches: () => {
+        labels: string[];
+        waits: Promise<unknown>[];
+    };
     scheduler: SchedulerHost;
     simulateDeadLetter: (id: string) => Promise<boolean>;
 }
@@ -513,6 +518,7 @@ const createNodeShardHost: (options?: NodeShardHostOptions) => {
     host: ShardHost;
     pendingAlarms: () => number;
     pendingBackground: () => number;
+    takeFailures: () => string[];
 };
 ```
 
