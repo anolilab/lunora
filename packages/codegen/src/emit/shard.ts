@@ -150,7 +150,6 @@ interface EmitShardOptions {
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
-/* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each declaration-driven fragment behind its own flag/length check to assemble dense generated TS; the branching is the per-feature emission contract, not refactorable logic */
 const emitShard = ({
     advisories = [],
     agents = [],
@@ -183,6 +182,7 @@ const emitShard = ({
     useUmbrella = false,
     workflowEvents = [],
     workflows = [],
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- emitter that gates each declaration-driven fragment behind its own flag/length check; the branching is the per-feature emission contract
 }: EmitShardOptions): string => {
     const base = baseSpecifiers(useUmbrella);
     const hasMutators = mutators.length > 0;
@@ -807,7 +807,6 @@ ${hasMemoryTables ? "            clearMemoryTables(this.sql as SqlExec, schema a
     // and a second wrap would mint a SECOND read scope, so every read would land
     // in the inner tracker and the outer entry would be stored with zero deps —
     // permanently stale. `handleRpc` forwards the scope it is handed instead.
-    /* eslint-disable no-secrets/no-secrets -- false positive: emitted generated-code text referencing the function registry, not a credential */
     // The statically-found address readers are address-keyed from the first run, before any dispatch has taught the
     // base class; the runtime-learned set stays as the backstop for what the analysis cannot see.
     const ipReaderBootstrap = hasIpReaders
@@ -858,7 +857,6 @@ ${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
             return LUNORA_FUNCTIONS[functionPath]?.x402 !== undefined;
         }
 `;
-    /* eslint-enable no-secrets/no-secrets */
     const prepareFunctionOverride = lazyFunctions
         ? `
         protected override prepareFunction(functionPath: string, reason: "rpc" | "subscription" | "stream" | "reactor"): Promise<void> | undefined {
@@ -881,11 +879,9 @@ ${ipReaderBootstrap}${sourceBootstrap}${ttlBootstrap}        }
     // Only emitted when some function declares a `v.sensitive` argument, so projects
     // without one keep their output byte-identical. The base class masks nothing.
     // A shape resolves its marked names through its own `__shape__:` path, so the shape registry is read only when one exists.
-    // eslint-disable-next-line no-secrets/no-secrets -- emitted shape-registry lookup, not a credential
     const shapeLookup = `const shape = functionPath.startsWith("__shape__:") ? LUNORA_SHAPES[functionPath.slice("__shape__:".length)] : undefined;`;
     const shapeNamesLookup = hasSensitiveShapes ? `\n            ${shapeLookup}` : "";
     const shapeArgsFallback = hasSensitiveShapes ? "shape?.args ?? " : "";
-    // eslint-disable-next-line no-secrets/no-secrets -- emitted function-registry lookup, not a credential
     const registeredLookup = "const registered = LUNORA_FUNCTIONS[functionPath];";
     const sensitiveArgsOverride = sensitiveArgs
         ? `

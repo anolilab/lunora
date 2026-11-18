@@ -115,8 +115,6 @@ const isTimingEnabled = (): boolean => {
  * comparison silently fails on Windows.
  */
 
-/* eslint-disable jsdoc/check-indentation, no-secrets/no-secrets -- intentional nested bullet list; the `discoverMaskHasNonLiteralPolicy` back-tick reference isn't a credential */
-
 /**
  * Fail closed (plan 208, Phase 1) when a `defineShape` replicates a table any
  * `.use(mask(...))` chain masks a column on. A shape runs no procedure, so
@@ -128,31 +126,31 @@ const isTimingEnabled = (): boolean => {
  * for a policy-less table.
  *
  * Cross-checks project-wide static facts — `discoverShapes`' `ShapeIR.table`,
- * `discoverMaskMetadata`'s masked `(table, column)` pairs, and
- * `discoverMaskHasNonLiteralPolicy`'s "codegen couldn't read every mask policy"
- * signal — rather than reading any runtime tag/registry, so this rejects the
+ * `discoverMaskMetadata`'s masked `(table, column)` pairs, and the non-literal
+ * mask policy discovery's "codegen couldn't read every mask policy" signal —
+ * rather than reading any runtime tag/registry, so this rejects the
  * collision at build time, before a single Durable Object ships. Runs
  * unconditionally (all three inputs are computed regardless of the `lint`
  * option), because a security invariant must not be optional the way an
  * advisor lint finding is.
  *
  * Two inputs codegen can't statically resolve to a certain answer, handled by
- * failing closed rather than silently passing:
+ * failing closed rather than silently passing.
  *
- * - A shape's `table` isn't a string literal (e.g. `defineShape({ table: t,
- *   ... })` for a hoisted `t`) — `ShapeIR.table` is `undefined`, and codegen
- *   cannot rule out that `t` names a masked table. Only enforced when the
- *   project masks at least one column somewhere — a mask-free project has
- *   nothing such a shape could leak, so it's let through unconditionally.
- * - A `mask(policies)` call's `policies` argument is a variable reference
- *   rather than an inline object literal (e.g. `mask(sharedPolicies)`) — it
- *   contributes zero columns to `maskMetadata`, so the per-table lookup below
- *   has no evidence for whichever table(s) it actually masks. Once codegen
- *   can't enumerate every masked column, it can't clear ANY shape, so this
- *   fires unconditionally whenever the project declares both such a call and
- *   at least one shape.
+ * First, a shape's `table` isn't a string literal (e.g. `defineShape({ table: t,
+ * ... })` for a hoisted `t`) — `ShapeIR.table` is `undefined`, and codegen
+ * cannot rule out that `t` names a masked table. Only enforced when the
+ * project masks at least one column somewhere — a mask-free project has
+ * nothing such a shape could leak, so it's let through unconditionally.
+ *
+ * Second, a `mask(policies)` call's `policies` argument is a variable reference
+ * rather than an inline object literal (e.g. `mask(sharedPolicies)`) — it
+ * contributes zero columns to `maskMetadata`, so the per-table lookup below
+ * has no evidence for whichever table(s) it actually masks. Once codegen
+ * can't enumerate every masked column, it can't clear ANY shape, so this
+ * fires unconditionally whenever the project declares both such a call and
+ * at least one shape.
  */
-/* eslint-enable jsdoc/check-indentation, no-secrets/no-secrets */
 const assertNoMaskedShapeTable = (shapes: ReadonlyArray<ShapeIR>, maskMetadata: MaskMetadataIR, hasNonLiteralMaskPolicy: boolean): void => {
     if (hasNonLiteralMaskPolicy && shapes.length > 0) {
         const shapeList = shapes.map((shape) => `"${shape.exportName}"`).join(", ");

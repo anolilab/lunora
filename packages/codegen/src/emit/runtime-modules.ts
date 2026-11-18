@@ -279,7 +279,6 @@ const emitVectors = (vectorIndexes: ReadonlyArray<VectorIndexIR>): string => {
 
     const body = entries.length > 0 ? `\n${entries}\n` : "";
 
-    // eslint-disable-next-line no-secrets/no-secrets -- the emitted registry's type annotation is high-entropy but not a secret
     return `${GENERATED_HEADER}/**
  * One vector index declared in \`schema.ts\` — an inline \`.vectorize()\` column
  * or a standalone \`defineVectorIndex()\`. \`field\` is the source column (absent

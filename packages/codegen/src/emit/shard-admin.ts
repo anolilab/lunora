@@ -50,7 +50,6 @@ const adminWriterMethod = `        /**
 /** Call the generated {@link adminWriterMethod}; only `runShardWrite` needs a meter. */
 const adminWriterPrelude = (headroomExpression = ""): string => `            const writer = this.adminWriter(${headroomExpression});`;
 
-/* eslint-disable no-secrets/no-secrets -- emitted ShardDO source, not credentials */
 const ADMIN_WRITE_METHODS: string = `${adminWriterMethod}
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
@@ -256,6 +255,5 @@ ${adminWriterPrelude()}
 
             return { applied: args.changes.length };
         }`;
-/* eslint-enable no-secrets/no-secrets */
 
 export default ADMIN_WRITE_METHODS;

@@ -128,7 +128,6 @@ const emitContainerFragments = (
 `,
         contextField: `\n                containers,`,
         importLines: [`import type { ContainerBindingSpec } from "@lunora/container";`, `import { createContainerContext } from "@lunora/container";`],
-        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `
 /** Wiring specs for \`ctx.containers\` (codegen-derived from \`lunora/containers.ts\`). */
 const LUNORA_CONTAINERS: ReadonlyArray<ContainerBindingSpec> = [
@@ -146,7 +145,6 @@ ${specEntries}
  * `workflows[].class_name` to be exported by the deployed worker. Returns ""
  * when the project declares no workflows (the file is not written then).
  */
-/* eslint-disable no-secrets/no-secrets -- the emitted WorkflowEntrypoint subclasses and `WorkflowParamsOf`/`WorkflowOutputOf` generics are dense generated TS, not credentials */
 const emitWorkflows = (workflows: ReadonlyArray<WorkflowIR>, options: { lazy?: boolean } = {}): string => {
     if (workflows.length === 0) {
         return "";
@@ -197,7 +195,6 @@ type WorkflowOutputOf<Definition> = Definition extends { __output?: infer Output
 
 ${classes}`;
 };
-/* eslint-enable no-secrets/no-secrets */
 
 /**
  * Emit `_generated/agents.ts` — one `WorkflowEntrypoint` class per `defineAgent`
@@ -452,7 +449,6 @@ const emitWorkflowFragments = (workflows: ReadonlyArray<WorkflowIR>): { build: s
 `,
         contextField: `\n                workflows,`,
         importLines: [`import type { WorkflowBindingSpec } from "@lunora/workflow";`, `import { createWorkflowContext } from "@lunora/workflow";`],
-        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `
 /** Wiring specs for \`ctx.workflows\` (codegen-derived from \`lunora/workflows.ts\`). */
 const LUNORA_WORKFLOWS: ReadonlyArray<WorkflowBindingSpec> = [
@@ -491,7 +487,6 @@ const emitQueueFragments = (queues: ReadonlyArray<QueueIR>): { build: string; co
 `,
         contextField: `\n                queues,`,
         importLines: [`import type { QueueBindingSpec } from "@lunora/queue";`, `import { createQueueContext } from "@lunora/queue";`],
-        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `
 /** Wiring specs for \`ctx.queues\` (codegen-derived from \`lunora/queues.ts\`). */
 const LUNORA_QUEUES: ReadonlyArray<QueueBindingSpec> = [
@@ -532,7 +527,6 @@ const emitTopicFragments = (
 `,
         contextField: `\n                topics,`,
         importLines: [`import type { TopicBindingSpec } from "@lunora/queue";`, `import { createTopicContext } from "@lunora/queue";`],
-        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `
 /** Wiring specs for \`ctx.topics\` (codegen-derived from \`lunora/queues.ts\`): each topic's subscription queues. */
 const LUNORA_TOPICS: ReadonlyArray<TopicBindingSpec> = [
@@ -566,7 +560,6 @@ const emitServiceFragments = (services: ReadonlyArray<ServiceBindingIR>, serverS
             const services = createServices(env, LUNORA_SERVICES);
 `,
         importLines: [`import type { ServiceBindingSpec } from "${serverSpecifier}";`, `import { createServices } from "${serverSpecifier}";`],
-        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `
 /** Wiring specs for \`ctx.services\` (codegen-derived from \`lunora.config\` \`services\`). */
 const LUNORA_SERVICES: ReadonlyArray<ServiceBindingSpec> = [
@@ -621,7 +614,6 @@ const emitAgentFragments = (
         schedulerSource: `withAgentScheduleShard(${PLAIN_SCHEDULER_SOURCE}, LUNORA_AGENTS, this.currentShardKey())`,
         // The schedule outbox retry scheduler is stamped the same way (see `dispatchMethods`).
         stampsOutbox: true,
-        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
         specs: `
 /** Wiring specs for \`ctx.agents\` (codegen-derived from \`lunora/agents.ts\`). */
 const LUNORA_AGENTS: ReadonlyArray<AgentBindingSpec> = [

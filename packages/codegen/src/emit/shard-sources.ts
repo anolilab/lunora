@@ -24,7 +24,6 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
     // `pullExternalSourceTick` in @lunora/do (query under `tenantBy(shardKey)` →
     // id-lift → diff → apply through the validated CDC writer). System-owned (alarm
     // tier, no request identity), so it never loosens `ctx.sql`'s action-only contract.
-    /* eslint-disable no-secrets/no-secrets -- the emitted `pullExternalSourceIncrementalTick(this.sql …)` poll-loop call is a dense generated identifier, not a credential */
     const externalSourceOverride = hasSourcedTables
         ? `
         protected override async pollExternalSources(trace?: TraceRefLike): Promise<number | undefined> {
@@ -172,7 +171,6 @@ const sourcePollAtCache = new WeakMap<object, Map<string, number>>();
         }
 `
         : "";
-    /* eslint-enable no-secrets/no-secrets */
 
     // Arm the shared poll alarm on construction so a sourced DO starts ingesting —
     // but only when at least one source is non-manual (a \`refresh: "manual"\`-only

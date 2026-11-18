@@ -28,7 +28,6 @@ const emitShapeFragments = ({
     // (`resolveShape`) and the client-watermark mutator push (`isCustomMutator`)
     // through the generated registries. Both are empty for a shape/mutator-free
     // project, so its `shard.ts` is byte-identical.
-    /* eslint-disable no-secrets/no-secrets -- the emitted resolveShape body + registry builder are dense generated TS (`composeShapeReadWhere(LUNORA_RLS_READ_REGISTRY, …)`), not credentials */
     // Only a project with a marked shape argument scopes its resolve: the scope is opened from the RAW
     // args, so the predicate's transformed value and any error it throws are masked at the throw site.
     // The wrapper clears the scope on every exit. Unmarked projects keep the body they always had.
@@ -143,8 +142,6 @@ assertShapesDeclareReadPolicies(LUNORA_SHAPES, ${JSON.stringify(shapeReadPolicyT
 `
         : "";
 
-    /* eslint-enable no-secrets/no-secrets */
-
     // The cross-shard-join guard (`assertShapeShardable`) is a value import,
     // pulled in only when the project has shapes so a shape-free `shard.ts`
     // stays byte-identical.
@@ -165,7 +162,6 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
     // just against D1/Hyperdrive instead of this DO's op-log. Emitted only when
     // both features are present so a shape-free or global-free `shard.ts` stays
     // byte-identical.
-    /* eslint-disable no-secrets/no-secrets -- the emitted override method body references dense generated identifiers (`withinGlobalShapeBound`, `ShardDOBase.GLOBAL_SHAPE_MAX_ROWS`), not credentials */
     const globalShapeReaderOverride = enabled
         ? `
         protected override async readGlobalShapeRows(resolved: { columns?: readonly string[]; effectiveWhere?: WhereInput; global?: boolean; table: string }, identity?: SubscriptionIdentity): Promise<Array<{ doc: Record<string, unknown>; id: string }>> {
@@ -235,7 +231,6 @@ const emitGlobalShapeReaderOverride = (enabled: boolean, globalDatabaseThunk: st
         }
 `
         : "";
-    /* eslint-enable no-secrets/no-secrets */
 
     return globalShapeReaderOverride;
 };
