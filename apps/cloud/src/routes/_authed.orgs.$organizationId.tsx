@@ -173,7 +173,11 @@ const OrganizationLayout = (): ReactElement => {
         >
             {org ? <OrgBanners org={org} /> : null}
             <TimeRangeProvider>
-                <Outlet />
+                {/* Keyed so switching organizations remounts the tab: its selections are
+                    `useState` seeded on mount, and the router keeps a tab mounted across a
+                    param change, so the new org was queried with the old one's project,
+                    deployment or script name. */}
+                <Outlet key={organizationId} />
             </TimeRangeProvider>
         </DashboardLayout>
     );
