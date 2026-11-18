@@ -212,7 +212,12 @@ describe("discoverAuthConfig", () => {
         const found = discoverAuthConfig(project, join(workdir, "lunora"));
 
         expect(found).toHaveLength(1);
-        expect(found[0]).toMatchObject({ analyzable: true, scope: { kind: "export", name: "auth" }, file: "src/server/index", trustedOriginsWildcard: true });
+        expect(found[0]).toMatchObject({
+            analyzable: true,
+            scope: { kind: "export", name: "auth" },
+            file: "../src/server/index",
+            trustedOriginsWildcard: true,
+        });
     });
 
     it("feeds auth_trusted_origins_wildcard from a worker-entry createAuth", () => {

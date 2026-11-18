@@ -343,7 +343,7 @@ const listEntrySourceFiles = (path: string, accumulator: string[] = []): string[
 
 /** One file a security discoverer scans: where to parse it from, and how a finding names it. */
 interface ScannedSourceFile {
-    /** How a finding refers to the file — project-relative, POSIX separators, no extension. */
+    /** How a finding refers to the file — relative to `lunora/`, POSIX separators, no extension. */
     displayPath: string;
     /** Absolute path to parse. */
     filePath: string;
@@ -389,7 +389,9 @@ const listSecurityScanFiles = (lunoraDirectory: string): ScannedSourceFile[] => 
         }
 
         seen.add(filePath);
-        files.push({ displayPath: lunoraRelativePath(projectRoot, filePath), filePath });
+        // Relative to `lunora/` like every other file (`../src/worker`), so a root `src/worker.ts` and a
+        // `lunora/src/worker.ts` stay two files to a finding and to a suppression directive.
+        files.push({ displayPath: lunoraRelativePath(lunoraDirectory, filePath), filePath });
     }
 
     return files;
