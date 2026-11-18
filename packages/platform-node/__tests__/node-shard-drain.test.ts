@@ -1399,6 +1399,52 @@ describe("shard drain passes", () => {
         expect(() => registry.shardFor("busy")).toThrow("the shard registry is closed,");
     });
 
+    it("claims no shard alarm that comes due during a platform drain, keeping its row for a restart", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-draining-alarm-"));
+        const fired: string[] = [];
+        const hold = deferred();
+        const platform = createNodePlatform({
+            directory,
+            onAlarm: (shard) => {
+                fired.push(shard?.shardKey ?? "platform");
+            },
+            onFetch: async (_request, shard) => {
+                await shard.shard.alarms.set(Date.now() + 1000);
+
+                return new Response("armed");
+            },
+        });
+
+        try {
+            await resolveShard(platform.directory, "a").fetch(new Request("https://shard.internal/rpc"));
+            platform.shard.waitUntil?.(hold.promise);
+
+            const drained = platform.drain({ timer: () => () => {} });
+
+            await vi.advanceTimersByTimeAsync(2000);
+            hold.release();
+            await drained;
+
+            expect(fired).toStrictEqual([]);
+        } finally {
+            platform.close();
+        }
+
+        const restarted = createNodeShardRegistry({ directory, onAlarm: () => {} });
+
+        try {
+            expect(restarted.rearmPersistedAlarms()).toStrictEqual(["a"]);
+        } finally {
+            restarted.close({ force: true });
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
     it("waits only for a shard's own requests when closing it", async () => {
         expect.assertions(3);
 

@@ -298,6 +298,7 @@ interface NodeSchedulerHost {
     };
     scheduler: SchedulerHost;
     simulateDeadLetter: (id: string) => Promise<boolean>;
+    suspend: () => void;
 }
 ```
 
@@ -357,6 +358,7 @@ interface NodeShardRegistry {
     pending: () => string[];
     rearmPersistedAlarms: () => string[];
     shardFor: (key: string) => NodeShard;
+    suspendAlarms: () => void;
 }
 ```
 

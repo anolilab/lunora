@@ -309,6 +309,13 @@ export interface NodeShardRegistry {
     rearmPersistedAlarms: () => string[];
     /** Materialize (or reuse) the shard serving `key`. */
     shardFor: (key: string) => NodeShard;
+
+    /**
+     * Stop arming and claiming alarms on every shard, including one opened afterwards, leaving each durable row to re-arm after
+     * a restart. A shutdown calls it before draining, so no alarm starts after the drain checked for running work. One-way;
+     * `close()` does it too.
+     */
+    suspendAlarms: () => void;
 }
 
 /** Build the in-process shard registry. */
@@ -320,6 +327,16 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
      * but `open` refuses new work: a request after close() would otherwise reopen a shard, or get one about to be disposed.
      */
     let state: "closed" | "closing" | "open" = "open";
+    /** Set by suspendAlarms() or close(): a shard opened from then on starts with its alarms suspended too. */
+    let alarmsSuspended = false;
+
+    const suspendAllAlarms = (): void => {
+        alarmsSuspended = true;
+
+        for (const entry of live.values()) {
+            entry.suspendAlarms();
+        }
+    };
 
     const refuseUnlessOpen = (): void => {
         if (state !== "open") {
@@ -443,6 +460,10 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             takeFailures,
         });
         known.add(key);
+
+        if (alarmsSuspended) {
+            suspendAlarms();
+        }
 
         return shard;
     };
@@ -631,9 +652,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
 
             // First, before any shard is disposed: no alarm is claimed from here on, so none starts that a dispose would cut
             // short. Its durable row stays, and it fires after a restart.
-            for (const entry of live.values()) {
-                entry.suspendAlarms();
-            }
+            suspendAllAlarms();
 
             for (const [key, entry] of live) {
                 const waits = shardWaits(key, entry);
@@ -725,5 +744,6 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         },
         listShardKeys: () => [...known],
         shardFor,
+        suspendAlarms: suspendAllAlarms,
     };
 };

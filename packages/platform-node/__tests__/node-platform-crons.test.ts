@@ -55,6 +55,59 @@ describe("createNodePlatform declared crons", () => {
         }
     });
 
+    it("starts no cron tick or job that comes due during a drain, and fires both after a restart", async () => {
+        expect.assertions(3);
+
+        const path = join(directory, "shard.sqlite3");
+        const crons = { "* * * * *": [{ args: {}, functionPath: "reports:tick", name: "tick" }] };
+        const during = dispatchSpy();
+        const first = createNodePlatform({
+            crons,
+            onDispatch: async (functionPath, args) => {
+                during(functionPath, args);
+            },
+            path,
+        });
+        let release: () => void = () => {};
+
+        await first.scheduler.schedule("reports:once", {}, { delayMs: 10_000 });
+        // Host work that holds the drain open while both come due.
+        first.shard.waitUntil?.(
+            new Promise<void>((resolve) => {
+                release = resolve;
+            }),
+        );
+
+        const drained = first.drain({ timer: () => () => {} });
+
+        await vi.advanceTimersByTimeAsync(2 * MINUTE);
+
+        expect(during).not.toHaveBeenCalled();
+
+        release();
+        await drained;
+        first.close();
+
+        const after = dispatchSpy();
+        const second = createNodePlatform({
+            crons,
+            onDispatch: async (functionPath, args) => {
+                after(functionPath, args);
+            },
+            path,
+        });
+
+        try {
+            await vi.advanceTimersByTimeAsync(MINUTE);
+
+            // Neither was lost: the job's row and the cron's declaration were kept, and both fire once the server is back.
+            expect(after).toHaveBeenCalledWith("reports:once", {});
+            expect(after).toHaveBeenCalledWith("reports:tick", {});
+        } finally {
+            second.close();
+        }
+    });
+
     it("stops firing a cron the app no longer declares after a restart", async () => {
         expect.assertions(2);
 

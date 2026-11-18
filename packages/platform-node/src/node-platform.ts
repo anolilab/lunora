@@ -189,6 +189,11 @@ export interface NodePlatform<
      * shutdown is `await platform.drain()` then `platform.close()`. Bounded by
      * `timeoutMs` (30 s by default); resolves with what was still running when
      * it passed.
+     *
+     * Draining is the start of shutdown: it first stops the scheduler's job and
+     * cron timers and every alarm timer, so nothing new starts once the drain
+     * has found the platform idle. Their rows are kept and re-armed after a
+     * restart.
      */
     drain: (options?: DrainOptions) => Promise<DrainResult>;
 
@@ -350,7 +355,16 @@ export const createNodePlatform = <
     // resource cannot be added to one and forgotten in the other.
     const teardown: ((closeOptions?: { force?: boolean }) => void)[] = [];
 
-    const { database, dispose: disposeShard, drain, host: shard, pendingAlarms, pendingBackground, takeFailures } = createNodeShardHost(options);
+    const {
+        database,
+        dispose: disposeShard,
+        drain,
+        host: shard,
+        pendingAlarms,
+        pendingBackground,
+        suspendAlarms: suspendHostAlarms,
+        takeFailures,
+    } = createNodeShardHost(options);
 
     teardown.push(disposeShard);
 
@@ -384,6 +398,7 @@ export const createNodePlatform = <
             dispose: disposeScheduler,
             pendingDispatches,
             scheduler,
+            suspend: suspendScheduler,
         } = createNodeSchedulerHost(database, { ...options, onDispatch: options.onDispatch ?? deliverJob });
         const { socket: sockets } = createNodeSocketHost(database);
 
@@ -508,7 +523,16 @@ export const createNodePlatform = <
             // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
             // would let `close()` dispose a database a handler is still writing. Host work can start shard work after the
             // registry drained (a due job's delivery), which drainTogether's passes, failures and pending re-read account for.
-            drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => drainTogether([host, registry], drainOptions),
+            //
+            // Timers are stopped first, before the first pass: a job, cron tick or alarm that fired after the drain found
+            // everything idle would run into the forced close. Their rows stay, so each fires after a restart.
+            drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
+                suspendScheduler();
+                suspendHostAlarms();
+                registry.suspendAlarms();
+
+                return drainTogether([host, registry], drainOptions);
+            },
             globalTables,
             kv,
             objectStorage,

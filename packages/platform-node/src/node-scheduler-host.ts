@@ -240,6 +240,13 @@ interface NodeSchedulerHost {
      * while how many failures it takes to get there is host policy.
      */
     simulateDeadLetter: (id: string) => Promise<boolean>;
+
+    /**
+     * Stop firing: clear every armed timer and arm none from then on, while rows are still written and kept. A shutdown calls
+     * it before draining, so no job or cron tick starts after the drain checked for running work; each then re-arms from its
+     * row after a restart. A delivery already running finishes. One-way; `dispose()` still ends the host.
+     */
+    suspend: () => void;
 }
 
 /**
@@ -415,6 +422,8 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * keeps the connection open for other work.
      */
     let closed = false;
+    /** Set by `suspend()`: rows are still written, but no timer is armed, so nothing fires until a restart re-arms them. */
+    let suspended = false;
 
     /**
      * Resolve once no transaction is open on the shared connection, or the host
@@ -473,6 +482,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
     const armJob = (id: string, scheduledFor: number): void => {
         clearJobTimer(id);
+
+        if (suspended) {
+            return;
+        }
 
         const delay = Math.max(0, scheduledFor - Date.now());
 
@@ -714,6 +727,11 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
 
         if (existing !== undefined) {
             clearTimeout(existing);
+            cronTimers.delete(row.key);
+        }
+
+        if (suspended) {
+            return undefined;
         }
 
         let nextAt: number;
@@ -1023,6 +1041,19 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         }
     }
 
+    const clearTimers = (): void => {
+        for (const timer of jobTimers.values()) {
+            clearTimeout(timer);
+        }
+
+        for (const timer of cronTimers.values()) {
+            clearTimeout(timer);
+        }
+
+        jobTimers.clear();
+        cronTimers.clear();
+    };
+
     return {
         pendingDispatches: () => {
             return { labels: [...dispatching.values()].map((dispatch) => dispatch.label), waits: [...dispatching.keys()] };
@@ -1089,16 +1120,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             }
         },
         dispose: () => {
-            for (const timer of jobTimers.values()) {
-                clearTimeout(timer);
-            }
-
-            for (const timer of cronTimers.values()) {
-                clearTimeout(timer);
-            }
-
-            jobTimers.clear();
-            cronTimers.clear();
+            clearTimers();
             closed = true;
         },
         scheduler,
@@ -1117,6 +1139,10 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             parkJob.run((retry?.maxAttempts ?? DEFAULT_RETRY.maxAttempts) + 1, Date.now(), id);
 
             return true;
+        },
+        suspend: () => {
+            suspended = true;
+            clearTimers();
         },
     };
 };
