@@ -379,15 +379,28 @@ mod tests {
         assert_eq!(stubborn.restarts(), 0);
     }
 
-    /// Gone, or a zombie waiting for init to reap it: either way no longer running. A zombie can be reaped between
-    /// the signal-0 check and reading its stat, so a stat that is no longer there counts as gone too.
+    /// Gone, or a zombie waiting for init to reap it: either way no longer running.
     fn is_gone(pid: libc::pid_t) -> bool {
         // SAFETY: signal 0 only checks that the pid exists.
-        let exists = unsafe { libc::kill(pid, 0) } == 0;
+        let exists = || unsafe { libc::kill(pid, 0) } == 0;
 
-        !exists
-            || std::fs::read_to_string(format!("/proc/{pid}/stat"))
-                .map_or(true, |stat| stat.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')))
+        if !exists() {
+            return true;
+        }
+
+        // Without procfs a zombie answers signal 0 like a live process; the caller's wait loop covers the moment
+        // before it is reaped.
+        if !cfg!(target_os = "linux") {
+            return false;
+        }
+
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(stat) => stat.rsplit(')').next().is_some_and(|rest| rest.trim_start().starts_with('Z')),
+            // Reaped between the signal-0 check and this read: gone only if signal 0 now agrees. Any other read error
+            // says nothing about the process, so it is not taken as a stop.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => !exists(),
+            Err(_) => false,
+        }
     }
 
     #[tokio::test]
