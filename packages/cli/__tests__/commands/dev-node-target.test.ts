@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,6 +89,7 @@ interface Env {
     API_KEY?: { get: () => Promise<string> };
     HYPERDRIVE?: { host: string; port: number };
     SHARD: never;
+    STAGE?: string;
 }
 
 let worker: ReturnType<typeof createWorker> | undefined;
@@ -96,7 +97,11 @@ let worker: ReturnType<typeof createWorker> | undefined;
 export default {
     async fetch(request: Request, env: Env, ctx: never): Promise<Response> {
         if (new URL(request.url).pathname === "/__env") {
-            return Response.json({ hyperdrive: env.HYPERDRIVE && { host: env.HYPERDRIVE.host, port: env.HYPERDRIVE.port }, secret: await env.API_KEY?.get() });
+            return Response.json({
+                hyperdrive: env.HYPERDRIVE && { host: env.HYPERDRIVE.host, port: env.HYPERDRIVE.port },
+                secret: await env.API_KEY?.get(),
+                stage: env.STAGE,
+            });
         }
 
         worker ??= createWorker({ shardDO: env.SHARD });
@@ -107,6 +112,53 @@ export default {
 `,
         "utf8",
     );
+};
+
+/** A second entry over the fixture's worker that answers `/__which` with `name`, so a test can tell which entry is served. */
+const writeAlternateEntry = (root: string, file: string, name: string): void => {
+    writeFileSync(
+        join(root, "src", file),
+        `import worker from "./worker";
+
+export { ShardDO } from "./worker";
+
+export default {
+    fetch: (request: Request, env: never, ctx: never): Promise<Response> | Response =>
+        new URL(request.url).pathname === "/__which" ? new Response(${JSON.stringify(name)}) : worker.fetch(request, env, ctx),
+};
+`,
+        "utf8",
+    );
+};
+
+/** Rewrite one file through `pattern`, failing when it matches nothing: a no-op write would still raise a change event. */
+const editFile = (path: string, pattern: RegExp, replacement: string): void => {
+    const before = readFileSync(path, "utf8");
+    const after = before.replace(pattern, replacement);
+
+    if (after === before) {
+        throw new Error(`${pattern.source} matched nothing in ${path}`);
+    }
+
+    writeFileSync(path, after, "utf8");
+};
+
+/**
+ * A request on a connection of its own. A reload closes the previous listener, and a pooled keep-alive socket to it can be
+ * handed to the next request before the client has seen it close.
+ */
+const freshFetch = async (url: string): Promise<Response> => fetch(url, { headers: { connection: "close" } });
+
+const readEnv = async (origin: string): Promise<unknown> => {
+    const response = await freshFetch(`${origin}/__env`);
+
+    return response.json();
+};
+
+const readWhich = async (origin: string): Promise<string> => {
+    const response = await freshFetch(`${origin}/__which`);
+
+    return response.text();
 };
 
 /** A logger whose info lines can be awaited: each wait resolves on the next line containing the text, never on a timer. */
@@ -368,7 +420,7 @@ export default crons;
             writeFileSync(join(workdir, "lunora", "notes.ts"), notesSource("v2"), "utf8");
             // Logged as an error, which the milestone logger does not resolve on.
             await vi.waitFor(() => {
-                expect(dev.errors.join(" ")).toContain("could not serve the reloaded worker");
+                expect(dev.errors.join(" ")).toContain("Nothing is serving until a reload succeeds");
             });
 
             writeFileSync(join(workdir, "lunora", "notes.ts"), notesSource("v3"), "utf8");
@@ -451,6 +503,90 @@ export default crons;
             }),
         ).rejects.toThrow(/createNodeAppHost \(1\.0\.0-alpha\.220 or later\)/u);
     });
+
+    it("serves the CLOUDFLARE_ENV environment's entry, bindings, vars and .dev.vars.<env>", async () => {
+        expect.assertions(2);
+
+        writeFixture(workdir, {
+            env: {
+                staging: {
+                    // Bindings and vars are not inherited; `main` is, and this environment overrides it.
+                    durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                    main: "src/staging.ts",
+                    secrets_store_secrets: [{ binding: "API_KEY", secret_name: "api-key", store_id: "local" }],
+                    vars: { STAGE: "staging" },
+                },
+            },
+            vars: { STAGE: "top" },
+        });
+        writeAlternateEntry(workdir, "staging.ts", "staging");
+        writeFileSync(join(workdir, ".dev.vars"), "API_KEY=from-default\n", "utf8");
+        writeFileSync(join(workdir, ".dev.vars.staging"), "API_KEY=from-staging\n", "utf8");
+        vi.stubEnv("CLOUDFLARE_ENV", "staging");
+
+        const dev = await startDev(workdir);
+
+        try {
+            await expect(readEnv(dev.origin)).resolves.toStrictEqual({ secret: "from-staging", stage: "staging" });
+            await expect(readWhich(dev.origin)).resolves.toBe("staging");
+        } finally {
+            await dev.stop();
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it("reloads when .dev.vars or wrangler.jsonc changes", async () => {
+        expect.assertions(3);
+
+        writeFixture(workdir, {
+            secrets_store_secrets: [{ binding: "API_KEY", secret_name: "api-key", store_id: "local" }],
+            vars: { STAGE: "one" },
+        });
+        writeFileSync(join(workdir, ".dev.vars"), "API_KEY=first\n", "utf8");
+
+        const dev = await startDev(workdir);
+
+        try {
+            await expect(readEnv(dev.origin)).resolves.toStrictEqual({ secret: "first", stage: "one" });
+
+            const afterDevVariables = dev.next("node: reloaded");
+            // The start may have added a generated secret to the file; only the one line changes.
+            editFile(join(workdir, ".dev.vars"), /API_KEY=first/u, "API_KEY=second");
+            await afterDevVariables;
+
+            await expect(readEnv(dev.origin)).resolves.toStrictEqual({ secret: "second", stage: "one" });
+
+            const afterConfig = dev.next("node: reloaded");
+            // The start may have reformatted the file, so the match allows any spacing.
+            editFile(join(workdir, "wrangler.jsonc"), /"STAGE":\s*"one"/u, `"STAGE": "two"`);
+            await afterConfig;
+
+            await expect(readEnv(dev.origin)).resolves.toStrictEqual({ secret: "second", stage: "two" });
+        } finally {
+            await dev.stop();
+        }
+    });
+
+    it("loads the entry `main` names now, not the one it named at startup", async () => {
+        expect.assertions(1);
+
+        writeFixture(workdir);
+        writeAlternateEntry(workdir, "other.ts", "other");
+
+        const dev = await startDev(workdir);
+
+        try {
+            const reloaded = dev.next("node: reloaded");
+            editFile(join(workdir, "wrangler.jsonc"), /"main":\s*"src\/worker\.ts"/u, `"main": "src/other.ts"`);
+            // A function edit reloads on its own, so the check holds whichever change the reload follows.
+            writeFileSync(join(workdir, "lunora", "notes.ts"), notesSource("v2"), "utf8");
+            await reloaded;
+
+            await expect(readWhich(dev.origin)).resolves.toBe("other");
+        } finally {
+            await dev.stop();
+        }
+    });
 });
 
 describe("lunora dev --target node codegen settlements", () => {
@@ -466,11 +602,11 @@ describe("lunora dev --target node codegen settlements", () => {
     });
 
     /** Run `lunora dev` with a fake codegen watcher and a fake Node worker, settling one run at `when`. */
-    const runWithFakes = async (when: "before-start" | "during-start", startup = false) => {
-        const run = { startup };
+    const runWithFakes = async (when: "after-start" | "before-start" | "during-start", run?: { hookRan: boolean; startup: boolean }) => {
+        const settled = run ?? { hookRan: false, startup: false };
 
         const reload = vi.fn<() => void>();
-        let onSettled: ((settled: { startup: boolean }) => void) | undefined;
+        let onSettled: ((settled: { hookRan: boolean; startup: boolean }) => void) | undefined;
         let exit: (code: number) => void = () => {};
         const exited = new Promise<number>((resolve) => {
             exit = resolve;
@@ -484,18 +620,23 @@ describe("lunora dev --target node codegen settlements", () => {
                 ({ onSettled } = options);
 
                 if (when === "before-start") {
-                    onSettled?.(run);
+                    onSettled?.(settled);
                 }
 
                 return { close: async () => {}, watchAvailable: true } as never;
             },
             startNodeWorker: async () => {
                 if (when === "during-start") {
-                    onSettled?.(run);
+                    onSettled?.(settled);
                 }
 
-                // Stops as soon as it is up: the reload call is all this test reads.
-                queueMicrotask(() => {
+                // Stops as soon as it is up: the reload call is all this test reads. After the handler has registered the
+                // worker's reload, which happens once this start resolves.
+                setImmediate(() => {
+                    if (when === "after-start") {
+                        onSettled?.(settled);
+                    }
+
                     exit(0);
                 });
 
@@ -524,9 +665,27 @@ describe("lunora dev --target node codegen settlements", () => {
         await expect(runWithFakes("before-start")).resolves.not.toHaveBeenCalled();
     });
 
+    it("does not reload for the startup run once the host is up, without a postcodegen hook", async () => {
+        expect.assertions(1);
+
+        await expect(runWithFakes("after-start", { hookRan: false, startup: true })).resolves.not.toHaveBeenCalled();
+    });
+
+    it("reloads for the startup run whose postcodegen hook may have rewritten output during the load", async () => {
+        expect.assertions(1);
+
+        await expect(runWithFakes("during-start", { hookRan: true, startup: true })).resolves.toHaveBeenCalledTimes(1);
+    });
+
+    it("still reloads for an edit's run once the host is up", async () => {
+        expect.assertions(1);
+
+        await expect(runWithFakes("after-start")).resolves.toHaveBeenCalledTimes(1);
+    });
+
     it("does not reload for the startup run, which wrote its output before the host started loading", async () => {
         expect.assertions(1);
 
-        await expect(runWithFakes("during-start", true)).resolves.not.toHaveBeenCalled();
+        await expect(runWithFakes("during-start", { hookRan: false, startup: true })).resolves.not.toHaveBeenCalled();
     });
 });

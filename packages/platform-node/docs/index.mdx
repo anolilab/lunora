@@ -164,13 +164,18 @@ resolves `@lunora/platform-node` from the project and serves the worker entry
 
 - Codegen runs on every change under `lunora/`, as on Cloudflare. The app
   reloads after each finished codegen run (not after a failed `postcodegen`),
-  and when a file the entry loaded from outside `lunora/` changes; with
-  `--no-codegen` it watches the files it loaded under `lunora/` too. A reload
-  restarts the listener, so open sockets and streams reconnect. The previous
-  version gets 5 s to finish its in-flight work and is then closed anyway, with
-  a warning naming what was cut off. A reload that fails to load keeps the
-  previous version serving; one that cannot bind the port logs it and serves
-  again on the next change.
+  when a file the entry loaded from outside `lunora/` changes, and when
+  `wrangler.jsonc`, `.dev.vars`, `.dev.vars.<env>` or the `.env` files change;
+  with `--no-codegen` it watches the files it loaded under `lunora/` too. Each
+  reload re-reads the wrangler config, so an edited `main` takes effect. A
+  reload restarts the listener, so open sockets and streams reconnect. The
+  previous version gets 5 s to finish its in-flight work and is then closed
+  anyway, with a warning naming what was cut off. A reload that fails to load
+  keeps the previous version serving; one that cannot bind the port logs it,
+  and nothing serves until a later reload succeeds, since the previous version
+  held the same port and databases.
+- `CLOUDFLARE_ENV` selects a wrangler environment, as for `wrangler dev`: its
+  `main`, bindings and `vars`, and `.dev.vars.<env>` before `.dev.vars`.
 - Each `durable_objects` binding is composed over this host with the class the
   entry exports (`createNodeAppHost`). Shard data persists in `.lunora/node/`.
 - `env` carries the wrangler `vars`, `.dev.vars` (or `.env`) and

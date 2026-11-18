@@ -686,7 +686,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         // Set once the Node host is up. A run that settles before the host starts loading is already in what it loads; an edit's
         // run that settles while it loads may have rewritten `_generated/*` after the host read it, so it reloads once the host
-        // is up. The startup run wrote its output before the worker was started, so it is never the reason for one.
+        // is up. The startup run's codegen wrote before the worker was started, so it reloads only when a `postcodegen` hook
+        // ran after that: without one, a reload would only drop the requests already in flight.
         let reloadNodeWorker: (() => void) | undefined;
         let nodeWorkerStarting = false;
         let settledWhileNodeWorkerStarted = false;
@@ -698,10 +699,14 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
                 jsonLogs: options.jsonLogs,
                 logger,
                 lunoraDirectory: resolveSchemaDirectory(cwd),
-                onSettled: ({ startup }) => {
+                onSettled: ({ hookRan, startup }) => {
+                    if (startup && !hookRan) {
+                        return;
+                    }
+
                     if (reloadNodeWorker !== undefined) {
                         reloadNodeWorker();
-                    } else if (nodeWorkerStarting && !startup) {
+                    } else if (nodeWorkerStarting) {
                         settledWhileNodeWorkerStarted = true;
                     }
                 },

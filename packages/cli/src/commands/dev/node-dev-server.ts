@@ -11,11 +11,17 @@
  *
  * A reload is a full restart of the listener and the host, the same thing
  * `wrangler dev` does on a rebuild: open sockets and streams close and clients
- * reconnect to the new code. Two things trigger one. A settled run of the
+ * reconnect to the new code. Three things trigger one. A settled run of the
  * codegen watcher covers every file under `lunora/`; reloading on the raw file
  * event instead would import `_generated/*` while codegen is still rewriting
  * it. Files the entry loaded from outside `lunora/` (the entry itself and its
- * helpers) are watched here, because the codegen watcher never sees them.
+ * helpers) are watched here, because the codegen watcher never sees them. So
+ * are the wrangler config and the files the env is read from (`.dev.vars`,
+ * `.dev.vars.<env>`, `.env*`).
+ *
+ * Every load re-reads the wrangler config for the environment `CLOUDFLARE_ENV`
+ * names, as `wrangler dev` does: that environment's `main` and bindings, its
+ * `vars` and its `.dev.vars.<env>`.
  *
  * Besides the Durable Object bindings, each load binds what `@lunora/platform-node`
  * can stand in for: the declared crons (`_generated/crons.ts`), armed on the
@@ -24,10 +30,11 @@
  */
 import type { FSWatcher } from "node:fs";
 import { existsSync, realpathSync, statSync, watch } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
-import { resolveLocalWorkerEnv, resolveSchemaDirectory } from "@lunora/config";
-import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
+import { resolveLocalWorkerEnv, resolveSchemaDirectory, wranglerDotenvFiles } from "@lunora/config";
+import type { WranglerConfig } from "@lunora/config/cloudflare";
+import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { codegenRequested } from "./lifecycle";
 import type { DevCommandOptions, DevCommandPlan, NodeAppHost, NodeDevWorker, NodeDevWorkerInputs, PlatformNode } from "./types";
@@ -80,13 +87,16 @@ interface DurableObjectBinding {
     name: string;
 }
 
-/** What the Node dev worker reads from the project's wrangler config. */
+/** What the Node dev worker reads from the project's wrangler config, for the active wrangler environment. */
 interface NodeDevProject {
     configPath: string;
     durableObjects: DurableObjectBinding[];
     entry: string;
+    /** The wrangler environment the view was resolved for, or `undefined` for the top level. */
+    environment: string | undefined;
     /** `hyperdrive[].binding` names. */
     hyperdrive: string[];
+    /** The whole config as written; `resolveLocalWorkerEnv` picks the environment's `vars` and `secrets` from it itself. */
     parsed: NodeWranglerConfig;
     /** `secrets_store_secrets[].binding` names. */
     secrets: string[];
@@ -99,8 +109,21 @@ const isPresent = (value: unknown): boolean => (Array.isArray(value) ? value.len
 const bindingNames = (entries: ReadonlyArray<{ binding?: unknown }> | undefined): string[] =>
     (entries ?? []).flatMap((entry) => (typeof entry.binding === "string" ? [entry.binding] : []));
 
-/** Read the worker entry and its Durable Object bindings, or throw naming what is missing. */
-const readNodeDevProject = (projectRoot: string): NodeDevProject => {
+/**
+ * The wrangler environment `lunora dev` runs, read as `wrangler dev` reads it: `CLOUDFLARE_ENV`, empty meaning none. Read on
+ * every load, as the rest of the config is.
+ */
+const activeWranglerEnvironment = (): string | undefined => {
+    const environment = process.env["CLOUDFLARE_ENV"];
+
+    return environment === "" ? undefined : environment;
+};
+
+/**
+ * Read the worker entry and its bindings for `environment`, or throw naming what is missing. `main` is inherited from the top
+ * level and the bindings are not, as `mergeWranglerEnvironment` resolves them for `wrangler deploy --env`.
+ */
+const readNodeDevProject = (projectRoot: string, environment: string | undefined): NodeDevProject => {
     const configPath = findWranglerFile(projectRoot);
 
     if (configPath === undefined) {
@@ -109,28 +132,41 @@ const readNodeDevProject = (projectRoot: string): NodeDevProject => {
 
     const { parsed } = readWranglerJsonc<NodeWranglerConfig>(configPath);
 
-    if (parsed === undefined || typeof parsed.main !== "string") {
-        throw new Error(`--target node serves the worker entry \`main\` names, and ${relative(projectRoot, configPath)} has no \`main\``);
+    if (parsed === undefined) {
+        throw new Error(`--target node could not read ${relative(projectRoot, configPath)} as JSONC`);
+    }
+
+    const { error, merged } = mergeWranglerEnvironment(parsed as WranglerConfig, environment);
+
+    if (error !== undefined) {
+        throw new Error(`CLOUDFLARE_ENV: ${error}`);
+    }
+
+    const view = merged as NodeWranglerConfig;
+
+    if (typeof view.main !== "string") {
+        throw new TypeError(`--target node serves the worker entry \`main\` names, and ${relative(projectRoot, configPath)} has no \`main\``);
     }
 
     const durableObjects: DurableObjectBinding[] = [];
 
-    for (const binding of parsed.durable_objects?.bindings ?? []) {
+    for (const binding of view.durable_objects?.bindings ?? []) {
         // A binding to another worker's class has no class in this entry to construct.
         if (typeof binding.name === "string" && typeof binding.class_name === "string" && binding.script_name === undefined) {
             durableObjects.push({ className: binding.class_name, name: binding.name });
         }
     }
 
-    const unbound = UNBOUND_BINDING_KEYS.filter((key) => isPresent((parsed as Record<string, unknown>)[key]));
+    const unbound = UNBOUND_BINDING_KEYS.filter((key) => isPresent((view as Record<string, unknown>)[key]));
 
     return {
         configPath,
         durableObjects,
-        entry: resolve(projectRoot, parsed.main),
-        hyperdrive: bindingNames(parsed.hyperdrive),
+        entry: resolve(projectRoot, view.main),
+        environment,
+        hyperdrive: bindingNames(view.hyperdrive),
         parsed,
-        secrets: bindingNames(parsed.secrets_store_secrets),
+        secrets: bindingNames(view.secrets_store_secrets),
         unbound,
     };
 };
@@ -184,7 +220,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     const { logger, port } = inputs;
     // jiti keys its cache by real path, and the eviction below matches project files against this root.
     const projectRoot = realpathSync(inputs.projectRoot);
-    const project = readNodeDevProject(projectRoot);
+    const project = readNodeDevProject(projectRoot, activeWranglerEnvironment());
     const { createJiti } = await import("jiti");
     const jiti = createJiti(join(projectRoot, "package.json"), { interopDefault: false });
     const schemaDirectory = resolve(projectRoot, resolveSchemaDirectory(projectRoot));
@@ -270,7 +306,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         }
     };
 
-    const load = async (): Promise<Record<string, unknown>> => {
+    const load = async (entry: string): Promise<Record<string, unknown>> => {
         // The wall clock the file system stamps mtimes with, read without `Date`: a clock an app or a test moves would make every
         // file look changed, or none.
         const loadStartedAt = performance.timeOrigin + performance.now();
@@ -285,7 +321,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         }
 
         try {
-            return await jiti.import<Record<string, unknown>>(project.entry);
+            return await jiti.import<Record<string, unknown>>(entry);
         } finally {
             // Also after a failed load: the file that broke it is in the set, and its next save is the fix.
             watchLoadedSources(loadStartedAt);
@@ -320,9 +356,16 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     };
 
     const prepare = async (): Promise<NodeAppHost> => {
-        const worker = await load();
-        const current = readNodeDevProject(projectRoot);
-        const { env } = resolveLocalWorkerEnv({ config: current.parsed, configPath: current.configPath, projectRoot, vars: { WORKER_ENV: "development" } });
+        // Read first, so an edited `main` is the entry this load imports.
+        const current = readNodeDevProject(projectRoot, activeWranglerEnvironment());
+        const worker = await load(current.entry);
+        const { env } = resolveLocalWorkerEnv({
+            config: current.parsed,
+            configPath: current.configPath,
+            environment: current.environment,
+            projectRoot,
+            vars: { WORKER_ENV: "development" },
+        });
         // After `load`, which evicted it with the rest of the project, so a schedule edit lands with the reload codegen triggers.
         const generated = existsSync(cronsModule)
             ? await jiti.import<{ LUNORA_CRONS?: Readonly<Record<string, ReadonlyArray<unknown>>> }>(cronsModule)
@@ -375,6 +418,27 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     // After serving, not in `prepare`: a reload opens shards only once the previous version has closed them.
     running?.host.rearmPersistedAlarms();
 
+    // The files the env is read from, and the wrangler config itself when no codegen watcher does (it reruns on a config edit and
+    // its settled run reloads here), watched through their directory so a file created or replaced after startup is seen too.
+    // The name set is rebuilt per event, so it follows CLOUDFLARE_ENV.
+    const configWatcher = watch(dirname(project.configPath), (_event, filename) => {
+        const environment = activeWranglerEnvironment();
+        const watched = new Set([
+            ...(inputs.codegenWatch ? [] : [basename(project.configPath), "wrangler.json", "wrangler.jsonc"]),
+            ".dev.vars",
+            ...(environment === undefined ? [] : [`.dev.vars.${environment}`]),
+            ...wranglerDotenvFiles(environment),
+        ]);
+
+        if (filename !== null && watched.has(filename)) {
+            scheduleReload();
+        }
+    });
+
+    configWatcher.on("error", () => {
+        configWatcher.close();
+    });
+
     logger.info(`node: serving ${relative(projectRoot, project.entry)} on @lunora/platform-node at http://localhost:${String(port)}`);
 
     let settle: (code: number) => void = () => {};
@@ -415,8 +479,11 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         try {
             await serve(host);
         } catch (error: unknown) {
-            // The session stays up: the next save reloads again, which is the developer's chance to free the port.
-            logger.error(`node: could not serve the reloaded worker, nothing is serving until the next change: ${errorMessage(error)}`);
+            // The session stays up and the next save reloads again. The previous version cannot keep serving meanwhile: it held the
+            // same port and the same shard databases, and both were released for this one.
+            logger.error(
+                `node: could not serve the reloaded worker on port ${String(port)}: ${errorMessage(error)}. Nothing is serving until a reload succeeds — fix the cause (another process on the port?) and save a file to retry.`,
+            );
 
             return;
         }
@@ -462,6 +529,7 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             stopped = true;
             clearTimeout(debounce);
             unwatch();
+            configWatcher.close();
             (reloading ?? Promise.resolve())
                 .then(shutdown)
                 .then(

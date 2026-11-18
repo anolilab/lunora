@@ -1045,6 +1045,7 @@ interface CodegenWatcherOptions {
     logger: Logger;
     lunoraDirectory?: string;
     onSettled?: (run: {
+        hookRan: boolean;
         startup: boolean;
     }) => void;
     projectRoot: string;
