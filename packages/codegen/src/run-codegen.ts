@@ -448,6 +448,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         dataModelContent,
         dependencies,
         entryCronTriggers,
+        workerEntryCrons,
         env,
         featureUsage,
         hasFlags,
@@ -1061,6 +1062,7 @@ const runCodegenUnmemoized = (options: CodegenOptions): CodegenResult => {
         // fire, and both count against Cloudflare's per-worker Cron Trigger cap,
         // so the reconciler and the CLI's limit warning have to see one list.
         cronTriggers: [...new Set([...emitWranglerCronTriggers(crons), ...entryCronTriggers])],
+        workerEntryCrons,
         generated: {
             advisorProceduresJson,
             agents: agentsContent,

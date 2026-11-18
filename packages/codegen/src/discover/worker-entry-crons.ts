@@ -1,6 +1,7 @@
 import type { CallExpression, ObjectLiteralExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
+import type { WorkerEntryCron } from "../run-codegen-types";
 import { descendantsOfKind, listSecurityScanFiles, objectLiteralFromCallbackBody, propertyInitializer } from "./ast";
 import { calleeName } from "./callee";
 
@@ -35,12 +36,12 @@ const literalText = (node: Node | undefined): string | undefined =>
  * computed key (`[env.CRON]: handler`) or a spread is out of reach, not merely
  * unusual.
  */
-const cronsFromWorkerOptions = (options: ObjectLiteralExpression): string[] => {
-    const found: string[] = [];
+const cronsFromWorkerOptions = (options: ObjectLiteralExpression): WorkerEntryCron[] => {
+    const found: WorkerEntryCron[] = [];
     const backupCron = literalText(propertyInitializer(options, "backupCron"));
 
     if (backupCron !== undefined) {
-        found.push(backupCron);
+        found.push({ cron: backupCron, handler: "backupCron" });
     }
 
     const handlers = propertyInitializer(options, "crons");
@@ -57,7 +58,7 @@ const cronsFromWorkerOptions = (options: ObjectLiteralExpression): string[] => {
         const key = literalText(property.getNameNode());
 
         if (key !== undefined) {
-            found.push(key);
+            found.push({ cron: key, handler: "crons" });
         }
     }
 
@@ -70,7 +71,7 @@ const cronsFromWorkerOptions = (options: ObjectLiteralExpression): string[] => {
  * returns. Empty for every other call, and for an argument that is not a
  * statically readable literal.
  */
-const cronsFromCall = (call: CallExpression): string[] => {
+const cronsFromCall = (call: CallExpression): WorkerEntryCron[] => {
     const name = calleeName(call.getExpression());
     const [argument] = call.getArguments();
 
@@ -116,8 +117,8 @@ const cronsFromCall = (call: CallExpression): string[] => {
  * instead of deleting it. Removing that record on the strength of this scan
  * would reinstate the deletion bug for every dynamically-configured app.
  */
-const discoverWorkerEntryCrons = (project: Project, lunoraDirectory: string): string[] => {
-    const found: string[] = [];
+const discoverWorkerEntryCrons = (project: Project, lunoraDirectory: string): WorkerEntryCron[] => {
+    const found: WorkerEntryCron[] = [];
 
     for (const { filePath } of listSecurityScanFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
@@ -127,7 +128,8 @@ const discoverWorkerEntryCrons = (project: Project, lunoraDirectory: string): st
         }
     }
 
-    return [...new Set(found)];
+    // One entry per schedule and option: the same expression on both options is two handlers, and both are reported.
+    return [...new Map(found.map((entry) => [`${entry.handler} ${entry.cron}`, entry])).values()];
 };
 
 export default discoverWorkerEntryCrons;

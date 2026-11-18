@@ -20,7 +20,7 @@ const writeAt = (relative: string, source: string): string => {
     return path;
 };
 
-const discover = (): string[] => discoverWorkerEntryCrons(project, join(workdir, "lunora"));
+const discover = (): string[] => [...new Set(discoverWorkerEntryCrons(project, join(workdir, "lunora")).map((entry) => entry.cron))];
 
 describe("discoverWorkerEntryCrons", () => {
     beforeEach(() => {
@@ -53,6 +53,25 @@ describe("discoverWorkerEntryCrons", () => {
         );
 
         expect(discover()).toStrictEqual(["0 3 * * *", "*/15 * * * *", "0 0 1 * *"]);
+    });
+
+    it("names the createWorker option behind each schedule, keeping one expression used by both", () => {
+        expect.assertions(1);
+
+        writeAt(
+            "src/server/index.ts",
+            `export default createWorker({
+                backupCron: "0 3 * * *",
+                crons: { "0 3 * * *": nightly, "*/15 * * * *": async () => {} },
+            });`,
+        );
+
+        // A host that never calls scheduled() must name each handler, so the shared expression appears once per option.
+        expect(discoverWorkerEntryCrons(project, join(workdir, "lunora"))).toStrictEqual([
+            { cron: "0 3 * * *", handler: "backupCron" },
+            { cron: "0 3 * * *", handler: "crons" },
+            { cron: "*/15 * * * *", handler: "crons" },
+        ]);
     });
 
     it("reads a backtick-quoted backupCron", () => {
