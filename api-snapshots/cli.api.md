@@ -133,6 +133,7 @@ interface DeployCommandOptions {
     healthCheck?: boolean;
     healthFetch?: HealthFetch;
     healthSleep?: (ms: number) => Promise<void>;
+    image?: string;
     interactive?: boolean;
     isolatedPreview?: boolean;
     lazyFunctions?: boolean;
@@ -166,6 +167,7 @@ interface DeployCommandOptions {
 ```ts
 interface DeployCommandResult {
     code: number;
+    container?: NodeContainerOutput;
     deployment?: DeployedIdentity;
     descriptor: SpawnDescriptor | undefined;
     error?: string;
@@ -1283,6 +1285,16 @@ interface LongLivedDescriptor {
 
 ```ts
 type LongLivedSpawner = (descriptor: LongLivedDescriptor, onLine: (line: string, kind: "stderr" | "stdout") => void, onError?: (error: Error) => void) => WorkerProcess;
+```
+
+### `NodeContainerOutput` (interface)
+
+```ts
+interface NodeContainerOutput {
+    directory: string;
+    files: ReadonlyArray<string>;
+    image?: string;
+}
 ```
 
 ### `OfferDeps` (interface)

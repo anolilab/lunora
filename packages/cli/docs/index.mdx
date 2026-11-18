@@ -796,6 +796,120 @@ fi
 curl -fsS "$url/api/smoke"
 ```
 
+#### Deploying to Node (`--target node`)
+
+The Node target has no hosted control plane, so `lunora deploy --target node`
+deploys to a container build context instead of publishing anything. It runs
+codegen for the target (into the configured `schemaDir`), bundles a generated
+server entry together with the worker entry wrangler's `main` names into one
+`server.mjs` with the project's own `esbuild` (applying the worker's wrangler `define` and `alias` to the app's
+own code, but not to the generated server or to dependencies, unlike wrangler, so
+a `process.env` define cannot rewrite the server's environment checks), and writes `.lunora/deploy/node/`:
+
+| File                | What it is                                                                                                                                                                                                |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `server.mjs`        | The app on `@lunora/platform-node`: the app's own Durable Object bindings, the declared crons, `ctx.secrets` and Hyperdrive wired                                                                         |
+| `package.json`      | Only `better-sqlite3`, the one native module the bundle leaves out, at the version the project's platform-node runs (plus `ws`'s optional `bufferutil` / `utf-8-validate` when the project installs them) |
+| `package-lock.json` | Resolved at deploy time with `npm install --package-lock-only`, so the image's `npm ci` installs the same tree on every rebuild; the deploy needs npm and registry access for it                          |
+| `Dockerfile`        | Two stages on a Node LTS image pinned by digest: compiles `better-sqlite3` from source, then runs as the image's `node` user                                                                              |
+| `.dockerignore`     | An allowlist: only `package.json` and `server.mjs` reach the builder, whatever else the reused directory holds                                                                                            |
+| `README.md`         | The run command, the data volume and its permissions, the shutdown behaviour, and every environment variable the server reads                                                                             |
+
+Install `esbuild` and `@lunora/platform-node` in the project; the CLI resolves
+both from there. `--image <name>` also runs `docker build -t <name>` on the
+context when a Docker engine answers. Without one, or without the flag, the
+command prints the build command and stops. Nothing is pushed to a registry.
+`--dry-run` writes the context and builds no image. `--image` is refused for
+any other target.
+
+Refused before codegen writes anything:
+
+- **Framework projects.** A worker produced by a framework build, either
+  `main: "virtual:lunora/worker"` composed by `@lunora/vite` or a Cloudflare
+  adapter's output that `src/worker.ts` wraps, cannot be bundled, because this
+  deploy runs no framework build. Point `main` at a hand-written worker entry
+  that default-exports the fetch handler and exports `ShardDO` (the standalone
+  template's shape), or deploy the app to Cloudflare. An entry that exports no
+  default fetch handler or not every Durable Object class wrangler binds (an
+  adapter's output with no composed wrapper) fails the bundle with the same
+  advice.
+- **Flags with nothing to act on:** `--env`, `--migrate` and its
+  `--migrate-url`, `--migrate-token`, `--migrate-yes` and
+  `--migrate-allow-destructive`, `--health-check`, `--preview`, `--temporary`,
+  `--emit-bindings`, and `--prebuilt`, since `lunora build` and `lunora prepare`
+  never generate for this target.
+- **A malformed `secrets`**: anything but `{ "required": [...] }` listing
+  environment variable names (a misspelled key such as `require` included),
+  which would otherwise deploy a server missing those secrets.
+- **A name declared twice on `env`**: a var, a `secrets.required` name, a
+  `secrets_store_secrets` binding, the Hyperdrive binding and the Durable Object
+  bindings all share one namespace, so a repeat (a var named `SHARD`) would
+  silently replace another; the error names both sources.
+- **A malformed binding entry**: a `durable_objects.bindings`, `hyperdrive` or
+  `secrets_store_secrets` entry without a valid name, or `vars` that is not an
+  object of environment variable names. The error names the section and index;
+  such an entry used to be dropped, leaving the worker an `undefined` binding.
+- **A Durable Object binding whose name is not an identifier** (`..`, `a/b`):
+  each binding's shards live in a directory of that name under
+  `LUNORA_DATA_DIR`.
+- **An app import of `bufferutil` or `utf-8-validate` the project does not
+  install.** `ws` loads them optionally and falls back without them.
+- **A `secrets_store_secrets[]` binding named `LUNORA_*`**, which the runtime
+  reads as a plain string and which could therefore never start.
+
+The server reads `LUNORA_ORIGIN_URL` (the public URL; required, because the
+image binds `0.0.0.0`), `PORT` (default `8787`), `HOST` and `LUNORA_DATA_DIR`
+(`/data` in the image), plus `DATABASE_URL` when the app declares a Hyperdrive
+binding and one variable per `secrets_store_secrets[]` binding and
+`secrets.required` name. It refuses to start while a `secrets.required` name or
+`DATABASE_URL` is unset. Only declared names reach the worker's `env`, as on
+Cloudflare: the wrangler `vars`, the `secrets.required` names, the
+`secrets_store_secrets[]` bindings, and the runtime's own `LUNORA_*`, `PORT` and
+`DATABASE_URL`. No other variable a container host injects (cloud credentials,
+another service's token) is passed through `env`, so list every secret the app
+reads in `secrets.required`. That is not a sandbox: `process.env` stays readable
+to the app and every dependency in the same process, so inject only the
+variables the app needs. A name that is both a `secrets.required` entry and a
+`secrets_store_secrets` binding is refused, since the binding would replace the
+plain secret. No secret value is written into the generated
+files: secrets appear by name only. The wrangler `vars` are the exception by
+design, bundled into `server.mjs` as defaults, so keep secrets out of `vars`.
+Before it listens, the server re-arms every persisted alarm, so a restart does
+not leave alarms unfired on shards nobody calls. Crons and scheduled jobs are delivered to the shard binding, the one whose class
+is `ShardDO` (or `LunoraDO`), whatever it is named. The worker's `scheduled()`
+export is never called, so a wrangler `triggers.crons` expression meant only for
+it (a `createWorker` `backupCron` or `crons` job) does not fire; the deploy names
+any it finds. A project whose `@lunora/platform-node` predates deadline-bounded
+drains is refused, since every shutdown would fail on it. Wrangler `vars` are bundled as declared (a JSON object
+stays an object) and a set environment variable overrides one as a string.
+Every shard, the scheduler and the crons live in SQLite files under
+`LUNORA_DATA_DIR`, so mount a persistent volume there (a bind mount must be
+writable by uid 1000) and run one container per volume.
+
+On SIGTERM or SIGINT the server stops accepting connections, waits for the
+responses in flight at that moment to be written (a request still arriving on an
+open connection gets a 503 and `Connection: close`), closes the listener (ending
+event streams and WebSockets), then drains `waitUntil` work, alarms and cron runs
+before closing the databases (each registry and the platform drained together
+until all are idle, and each closed as its own step). The whole drain shares one deadline,
+`LUNORA_SHUTDOWN_TIMEOUT_MS` (default 8000, under `docker stop`'s 10 s grace; a
+value that is not a whole number of milliseconds from 0 to 2147483647, the
+longest delay a Node timer honours, is refused at startup);
+work still running when it passes is logged by name and the exit code is 1. A
+failed step is logged and the rest still run, and any fatal error during the
+shutdown also makes the exit code 1. A second signal exits at once. `waitUntil`
+failures, alarm and scheduled-job failures, a throwing fetch handler (logged by
+method and path, never its query string), unhandled rejections and uncaught
+exceptions are logged with their stack and cause; the last two also shut the
+server down with exit code 1. If the process ends before the shutdown finished,
+for any reason, it exits 1 and logs the step it was in.
+
+The deploy warns, by name, about every declared binding the server does not
+compose: static `assets`, queues, workflows, `.global()` tables, object
+storage, mail, `version_metadata`, a Durable Object bound from another worker
+(`script_name`), and any other binding section. The schema-drift gate does not
+run.
+
 ### `lunora preview`
 
 An isolated copy of the app per pull request, and the way to remove it.
@@ -913,7 +1027,8 @@ readable by anyone who can push a branch, that person can edit or delete every
 Worker, D1 database, KV namespace and R2 bucket on the account. If production
 shares the account, give previews an account of their own. It works on Cloudflare
 only. celld has no Wrangler environments, so deploy a separate config with its
-own `CELLD_BUCKET` instead. The Node target has no deploy.
+own `CELLD_BUCKET` instead. The Node target deploys as a container, which has
+no isolated previews: run a second container on its own data volume instead.
 
 ### `lunora build`
 

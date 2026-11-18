@@ -177,6 +177,7 @@ interface CodegenResult {
     schemaSnapshot: SchemaSnapshot;
     schemaSnapshotPath: string;
     schemaTables: ReadonlyArray<TableIR>;
+    workerEntryCrons: ReadonlyArray<WorkerEntryCron>;
     workflows: ReadonlyArray<WorkflowIR>;
     writtenFiles: ReadonlyArray<string>;
 }
@@ -3482,6 +3483,15 @@ interface VectorNamespaceAccessIR {
     line: number;
     method: string;
     scope: CallSiteScope;
+}
+```
+
+### `WorkerEntryCron` (interface)
+
+```ts
+interface WorkerEntryCron {
+    cron: string;
+    handler: "backupCron" | "crons";
 }
 ```
 

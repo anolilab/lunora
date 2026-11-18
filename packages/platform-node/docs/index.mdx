@@ -39,6 +39,16 @@ tells you, once, which declared features this target cannot serve, and it has
 no toolchain to shell out to (no `wrangler`-equivalent), because there is
 nothing remote to deploy to, tail logs from, or store secrets in.
 
+`lunora deploy --target node` deploys to a container build context instead:
+a bundled `server.mjs` whose generated entry composes this package around the
+app's worker entry (every Durable Object binding, `crons: LUNORA_CRONS`,
+`createNodeSecretBindings` over the `secrets_store_secrets[]` names, and
+`createNodeHyperdrive` from `DATABASE_URL`), a Dockerfile on a pinned Node LTS
+image that compiles `better-sqlite3` and runs as a non-root user, and a README
+listing the environment it reads. The SQLite files live under
+`LUNORA_DATA_DIR` (`/data` in the image), which is the volume to mount. See
+`lunora deploy` in the CLI docs.
+
 Its API snapshot is gated at the **experimental** tier
 (`scripts/api-snapshot.js`): a diff here is a public-API change and must be
 reviewed as one. This package is Experimental: the snapshot records how its surface
@@ -136,7 +146,8 @@ Dev and test. It exists to run the same conformance suite
 (`@lunora/platform/conformance`, `@lunora/shard-engine/conformance`) against a
 second host so portability is a construction check rather than a claim, and it
 is a useful in-process double for exercising app code without Cloudflare
-credentials. It is not wired into `lunora dev`, is not a deploy target, and the
+credentials. It is not wired into `lunora dev`, deploys only as the container
+`lunora deploy --target node` writes (one process, which you host), and the
 capabilities above (one process, no distributed placement or failover, no
 Cloudflare product bindings) mean it is not a substitute for the Cloudflare
 host in anything that needs them.
@@ -195,7 +206,8 @@ file. The `queues`, `workflows`, `objectStorage` and `globalTables` members are
 
 The object `createNodePlatform` returns. It exposes `shard`, `kv`, `sockets`,
 `scheduler`, `directory`, `dispatch`, `capabilities`, `drain`, `close` and
-`[Symbol.dispose]`, plus the optional `queues`, `workflows`, `objectStorage` and
+`[Symbol.dispose]`. `drain` also drains the registry's shards (see
+`createNodeShardRegistry`), plus the optional `queues`, `workflows`, `objectStorage` and
 `globalTables` members described above.
 
 ### `NodePlatformOptions`
@@ -264,12 +276,44 @@ that a shard's `d1` thunk expects.
 Builds the SQL executor over a `better-sqlite3` connection. Its `transaction`
 holds `BEGIN IMMEDIATE` open across the awaits of an async closure.
 
+### `DrainOptions`, `DrainResult`, `DrainTimer`, `DEFAULT_DRAIN_TIMEOUT_MS`
+
+**Type:** interfaces and a constant
+
+What every `drain()` in this package takes and returns. `timeoutMs` bounds the
+drain (`DEFAULT_DRAIN_TIMEOUT_MS`, 30 s, when omitted; a value that is not a
+whole number from 0 to 2147483647 ms throws a `RangeError`, since Node would run
+a longer timer after 1 ms), and `timer` replaces the
+clock it runs on, so a test can fire the deadline by hand. The default timer is
+referenced while the drain runs: a drain waiting on a promise with no I/O behind
+it (a stalled shard `waitUntil`) keeps the process alive until the deadline
+fires, instead of letting it exit silently. `NodePlatform.drain()` runs its host
+and registry drains under that one deadline, repeating until both are idle at the
+same instant, since host work can start shard work after the registry drained.
+Scheduler deliveries count as busy work too: a scheduled job or cron tick
+running through `onDispatch` (yours or the built-in one) is waited for until the
+scheduler has recorded its outcome, and named if the deadline passes first. A `DrainResult`
+reports `timedOut`, the `pending` work still running when the deadline passed,
+and the work that `failed` while the drain waited (an alarm retry that could not
+be written), one readable label each. Each failure is also logged with its cause
+when it happens, and drains wait with settled semantics, so one failure never
+stops them waiting for the rest.
+
 ### `createNodeHttpServer`
 
 **Type:** `(options: NodeHttpServerOptions) => Promise<NodeHttpServer>`
 
 Serves an app worker's `fetch` over `node:http` and resolves once the server is
-listening. `fetch` is required. `host` defaults to the loopback interface.
+listening. `fetch` is required. `host` defaults to the loopback interface. A
+handler that throws is answered with 500 and logged with its error, its method
+and its path (never the query string, which can carry a token). `drain()` stops
+the listener, then waits until every response that was in progress when it
+began is written or its client is gone; a request still arriving on an open
+connection is answered with `Connection: close` and not waited for. Event
+streams and WebSockets are not waited for, and `close()` ends them. It is
+bounded by a deadline (see `DrainOptions`, checked before anything is stopped, so an invalid one leaves the server serving) and resolves with what was still
+unfinished, which it also logs. A graceful shutdown refuses new requests in its
+`fetch`, awaits `drain()`, then `close()`.
 
 ### `createNodeHyperdrive`
 
@@ -369,7 +413,32 @@ itself.
 
 Builds the in-process shard registry. `directory` names the folder that holds one
 SQLite file per shard. Omit it for in-memory shards, which do not survive a
-restart. `onAlarm` and `onFetch` are the registry's delivery hooks.
+restart. `onAlarm` and `onFetch` are the registry's delivery hooks. `drain()`
+waits until every shard is idle: no `onFetch` or `onAlarm` call in flight (cron
+and scheduled-job deliveries included), no `waitUntil` work pending and no socket
+close handler running. Each pass re-reads every live shard, so work handed to a
+shard after its own drain finished, or a shard opened while draining, is seen;
+Alarm deliveries count until their retry, if any, is written, so a shutdown
+cannot lose a failed alarm. A retry waiting for another task's transaction to end
+always settles: it is written once the transaction ends, superseded by a later
+`set` or `delete`, or, if the shard closes first, given up and logged. A retry
+write that fails (contention from another process) is tried again with backoff
+before the alarm is given up and logged. `idle()` answers the same question synchronously.
+It returns only when a full pass finds nothing running, or when its deadline
+passes, logging one line per shard with how many requests, alarms and
+`waitUntil` tasks it still had (never the request or its payload). Await it before `close()`, which does not wait. `close({ force: true })`, for
+after a drain has finished or reached its deadline, disposes a shard whose socket
+close handler is still running instead of waiting for it, and logs it. A shard
+that fails to close does not stop the others: every one is tried, each failure is
+logged, and `close()` then throws one `AggregateError` naming them.
+`NodePlatform.close()` runs all of its teardowns the same way.
+`rearmPersistedAlarms()` (on the registry and on `NodePlatform`) opens every
+stored shard that has a persisted alarm, so a restarted process fires it without
+waiting for a request to that shard; call it once before taking traffic. Shards
+without an alarm stay closed. `idle()` reports synchronously whether anything a
+drain would wait for is running, and `drainTogether(parts, options)` drains
+several registries or platforms under one deadline until all are idle in the same
+pass, since work on one can start work on another after it drained.
 
 ### `createNodeShardState`
 

@@ -11,6 +11,47 @@ SemVer promise until the package graduates.
 
 ## `@lunora/platform-node`
 
+### `DEFAULT_DRAIN_TIMEOUT_MS` (const)
+
+```ts
+const DEFAULT_DRAIN_TIMEOUT_MS = 3e4;
+```
+
+### `DrainOptions` (interface)
+
+```ts
+interface DrainOptions {
+    timeoutMs?: number;
+    timer?: DrainTimer;
+}
+```
+
+### `DrainResult` (interface)
+
+```ts
+interface DrainResult {
+    failed: string[];
+    pending: string[];
+    timedOut: boolean;
+}
+```
+
+### `DrainTimer` (type)
+
+```ts
+type DrainTimer = (ms: number, onExpire: () => void) => () => void;
+```
+
+### `Drainable` (interface)
+
+```ts
+interface Drainable {
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
+    idle: () => boolean;
+    pending: () => string[];
+}
+```
+
 ### `NODE_SCHEDULER_DISPATCH_PATH` (const)
 
 ```ts
@@ -101,6 +142,7 @@ interface NodeGlobalStoreOptions {
 ```ts
 interface NodeHttpServer {
     close: () => Promise<void>;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
     origin: string;
 }
 ```
@@ -139,14 +181,19 @@ interface NodePlatform<Queues extends Record<string, {
 }> = Record<string, never>> {
     [Symbol.dispose]: () => void;
     capabilities: PlatformCapabilities;
-    close: () => void;
+    close: (options?: {
+        force?: boolean;
+    }) => void;
     directory: ShardDirectory;
     dispatch: (request: Request) => Promise<Response>;
-    drain: () => Promise<void>;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
     globalTables?: NodeGlobalStore;
+    idle: () => boolean;
     kv: ShardKvStore;
     objectStorage?: R2BucketLike;
+    pending: () => string[];
     queues?: NodeQueueHost<Queues>;
+    rearmPersistedAlarms: () => string[];
     scheduler: SchedulerHost;
     shard: ShardHost;
     sockets: SocketHost;
@@ -245,8 +292,13 @@ interface NodeR2BucketOptions {
 interface NodeSchedulerHost {
     declareCrons: (crons: ReadonlyArray<NodeDeclaredCron>) => void;
     dispose: () => void;
+    pendingDispatches: () => {
+        labels: string[];
+        waits: Promise<unknown>[];
+    };
     scheduler: SchedulerHost;
     simulateDeadLetter: (id: string) => Promise<boolean>;
+    suspend: () => void;
 }
 ```
 
@@ -296,10 +348,17 @@ interface NodeShardHostOptions {
 
 ```ts
 interface NodeShardRegistry {
-    close: () => void;
+    close: (options?: {
+        force?: boolean;
+    }) => void;
     directory: DirectShardDirectory;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
+    idle: () => boolean;
     listShardKeys: (table?: string) => ReadonlyArray<string>;
+    pending: () => string[];
+    rearmPersistedAlarms: () => string[];
     shardFor: (key: string) => NodeShard;
+    suspendAlarms: () => void;
 }
 ```
 
@@ -474,10 +533,15 @@ const createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly
 
 ```ts
 const createNodeShardHost: (options?: NodeShardHostOptions) => {
+    alarmsSettled: () => Promise<unknown> | undefined;
     database: Database.Database;
     dispose: () => void;
     drain: () => Promise<void>;
     host: ShardHost;
+    pendingAlarms: () => number;
+    pendingBackground: () => number;
+    suspendAlarms: () => void;
+    takeFailures: () => string[];
 };
 ```
 
@@ -529,6 +593,12 @@ const createNodeWorkflowHost: <Workflows extends Record<string, {
 
 ```ts
 const createNodeWorkflowStore: (database: Database.Database) => WorkflowStore;
+```
+
+### `drainTogether` (const)
+
+```ts
+const drainTogether: (parts: ReadonlyArray<Drainable>, options?: DrainOptions) => Promise<DrainResult>;
 ```
 
 ## `@lunora/platform-node/conformance`

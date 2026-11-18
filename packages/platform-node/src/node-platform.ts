@@ -18,6 +18,8 @@ import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory,
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
 import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
+import type { Drainable, DrainOptions, DrainResult } from "./drain-deadline";
+import { drainTimeoutMs, drainTogether, settlesBefore, startDrainDeadline } from "./drain-deadline";
 import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-route";
 import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
@@ -155,8 +157,12 @@ export interface NodePlatform<
      * any runtime socket map or durable row. A no-op instead of a throw would
      * be indistinguishable from a working call — exactly the silent-vanishing
      * this lifecycle exists to end.
+     *
+     * `force` is for a shutdown whose drain has finished or reached its deadline:
+     * a shard whose socket close handler is still running is disposed now (and
+     * logged) instead of once the handler settles. See `NodeShardRegistry.close`.
      */
-    close: () => void;
+    close: (options?: { force?: boolean }) => void;
     /** In-process shard directory (see `createNodeShardRegistry` for what it can and cannot do). */
     directory: ShardDirectory;
 
@@ -172,14 +178,24 @@ export interface NodePlatform<
     dispatch: (request: Request) => Promise<Response>;
 
     /**
-     * Wait for every promise handed to `shard.waitUntil` to settle.
+     * Wait for every promise handed to `shard.waitUntil` to settle, and for the
+     * registry's shards to go idle (`NodeShardRegistry.drain`): in-flight
+     * `onFetch` and `onAlarm` calls, including cron and scheduled-job
+     * deliveries, and each shard's own `waitUntil` work.
      *
      * Separate from `close()` because the two answer different questions:
      * `close()` releases handles and stays synchronous (it backs
      * `Symbol.dispose`), while draining is inherently awaitable. A graceful
-     * shutdown is `await platform.drain()` then `platform.close()`.
+     * shutdown is `await platform.drain()` then `platform.close()`. Bounded by
+     * `timeoutMs` (30 s by default); resolves with what was still running when
+     * it passed.
+     *
+     * Draining is the start of shutdown: it first stops the scheduler's job and
+     * cron timers and every alarm timer, so nothing new starts once the drain
+     * has found the platform idle. Their rows are kept and re-armed after a
+     * restart.
      */
-    drain: () => Promise<void>;
+    drain: (options?: DrainOptions) => Promise<DrainResult>;
 
     /**
      * The `.global()` backend, or `undefined` when the caller named no database
@@ -200,11 +216,20 @@ export interface NodePlatform<
      */
     globalTables?: NodeGlobalStore;
 
+    /**
+     * Whether nothing a {@link NodePlatform.drain} would wait for is running right now. Synchronous, so a caller draining
+     * several platforms or registries together can confirm they are all idle at one instant.
+     */
+    idle: () => boolean;
+
     /** Durable key-value storage backed by the same `better-sqlite3` database as `shard`. */
     kv: ShardKvStore;
 
     /** The local-filesystem bucket, or `undefined` when the caller named no bucket directory. */
     objectStorage?: R2BucketLike;
+
+    /** What is running right now (host work, scheduler deliveries, each shard's work), as a timed-out drain would report it. */
+    pending: () => string[];
 
     /**
      * The declared queues, or `undefined` when the caller declared none.
@@ -214,6 +239,9 @@ export interface NodePlatform<
      * works when no queue exists to send to.
      */
     queues?: NodeQueueHost<Queues>;
+
+    /** Open every stored shard with a persisted alarm, so it is re-armed before traffic arrives. See `NodeShardRegistry.rearmPersistedAlarms`. */
+    rearmPersistedAlarms: () => string[];
     /** Delayed jobs and crons, persisted to the same database and re-armed on construction. */
     scheduler: SchedulerHost;
 
@@ -325,9 +353,18 @@ export const createNodePlatform = <
     // `close()` method, a `dispose()` method — and holding them here is what lets
     // both the failure path below and `close()` unwind the same list, so a fifth
     // resource cannot be added to one and forgotten in the other.
-    const teardown: (() => void)[] = [];
+    const teardown: ((closeOptions?: { force?: boolean }) => void)[] = [];
 
-    const { database, dispose: disposeShard, drain, host: shard } = createNodeShardHost(options);
+    const {
+        database,
+        dispose: disposeShard,
+        drain,
+        host: shard,
+        pendingAlarms,
+        pendingBackground,
+        suspendAlarms: suspendHostAlarms,
+        takeFailures,
+    } = createNodeShardHost(options);
 
     teardown.push(disposeShard);
 
@@ -335,8 +372,8 @@ export const createNodePlatform = <
         const kv = createNodeShardKvStore(database);
         const registry = createNodeShardRegistry(options);
 
-        teardown.push(() => {
-            registry.close();
+        teardown.push((closeOptions) => {
+            registry.close(closeOptions);
         });
 
         const { directory } = registry;
@@ -359,7 +396,9 @@ export const createNodePlatform = <
         const {
             declareCrons,
             dispose: disposeScheduler,
+            pendingDispatches,
             scheduler,
+            suspend: suspendScheduler,
         } = createNodeSchedulerHost(database, { ...options, onDispatch: options.onDispatch ?? deliverJob });
         const { socket: sockets } = createNodeSocketHost(database);
 
@@ -416,15 +455,62 @@ export const createNodePlatform = <
         const workflows =
             options.workflows === undefined ? undefined : createNodeWorkflowHost({ store: createNodeWorkflowStore(database), workflows: options.workflows });
 
-        const close = (): void => {
+        const close = (closeOptions?: { force?: boolean }): void => {
             // Reverse construction order, which puts the scheduler's timers ahead of
             // the connection they would fire against: `disposeShard` closes it, and a
             // job timer that fired in between would find it closed. Every teardown is
             // guarded on its own, so ordering makes the guard the backstop rather than
             // the mechanism. The copy keeps `close()` callable more than once.
+            // Each teardown runs even when an earlier one throws, so one failing resource cannot leave the rest open; the
+            // failures are thrown together once all of them have been tried.
+            const failures: unknown[] = [];
+
             for (const undo of teardown.toReversed()) {
-                undo();
+                try {
+                    undo(closeOptions);
+                } catch (error: unknown) {
+                    failures.push(error);
+                }
             }
+
+            if (failures.length > 0) {
+                throw new AggregateError(failures, `@lunora/platform-node: ${String(failures.length)} resource(s) failed to close`);
+            }
+        };
+
+        const hostPending = (): string[] => [
+            ...(pendingBackground() > 0 || pendingAlarms() > 0 ? ["waitUntil work on the platform host"] : []),
+            ...pendingDispatches().labels,
+        ];
+
+        // The platform's own work as one drainable part: host waitUntil work and alarm deliveries, and scheduler deliveries (a
+        // custom onDispatch, a cron tick), which write to the database the drain protects.
+        const host: Drainable = {
+            drain: async (drainOptions) => {
+                const deadline = startDrainDeadline(drainOptions);
+
+                try {
+                    const [hostSettled, dispatchesSettled] = await Promise.all([
+                        settlesBefore(drain(), deadline),
+                        settlesBefore(Promise.allSettled(pendingDispatches().waits), deadline),
+                    ]);
+
+                    if (hostSettled && dispatchesSettled) {
+                        return { failed: takeFailures(), pending: [], timedOut: false };
+                    }
+
+                    const pending = hostPending();
+
+                    // eslint-disable-next-line no-console -- the drain gives up on this work, so the log is the only record of it
+                    console.error("[@lunora/platform-node] platform drain deadline passed with work still running: %s", pending.join(", "));
+
+                    return { failed: takeFailures(), pending, timedOut: true };
+                } finally {
+                    deadline.cancel();
+                }
+            },
+            idle: () => pendingBackground() === 0 && pendingAlarms() === 0 && pendingDispatches().waits.length === 0,
+            pending: hostPending,
         };
 
         return {
@@ -432,16 +518,35 @@ export const createNodePlatform = <
             close,
             directory,
             dispatch: (request) => dispatch(request),
-            drain,
+            idle: () => host.idle() && registry.idle(),
+            pending: () => [...host.pending(), ...registry.pending()],
+            // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
+            // would let `close()` dispose a database a handler is still writing. Host work can start shard work after the
+            // registry drained (a due job's delivery), which drainTogether's passes, failures and pending re-read account for.
+            //
+            // Timers are stopped first, before the first pass: a job, cron tick or alarm that fired after the drain found
+            // everything idle would run into the forced close. Their rows stay, so each fires after a restart.
+            drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
+                // Checked before anything is stopped: a refused timeout must leave jobs, crons and alarms running.
+                drainTimeoutMs(drainOptions);
+                suspendScheduler();
+                suspendHostAlarms();
+                registry.suspendAlarms();
+
+                return drainTogether([host, registry], drainOptions);
+            },
             globalTables,
             kv,
             objectStorage,
+            rearmPersistedAlarms: () => registry.rearmPersistedAlarms(),
             queues,
             scheduler,
             shard,
             sockets,
             workflows,
-            [Symbol.dispose]: close,
+            [Symbol.dispose]: () => {
+                close();
+            },
         };
     } catch (error) {
         // Roll back what was already built. Nothing else can reach these — the

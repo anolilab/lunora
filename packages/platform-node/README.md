@@ -16,7 +16,7 @@ Portability was a claim, not a construction check — `PLATFORM_MATRICES` held e
 
 ## Scope
 
-This is a **spike**, not a production target: it is not wired into `lunora dev`, has no deploy driver, and several capabilities are honestly rated `emulated`/`unsupported` in its capability matrix entry (see `@lunora/platform`'s `NODE_CAPABILITIES`). Wiring it into the dev server is the payoff and a follow-up, not this change.
+This is a **spike**, not a production target: it is not wired into `lunora dev`, deploys only as the container build context `lunora deploy --target node` writes, and several capabilities are honestly rated `emulated`/`unsupported` in its capability matrix entry (see `@lunora/platform`'s `NODE_CAPABILITIES`). Wiring it into the dev server is the payoff and a follow-up, not this change.
 
 ## On-demand profiling
 

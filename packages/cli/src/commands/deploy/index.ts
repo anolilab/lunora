@@ -5,11 +5,13 @@ import TARGET_OPTION from "../../util/deploy-target";
 import { OUTPUT_FORMAT_OPTION } from "../../util/output-format";
 
 const deployCommand: Command = {
-    description: "Codegen, validate wrangler, then wrangler deploy",
+    description: "Codegen, validate wrangler, then wrangler deploy (--target node: write a container build context)",
     examples: [
         ["lunora deploy", "Deploy to Cloudflare"],
         ["lunora deploy --env production", "Deploy to a named environment"],
         ["lunora deploy --dry-run", "Validate + bundle without publishing"],
+        ["lunora deploy --target node", "Write a Node container build context to .lunora/deploy/node"],
+        ["lunora deploy --target node --image my-app", "Same, then docker build it as my-app"],
         ["lunora deploy --migrate --migrate-yes --migrate-url <url>", "Deploy, then apply pending SQL and run the data migrations"],
         [
             "lunora deploy --migrate --migrate-yes --migrate-allow-destructive --migrate-url <url>",
@@ -52,6 +54,12 @@ const deployCommand: Command = {
                 "After the deploy, probe the new version's health route (/_lunora/health/ready, falling back to /_lunora/health) and fail if it never answers",
             name: "health-check",
             type: Boolean,
+        },
+        {
+            description:
+                "With --target node: also `docker build` the written container context under this image name when Docker is available. Nothing is pushed",
+            name: "image",
+            type: String,
         },
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
         {
@@ -141,6 +149,7 @@ export type DeployOptions = CreateOptions<{
     format: string | undefined;
     "framework-build": boolean | undefined;
     "health-check": boolean | undefined;
+    image: string | undefined;
     "lazy-functions": boolean | undefined;
     migrate: boolean | undefined;
     "migrate-allow-destructive": boolean | undefined;

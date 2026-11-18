@@ -191,7 +191,7 @@ before blocking a schema change.
 | ---------- | ----------------------------------------------------------------------------------------------- |
 | Cloudflare | `lunora preview`: its own Worker, Durable Object namespace, D1, KV and R2                       |
 | celld      | Refused: no Wrangler environments. Deploy a separate config with its own `CELLD_BUCKET` instead |
-| Node       | Refused: the Node target has no `lunora deploy`                                                 |
+| Node       | Refused: the deploy is a container. Run a second one on its own data volume instead             |
 
 ### Validating without publishing
 

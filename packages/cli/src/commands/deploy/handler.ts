@@ -1,5 +1,5 @@
 import { existsSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import type { CodegenResult } from "@lunora/codegen";
 import { readBoundServiceBindings, readServiceBindings, runCodegen } from "@lunora/codegen";
@@ -43,8 +43,9 @@ import { writeBindingManifestFile } from "../../util/binding-manifest-file";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import { renderDeploySummary } from "../../util/deploy-summary";
-import { resolveRunnableTargetOrError } from "../../util/deploy-target-resolve";
+import { deploysAsContainer, resolveDeployTargetOrError, resolveRunnableTargetOrError } from "../../util/deploy-target-resolve";
 import { detectPackageManager, toolchainExecArgs } from "../../util/detect-package-manager";
+import { isDockerAvailable } from "../../util/docker";
 import { checkDurableObjectBudget } from "../../util/durable-object-budget";
 import type { ExitCode } from "../../util/exit-code";
 import { EXIT_CODE } from "../../util/exit-code";
@@ -69,6 +70,7 @@ import type { PreDeployCommand } from "./checks";
 import { checkD1Placeholder, resolveComposedWorkerEntry, runOpenShardGate, runPreDeployChecks, validateMigrateDeployPreflight } from "./checks";
 import { generatedConfigPath, hasHyperdrivePlaceholder, provisionDeployHyperdrive } from "./hyperdrive";
 import type { DeployOptions } from "./index";
+import { buildNodeContainer, readNodeDeployProject } from "./node-container";
 import completeDeploy from "./post-deploy";
 import { offerMissingSecrets, warnDevVariablesNotPushed } from "./secrets";
 import type { DeployCommandData, DeployCommandOptions, DeployCommandResult } from "./types";
@@ -253,6 +255,7 @@ const runCodegenStep = async (
     jsonOutput: boolean,
     strictAdvisories: boolean,
     writeOutputs: boolean,
+    lunoraDirectory?: string,
 ): Promise<{ error?: string; result?: CodegenResult }> => {
     let codegenSpinner: Spinner | undefined;
 
@@ -264,7 +267,15 @@ const runCodegenStep = async (
     }
 
     try {
-        const result = runCodegen({ apiSpec, dryRun: !writeOutputs, lazyFunctions, projectRoot: cwd, target, ...wranglerCodegenInputs(cwd, target) });
+        const result = runCodegen({
+            apiSpec,
+            dryRun: !writeOutputs,
+            lazyFunctions,
+            lunoraDirectory,
+            projectRoot: cwd,
+            target,
+            ...wranglerCodegenInputs(cwd, target),
+        });
 
         if (writeOutputs) {
             reconcileStudioAssets(cwd, target, logger);
@@ -1675,6 +1686,193 @@ const clientBuildEnvironmentFor = (projectRoot: string, options: DeployCommandOp
 };
 
 /**
+ * Flags that act on a remote deployment, which a container deploy does not make. Refused rather than ignored, so a CI script
+ * written for Cloudflare does not read a written directory as a migrated, health-checked release.
+ */
+const CONTAINER_REFUSED_FLAGS: ReadonlyArray<[keyof DeployCommandOptions, string]> = [
+    ["emitBindings", "--emit-bindings"],
+    ["env", "--env"],
+    // The Node deploy bundles a hand-written worker entry and refuses a framework-composed one, so a framework build has no output
+    // it could use. `--no-framework-build` (false) asks for what it already does and passes.
+    ["frameworkBuild", "--framework-build"],
+    ["healthCheck", "--health-check"],
+    ["migrate", "--migrate"],
+    ["migrateAllowDestructive", "--migrate-allow-destructive"],
+    ["migrateToken", "--migrate-token"],
+    ["migrateUrl", "--migrate-url"],
+    ["migrateYes", "--migrate-yes"],
+    ["preview", "--preview"],
+    // `build` and `prepare` refuse this target, so no earlier run wrote `_generated/*` for it: a bundle that skipped codegen would
+    // ship whatever another target's codegen left there.
+    ["skipCodegen", "--prebuilt"],
+    ["temporary", "--temporary"],
+];
+
+/**
+ * Why `options` cannot deploy as a container, before anything is written: a flag that has no meaning here, or an app the deploy
+ * cannot bundle (a framework build's worker, a reserved secret name). Reading the project is read-only, so a refused app keeps
+ * its `_generated/*` as it was.
+ */
+const containerDeployRefusal = (options: DeployCommandOptions, cwd: string, target: string): string | undefined => {
+    const refused = CONTAINER_REFUSED_FLAGS.filter(([key]) => options[key] !== undefined && options[key] !== false).map(([, flag]) => flag);
+
+    if (refused.length > 0) {
+        return `${refused.join(", ")} ${refused.length === 1 ? "does" : "do"} not apply to --target ${target}, which writes a container build context instead of a hosted deployment`;
+    }
+
+    try {
+        readNodeDeployProject(cwd);
+
+        return undefined;
+    } catch (error: unknown) {
+        return error instanceof Error ? error.message : String(error);
+    }
+};
+
+/**
+ * `lunora deploy --target node`: codegen for the target, then the container build context `buildNodeContainer` writes, then
+ * `docker build` when `--image` names a tag and an engine answers. `--dry-run` writes the context and builds no image.
+ */
+const runNodeContainerDeploy = async (options: DeployCommandOptions, target: string): Promise<DeployCommandResult> => {
+    const { logger } = options;
+    const cwd = options.cwd ?? process.cwd();
+    const refusal = containerDeployRefusal(options, cwd, target);
+
+    if (refusal !== undefined) {
+        logger.error(refusal);
+
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: refusal, validation: NO_VALIDATION };
+    }
+
+    const gateError = runOpenShardGate(cwd, options, "deploy", []);
+
+    if (gateError !== undefined) {
+        return { code: gateError.code, descriptor: undefined, error: gateError.error, validation: NO_VALIDATION };
+    }
+
+    const codegen = await runCodegenStep(
+        cwd,
+        isInteractive(options),
+        logger,
+        options.apiSpec,
+        resolveLazyFunctions(options.lazyFunctions),
+        target,
+        options.spawner,
+        options.format === "json",
+        resolveStrictAdvisories(options),
+        true,
+        // The directory the bundle reads `_generated/*` from, so a `schemaDir` project generates where it is bundled.
+        resolveSchemaDirectory(cwd),
+    );
+
+    if (codegen.error !== undefined) {
+        return { code: 1, descriptor: undefined, error: codegen.error, validation: NO_VALIDATION };
+    }
+
+    let artifact: Awaited<ReturnType<typeof buildNodeContainer>>;
+
+    try {
+        artifact = await buildNodeContainer(cwd, options.spawner ?? defaultSpawner);
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.error(message);
+
+        return { code: 1, descriptor: undefined, error: message, validation: NO_VALIDATION };
+    }
+
+    const context = relative(cwd, artifact.directory);
+    const buildCommand = `docker build -t ${options.image ?? "<image>"} ${context}`;
+    const required = artifact.env.filter((variable) => variable.required).map((variable) => variable.name);
+
+    logger.success(`wrote the Node container build context to ${context} (${artifact.files.join(", ")})`);
+
+    // Two kinds of schedule reach only the worker's scheduled() handler, which nothing calls in the container: createWorker's
+    // own (backupCron, crons keys), named with their handler whether or not a declared cron shares the expression, since sharing
+    // it delivers the cron job and not that handler; and a wrangler trigger the generated LUNORA_CRONS map does not deliver, as
+    // for a hand-written scheduled().
+    const entrySchedules = codegen.result?.workerEntryCrons ?? [];
+    const named = new Set(entrySchedules.map((entry) => entry.cron));
+    const delivered = new Set(artifact.deliveredCrons);
+    const undeliveredTriggers = [...new Set(artifact.cronTriggers)].filter((cron) => !delivered.has(cron) && !named.has(cron));
+    const neverRun = [...entrySchedules.map((entry) => `${entry.handler} "${entry.cron}"`), ...undeliveredTriggers.map((cron) => `triggers.crons "${cron}"`)];
+
+    if (neverRun.length > 0) {
+        logger.warn(`the Node server never calls the worker's scheduled() handler, so these schedules never run: ${neverRun.join(", ")}`);
+    }
+
+    if (artifact.unbound.length > 0) {
+        logger.warn(
+            `the Node server binds its own Durable Objects, crons, secrets, Hyperdrive and vars; these wrangler bindings are not bound, so reading one fails: ${artifact.unbound.join(", ")}`,
+        );
+    }
+
+    logger.info(
+        `run it with the SQLite data volume mounted at /data and these set: ${required.join(", ")} — ${join(context, "README.md")} lists every variable`,
+    );
+
+    const container = { directory: artifact.directory, files: artifact.files };
+
+    if (options.image === undefined || options.dryRun === true) {
+        logger.info(`build the image: ${buildCommand}`);
+
+        return { code: 0, container, descriptor: undefined, validation: NO_VALIDATION };
+    }
+
+    if (!(options.dockerAvailable ?? isDockerAvailable)()) {
+        logger.warn(`no Docker engine answered, so no image was built — build it where one runs: ${buildCommand}`);
+
+        return { code: 0, container, descriptor: undefined, validation: NO_VALIDATION };
+    }
+
+    const descriptor: SpawnDescriptor = {
+        args: ["build", "-t", options.image, artifact.directory],
+        command: "docker",
+        cwd,
+        stdoutToStderr: options.format === "json",
+    };
+    let built: Awaited<ReturnType<Spawner>>;
+
+    try {
+        built = await (options.spawner ?? defaultSpawner)(descriptor);
+    } catch (error: unknown) {
+        // A spawn that cannot start (no docker binary on PATH, a permission error) is the same failed build as a nonzero exit.
+        const message = `docker build could not start: ${error instanceof Error ? error.message : String(error)}`;
+
+        logger.error(message);
+
+        return { code: 1, container, descriptor, error: message, validation: NO_VALIDATION };
+    }
+
+    if (built.code !== 0) {
+        const message = `docker build exited with code ${String(built.code)}`;
+
+        logger.error(message);
+
+        return { code: built.code, container, descriptor, error: message, validation: NO_VALIDATION };
+    }
+
+    logger.success(`built image ${options.image}`);
+
+    return { code: 0, container: { ...container, image: options.image }, descriptor, validation: NO_VALIDATION };
+};
+
+/**
+ * The target this run deploys as a container, if any. A container target is not a toolchain target, so it never reaches the
+ * wrangler preflight. `build`, `prepare` and `lunora preview` share {@link runDeployCommand} and stay toolchain-only: the
+ * preflight refuses it for them.
+ */
+const containerDeployTarget = (options: DeployCommandOptions, projectRoot: string): string | undefined => {
+    if ((options.commandName ?? "deploy") !== "deploy" || options.isolatedPreview === true) {
+        return undefined;
+    }
+
+    const { target } = resolveDeployTargetOrError(projectRoot, options.target);
+
+    return target !== undefined && deploysAsContainer(target) ? target : undefined;
+};
+
+/**
  * Run a deploy. In `--format json` mode the human/progress channel is already on
  * stderr (`defineHandler` routed it) and the Vercel-style summary is skipped, so
  * stdout is left to the single result document `execute` returns.
@@ -1688,6 +1886,21 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     // else needs to own a snapshot.
     const { logger } = options;
     const projectRoot = options.cwd ?? process.cwd();
+
+    const containerTarget = containerDeployTarget(options, projectRoot);
+
+    if (containerTarget !== undefined) {
+        return runNodeContainerDeploy(options, containerTarget);
+    }
+
+    // Refused rather than ignored: a caller asking for an image would otherwise get a hosted deploy it did not ask for.
+    if (options.image !== undefined) {
+        const message = "--image builds the container a `--target node` deploy writes, and this deploy's target is not a container target";
+
+        logger.error(message);
+
+        return { code: EXIT_CODE.USAGE, descriptor: undefined, error: message, validation: NO_VALIDATION };
+    }
 
     // A refused deploy must not rewrite the project, and the client build rewrites `_generated/*` and `dist/`, so the refusals
     // that need no writes run before it.
@@ -1771,6 +1984,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         env: options.env,
         format,
         healthCheck: options.healthCheck === true,
+        image: options.image,
         logger,
         migrate: options.migrate === true,
         migrateToken: options.migrateToken,
@@ -1779,7 +1993,10 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
         // link is only trusted when it was recorded for THIS `--env` — a
         // production-linked checkout must not silently supply its URL to a
         // `--env staging --migrate` run (see resolveWorkerUrl's env guard).
-        migrateUrl: resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
+        // A container deploy has no worker to migrate and refuses `--migrate-url`, so only the flag itself reaches it.
+        migrateUrl: deploysAsContainer(resolveDeployTargetOrError(cwd, options.target).target ?? "")
+            ? options.migrateUrl
+            : resolveWorkerUrl({ cwd, env: options.env, url: options.migrateUrl }),
         migrateAllowDestructive: options.migrateAllowDestructive === true,
         migrateYes: options.migrateYes === true,
         preview: options.preview === true,
@@ -1796,6 +2013,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions, Depl
     return {
         code: result.code,
         data: {
+            container: result.container,
             deployment: result.deployment,
             healthCheck: result.healthCheck,
             mintedSecretsFile: result.mintedSecretsFile,

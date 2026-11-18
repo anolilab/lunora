@@ -90,7 +90,7 @@ const UNSUPPORTED_TARGETS: Readonly<Record<string, string>> = {
     celld:
         "celld has no isolated previews: it has no Wrangler environments, and an app's Durable Objects and storage live in its fleet bucket. " +
         "Deploy the copy as its own config, with CELLD_BUCKET naming a bucket of its own, and delete that bucket to remove it.",
-    node: "the Node target has no `lunora deploy`, so there is nothing to preview: run a second process with its own database for a copy.",
+    node: "the Node target deploys as a container (`lunora deploy --target node`), which has no isolated previews: run a second container with its own data volume for a copy.",
 };
 
 interface PreviewCommandOptions {
