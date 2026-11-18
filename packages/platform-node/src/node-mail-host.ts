@@ -39,10 +39,10 @@ import type { MessageBatchLike } from "@lunora/platform";
 import { defineQueue } from "@lunora/queue";
 import type Database from "better-sqlite3";
 
-import { createNodeQueueHost, preparedSendOf } from "./node-queue-host";
+import { allowReservedQueueName, createNodeQueueHost, preparedSendOf, RESERVED_MAIL_QUEUE_NAME } from "./node-queue-host";
 
 /** The queue name the registry's `wrangler.jsonc` example gives the mail queue. */
-const MAIL_QUEUE_NAME = "lunora-mail";
+const MAIL_QUEUE_NAME = RESERVED_MAIL_QUEUE_NAME;
 
 /** Sends claimed per batch; the batch runs them one after another. */
 const MAIL_BATCH_SIZE = 10;
@@ -405,8 +405,9 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
     /**
      * The content a key belongs to: its record while that lives, otherwise the
      * oldest queued, retrying or parked row that still carries the key, judged by
-     * that row's own stored body. The record lapses 24 hours after the enqueue, but
-     * a delayed, retrying or parked row outlives it; without the rows, a later
+     * that row's own stored body. The record lapses 15 days after the key's last
+     * delivery (`MAIL_EVIDENCE_TTL_MS`), but a delayed, retrying or parked row can
+     * outlive it; without the rows, a later
      * enqueue with other content would take the key and the old row would be
      * judged a conflict when it finally came due.
      */
@@ -871,23 +872,27 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         sent: createSentLedger(database, clock),
         superseded: new Set(),
     };
-    const host = createNodeQueueHost(database, {
-        now: clock,
-        onBatch: async (batch) => {
-            await consumeBatch(consumer, batch);
-        },
-        // No batch window: a verification code or reset link must not wait for nine more sends.
-        queues: {
-            mail: defineQueue({
-                handler: () => undefined,
-                maxBatchSize: MAIL_BATCH_SIZE,
-                maxBatchTimeout: 0,
-                maxRetries: MAIL_MAX_RETRIES,
-                name: MAIL_QUEUE_NAME,
-            }),
-        },
-        visibilityTimeoutMs: MAIL_VISIBILITY_TIMEOUT_MS,
-    });
+    // The one host allowed the reserved `lunora-mail` name.
+    const host = createNodeQueueHost(
+        database,
+        allowReservedQueueName({
+            now: clock,
+            onBatch: async (batch) => {
+                await consumeBatch(consumer, batch);
+            },
+            // No batch window: a verification code or reset link must not wait for nine more sends.
+            queues: {
+                mail: defineQueue({
+                    handler: () => undefined,
+                    maxBatchSize: MAIL_BATCH_SIZE,
+                    maxBatchTimeout: 0,
+                    maxRetries: MAIL_MAX_RETRIES,
+                    name: MAIL_QUEUE_NAME,
+                }),
+            },
+            visibilityTimeoutMs: MAIL_VISIBILITY_TIMEOUT_MS,
+        }),
+    );
     // The lookup `createKeyClaims` makes when a key's record has lapsed. Partial, so only mail rows
     // are indexed and an app queue's non-JSON bodies never reach the expression.
     database.exec(

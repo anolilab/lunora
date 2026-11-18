@@ -259,32 +259,23 @@ describe(createNodeMailHost, () => {
         shardTables.close();
     });
 
-    it("lets an app queue named lunora-mail coexist with mail, whose queue lives in its own file", async () => {
-        expect.assertions(2);
+    it("refuses an app queue named lunora-mail, even with mail in a file of its own", () => {
+        expect.assertions(1);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-mail-names-"));
 
         const outbox = defineQueue({ handler: () => undefined, maxBatchTimeout: 0, name: "lunora-mail" });
-        const batches: string[] = [];
-        const transport = scriptedTransport(["ok"]);
+        const root = directory;
 
-        using platform = createNodePlatform({
-            mail: { env: PRODUCTION, now: startClock().now, path: join(directory, "mail.sqlite3"), transport },
-            onQueueBatch: (batch) => {
-                batches.push(batch.queue);
-            },
-            path: join(directory, "shard.sqlite3"),
-            queues: { outbox },
-        });
-
-        await platform.queues?.bindings.outbox.send({ n: 1 });
-        await platform.mail?.mailer.queue({ subject: "Hi", text: "Hi", to: "ada@example.com" });
-        await platform.queues?.poll();
-        await platform.mail?.poll();
-
-        // Each host consumed only its own row.
-        expect(batches).toStrictEqual(["lunora-mail"]);
-        expect(transport.sent).toHaveLength(1);
+        // Reserved outright: no connection or file split can make the two hosts' rows safe to share.
+        expect(() =>
+            createNodePlatform({
+                mail: { env: PRODUCTION, now: startClock().now, path: join(root, "mail.sqlite3"), transport: scriptedTransport(["ok"]) },
+                onQueueBatch: () => undefined,
+                path: join(root, "shard.sqlite3"),
+                queues: { outbox },
+            }),
+        ).toThrow(/"lunora-mail" is reserved for the mail host/u);
     });
 
     describe("delivery semantics", () => {
@@ -1680,38 +1671,33 @@ describe(createNodeMailHost, () => {
             expect(error.mock.calls.map(([line]) => logged(line).event)).toContain("lunora.mail.send_evidence_expired");
         });
 
-        /** An app queue host and the mail host, each declaring `lunora-mail`, on one connection. */
-        const lunoraMailHosts = (): { app: () => unknown; mail: () => unknown } => {
+        const outbox = (): ReturnType<typeof defineQueue> => defineQueue({ handler: () => undefined, name: "lunora-mail" });
+
+        it("refuses an app queue named lunora-mail on the mail host's own connection", () => {
+            expect.assertions(1);
+
             const database = freshDatabase();
 
-            return {
-                app: () =>
-                    createNodeQueueHost(database, {
-                        onBatch: () => undefined,
-                        queues: { outbox: defineQueue({ handler: () => undefined, name: "lunora-mail" }) },
-                    }),
-                mail: () => createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: scriptedTransport(["ok"]) }),
-            };
-        };
+            createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: scriptedTransport(["ok"]) });
 
-        it("refuses the mail host on a connection where an app queue already declares lunora-mail", () => {
-            expect.assertions(1);
-
-            const { app, mail } = lunoraMailHosts();
-
-            app();
-
-            expect(mail).toThrow(/"lunora-mail" is already declared/u);
+            expect(() => createNodeQueueHost(database, { onBatch: () => undefined, queues: { outbox: outbox() } })).toThrow(/is reserved for the mail host/u);
         });
 
-        it("refuses an app queue named lunora-mail on a connection the mail host already uses", () => {
+        it("refuses an app queue named lunora-mail on a second connection to the mail file", () => {
             expect.assertions(1);
 
-            const { app, mail } = lunoraMailHosts();
+            // A per-connection registry cannot see this one: a separate connection, as a second process has.
+            const database = freshDatabase();
 
-            mail();
+            createNodeMailHost(database, { env: PRODUCTION, now: startClock().now, transport: scriptedTransport(["ok"]) });
 
-            expect(app).toThrow(/"lunora-mail" is already declared/u);
+            const second = new Database(database.name);
+
+            try {
+                expect(() => createNodeQueueHost(second, { onBatch: () => undefined, queues: { outbox: outbox() } })).toThrow(/is reserved for the mail host/u);
+            } finally {
+                second.close();
+            }
         });
 
         it("logs a failed content update after a send as its own error, never as a refusal", async () => {

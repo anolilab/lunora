@@ -200,6 +200,28 @@ const preparedSendOf = (host: object, exportName: string): PreparedSend => {
     return prepared;
 };
 
+/**
+ * The queue name the mail host declares. Reserved: an app queue of this name, on any
+ * connection to the same file or in another process, would claim and settle mail
+ * rows as its own and drop them. A per-connection registry cannot see a second
+ * connection, so the name is refused outright and only the mail host may declare it.
+ */
+const RESERVED_MAIL_QUEUE_NAME = "lunora-mail";
+
+/** The options objects allowed to declare {@link RESERVED_MAIL_QUEUE_NAME}: only the mail host's. */
+const reservedNameHolders = new WeakSet<object>();
+
+/**
+ * Mark the options of the one host allowed to declare the reserved mail queue
+ * name. Package-internal: exported from this module for `createNodeMailHost`,
+ * never from the package root, and not a field of the public options type.
+ */
+const allowReservedQueueName = <Options extends object>(options: Options): Options => {
+    reservedNameHolders.add(options);
+
+    return options;
+};
+
 /** The queue names each database connection's hosts declared, so a second host cannot take one. */
 const declaredOnConnection = new WeakMap<Database.Database, Set<string>>();
 
@@ -348,9 +370,14 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
 
     const declared = new Set(compiled.map((queue) => queue.name));
 
-    // Two hosts on one connection would both claim a name's rows, each settling the other's. That
-    // includes the mail host, which declares `lunora-mail` on the connection it is given. Only one
-    // connection is visible here, so two processes on one file are not detected.
+    if (declared.has(RESERVED_MAIL_QUEUE_NAME) && !reservedNameHolders.has(options)) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: queue name "${RESERVED_MAIL_QUEUE_NAME}" is reserved for the mail host, which would otherwise share its rows with this queue — give the queue another name`,
+        );
+    }
+
+    // Two app hosts on one connection would both claim a name's rows, each settling the other's.
     const taken = declaredOnConnection.get(database) ?? new Set<string>();
     const clash = [...declared].find((name) => taken.has(name));
 
@@ -654,5 +681,5 @@ export const createNodeQueueHost = <Queues extends Record<string, { isLunoraQueu
     return host;
 };
 
-export { preparedSendOf };
+export { allowReservedQueueName, preparedSendOf, RESERVED_MAIL_QUEUE_NAME };
 export type { NodeQueueHost, NodeQueueHostOptions, PreparedSend };

@@ -450,9 +450,10 @@ stacks, and retried three times. The delivery that parks it is logged as the err
 outcome-unknown failure waits 180 seconds before the retry, counted from the
 failure, not from the start of a slow batch. A refused or malformed
 send is logged as an error and dropped, because a retry could mail a second copy.
-Two hosts on one database connection cannot declare the same queue name:
-`createNodeQueueHost` throws for the second. That includes the mail host's
-`lunora-mail`, in either order. A second process on the same file is not detected.
+The queue name `lunora-mail` is reserved for the mail host: `createNodeQueueHost`
+refuses an app queue of that name on any connection, in this process or another,
+since it would claim and drop mail rows as its own. Separately, two app hosts on
+one database connection cannot declare the same queue name.
 `deadLetters.requeue(id)` revives only a parked mail send and keeps its attempt
 count, so a send that may already have landed is refused rather than mailed again
 once Resend's window has passed. It throws for a send queued 15 or more days ago,
