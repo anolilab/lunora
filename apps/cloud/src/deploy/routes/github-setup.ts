@@ -4,6 +4,8 @@
  * GitHub returns the browser to, which binds the installation. Both need a
  * session, and the decisions live in `src/github/setup-flow.ts`.
  */
+import { isLunoraError } from "@lunora/errors";
+
 import { api } from "../../../lunora/_generated/api";
 import { internal } from "../../../lunora/_generated/internal";
 import { currentAuth } from "../../auth";
@@ -14,7 +16,19 @@ import { jsonError, requireContext } from "./shared";
 
 /** Whether `userId` is an owner or admin of `organizationId`, read from the membership list. */
 const isOwnerOrAdmin = async (context: LunoraActionContext, organizationId: string, userId: string): Promise<boolean> => {
-    const members = await context.runQuery<{ role: string; userId: string }[]>(api.members.list, { organizationId });
+    let members: { role: string; userId: string }[];
+
+    try {
+        members = await context.runQuery<{ role: string; userId: string }[]>(api.members.list, { organizationId });
+    } catch (error) {
+        // `members.list` refuses a non-member outright; that is a "no", which the flow answers with its own 403.
+        if (isLunoraError(error) && error.code === "FORBIDDEN") {
+            return false;
+        }
+
+        throw error;
+    }
+
     const role = members.find((member) => member.userId === userId)?.role;
 
     return role === "owner" || role === "admin";
