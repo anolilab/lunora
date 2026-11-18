@@ -52,6 +52,12 @@ interface Drainable {
 }
 ```
 
+### `MailParkReason` (type)
+
+```ts
+type MailParkReason = "evidence_expired" | "idempotency_key_conflict" | "outcome_unknown" | "retries_exhausted" | "unknown";
+```
+
 ### `NODE_SCHEDULER_DISPATCH_PATH` (const)
 
 ```ts
@@ -180,10 +186,12 @@ interface NodeMailHost {
             attempts: number;
             body: unknown;
             id: string;
+            reason: MailParkReason;
         }[];
         requeue: (id: string) => boolean;
     };
     drain: () => Promise<void>;
+    idle: () => boolean;
     mailer: Mailer;
     poll: (now?: number) => Promise<number>;
     queue: QueueLike;
