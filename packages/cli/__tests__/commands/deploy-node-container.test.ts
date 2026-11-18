@@ -152,25 +152,43 @@ export default {
 };
 `;
 
+/** The fixture's node_modules: this package's own, plus any extras by name (a scoped name replaces just that package). */
+const linkModules = (root: string, extraModules: Record<string, string> | undefined): void => {
+    if (extraModules === undefined) {
+        symlinkSync(PACKAGE_NODE_MODULES, join(root, "node_modules"), "dir");
+
+        return;
+    }
+
+    // A directory of links rather than one link, so the extras sit beside this package's own modules without touching them.
+    mkdirSync(join(root, "node_modules"));
+
+    const scopes = new Set(Object.keys(extraModules).flatMap((name) => (name.startsWith("@") ? [name.split("/")[0] ?? ""] : [])));
+
+    for (const entry of readdirSync(PACKAGE_NODE_MODULES)) {
+        if (scopes.has(entry)) {
+            // A scope with an override is a directory of links too, so one package in it can be replaced.
+            mkdirSync(join(root, "node_modules", entry));
+
+            for (const scoped of readdirSync(join(PACKAGE_NODE_MODULES, entry)).filter((name) => extraModules[`${entry}/${name}`] === undefined)) {
+                symlinkSync(join(PACKAGE_NODE_MODULES, entry, scoped), join(root, "node_modules", entry, scoped));
+            }
+        } else {
+            symlinkSync(join(PACKAGE_NODE_MODULES, entry), join(root, "node_modules", entry));
+        }
+    }
+
+    for (const [name, path] of Object.entries(extraModules)) {
+        symlinkSync(path, join(root, "node_modules", name), "dir");
+    }
+};
+
 const writeFixture = (root: string, options: FixtureOptions = {}): void => {
     const schemaDir = options.schemaDir ?? "lunora";
 
     mkdirSync(join(root, schemaDir));
     mkdirSync(join(root, "src"));
-    if (options.extraModules === undefined) {
-        symlinkSync(PACKAGE_NODE_MODULES, join(root, "node_modules"), "dir");
-    } else {
-        // A directory of links rather than one link, so the extras sit beside this package's own modules without touching them.
-        mkdirSync(join(root, "node_modules"));
-
-        for (const entry of readdirSync(PACKAGE_NODE_MODULES)) {
-            symlinkSync(join(PACKAGE_NODE_MODULES, entry), join(root, "node_modules", entry));
-        }
-
-        for (const [name, path] of Object.entries(options.extraModules)) {
-            symlinkSync(path, join(root, "node_modules", name), "dir");
-        }
-    }
+    linkModules(root, options.extraModules);
     writeFileSync(join(root, "package.json"), JSON.stringify({ name: "node-container-app", private: true, type: "module" }), "utf8");
     writeFileSync(join(root, "lunora.config.ts"), `export default { target: "node" };\n`, "utf8");
     writeFileSync(
@@ -448,7 +466,7 @@ describe("lunora deploy --target node", () => {
         });
 
         it("names the secrets in the README but bakes no secret value into any generated file", () => {
-            expect.assertions(3);
+            expect.assertions(5);
 
             const files = readdirSync(artifact).filter((file) => file !== "node_modules");
             const contents = files.map((file) => readFileSync(join(artifact, file), "utf8")).join("\n");
@@ -456,6 +474,9 @@ describe("lunora deploy --target node", () => {
 
             expect(readme).toContain("`STRIPE_KEY`");
             expect(readme).toContain("`SESSION_SECRET`");
+            // Truthful about what is bundled: secrets by name only, vars by value.
+            expect(readme).toContain("No secret value is written into `server.mjs`");
+            expect(readme).toContain("values are bundled into `server.mjs` as defaults");
             expect(Object.values(SECRET_VALUES).filter((value) => contents.includes(value))).toStrictEqual([]);
         });
 
@@ -1013,6 +1034,86 @@ describe("lunora deploy --target node", () => {
 
             await expect(deploy(workdir)).resolves.toMatchObject({ code: 2, error: expect.stringContaining(where) });
             expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
+        });
+
+        it("delivers crons to the shard binding by its class, whatever it is named and wherever it is listed", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, {
+                wrangler: {
+                    durable_objects: {
+                        bindings: [
+                            { class_name: "Chat", name: "CHAT" },
+                            { class_name: "ShardDO", name: "MAIN" },
+                        ],
+                    },
+                },
+            });
+            writeFileSync(
+                join(workdir, "src", "worker.ts"),
+                `${readFileSync(join(workdir, "src", "worker.ts"), "utf8")}\nexport class Chat {\n    fetch(): Response {\n        return new Response("chat");\n    }\n}\n`,
+                "utf8",
+            );
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+            // The platform's registry, where crons and scheduled jobs land, is the ShardDO binding's, not the first one listed.
+            expect(readFileSync(join(workdir, NODE_DEPLOY_DIRECTORY, "server.mjs"), "utf8")).toContain('PRIMARY_BINDING = "MAIN"');
+        });
+
+        it("names the wrangler cron triggers only a scheduled() handler would serve, which never fire in the container", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { triggers: { crons: ["0 3 * * *"] } } });
+
+            const { logger, warnings } = recordingLogger();
+
+            await expect(runDeployCommand({ cwd: workdir, interactive: false, logger, spawner: fakeNpm(), target: "node" })).resolves.toMatchObject({
+                code: 0,
+            });
+            expect(warnings.join("\n")).toContain(
+                "never calls the worker's scheduled() handler, so these wrangler triggers.crons will not fire (a createWorker backupCron or crons job on them does not run): 0 3 * * *",
+            );
+        });
+
+        it("refuses a project whose @lunora/platform-node predates deadline-bounded drains", async () => {
+            expect.assertions(1);
+
+            // A stand-in for an older release: the same exports, minus the bounded-drain one this deploy needs.
+            const oldPlatform = join(workdir, "old-platform-node");
+
+            mkdirSync(oldPlatform);
+            writeFileSync(
+                join(oldPlatform, "package.json"),
+                JSON.stringify({
+                    exports: { ".": { import: "./index.mjs" }, "./package.json": "./package.json" },
+                    name: "@lunora/platform-node",
+                    type: "module",
+                    version: "1.0.0-alpha.200",
+                }),
+                "utf8",
+            );
+            writeFileSync(
+                join(oldPlatform, "index.mjs"),
+                [
+                    "bindShardSockets",
+                    "createNodeHttpServer",
+                    "createNodeHyperdrive",
+                    "createNodePlatform",
+                    "createNodeSecretBindings",
+                    "createNodeShardNamespace",
+                    "createNodeShardRegistry",
+                    "createNodeShardState",
+                ]
+                    .map((name) => `export const ${name} = () => {};`)
+                    .join("\n"),
+                "utf8",
+            );
+            writeFixture(workdir, { extraModules: { "@lunora/platform-node": oldPlatform } });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({
+                code: 1,
+                error: expect.stringContaining("this project installs 1.0.0-alpha.200, which predates them, so every container shutdown would fail"),
+            });
         });
 
         it("refuses a secrets_store binding with the reserved LUNORA_ prefix, which could never start", async () => {

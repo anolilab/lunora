@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { createRequire } from "node:module";
 import { join, relative, resolve, sep } from "node:path";
 
-import { COMPOSED_WORKER_ENTRY, resolveSchemaDirectory } from "@lunora/config";
+import { COMPOSED_WORKER_ENTRY, DURABLE_OBJECT_BINDINGS, resolveSchemaDirectory } from "@lunora/config";
 import { findWranglerFile, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import type { Spawner } from "../../util/spawn";
@@ -102,6 +102,11 @@ const COMPOSED_OR_CONFIG_KEYS: ReadonlySet<string> = new Set([
     "workers_dev",
 ]);
 
+/** The classes `@lunora/config` binds as the app's shard (`DURABLE_OBJECT_BINDINGS`): the one that receives crons and jobs. */
+const SHARD_DURABLE_OBJECT_CLASSES: ReadonlySet<string> = new Set(
+    Object.keys(DURABLE_OBJECT_BINDINGS).filter((className) => DURABLE_OBJECT_BINDINGS[className as keyof typeof DURABLE_OBJECT_BINDINGS] === "SHARD"),
+);
+
 /** An environment variable name as a container runtime sets one. */
 const ENV_NAME = /^[A-Z_a-z]\w*$/u;
 
@@ -122,7 +127,9 @@ interface NodeWranglerConfig {
 
 /** What the generated server entry composes, read from the project's wrangler config. */
 interface NodeDeployProject {
-    /** The `durable_objects.bindings[]` the server constructs. The binding named `SHARD` (else the first) also carries crons. */
+    /** Wrangler's `triggers.crons`: on Cloudflare they reach the worker's `scheduled()`, which this server never calls. */
+    cronTriggers: string[];
+    /** The `durable_objects.bindings[]` the server constructs. The shard binding (class `ShardDO` or `LunoraDO`) also carries crons. */
     durableObjects: { className: string; name: string }[];
     /** The worker entry wrangler's `main` names, absolute. */
     entry: string;
@@ -146,6 +153,8 @@ interface NodeDeployEnvVariable {
 }
 
 interface NodeContainerArtifact {
+    /** Wrangler's `triggers.crons`, for the caller to compare with the crons codegen declares. */
+    cronTriggers: string[];
     /** The build context, absolute. */
     directory: string;
     env: NodeDeployEnvVariable[];
@@ -261,6 +270,21 @@ const durableObjectEntries = (value: unknown, configName: string): { className: 
 
         return { className: entry.class_name, name: entry.name, scriptName: entry.script_name };
     });
+};
+
+/** `triggers.crons`: each a cron expression string. */
+const cronTriggerList = (value: unknown, configName: string): string[] => {
+    const crons = isRecord(value) ? value.crons : undefined;
+
+    if (crons === undefined || crons === null) {
+        return [];
+    }
+
+    if (!Array.isArray(crons) || !crons.every((cron) => typeof cron === "string")) {
+        throw new TypeError(`--target node reads triggers.crons in ${configName} as a list of cron expressions, and it is ${JSON.stringify(crons)}`);
+    }
+
+    return crons;
 };
 
 /** `vars`: an object of environment variable names, since an override comes from the variable of the same name. */
@@ -392,6 +416,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     const declared = parsed as Record<string, unknown>;
 
     return {
+        cronTriggers: cronTriggerList(declared.triggers, configName),
         durableObjects,
         entry: resolve(projectRoot, parsed.main),
         hyperdrive: hyperdrive[0],
@@ -465,7 +490,12 @@ const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cron
         storeSecrets: project.storeSecrets,
         vars: project.vars,
     };
-    const primary = project.durableObjects.find((binding) => binding.name === "SHARD") ?? project.durableObjects[0];
+    // The shard binding is the one whose class is the app's shard Durable Object (ShardDO, or LunoraDO when its roles are
+    // merged), as @lunora/config binds it, whatever the binding is named: crons and scheduled jobs are delivered there.
+    const primary =
+        project.durableObjects.find((binding) => SHARD_DURABLE_OBJECT_CLASSES.has(binding.className)) ??
+        project.durableObjects.find((binding) => binding.name === "SHARD") ??
+        project.durableObjects[0];
     // Named, not a namespace import: esbuild then fails the bundle when the entry does not export one of them, so an entry that
     // is not a Lunora worker (a framework adapter exporting only \`fetch\`) is refused at deploy time instead of at startup.
     const classNames = [...new Set(project.durableObjects.map((binding) => binding.className))];
@@ -484,10 +514,15 @@ import {
     createNodeShardNamespace,
     createNodeShardRegistry,
     createNodeShardState,
+    DEFAULT_DRAIN_TIMEOUT_MS,
 } from "@lunora/platform-node";
 
 import handler, { ${classImports} } from ${JSON.stringify(projectSpecifier(projectRoot, project.entry))};
 import { LUNORA_CRONS } from ${JSON.stringify(projectSpecifier(projectRoot, cronsModule))};
+
+// A version guard, not a value this file uses: a platform-node without deadline-bounded drains has no such export, so the
+// bundle fails at deploy time instead of every shutdown failing in the container.
+void DEFAULT_DRAIN_TIMEOUT_MS;
 
 const CONFIG = ${JSON.stringify(config, undefined, 4)};
 const PRIMARY_BINDING = ${JSON.stringify(primary?.name)};
@@ -863,8 +898,14 @@ and the server exits with code 1. A second signal exits without waiting.
 Only declared names reach the worker's \`env\`, as on Cloudflare: the wrangler \`vars\`, the \`secrets.required\`
 names, the \`secrets_store_secrets\` bindings, and what the runtime reads itself (\`LUNORA_*\`, \`PORT\`,
 \`DATABASE_URL\`). Any other variable on the container stays out of reach of app code, so a secret the app reads
-must be listed in \`secrets.required\` in wrangler.jsonc. No value is baked into \`server.mjs\`, this README or
-the Dockerfile; they carry names only.
+must be listed in \`secrets.required\` in wrangler.jsonc. No secret value is written into \`server.mjs\`, this
+README or the Dockerfile: secrets appear by name only. The wrangler \`vars\` are the exception by design: their
+values are bundled into \`server.mjs\` as defaults (an environment variable of the same name overrides one), so
+keep secrets out of \`vars\`.
+
+The worker's \`scheduled()\` export is never called here. The app's declared crons run on the platform scheduler,
+but wrangler \`triggers.crons\` meant only for \`scheduled()\` (\`createWorker({ backupCron })\` or
+\`createWorker({ crons })\`) do not fire; the deploy names any it finds.
 
 | Variable | Required | |
 | --- | --- | --- |
@@ -925,22 +966,30 @@ interface EsbuildFailure {
     errors?: ReadonlyArray<{ text?: string }>;
 }
 
-const MISSING_EXPORT = /^No matching export in "[^"]+" for import "([^"]+)"$/u;
+const MISSING_EXPORT = /^No matching export in "([^"]+)" for import "([^"]+)"$/u;
 
 /**
  * The deploy's own message for an entry that lacks the default fetch handler or a bound Durable Object class: esbuild's
  * "No matching export" names the symptom, this names the cause and the fix. `undefined` for any other failure.
  */
 const missingExportRefusal = (error: unknown, project: NodeDeployProject, projectRoot: string): Error | undefined => {
-    const missing = ((error as EsbuildFailure).errors ?? []).flatMap((entry) => {
-        const name = MISSING_EXPORT.exec(entry.text ?? "")?.[1];
+    const unmatched = ((error as EsbuildFailure).errors ?? []).flatMap((entry) => {
+        const match = MISSING_EXPORT.exec(entry.text ?? "");
 
-        if (name === undefined) {
-            return [];
-        }
-
-        return [name === "default" ? "a default export with the fetch handler" : name];
+        return match?.[1] === undefined || match[2] === undefined ? [] : [{ file: match[1], name: match[2] }];
     });
+
+    // A missing platform-node export means the project's copy is older than this deploy needs, not that the entry is wrong.
+    if (unmatched.some((entry) => entry.file.includes("platform-node"))) {
+        const version = installedVersion(join(projectRoot, "package.json"), "@lunora/platform-node") ?? "unknown";
+
+        return new Error(
+            `--target node needs an @lunora/platform-node with deadline-bounded drains, and this project installs ${version}, which predates them, so every container shutdown would fail. Upgrade @lunora/platform-node to the release this CLI came with.`,
+            { cause: error },
+        );
+    }
+
+    const missing = unmatched.map((entry) => (entry.name === "default" ? "a default export with the fetch handler" : entry.name));
 
     if (missing.length === 0) {
         return undefined;
@@ -1057,7 +1106,13 @@ const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promis
     writeFileSync(join(directory, ".dockerignore"), DOCKERIGNORE, "utf8");
     writeFileSync(join(directory, "README.md"), renderReadme(env), "utf8");
 
-    return { directory, env, files: [".dockerignore", "Dockerfile", "package-lock.json", "package.json", "README.md", "server.mjs"], unbound: project.unbound };
+    return {
+        directory,
+        env,
+        files: [".dockerignore", "Dockerfile", "package-lock.json", "package.json", "README.md", "server.mjs"],
+        unbound: project.unbound,
+        cronTriggers: project.cronTriggers,
+    };
 };
 
 export type { NodeContainerArtifact, NodeDeployEnvVariable };

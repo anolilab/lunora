@@ -1784,6 +1784,17 @@ const runNodeContainerDeploy = async (options: DeployCommandOptions, target: str
 
     logger.success(`wrote the Node container build context to ${context} (${artifact.files.join(", ")})`);
 
+    // The server delivers the crons codegen declares through the platform scheduler; anything else in triggers.crons only reaches
+    // a worker's scheduled() handler (createWorker's backupCron or crons), which nothing calls in the container.
+    const declaredCrons = new Set(codegen.result?.cronTriggers);
+    const scheduledOnly = artifact.cronTriggers.filter((cron) => !declaredCrons.has(cron));
+
+    if (scheduledOnly.length > 0) {
+        logger.warn(
+            `the Node server never calls the worker's scheduled() handler, so these wrangler triggers.crons will not fire (a createWorker backupCron or crons job on them does not run): ${scheduledOnly.join(", ")}`,
+        );
+    }
+
     if (artifact.unbound.length > 0) {
         logger.warn(
             `the Node server binds its own Durable Objects, crons, secrets, Hyperdrive and vars; these wrangler bindings are not bound, so reading one fails: ${artifact.unbound.join(", ")}`,

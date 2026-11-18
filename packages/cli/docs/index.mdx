@@ -861,8 +861,15 @@ Cloudflare: the wrangler `vars`, the `secrets.required` names, the
 `secrets_store_secrets[]` bindings, and the runtime's own `LUNORA_*`, `PORT` and
 `DATABASE_URL`. Any other variable a container host injects (cloud credentials,
 another service's token) stays out of reach of app code, so list every secret
-the app reads in `secrets.required`. The generated files carry names only, never
-a value. Wrangler `vars` are bundled as declared (a JSON object
+the app reads in `secrets.required`. No secret value is written into the generated
+files: secrets appear by name only. The wrangler `vars` are the exception by
+design, bundled into `server.mjs` as defaults, so keep secrets out of `vars`.
+Crons and scheduled jobs are delivered to the shard binding, the one whose class
+is `ShardDO` (or `LunoraDO`), whatever it is named. The worker's `scheduled()`
+export is never called, so a wrangler `triggers.crons` expression meant only for
+it (a `createWorker` `backupCron` or `crons` job) does not fire; the deploy names
+any it finds. A project whose `@lunora/platform-node` predates deadline-bounded
+drains is refused, since every shutdown would fail on it. Wrangler `vars` are bundled as declared (a JSON object
 stays an object) and a set environment variable overrides one as a string.
 Every shard, the scheduler and the crons live in SQLite files under
 `LUNORA_DATA_DIR`, so mount a persistent volume there (a bind mount must be
