@@ -70,7 +70,6 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string =>
  * call site. `AgentRunInput` is imported from `@lunora/agent` (type-only, erased
  * at build) only when agents are declared, so agent-free output is unchanged.
  */
-/* eslint-disable no-secrets/no-secrets -- the emitted `WorkflowReference`/`WorkflowParamsOf` generic strings are dense generated TS, not credentials */
 const renderSchedulerReferences = (workflows: ReadonlyArray<WorkflowIR>, agents: ReadonlyArray<AgentIR>): { block: string; importLine: string } => {
     if (workflows.length === 0 && agents.length === 0) {
         return { block: "", importLine: "" };
@@ -152,7 +151,6 @@ ${objectMembers}
 
     return { block, importLine: importLines.join("") };
 };
-/* eslint-enable no-secrets/no-secrets -- re-enable after the scheduler-refs emitter */
 
 /**
  * The `@lunora/agent` runtime functions codegen auto-registers under the

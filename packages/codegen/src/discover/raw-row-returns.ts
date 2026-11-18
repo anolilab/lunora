@@ -207,13 +207,11 @@ const rawRowReturnsInDeclaration = (declaration: TsNode, relativePath: string): 
     return rows;
 };
 
-/* eslint-disable no-secrets/no-secrets -- the referenced advisor lint rule id in the doc comment, not a credential */
-
 /**
  * Discover `query` handlers under the lunora source directory that `return` the
  * raw rows of a table (a `ctx.db` row read or `ctx.db.query(...)` fluent chain,
  * returned directly or through one local `const` hop, with no hand-built
- * projection) — the `output_projection_missing_on_public_read` lint input.
+ * projection) — the output_projection_missing_on_public_read lint input.
  * Shape/name-based (no type-checker dependency, so it runs pre-`pnpm install`) and
  * fail-safe: a handler that already shapes its output, or whose read table can't be
  * resolved to a string literal, is not recorded. The lint owns the policy — it

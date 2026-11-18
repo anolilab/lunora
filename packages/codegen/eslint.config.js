@@ -98,6 +98,17 @@ export default createConfig(
             "unicorn/number-literal-case": "off",
         },
     },
+    // `src/emit/**` builds the generated `_generated/*.ts` as string literals, and a
+    // fragment of TypeScript (`NonNullable<ShardConfig["observability"]>`,
+    // `Promise<ImportShardResult>`) scores 4.0–4.4 on the default entropy threshold
+    // of 4. Random API keys and tokens score well above 4.5, so the rule still
+    // guards these files at the higher threshold.
+    {
+        files: ["src/emit/**/*.ts"],
+        rules: {
+            "no-secrets/no-secrets": ["error", { tolerance: 4.5 }],
+        },
+    },
     // Test files: relax rules that are noisy or inappropriate in test code (loose
     // mocks/typing, inline regex, null fixtures, async helpers without await, toEqual,
     // describe titles). Source files still enforce all of these.
