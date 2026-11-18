@@ -153,6 +153,22 @@ interface AuthDataPort {
 const storageBucketsOf = (options: WorkerOptions): ReadonlyArray<string | undefined> =>
     options.storageBuckets !== undefined && options.storageBuckets.length > 0 ? options.storageBuckets : [undefined];
 
+/**
+ * Why this worker cannot take a `$storage` record's bucket, if it cannot. The
+ * generated storage ops send a name they do not know to the default bucket, so
+ * such a record would land there, and a replace — keeping it under the name it
+ * carries — would then prune it from the default bucket.
+ */
+const undeclaredBucket = (options: WorkerOptions, record: StorageRecord): string | undefined => {
+    const { bucket } = record.where;
+
+    if (bucket === undefined || storageBucketsOf(options).includes(bucket)) {
+        return undefined;
+    }
+
+    return `${record.key} is in the bucket "${bucket}", which this worker does not declare`;
+};
+
 /** The sections this worker can export, out of those asked for. */
 const availableSections = (options: WorkerOptions, requested: ReadonlyArray<ExportSection>): ExportSection[] =>
     requested.filter((section) => {
@@ -790,6 +806,14 @@ const importStorageRow = async (options: WorkerOptions, row: SectionRow, totals:
         return;
     }
 
+    const undeclared = undeclaredBucket(options, record);
+
+    if (undeclared !== undefined) {
+        rowError(totals, row, "BAD_ROW", undeclared);
+
+        return;
+    }
+
     try {
         await writeStorageRecord(options, row, record, totals, run);
     } catch (error) {
@@ -880,4 +904,5 @@ export {
     STORAGE_TABLE,
     storageBucketsOf,
     storageObjects,
+    undeclaredBucket,
 };

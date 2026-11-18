@@ -419,6 +419,20 @@ describe("admin export — auth, KV and storage sections", { timeout: 60_000 }, 
         expect(stores.buckets.get("default")!.has("_lunora/uploads/state")).toBe(false);
     });
 
+    it("refuses a record in a bucket this worker does not declare, uploading nothing", async () => {
+        expect.hasAssertions();
+
+        const stores = createStores();
+        const storageUpload = vi.fn<NonNullable<WorkerOptions["storageUpload"]>>(stores.options.storageUpload);
+        const data = Buffer.from("hello").toString("base64");
+        const summary = await importInto(workerFor({ ...stores.options, storageUpload }), [
+            JSON.stringify({ doc: { bucket: "media", data, key: "a.txt", last: true, offset: 0, size: 5 }, table: "$storage" }),
+        ]);
+
+        expect(summary.errors.map((error) => error.code)).toStrictEqual(["BAD_ROW"]);
+        expect(storageUpload).not.toHaveBeenCalled();
+    });
+
     it("reports a chunk whose data is not base64 as that row's BAD_ROW and imports the rows after it", async () => {
         expect.hasAssertions();
 

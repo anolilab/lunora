@@ -619,6 +619,34 @@ describe("admin import — staged replace", () => {
     });
 });
 
+describe("admin import — staged replace of a bucket the worker does not declare", () => {
+    afterEach(closeCluster);
+
+    it("refuses the record at staging, so the commit never prunes the default bucket", async () => {
+        expect.assertions(3);
+
+        await seed();
+
+        const stores = createStores();
+        const bucket = stores.buckets.get("default")!;
+
+        bucket.set("a.txt", { bytes: new TextEncoder().encode("live") });
+
+        const worker = workerWith({ ...stores.options });
+        const response = await postImport(worker, "?mode=replace&tables=messages&stage=undeclared-bucket", [
+            { doc: { format: 2, sections: ["storage"] }, table: "$lunora" },
+            message("m1", "c1", "as snapshotted"),
+            { doc: { bucket: "default", data: Buffer.from("back").toString("base64"), key: "a.txt", last: true, offset: 0, size: 4 }, table: "$storage" },
+            { doc: { bucket: "media", data: Buffer.from("back").toString("base64"), key: "b.txt", last: true, offset: 0, size: 4 }, table: "$storage" },
+        ]);
+        const committed = await postSession(worker, "commit", "undeclared-bucket");
+
+        await expect(response.json()).resolves.toMatchObject({ errors: [expect.objectContaining({ code: "BAD_ROW", table: "$storage" })] });
+        expect(committed.status).toBe(409);
+        expect([...bucket.keys()]).toStrictEqual(["a.txt"]);
+    });
+});
+
 describe("admin import — staged replace of a section its header does not declare", () => {
     afterEach(closeCluster);
 

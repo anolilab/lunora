@@ -43,6 +43,7 @@ import {
     STORAGE_TABLE,
     storageBucketsOf,
     storageObjects,
+    undeclaredBucket,
 } from "./export-sections";
 import type { ImportRowError } from "./import-stream";
 import type { ChunkRecord, StagingStore } from "./section-chunks";
@@ -255,6 +256,14 @@ const stageStorageRow = async (options: WorkerOptions, ref: SessionRef, row: Sec
             "BAD_ROW",
             "a `$storage` record needs a string `key` outside `_lunora/` and base64 `data`, an integer `offset`, and a `size` on its last chunk",
         );
+
+        return undefined;
+    }
+
+    const undeclared = undeclaredBucket(options, record);
+
+    if (undeclared !== undefined) {
+        stageError(errors, row, "BAD_ROW", undeclared);
 
         return undefined;
     }

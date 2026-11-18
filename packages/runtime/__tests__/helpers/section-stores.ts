@@ -117,7 +117,8 @@ const createStores = (): {
         ["user", new Map()],
     ]);
 
-    const bucketOf = (name?: string): Map<string, StoredObject> => buckets.get(name ?? "default")!;
+    // Like the generated storage ops: a name the worker does not bind falls back to the default bucket.
+    const bucketOf = (name?: string): Map<string, StoredObject> => buckets.get(name ?? "default") ?? buckets.get("default")!;
     const multipart = fakeMultipart();
 
     const kvIntrospector: KvIntrospector = {
