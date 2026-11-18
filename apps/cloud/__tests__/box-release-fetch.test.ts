@@ -70,7 +70,7 @@ describe("box-signed requests", () => {
         };
     };
 
-    it("accepts a request signed by the box, and remembers its nonce until the window closes", async () => {
+    it("accepts a request signed by the box, and remembers its nonce a window past the timestamp check", async () => {
         const key = await boxKey();
         const { ledger, ports } = portsFor(key);
 
@@ -78,7 +78,17 @@ describe("box-signed requests", () => {
             boxId: "box_1",
             organizationId: "org_1",
         });
-        expect(ledger.claims.get(`box_1:${"n".repeat(22)}`)).toBe(NOW + TIMESTAMP_WINDOW_MS);
+        expect(ledger.claims.get(`box_1:${"n".repeat(22)}`)).toBe(NOW + 2 * TIMESTAMP_WINDOW_MS);
+    });
+
+    it("refuses a replay of a request signed at the very edge of the window", async () => {
+        const key = await boxKey();
+        const { ports } = portsFor(key);
+        const nonce = randomBase64Url();
+        const edge = { nonce, timestamp: NOW - TIMESTAMP_WINDOW_MS };
+
+        await expect(verifyBoxRequest(await signedRequest(key, edge), ports)).resolves.not.toBeNull();
+        await expect(verifyBoxRequest(await signedRequest(key, edge), ports)).resolves.toBeNull();
     });
 
     it("refuses a request without a timestamp, even one validly signed — nothing would ever expire it", async () => {

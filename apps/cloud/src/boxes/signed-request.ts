@@ -8,8 +8,9 @@
  * query), so a signature cannot be moved to another path. Replay protection is
  * the timestamp and the box-chosen single-use nonce together: the request must
  * carry a timestamp within {@link TIMESTAMP_WINDOW_MS} of the control plane's
- * clock, and its nonce is remembered (in the box's own session object) until
- * that window closes — after which the timestamp alone refuses it. A request
+ * clock, and its nonce is remembered (in the box's own session object) for a
+ * window past that — by then the timestamp alone refuses it, whatever the
+ * session object's clock reads. A request
  * without a timestamp is refused: nothing would ever expire its signature, and
  * a nonce is only remembered for so long.
  *
@@ -86,5 +87,9 @@ export const verifyBoxRequest = async (request: Request, ports: SignedRequestPor
         return null;
     }
 
-    return (await ports.claimNonce(boxId, nonce, timestamp + TIMESTAMP_WINDOW_MS)) ? { boxId, organizationId: box.organizationId } : null;
+    // Remembered a full window past the last moment the timestamp check can pass. The claim is
+    // judged on the session object's clock, not this one: expiring at the window's own edge, a
+    // request signed right at it gets a claim already over, and a copy sent while this side's
+    // check still passes is accepted again.
+    return (await ports.claimNonce(boxId, nonce, timestamp + 2 * TIMESTAMP_WINDOW_MS)) ? { boxId, organizationId: box.organizationId } : null;
 };
