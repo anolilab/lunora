@@ -620,13 +620,16 @@ export const renderMetricAlert = (
     };
 };
 
+/** The fields that decide how far back a metric rule reads. */
+type LookbackRule = Pick<MetricRule, "baselineWindows" | "mode" | "windowMinutes">;
+
 /**
  * How far before `now` a rule's evaluation reads: the current window plus the
  * prior one, or plus the trailing baseline in `deviation` mode. A read that does
  * not reach this far — or stops short of it at a page cap — evaluates the rule on
  * part of its windows, which can fire or clear it on numbers that are not there.
  */
-export const metricLookbackMs = (rule: Pick<MetricRule, "baselineWindows" | "mode" | "windowMinutes">): number => {
+export const metricLookbackMs = (rule: LookbackRule): number => {
     const windowsBack = rule.mode === "deviation" ? 1 + Math.max(1, rule.baselineWindows ?? DEFAULT_BASELINE_WINDOWS) : 2;
 
     return windowsBack * rule.windowMinutes * 60_000;
@@ -639,7 +642,7 @@ export const metricLookbackMs = (rule: Pick<MetricRule, "baselineWindows" | "mod
  * only down to its oldest row: a rule whose lookback starts at or after that row
  * saw every observation it needs, any other would be judged on a partial window.
  */
-export const partitionByCoverage = <TRule extends Pick<MetricRule, "baselineWindows" | "mode" | "windowMinutes">>(
+export const partitionByCoverage = <TRule extends LookbackRule>(
     rules: ReadonlyArray<TRule>,
     observations: ReadonlyArray<Pick<MetricObservation, "startedAt">>,
     truncated: boolean,
@@ -661,6 +664,45 @@ export const partitionByCoverage = <TRule extends Pick<MetricRule, "baselineWind
     }
 
     return { covered, uncovered };
+};
+
+/** `findMany`'s own page cap: asking for more per page still answers 1000 rows. */
+const METRIC_PAGE_ROWS = 1000;
+
+/**
+ * Read an org's observations inside the longest lookback of `rules`,
+ * newest-first, a page at a time until the read is done or `bound` rows are in.
+ * `truncated` says the bound stopped it, for {@link partitionByCoverage}: a single
+ * page of a busy org always stopped short, so its rules were never evaluated.
+ */
+export const readMetricWindow = async <TRow extends Pick<MetricObservation, "startedAt">>(
+    rules: ReadonlyArray<LookbackRule>,
+    now: number,
+    bound: number,
+    fetchPage: (query: { cursor: null | string; limit: number; since: number }) => Promise<{
+        continueCursor?: null | string;
+        isDone?: boolean;
+        page: TRow[];
+    }>,
+): Promise<{ observations: TRow[]; truncated: boolean }> => {
+    const since = now - Math.max(0, ...rules.map((rule) => metricLookbackMs(rule)));
+    const observations: TRow[] = [];
+    let cursor: null | string = null;
+
+    while (observations.length < bound) {
+        // eslint-disable-next-line no-await-in-loop -- keyset pagination is sequential by construction
+        const result = await fetchPage({ cursor, limit: Math.min(METRIC_PAGE_ROWS, bound - observations.length), since });
+
+        observations.push(...result.page);
+
+        if (result.isDone !== false || !result.continueCursor) {
+            return { observations, truncated: false };
+        }
+
+        cursor = result.continueCursor;
+    }
+
+    return { observations, truncated: true };
 };
 
 /**

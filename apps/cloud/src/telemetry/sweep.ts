@@ -20,7 +20,7 @@
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
 import type { AlertChannel, AlertDelivery, MetricObservation, MetricRule, MetricTarget } from "./alerts";
-import { fireMetricRules, METRIC_TARGETS, partitionByCoverage } from "./alerts";
+import { fireMetricRules, METRIC_TARGETS, partitionByCoverage, readMetricWindow } from "./alerts";
 
 /** An `alertRules` row as the control-plane store returns it. */
 interface AlertRuleRow {
@@ -65,14 +65,14 @@ export interface AlertSweepResult {
 /** Options for {@link runAlertSweep}. */
 export interface AlertSweepOptions {
     now: number;
-    /** Max recent observations scanned per org (bounds the D1 read). */
+    /** Max observations read per org; a rule whose lookback reaches past them is reported incomplete. */
     scanLimit?: number;
 }
 
 /** The metric-window rule targets this sweep evaluates. */
 
-/** Recent spans scanned per org when slicing metric windows (bounds the read). */
-const DEFAULT_SCAN_LIMIT = 2000;
+/** Twenty pages: an org busy enough to pass this inside a rule's lookback has the rule reported, not guessed. */
+const DEFAULT_SCAN_LIMIT = 20_000;
 
 /** Map an `alertRules` row to the shared {@link MetricRule} the firing loop reads. */
 const toMetricRule = (row: AlertRuleRow): MetricRule => {
@@ -130,18 +130,20 @@ export const runAlertSweep = async (database: ControlPlaneDatabase, options: Ale
     let cleared = 0;
 
     for (const [organizationId, rules] of rulesByOrg) {
-        // The org's recent spans, newest-first and bounded — the windows are sliced
-        // from these in `fireMetricRules`.
         // eslint-disable-next-line no-await-in-loop -- one bounded read per org with a metric rule; serialized like the uptime sweep
-        const { isDone, page: observationPage } = await database.findMany("observations", {
-            limit: scanLimit,
-            orderBy: [{ startedAt: "desc" }],
-            where: { organizationId },
+        const { observations, truncated } = await readMetricWindow<ObservationRow>(rules, options.now, scanLimit, async ({ cursor, limit, since }) => {
+            const result = await database.findMany("observations", {
+                cursor,
+                limit,
+                orderBy: [{ startedAt: "desc" }],
+                where: { organizationId, startedAt: { gt: since } },
+            });
+
+            return { ...result, page: result.page as ObservationRow[] };
         });
-        const observations = observationPage as ObservationRow[];
-        // A busy org fills the page before reaching back across a long or deviation
+        // A busy org can pass the bound before reaching back across a long or deviation
         // rule's windows; evaluating it then would fire or clear on a partial count.
-        const { covered, uncovered } = partitionByCoverage(rules, observations, isDone === false, options.now);
+        const { covered, uncovered } = partitionByCoverage(rules, observations, truncated, options.now);
 
         for (const rule of uncovered) {
             incomplete.push({ organizationId, ruleId: rule.ruleId });

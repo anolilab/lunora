@@ -173,6 +173,47 @@ describe(runAlertSweep, () => {
         expect(patch).toHaveBeenCalledWith("alertRuleState", "state1", expect.objectContaining({ firing: false }));
     });
 
+    it("evaluates a busy org's rule past the store's 1000-row page", async () => {
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>((table: string) => Promise.resolve(`${table}_id`));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [],
+                alertRules: [errorRateRule],
+                // 1500 spans in the current window, older than the lookback ones ignored.
+                observations: [
+                    ...window(1500, 1500),
+                    ...window(3000, 0).map((row) => {
+                        return { ...row, startedAt: now - 20 * 60_000 };
+                    }),
+                ],
+            },
+            { insert },
+        );
+
+        const result = await runAlertSweep(database, { now });
+
+        expect(result.incomplete).toStrictEqual([]);
+        expect(result.deliveries).toHaveLength(1);
+        expect(insert).toHaveBeenCalledWith("alertRuleState", expect.objectContaining({ firing: true, ruleId: "rule1" }));
+    });
+
+    it("reports the rule incomplete when the read hits its bound across pages", async () => {
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const database = fakeControlPlaneDb(
+            {
+                alertRuleState: [{ _id: "state1", firing: true, ruleId: "rule1" }],
+                alertRules: [errorRateRule],
+                observations: window(2500, 0),
+            },
+            { patch },
+        );
+
+        const result = await runAlertSweep(database, { now, scanLimit: 2000 });
+
+        expect(result.incomplete).toStrictEqual([{ organizationId: "org1", ruleId: "rule1" }]);
+        expect(patch).not.toHaveBeenCalled();
+    });
+
     it("ignores disabled rules and non-metric targets (never scans observations)", async () => {
         const findMany = vi.fn<ControlPlaneDatabase["findMany"]>((table: string) =>
             Promise.resolve({

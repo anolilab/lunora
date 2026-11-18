@@ -2,7 +2,7 @@ import { fingerprintError } from "@lunora/fingerprint";
 import { LunoraError } from "@lunora/server";
 
 import type { AlertDelivery as AlertDeliveryBase, FiringRule, MetricRule, MetricTarget } from "../src/telemetry/alerts";
-import { fireCrossedRules, fireMetricRules, partitionByCoverage } from "../src/telemetry/alerts";
+import { fireCrossedRules, fireMetricRules, partitionByCoverage, readMetricWindow } from "../src/telemetry/alerts";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext } from "./_generated/server";
 import { internalMutation, internalQuery, mutation, v } from "./_generated/server";
@@ -82,8 +82,11 @@ const COUNT_TARGETS = new Set(["incident", "issue"]);
 /** Metric-window rule targets the ingest evaluates via `fireMetricRules`. */
 const METRIC_TARGETS = new Set<MetricTarget>(["error_rate", "latency_p95", "llm_cost"]);
 
-/** Recent spans scanned when a metric rule needs its window (bounds the read). */
-const METRIC_SCAN_LIMIT = 2000;
+/**
+ * Spans read per batch when a metric rule needs its window. Lower than the sweep's
+ * bound because it runs on every ingest: a rule past it is left to the sweep.
+ */
+const METRIC_SCAN_LIMIT = 5000;
 
 /** A fired alert the router should deliver (email/webhook) then mark delivered — the shared shape at this store's branded id. */
 export type AlertDelivery = AlertDeliveryBase<Id<"alerts">>;
@@ -394,15 +397,24 @@ export const ingest = mutation
             // (shared with the periodic sweep in `src/telemetry/sweep.ts`) makes a
             // sustained breach alert once and lets a quiet window still clear + re-arm.
             if (metricRules.length > 0) {
-                const { isDone, page: storedWindow } = await context.db.observations.findMany({
-                    limit: METRIC_SCAN_LIMIT,
-                    orderBy: [{ startedAt: "desc" }],
-                    where: { organizationId: args.organizationId },
-                });
-                const windowObservations = storedWindow.map((row) => absentForNull(row));
-                // A rule whose windows reach past a full page is left to the periodic
+                const { observations: windowObservations, truncated } = await readMetricWindow(
+                    metricRules,
+                    now,
+                    METRIC_SCAN_LIMIT,
+                    async ({ cursor, limit, since }) => {
+                        const result = await context.db.observations.findMany({
+                            cursor,
+                            limit,
+                            orderBy: [{ startedAt: "desc" }],
+                            where: { organizationId: args.organizationId, startedAt: { gt: since } },
+                        });
+
+                        return { ...result, page: result.page.map((row) => absentForNull(row)) };
+                    },
+                );
+                // A rule whose windows reach past the bound is left to the periodic
                 // sweep, which reports it, rather than fired or cleared on a partial count.
-                const { covered } = partitionByCoverage(metricRules, windowObservations, !isDone, now);
+                const { covered } = partitionByCoverage(metricRules, windowObservations, truncated, now);
                 const { page: statePage } = await context.db.alertRuleState.findMany({ where: { organizationId: args.organizationId } });
                 const stateByRule = new Map(statePage.map((row) => [row.ruleId as string, row]));
 
