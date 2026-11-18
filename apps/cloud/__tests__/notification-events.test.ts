@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Id } from "../lunora/_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "../lunora/_generated/server";
 import { markVerified } from "../lunora/domains";
-import { channels, createChannel } from "../lunora/notifications";
+import { channels, createChannel, MAX_CHANNELS_PER_ORG } from "../lunora/notifications";
 import withRateLimitStore from "./support/rate-limit-db";
 
 type Row = Record<string, unknown> & { _id: string };
@@ -189,5 +189,17 @@ describe("createChannel", () => {
         expect(doc).toMatchObject({ secretCiphertext: "sealed-bytes", secretIv: "iv-bytes" });
         expect(doc).not.toHaveProperty("secret");
         expect(doc["events"]).toContain("domain.failed");
+    });
+
+    it("refuses a channel past the per-organization cap, so one page of an org's channels is all of them", async () => {
+        const full = Array.from({ length: MAX_CHANNELS_PER_ORG }, (_unused, index) => {
+            return { _id: `ch_${String(index)}`, enabled: true, events: [], kind: "slack", name: "c", organizationId: ORG };
+        });
+        const { ctx, inserted } = makeCtx({ channels: full });
+
+        await expect(
+            createChannel.handler(ctx, { destination: "https://hooks.slack.com/services/x", kind: "slack", name: "One more", organizationId: ORG }),
+        ).rejects.toThrow(`at most ${String(MAX_CHANNELS_PER_ORG)} notification channels`);
+        expect(inserted).toHaveLength(0);
     });
 });

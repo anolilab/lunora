@@ -127,6 +127,14 @@ export const deliveries = query
     });
 
 /**
+ * Channels an organization may hold. Every reader of an org's channels (the
+ * enqueue, the delivery sweep, the list) reads one page of them; past the
+ * store's 1,000-row page a channel would get no deliveries and its pending ones
+ * would fail as if it were removed. Far below that page, so one read is all of them.
+ */
+export const MAX_CHANNELS_PER_ORG = 50;
+
+/**
  * Create a channel (owners/admins). The edge route `POST /v1/notification-channels`
  * generates or takes the secret, seals it with the master key, and calls this with
  * the ciphertext, so no plaintext secret reaches the database. New channels
@@ -155,6 +163,12 @@ export const createChannel = mutation
 
         if (args.kind === "webhook" && !hasSecret) {
             throw new LunoraError("BAD_REQUEST", "webhook channels need a signing key");
+        }
+
+        const { page: existing } = await context.db.notificationChannels.findMany({ where: { organizationId } });
+
+        if (existing.length >= MAX_CHANNELS_PER_ORG) {
+            throw new LunoraError("BAD_REQUEST", `an organization may hold at most ${String(MAX_CHANNELS_PER_ORG)} notification channels; remove one first`);
         }
 
         const { now } = context;
