@@ -70,11 +70,17 @@ const recordedClassesOf = (row: Pick<DeploymentRow, "durableObjectClasses" | "ru
  * Worker binds may disappear unless the request names it in `allowDeleteClasses`
  * — a CLI/API opt-in, audited by the caller. A project with no release on the
  * Worker yet may do either. The rollback path has its own check (`keepClasses`).
+ *
+ * `recorded` is the alias's converge record (`src/deploy/worker-classes.ts`):
+ * the classes the last successful converge put on the Worker and those of every
+ * converge that may have uploaded before it failed. A release that failed before
+ * `verifyingAt` is not in `current`, yet its classes can be on the Worker.
  * @returns The classes the release deletes with the caller's consent, for the audit log.
  * @throws {LunoraError} `CONFLICT` naming what would be lost and the way forward.
  */
 const assertKeepsWorkerData = (
     current: ReadonlyArray<DeploymentRow>,
+    recorded: ReadonlyArray<string>,
     release: { allowDeleteClasses?: ReadonlyArray<string>; runtime?: "worker"; scriptName: string; statefulClasses?: ReadonlyArray<string> },
     dropsUnbound: boolean,
 ): string[] => {
@@ -96,10 +102,9 @@ const assertKeepsWorkerData = (
         return [];
     }
 
-    const dropped = classesMissingFrom(
-        current.flatMap((row) => recordedClassesOf(row)),
-        release.statefulClasses,
-    ).toSorted((a, b) => a.localeCompare(b));
+    const dropped = classesMissingFrom([...new Set([...current.flatMap((row) => recordedClassesOf(row)), ...recorded])], release.statefulClasses).toSorted(
+        (a, b) => a.localeCompare(b),
+    );
     const allowed = new Set(release.allowDeleteClasses);
     const refused = dropped.filter((className) => !allowed.has(className));
 
@@ -111,6 +116,14 @@ const assertKeepsWorkerData = (
     }
 
     return dropped;
+};
+
+/** Every class the alias's converge record says may be on its Worker, by name: `workerClasses` and every pending converge's. */
+const convergedClasses = async (context: QueryContext, alias: string): Promise<string[]> => {
+    const { page } = await context.db.aliasOwnership.findMany({ where: { alias } });
+    const row = page[0];
+
+    return [...(row?.workerClasses ?? []), ...(row?.pendingClasses ?? []).flatMap((entry) => entry.classes)].map((bound) => bound.className);
 };
 
 /** The live deployment of one alias + kind — the release currently on that alias's Worker. */
@@ -477,7 +490,12 @@ export const create = mutation
         const { now } = context;
         // A row predating targets answers NULL, which is the default target.
         const target = storedTarget(project.target) ?? DEFAULT_TARGET;
-        const deletedClasses = assertKeepsWorkerData(aliasWorkerReleases(existing, arguments_.scriptName), arguments_, TARGETS[target].dropsUnboundClasses);
+        const deletedClasses = assertKeepsWorkerData(
+            aliasWorkerReleases(existing, arguments_.scriptName),
+            await convergedClasses(context, arguments_.scriptName),
+            arguments_,
+            TARGETS[target].dropsUnboundClasses,
+        );
 
         const deploymentId = await context.db.insert("deployments", {
             ...(arguments_.adminToken ? { adminToken: arguments_.adminToken } : {}),

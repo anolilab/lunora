@@ -300,9 +300,9 @@ describe("deployments", () => {
 });
 
 describe("deployments keep the Worker's Durable Object data", () => {
-    const releaseClasses = async (current: Row[], classes: string[], allowDeleteClasses?: string[]) => {
+    const releaseClasses = async (current: Row[], classes: string[], allowDeleteClasses?: string[], ownership: Row[] = []) => {
         const { ctx, ops } = makeCtx({
-            aliasOwnership: [],
+            aliasOwnership: ownership,
             halts: [],
             organizations: [{ _id: ORG }],
             auditLog: [],
@@ -373,6 +373,29 @@ describe("deployments keep the Worker's Durable Object data", () => {
         await expect(
             releaseClasses([onWorker(["Counter"]), onWorker(["Room"], { _id: "dep_q", createdAt: 9, status: "queued" })], ["Counter"]),
         ).resolves.toBeDefined();
+    });
+
+    it("keeps the classes a converge may have uploaded before it failed, which no reached release names", async () => {
+        expect.assertions(2);
+
+        const bound = (className: string): Row => {
+            return { binding: className.toUpperCase(), className, type: "durable_object_namespace" };
+        };
+        // dep_f uploaded Room, then failed before verifying: only the converge record still names it.
+        const current = [onWorker(["Counter"]), onWorker(["Counter", "Room"], { _id: "dep_f", createdAt: 5, status: "failed" })];
+        const ownership = (over: Row): Row[] => [{ _id: "own_1", alias: "web", createdAt: 0, organizationId: ORG, projectId: "prj_1", ...over }];
+
+        await expect(
+            releaseClasses(
+                current,
+                ["Counter"],
+                undefined,
+                ownership({ pendingClasses: [{ classes: [bound("Counter"), bound("Room")], endedAt: 6, startedAt: 5, token: "t" }] }),
+            ),
+        ).rejects.toMatchObject({ code: "CONFLICT", message: expect.stringContaining("Room") as unknown });
+        await expect(releaseClasses(current, ["Counter"], undefined, ownership({ workerClasses: [bound("Counter"), bound("Room")] }))).rejects.toMatchObject({
+            code: "CONFLICT",
+        });
     });
 
     it("adds classes freely, and checks nothing against a row from before classes were recorded", async () => {
