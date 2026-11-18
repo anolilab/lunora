@@ -484,6 +484,18 @@ describe("account export", () => {
         expect(exported.auditEntries.map((entry) => entry.action)).toStrictEqual(["project.create"]);
         expect(exported.truncated).toBe(false);
     });
+
+    it("says it is truncated when an authored-records list reached the cap", async () => {
+        const deployments = Array.from({ length: 1000 }, (_, index) => {
+            return { _id: `dep_${String(index)}`, createdBy: "usr_me", organizationId: "org_1" };
+        });
+        const { ctx } = makeCtx({ auditLog: [], deployments, members: [] }, { now: NOW, userId: "usr_me" });
+
+        const exported = (await exportMine.handler(ctx, {})) as { authoredRecords: unknown[]; truncated: boolean };
+
+        expect(exported.authoredRecords).toHaveLength(1000);
+        expect(exported.truncated).toBe(true);
+    });
 });
 
 /**

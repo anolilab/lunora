@@ -67,10 +67,13 @@ export const exportMine = internalQuery.query(async ({ ctx: context }): Promise<
     ]);
 
     const authored: Record<string, unknown>[] = [];
+    let authoredTruncated = false;
 
     for (const [table, column] of AUTHORED_COLUMNS) {
         // eslint-disable-next-line no-await-in-loop -- one bounded read per table; the export is small
         const { page } = await (context.db[table] as unknown as AuthoredFacade).findMany({ limit: EXPORT_LIMIT, where: { [column]: userId } });
+
+        authoredTruncated ||= page.length === EXPORT_LIMIT;
 
         for (const row of page) {
             authored.push({ column, id: row._id, organizationId: row.organizationId ?? null, table });
@@ -96,7 +99,7 @@ export const exportMine = internalQuery.query(async ({ ctx: context }): Promise<
                 role: membership.role,
             };
         }),
-        truncated: memberships.length === EXPORT_LIMIT || entries.length === EXPORT_LIMIT,
+        truncated: authoredTruncated || memberships.length === EXPORT_LIMIT || entries.length === EXPORT_LIMIT,
     };
 });
 
