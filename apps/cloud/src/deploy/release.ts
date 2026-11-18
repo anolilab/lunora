@@ -360,6 +360,10 @@ export const reprovision = async (
  * record carries the release that was live when the rollback was resolved, so a
  * deploy that went live in between makes it refuse instead of marking a release
  * live that the Worker no longer runs.
+ *
+ * When the record is refused, the Worker already runs the rollback target, so
+ * the release recorded live then is put back on it before the refusal is
+ * rethrown: otherwise the Worker serves code the record does not name.
  */
 export const rollbackRelease = async (
     input: { deploymentId: string; key?: string; organizationId: string },
@@ -367,5 +371,15 @@ export const rollbackRelease = async (
 ): Promise<{ scriptName: string; version?: number }> => {
     const { liveDeploymentId } = await reprovision(input, deps, { keepClasses: true });
 
-    return deps.backend.rollbackDeployment({ ...input, ...(liveDeploymentId === undefined ? {} : { expectedLiveId: liveDeploymentId }) });
+    try {
+        return await deps.backend.rollbackDeployment({ ...input, ...(liveDeploymentId === undefined ? {} : { expectedLiveId: liveDeploymentId }) });
+    } catch (error) {
+        const { liveDeploymentId: recorded } = await deps.backend.releaseTarget(input);
+
+        if (recorded !== undefined && recorded !== input.deploymentId) {
+            await reprovision({ ...input, deploymentId: recorded }, deps, { liveAmong: [recorded] });
+        }
+
+        throw error;
+    }
 };

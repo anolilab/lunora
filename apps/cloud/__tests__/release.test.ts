@@ -378,6 +378,49 @@ describe("handler: one stable Worker per project", () => {
         expect(lines.at(-1)).toMatchObject({ done: true, status: "failed" });
     });
 
+    it("puts back a release that went live while the revert converged", async () => {
+        const { store } = memoryReleaseStore();
+        const onWorker: string[] = [];
+        let live = "dep_prev";
+
+        await store.put("dep_prev", PREVIOUS);
+        await store.put("dep_newer", { ...PREVIOUS, bundle: btoa("export default { v: 3 }") });
+
+        const lines = await readLines(
+            await handleDeployRequest(
+                request({ bundle: BUNDLE, projectId: "proj_1", scriptName: "app" }),
+                deps(
+                    backendWith({
+                        createDeployment: () => Promise.resolve({ deploymentId: "dep_new", previousDeploymentId: "dep_prev", version: 2 }),
+                        releaseTarget: () => Promise.resolve(releaseTarget({ liveDeploymentId: live })),
+                    }),
+                    {
+                        healthCheck: () => Promise.resolve(false),
+                        provisioner: {
+                            deploy: (spec) => {
+                                const bundle = new TextDecoder().decode(spec.bundle);
+
+                                onWorker.push(bundle);
+
+                                // A newer deploy activates while the revert puts the previous release back.
+                                if (bundle === "export default { v: 1 }") {
+                                    live = "dep_newer";
+                                }
+
+                                return Promise.resolve({ url: `https://${spec.alias}.lunora.app` });
+                            },
+                            destroy: () => Promise.resolve(),
+                        },
+                        releases: store,
+                    },
+                ),
+            ),
+        );
+
+        expect(onWorker).toStrictEqual(["export default { v: 2 }", "export default { v: 1 }", "export default { v: 3 }"]);
+        expect(lines).toContainEqual({ deploymentId: "dep_new", event: "reverted", to: "dep_newer" });
+    });
+
     it("still reverts when the previous release is the live one", async () => {
         const { deployed, provisioner } = capture();
         const { store } = memoryReleaseStore();
@@ -475,8 +518,10 @@ describe(rollbackRelease, () => {
         let live = "dep_live";
         const recordedLive: string[] = [];
         const expectedLive: (string | undefined)[] = [];
+        const onWorker: string[] = [];
 
         await store.put("dep_prev", PREVIOUS);
+        await store.put("dep_newer", { ...PREVIOUS, bundle: btoa("export default { v: 3 }") });
 
         const release = deps(
             backendWith({
@@ -497,6 +542,7 @@ describe(rollbackRelease, () => {
             {
                 provisioner: {
                     deploy: (spec) => {
+                        onWorker.push(new TextDecoder().decode(spec.bundle));
                         // A deploy activates its release while the rollback converges.
                         live = "dep_newer";
 
@@ -512,6 +558,8 @@ describe(rollbackRelease, () => {
         // The record is checked against the release live when the rollback was resolved, not the current one.
         expect(expectedLive).toStrictEqual(["dep_live"]);
         expect(recordedLive).toStrictEqual([]);
+        // The rollback overwrote the newer release's Worker; it is put back, so the Worker runs what the record names.
+        expect(onWorker).toStrictEqual(["export default { v: 1 }", "export default { v: 3 }"]);
     });
 
     it("does not record the rollback when the provision fails", async () => {

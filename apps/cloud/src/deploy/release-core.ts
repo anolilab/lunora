@@ -188,6 +188,18 @@ const revertFailedRelease = async (
         }
 
         write({ deploymentId, event: "reverted", to: previousDeploymentId });
+
+        // The check above and the converge are two steps: a release that went live
+        // between them now has its Worker overwritten, so it is put back.
+        const { liveDeploymentId: recorded } = await deps.backend.releaseTarget({
+            deploymentId: previousDeploymentId,
+            key: input.key,
+            organizationId: input.organizationId,
+        });
+
+        if (recorded !== undefined && recorded !== deploymentId && recorded !== previousDeploymentId) {
+            await restoreLiveRelease({ ...input, liveDeploymentId: recorded }, deps, write);
+        }
     } catch (error) {
         write({ deploymentId, error: error instanceof Error ? error.message : String(error), event: "revert_failed", to: previousDeploymentId });
     }
