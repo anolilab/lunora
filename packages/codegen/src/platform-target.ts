@@ -510,12 +510,6 @@ const unsupportedSignalDiagnostic = (key: keyof PlatformSignals, matrix: Platfor
 };
 
 /**
- * The app reads `ctx.live` and the target withholds live streams, so the
- * runtime never sets the publisher on the context: the read would throw a
- * TypeError on first use. Refused here rather than left to fail at runtime.
- */
-
-/**
  * App modules that load `cloudflare:*` built-ins on a target that has none.
  * Each module is named: the fix is in those files, and on a Node target the
  * usual one is the `mail` registry starter, which reads `env` from
@@ -547,6 +541,11 @@ const cloudflareModulesDiagnostic = (
           };
 };
 
+/**
+ * The app reads `ctx.live` and the target withholds live streams, so the
+ * runtime never sets the publisher on the context: the read would throw a
+ * TypeError on first use. Refused here rather than left to fail at runtime.
+ */
 const liveContextWithheldDiagnostic = (matrix: PlatformCapabilities, target: string): PlatformDiagnostic => {
     return {
         level: "error",
