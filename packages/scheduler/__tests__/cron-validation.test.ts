@@ -78,6 +78,8 @@ describe("isValidCronExpression (Cloudflare dialect)", () => {
         "L",
         "* * * * 1#6",
         "* * * * 8#1",
+        // Parses, but April, June, September and November have no 31st, so it never occurs.
+        "0 0 31 4,6,9,11 *",
         "",
         "   ",
     ])("rejects %j", (expression) => {

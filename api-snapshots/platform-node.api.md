@@ -17,6 +17,28 @@ SemVer promise until the package graduates.
 const NODE_SCHEDULER_DISPATCH_PATH: "/_lunora/scheduler/dispatch";
 ```
 
+### `NodeCronJob` (interface)
+
+```ts
+interface NodeCronJob {
+    args?: Record<string, unknown>;
+    functionPath?: string;
+    name: string;
+    workflow?: string;
+}
+```
+
+### `NodeDeclaredCron` (interface)
+
+```ts
+interface NodeDeclaredCron {
+    args: Record<string, unknown>;
+    expression: string;
+    functionPath: string;
+    name: string;
+}
+```
+
 ### `NodeDispatchInvocation` (interface)
 
 ```ts
@@ -94,6 +116,19 @@ interface NodeHttpServerOptions {
 }
 ```
 
+### `NodeHyperdriveBinding` (interface)
+
+```ts
+interface NodeHyperdriveBinding {
+    connectionString: string;
+    database: string;
+    host: string;
+    password: string;
+    port: number;
+    user: string;
+}
+```
+
 ### `NodePlatform` (interface)
 
 ```ts
@@ -136,6 +171,7 @@ type NodePlatformOptions<Queues extends Record<string, {
 }> = Record<string, never>, Workflows extends Record<string, {
     isLunoraWorkflow: true;
 }> = Record<string, never>> = {
+    crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
     dispatch?: NodePlatformDispatchOptions;
     globalTablesPath?: string;
     objectStorageDirectory?: string;
@@ -207,6 +243,7 @@ interface NodeR2BucketOptions {
 
 ```ts
 interface NodeSchedulerHost {
+    declareCrons: (crons: ReadonlyArray<NodeDeclaredCron>) => void;
     dispose: () => void;
     scheduler: SchedulerHost;
     simulateDeadLetter: (id: string) => Promise<boolean>;
@@ -222,6 +259,14 @@ interface NodeSchedulerHostOptions {
         id: string;
         scheduledFor: number;
     }) => Promise<void> | void;
+}
+```
+
+### `NodeSecretBinding` (interface)
+
+```ts
+interface NodeSecretBinding {
+    get: () => Promise<string>;
 }
 ```
 
@@ -377,6 +422,12 @@ const createNodeGlobalStore: (options?: NodeGlobalStoreOptions) => NodeGlobalSto
 const createNodeHttpServer: (options: NodeHttpServerOptions) => Promise<NodeHttpServer>;
 ```
 
+### `createNodeHyperdrive` (const)
+
+```ts
+const createNodeHyperdrive: (url?: string | undefined) => NodeHyperdriveBinding;
+```
+
 ### `createNodePlatform` (const)
 
 ```ts
@@ -411,6 +462,12 @@ const createNodeR2Bucket: (options: NodeR2BucketOptions) => R2BucketLike;
 
 ```ts
 const createNodeSchedulerHost: (database: Database.Database, options?: NodeSchedulerHostOptions) => NodeSchedulerHost;
+```
+
+### `createNodeSecretBindings` (const)
+
+```ts
+const createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, NodeSecretBinding>;
 ```
 
 ### `createNodeShardHost` (const)

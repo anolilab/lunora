@@ -195,19 +195,33 @@ describe("gatePlatformFeatures", () => {
     });
 
     it("gates ctx.x402 on a target without a secrets store", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const { gatePlatformFeatures } = await import("../src/platform-target");
-        // The generated rail reads its wallet key through `ctx.secrets`, which `node`
+        // The generated rail reads its wallet key through `ctx.secrets`, which `celld`
         // rates unsupported, so raw-key and CDP custody would fail on the first payment.
         const usage: FeatureUsage = { ...ALL_OFF, x402: true };
 
         expect(gatePlatformFeatures(usage, "cloudflare").usage.x402).toBe(true);
+        // `node` maps ctx.secrets onto process.env (createNodeSecretBindings), so the rail has its key there.
+        expect(gatePlatformFeatures(usage, "node").usage.x402).toBe(true);
 
+        const celld = gatePlatformFeatures(usage, "celld");
+
+        expect(celld.usage.x402).toBe(false);
+        expect(celld.diagnostics).toMatchObject([{ feature: "x402", name: "platform_unsupported_feature" }]);
+    });
+
+    it("keeps ctx.sql on node, which builds the Hyperdrive binding from DATABASE_URL, and gates it on celld", async () => {
+        expect.assertions(3);
+
+        const { gatePlatformFeatures } = await import("../src/platform-target");
+        const usage: FeatureUsage = { ...ALL_OFF, hyperdrive: true };
         const node = gatePlatformFeatures(usage, "node");
 
-        expect(node.usage.x402).toBe(false);
-        expect(node.diagnostics).toMatchObject([{ feature: "x402", name: "platform_unsupported_feature" }]);
+        expect(node.usage.hyperdrive).toBe(true);
+        expect(node.diagnostics).toStrictEqual([]);
+        expect(gatePlatformFeatures(usage, "celld").diagnostics).toMatchObject([{ feature: "hyperdrive", name: "platform_unsupported_feature" }]);
     });
 
     // Plan 234: `node` is a REGISTERED target (unlike the synthetic "partial"
@@ -795,13 +809,46 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
     const codegen = (): ReturnType<typeof runCodegen> => runCodegen({ projectRoot: workdir, wranglerQueueProducers: [] });
 
-    it("gates a declared cron on a target where nothing dispatches one", () => {
+    const writeWorkflowCron = (): void => {
+        write(
+            "workflows.ts",
+            `import { defineWorkflow } from "@lunora/workflow";\n\nexport const digestPipeline = defineWorkflow({ handler: async () => undefined });\n`,
+        );
+        write(
+            "crons.ts",
+            `import { cronJobs } from "@lunora/server";\nimport { workflows } from "./_generated/api.js";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-digest", { hourUTC: 9, minuteUTC: 0 }, workflows.digestPipeline, {});\n\nexport default crons;\n`,
+        );
+    };
+
+    it("refuses a cron that starts a workflow on node, which has nothing to start one from a tick", () => {
+        expect.assertions(2);
+
+        // `cronTriggers` alone passed this app, which then failed at createNodePlatform.
+        writeWorkflowCron();
+
+        const result = codegen();
+        const diagnostic = result.platformDiagnostics.find((entry) => entry.message.includes("start a workflow"));
+
+        expect(diagnostic).toMatchObject({ level: "error", name: "platform_unsupported_feature", target: "node" });
+        expect(result.platformDiagnostics.filter((entry) => entry.message.includes("cron triggers"))).toStrictEqual([]);
+    });
+
+    it("lets a cron that starts a workflow through on cloudflare", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "cloudflare" };\n`, "utf8");
+        writeWorkflowCron();
+
+        expect(codegen().platformDiagnostics).toStrictEqual([]);
+    });
+
+    it("emits a declared cron for node, whose host walks LUNORA_CRONS into its scheduler", () => {
         expect.assertions(3);
 
-        // The `featureUsage` arm cannot cover this: it keys `scheduler` on a
-        // `@lunora/scheduler` import, while `cronJobs` is legitimately imported
-        // from `@lunora/server`. Before the signal existed, this app built green
-        // on a host where the nightly sweep never fires.
+        // `cronJobs` is imported from `@lunora/server`, so the `featureUsage` arm
+        // (keyed on a `@lunora/scheduler` import) cannot see one; the
+        // `cronTriggers` signal can. Node rates it emulated now that
+        // `createNodePlatform({ crons })` arms the map.
         write(
             "crons.ts",
             `import { cronJobs } from "@lunora/server";\n\nconst crons = cronJobs();\n\ncrons.daily("nightly-billing-sweep", { hourUTC: 3, minuteUTC: 0 }, internal.messages.purge, {});\n\nexport default crons;\n`,
@@ -809,11 +856,9 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
 
         const result = codegen();
 
-        // The cron IS declared and emitted — the diagnostic is the only thing
-        // standing between it and a deploy where it never fires.
         expect(result.cronTriggers).toStrictEqual(["0 3 * * *"]);
-        expect(result.platformDiagnostics.map((diagnostic) => diagnostic.name)).toStrictEqual(["platform_unsupported_feature"]);
-        expect(result.platformDiagnostics[0]?.message).toContain("cron");
+        expect(result.platformDiagnostics).toStrictEqual([]);
+        expect(result.generated.crons).toContain('"0 3 * * *"');
     });
 
     // The whole path: the declaration in `lunora/`, the discovery pass, the
@@ -1120,9 +1165,19 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         expect(codegen().platformDiagnostics.map((diagnostic) => diagnostic.feature)).toStrictEqual(["mail"]);
     });
 
+    it("emits ctx.secrets for node, which maps it onto process.env", () => {
+        expect.assertions(1);
+
+        write("keys.ts", `import { action } from "@lunora/server";\n\nexport const send = action.action(async ({ ctx }) => ctx.secrets.get("STRIPE_KEY"));\n`);
+
+        expect(codegen().platformDiagnostics).toStrictEqual([]);
+    });
+
     it("gates a destructured ctx.secrets read, not only a direct property access", () => {
         expect.assertions(2);
 
+        // celld rates `secrets` unsupported; node no longer does.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
         write(
             "keys.ts",
             `import { action } from "@lunora/server";\n\nexport const send = action({ args: {}, handler: async (ctx) => {\n    const { secrets } = ctx;\n\n    return secrets.get("STRIPE_KEY");\n} });\n`,
@@ -1150,6 +1205,7 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
         // binding named "…"` on first use — the exact failure this gate refuses.
         // `secrets` has no import arm and no capability row, so nothing else
         // covers it.
+        writeFileSync(join(workdir, "lunora.config.ts"), `export default { target: "celld" };\n`, "utf8");
         write("keys.ts", `import { action } from "@lunora/server";\n\nexport const send = action.action(${handler});\n`);
 
         const result = codegen();

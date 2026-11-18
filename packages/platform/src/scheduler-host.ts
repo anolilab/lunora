@@ -94,15 +94,13 @@ export interface SchedulerHost {
      * with `SocketHost.setTag`. A caller that finds it absent must fall
      * back to the target's declarative configuration.
      *
-     * **Nothing in the framework calls this today.** `@lunora/platform-node`
-     * implements it (parser, persistence, timer re-arm) and the conformance
-     * suite is its only caller: no runtime walks an app's declared crons — the
-     * generated `LUNORA_CRONS` map — into it. The only cron dispatch that ships
-     * is `@lunora/runtime`'s, reached from Cloudflare's `scheduled()` handler,
-     * which is declarative and never touches this method. So a host that
-     * implements `cron` gains nothing until that wiring exists, and an app
-     * declaring crons on such a host has none of them fire. Wire it before
-     * treating a `cron`-bearing host as one that runs declared schedules.
+     * **This method is for crons registered at runtime, not declared ones.**
+     * An app's declared crons (the generated `LUNORA_CRONS` map) reach
+     * `@lunora/platform-node`'s scheduler through `createNodePlatform({ crons })`,
+     * which keys each row by job name so a removed job can be deleted. This
+     * method keys by expression and function path, so it cannot do either. On
+     * Cloudflare, declared crons go through the `scheduled()` handler, which
+     * walks `LUNORA_CRONS` itself and never touches this method.
      */
     cron?: (cron: string, functionPath: string, args?: Record<string, unknown>) => Promise<void>;
 
