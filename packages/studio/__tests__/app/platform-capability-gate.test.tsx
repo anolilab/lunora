@@ -27,7 +27,9 @@ const platformOf = (matrix: PlatformCapabilities): StudioPlatform => {
 const NODE = platformOf(NODE_CAPABILITIES);
 const CLOUDFLARE = platformOf(CLOUDFLARE_CAPABILITIES);
 
-const UNSUPPORTED_ON_NODE = ["pitr", "agents", "vectors", "containers", "analytics", "mail"] as const;
+// Every gated tab Node rates unsupported. Mail left this list when `createNodeMailHost` made it
+// emulated; nothing left here is on #1551's remaining list (the dev target and deploy).
+const UNSUPPORTED_ON_NODE = ["pitr", "agents", "vectors", "containers", "analytics"] as const;
 
 const createClient = (platform?: StudioPlatform): MockClientHooks =>
     createMockClient({
@@ -115,7 +117,7 @@ describe("platform capability gate", () => {
         renderStudio(createClient(NODE));
         await settled(NODE);
 
-        expect(screen.getByTestId("dash-tab-mail").getAttribute("title")).toBe("Mail delivery is not supported on Node.");
+        expect(screen.getByTestId("dash-tab-vectors").getAttribute("title")).toBe("Vector search is not supported on Node.");
         expect(screen.getByTestId("dash-tab-pitr").getAttribute("title")).toBe("Point-in-time recovery is not supported on Node.");
     });
 
@@ -135,6 +137,7 @@ describe("platform capability gate", () => {
         // Emulated is still a working surface — shown normally.
         expect(screen.getByTestId("dash-tab-workflows").dataset.unsupported).toBeUndefined();
         expect(screen.getByTestId("dash-tab-queues").dataset.unsupported).toBeUndefined();
+        expect(screen.getByTestId("dash-tab-mail").dataset.unsupported).toBeUndefined();
     });
 
     it("shows the same tabs as available on a Cloudflare worker", async () => {
