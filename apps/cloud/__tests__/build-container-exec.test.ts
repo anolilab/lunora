@@ -1,6 +1,7 @@
+import type { ContainerAccessor, ContainerInstanceHandle } from "@lunora/container";
 import { describe, expect, it, vi } from "vitest";
 
-import { executeInContainer } from "../src/builds/container-exec";
+import { executeInContainer, executeOnOwnBox } from "../src/builds/container-exec";
 
 /**
  * Reading the build box's NDJSON reply.
@@ -146,5 +147,51 @@ describe(executeInContainer, () => {
         expect.assertions(1);
 
         await expect(executeInContainer(streaming(["{}"], 503), SOURCE, undefined, vi.fn().mockResolvedValue(undefined))).rejects.toThrow("503");
+    });
+});
+
+describe(executeOnOwnBox, () => {
+    /** An accessor that records every instance name it hands out and every instance destroyed. */
+    const recordingBoxes = (): { boxes: Pick<ContainerAccessor, "get">; destroyed: string[]; names: string[] } => {
+        const destroyed: string[] = [];
+        const names: string[] = [];
+
+        return {
+            boxes: {
+                get: (name) => {
+                    names.push(name);
+
+                    return {
+                        destroy: async () => {
+                            destroyed.push(name);
+                        },
+                    } as ContainerInstanceHandle;
+                },
+            },
+            destroyed,
+            names,
+        };
+    };
+
+    it("gives each build an instance no other build shares, and destroys it after", async () => {
+        expect.assertions(3);
+
+        const { boxes, destroyed, names } = recordingBoxes();
+
+        await executeOnOwnBox(boxes, async () => "first");
+        await executeOnOwnBox(boxes, async () => "second");
+
+        expect(names).toHaveLength(2);
+        expect(new Set(names).size).toBe(2);
+        expect(destroyed).toStrictEqual(names);
+    });
+
+    it("destroys the instance when the build throws, and surfaces the build's error", async () => {
+        expect.assertions(2);
+
+        const { boxes, destroyed, names } = recordingBoxes();
+
+        await expect(executeOnOwnBox(boxes, async () => await Promise.reject(new Error("install failed")))).rejects.toThrow("install failed");
+        expect(destroyed).toStrictEqual(names);
     });
 });

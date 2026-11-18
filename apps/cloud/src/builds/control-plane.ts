@@ -23,7 +23,7 @@ import type { DeployHandlerDeps } from "../deploy/release-core";
 import { startRelease } from "../deploy/release-core";
 import type { LunoraActionContext, RouterEnv } from "../deploy/routes/shared";
 import { createGitHubApp } from "../github/app";
-import { executeInContainer } from "./container-exec";
+import { executeInContainer, executeOnOwnBox } from "./container-exec";
 import { claimBuilds } from "./dispatch";
 import { createBuildExecutionStore } from "./execution-store";
 import type { BuildReleaseTarget } from "./release";
@@ -83,15 +83,17 @@ const runnerPortsFor = (input: BuildWiring, runnerId: string): BuildRunnerPorts 
                 ...(workspacePackages === undefined ? {} : { workspacePackages }),
             });
         },
-        // `.any()` — a build is stateless, so any instance will do, and `.any()`
-        // is the handle that retries THROUGH a cold start (a 503 "no instance"
+        // The instance handle retries THROUGH a cold start (a 503 "no instance"
         // while Cloudflare provisions) while letting a genuine 5xx from a
         // running box pass straight through. Retrying a real build failure
         // would just pay for the same install twice.
         // Bounded so the build half fits the alarm it runs in
         // (`ALARM_INVOCATION_LIMIT_MS`); the box's own timeouts are longer.
         execute: async (source, place, onLine, onAdvisory) =>
-            await withinBudget(executeInContainer(buildBoxFrom(environment).any(), source, place, onLine, onAdvisory), BUILD_EXECUTE_BUDGET_MS, "the build"),
+            await executeOnOwnBox(
+                buildBoxFrom(environment),
+                async (box) => await withinBudget(executeInContainer(box, source, place, onLine, onAdvisory), BUILD_EXECUTE_BUDGET_MS, "the build"),
+            ),
         fail: async (buildId, error) => {
             await context.runMutation(internal.builds.fail, { buildId, error, runnerId });
         },

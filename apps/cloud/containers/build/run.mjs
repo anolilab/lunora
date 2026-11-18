@@ -22,7 +22,8 @@ const DEFAULT_TIMEOUT_MS = 15 * 60 * 1000;
  * can read that tenant's source and env.
  *
  * A descendant that called `setsid` has left the group and survives this;
- * containing that needs per-build uid isolation or recycling the instance.
+ * the control plane contains it by giving each build an instance of its own
+ * and destroying it afterwards (`src/builds/container-exec.ts`).
  * @param {number | undefined} pid The group leader's pid.
  */
 const killGroup = (pid) => {

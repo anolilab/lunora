@@ -7,6 +7,7 @@
  * in particular needs a test — a JSON object split across two reads is the
  * normal case for a streaming body, not an edge one.
  */
+import type { ContainerAccessor, ContainerInstanceHandle } from "@lunora/container";
 import { LunoraError } from "@lunora/server";
 
 import readNdjson from "../lib/read-ndjson";
@@ -206,4 +207,32 @@ export const executeInContainer = async (
     }
 
     return execution;
+};
+
+/**
+ * Start attempts for a build's own instance. Past the build box's
+ * `maxInstances` a start fails until a running build's instance is destroyed;
+ * the doubling backoff (capped at 30s) waits about a minute for one.
+ */
+const OWN_BOX_START_ATTEMPTS = 8;
+
+/**
+ * Run one build on a build-box instance of its own, destroyed once it ends.
+ *
+ * Every tenant command in the box runs as the same user. On a pooled instance
+ * two builds landing at once can read each other's workspace, and a process
+ * that `setsid`s out of its build's process group outlives the group kill
+ * (`containers/build/run.mjs`) into whatever build lands next. A fresh
+ * instance per build leaves nothing to share and nowhere to linger. A destroy
+ * that fails leaves an instance nothing else is ever routed to, which then
+ * sleeps out its `sleepAfter`.
+ */
+export const executeOnOwnBox = async <T>(boxes: Pick<ContainerAccessor, "get">, work: (box: ContainerInstanceHandle) => Promise<T>): Promise<T> => {
+    const box = boxes.get(`build-${crypto.randomUUID()}`, { attempts: OWN_BOX_START_ATTEMPTS });
+
+    try {
+        return await work(box);
+    } finally {
+        await box.destroy().catch(() => {});
+    }
 };

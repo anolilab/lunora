@@ -256,8 +256,9 @@ arbitrary code execution by design. The container is the boundary.
 - Every install and build runs as its own process group (`run.mjs`), and the
   whole group is SIGKILLed on timeout and again once the command exits, so a
   backgrounded process cannot linger into the next tenant's build on a reused
-  instance. A process that `setsid`s out of the group is not caught; that
-  needs per-build uid isolation or recycling the instance.
+  instance. A process that `setsid`s out of the group is not caught here; the
+  control plane runs each build on an instance of its own and destroys it
+  afterwards, so nothing a build leaves behind meets another build.
 - Start it with egress restricted to the package registry —
   `enableInternet: false` plus `allowedHosts` on the `defineContainer` side.
 
