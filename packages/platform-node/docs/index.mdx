@@ -419,10 +419,11 @@ Delivery is at-least-once, narrowed:
   when one may have landed. Row attempts still set the retry budget. The content
   record is kept at least as long as the sent record.
 - `_lunora_mail_sent`, in the mail database beside the queue, records each key once the transport
-  confirms the send, and keeps it for 24 hours. It also keeps the attempt marks
-  `consumeQueuedSend` writes, for 15 days. A second enqueue of a sent key is acked
-  without a send. A redelivery past Resend's dedupe window is refused when an
-  earlier attempt may have landed. Expired rows are pruned at most once a minute,
+  confirms the send, and keeps it for 15 days, as long as the attempt marks
+  `consumeQueuedSend` writes and the key's delivery history. A second enqueue of a
+  sent key within those 15 days is acked without a send, even past Resend's
+  window. A redelivery past that window is parked when an earlier attempt may
+  have landed and none is recorded as sent. Expired rows are pruned at most once a minute,
   through an index.
 - The dedupe window is measured on the host clock (`now`), the same clock the
   queue and the ledger use.

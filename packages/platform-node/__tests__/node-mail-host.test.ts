@@ -2223,4 +2223,29 @@ describe(createNodeMailHost, () => {
             expect(mail.deadLetters.list()).toMatchObject([{ body: { idempotencyKey: "reset-yan" }, reason: "evidence_expired" }]);
         });
     });
+
+    describe("twenty-third review", () => {
+        it("dedupes a same-key, same-content send queued a day after the first was sent", async () => {
+            expect.assertions(3);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const database = freshDatabase();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport });
+            const receipt = { idempotencyKey: "receipt-ida", subject: "Receipt", text: "Paid", to: "ida@example.com" };
+
+            await mail.mailer.queue(receipt);
+            await mail.poll();
+            // Past Resend's window and the 24-hour sent default, well inside the 15-day evidence horizon.
+            clock.advance(25 * 60 * 60 * 1000);
+            await mail.mailer.queue(receipt);
+            await mail.poll();
+
+            // Known sent: acked as a duplicate, neither mailed again nor parked as possibly sent.
+            expect(transport.sent).toHaveLength(1);
+            expect(mail.deadLetters.list()).toStrictEqual([]);
+            expect(error.mock.calls.map(([line]) => logged(line).event)).not.toContain("lunora.mail.send_outcome_unknown");
+        });
+    });
 });

@@ -852,7 +852,15 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
 
     try {
         try {
-            await consumeQueuedSend(consumer.mailer, message.body, { attempts: claimed.delivery, enqueuedAt, sent: consumer.sent });
+            await consumeQueuedSend(consumer.mailer, message.body, {
+                attempts: claimed.delivery,
+                enqueuedAt,
+                sent: consumer.sent,
+                // As long as the attempt marks and the key's history: with the 24-hour default, a
+                // repeat of a sent key a day later found sending marks and no sent record, and was
+                // parked as possibly sent when it was known to have been.
+                sentTtlSeconds: MAIL_EVIDENCE_TTL_MS / 1000,
+            });
         } catch (error) {
             settleFailure(consumer, message, error);
 
