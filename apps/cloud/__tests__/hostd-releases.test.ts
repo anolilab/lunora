@@ -7,7 +7,7 @@ import { store } from "../lunora/hostd-releases";
 import { randomBase64Url } from "../src/boxes/encoding";
 import { versionKey, versionsOf } from "../src/boxes/hostd-releases";
 import type { RolloutTarget } from "../src/boxes/rollout";
-import { planHostdRollout, resumeHostdRollouts, runHostdRollout, withdrawDesiredRelease } from "../src/boxes/rollout";
+import { desiresRelease, planHostdRollout, resumeHostdRollouts, runHostdRollout, withdrawDesiredRelease } from "../src/boxes/rollout";
 import { createDeployRouter } from "../src/deploy/router";
 import { handleHostdManifestRoute, handleHostdRolloutRoute } from "../src/deploy/routes/hostd";
 import type { RouterEnv } from "../src/deploy/routes/shared";
@@ -135,6 +135,7 @@ describe("rolling a release out", () => {
 
     const manifestUrl = "https://cloud.test/v1/hostd/releases/hostd-v1_1_0/manifest";
     const noWithdraw = (): Promise<void> => Promise.resolve();
+    const desired = (): Promise<boolean> => Promise.resolve(true);
     const rollout = (boxes: RolloutTarget[]) => planHostdRollout({ boxes, manifestUrl, release });
 
     it("upgrades online boxes canary first, skips current ones, and defers offline ones to their reconnect", async () => {
@@ -149,6 +150,7 @@ describe("rolling a release out", () => {
         expect(planned).toMatchObject({ batches: [["box_a"], ["box_b"]], deferred: 1, skipped: 1 });
 
         const result = await runHostdRollout(planned, {
+            desires: desired,
             dispatch: (boxId, job) => {
                 dispatched.push(`${boxId} ${job.kind} ${job.releaseId} ${job.manifestUrl}`);
 
@@ -184,6 +186,7 @@ describe("rolling a release out", () => {
                 { boxId: "box_d", status: "offline", versions: old },
             ]),
             {
+                desires: desired,
                 dispatch: () => Promise.resolve({ error: { code: "CHECKSUM", message: "bad" }, ok: false }),
                 withdraw: (boxIds) => {
                     withdrawn.push(boxIds);
@@ -258,6 +261,34 @@ describe("rolling a release out", () => {
             box_fwd: { kind: "upgrade", manifestUrl, releaseId: "hostd-v1_1_0" },
         });
         expect(Object.keys(results).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["hostd-v1_1_0", "hostd-v1_1_0 (rollback)"]);
+    });
+
+    it("sends no upgrade to a box a newer rollout re-pointed while the run waited on an earlier batch", async () => {
+        const records = memoryStore({
+            boxes: [
+                { _id: "box_a", desiredReleaseId: "hostd-v1_1_0", status: "online", versions: old },
+                { _id: "box_b", desiredReleaseId: "hostd-v1_1_0", status: "online", versions: old },
+            ],
+        });
+        const planned = rollout([
+            { boxId: "box_a", status: "online", versions: old },
+            { boxId: "box_b", status: "online", versions: old },
+        ]);
+        const dispatched: string[] = [];
+        const result = await runHostdRollout(planned, {
+            desires: desiresRelease(records, planned.job),
+            dispatch: async (boxId) => {
+                dispatched.push(boxId);
+                // The canary's upgrade is in flight when an operator rolls box_b back onto another release.
+                await records.patch("boxes", "box_b", { allowDowngrade: true, desiredReleaseId: "hostd-v1_0_0" });
+
+                return { ok: true };
+            },
+            withdraw: noWithdraw,
+        });
+
+        expect(dispatched).toStrictEqual(["box_a"]);
+        expect(result).toMatchObject({ halted: false });
     });
 
     it("withdraws a halted rollback's flag with its intent", async () => {
@@ -353,6 +384,22 @@ describe("rolling a release out", () => {
     });
 });
 
+/** A D1 binding over raw rows: each statement is answered with the rows whose `id` it binds. */
+const d1Over = (rows: () => Record<string, unknown>[]) => {
+    const statement = (...parameters: unknown[]) => {
+        return {
+            all: () => Promise.resolve({ results: rows().filter((row) => parameters.includes(row["id"])) }),
+            run: () => Promise.resolve({}),
+        };
+    };
+
+    return {
+        prepare: () => {
+            return { bind: statement };
+        },
+    };
+};
+
 describe("the rollout route, POST /v1/hostd/rollout", () => {
     const release = { channel: "stable", createdAt: 1, keyId: "k", releaseId: "hostd-v1_1_0", versions: { caddy: "v2", celld: "v0.7.0", hostd: "1.1.0" } };
     const old = { caddy: "v2", celld: "v0.6.0", hostd: "1.0.0" };
@@ -368,6 +415,9 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
         boxes: unknown[] = DEFAULT_BOXES,
         seen?: { jobs: unknown[]; mutations: unknown[] },
     ): Record<string, unknown> & RouterEnv => {
+        // The rows `setDesiredRelease` leaves, as the D1 binding answers them: the run re-reads each box's intent.
+        let intents: Record<string, unknown>[] = [];
+
         return {
             __executionCtx: {
                 waitUntil: (promise: Promise<unknown>) => {
@@ -378,6 +428,11 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
                 runAction: () => Promise.reject(new Error("unused")),
                 runMutation: <R>(_reference: unknown, args: unknown) => {
                     seen?.mutations.push(args);
+                    const { allowDowngrade, releaseId } = args as { allowDowngrade: boolean; releaseId: string };
+
+                    intents = (boxes as { boxId: string }[]).map(({ boxId }) => {
+                        return { allowDowngrade: allowDowngrade ? 1 : 0, desiredReleaseId: releaseId, id: boxId };
+                    });
 
                     return Promise.resolve(boxes as R);
                 },
@@ -393,7 +448,7 @@ describe("the rollout route, POST /v1/hostd/rollout", () => {
                     },
                 };
             }),
-            DB: {},
+            DB: d1Over(() => intents),
             LUNORA_ADMIN_TOKEN: "admin",
             LUNORA_ORIGIN_URL: "https://cloud.test",
         };

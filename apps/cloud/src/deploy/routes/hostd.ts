@@ -18,7 +18,7 @@ import { internal } from "../../../lunora/_generated/internal";
 import type { RolloutBox } from "../../../lunora/boxes";
 import type { HostdReleaseView } from "../../../lunora/hostd-releases";
 import { versionsOf } from "../../boxes/hostd-releases";
-import { planHostdRollout, runHostdRollout, upgradeDispatch, withdrawDesiredRelease } from "../../boxes/rollout";
+import { desiresRelease, planHostdRollout, runHostdRollout, upgradeDispatch, withdrawDesiredRelease } from "../../boxes/rollout";
 import { manifestUrlOf } from "../../boxes/urls";
 import { controlPlaneDatabase } from "../../d1-store";
 import { HOSTD_TRUSTED_RELEASE_KEYS, verifyReleaseManifest } from "../../hostd/release";
@@ -161,6 +161,7 @@ export const handleHostdRolloutRoute = async (request: Request, environment: Hos
             manifestUrl: manifestUrlOf(origin, releaseId),
             release,
         });
+        const database = controlPlaneDatabase(environment.DB as D1DatabaseLike);
         const executionContext = environment.__executionCtx;
         const waitUntil = planned.batches.length > 0 ? executionContext?.waitUntil?.bind(executionContext) : undefined;
         const started = waitUntil !== undefined;
@@ -168,8 +169,9 @@ export const handleHostdRolloutRoute = async (request: Request, environment: Hos
         if (waitUntil !== undefined) {
             waitUntil(
                 runHostdRollout(planned, {
+                    desires: desiresRelease(database, planned.job),
                     dispatch: upgradeDispatch(namespace),
-                    withdraw: withdrawDesiredRelease(controlPlaneDatabase(environment.DB as D1DatabaseLike), releaseId),
+                    withdraw: withdrawDesiredRelease(database, releaseId),
                 }).then(
                     (result) => {
                         // eslint-disable-next-line no-console -- the run outlives the response; Workers Logs is its only record

@@ -117,6 +117,8 @@ export const planHostdRollout = (input: {
 export const runHostdRollout = async (
     planned: PlannedRollout,
     ports: {
+        /** True while the box still names this run's release, with its `allowDowngrade`, as its desired one. */
+        desires: (boxId: string) => Promise<boolean>;
         /** Run one job on one box; a refusal (offline, busy) is a failed upgrade, not an error. */
         dispatch: (boxId: string, job: UpgradeJob) => Promise<JobOutcome>;
         maxFailureRate?: number;
@@ -128,6 +130,13 @@ export const runHostdRollout = async (
     const result = await runFleetUpgrade(planned.plan, {
         ...(ports.maxFailureRate === undefined ? {} : { maxFailureRate: ports.maxFailureRate }),
         release: async (box) => {
+            // Asked per box, not once per plan: a run waits up to a batch's timeout between batches, and a
+            // newer rollout, a rollback or another run's halt may have re-pointed the box meanwhile. Such a
+            // box is not this run's to upgrade; it counts as done so it neither fails nor halts the run.
+            if (!(await ports.desires(box.deploymentId))) {
+                return true;
+            }
+
             const outcome = await ports.dispatch(box.deploymentId, planned.job);
 
             if (outcome.ok) {
@@ -162,6 +171,15 @@ export const withdrawDesiredRelease =
                 await database.patch("boxes", boxId, { allowDowngrade: false, desiredReleaseId: null });
             }
         }
+    };
+
+/** A {@link runHostdRollout} `desires` port over the control-plane store, read fresh for each box. */
+export const desiresRelease =
+    (database: ControlPlaneStore, job: UpgradeJob) =>
+    async (boxId: string): Promise<boolean> => {
+        const row = (await database.get("boxes", boxId)) as null | { allowDowngrade?: boolean | null; desiredReleaseId?: null | string };
+
+        return row?.desiredReleaseId === job.releaseId && (row.allowDowngrade === true) === (job.allowDowngrade === true);
     };
 
 interface DesiringBoxRow {
@@ -214,7 +232,11 @@ export const resumeHostdRollouts = async (ports: {
 
         if (planned.batches.length > 0) {
             // eslint-disable-next-line no-await-in-loop -- see above
-            results[key] = await runHostdRollout(planned, { dispatch: ports.dispatch, withdraw: withdrawDesiredRelease(ports.database, releaseId) });
+            results[key] = await runHostdRollout(planned, {
+                desires: desiresRelease(ports.database, planned.job),
+                dispatch: ports.dispatch,
+                withdraw: withdrawDesiredRelease(ports.database, releaseId),
+            });
         }
     }
 
