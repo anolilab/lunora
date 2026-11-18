@@ -343,8 +343,9 @@ Queues and delivers `@lunora/mail` sends. It declares a `lunora-mail` queue on
 `createNodeQueueHost` and returns `{ queue, mailer, poll, drain, deadLetters }`.
 `mailer.queue()` writes a durable row, and so does a mailer you build in your own
 module with `createMailerFromEnv(env, { queue })`. `queue.send(body, { delaySeconds })`
-holds a send back, and any other option throws rather than being dropped. `poll()` sends every due row
-through `consumeQueuedSend`. The `transport` option, such as an SMTP client you
+holds a send back, and any other option throws rather than being dropped. Each `poll()` sends at most one
+batch of up to 10 due rows through `consumeQueuedSend`, so drain a backlog with
+further polls. The `transport` option, such as an SMTP client you
 wrap as a `MailTransport`, wins over `RESEND_API_KEY`, which is read only without
 one. A dev environment (`WORKER_ENV=development` or `LUNORA_MAIL_CAPTURE=1`)
 captures instead, the same rule `createMailerFromEnv` applies on Cloudflare. To
@@ -364,10 +365,17 @@ Delivery is at-least-once, narrowed:
 - Before it sends, a delivery claims its idempotency key in
   `_lunora_mail_claims`, atomically. A second row with the same key waits 180
   seconds instead of sending alongside it, even from another process on the file.
-  A claim left behind by a crash lapses with the lease.
-- A key remembers the content it was first queued with for 24 hours. A later row
-  that reuses the key for different content is refused and logged as the error
-  `lunora.mail.idempotency_key_conflict`, never acked as already sent.
+  The claim names the row holding it, so a row redelivered after a crash takes
+  its own claim back and sends. Another row's abandoned claim lapses with the
+  lease.
+- A key records the content it was first queued with, at enqueue, for 24 hours,
+  so the first message queued under a key owns it whatever order rows are
+  delivered in. `mailer.queue()` and `queue.send()` throw for a key already queued
+  with different content. Content is compared on the fields the consumer sends,
+  with a lone recipient and a one-element list counting as the same. A row queued
+  before any record existed is checked at delivery, and refused there as the
+  error `lunora.mail.idempotency_key_conflict`. Expired records and abandoned
+  claims are pruned at most once a minute.
 - `_lunora_mail_sent`, in the same database, records each key once the transport
   confirms the send, and keeps it for 24 hours. It also keeps the attempt marks
   `consumeQueuedSend` writes, for 15 days. A second enqueue of a sent key is acked

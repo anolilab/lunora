@@ -13,6 +13,9 @@ import { createNodePlatform } from "../src/node-platform";
 
 const PRODUCTION = { MAIL_FROM: "Acme <noreply@acme.test>", NODE_ENV: "production" };
 
+/** The mail queue's lease: 10 sends × (60 s deadline + 40 s of ledger calls) + 60 s. */
+const MAIL_LEASE_MS = 10 * (60_000 + 40_000) + 60_000;
+
 /** A transport whose first send waits for `release()`, announcing through `entered` that it has started; later sends succeed. */
 const blockingTransport = (): { entered: Promise<void>; release: () => void; sent: SendPayload[]; transport: MailTransport } => {
     const sent: SendPayload[] = [];
@@ -594,21 +597,23 @@ describe(createNodeMailHost, () => {
 
     describe("third review", () => {
         it("refuses, loudly, a reused idempotency key whose content differs", async () => {
-            expect.assertions(3);
+            expect.assertions(2);
 
-            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
             const clock = startClock();
             const transport = scriptedTransport(["ok"]);
             const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
 
             await mail.mailer.queue({ idempotencyKey: "invite-42", subject: "Invite", text: "Join team A", to: "ada@example.com" });
             await mail.poll();
-            await mail.mailer.queue({ idempotencyKey: "invite-42", subject: "Invite", text: "Join team B", to: "bob@example.com" });
+
+            // Refused at enqueue, where the producer can act on it, never acked later as already sent.
+            await expect(mail.mailer.queue({ idempotencyKey: "invite-42", subject: "Invite", text: "Join team B", to: "bob@example.com" })).rejects.toThrow(
+                /already queued with different content/u,
+            );
+
             await mail.poll();
 
             expect(transport.sent.map((payload) => payload.to)).toStrictEqual(["ada@example.com"]);
-            expect(error).toHaveBeenCalledTimes(1);
-            expect(logged(error.mock.calls[0]?.[0])).toMatchObject({ event: "lunora.mail.idempotency_key_conflict" });
         });
 
         it("records a key as sent only once the transport has confirmed the send", async () => {
@@ -807,6 +812,143 @@ describe(createNodeMailHost, () => {
 
             expect(transport.sent).toHaveLength(1);
             await expect(mail.queue.send(body, { contentType: "text" })).rejects.toThrow(/delaySeconds/u);
+        });
+    });
+
+    describe("fifth review", () => {
+        it("lets the first message queued under a key own it, even when a later one would be delivered first", async () => {
+            expect.assertions(2);
+
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            // Queued first but held back a minute: the later row would be due before it.
+            await mail.queue.send({ idempotencyKey: "welcome-ada", subject: "Welcome", text: "Original", to: "ada@example.com" }, { delaySeconds: 60 });
+
+            await expect(mail.mailer.queue({ idempotencyKey: "welcome-ada", subject: "Welcome", text: "Replacement", to: "ada@example.com" })).rejects.toThrow(
+                /already queued with different content/u,
+            );
+
+            await mail.poll();
+            clock.advance(60_000);
+            await mail.poll();
+
+            expect(transport.sent.map((payload) => payload.text)).toStrictEqual(["Original"]);
+        });
+
+        it("treats two bodies that send the same mail as the same content", async () => {
+            expect.assertions(2);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            // A lone address and a one-element list are one recipient to the consumer.
+            await mail.queue.send({ bcc: "audit@acme.test", idempotencyKey: "receipt-9", subject: "Receipt", text: "Paid", to: "ada@example.com" });
+            await mail.queue.send({ bcc: ["audit@acme.test"], idempotencyKey: "receipt-9", subject: "Receipt", text: "Paid", to: ["ada@example.com"] });
+            await mail.poll();
+
+            // The second row is the same mail, so the ledger acks it unsent; it is no conflict.
+            expect(transport.sent).toHaveLength(1);
+            expect(error).not.toHaveBeenCalled();
+        });
+
+        it("prunes expired key records and abandoned claims", async () => {
+            expect.assertions(3);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            const mail = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport: scriptedTransport(["ok"]) });
+            const keys = (): unknown => database.prepare("SELECT key FROM _lunora_mail_keys ORDER BY key").all();
+
+            await mail.mailer.queue({ idempotencyKey: "old-key", subject: "Old", text: "1", to: "ada@example.com" });
+            await mail.poll();
+            // A claim a crashed process never released.
+            database.prepare("INSERT INTO _lunora_mail_claims (key, message_id, expires_at) VALUES ('crashed', 'gone', ?)").run(clock.now() - 1);
+
+            clock.advance(25 * 60 * 60 * 1000);
+            await mail.mailer.queue({ idempotencyKey: "new-key", subject: "New", text: "2", to: "ada@example.com" });
+            await mail.poll();
+
+            expect(keys()).toStrictEqual([{ key: "new-key" }]);
+            expect(database.prepare("SELECT key FROM _lunora_mail_claims").all()).toStrictEqual([]);
+
+            const plan = database.prepare<[number], { detail: string }>("EXPLAIN QUERY PLAN DELETE FROM _lunora_mail_keys WHERE expires_at <= ?").all(0);
+
+            expect(plan.map((row) => row.detail).join(" ")).toContain("_lunora_mail_keys_expires");
+        });
+
+        it("lets a row redelivered after a crash take back its own key claim and send", async () => {
+            expect.assertions(2);
+
+            const clock = startClock();
+            const database = freshDatabase();
+            let announce: () => void = () => undefined;
+            const stuckEntered = new Promise<void>((resolve) => {
+                announce = resolve;
+            });
+            // Stands in for a process that crashed mid-send: a slow first send moves the clock 200 s,
+            // so the second send (and its key claim) starts 200 s after the batch's lease began, then
+            // never returns.
+            const crashedTransport: MailTransport = {
+                send: async (payload) => {
+                    if (payload.subject === "Slow") {
+                        clock.advance(200_000);
+
+                        return { id: "slow" };
+                    }
+
+                    announce();
+
+                    return await new Promise<never>(() => {
+                        // Never settles: the process died here.
+                    });
+                },
+            };
+            const crashed = createNodeMailHost(database, { env: PRODUCTION, now: clock.now, transport: crashedTransport });
+            const survivorDatabase = new Database(database.name);
+            const other = scriptedTransport(["ok"]);
+            const survivor = createNodeMailHost(survivorDatabase, { env: PRODUCTION, now: clock.now, transport: other });
+
+            await crashed.mailer.queue({ idempotencyKey: "slow-1", subject: "Slow", text: "1", to: "ada@example.com" });
+            await crashed.mailer.queue({ idempotencyKey: "otp-cy", subject: "Code", text: "5555", to: "cy@example.com" });
+
+            // Left running: it is the crashed process's poll, and it never finishes.
+            crashed.poll().catch(() => undefined);
+            await stuckEntered;
+            // The batch's lease has run out, so its rows redeliver; the stuck send's claim, taken
+            // 200 s into the batch, still has 200 s left.
+            clock.advance(MAIL_LEASE_MS - 200_000);
+            await survivor.poll();
+
+            // "Slow" was recorded as sent before the crash, so only the stuck send goes out again.
+            expect(other.sent.map((payload) => payload.to)).toStrictEqual(["cy@example.com"]);
+            expect(survivorDatabase.prepare("SELECT COUNT(*) AS n FROM _lunora_queue_messages").get()).toStrictEqual({ n: 0 });
+
+            survivorDatabase.close();
+        });
+
+        it("sends at most one batch of ten per poll, so a backlog needs further polls", async () => {
+            expect.assertions(2);
+
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            for (let index = 0; index < 11; index += 1) {
+                // eslint-disable-next-line no-await-in-loop -- enqueue order is the claim order this pins
+                await mail.mailer.queue({ subject: `Mail ${String(index)}`, text: "Hi", to: "ada@example.com" });
+            }
+
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(10);
+
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(11);
         });
     });
 });

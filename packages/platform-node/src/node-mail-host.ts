@@ -199,50 +199,102 @@ const createSentLedger = (database: Database.Database, clock: () => number): Sen
 
 /** One delivery at a time per idempotency key, and one content per key, across polls and processes on the file. */
 interface KeyClaims {
-    release: (key: string) => void;
+    /** Forget a content record `recordContent` just made, for an enqueue that then failed. */
+    forgetContent: (key: string) => void;
 
     /**
-     * Take the key for this delivery: `"busy"` while another delivery holds it,
-     * `"conflict"` when the key was first queued with different content.
+     * Record the content a key is first queued with: `"conflict"` when the key
+     * already names different content, `"recorded"` when this call created the
+     * record, `"matches"` when it already held this content.
      */
-    take: (key: string, fingerprint: string) => "busy" | "conflict" | "taken";
+    recordContent: (key: string, fingerprint: string) => "conflict" | "matches" | "recorded";
+
+    release: (key: string, messageId: string) => void;
+
+    /**
+     * Take the key for this delivery of `messageId`: `"busy"` while another
+     * delivery holds it, `"conflict"` when the key names different content.
+     */
+    take: (key: string, fingerprint: string, messageId: string) => "busy" | "conflict" | "taken";
 }
 
 /**
  * Claims taken before a send, in one immediate transaction with the content
  * check: two queued rows with one key, claimed by overlapping polls or two
  * processes, would otherwise both pass the ledger's "not yet sent" read before
- * either recorded the send. A claim a crash left behind lapses after the same
- * lease as the row, which is when the row redelivers; `DO NOTHING` would hold
- * the key forever instead.
+ * either recorded the send.
  *
- * The content check exists because the ledger answers by key alone: a key
- * reused for a different message would otherwise be acked as already sent.
+ * A claim names the queue row holding it. The claim starts after the row's
+ * lease (when the send starts, not when the batch was claimed), so after a crash
+ * the redelivered row would otherwise find its own claim still live and wait as
+ * if another delivery held it, spending attempts until it parked unsent. Another
+ * row's claim lapses on its own lease; `DO NOTHING` would hold the key forever.
+ *
+ * The content record exists because the ledger answers by key alone: a key
+ * reused for a different message would otherwise be acked as already sent. It is
+ * written at enqueue, so the first message queued under a key owns it whatever
+ * order the rows are delivered in; delivery records it only for a row queued
+ * before any record existed. Both tables are pruned at most once a minute.
  */
 const createKeyClaims = (database: Database.Database, clock: () => number): KeyClaims => {
-    database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_claims (key TEXT PRIMARY KEY, expires_at INTEGER NOT NULL)");
+    database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_claims (key TEXT PRIMARY KEY, message_id TEXT NOT NULL, expires_at INTEGER NOT NULL)");
+    database.exec("CREATE INDEX IF NOT EXISTS _lunora_mail_claims_expires ON _lunora_mail_claims (expires_at)");
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_keys (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, expires_at INTEGER NOT NULL)");
+    database.exec("CREATE INDEX IF NOT EXISTS _lunora_mail_keys_expires ON _lunora_mail_keys (expires_at)");
 
-    const claim = database.prepare<[string, number, number]>(
-        "INSERT INTO _lunora_mail_claims (key, expires_at) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET expires_at = excluded.expires_at WHERE _lunora_mail_claims.expires_at <= ?",
+    const claim = database.prepare<[string, string, number, number]>(
+        `INSERT INTO _lunora_mail_claims (key, message_id, expires_at) VALUES (?, ?, ?)
+         ON CONFLICT (key) DO UPDATE SET message_id = excluded.message_id, expires_at = excluded.expires_at
+         WHERE _lunora_mail_claims.expires_at <= ? OR _lunora_mail_claims.message_id = excluded.message_id`,
     );
-    const drop = database.prepare<[string]>("DELETE FROM _lunora_mail_claims WHERE key = ?");
+    const drop = database.prepare<[string, string]>("DELETE FROM _lunora_mail_claims WHERE key = ? AND message_id = ?");
     const readContent = database.prepare<[string, number], { fingerprint: string }>(
         "SELECT fingerprint FROM _lunora_mail_keys WHERE key = ? AND expires_at > ?",
     );
     const writeContent = database.prepare<[string, string, number]>(
         "INSERT INTO _lunora_mail_keys (key, fingerprint, expires_at) VALUES (?, ?, ?) ON CONFLICT (key) DO UPDATE SET fingerprint = excluded.fingerprint, expires_at = excluded.expires_at",
     );
+    const dropContent = database.prepare<[string]>("DELETE FROM _lunora_mail_keys WHERE key = ?");
+    const pruneClaims = database.prepare<[number]>("DELETE FROM _lunora_mail_claims WHERE expires_at <= ?");
+    const pruneContent = database.prepare<[number]>("DELETE FROM _lunora_mail_keys WHERE expires_at <= ?");
+    let prunedAt = Number.NEGATIVE_INFINITY;
 
-    const takeInTransaction = database.transaction((key: string, fingerprint: string): "busy" | "conflict" | "taken" => {
+    const pruneDue = (now: number): void => {
+        if (now - prunedAt >= LEDGER_PRUNE_INTERVAL_MS) {
+            pruneClaims.run(now);
+            pruneContent.run(now);
+            prunedAt = now;
+        }
+    };
+
+    const recordInTransaction = database.transaction((key: string, fingerprint: string): "conflict" | "matches" | "recorded" => {
         const now = clock();
+
+        pruneDue(now);
+
+        const known = readContent.get(key, now)?.fingerprint;
+
+        if (known === undefined) {
+            writeContent.run(key, fingerprint, now + MAIL_KEY_CONTENT_TTL_MS);
+
+            return "recorded";
+        }
+
+        return known === fingerprint ? "matches" : "conflict";
+    });
+
+    const takeInTransaction = database.transaction((key: string, fingerprint: string, messageId: string): "busy" | "conflict" | "taken" => {
+        const now = clock();
+
+        pruneDue(now);
+
         const known = readContent.get(key, now)?.fingerprint;
 
         if (known !== undefined && known !== fingerprint) {
             return "conflict";
         }
 
-        if (claim.run(key, now + MAIL_VISIBILITY_TIMEOUT_MS, now).changes === 0) {
+        if (claim.run(key, messageId, now + MAIL_VISIBILITY_TIMEOUT_MS, now).changes === 0) {
             return "busy";
         }
 
@@ -254,14 +306,18 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
     });
 
     return {
-        release: (key) => {
-            drop.run(key);
+        forgetContent: (key) => {
+            dropContent.run(key);
         },
-        take: (key, fingerprint) => takeInTransaction.immediate(key, fingerprint),
+        recordContent: (key, fingerprint) => recordInTransaction.immediate(key, fingerprint),
+        release: (key, messageId) => {
+            drop.run(key, messageId);
+        },
+        take: (key, fingerprint, messageId) => takeInTransaction.immediate(key, fingerprint, messageId),
     };
 };
 
-/** A body as JSON with its object keys sorted, so the same message always hashes the same. */
+/** A value as JSON with its object keys sorted, so the same content always hashes the same. */
 const canonicalJson = (value: unknown): string => {
     if (Array.isArray(value)) {
         return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
@@ -278,7 +334,38 @@ const canonicalJson = (value: unknown): string => {
     return JSON.stringify(value);
 };
 
-const fingerprintOf = (body: unknown): string => createHash("sha256").update(canonicalJson(body)).digest("hex");
+/** A recipient field as the consumer reads it: a lone address and a one-element list are the same, an empty list is absent. */
+const recipientList = (value: unknown): unknown => {
+    const list = typeof value === "string" ? [value] : value;
+
+    return Array.isArray(list) && list.length === 0 ? undefined : list;
+};
+
+/**
+ * The mail a body would send, hashed: only the fields `consumeQueuedSend` reads,
+ * with recipients normalized as it normalizes them, so two bodies that send the
+ * same mail never read as a conflict. The key itself is left out; it is what
+ * the record is stored under.
+ */
+const fingerprintOf = (body: unknown): string => {
+    const fields = body !== null && typeof body === "object" ? (body as Record<string, unknown>) : {};
+
+    return createHash("sha256")
+        .update(
+            canonicalJson({
+                bcc: recipientList(fields.bcc),
+                cc: recipientList(fields.cc),
+                from: fields.from,
+                headers: fields.headers,
+                html: fields.html,
+                replyTo: fields.replyTo,
+                subject: fields.subject,
+                text: fields.text,
+                to: recipientList(fields.to),
+            }),
+        )
+        .digest("hex");
+};
 
 /** The queued body's idempotency key, when it carries a usable one; `consumeQueuedSend` refuses the rest. */
 const idempotencyKeyOf = (body: unknown): string | undefined => {
@@ -381,7 +468,7 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
     }
 
     const key = idempotencyKeyOf(message.body);
-    const claimed = key === undefined ? "taken" : consumer.claims.take(key, fingerprintOf(message.body));
+    const claimed = key === undefined ? "taken" : consumer.claims.take(key, fingerprintOf(message.body), message.id);
 
     if (claimed === "conflict") {
         refuse(message, "lunora.mail.idempotency_key_conflict", `idempotency key "${String(key)}" was already queued with different content`);
@@ -407,7 +494,7 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
         settleFailure(message, error);
     } finally {
         if (key !== undefined) {
-            consumer.claims.release(key);
+            consumer.claims.release(key, message.id);
         }
     }
 };
@@ -461,8 +548,29 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
                 );
             }
 
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `host` is assigned
-            await host.bindings.mail.send(payload, delaySeconds === undefined ? undefined : { delaySeconds });
+            const key = idempotencyKeyOf(payload);
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `consumer` is assigned
+            const recorded = key === undefined ? "matches" : consumer.claims.recordContent(key, fingerprintOf(payload));
+
+            if (recorded === "conflict") {
+                throw new LunoraError(
+                    "VALIDATION_ERROR",
+                    `@lunora/platform-node: idempotency key "${String(key)}" was already queued with different content — a key names one message, so use a new key for new content`,
+                );
+            }
+
+            try {
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `host` is assigned
+                await host.bindings.mail.send(payload, delaySeconds === undefined ? undefined : { delaySeconds });
+            } catch (error) {
+                // Nothing was queued under the key, so the record this call made must not outlive it.
+                if (recorded === "recorded") {
+                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- see above
+                    consumer.claims.forgetContent(String(key));
+                }
+
+                throw error;
+            }
         },
     };
     // Built before the tables, so a refusal leaves nothing behind in the database.
