@@ -597,6 +597,8 @@ describe("shard drain passes", () => {
             });
 
             failAlarm.release();
+            // Every write attempt fails the same way; the backoff between them runs on the fake clock.
+            await vi.advanceTimersByTimeAsync(1000);
             await turn();
             otherGate.release();
 
@@ -612,10 +614,75 @@ describe("shard drain passes", () => {
 
             const line = printed(logged).find((entry) => entry.includes("could not be written")) ?? "";
 
-            expect(line).toContain("on shard a could not be written, so that alarm is lost");
+            expect(line).toContain("on shard a could not be written after 4 attempts, so that alarm is lost");
             expect(line).toContain("no such table: _lunora_alarm");
         } finally {
             registry.close();
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("tries a failed retry write again, so brief contention does not lose the alarm", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-alarm-retry-busy-"));
+        const arrived = deferred();
+        const failAlarm = deferred();
+        const first = createNodeShardRegistry({
+            directory,
+            onAlarm: async () => {
+                arrived.release();
+                await failAlarm.promise;
+
+                throw new Error("alarm failed");
+            },
+        });
+        let result: unknown;
+
+        try {
+            await first.shardFor("a").shard.alarms.set(Date.now());
+            await vi.advanceTimersByTimeAsync(0);
+            await arrived.promise;
+
+            // The first write fails (the table is gone, as under contention); the table is back before the next attempt.
+            const file = join(directory, String(readdirSync(directory).find((name) => name.endsWith(".sqlite3"))));
+            const other = new Database(file);
+
+            other.exec("DROP TABLE _lunora_alarm");
+
+            const drained = first.drain({ timer: () => () => {} });
+
+            failAlarm.release();
+            await turn();
+            other.exec("CREATE TABLE _lunora_alarm (id INTEGER PRIMARY KEY CHECK (id = 0), scheduled_for INTEGER NOT NULL)");
+            other.close();
+            await vi.advanceTimersByTimeAsync(150);
+            result = await drained;
+        } finally {
+            first.close();
+        }
+
+        expect(result).toStrictEqual({ failed: [], pending: [], timedOut: false });
+
+        const fired = deferred();
+        const second = createNodeShardRegistry({
+            directory,
+            onAlarm: () => {
+                fired.release();
+            },
+        });
+
+        try {
+            second.shardFor("a");
+            await vi.advanceTimersByTimeAsync(1000);
+
+            await expect(fired.promise).resolves.toBeUndefined();
+        } finally {
+            second.close();
             vi.useRealTimers();
             rmSync(directory, { force: true, recursive: true });
         }

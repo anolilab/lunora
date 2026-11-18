@@ -311,7 +311,7 @@ the listener, then waits until every response that was in progress when it
 began is written or its client is gone; a request still arriving on an open
 connection is answered with `Connection: close` and not waited for. Event
 streams and WebSockets are not waited for, and `close()` ends them. It is
-bounded by a deadline (see `DrainOptions`) and resolves with what was still
+bounded by a deadline (see `DrainOptions`, checked before anything is stopped, so an invalid one leaves the server serving) and resolves with what was still
 unfinished, which it also logs. A graceful shutdown refuses new requests in its
 `fetch`, awaits `drain()`, then `close()`.
 
@@ -421,7 +421,9 @@ shard after its own drain finished, or a shard opened while draining, is seen;
 Alarm deliveries count until their retry, if any, is written, so a shutdown
 cannot lose a failed alarm. A retry waiting for another task's transaction to end
 always settles: it is written once the transaction ends, superseded by a later
-`set` or `delete`, or, if the shard closes first, given up and logged. `idle()` answers the same question synchronously.
+`set` or `delete`, or, if the shard closes first, given up and logged. A retry
+write that fails (contention from another process) is tried again with backoff
+before the alarm is given up and logged. `idle()` answers the same question synchronously.
 It returns only when a full pass finds nothing running, or when its deadline
 passes, logging one line per shard with how many requests, alarms and
 `waitUntil` tasks it still had (never the request or its payload). Await it before `close()`, which does not wait.

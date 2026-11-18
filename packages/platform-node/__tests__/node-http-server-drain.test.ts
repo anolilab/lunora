@@ -275,6 +275,20 @@ describe("createNodeHttpServer drain", () => {
         }
     });
 
+    it("refuses an invalid timeout before it stops anything, so the server keeps serving", async () => {
+        expect.assertions(2);
+
+        const server = await createNodeHttpServer({ fetch: () => new Response("still here") });
+
+        try {
+            await expect(server.drain({ timeoutMs: -1 })).rejects.toThrow(RangeError);
+            // The listener is still open and keep-alive untouched: a new connection is served.
+            await expect(fetch(server.origin).then(async (response) => response.text())).resolves.toBe("still here");
+        } finally {
+            await server.close();
+        }
+    });
+
     it("logs the method and path of a failed request, never its query string", async () => {
         expect.assertions(2);
 

@@ -538,6 +538,9 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             await Promise.all(socketsClosed);
         },
         drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
+            // First, so an invalid timeout throws before anything changes: the listener still open, keep-alive still on.
+            const deadline = startDrainDeadline(drainOptions);
+
             draining = true;
             // Stop accepting connections now; its callback waits for every connection, which `close()` ends later.
             stopListening().catch(() => undefined);
@@ -545,7 +548,6 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
 
             // Only what was in flight when the drain began: traffic that keeps arriving on open connections cannot extend it.
             const inFlight = new Map(responses);
-            const deadline = startDrainDeadline(drainOptions);
             const settled = await settlesBefore(Promise.all(inFlight.keys()), deadline);
 
             deadline.cancel();

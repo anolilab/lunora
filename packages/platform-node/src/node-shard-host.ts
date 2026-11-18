@@ -38,6 +38,8 @@ const MAX_TIMEOUT_MS = 2_147_483_647;
  */
 const ALARM_RETRY_LIMIT = 6;
 const ALARM_RETRY_BASE_MS = 100;
+/** How many times a failed delivery's retry row is written before the alarm is given up: contention is usually brief. */
+const RETRY_WRITE_ATTEMPTS = 4;
 
 /**
  * How long an alarm timer waits before looking again when a transaction is open
@@ -362,17 +364,38 @@ const createAlarms = (
      * a broken table). Such a failure is logged with its cause and recorded for the drain's result, and the delivery still
      * settles, so it never leaves a drain waiting, never rejects one, and is never dropped without a trace.
      */
-    const writeRetry = (onSettled: () => void, firedAt: number, generation = alarmGeneration): void => {
+    const writeRetry = (onSettled: () => void, firedAt: number, generation = alarmGeneration, writeAttempt = 0): void => {
+        const attemptsBefore = attempts;
+
         try {
             retryFailedDelivery(onSettled, firedAt, generation);
         } catch (error: unknown) {
+            // The write did not happen, so it does not spend the alarm's own retry budget.
+            attempts = attemptsBefore;
+
+            // Contention passes (another process's lock, a checkpoint): try the write again with backoff before giving up,
+            // with the delivery still tracked, so a drain waits for the outcome rather than closing over a lost alarm.
+            if (database.open && writeAttempt + 1 < RETRY_WRITE_ATTEMPTS) {
+                waitingRetries.add({
+                    retry: () => {
+                        writeRetry(onSettled, firedAt, generation, writeAttempt + 1);
+                    },
+                    settle: onSettled,
+                });
+                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the poll and the retry call each other until the write lands
+                retryTimeout ??= setTimeout(pollWaitingRetries, ALARM_RETRY_BASE_MS * 2 ** writeAttempt);
+
+                return;
+            }
+
             const due = new Date(firedAt).toISOString();
 
             // eslint-disable-next-line no-console -- the alarm is lost here, so the log is the only record of it and of why
             console.error(
-                "[@lunora/platform-node] the retry of the alarm due %s on shard %s could not be written, so that alarm is lost",
+                "[@lunora/platform-node] the retry of the alarm due %s on shard %s could not be written after %d attempts, so that alarm is lost",
                 due,
                 shardKey ?? "(unnamed)",
+                writeAttempt + 1,
                 error,
             );
             onFailure(`shard ${shardKey ?? "(unnamed)"}: the retry of the alarm due ${due} could not be written`);
