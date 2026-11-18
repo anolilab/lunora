@@ -181,6 +181,8 @@ export const enforceDunning = internalMutation.mutation(async ({ ctx: context })
             return organization.paymentFailedAt == null ? { counter: "graced", patch: { paymentFailedAt: decision.paymentFailedAt } } : null;
         }
 
+        // Already suspended for another reason: that reason's sweep hands the
+        // suspension to dunning when it would lift it (`dunningGraceLapsed`).
         return organization.suspendedAt == null
             ? { counter: "suspended", patch: { paymentFailedAt: decision.paymentFailedAt, suspendedAt: now, suspendedReason: "dunning" } }
             : null;

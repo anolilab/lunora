@@ -10,6 +10,15 @@
 /** Grace window between the first observed failure and suspension. */
 export const DUNNING_GRACE_MS = 14 * 24 * 60 * 60 * 1000;
 
+/**
+ * Whether a stamped payment failure has outlived its grace, so dunning requires
+ * the org suspended. An org holds one suspension reason, so a sweep lifting its
+ * own (spend-cap, overage) hands the suspension to dunning instead when this
+ * holds — otherwise the org would serve until the next dunning run.
+ */
+export const dunningGraceLapsed = (paymentFailedAt: null | number | undefined, now: number): boolean =>
+    paymentFailedAt != null && now - paymentFailedAt >= DUNNING_GRACE_MS;
+
 /** Subscription states that count as paying. */
 const GOOD_STATES = new Set(["active", "trialing"]);
 

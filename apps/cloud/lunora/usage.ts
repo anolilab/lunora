@@ -1,5 +1,6 @@
 import { LunoraError } from "@lunora/server";
 
+import { dunningGraceLapsed } from "../src/billing/dunning";
 import type { PeriodUsage, SpendAccrual, SpendCapDecision, SpendLevel, SpendLimits, SpendLine } from "../src/billing/spend";
 import {
     accruedSpend,
@@ -508,6 +509,33 @@ export const setSpendWarning = mutation
     });
 
 /**
+ * Lift a spend-cap suspension once spend is back under the cap — unless a
+ * payment failure has outlived its dunning grace meanwhile. The org holds one
+ * suspension reason and dunning does not overwrite this one, so lifting would
+ * serve an unpaid org until the next dunning run; the suspension is handed to
+ * dunning instead, which lifts it on payment. Answers how many it lifted (0 or 1).
+ */
+const liftSpendCapSuspension = async (
+    context: MutationContext,
+    organizationId: Id<"organizations">,
+    paymentFailedAt: null | number | undefined,
+    audit: (action: string, target: string) => Promise<void>,
+    decision: SpendCapDecision,
+): Promise<0 | 1> => {
+    if (dunningGraceLapsed(paymentFailedAt, context.now)) {
+        await context.db.patch("organizations", organizationId, { suspendedReason: "dunning" });
+        await audit("organization.suspend", "spend back under cap; payment failure grace exhausted");
+
+        return 0;
+    }
+
+    await context.db.patch("organizations", organizationId, { suspendedAt: null, suspendedReason: null });
+    await audit("organization.unsuspend", `spend ${String(decision.spendMinor)} < cap ${String(decision.capMinor)}`);
+
+    return 1;
+};
+
+/**
  * Enforce aggregate spend caps (GAPS.md C1). Estimates each org's current-
  * period spend from the metered platform usage and suspends orgs over their
  * cap (plan default or org override) — the dispatcher serves 503 for a
@@ -548,6 +576,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         collectAll<{
             _id: Id<"organizations">;
             name: string;
+            paymentFailedAt?: null | number;
             spendCapMinor?: null | number;
             spendNanoCents?: null | number;
             spendPeriod?: null | number;
@@ -601,10 +630,7 @@ export const enforceSpendCaps = internalMutation.mutation(async ({ ctx: context 
         } else if (decision.level !== "breach" && organization.suspendedAt != null && organization.suspendedReason === "spend-cap") {
             // Only lift our own suspensions — dunning/support ones stay (GAPS.md C2).
             // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
-            await context.db.patch("organizations", organizationId, { suspendedAt: null, suspendedReason: null });
-            // eslint-disable-next-line no-await-in-loop -- one audit row per transition
-            await audit("organization.unsuspend", `spend ${String(decision.spendMinor)} < cap ${String(decision.capMinor)}`);
-            unsuspended += 1;
+            unsuspended += await liftSpendCapSuspension(context, organizationId, organization.paymentFailedAt, audit, decision);
         }
 
         // Soft cap (plan 365 D3): a notification, never an action — once per period.

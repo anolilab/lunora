@@ -9,6 +9,7 @@
 import { toSubscription } from "../../lunora/entitlements";
 import type { ControlPlaneDatabase } from "../store";
 import { drainTable } from "../store";
+import { dunningGraceLapsed } from "./dunning";
 import type { OverageFleetPorts, OverageOrgInput } from "./overage";
 import { plansByReference } from "./plan-of";
 import type { PeriodUsage } from "./spend";
@@ -20,6 +21,7 @@ type SubscriptionRow = Parameters<typeof toSubscription>[0];
 interface OrgRow {
     _id: string;
     creditsAccountId?: string;
+    paymentFailedAt?: null | number;
     suspendedReason?: null | string;
 }
 
@@ -64,6 +66,8 @@ export interface OverageReconcileData {
     /** org id → its Creem credits-account id (null when none purchased yet). */
     accounts: Map<string, null | string>;
     inputs: OverageOrgInput[];
+    /** org id → its stamped dunning `paymentFailedAt`, for orgs with one (the recovery hands off to dunning). */
+    paymentFailedAt: Map<string, number>;
     /** org id → its current `suspendedReason` (for the recovery gate). */
     suspension: Map<string, string | undefined>;
 }
@@ -126,6 +130,7 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
 
     const accounts = new Map<string, null | string>();
     const suspension = new Map<string, string | undefined>();
+    const paymentFailedAt = new Map<string, number>();
     const inputs: OverageOrgInput[] = [];
 
     for (const organization of organizations) {
@@ -133,6 +138,11 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
         // Recovery writes `suspendedReason: null`, so a lifted org reads back null,
         // not absent — keeping null would make `onExhausted` treat it as suspended forever.
         suspension.set(organization._id, organization.suspendedReason ?? undefined);
+
+        if (organization.paymentFailedAt != null) {
+            paymentFailedAt.set(organization._id, organization.paymentFailedAt);
+        }
+
         inputs.push({
             alreadyDebitedCredits: debitedByOrg.get(organization._id) ?? 0,
             boxes: boxesByOrg.get(organization._id) ?? 0,
@@ -143,7 +153,7 @@ export const buildOverageReconcileData = async (database: ControlPlaneDatabase, 
         });
     }
 
-    return { accounts, inputs, suspension };
+    return { accounts, inputs, paymentFailedAt, suspension };
 };
 
 /**
@@ -158,6 +168,7 @@ export const overageFleetPorts = (
     ledger: OverageFleetPorts["ledger"],
     now: number,
     suspension: Map<string, string | undefined>,
+    paymentFailedAt: ReadonlyMap<string, number>,
 ): OverageFleetPorts => {
     return {
         advanceWatermark: async (organizationId, periodStart, debitedCredits) => {
@@ -188,6 +199,19 @@ export const overageFleetPorts = (
         onRecovered: async (organizationId) => {
             // Only lift our own suspensions — dunning/spend-cap/support ones stay.
             if (suspension.get(organizationId) !== "overage") {
+                return;
+            }
+
+            if (dunningGraceLapsed(paymentFailedAt.get(organizationId), now)) {
+                await database.patch("organizations", organizationId, { suspendedReason: "dunning" });
+                await database.insert("auditLog", {
+                    action: "organization.suspend",
+                    actorUserId: "system:dunning",
+                    createdAt: now,
+                    organizationId,
+                    target: "prepaid credit balance restored; payment failure grace exhausted",
+                });
+
                 return;
             }
 

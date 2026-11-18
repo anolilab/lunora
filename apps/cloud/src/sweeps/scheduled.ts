@@ -160,7 +160,7 @@ const sweepOverageReconciliation = async (database: ControlPlaneStore, env: Cont
     }
 
     const periodStart = currentPeriodStart();
-    const { accounts, inputs, suspension } = await buildOverageReconcileData(database, periodStart);
+    const { accounts, inputs, paymentFailedAt, suspension } = await buildOverageReconcileData(database, periodStart);
 
     const creem = new Creem({ apiKey: env.CREEM_API_KEY, ...(env.CREEM_TEST_MODE === "true" ? { server: "test" as const } : {}) });
     const ledger = createCreemCreditsLedger({
@@ -169,7 +169,7 @@ const sweepOverageReconciliation = async (database: ControlPlaneStore, env: Cont
         resolveAccountId: (organizationId) => Promise.resolve(accounts.get(organizationId) ?? null),
     });
 
-    await reconcileAllOverages(inputs, overageFleetPorts(database, ledger, Date.now(), suspension));
+    await reconcileAllOverages(inputs, overageFleetPorts(database, ledger, Date.now(), suspension, paymentFailedAt));
 };
 
 /**

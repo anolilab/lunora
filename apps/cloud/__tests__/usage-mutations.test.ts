@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MutationCtx } from "../lunora/_generated/server";
 import { enforceSpendCaps, ingest, rollup, series, setSpendWarning } from "../lunora/usage";
+import { DUNNING_GRACE_MS } from "../src/billing/dunning";
 import { RATE_CARD } from "../src/billing/spend";
 import { UNVERIFIED_METERS } from "../src/billing/usage";
 import { hashDeployKey } from "../src/deploy/keys";
@@ -303,6 +304,29 @@ describe("usage.enforceSpendCaps", () => {
 
         expect(ops.filter((op) => op.kind === "patch" && "suspendedReason" in op.patch)).toStrictEqual([]);
         expect(ops.find((op) => op.kind === "patch" && "spendNanoCents" in op.patch)).toMatchObject({ patch: { spendNanoCents: 0 } });
+    });
+
+    it("hands a lifted spend-cap suspension to dunning when the payment grace has run out", async () => {
+        const now = 1_700_000_000_000;
+        const { ctx, ops } = makeCtx(
+            { organizations: [organization({ paymentFailedAt: now - DUNNING_GRACE_MS, suspendedAt: 1, suspendedReason: "spend-cap" })], platformUsage: [] },
+            now,
+        );
+
+        await expect(enforceSpendCaps.handler(ctx, {})).resolves.toMatchObject({ unsuspended: 0 });
+        expect(ops.filter((op) => isTransition(op))).toStrictEqual([expect.objectContaining({ id: "org_1", patch: { suspendedReason: "dunning" } })]);
+    });
+
+    it("still lifts a spend-cap suspension while a payment failure is inside its grace", async () => {
+        const now = 1_700_000_000_000;
+        const { ctx, ops } = makeCtx(
+            { organizations: [organization({ paymentFailedAt: now - 1000, suspendedAt: 1, suspendedReason: "spend-cap" })], platformUsage: [] },
+            now,
+        );
+
+        await enforceSpendCaps.handler(ctx, {});
+
+        expect(ops.find((op) => isTransition(op))).toMatchObject({ id: "org_1", patch: { suspendedAt: null, suspendedReason: null } });
     });
 
     it("lifts a spend-cap suspension once usage is back under the cap", async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { DUNNING_GRACE_MS } from "../src/billing/dunning";
 import type { CreditsLedgerPort } from "../src/billing/overage";
 import { buildOverageReconcileData, overageFleetPorts } from "../src/billing/reconcile";
 import type { ControlPlaneDatabase } from "../src/store";
@@ -63,7 +64,7 @@ describe(overageFleetPorts, () => {
             { insert, patch },
         );
 
-        const ports = overageFleetPorts(database, noopLedger, 1000, new Map());
+        const ports = overageFleetPorts(database, noopLedger, 1000, new Map(), new Map());
 
         // org_a already at 30 → advancing to 50 patches forward.
         await ports.advanceWatermark("org_a", 500, 50);
@@ -79,7 +80,7 @@ describe(overageFleetPorts, () => {
     it("suspends an unsuspended exhausted org with reason 'overage' + audit", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
         const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
-        const ports = overageFleetPorts(fakeControlPlaneDb({}, { insert, patch }), noopLedger, 1000, new Map([["org_a", undefined]]));
+        const ports = overageFleetPorts(fakeControlPlaneDb({}, { insert, patch }), noopLedger, 1000, new Map([["org_a", undefined]]), new Map());
 
         await ports.onExhausted("org_a");
 
@@ -92,7 +93,7 @@ describe(overageFleetPorts, () => {
         const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
         const database = fakeControlPlaneDb({ organizations: [{ _id: "org_a", suspendedAt: null, suspendedReason: null }] }, { insert, patch });
         const { suspension } = await buildOverageReconcileData(database, 500);
-        const ports = overageFleetPorts(database, noopLedger, 1000, suspension);
+        const ports = overageFleetPorts(database, noopLedger, 1000, suspension, new Map());
 
         await ports.onExhausted("org_a");
 
@@ -102,7 +103,7 @@ describe(overageFleetPorts, () => {
 
     it("never overrides a non-overage suspension on exhaustion", async () => {
         const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
-        const ports = overageFleetPorts(fakeControlPlaneDb({}, { patch }), noopLedger, 1000, new Map([["org_a", "dunning"]]));
+        const ports = overageFleetPorts(fakeControlPlaneDb({}, { patch }), noopLedger, 1000, new Map([["org_a", "dunning"]]), new Map());
 
         await ports.onExhausted("org_a");
 
@@ -119,6 +120,7 @@ describe(overageFleetPorts, () => {
                 ["org_dun", "dunning"],
                 ["org_over", "overage"],
             ]),
+            new Map(),
         );
 
         await ports.onRecovered?.("org_over");
@@ -129,5 +131,22 @@ describe(overageFleetPorts, () => {
         await ports.onRecovered?.("org_dun"); // dunning suspension must stay
 
         expect(patch).not.toHaveBeenCalled();
+    });
+
+    it("hands a lifted overage suspension to dunning when the payment grace has run out", async () => {
+        const patch = vi.fn<ControlPlaneDatabase["patch"]>(() => Promise.resolve(undefined));
+        const insert = vi.fn<ControlPlaneDatabase["insert"]>(() => Promise.resolve("id"));
+        const now = DUNNING_GRACE_MS + 5000;
+        const database = fakeControlPlaneDb(
+            { organizations: [{ _id: "org_a", paymentFailedAt: 5000, suspendedAt: 1, suspendedReason: "overage" }] },
+            { insert, patch },
+        );
+        const { paymentFailedAt, suspension } = await buildOverageReconcileData(database, 500);
+        const ports = overageFleetPorts(database, noopLedger, now, suspension, paymentFailedAt);
+
+        await ports.onRecovered?.("org_a");
+
+        expect(patch.mock.calls).toStrictEqual([["organizations", "org_a", { suspendedReason: "dunning" }]]);
+        expect(insert).toHaveBeenCalledWith("auditLog", expect.objectContaining({ action: "organization.suspend", actorUserId: "system:dunning" }));
     });
 });
