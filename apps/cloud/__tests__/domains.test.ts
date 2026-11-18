@@ -120,6 +120,17 @@ describe("domains.add", () => {
         expect(ops.find((op) => op.kind === "insert" && op.table === "domains")).toMatchObject({ document: { hostname: "app.example.com" } });
     });
 
+    /** Its Worker answers on workers.dev only; a verified hostname there would never reach it. */
+    it("refuses a project on a target that cannot serve a custom domain", async () => {
+        const { ctx, ops } = makeCtx({ ...world(), projects: [{ _id: PROJECT, name: "Web", organizationId: ORG, slug: "web", target: "cloudflare-workers" }] });
+
+        await expect(add.handler(ctx, args() as never)).rejects.toMatchObject({
+            code: "BAD_REQUEST",
+            message: expect.stringContaining("not available on Your Cloudflare account") as unknown as string,
+        });
+        expect(ops.filter((op) => op.kind === "insert" && op.table === "domains")).toStrictEqual([]);
+    });
+
     it("refuses a caller who is not an owner or admin", async () => {
         const { ctx } = makeCtx({ ...world(), members: [{ _id: "mem_1", organizationId: ORG, role: "member", userId: "usr_1" }] });
 

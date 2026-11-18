@@ -7,6 +7,7 @@ import { domainNotificationDetail } from "../src/domains/check";
 import type { EdgeBlockMode } from "../src/domains/edge-block-mode";
 import { edgeBlockModeOf } from "../src/domains/edge-block-mode";
 import type { TargetId } from "../src/provision-contract";
+import { storedTarget, TARGETS } from "../src/provision-contract";
 import type { Doc as Document_, Id } from "./_generated/dataModel";
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "./_generated/server";
 import { action, internalMutation, internalQuery, mutation, query, v } from "./_generated/server";
@@ -59,6 +60,27 @@ const assertServing = async (context: QueryContext, organizationId: Id<"organiza
     }
 };
 
+/**
+ * Refuse a domain for a project whose target cannot serve one (its descriptor
+ * lists `customDomains` among its limitations). Verifying it anyway would mark
+ * a hostname verified that never reaches the project's Worker.
+ * @throws {LunoraError} `BAD_REQUEST` with the target's own reason.
+ */
+const assertTargetServesDomains = async (context: QueryContext, projectId: Id<"projects">): Promise<void> => {
+    const project = await context.db.get("projects", projectId);
+    const target = storedTarget(project?.target);
+
+    if (target === undefined) {
+        return;
+    }
+
+    const limitation = TARGETS[target].limitations.find(({ id }) => id === "customDomains");
+
+    if (limitation !== undefined) {
+        throw new LunoraError("BAD_REQUEST", `custom domains are not available on ${TARGETS[target].label}: ${limitation.reason}`);
+    }
+};
+
 export const add = mutation
     .use(rateLimit("provision"))
     .input({
@@ -73,6 +95,7 @@ export const add = mutation
 
         await assertRowInOrg(context, "projects", arguments_.projectId, arguments_.organizationId, "project");
         await assertServing(context, member.organizationId);
+        await assertTargetServesDomains(context, arguments_.projectId);
 
         // Custom domains are a plan feature (GAPS.md B1) — enforce the
         // entitlement, not just the flag on the pricing page.
@@ -168,7 +191,12 @@ export const verifyTarget = internalQuery
         await assertRowInOrg(context, "domains", id, member.organizationId, "domain");
         await assertServing(context, member.organizationId);
 
-        return { domain: (await context.db.get("domains", id)) as DomainRow, organizationId: member.organizationId };
+        const domain = (await context.db.get("domains", id)) as DomainRow;
+
+        // A domain added before its project moved to such a target.
+        await assertTargetServesDomains(context, domain.projectId);
+
+        return { domain, organizationId: member.organizationId };
     });
 
 /**

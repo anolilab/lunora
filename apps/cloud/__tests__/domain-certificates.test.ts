@@ -423,6 +423,19 @@ describe("domains.recordCertificate / removalTarget / remove", () => {
             });
             await expect(verifyTarget.handler(member, { id: "dom_1" as never, organizationId: "org_1" as never })).rejects.toMatchObject({ code: "FORBIDDEN" });
         });
+
+        it("refuses to verify a domain whose project moved to a target that cannot serve it", async () => {
+            const { ctx } = makeCtx({
+                ...world(),
+                organizations: [{ _id: "org_1", plan: "free" }],
+                projects: [{ _id: "proj_1", organizationId: "org_1", target: "cloudflare-workers" }],
+            });
+
+            await expect(verifyTarget.handler(ctx, { id: "dom_1" as never, organizationId: "org_1" as never })).rejects.toMatchObject({
+                code: "BAD_REQUEST",
+                message: expect.stringContaining("custom domains are not available") as unknown,
+            });
+        });
     });
 
     it("are internal: a certificate is only released by the route that removes the domain", () => {
