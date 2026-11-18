@@ -1341,10 +1341,10 @@ export interface Caller {
         update: (args: { id: Id<"dashboards">; name?: unknown; organizationId: Id<"organizations">; panels?: Array<{ config: { filter?: string; metricName?: string; stat?: "last" | "first" | "count" }; id: string; kind: "metric" | "stat" | "traces" | "logs"; title: string }> }) => Promise<Id<"dashboards">>;
     };
     deploy_keys: {
-        ingestKeyCipher: (args: { deployKey?: unknown; organizationId: Id<"organizations"> }) => Promise<null | { ciphertext: string; iv: string }>;
+        ingestKeyCipher: (args: { deployKey?: unknown; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<null | { ciphertext: string; iv: string }>;
         issue: (args: { capability?: "deploy" | "ingest"; name: unknown; organizationId: Id<"organizations">; projectId?: Id<"projects">; type: "production" | "dev" | "preview" }) => Promise<{ id: Id<"deployKeys">; key: string; }>;
         list: (args: { organizationId: Id<"organizations"> }) => Promise<{ _id: Id<"deployKeys">; capability?: "deploy" | "ingest"; createdAt: number; lastUsedAt?: number; name: string; organizationId: Id<"organizations">; projectId?: Id<"projects">; revokedAt?: number; type: "dev" | "preview" | "production" }[]>;
-        recordIngestKey: (args: { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }) => Promise<{ ciphertext: string; iv: string }>;
+        recordIngestKey: (args: { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<{ ciphertext: string; iv: string }>;
         recordInstallKey: (args: { hashedKey: unknown; installId: Id<"catalogInstalls">; organizationId: Id<"organizations">; projectId: Id<"projects"> }) => Promise<Id<"deployKeys">>;
         recordReleaseKey: (args: { buildId: Id<"builds">; hashedKey: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; type: "production" | "preview" }) => Promise<Id<"deployKeys">>;
         removeInstallKey: (args: { id: Id<"deployKeys">; installId: Id<"catalogInstalls"> }) => Promise<void>;

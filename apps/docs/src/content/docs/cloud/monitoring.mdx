@@ -113,8 +113,10 @@ Deploy keys have a **capability**:
   **rejected by the deploy and admin paths**, so a leaked ingest token can't ship
   code.
 
-The platform mints one ingest key per org and injects it as `LUNORA_OTLP_TOKEN` at
-deploy time. You never handle it directly for your own apps.
+The platform mints one ingest key per project and injects it as `LUNORA_OTLP_TOKEN`
+at deploy time. It sends telemetry for that project only, so code shipped with a
+project-scoped deploy key cannot write as a sibling project. You never handle it
+directly for your own apps.
 
 ## Bring your own OpenTelemetry
 

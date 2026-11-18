@@ -89,7 +89,7 @@ export interface ReleaseDeps {
      * to deploy without telemetry (everything still works). Best-effort: a throw
      * is swallowed and the deploy proceeds untelemetered.
      */
-    resolveTelemetry?: (input: { key?: string; organizationId: string }) => Promise<DeployTelemetry | undefined>;
+    resolveTelemetry?: (input: { key?: string; organizationId: string; projectId: string }) => Promise<DeployTelemetry | undefined>;
 }
 
 /** The telemetry wiring injected into a tenant deploy, when the cell resolved any. */
@@ -179,7 +179,10 @@ const buildDeploymentSpec = (input: {
 };
 
 /** Best-effort telemetry: a failure here must never fail a deploy, so the tenant just ships untelemetered. */
-const resolveTelemetrySafely = async (deps: ReleaseDeps, input: { key?: string; organizationId: string }): Promise<DeployTelemetry | undefined> => {
+const resolveTelemetrySafely = async (
+    deps: ReleaseDeps,
+    input: { key?: string; organizationId: string; projectId: string },
+): Promise<DeployTelemetry | undefined> => {
     try {
         return await deps.resolveTelemetry?.(input);
     } catch {
@@ -229,7 +232,7 @@ export const resolveReleaseSpec = async (input: ReleaseSpecInput, deps: ReleaseD
         organizationId,
         projectId, // secret-scanner:allow -- domain field name
         runtime: input.runtime ?? "lunora",
-        telemetry: await resolveTelemetrySafely(deps, { key, organizationId }),
+        telemetry: await resolveTelemetrySafely(deps, { key, organizationId, projectId }),
         tenantSecrets,
     });
 };

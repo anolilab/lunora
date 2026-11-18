@@ -6,7 +6,7 @@
  * tail consumer, on `cloudflare-wfp`) is the target driver's business.
  *
  * Lives here — not inline in the router factory — because it is key-lifecycle +
- * crypto business logic, not HTTP wiring: one `ingest`-capability key per org,
+ * crypto business logic, not HTTP wiring: one `ingest`-capability key per project,
  * its plaintext stored envelope-encrypted so it can be re-injected on every
  * deploy without re-minting (only the hash is ever checked at ingest time).
  *
@@ -47,16 +47,16 @@ const mintIngestKey = async (encryptionKey: string, organizationId: string): Pro
 };
 
 /**
- * Resolve (get-or-create) the org's ingest token and return the tenant telemetry
- * config, or `undefined` when telemetry isn't configured (no ingest endpoint or
- * no master key → deploy untelemetered). The mutation returns the **effective**
- * cipher (race-safe against a concurrent deploy), so the injected token's hash is
- * always the stored one.
+ * Resolve (get-or-create) the project's ingest token and return the tenant
+ * telemetry config, or `undefined` when telemetry isn't configured (no ingest
+ * endpoint or no master key → deploy untelemetered). The mutation returns the
+ * **effective** cipher (race-safe against a concurrent deploy), so the injected
+ * token's hash is always the stored one.
  */
 export const resolveTelemetryConfig = async (
     context: IngestKeyContext,
     env: IngestKeyEnv,
-    input: { key?: string; organizationId: string },
+    input: { key?: string; organizationId: string; projectId: string },
 ): Promise<TelemetryConfig | undefined> => {
     const endpoint = env.LUNORA_OTLP_ENDPOINT;
     const encryptionKey = env.SECRET_ENCRYPTION_KEY;
@@ -68,6 +68,7 @@ export const resolveTelemetryConfig = async (
     const existing = await context.runQuery<CipherEnvelope | null>(internal.deploy_keys.ingestKeyCipher, {
         deployKey: input.key,
         organizationId: input.organizationId,
+        projectId: input.projectId,
     });
 
     let cipher: CipherEnvelope;
@@ -75,9 +76,9 @@ export const resolveTelemetryConfig = async (
     if (existing) {
         cipher = existing;
     } else if (input.key === undefined) {
-        // A session caller (the studio's rollback) cannot mint the org's ingest
-        // key — minting is bound to a deploy key. An org with no key has never
-        // deployed with telemetry, so there is nothing to re-inject.
+        // A session caller (the studio's rollback) cannot mint the project's
+        // ingest key — minting is bound to a deploy key. A project with no key has
+        // not deployed with telemetry since keys became per project.
         return undefined;
     } else {
         // Mint an `ingest`-capability key (telemetry-only — can't deploy), store it
@@ -89,6 +90,7 @@ export const resolveTelemetryConfig = async (
             encryptedSecret,
             hashedKey,
             organizationId: input.organizationId,
+            projectId: input.projectId,
         });
     }
 
@@ -98,9 +100,10 @@ export const resolveTelemetryConfig = async (
 /**
  * The telemetry config a box's `lunora-hostd` forwards its own logs with
  * (protocol §5.2 `config`): this cell's OTLP endpoint and the box
- * organization's ingest key — the same pair a tenant gets — or `undefined`
- * when the cell has no telemetry configured. An organization without an ingest
- * key yet gets one, minted exactly as the deploy path mints it.
+ * organization's ingest key, or `undefined` when the cell has no telemetry
+ * configured. With `projectId` — a halted tenant resumed onto its release — it
+ * is that project's key instead, the one its deploy injects. A key not minted
+ * yet is minted exactly as the deploy path mints it.
  *
  * The box session runs in a trusted system context with the store in hand and
  * no deploy key to authorize `recordIngestKey` with, so it reads and writes the
@@ -113,6 +116,7 @@ export const resolveBoxTelemetryConfig = async (
     env: IngestKeyEnv,
     organizationId: string,
     now: number,
+    projectId?: string,
 ): Promise<TelemetryConfig | undefined> => {
     const endpoint = env.LUNORA_OTLP_ENDPOINT;
     const encryptionKey = env.SECRET_ENCRYPTION_KEY;
@@ -124,7 +128,7 @@ export const resolveBoxTelemetryConfig = async (
     const activeCipher = async (): Promise<CipherEnvelope | undefined> => {
         const { page } = await database.findMany("deployKeys", { where: { organizationId } });
 
-        return findActiveIngestKey(page as IngestKeyRow[])?.encryptedSecret ?? undefined;
+        return findActiveIngestKey(page as IngestKeyRow[], projectId)?.encryptedSecret ?? undefined;
     };
 
     let cipher = await activeCipher();
@@ -132,7 +136,7 @@ export const resolveBoxTelemetryConfig = async (
     if (cipher === undefined) {
         const { encryptedSecret, hashedKey } = await mintIngestKey(encryptionKey, organizationId);
 
-        await database.insert("deployKeys", ingestKeyRow({ createdAt: now, encryptedSecret, hashedKey, organizationId }));
+        await database.insert("deployKeys", ingestKeyRow({ createdAt: now, encryptedSecret, hashedKey, organizationId, projectId }));
         cipher = (await activeCipher()) ?? encryptedSecret;
     }
 

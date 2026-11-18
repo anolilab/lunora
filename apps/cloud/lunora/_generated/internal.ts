@@ -60,8 +60,8 @@ export interface InternalApiTypes {
         assertAlertsManager: FunctionReference<"query", { organizationId: Id<"organizations"> }, null>;
     };
     deploy_keys: {
-        ingestKeyCipher: FunctionReference<"query", { deployKey?: unknown; organizationId: Id<"organizations"> }, null | { ciphertext: string; iv: string }>;
-        recordIngestKey: FunctionReference<"mutation", { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations"> }, { ciphertext: string; iv: string }>;
+        ingestKeyCipher: FunctionReference<"query", { deployKey?: unknown; organizationId: Id<"organizations">; projectId: Id<"projects"> }, null | { ciphertext: string; iv: string }>;
+        recordIngestKey: FunctionReference<"mutation", { deployKey: unknown; encryptedSecret: { ciphertext: unknown; iv: unknown }; hashedKey: unknown; organizationId: Id<"organizations">; projectId: Id<"projects"> }, { ciphertext: string; iv: string }>;
         recordInstallKey: FunctionReference<"mutation", { hashedKey: unknown; installId: Id<"catalogInstalls">; organizationId: Id<"organizations">; projectId: Id<"projects"> }, Id<"deployKeys">>;
         recordReleaseKey: FunctionReference<"mutation", { buildId: Id<"builds">; hashedKey: unknown; organizationId: Id<"organizations">; projectId: Id<"projects">; type: "production" | "preview" }, Id<"deployKeys">>;
         removeInstallKey: FunctionReference<"mutation", { id: Id<"deployKeys">; installId: Id<"catalogInstalls"> }, void>;

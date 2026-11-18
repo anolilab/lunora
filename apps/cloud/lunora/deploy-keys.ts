@@ -272,25 +272,28 @@ interface CipherEnvelope {
 }
 
 /**
- * The org's platform-managed ingest key ciphertext, for the deploy path to
- * re-inject into a tenant's `otlpSink`. Deploy-key authorized (the caller is a
- * live deploy holding the org's deploy key), or an owner/admin session for the
- * studio's rollback — the same roles that may roll back. Returns the envelope only — never
- * plaintext — or `null` when the org has no ingest key yet. The cipher is inert
- * without the master key, so exposing it to the deploy edge is safe.
+ * A project's platform-managed ingest key ciphertext, for the deploy path to
+ * re-inject into the tenant's `otlpSink`. Deploy-key authorized for that
+ * project (the caller is a live deploy of it), or an owner/admin session for
+ * the studio's rollback — the same roles that may roll back. Returns the
+ * envelope only — never plaintext — or `null` when the project has no ingest
+ * key yet. The cipher is inert without the master key, so exposing it to the
+ * deploy edge is safe.
  */
 export const ingestKeyCipher = internalQuery
     .input({
         // Absent for the studio's rollback, which runs under an owner/admin session.
         deployKey: v.optional(boundedString(LIMITS.token)),
         organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
     })
-    .query(async ({ ctx: context, args: { deployKey, organizationId } }): Promise<CipherEnvelope | null> => {
-        await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, "org-wide") : assertMember(context, organizationId, ["owner", "admin"]));
+    .query(async ({ ctx: context, args: { deployKey, organizationId, projectId } }): Promise<CipherEnvelope | null> => {
+        await (deployKey ? authorizeDeployKey(context, organizationId, deployKey, projectId) : assertMember(context, organizationId, ["owner", "admin"]));
+        await assertRowInOrg(context, "projects", projectId, organizationId, "project");
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
 
-        return findActiveIngestKey(page)?.encryptedSecret ?? null;
+        return findActiveIngestKey(page, projectId)?.encryptedSecret ?? null;
     });
 
 /**
@@ -303,9 +306,8 @@ export const ingestKeyCipher = internalQuery
  * inputs — the token itself is minted at the EDGE, because envelope encryption
  * needs the master key, which a mutation cannot reach. As a public mutation that
  * meant the credential was whatever the caller said it was: anyone holding any
- * live deploy key for the org (including a single-project CI key, since this
- * authorizes `"org-wide"`) could register an org-wide telemetry credential whose
- * plaintext they chose. It authenticates every ingest path for the whole org,
+ * live deploy key for the project could register a telemetry credential whose
+ * plaintext they chose. It authenticates every ingest path for the project,
  * shows in the UI as "Telemetry ingest (auto)", and outlives revocation of the
  * key that created it. Only the deploy route mints these through here; a box's
  * session, a system context with no deploy key, writes the same row
@@ -320,18 +322,20 @@ export const recordIngestKey = internalMutation
         }),
         hashedKey: boundedString(LIMITS.name),
         organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
     })
-    .mutation(async ({ ctx: context, args: { deployKey, encryptedSecret, hashedKey, organizationId } }): Promise<CipherEnvelope> => {
-        await authorizeDeployKey(context, organizationId, deployKey, "org-wide");
+    .mutation(async ({ ctx: context, args: { deployKey, encryptedSecret, hashedKey, organizationId, projectId } }): Promise<CipherEnvelope> => {
+        await authorizeDeployKey(context, organizationId, deployKey, projectId);
+        await assertRowInOrg(context, "projects", projectId, organizationId, "project");
 
         const { page } = await context.db.deployKeys.findMany({ where: { organizationId } });
-        const existing = findActiveIngestKey(page);
+        const existing = findActiveIngestKey(page, projectId);
 
         if (existing?.encryptedSecret) {
             return existing.encryptedSecret; // a racing deploy already provisioned it
         }
 
-        await context.db.insert("deployKeys", ingestKeyRow({ createdAt: context.now, encryptedSecret, hashedKey, organizationId }));
+        await context.db.insert("deployKeys", ingestKeyRow({ createdAt: context.now, encryptedSecret, hashedKey, organizationId, projectId }));
 
         return encryptedSecret;
     });

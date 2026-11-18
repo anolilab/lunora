@@ -530,7 +530,7 @@ const sweepHalts = async (database: ControlPlaneStore, env: ControlPlaneEnv): Pr
         pacer: createDeployPacer(),
         read: storeRowReader(database),
         releases: createReleaseStore(env.RELEASES),
-        telemetry: async (organizationId) => resolveBoxTelemetryConfig(database, env, organizationId, now),
+        telemetry: async (organizationId, projectId) => resolveBoxTelemetryConfig(database, env, organizationId, now, projectId),
     };
     const result = await runHaltConverges(database, {
         alert: deployRuleAlert(database, now),

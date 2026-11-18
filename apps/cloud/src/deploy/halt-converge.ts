@@ -51,7 +51,7 @@ export interface HaltConvergeDeps {
     read: RowReader;
     releases: ReleaseStore;
     /** The telemetry a resumed tenant is wired to (`resolveBoxTelemetryConfig`), when the cell has any. */
-    telemetry?: (organizationId: string) => Promise<DeployTelemetry | undefined>;
+    telemetry?: (organizationId: string, projectId: string) => Promise<DeployTelemetry | undefined>;
 }
 
 type DeploymentRow = HaltDeploymentRow & StoredAdminToken & { cronSpecs?: null | string[] };
@@ -253,7 +253,12 @@ const storeReleaseDeps = (deps: HaltConvergeDeps, deployment: DeploymentRow, liv
         driverFor: (placement) => recordingDriver(deps.driverFor(placement), storeRecorder(deps.database)),
         pacer: deps.pacer,
         releases: deps.releases,
-        ...(deps.telemetry ? { resolveTelemetry: async ({ organizationId }: { organizationId: string }) => deps.telemetry?.(organizationId) } : {}),
+        ...(deps.telemetry
+            ? {
+                  resolveTelemetry: async ({ organizationId, projectId }: { organizationId: string; projectId: string }) =>
+                      deps.telemetry?.(organizationId, projectId),
+              }
+            : {}),
     };
 };
 
