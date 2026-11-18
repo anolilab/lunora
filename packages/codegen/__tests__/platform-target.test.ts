@@ -1399,6 +1399,18 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message).toContain("lunora/loader.ts (cloudflare:workers)");
         });
 
+        it.each([
+            ["module.require", "module", "module"],
+            ["a loader object's require", "loaders", "loaders.node"],
+        ])('refuses %s("cloudflare:workers"), whatever require is called on', (_label, declared, receiver) => {
+            expect.assertions(1);
+
+            // Node's own loader, or any object's: a method named require is taken as one, failing closed.
+            write("method.ts", `declare const ${declared}: any;\n\nexport const workers = ${receiver}.require("cloudflare:workers");\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/method.ts (cloudflare:workers)");
+        });
+
         it("refuses a call to the file's own function named require, failing closed until it is renamed", () => {
             expect.assertions(1);
 

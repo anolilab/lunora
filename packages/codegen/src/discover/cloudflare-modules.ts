@@ -65,13 +65,18 @@ const requireEqualsSpecifier = (declaration: ImportEqualsDeclaration): string | 
  * walk reaches loads with. Any callee spelled `require` counts, whatever binds it:
  * a loader made locally (`const require = createRequire(import.meta.url)`) loads
  * the module as surely as the global one, so this fails closed, and a local
- * function of that name that loads nothing is refused until it is renamed. A backtick literal with no substitutions is as static
- * as a quoted one.
+ * function of that name that loads nothing is refused until it is renamed. A method named
+ * `require` counts the same way, whatever it is called on: `module.require` is Node's own
+ * loader, and an object's `require` is assumed to be one. A backtick literal with no
+ * substitutions is as static as a quoted one.
  */
 const loadCallSpecifier = (call: CallExpression): string | undefined => {
     const callee = call.getExpression();
     const [argument] = call.getArguments();
-    const loads = callee.getKind() === SyntaxKind.ImportKeyword || (Node.isIdentifier(callee) && callee.getText() === "require");
+    const loads =
+        callee.getKind() === SyntaxKind.ImportKeyword ||
+        (Node.isIdentifier(callee) && callee.getText() === "require") ||
+        (Node.isPropertyAccessExpression(callee) && callee.getName() === "require");
 
     return loads && argument !== undefined && (Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument))
         ? argument.getLiteralValue()
