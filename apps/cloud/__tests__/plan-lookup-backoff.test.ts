@@ -123,13 +123,4 @@ describe("plan lookup failure backoff", () => {
 
         expect(fetch).toHaveBeenCalledTimes(2);
     });
-
-    it("bounds the lookup with the timeout only when a store is bound", async () => {
-        const fetch = vi.fn<typeof globalThis.fetch>().mockImplementation(down);
-        const resolve = createPlanResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch, now: () => T0 });
-
-        await resolve("acme-app");
-
-        expect(fetch.mock.calls[0]?.[1]?.signal).toBeUndefined();
-    });
 });

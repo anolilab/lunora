@@ -277,11 +277,11 @@ export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: 
 
         try {
             const url = `${options.controlPlaneUrl}/v1/tenants/plan?script=${encodeURIComponent(scriptName)}`;
-            // The timeout exists so a hung control plane reaches the stored fallback. Without a store there
-            // is no fallback to reach, so the lookup keeps its previous, unbounded behaviour.
+            // Bounded with or without a store: storeless, a hung control plane must still reach the isolate
+            // grace or a prompt refusal rather than holding the tenant request until the platform limit.
             const response = await fetchImpl(url, {
                 headers: { authorization: `Bearer ${options.controlPlaneToken}` },
-                ...(hasStore ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+                signal: AbortSignal.timeout(timeoutMs),
             });
 
             if (!response.ok) {

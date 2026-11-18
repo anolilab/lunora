@@ -284,6 +284,27 @@ describe("plan resolver: a lookup that hangs reaches the fallback", () => {
         expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
         expect(outcomes).toStrictEqual(["served"]);
     });
+
+    it("aborts a hung lookup with no store bound and refuses promptly", async () => {
+        const fetchMock = vi.fn<typeof globalThis.fetch>(
+            (_url, init) =>
+                new Promise<Response>((_resolve, reject) => {
+                    init?.signal?.addEventListener("abort", () => {
+                        reject(new Error("aborted by the lookup timeout"));
+                    });
+                }),
+        );
+        const resolve = createPlanResolver({
+            controlPlaneToken: "t",
+            controlPlaneUrl: "https://cp",
+            fetch: fetchMock,
+            lookupTimeoutMs: 10,
+            now: () => T0,
+        });
+
+        await expect(resolve("acme-app")).resolves.toStrictEqual({ plan: UNAVAILABLE_PLAN });
+        expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+    });
 });
 
 describe("plan resolver: a newer isolate verdict beats an older stored record", () => {
