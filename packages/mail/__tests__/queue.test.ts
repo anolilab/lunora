@@ -1,3 +1,4 @@
+import { createElement } from "react";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import createMailer from "../src/create-mailer";
@@ -46,6 +47,33 @@ const noopMailer = (): Mailer => {
 };
 
 describe("queued send content", () => {
+    it("refuses a react element whose explicit empty html and text win over its render, at enqueue", async () => {
+        expect.assertions(2);
+
+        const { messages, queue } = captureQueue();
+        const { transport } = captureTransport();
+        const mailer = createMailer({ from: "noreply@x.test", queue, transport });
+        // `html: ""` is kept over the render (`??`), so nothing would be sent: react alone is no content.
+        const error = await mailer
+            .queue({ html: "", react: createElement("p", null, "Hi"), subject: "Hi", text: "", to: "a@x.test" })
+            .catch((error_: unknown) => error_);
+
+        expect(String(error)).toMatch(/needs `text` or `html`/u);
+        expect(messages).toStrictEqual([]);
+    });
+
+    it("queues a react element's render when no html or text is given", async () => {
+        expect.assertions(1);
+
+        const { messages, queue } = captureQueue();
+        const { transport } = captureTransport();
+        const mailer = createMailer({ from: "noreply@x.test", queue, transport });
+
+        await mailer.queue({ react: createElement("p", null, "Hi"), subject: "Hi", to: "a@x.test" });
+
+        expect(messages[0]?.html).toContain("Hi");
+    });
+
     it.each([
         ["a number as html", { html: 42 }, /`html` must be a string, got number/u],
         ["an object as text", { text: { body: "Hi" } }, /`text` must be a string, got object/u],
