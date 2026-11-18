@@ -1531,14 +1531,17 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message).toContain("lunora/blocked/entry.tsx (cloudflare:workers)");
         });
 
-        it("starts from the composed worker entry src/worker.ts, outside lunora/", () => {
+        it("does not refuse a src/server/ helper the worker entry never imports", () => {
             expect.assertions(1);
 
-            // The file `lunora deploy` bundles in place of `main`; the walk had seeded from lunora/ alone.
-            mkdirSync(join(workdir, "src"));
-            writeFileSync(join(workdir, "src", "worker.ts"), LOADS_ENV, "utf8");
+            // Unreachable from the entry, so not in the bundle; the walk had seeded all of src/server/.
+            mkdirSync(join(workdir, "src", "server"), { recursive: true });
+            writeFileSync(join(workdir, "src", "server.ts"), "export default { fetch: () => new Response() };\n", "utf8");
+            writeFileSync(join(workdir, "src", "server", "helper.ts"), LOADS_ENV, "utf8");
 
-            expect(cloudflareRefusals()[0]?.message).toContain("src/worker.ts (cloudflare:workers)");
+            const { platformDiagnostics } = runCodegen({ projectRoot: workdir, workerEntry: join(workdir, "src", "server.ts"), wranglerQueueProducers: [] });
+
+            expect(platformDiagnostics.filter((entry) => entry.message.includes("cloudflare:"))).toStrictEqual([]);
         });
 
         it("starts from a custom worker entry the caller passes from wrangler's main", () => {

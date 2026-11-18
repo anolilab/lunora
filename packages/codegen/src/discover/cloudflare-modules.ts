@@ -4,7 +4,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { CallExpression, ImportDeclaration, ImportEqualsDeclaration, SourceFile } from "ts-morph";
 import { Node, Project, SyntaxKind, ts } from "ts-morph";
 
-import { descendantsOfKind, listSecurityScanFiles } from "./ast";
+import { descendantsOfKind, listLunoraSourceFiles } from "./ast";
 
 /** The scheme of the Workers runtime's built-in modules: `cloudflare:workers`, `cloudflare:email`, `cloudflare:sockets`, … */
 const CLOUDFLARE_SCHEME = "cloudflare:";
@@ -334,13 +334,13 @@ const discoverCloudflareModuleImports = (project: Project, lunoraDirectory: stri
     // The lister leaves out the root `schema.ts`, which `discoverSchema` reads on its own, but
     // the generated shard imports it, so it and whatever it imports are in the bundle too.
     const rootSchema = join(lunoraDirectory, "schema.ts");
-    // The walk starts from everything the worker bundle is built from: the `lunora/` modules,
-    // the worker entry in its conventional places (`src/server`, `src/index.ts`, and the
-    // composed `src/worker.ts`) with `lunora.config.*`, which is the security lints' set, the
-    // root schema, and a wrangler `main` elsewhere when the caller knows one.
+    // The walk starts where the bundle does: the `lunora/` modules, the root schema, and the one
+    // worker entry the caller resolved. Anything else reaches the bundle only through an import
+    // from those, so a file nothing imports (an unused `main`, a helper beside the entry) is not
+    // judged.
     const pending = [
         ...new Set([
-            ...listSecurityScanFiles(lunoraDirectory).map((file) => file.filePath),
+            ...listLunoraSourceFiles(lunoraDirectory),
             ...[rootSchema, ...(workerEntry === undefined ? [] : [workerEntry])].filter((file) => isFile(file)),
         ]),
     ];

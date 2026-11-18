@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { runCodegen } from "@lunora/codegen";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { wranglerCodegenInputs } from "../src/cloudflare/wrangler-codegen-inputs";
@@ -38,18 +39,6 @@ describe("wranglerCodegenInputs — wranglerQueueProducers", () => {
             { binding: "QUEUE_JOBS", queue: "jobs" },
             { binding: "QUEUE_JOBS", env: "preview", queue: "jobs-preview" },
         ]);
-    });
-
-    it("passes wrangler's main on as the worker entry, resolved against the wrangler file's directory", () => {
-        expect.assertions(2);
-
-        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "main": "worker/main.ts" }`);
-
-        expect(wranglerCodegenInputs(root).workerEntry).toBe(join(root, "worker", "main.ts"));
-
-        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app" }`);
-
-        expect(wranglerCodegenInputs(root).workerEntry).toBeUndefined();
     });
 
     it("ignores a producers value that is not an array", () => {
@@ -114,5 +103,83 @@ describe("wranglerCodegenInputs — spaAssetsBindings", () => {
         writeFileSync(join(root, "wrangler.jsonc"), '{ "name": "app", "assets": { "not_found_handling": "single-page-application" } }', "utf8");
 
         expect(wranglerCodegenInputs(root).spaAssetsBindings).toBeUndefined();
+    });
+});
+
+describe("wranglerCodegenInputs — workerEntry", () => {
+    const LOADS_ENV = `import { env } from "cloudflare:workers";\n\nexport const binding = () => env;\n`;
+    const HANDLER = "export default { fetch: () => new Response() };\n";
+    let root: string;
+
+    beforeEach(() => {
+        root = mkdtempSync(join(tmpdir(), "lunora-wrangler-worker-entry-"));
+        mkdirSync(join(root, "lunora"));
+        writeFileSync(
+            join(root, "lunora", "schema.ts"),
+            `import { defineSchema, defineTable, v } from "@lunora/server";\n\nexport default defineSchema({ todos: defineTable({ text: v.string() }) });\n`,
+        );
+    });
+
+    afterEach(() => {
+        rmSync(root, { force: true, recursive: true });
+    });
+
+    const source = (path: string, text: string): void => {
+        mkdirSync(join(root, path, ".."), { recursive: true });
+        writeFileSync(join(root, path), text);
+    };
+
+    /** The cloudflare: refusals a node build of the project gets from codegen, fed the same way every caller feeds it. */
+    const cloudflareRefusals = (): string[] =>
+        runCodegen({ dryRun: true, projectRoot: root, target: "node", ...wranglerCodegenInputs(root, "node") })
+            .platformDiagnostics.map((entry) => entry.message)
+            .filter((message) => message.includes("cloudflare:"));
+
+    it("is wrangler's main when it names a file", () => {
+        expect.assertions(1);
+
+        source("worker/main.ts", HANDLER);
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "main": "worker/main.ts" }`);
+
+        expect(wranglerCodegenInputs(root).workerEntry).toBe(join(root, "worker", "main.ts"));
+    });
+
+    it("falls back to src/server.ts with no main, and codegen refuses its cloudflare: import on node", () => {
+        expect.assertions(2);
+
+        source("src/server.ts", LOADS_ENV);
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app" }`);
+
+        expect(wranglerCodegenInputs(root).workerEntry).toBe(join(root, "src", "server.ts"));
+        expect(cloudflareRefusals().join("\n")).toContain("src/server.ts (cloudflare:workers)");
+    });
+
+    it("falls back to src/server.ts with no wrangler config at all", () => {
+        expect.assertions(1);
+
+        source("src/server.ts", HANDLER);
+
+        expect(wranglerCodegenInputs(root).workerEntry).toBe(join(root, "src", "server.ts"));
+    });
+
+    it("is the composed src/worker.ts over an unused main, whose cloudflare: import is not refused", () => {
+        expect.assertions(2);
+
+        // `lunora deploy` bundles src/worker.ts in place of main, so main never reaches the bundle.
+        source("src/worker.ts", HANDLER);
+        source("worker/main.ts", LOADS_ENV);
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "main": "worker/main.ts" }`);
+
+        expect(wranglerCodegenInputs(root).workerEntry).toBe(join(root, "src", "worker.ts"));
+        expect(cloudflareRefusals()).toStrictEqual([]);
+    });
+
+    it("is absent for the composed virtual:lunora/worker entry", () => {
+        expect.assertions(1);
+
+        source("src/index.ts", LOADS_ENV);
+        writeFileSync(join(root, "wrangler.jsonc"), `{ "name": "app", "main": "virtual:lunora/worker" }`);
+
+        expect(wranglerCodegenInputs(root).workerEntry).toBeUndefined();
     });
 });

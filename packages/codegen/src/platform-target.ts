@@ -607,6 +607,25 @@ const undeclaredSignalDiagnostic = (key: keyof PlatformSignals, matrix: Platform
  * passes answer different questions off different inputs, and only the shared
  * `reported` set couples them.
  */
+/** Whether `matrix` refuses `cloudflare:*` imports: rated `unsupported`, or not rated at all (fail closed). */
+const refusesCloudflareModules = (matrix: PlatformCapabilities): boolean => {
+    const level = matrix.features.cloudflareModules?.level;
+
+    return level === undefined || level === "unsupported";
+};
+
+/**
+ * Whether codegen has to walk the app's imports for `cloudflare:*` built-ins on
+ * `target`: only where the gate would refuse one. Everywhere else the walk's
+ * result is never read, and it parses the whole worker graph on every run,
+ * watch-mode rebuilds included.
+ */
+const needsCloudflareModuleWalk = (target: string): boolean => {
+    const matrix = PLATFORM_MATRICES[target];
+
+    return matrix !== undefined && refusesCloudflareModules(matrix);
+};
+
 const gateSignalPass = (context: {
     diagnostics: PlatformDiagnostic[];
     gatedSignals: PlatformSignals;
@@ -729,10 +748,9 @@ const gateAgainstMatrix = (usage: FeatureUsage, matrix: PlatformCapabilities, ta
     }
 
     const cloudflareImports = signals.cloudflareModuleImports ?? [];
-    const cloudflareModulesLevel = matrix.features.cloudflareModules?.level;
 
-    if (cloudflareImports.length > 0 && (cloudflareModulesLevel === undefined || cloudflareModulesLevel === "unsupported")) {
-        diagnostics.push(cloudflareModulesDiagnostic(matrix, target, cloudflareImports, cloudflareModulesLevel));
+    if (cloudflareImports.length > 0 && refusesCloudflareModules(matrix)) {
+        diagnostics.push(cloudflareModulesDiagnostic(matrix, target, cloudflareImports, matrix.features.cloudflareModules?.level));
     }
 
     return { diagnostics, liveStreamsWithheld, signals: gatedSignals, usage: gated };
@@ -837,6 +855,7 @@ export {
     gateAgainstMatrix,
     gatePlatformFeatures,
     liveStreamsDeliveryAuthorizationDiagnostic,
+    needsCloudflareModuleWalk,
     platformFeatureAvailable,
     platformMatrixIds,
     readProjectTarget,
