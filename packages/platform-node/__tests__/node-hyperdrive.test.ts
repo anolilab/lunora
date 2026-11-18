@@ -7,7 +7,7 @@ describe(createNodeHyperdrive, () => {
         expect.assertions(1);
 
         // eslint-disable-next-line no-secrets/no-secrets -- a fixture URL with a dummy password, percent-encoded to test decoding
-        const url = "postgres://app%40corp:p%2Fss@db.internal:6543/orders%20db?sslmode=require";
+        const url = "postgres://app%40corp:p%2Fss@db.internal:6543/orders%20db?application_name=orders";
 
         expect(createNodeHyperdrive(url)).toStrictEqual({
             connectionString: url,
@@ -102,6 +102,30 @@ describe(createNodeHyperdrive, () => {
             expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.not.stringContaining("db%ZZ") }),
         );
     });
+
+    it.each([
+        ["postgres://u@h/db?sslmode=require", "sslmode"],
+        ["postgres://u@h/db?sslmode=verify-full&sslrootcert=/etc/ca.pem", "sslmode, sslrootcert"],
+        ["postgres://u@h/db?ssl=true", "ssl"],
+        ["mysql://u@h/db?ssl-mode=REQUIRED", "ssl-mode"],
+    ])("refuses the discrete fields of %s, which cannot carry its TLS requirement", (url, names) => {
+        expect.assertions(3);
+
+        const binding = createNodeHyperdrive(url);
+
+        expect(binding.connectionString).toBe(url);
+        expect(() => binding.host).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR", message: expect.stringContaining(`sets ${names},`) }));
+        expect(() => binding.port).toThrow(/connectionString/u);
+    });
+
+    it.each(["postgres://u@h/db?sslmode=disable", "postgres://u@h/db?sslmode=prefer", "postgres://u@h/db?ssl=false", "mysql://u@h/db?ssl-mode=PREFERRED"])(
+        "keeps the discrete fields of %s, whose TLS setting requires nothing",
+        (url) => {
+            expect.assertions(1);
+
+            expect(createNodeHyperdrive(url).host).toBe("h");
+        },
+    );
 
     it("takes a Postgres Unix socket directory from the host query parameter", () => {
         expect.assertions(2);

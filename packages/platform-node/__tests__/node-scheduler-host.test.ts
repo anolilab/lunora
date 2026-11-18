@@ -8,6 +8,58 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createNodeSchedulerHost } from "../src/node-scheduler-host";
 import { createNodeShardHost } from "../src/node-shard-host";
 
+const CRON_ROW_READ = "SELECT * FROM _lunora_scheduler_crons WHERE key = ?";
+
+/** Forward every member of `target` except `override`'s, binding methods to `target`. */
+const forwardExcept = <T extends object>(target: T, override: PropertyKey, replacement: unknown): T =>
+    new Proxy(target, {
+        get(inner, name) {
+            if (name === override) {
+                return replacement;
+            }
+
+            const value: unknown = Reflect.get(inner, name, inner);
+
+            return typeof value === "function" ? (value as (...args: unknown[]) => unknown).bind(inner) : value;
+        },
+    });
+
+/**
+ * `database`, with the per-key cron row read throwing while `failNext` has
+ * failures left: a stand-in for a SQLite error (a locked or corrupt file) on the
+ * scheduler's timer path.
+ */
+const withFailingCronRead = (database: Database.Database): { database: Database.Database; failNext: (count: number) => void } => {
+    let failures = 0;
+
+    const prepare = (source: string): Database.Statement => {
+        const statement = database.prepare(source);
+
+        if (source !== CRON_ROW_READ) {
+            return statement;
+        }
+
+        const get = (...values: unknown[]): unknown => {
+            if (failures > 0) {
+                failures -= 1;
+
+                throw new Error("SQLITE_BUSY: database is locked");
+            }
+
+            return statement.get(...values);
+        };
+
+        return forwardExcept(statement, "get", get);
+    };
+
+    return {
+        database: forwardExcept(database, "prepare", prepare),
+        failNext: (count) => {
+            failures = count;
+        },
+    };
+};
+
 describe("createNodeSchedulerHost", () => {
     afterEach(() => {
         vi.useRealTimers();
@@ -247,6 +299,104 @@ describe("createNodeSchedulerHost", () => {
             } finally {
                 host.dispose();
                 database.close();
+                error.mockRestore();
+            }
+        });
+
+        it("re-arms from a changed expression instead of firing the new job on the old timer", async () => {
+            expect.assertions(2);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const database = new Database(":memory:");
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:x", name: "x" }]);
+                // Another process moves the job from every minute to daily at 09:00 UTC.
+                database.prepare("UPDATE _lunora_scheduler_crons SET expression = '0 9 * * *' WHERE key = 'declared:x'").run();
+                await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+
+                expect(onDispatch).not.toHaveBeenCalled();
+
+                await vi.advanceTimersByTimeAsync(20 * 60 * 60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+            } finally {
+                host.dispose();
+                database.close();
+            }
+        });
+
+        it("logs and re-arms when the row read before a tick throws, instead of crashing the timer", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const real = new Database(":memory:");
+            const { database, failNext } = withFailingCronRead(real);
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                },
+            });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:x", name: "x" }]);
+                failNext(1);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(error.mock.calls[0]?.[0]).toContain("could not read its row before the tick");
+
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(1);
+                expect(error).toHaveBeenCalledTimes(1);
+            } finally {
+                host.dispose();
+                real.close();
+                error.mockRestore();
+            }
+        });
+
+        it("logs and re-arms when settling a tick throws, so the job never goes quiet", async () => {
+            expect.assertions(3);
+
+            vi.useFakeTimers({ now: new Date("2026-11-01T12:00:30Z") });
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const real = new Database(":memory:");
+            const { database, failNext } = withFailingCronRead(real);
+            const onDispatch = vi.fn<(functionPath: string) => void>();
+            const host = createNodeSchedulerHost(database, {
+                onDispatch: async (functionPath) => {
+                    onDispatch(functionPath);
+                    // The pre-dispatch read already happened; fail the one after the dispatch.
+                    failNext(1);
+                },
+            });
+
+            try {
+                host.declareCrons([{ args: {}, expression: "* * * * *", functionPath: "reports:x", name: "x" }]);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(error.mock.calls[0]?.[0]).toContain("could not read its row after its tick");
+
+                failNext(0);
+                await vi.advanceTimersByTimeAsync(60 * 1000);
+
+                expect(onDispatch).toHaveBeenCalledTimes(2);
+                expect(error.mock.calls[0]?.[0]).toContain("next run: 2026-11-01T12:02:00.000Z");
+            } finally {
+                host.dispose();
+                real.close();
                 error.mockRestore();
             }
         });

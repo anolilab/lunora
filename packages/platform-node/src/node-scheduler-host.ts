@@ -666,8 +666,9 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
      * onto the same far-future target — an unbounded ~1 ms dispatch loop for a
      * schedule that should fire once a month.
      */
-    // Assigned below: `settleCronTick` and `armCron` call each other.
+    // Assigned below: `settleCronTick`, `recoverCron` and `armCron` call each other.
     let settleCronTick: (row: CronRow, scheduledFor: number, failure: { error: unknown } | undefined) => void;
+    let recoverCron: (row: CronRow, what: string, error: unknown) => number | undefined;
 
     /** Arm `row`'s next tick and return when it is due, or `undefined` when nothing was armed. */
     const armCron = (row: CronRow): number | undefined => {
@@ -716,8 +717,17 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             }
 
             // Re-read before dispatching: another process passing `crons` may have
-            // removed or changed this job since it was armed.
-            const current = selectCron.get(row.key);
+            // removed or changed this job since it was armed. Inside a handler:
+            // a throw from a timer callback would take the process down.
+            let current: CronRow | undefined;
+
+            try {
+                current = selectCron.get(row.key);
+            } catch (error) {
+                recoverCron(row, `could not read its row before the tick due ${new Date(nextAt).toISOString()}, so that tick was skipped`, error);
+
+                return;
+            }
 
             if (current === undefined) {
                 settleCronTick(row, nextAt, undefined);
@@ -725,13 +735,23 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                 return;
             }
 
+            // This timer was armed for the old schedule; firing the new job on it
+            // would run it early (an every-minute timer firing a daily job).
+            if (current.expression !== row.expression) {
+                armCron(current);
+
+                return;
+            }
+
+            const dispatched = current;
+
             runningCrons.add(row.key);
 
             (async (): Promise<void> => {
                 let failure: { error: unknown } | undefined;
 
                 try {
-                    await options.onDispatch?.(current.function_path, deserialize(current.args) as Record<string, unknown>, {
+                    await options.onDispatch?.(dispatched.function_path, deserialize(dispatched.args) as Record<string, unknown>, {
                         attempts: 0,
                         // Per tick: a shard dedups replays on this id, so a constant one would run only the first tick of each day.
                         id: `${row.key}:${String(nextAt)}`,
@@ -744,16 +764,28 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
                     runningCrons.delete(row.key);
                 }
 
-                settleCronTick(current, nextAt, failure);
-            })().catch(() => {
-                // Unreachable — the body catches its own dispatch failure —
-                // but an unhandled rejection here would take the process down.
+                settleCronTick(dispatched, nextAt, failure);
+            })().catch((error: unknown) => {
+                // `settleCronTick` handles its own database failures, so this is a
+                // last resort; it still must not leave the job quiet.
+                recoverCron(dispatched, "failed to settle its tick", error);
             });
         }, delay);
 
         cronTimers.set(row.key, timer);
 
         return nextAt;
+    };
+
+    recoverCron = (row, what, error) => {
+        // A closed connection is shutdown, not a fault: re-arming would only fail again.
+        const nextRun = closed || !isOpen() ? undefined : armCron(row);
+        const next = nextRun === undefined ? "none scheduled, the scheduler is closed" : new Date(nextRun).toISOString();
+
+        // eslint-disable-next-line no-console -- the package logs host-side failures to the console; without this the job would go quiet
+        console.error(`[@lunora/platform-node] cron ${describeCron(row)} ${what}; re-armed from its last known definition, next run: ${next}`, error);
+
+        return nextRun;
     };
 
     settleCronTick = (row, scheduledFor, failure) => {
@@ -765,11 +797,19 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
         if (!closed && isOpen()) {
             // Re-read rather than re-arm `row`: `declareCrons` may have removed
             // or changed this cron while the tick was in flight.
-            const current = selectCron.get(row.key);
+            let current: CronRow | undefined;
+            let readFailed = false;
+
+            try {
+                current = selectCron.get(row.key);
+            } catch (error) {
+                readFailed = true;
+                nextRun = recoverCron(row, "could not read its row after its tick", error);
+            }
 
             if (current !== undefined) {
                 nextRun = armCron(current);
-            } else if (declaredKeys.has(row.key)) {
+            } else if (!readFailed && declaredKeys.has(row.key)) {
                 declaredKeys.delete(row.key);
                 // eslint-disable-next-line no-console -- the package logs host-side failures to the console; nothing else would show that this cron stopped
                 console.warn(

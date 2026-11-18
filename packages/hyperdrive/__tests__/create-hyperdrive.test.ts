@@ -30,6 +30,19 @@ describe("createHyperdrive", () => {
         expect(connectionString).toBe("postgres://app:secret@hyperdrive.local:5432/appdb"); // gitleaks:allow -- test fixture connection string, not a real secret
     });
 
+    it("does not read the discrete fields when only the connection string is used", () => {
+        expect.assertions(1);
+
+        // A host may refuse its discrete fields (the Node binding does for a URL that requires TLS).
+        const refusing = Object.defineProperty({ ...fakeBinding() }, "host", {
+            get: () => {
+                throw new Error("discrete fields refused");
+            },
+        });
+
+        expect(createHyperdrive(refusing).connectionString).toBe("postgres://app:secret@hyperdrive.local:5432/appdb"); // gitleaks:allow -- test fixture connection string, not a real secret
+    });
+
     it("lifts the discrete connection parts into config", () => {
         expect.assertions(1);
 

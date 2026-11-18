@@ -50,15 +50,21 @@ import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, Post
  * @returns The raw `connectionString` plus the discrete connection parts.
  */
 export const createHyperdrive = (binding: HyperdriveLike): { config: HyperdriveConnection; connectionString: string } => {
-    const config: HyperdriveConnection = {
-        database: binding.database,
-        host: binding.host,
-        password: binding.password,
-        port: binding.port,
-        user: binding.user,
+    return {
+        // Read on access, not up front: a host may refuse its discrete fields when they
+        // cannot carry what the URL does (`@lunora/platform-node`'s binding for a URL
+        // that requires TLS), and the `connectionString` path must not trip on that.
+        get config(): HyperdriveConnection {
+            return {
+                database: binding.database,
+                host: binding.host,
+                password: binding.password,
+                port: binding.port,
+                user: binding.user,
+            };
+        },
+        connectionString: binding.connectionString,
     };
-
-    return { config, connectionString: binding.connectionString };
 };
 
 /**

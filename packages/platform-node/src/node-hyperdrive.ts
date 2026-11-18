@@ -19,6 +19,54 @@ const LEADING_SLASH = /^\//u;
 /** An IPv6 literal keeps its brackets in `hostname`; a driver's `host` option wants the bare address. */
 const BRACKETED_HOST = /^\[(.*)\]$/u;
 
+/** `sslmode` / `ssl-mode` values that do not require TLS, so dropping them loses nothing. */
+const NON_REQUIRING_SSL_MODES: ReadonlySet<string> = new Set(["allow", "disable", "disabled", "prefer", "preferred"]);
+const SSL_OFF_VALUES: ReadonlySet<string> = new Set(["0", "false"]);
+const SEPARATORS = /[-_]/gu;
+
+/**
+ * The query parameters that require or configure TLS: any `ssl*` option
+ * (`sslmode`, `ssl-mode`, `ssl`, `sslrootcert`, `sslcert`, `sslkey`, …) except a
+ * mode or flag that turns TLS off or makes it opportunistic. Names only: values
+ * such as `sslpassword` are secret.
+ */
+const tlsOptionNames = (parameters: URLSearchParams): string[] =>
+    [...parameters.entries()]
+        .filter(([name, value]) => {
+            const key = name.toLowerCase().replaceAll(SEPARATORS, "");
+            const setting = value.toLowerCase();
+
+            if (key === "sslmode") {
+                return !NON_REQUIRING_SSL_MODES.has(setting);
+            }
+
+            return key.startsWith("ssl") && !(key === "ssl" && SSL_OFF_VALUES.has(setting));
+        })
+        .map(([name]) => name);
+
+/**
+ * The binding for a URL that requires TLS. The discrete fields cannot say so,
+ * and Cloudflare's binding has no TLS field to mirror (Hyperdrive handles TLS to
+ * the origin itself), so a driver built from them would connect without it.
+ * They throw instead; `connectionString`, which keeps the query, is unchanged.
+ */
+const tlsOnlyBinding = (connectionString: string, tlsOptions: ReadonlyArray<string>): NodeHyperdriveBinding => {
+    const refuse = (): never => {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: the Hyperdrive database URL sets ${tlsOptions.join(", ")}, which the discrete host/port/user/password/database fields cannot carry, so a driver built from them would connect without TLS — build the driver from connectionString instead`,
+        );
+    };
+
+    return Object.defineProperties({ connectionString } as NodeHyperdriveBinding, {
+        database: { enumerable: true, get: refuse },
+        host: { enumerable: true, get: refuse },
+        password: { enumerable: true, get: refuse },
+        port: { enumerable: true, get: refuse },
+        user: { enumerable: true, get: refuse },
+    });
+};
+
 const POSTGRES_PROTOCOLS: ReadonlySet<string> = new Set(["postgres:", "postgresql:"]);
 
 const DEFAULT_PORTS: Readonly<Record<string, number>> = {
@@ -41,6 +89,11 @@ const DEFAULT_PORTS: Readonly<Record<string, number>> = {
  * A Postgres URL may name a Unix socket the libpq way: an empty host with the
  * socket directory in a `host` query parameter (`postgres:///db?host=/var/run/postgresql`),
  * which becomes the binding's `host`.
+ *
+ * A URL that requires TLS (`sslmode=require`, `ssl=true`, `sslrootcert=…`) gets
+ * a binding whose discrete fields throw: they cannot carry the TLS requirement,
+ * so a pool built from them would silently connect without it. Build the driver
+ * from `connectionString`, which keeps every query option.
  * @param url A `postgres://`, `postgresql://`, `mysql://` or `mariadb://` URL; `DATABASE_URL` unless given.
  */
 const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL): NodeHyperdriveBinding => {
@@ -86,6 +139,12 @@ const createNodeHyperdrive = (url: string | undefined = process.env.DATABASE_URL
     // Refused here rather than left to the driver, whose error may echo the URL and its password.
     if (host === "" || database === "") {
         throw new LunoraError("VALIDATION_ERROR", "@lunora/platform-node: the Hyperdrive database URL needs both a host and a database name");
+    }
+
+    const tlsOptions = tlsOptionNames(parsed.searchParams);
+
+    if (tlsOptions.length > 0) {
+        return tlsOnlyBinding(url, tlsOptions);
     }
 
     return {

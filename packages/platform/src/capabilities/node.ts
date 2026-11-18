@@ -257,7 +257,7 @@ const NODE_CAPABILITIES: PlatformCapabilities = {
         },
         hyperdrive: {
             level: "emulated",
-            note: "createNodeHyperdrive (@lunora/platform-node) builds the HYPERDRIVE binding from DATABASE_URL (postgres:, postgresql:, mysql: or mariadb:, plus the libpq Unix-socket form postgres:///db?host=/socket/dir), so the app's own .hyperdrive((env) => …) wiring builds ctx.sql from it unchanged. Emulated, not native: nothing sits between the driver and the database, so there is no edge connection pool and no query cache, and the driver's own pool settings are the only ones that apply",
+            note: "createNodeHyperdrive (@lunora/platform-node) builds the HYPERDRIVE binding from DATABASE_URL (postgres:, postgresql:, mysql: or mariadb:, plus the libpq Unix-socket form postgres:///db?host=/socket/dir). A URL that requires TLS (sslmode=require, ssl=true, sslrootcert=…) keeps it in connectionString only: Cloudflare's binding has no TLS field to mirror, so the binding's discrete host/port/user/password/database fields throw rather than let a driver built from them connect without TLS, so the app's own .hyperdrive((env) => …) wiring builds ctx.sql from it unchanged. Emulated, not native: nothing sits between the driver and the database, so there is no edge connection pool and no query cache, and the driver's own pool settings are the only ones that apply",
         },
         httpCache: {
             level: "unsupported",
