@@ -140,6 +140,17 @@ describe("protobuf decoder hardening", () => {
         expect(() => decodeTracePayloadProto(bomb)).toThrow(/malformed OTLP protobuf/u);
     });
 
+    it("throws (→ 400) on a body cut short inside a length-delimited field, so its sender retries", () => {
+        const resourceSpans = lenField(1, [...lenField(2, [...stringField(1, "span-name")])]);
+        const truncated = new Uint8Array(resourceSpans.slice(0, -3));
+
+        expect(() => decodeTracePayloadProto(truncated)).toThrow(/runs past end/u);
+    });
+
+    it("throws on a fixed-width field cut short", () => {
+        expect(() => decodeTracePayloadProto(new Uint8Array([...tag(9, 1), 1, 2]))).toThrow(/runs past end/u);
+    });
+
     it("decodes an empty body to an empty payload", () => {
         expect(decodeTracePayloadProto(new Uint8Array())).toStrictEqual({ resourceSpans: [] });
     });

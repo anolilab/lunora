@@ -120,7 +120,7 @@ class Reader {
 
     /** A length-delimited byte slice. */
     public readBytes(): Uint8Array {
-        const length = Number(this.varint());
+        const length = this.lengthPrefix();
         const slice = this.bytes.subarray(this.pos, this.pos + length);
         this.pos += length;
 
@@ -141,17 +141,17 @@ class Reader {
     public skip(wireType: number): void {
         switch (wireType) {
             case WIRE_FIXED32: {
-                this.pos += 4;
+                this.pos += this.fits(4);
 
                 break;
             }
             case WIRE_FIXED64: {
-                this.pos += 8;
+                this.pos += this.fits(8);
 
                 break;
             }
             case WIRE_LEN: {
-                this.pos += Number(this.varint());
+                this.pos += this.lengthPrefix();
 
                 break;
             }
@@ -167,6 +167,24 @@ class Reader {
                 break;
             }
         }
+    }
+
+    /**
+     * The length of a length-delimited field, refused when it runs past the
+     * input: `subarray` clamps silently, so a truncated body decoded to fewer
+     * records and was acknowledged as delivered.
+     */
+    private lengthPrefix(): number {
+        return this.fits(Number(this.varint()));
+    }
+
+    /** `length`, when that many bytes remain; a field cut short throws. */
+    private fits(length: number): number {
+        if (length > this.bytes.length - this.pos) {
+            throw new Error("malformed OTLP protobuf: a field runs past end");
+        }
+
+        return length;
     }
 }
 
