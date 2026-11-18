@@ -48,6 +48,7 @@ type DrainTimer = (ms: number, onExpire: () => void) => () => void;
 interface Drainable {
     drain: (options?: DrainOptions) => Promise<DrainResult>;
     idle: () => boolean;
+    pending: () => string[];
 }
 ```
 
@@ -190,6 +191,7 @@ interface NodePlatform<Queues extends Record<string, {
     idle: () => boolean;
     kv: ShardKvStore;
     objectStorage?: R2BucketLike;
+    pending: () => string[];
     queues?: NodeQueueHost<Queues>;
     rearmPersistedAlarms: () => string[];
     scheduler: SchedulerHost;
@@ -352,6 +354,7 @@ interface NodeShardRegistry {
     drain: (options?: DrainOptions) => Promise<DrainResult>;
     idle: () => boolean;
     listShardKeys: (table?: string) => ReadonlyArray<string>;
+    pending: () => string[];
     rearmPersistedAlarms: () => string[];
     shardFor: (key: string) => NodeShard;
 }

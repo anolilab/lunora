@@ -102,6 +102,8 @@ const timerBoundTo =
 interface Drainable {
     drain: (options?: DrainOptions) => Promise<DrainResult>;
     idle: () => boolean;
+    /** What is running right now, re-read when the deadline passes: a part that drained early can have gained work since. */
+    pending: () => string[];
 }
 
 /**
@@ -122,10 +124,18 @@ const drainTogether = async (parts: ReadonlyArray<Drainable>, options?: DrainOpt
             failed.push(...results.flatMap((result) => result.failed));
 
             if (results.some((result) => result.timedOut)) {
-                return { failed, pending: results.flatMap((result) => result.pending), timedOut: true };
+                // Re-read from every part, not taken from the results: one that drained early and then gained work reports it.
+                return { failed, pending: parts.flatMap((part) => part.pending()), timedOut: true };
             }
 
             if (parts.every((part) => part.idle())) {
+                // One more pass, immediate for parts that are idle: it collects a failure recorded after a part's own drain
+                // returned (work another part handed it, which failed), which the results above could not include.
+                // eslint-disable-next-line no-await-in-loop -- a final sweep, run once, after every part is idle
+                const sweep = await Promise.all(parts.map(async (part) => part.drain({ timer })));
+
+                failed.push(...sweep.flatMap((result) => result.failed));
+
                 return { failed, pending: [], timedOut: false };
             }
         }

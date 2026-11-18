@@ -282,6 +282,9 @@ export interface NodeShardRegistry {
      */
     listShardKeys: (table?: string) => ReadonlyArray<string>;
 
+    /** What is running right now, one label per shard with its counts, as a drain that timed out would report it. */
+    pending: () => string[];
+
     /**
      * Open every stored shard that has a persisted alarm, so the alarm is re-armed now rather than when something next sends
      * that shard a request: after a restart an alarm would otherwise never fire on a shard nobody calls. Shards without one stay
@@ -496,7 +499,15 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
                 }
             }
 
-            live.clear();
+            // A shard whose close failed stays live, so a later close() tries it again; dropping it would leave its database
+            // open with nothing left that could close it.
+            const failedKeys = new Set(failed.map(({ key }) => key));
+
+            for (const key of live.keys()) {
+                if (!failedKeys.has(key)) {
+                    live.delete(key);
+                }
+            }
 
             if (forced.length > 0) {
                 // eslint-disable-next-line no-console -- these shards are closed under a running handler, so the log is the only record of it
@@ -547,6 +558,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             idForName: (name) => name,
         },
         idle: () => pendingWork().waits.length === 0,
+        pending: () => pendingWork().labels,
         rearmPersistedAlarms: () => {
             const { directory } = options;
 
@@ -559,8 +571,15 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             for (const key of known) {
                 // Opening a shard re-arms its stored alarm; one with no alarm stays closed, so a restart opens only these.
                 if (!live.has(key) && hasPersistedAlarm(join(directory, `${encodeShardKey(key)}${SHARD_FILE_SUFFIX}`), key)) {
-                    shardFor(key);
-                    rearmed.push(key);
+                    // One unreadable shard fails only itself, as it would on its first request: the others still re-arm and the
+                    // process still starts.
+                    try {
+                        shardFor(key);
+                        rearmed.push(key);
+                    } catch (error: unknown) {
+                        // eslint-disable-next-line no-console -- the shard stays unopened; this records why its alarm was not re-armed
+                        console.error("[@lunora/platform-node] could not open shard %s to re-arm its persisted alarm", key, error);
+                    }
                 }
             }
 

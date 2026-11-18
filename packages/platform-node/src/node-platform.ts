@@ -223,6 +223,9 @@ export interface NodePlatform<
     /** The local-filesystem bucket, or `undefined` when the caller named no bucket directory. */
     objectStorage?: R2BucketLike;
 
+    /** What is running right now (host work, scheduler deliveries, each shard's work), as a timed-out drain would report it. */
+    pending: () => string[];
+
     /**
      * The declared queues, or `undefined` when the caller declared none.
      *
@@ -469,6 +472,11 @@ export const createNodePlatform = <
             directory,
             dispatch: (request) => dispatch(request),
             idle: platformIdle,
+            pending: () => [
+                ...(pendingBackground() > 0 || pendingAlarms() > 0 ? ["waitUntil work on the platform host"] : []),
+                ...pendingDispatches().labels,
+                ...registry.pending(),
+            ],
             // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
             // would let `close()` dispose a database a handler is still writing.
             drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
