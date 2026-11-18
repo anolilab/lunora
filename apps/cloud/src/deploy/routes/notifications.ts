@@ -56,7 +56,13 @@ export const handleNotificationChannelRoute = async (request: Request, environme
         return jsonError(400, "secret, when given, is a string");
     }
 
-    const events = Array.isArray(listed) ? listed.filter(isNotificationEvent) : undefined;
+    // Absent means every event. A value that is present but not a list of known events is refused,
+    // not read as absent: a malformed selection would otherwise subscribe the channel to everything.
+    if (listed !== undefined && !(Array.isArray(listed) && listed.every(isNotificationEvent))) {
+        return jsonError(400, "events, when given, is a list of notification events");
+    }
+
+    const events = listed;
     const signingKey = kind === "webhook" ? randomSecret() : undefined;
     const secret = kind === "telegram" ? botToken?.trim() : signingKey;
     const sealing = await sealChannelSecret(environment, secret);

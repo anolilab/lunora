@@ -572,6 +572,14 @@ describe("mistyped JSON body fields", () => {
         ["/v1/domains/remove", { id: 1, organizationId: "org_1" }],
         ["/v1/boxes/revoke", { id: { id: "box_1" }, organizationId: "org_1" }],
         ["/v1/notification-channels", { destination: "123", kind: "telegram", name: "ops", organizationId: "org_1", secret: 42 }],
+        [
+            "/v1/notification-channels",
+            { destination: "https://hooks.example.com/x", events: "deploy.failed", kind: "webhook", name: "ops", organizationId: "org_1" },
+        ],
+        [
+            "/v1/notification-channels",
+            { destination: "https://hooks.example.com/x", events: ["deployment.faild"], kind: "webhook", name: "ops", organizationId: "org_1" },
+        ],
         ["/v1/invitations/send", { email: 5, organizationId: "org_1" }],
         ["/v1/usage", { deployKey: "dk_1", kind: 3, organizationId: "org_1", periodStart: 0, quantity: 1 }],
         ["/v1/usage", { deployKey: "dk_1", deploymentId: 9, kind: "requests", organizationId: "org_1", periodStart: 0, quantity: 1 }],
