@@ -358,7 +358,14 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     // Codegen also reads the app's wrangler config (cron triggers, the companion Worker's name and observability), at the project root.
     const configPaths = [...projectConfigCandidatePaths(watchDirectory), ...WRANGLER_FILES.map((name) => join(options.projectRoot, name))];
     let idle: Promise<void> = Promise.resolve();
+    // Runs started so far, and whether the last one that finished left `_generated/*` usable: a failed codegen run writes
+    // nothing, so only a failed `postcodegen` hook can leave it half-written.
+    let sequence = 0;
+    let usable = true;
     const project = createReusableProject(options.projectRoot, watchDirectory);
+    const generation = (): CodegenGeneration => {
+        return { busy: running || pending !== undefined, idle, sequence, usable };
+    };
 
     // Resolves when the STARTUP run — codegen plus the project's `postcodegen` —
     // has finished, so a caller can hold off work that reads generated output.
@@ -391,6 +398,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     const next = pending;
 
                     pending = undefined;
+                    sequence += 1;
 
                     // No hook on a failed run: `postcodegen` exists to finish
                     // generated output, and running it over a tree codegen did
@@ -451,6 +459,8 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                     // After the hook, so a listener that reads generated output reads the finished copy. A failed
                     // codegen run `continue`s past this: nothing it would read has changed. A failed hook skips it too:
                     // the output it left may be half-written, and the running app keeps serving until the next edit.
+                    usable = !hookFailed;
+
                     if (!hookFailed) {
                         options.onSettled?.({ hookRan, startup: next.reason === "startup" });
                     }
@@ -480,6 +490,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 
                 return idle;
             },
+            generation,
             ready,
             watchAvailable: false,
         };
@@ -684,6 +695,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
             // mid-write, on an inherited stdout.
             return idle;
         },
+        generation,
         ready,
         watchAvailable: true,
     };
@@ -723,6 +735,18 @@ export interface CodegenWatcherOptions {
     target?: string;
 }
 
+/** A snapshot of the watcher's runs; see {@link CodegenWatcherHandle.generation}. */
+export interface CodegenGeneration {
+    /** A run is in progress or queued. */
+    busy: boolean;
+    /** Settles when the runs in progress when this was read, and any queued behind them, have finished. */
+    idle: Promise<void>;
+    /** How many runs have started. */
+    sequence: number;
+    /** `false` after a run whose `postcodegen` hook failed, until a later run succeeds: its output may be half-written. */
+    usable: boolean;
+}
+
 export interface CodegenWatcherHandle {
     /**
      * Stop watching, drop any queued regeneration, and resolve once the run
@@ -733,6 +757,12 @@ export interface CodegenWatcherHandle {
      * watcher detached can ignore it.
      */
     close: () => Promise<void>;
+
+    /**
+     * Where generation stands now, for a reader of `_generated/*` that must not read a run mid-write: await `idle` while
+     * `busy`, then compare `sequence` after reading to see whether a run started meanwhile.
+     */
+    generation: () => CodegenGeneration;
 
     /**
      * Resolves once the startup regeneration — codegen AND the project's

@@ -1024,11 +1024,23 @@ interface CodegenCommandResult extends CodegenCommandData {
 }
 ```
 
+### `CodegenGeneration` (interface)
+
+```ts
+interface CodegenGeneration {
+    busy: boolean;
+    idle: Promise<void>;
+    sequence: number;
+    usable: boolean;
+}
+```
+
 ### `CodegenWatcherHandle` (interface)
 
 ```ts
 interface CodegenWatcherHandle {
     close: () => Promise<void>;
+    generation: () => CodegenGeneration;
     ready: Promise<void>;
     watchAvailable: boolean;
 }
@@ -1308,6 +1320,21 @@ interface NodeAppHost {
 }
 ```
 
+### `NodeAppHostCandidate` (interface)
+
+```ts
+interface NodeAppHostCandidate {
+    crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
+    dataDirectory?: string;
+    durableObjects: ReadonlyArray<{
+        className: string;
+        name: string;
+    }>;
+    env?: Record<string, unknown>;
+    worker: Record<string, unknown>;
+}
+```
+
 ### `NodeContainerOutput` (interface)
 
 ```ts
@@ -1331,6 +1358,7 @@ interface NodeDevWorker extends WorkerProcess {
 ```ts
 interface NodeDevWorkerInputs {
     codegenWatch: boolean;
+    generation?: () => CodegenGeneration;
     logger: Logger;
     platform?: PlatformNode;
     port: number;
@@ -1405,16 +1433,8 @@ interface PailLogger {
 
 ```ts
 interface PlatformNode {
-    createNodeAppHost: (options: {
-        crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
-        dataDirectory?: string;
-        durableObjects: ReadonlyArray<{
-            className: string;
-            name: string;
-        }>;
-        env?: Record<string, unknown>;
-        worker: Record<string, unknown>;
-    }) => NodeAppHost;
+    checkNodeAppHost: (options: NodeAppHostCandidate) => void;
+    createNodeAppHost: (options: NodeAppHostCandidate) => NodeAppHost;
     createNodeHttpServer: (options: {
         fetch: (request: Request) => Promise<Response>;
         port?: number;

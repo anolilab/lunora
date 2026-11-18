@@ -37,6 +37,7 @@ import { describeWithheld, reconcileStudioAssets, resolveRemoteEnabled, startLoc
 
 import { parseApiSpec } from "../../util/api-spec";
 import { writeBindingManifestFile } from "../../util/binding-manifest-file";
+import type { CodegenWatcherHandle } from "../../util/codegen-watch";
 import { startCodegenWatch } from "../../util/codegen-watch";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -496,10 +497,52 @@ const attachedCelldProjectionReady = async (plan: DevCommandPlan, options: DevCo
 };
 
 /**
+ * Routes the codegen watcher's settled runs to the Node host's reload. A run that settles before the host starts loading is
+ * already in what it loads; an edit's run that settles while it loads may have rewritten `_generated/*` after the host read
+ * it, so it reloads once the host is up. The startup run's codegen wrote before the worker was started, so it reloads only
+ * when a `postcodegen` hook ran after that: without one, a reload would only drop the requests already in flight.
+ */
+interface NodeReloadLatch {
+    onSettled: (run: { hookRan: boolean; startup: boolean }) => void;
+    started: (reload: () => void) => void;
+    starting: () => void;
+}
+
+const createNodeReloadLatch = (): NodeReloadLatch => {
+    let reloadNodeWorker: (() => void) | undefined;
+    let loading = false;
+    let settledWhileLoading = false;
+
+    return {
+        onSettled: ({ hookRan, startup }) => {
+            if (startup && !hookRan) {
+                return;
+            }
+
+            if (reloadNodeWorker !== undefined) {
+                reloadNodeWorker();
+            } else if (loading) {
+                settledWhileLoading = true;
+            }
+        },
+        started: (reload) => {
+            reloadNodeWorker = reload;
+
+            if (settledWhileLoading) {
+                reload();
+            }
+        },
+        starting: () => {
+            loading = true;
+        },
+    };
+};
+
+/**
  * The worker the plan runs — a celld dev session, the in-process Node host,
  * else the planned dev server process — or `undefined`, logged, when it cannot
- * start. `onNodeWorker` receives the Node host so the codegen watcher can
- * reload it.
+ * start. `node.reload` receives the Node host so the codegen watcher can
+ * reload it, and `node.codegen` lets the host wait out a run before it loads.
  */
 const startPlannedWorker = async (
     plan: DevCommandPlan,
@@ -507,18 +550,23 @@ const startPlannedWorker = async (
     spawn: WorkerSpawner,
     cwd: string,
     logger: Logger,
-    onNodeWorker: (reload: () => void) => void,
+    node: { codegen: CodegenWatcherHandle | undefined; reload: NodeReloadLatch },
 ): Promise<WorkerProcess | undefined> => {
     try {
         if (plan.nodeHost === true) {
+            const { codegen } = node;
+
+            node.reload.starting();
+
             const worker = await (options.startNodeWorker ?? startNodeDevWorker)({
                 codegenWatch: plan.runsCodegenWatch,
+                generation: codegen === undefined ? undefined : () => codegen.generation(),
                 logger,
                 port: plan.workerPort,
                 projectRoot: cwd,
             });
 
-            onNodeWorker(worker.reload);
+            node.reload.started(worker.reload);
 
             return worker;
         }
@@ -684,13 +732,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
 
         noteIpv4LoopbackFallback(plan, logger);
 
-        // Set once the Node host is up. A run that settles before the host starts loading is already in what it loads; an edit's
-        // run that settles while it loads may have rewritten `_generated/*` after the host read it, so it reloads once the host
-        // is up. The startup run's codegen wrote before the worker was started, so it reloads only when a `postcodegen` hook
-        // ran after that: without one, a reload would only drop the requests already in flight.
-        let reloadNodeWorker: (() => void) | undefined;
-        let nodeWorkerStarting = false;
-        let settledWhileNodeWorkerStarted = false;
+        const nodeReload = createNodeReloadLatch();
 
         if (plan.runsCodegenWatch) {
             handles.codegen = (options.startCodegen ?? startCodegenWatch)({
@@ -699,17 +741,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
                 jsonLogs: options.jsonLogs,
                 logger,
                 lunoraDirectory: resolveSchemaDirectory(cwd),
-                onSettled: ({ hookRan, startup }) => {
-                    if (startup && !hookRan) {
-                        return;
-                    }
-
-                    if (reloadNodeWorker !== undefined) {
-                        reloadNodeWorker();
-                    } else if (nodeWorkerStarting) {
-                        settledWhileNodeWorkerStarted = true;
-                    }
-                },
+                onSettled: nodeReload.onSettled,
                 projectRoot: cwd,
                 target,
             });
@@ -798,15 +830,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         ensureSidecarGenerated(plan, options, cwd, logger, target);
 
         const spawn = options.startWorker ?? defaultWorkerSpawner;
-        nodeWorkerStarting = plan.nodeHost === true;
-
-        const worker = await startPlannedWorker(plan, options, spawn, cwd, logger, (reload) => {
-            reloadNodeWorker = reload;
-
-            if (settledWhileNodeWorkerStarted) {
-                reload();
-            }
-        });
+        const worker = await startPlannedWorker(plan, options, spawn, cwd, logger, { codegen: handles.codegen, reload: nodeReload });
 
         if (worker === undefined) {
             return { code: EXIT_CODE.FAILURE, plan };

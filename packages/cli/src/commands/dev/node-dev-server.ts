@@ -37,7 +37,7 @@ import type { WranglerConfig } from "@lunora/config/cloudflare";
 import { findWranglerFile, mergeWranglerEnvironment, readWranglerJsonc } from "@lunora/config/cloudflare";
 
 import { codegenRequested } from "./lifecycle";
-import type { DevCommandOptions, DevCommandPlan, NodeAppHost, NodeDevWorker, NodeDevWorkerInputs, PlatformNode } from "./types";
+import type { DevCommandOptions, DevCommandPlan, NodeAppHost, NodeAppHostCandidate, NodeDevWorker, NodeDevWorkerInputs, PlatformNode } from "./types";
 
 /** Where the shard databases persist between sessions; `.lunora/` is already the dev server's gitignored state directory. */
 const NODE_DEV_STATE_DIRECTORY = join(".lunora", "node");
@@ -209,6 +209,14 @@ const stringValues = (env: Record<string, unknown>): Record<string, string> =>
 
 const isUnder = (path: string, directory: string): boolean => path === directory || path.startsWith(`${directory}${sep}`);
 
+/** A reload whose load a codegen run overlapped; that run's settlement reloads again. */
+class SupersededLoad extends Error {
+    public constructor() {
+        super("a codegen run started during the load");
+        this.name = "SupersededLoad";
+    }
+}
+
 const errorMessage = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 /**
@@ -238,10 +246,13 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         );
     }
 
-    // The peer range admits only releases that have it, but a project can pin an older one and skip the peer check.
-    if (typeof (platform as Partial<PlatformNode>).createNodeAppHost !== "function") {
+    // The peer range admits only releases that have them, but a project can pin an older one and skip the peer check.
+    if (
+        typeof (platform as Partial<PlatformNode>).createNodeAppHost !== "function" ||
+        typeof (platform as Partial<PlatformNode>).checkNodeAppHost !== "function"
+    ) {
         throw new TypeError(
-            "--target node needs a @lunora/platform-node that exports createNodeAppHost (1.0.0-alpha.220 or later); upgrade it in this project",
+            "--target node needs a @lunora/platform-node that exports createNodeAppHost and checkNodeAppHost (1.0.0-alpha.220 or later); upgrade it in this project",
         );
     }
 
@@ -261,6 +272,11 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     // the port, and one left armed after a failed start would compose a host nobody stops.
     let starting = true;
     let reloadAfterStart = false;
+    // The source set of the last load that succeeded, kept until another one does: a load that fails on a moved file has none
+    // of the files it could not import, and restoring one must still reload.
+    let lastLoadedSources = new Set<string>();
+    // The modification time each watched source had when it was last checked, so a reload follows each change once.
+    const seenModified = new Map<string, number>();
 
     const unwatch = (): void => {
         for (const watcher of watchers) {
@@ -284,30 +300,68 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         }, RELOAD_DEBOUNCE_MS);
     };
 
-    // Every project file the last load evaluated. Files under `lunora/` are left to the codegen watcher when it runs, whose
-    // settled run reloads after `_generated/*` is rewritten; without it (`--no-codegen`) nothing else would see them.
-    const watchLoadedSources = (loadStartedAt: number): void => {
-        unwatch();
+    /** Watch `paths` through their directories, so a file deleted and restored, or replaced by an editor's rename, is still seen. */
+    const watchThroughDirectories = (paths: ReadonlySet<string>): void => {
+        const byDirectory = new Map<string, Set<string>>();
 
-        let changedDuringLoad = false;
+        for (const path of paths) {
+            const names = byDirectory.get(dirname(path)) ?? new Set<string>();
 
-        for (const path of Object.keys(jiti.cache)) {
-            if (isProjectSource(path) && !(inputs.codegenWatch && isUnder(path, schemaDirectory))) {
-                const watcher = watch(path, scheduleReload);
+            names.add(basename(path));
+            byDirectory.set(dirname(path), names);
+        }
 
-                // A deleted file raises an error event; the next load re-reads the set, so it is only dropped here.
+        for (const [directory, names] of byDirectory) {
+            try {
+                const watcher = watch(directory, (_event, filename) => {
+                    // Node does not promise a name; an unnamed event in a watched directory may be one of these files.
+                    if (filename === null || names.has(filename)) {
+                        scheduleReload();
+                    }
+                });
+
                 watcher.on("error", () => {
                     watcher.close();
                 });
                 watchers.push(watcher);
+            } catch {
+                // The directory is gone; the next load re-reads the set.
+            }
+        }
+    };
 
-                // A watcher reports only what happens after it starts, and the load read this file before then: an edit in
-                // between would otherwise go unseen until the next save.
-                try {
-                    changedDuringLoad ||= statSync(path).mtimeMs > loadStartedAt;
-                } catch {
-                    // Deleted since the load; its watcher's error event already dropped it.
-                }
+    // Every project file the load evaluated. Files under `lunora/` are left to the codegen watcher when it runs, whose settled run
+    // reloads after `_generated/*` is rewritten; without it (`--no-codegen`) nothing else would see them.
+    const watchLoadedSources = (loadStartedAt: number, loaded: boolean): void => {
+        unwatch();
+
+        // A stop during the load already closed the watches; new ones would outlive the worker.
+        if (stopped) {
+            return;
+        }
+
+        const current = Object.keys(jiti.cache).filter((path) => isProjectSource(path) && !(inputs.codegenWatch && isUnder(path, schemaDirectory)));
+        const sources = loaded ? new Set(current) : new Set([...lastLoadedSources, ...current]);
+
+        if (loaded) {
+            lastLoadedSources = sources;
+        }
+
+        watchThroughDirectories(sources);
+
+        let changedDuringLoad = false;
+
+        for (const path of sources) {
+            // A watcher reports only what happens after it starts, and the load read this file before then: an edit in between
+            // would otherwise go unseen until the next save. Once per modification time, so a clock skewed ahead of this one
+            // reloads once rather than on every reload.
+            try {
+                const modified = statSync(path).mtimeMs;
+
+                changedDuringLoad ||= modified > loadStartedAt && seenModified.get(path) !== modified;
+                seenModified.set(path, modified);
+            } catch {
+                // Deleted since the load; its directory watch sees it come back.
             }
         }
 
@@ -330,11 +384,17 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             }
         }
 
+        let loaded = false;
+
         try {
-            return await jiti.import<Record<string, unknown>>(entry);
+            const worker = await jiti.import<Record<string, unknown>>(entry);
+
+            loaded = true;
+
+            return worker;
         } finally {
             // Also after a failed load: the file that broke it is in the set, and its next save is the fix.
-            watchLoadedSources(loadStartedAt);
+            watchLoadedSources(loadStartedAt, loaded);
         }
     };
 
@@ -345,9 +405,11 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     const cronsModule = join(schemaDirectory, "_generated", "crons.ts");
     let hyperdriveWarned = false;
 
-    // `.dev.vars` (or `.env`) first, then the shell: wrangler reads local secrets and the Hyperdrive URL from the same files.
+    // `.dev.vars` (or `.env`) over the shell, as the worker's own env has them. Read without a `secrets` block's filter, which
+    // decides what reaches the worker as a plain var, not where a Secrets Store binding or `DATABASE_URL` may come from.
     const bindPlatformEnv = (current: NodeDevProject, env: Record<string, unknown>): Record<string, unknown> => {
-        const source = { ...process.env, ...stringValues(env) };
+        const local = resolveLocalWorkerEnv({ config: undefined, configPath: current.configPath, environment: current.environment, projectRoot });
+        const source = { ...process.env, ...stringValues(local.env), ...stringValues(env) };
         const hyperdrive: Record<string, unknown> = {};
         const url = source["DATABASE_URL"];
 
@@ -365,7 +427,32 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         return { ...env, ...platform.createNodeSecretBindings(current.secrets, source), ...hyperdrive };
     };
 
-    const prepare = async (): Promise<NodeAppHost> => {
+    // A run of the codegen watcher, waited out before a load reads `_generated/*`: one that is running or queued can rewrite it
+    // under the import.
+    const settledGeneration = async (): Promise<{ sequence: number; usable: boolean } | undefined> => {
+        let state = inputs.generation?.();
+
+        while (state?.busy === true) {
+            // eslint-disable-next-line no-await-in-loop -- each wait covers the runs queued when it was read
+            await state.idle;
+            state = inputs.generation?.();
+        }
+
+        return state;
+    };
+
+    /**
+     * Load the current sources and check them, without touching the running version: the candidate is only composed once the
+     * previous host has drained, so the two never run schedulers over the same database at once, and a candidate that cannot
+     * be composed is refused while the previous version still serves.
+     */
+    const prepare = async (kind: "reload" | "start"): Promise<NodeAppHostCandidate> => {
+        const generation = await settledGeneration();
+
+        if (kind === "reload" && generation?.usable === false) {
+            throw new Error("the last postcodegen hook failed, so _generated/* may be half-written — fix it and save to reload");
+        }
+
         // Read first, so an edited `main` is the entry this load imports.
         const current = readNodeDevProject(projectRoot, activeWranglerEnvironment());
         const worker = await load(current.entry);
@@ -381,13 +468,24 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             ? await jiti.import<{ LUNORA_CRONS?: Readonly<Record<string, ReadonlyArray<unknown>>> }>(cronsModule)
             : undefined;
 
-        return platform.createNodeAppHost({
+        // A run that started during the load may have rewritten what it read. Its own settled run reloads once it succeeds, and
+        // the previous version keeps serving if it fails. The first start has no previous version, so it serves what it read
+        // and that run's settlement reloads it.
+        if (kind === "reload" && generation !== undefined && inputs.generation?.().sequence !== generation.sequence) {
+            throw new SupersededLoad();
+        }
+
+        const candidate: NodeAppHostCandidate = {
             crons: generated?.LUNORA_CRONS,
             dataDirectory: join(projectRoot, NODE_DEV_STATE_DIRECTORY),
             durableObjects: current.durableObjects,
             env: bindPlatformEnv(current, env),
             worker,
-        });
+        };
+
+        platform.checkNodeAppHost(candidate);
+
+        return candidate;
     };
 
     const serve = async (host: NodeAppHost): Promise<void> => {
@@ -417,39 +515,43 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
         }
     };
 
+    let configWatcher: FSWatcher | undefined;
+
     try {
-        await serve(await prepare());
+        // The files the env is read from, and the wrangler config itself when no codegen watcher does (it reruns on a config edit
+        // and its settled run reloads here), watched through their directory so a file created or replaced later is seen too.
+        // The name set is rebuilt per event, so it follows CLOUDFLARE_ENV. Installed before the listener, so a watch that
+        // cannot be opened fails the start with nothing bound.
+        configWatcher = watch(dirname(project.configPath), (_event, filename) => {
+            const environment = activeWranglerEnvironment();
+            const watched = new Set([
+                ...(inputs.codegenWatch ? [] : [basename(project.configPath), "wrangler.json", "wrangler.jsonc"]),
+                ".dev.vars",
+                ...(environment === undefined ? [] : [`.dev.vars.${environment}`]),
+                ...wranglerDotenvFiles(environment),
+            ]);
+
+            // Node does not promise a name; an unnamed event in this directory may be one of these files.
+            if (filename === null || watched.has(filename)) {
+                scheduleReload();
+            }
+        });
+        configWatcher.on("error", () => {
+            configWatcher?.close();
+        });
+
+        await serve(platform.createNodeAppHost(await prepare("start")));
     } catch (error: unknown) {
         stopped = true;
         clearTimeout(debounce);
         unwatch();
+        configWatcher?.close();
 
         throw error;
     }
 
     // After serving, not in `prepare`: a reload opens shards only once the previous version has closed them.
     running?.host.rearmPersistedAlarms();
-
-    // The files the env is read from, and the wrangler config itself when no codegen watcher does (it reruns on a config edit and
-    // its settled run reloads here), watched through their directory so a file created or replaced after startup is seen too.
-    // The name set is rebuilt per event, so it follows CLOUDFLARE_ENV.
-    const configWatcher = watch(dirname(project.configPath), (_event, filename) => {
-        const environment = activeWranglerEnvironment();
-        const watched = new Set([
-            ...(inputs.codegenWatch ? [] : [basename(project.configPath), "wrangler.json", "wrangler.jsonc"]),
-            ".dev.vars",
-            ...(environment === undefined ? [] : [`.dev.vars.${environment}`]),
-            ...wranglerDotenvFiles(environment),
-        ]);
-
-        if (filename !== null && watched.has(filename)) {
-            scheduleReload();
-        }
-    });
-
-    configWatcher.on("error", () => {
-        configWatcher.close();
-    });
 
     logger.info(`node: serving ${relative(projectRoot, project.entry)} on @lunora/platform-node at http://localhost:${String(port)}`);
 
@@ -480,13 +582,22 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
     };
 
     const reloadOnce = async (): Promise<void> => {
-        let host: NodeAppHost;
+        let candidate: NodeAppHostCandidate;
 
         try {
-            host = await prepare();
+            candidate = await prepare("reload");
         } catch (error: unknown) {
-            logger.error(`node: reload failed, still serving the previous version: ${errorMessage(error)}`);
+            if (error instanceof SupersededLoad) {
+                logger.info("node: codegen ran during the reload; reloading once it settles");
+            } else {
+                logger.error(`node: reload failed, still serving the previous version: ${errorMessage(error)}`);
+            }
 
+            return;
+        }
+
+        // Stopped while loading: the stop is closing the running version, and nothing new may start behind it.
+        if (stopped) {
             return;
         }
 
@@ -497,7 +608,10 @@ const startNodeDevWorker = async (inputs: NodeDevWorkerInputs): Promise<NodeDevW
             logger.error(`node: closing the previous version failed: ${errorMessage(error)}`);
         }
 
+        let host: NodeAppHost;
+
         try {
+            host = platform.createNodeAppHost(candidate);
             await serve(host);
         } catch (error: unknown) {
             // The session stays up and the next save reloads again. The previous version cannot keep serving meanwhile: it held the

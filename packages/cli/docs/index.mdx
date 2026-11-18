@@ -497,8 +497,11 @@ from outside `lunora/` changes, and when `wrangler.jsonc`, `.dev.vars`,
 loaded under `lunora/` are watched too. Every reload re-reads the wrangler
 config, so an edited `main` is the entry it loads. A reload restarts the
 listener, so open sockets and streams reconnect, and the previous version gets
-5 s to finish its in-flight work before it is closed anyway. A reload that
-cannot bind the port is logged, and nothing serves until a later reload
+5 s to finish its in-flight work before it is closed anyway; the new version is
+built only after that, so its crons and scheduled jobs never run beside the old
+one's. A reload waits out a running codegen run and is refused while the last
+`postcodegen` hook has failed, keeping the previous version serving. A reload
+that cannot bind the port is logged, and nothing serves until a later reload
 succeeds: the previous version held the same port and the same shard databases,
 so it cannot keep serving meanwhile.
 

@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } from "@lunora/platform-node";
+import { checkNodeAppHost, createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } from "@lunora/platform-node";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDevCommand } from "../../src/commands/dev/handler";
@@ -13,7 +14,7 @@ import { findAvailablePort } from "../../src/util/free-port";
 import type { Logger } from "../../src/util/logger";
 
 /** The project's real `@lunora/platform-node`, which a test wraps to inject a failure. */
-const realPlatform = { createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } as unknown as PlatformNode;
+const realPlatform = { checkNodeAppHost, createNodeAppHost, createNodeHttpServer, createNodeHyperdrive, createNodeSecretBindings } as unknown as PlatformNode;
 
 /** This package's node_modules: the fixture links it so `@lunora/*` resolve to the workspace builds. */
 const PACKAGE_NODE_MODULES = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "node_modules");
@@ -161,7 +162,22 @@ const readWhich = async (origin: string): Promise<string> => {
     return response.text();
 };
 
-/** A logger whose info lines can be awaited: each wait resolves on the next line containing the text, never on a timer. */
+/** Whether `port` can be bound now, so nothing still holds it. */
+const portIsFree = async (port: number): Promise<boolean> =>
+    new Promise((resolve) => {
+        const probe = createServer();
+
+        probe.once("error", () => {
+            resolve(false);
+        });
+        probe.listen(port, () => {
+            probe.close(() => {
+                resolve(true);
+            });
+        });
+    });
+
+/** A logger whose info and error lines can be awaited: each wait resolves on the next line containing the text, never on a timer. */
 const milestoneLogger = (): { errors: string[]; logger: Logger; next: (text: string) => Promise<void> } => {
     const waiters: { resolve: () => void; text: string }[] = [];
     const errors: string[] = [];
@@ -177,6 +193,7 @@ const milestoneLogger = (): { errors: string[]; logger: Logger; next: (text: str
         logger: {
             error: (message: string) => {
                 errors.push(message);
+                info(message);
             },
             info,
             success: () => {},
@@ -192,7 +209,9 @@ const milestoneLogger = (): { errors: string[]; logger: Logger; next: (text: str
 const callQuery = async (origin: string, functionPath: string, args: Record<string, unknown> = {}): Promise<unknown> => {
     const response = await fetch(`${origin}/_lunora/rpc`, {
         body: JSON.stringify({ args, functionPath }),
-        headers: { "content-type": "application/json" },
+        // Its own connection, as `freshFetch` explains; a pooled one would also leave the client's keep-alive timers running into
+        // a later test's fake clock.
+        headers: { connection: "close", "content-type": "application/json" },
         method: "POST",
     });
 
@@ -532,7 +551,7 @@ export default crons;
                 port: await findAvailablePort(18_870),
                 projectRoot: workdir,
             }),
-        ).rejects.toThrow(/createNodeAppHost \(1\.0\.0-alpha\.220 or later\)/u);
+        ).rejects.toThrow(/createNodeAppHost and checkNodeAppHost \(1\.0\.0-alpha\.220 or later\)/u);
     });
 
     it("serves the CLOUDFLARE_ENV environment's entry, bindings, vars and .dev.vars.<env>", async () => {
@@ -617,6 +636,302 @@ export default crons;
         } finally {
             await dev.stop();
         }
+    });
+
+    describe("started directly, over a generated project", () => {
+        /** Generate `_generated/*` with a normal session, then start the worker alone with `inputs`. */
+        const startWorker = async (inputs: Partial<Parameters<typeof startNodeDevWorker>[0]> = {}) => {
+            const generating = await startDev(workdir);
+
+            await generating.stop();
+
+            const { errors, logger, next } = milestoneLogger();
+            const port = await findAvailablePort(18_870);
+            const worker = await startNodeDevWorker({ codegenWatch: false, logger, port, projectRoot: workdir, ...inputs });
+
+            return {
+                errors,
+                next,
+                origin: `http://localhost:${String(port)}`,
+                port,
+                stop: async () => {
+                    worker.kill("SIGTERM");
+
+                    return worker.exited;
+                },
+                worker,
+            };
+        };
+
+        it("waits out a busy codegen run before the first load", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            let released = false;
+            let release: () => void = () => {};
+            const idle = new Promise<void>((resolve) => {
+                release = () => {
+                    released = true;
+                    resolve();
+                };
+            });
+            const composedAfterRelease: boolean[] = [];
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    composedAfterRelease.push(released);
+
+                    return realPlatform.createNodeAppHost(options);
+                },
+            };
+            // Released once the worker asks: a worker that never asks composes with the run still busy.
+            const generation = () => {
+                setImmediate(release);
+
+                return { busy: !released, idle, sequence: 1, usable: true };
+            };
+            const dev = await startWorker({ generation, platform });
+
+            try {
+                expect(composedAfterRelease).toStrictEqual([true]);
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("keeps serving the previous version while the last postcodegen hook has failed", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            let usable = true;
+            const dev = await startWorker({
+                generation: () => {
+                    return { busy: false, idle: Promise.resolve(), sequence: 1, usable };
+                },
+            });
+
+            try {
+                const refused = dev.next("the last postcodegen hook failed");
+
+                usable = false;
+                dev.worker.reload();
+                await refused;
+
+                await expect(callQuery(dev.origin, "notes:greeting")).resolves.toStrictEqual({ result: "v1" });
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("discards a reload whose load a codegen run overlapped", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            let sequence = 0;
+            let overlap = false;
+            // Each read during a reload sees a newer run once `overlap` is on: one started between the wait and the check.
+            const generation = () => {
+                if (overlap) {
+                    sequence += 1;
+                }
+
+                return { busy: false, idle: Promise.resolve(), sequence, usable: true };
+            };
+            let composed = 0;
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    composed += 1;
+
+                    return realPlatform.createNodeAppHost(options);
+                },
+            };
+            const dev = await startWorker({ generation, platform });
+
+            try {
+                const discarded = dev.next("codegen ran during the reload");
+
+                overlap = true;
+                dev.worker.reload();
+                await discarded;
+
+                expect(composed).toBe(1);
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("starts nothing for a reload that a stop overtook", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            let listeners = 0;
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeHttpServer: async (options) => {
+                    listeners += 1;
+
+                    return realPlatform.createNodeHttpServer(options);
+                },
+            };
+            const dev = await startWorker({ platform });
+
+            // The reload is still loading when the stop lands.
+            dev.worker.reload();
+            await dev.stop();
+
+            expect(listeners).toBe(1);
+        });
+
+        it("reloads once for a file stamped ahead of the clock, not on every reload", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const later = new Date(Date.now() + 60_000);
+
+            utimesSync(join(workdir, "src", "worker.ts"), later, later);
+
+            const generating = await startDev(workdir);
+
+            await generating.stop();
+            utimesSync(join(workdir, "src", "worker.ts"), later, later);
+            // Not advanced on their own: a reload timer stays pending until the test fires it, where the count below sees it.
+            vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+            const { logger, next } = milestoneLogger();
+            const reloaded = next("node: reloaded");
+            const worker = await startNodeDevWorker({ codegenWatch: false, logger, port: await findAvailablePort(18_870), projectRoot: workdir });
+
+            try {
+                // The start saw the stamp and marked one reload.
+                expect(vi.getTimerCount()).toBe(1);
+
+                await vi.advanceTimersByTimeAsync(200);
+                await reloaded;
+
+                // That reload saw the same stamp again, and arms nothing.
+                expect(vi.getTimerCount()).toBe(0);
+            } finally {
+                vi.useRealTimers();
+                worker.kill("SIGTERM");
+                await worker.exited;
+            }
+        });
+
+        it("reloads when a helper the entry imports is moved away and back", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+            writeFileSync(join(workdir, "src", "helper.ts"), "export const HELPER = 1;\n", "utf8");
+            editFile(join(workdir, "src", "worker.ts"), /^/u, `import "./helper";\n`);
+
+            const dev = await startWorker();
+
+            try {
+                const failed = dev.next("reload failed");
+
+                renameSync(join(workdir, "src", "helper.ts"), join(workdir, "src", "helper.moved"));
+                await failed;
+
+                const reloaded = dev.next("node: reloaded");
+
+                renameSync(join(workdir, "src", "helper.moved"), join(workdir, "src", "helper.ts"));
+                await reloaded;
+
+                await expect(callQuery(dev.origin, "notes:greeting")).resolves.toStrictEqual({ result: "v1" });
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("binds a Secrets Store secret from .dev.vars when a secrets block filters the plain vars", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, {
+                secrets: { required: [] },
+                secrets_store_secrets: [{ binding: "API_KEY", secret_name: "api-key", store_id: "local" }],
+            });
+            writeFileSync(join(workdir, ".dev.vars"), "API_KEY=from-dev-vars\n", "utf8");
+
+            const dev = await startWorker();
+
+            try {
+                await expect(readEnv(dev.origin)).resolves.toStrictEqual({ secret: "from-dev-vars" });
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("builds the reloaded host only after the previous one has drained", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir);
+
+            const events: string[] = [];
+            const platform: PlatformNode = {
+                ...realPlatform,
+                createNodeAppHost: (options) => {
+                    events.push("create");
+
+                    const host = realPlatform.createNodeAppHost(options);
+
+                    return {
+                        ...host,
+                        close: async (closeOptions) => {
+                            events.push("close");
+
+                            const drained = await host.close(closeOptions);
+
+                            events.push("closed");
+
+                            return drained;
+                        },
+                    };
+                },
+            };
+            const dev = await startWorker({ platform });
+
+            try {
+                const reloaded = dev.next("node: reloaded");
+
+                dev.worker.reload();
+                await reloaded;
+
+                // Two schedulers over one database would both arm the declared crons and the persisted jobs.
+                expect(events).toStrictEqual(["create", "close", "closed", "create"]);
+            } finally {
+                await dev.stop();
+            }
+        });
+
+        it("fails the start with the port released when the config directory cannot be watched", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir);
+
+            const generating = await startDev(workdir);
+
+            await generating.stop();
+
+            const port = await findAvailablePort(18_870);
+            const { logger } = milestoneLogger();
+
+            // Searchable but not readable: files load by path, and a watch on the directory itself is refused.
+            chmodSync(workdir, 0o311);
+
+            try {
+                await expect(startNodeDevWorker({ codegenWatch: false, logger, port, projectRoot: workdir })).rejects.toThrow(/EACCES/u);
+            } finally {
+                chmodSync(workdir, 0o755);
+            }
+
+            await expect(portIsFree(port)).resolves.toBe(true);
+        });
     });
 });
 

@@ -3,7 +3,7 @@ import type { ensureDevVariables, ensureDevVarsExample, fillDevSecrets, startCel
 import type { materializeDevWranglerConfig, materializeServiceDevConfigs, RemotePlan, startLocalHyperdrive } from "@lunora/config/cloudflare";
 
 import type { ApiSpec } from "../../util/api-spec";
-import type { startCodegenWatch } from "../../util/codegen-watch";
+import type { CodegenGeneration, startCodegenWatch } from "../../util/codegen-watch";
 import type { ReadinessProbe } from "../../util/dev-probe";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
@@ -30,19 +30,24 @@ interface NodeAppHost {
     rearmPersistedAlarms: () => string[];
 }
 
+/** What `createNodeAppHost` composes: a loaded worker module and its bindings. */
+interface NodeAppHostCandidate {
+    crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
+    dataDirectory?: string;
+    durableObjects: ReadonlyArray<{ className: string; name: string }>;
+    env?: Record<string, unknown>;
+    worker: Record<string, unknown>;
+}
+
 /**
  * The slice of the project's copy of `@lunora/platform-node` the Node dev worker calls, loaded through the same jiti instance
  * as the app so both share one module graph. Declared rather than imported: the package is resolved from the project at run
  * time, and importing its types would pull its whole dependency tree into this package's declarations.
  */
 interface PlatformNode {
-    createNodeAppHost: (options: {
-        crons?: Readonly<Record<string, ReadonlyArray<unknown>>>;
-        dataDirectory?: string;
-        durableObjects: ReadonlyArray<{ className: string; name: string }>;
-        env?: Record<string, unknown>;
-        worker: Record<string, unknown>;
-    }) => NodeAppHost;
+    /** Throws what `createNodeAppHost` would refuse, without opening a database or arming a timer. */
+    checkNodeAppHost: (options: NodeAppHostCandidate) => void;
+    createNodeAppHost: (options: NodeAppHostCandidate) => NodeAppHost;
     createNodeHttpServer: (options: { fetch: (request: Request) => Promise<Response>; port?: number }) => Promise<{ close: () => Promise<void> }>;
     createNodeHyperdrive: (url?: string) => unknown;
     createNodeSecretBindings: (names: ReadonlyArray<string>, source?: Readonly<Record<string, string | undefined>>) => Record<string, unknown>;
@@ -52,6 +57,8 @@ interface PlatformNode {
 interface NodeDevWorkerInputs {
     /** Whether the codegen watcher runs and reloads the worker on a settled run; without it the worker watches `lunora/` itself. */
     codegenWatch: boolean;
+    /** The codegen watcher's runs, when it runs: a load waits while one is busy and is discarded if one started during it. */
+    generation?: () => CodegenGeneration;
     logger: Logger;
     /** Injection seam for tests — defaults to the project's own `@lunora/platform-node`. */
     platform?: PlatformNode;
@@ -262,6 +269,7 @@ export type {
     LongLivedDescriptor,
     LongLivedSpawner,
     NodeAppHost,
+    NodeAppHostCandidate,
     NodeDevWorker,
     NodeDevWorkerInputs,
     PlatformNode,
