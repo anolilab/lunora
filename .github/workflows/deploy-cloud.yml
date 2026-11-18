@@ -186,7 +186,10 @@
             # and are fanned out to each Worker that needs them. A value shared by two
             # Workers (the admin token, the tail and lineage secrets) is stored once.
             # GitHub forbids the `GITHUB_` prefix on secret names, hence `CLOUD_GITHUB_*`
-            # here; the script renames them to the Worker's own name.
+            # here; the script renames them to the Worker's own name. A `!` pair is one
+            # its Worker cannot serve without (better-auth's AUTH_SECRET, the sealing key,
+            # the dispatcher's control-plane token), so an unset one fails here instead
+            # of deploying green.
             - "name": "Write the Worker secrets"
               "env":
                   "AUTH_SECRET": "${{ secrets.AUTH_SECRET }}"
@@ -207,9 +210,9 @@
                   set -euo pipefail
 
                   bash scripts/worker-secrets.sh "${RUNNER_TEMP}/secrets-control-plane.json" \
-                      AUTH_SECRET=AUTH_SECRET \
-                      SECRET_ENCRYPTION_KEY=SECRET_ENCRYPTION_KEY \
-                      LUNORA_ADMIN_TOKEN=LUNORA_ADMIN_TOKEN \
+                      '!AUTH_SECRET=AUTH_SECRET' \
+                      '!SECRET_ENCRYPTION_KEY=SECRET_ENCRYPTION_KEY' \
+                      '!LUNORA_ADMIN_TOKEN=LUNORA_ADMIN_TOKEN' \
                       LUNORA_TAIL_SECRET=LUNORA_TAIL_SECRET \
                       GITHUB_WEBHOOK_SECRET=CLOUD_GITHUB_WEBHOOK_SECRET \
                       GITHUB_SETUP_STATE_SECRET=CLOUD_GITHUB_SETUP_STATE_SECRET \
@@ -220,7 +223,7 @@
                       GITHUB_APP_SLUG=CLOUD_GITHUB_APP_SLUG \
                       CLOUDFLARE_API_TOKEN=CELL_CLOUDFLARE_API_TOKEN
                   bash scripts/worker-secrets.sh "${RUNNER_TEMP}/secrets-dispatcher.json" \
-                      CONTROL_PLANE_TOKEN=LUNORA_ADMIN_TOKEN \
+                      '!CONTROL_PLANE_TOKEN=LUNORA_ADMIN_TOKEN' \
                       LUNORA_LINEAGE_SECRET=LUNORA_LINEAGE_SECRET
                   bash scripts/worker-secrets.sh "${RUNNER_TEMP}/secrets-outbound.json" \
                       LUNORA_LINEAGE_SECRET=LUNORA_LINEAGE_SECRET
