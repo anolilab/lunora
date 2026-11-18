@@ -337,6 +337,54 @@ describe("auth data port", () => {
         expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "kept" }]);
     });
 
+    it("refuses at the dry run a replace row with no column the table has, so the commit never meets it", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+
+        createTables(database);
+        database.prepare(`INSERT INTO "user" VALUES ('kept', 'kept@since.test', NULL)`).run();
+
+        const port = createSqlAuthDataPort(batchingExecutorOver(database), ["user"]);
+        const rows = [
+            { doc: { email: "a@b.test", id: "u1" }, table: "user" },
+            { doc: { removedPluginColumn: "x" }, table: "user" },
+        ];
+        const dryRun = await port.replaceRows!(rows, { dryRun: true });
+
+        expect(dryRun.errors).toStrictEqual([{ index: 1, message: `no column of the row exists on "user"`, table: "user" }]);
+        await expect(port.replaceRows!(rows)).resolves.toMatchObject({ errors: [{ index: 1 }], inserted: 0 });
+        expect(database.prepare(`SELECT "id" FROM "user"`).all()).toEqual([{ id: "kept" }]);
+    });
+
+    it("refuses the same row on the DO-backed auth object's dry run", async () => {
+        expect.hasAssertions();
+
+        const database = new DatabaseSync(":memory:");
+        const object = new LunoraAuthDO(
+            { storage: createDoStorage(database) },
+            () => {
+                return { secret: SECRET };
+            },
+            { internalSecret: INTERNAL_SECRET },
+        );
+        const { dataPort } = createDoAuthWiring({
+            internalSecret: INTERNAL_SECRET,
+            namespace: {
+                get: () => {
+                    return { fetch: async (request: Request) => object.fetch(request) };
+                },
+                idFromName: (name) => name,
+            },
+        });
+
+        await collect(dataPort!);
+
+        const result = await dataPort!.replaceRows!([{ doc: { removedPluginColumn: "x" }, table: "user" }], { dryRun: true });
+
+        expect(result.errors).toStrictEqual([{ index: 0, message: `no column of the row exists on "user"`, table: "user" }]);
+    });
+
     it("replaces the DO-backed auth object's tables in one storage transaction", async () => {
         expect.hasAssertions();
 

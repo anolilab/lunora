@@ -333,9 +333,16 @@ const planAuthReplace = async (
             continue;
         }
 
-        const row = decodeWire(doc) as Row;
+        const row = Object.fromEntries(Object.entries(decodeWire(doc) as Row).filter(([name]) => known.includes(name)));
 
-        decoded.push({ row: Object.fromEntries(Object.entries(row).filter(([name]) => known.includes(name))), table });
+        // Refused here rather than at the commit: `INSERT INTO t () VALUES ()` is a syntax error, and the dry run that
+        // vets a staged restore before its shards are swapped has to see it, or the restore fails half-written.
+        if (Object.keys(row).length === 0) {
+            errors.push({ index, message: `no column of the row exists on "${table}"`, table });
+            continue;
+        }
+
+        decoded.push({ row, table });
     }
 
     const present = [...clearTables, ...tables].filter((table) => (columns.get(table) ?? []).length > 0);
