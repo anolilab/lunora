@@ -118,6 +118,18 @@ const ENV_NAME = /^[A-Z_a-z]\w*$/u;
 /** Wrangler's rule for a binding name: a JavaScript identifier. A Durable Object binding's name is also a directory on the data volume. */
 const BINDING_NAME = /^[A-Za-z_$][\w$]*$/u;
 
+/**
+ * The queue `@lunora/mail`'s producer writes to: the name the `mail` starter's wrangler config gives it, and the one
+ * `@lunora/platform-node`'s mail host reserves. A producer bound to it is how the server knows the app queues mail.
+ */
+const MAIL_QUEUE_NAME = "lunora-mail";
+
+/** What the mail host reads to deliver: the sender, and Resend's key, the only transport the container has. */
+const MAIL_ENV = ["MAIL_FROM", "RESEND_API_KEY"] as const;
+
+/** How often the server polls the mail queue. A queued reset link waits at most this long before its first attempt. */
+const MAIL_POLL_INTERVAL_MS = 1000;
+
 /** The prefix of the env vars the runtime reads as plain strings; `createNodeSecretBindings` refuses it as a secret name. */
 const RUNTIME_ENV_PREFIX = "LUNORA_";
 
@@ -125,6 +137,7 @@ interface NodeWranglerConfig {
     durable_objects?: unknown;
     hyperdrive?: unknown;
     main?: unknown;
+    queues?: unknown;
     secrets?: unknown;
     secrets_store_secrets?: unknown;
     vars?: unknown;
@@ -144,6 +157,12 @@ interface NodeDeployProject {
     entry: string;
     /** The Hyperdrive binding built from `DATABASE_URL`, when the app declares one. */
     hyperdrive: string | undefined;
+
+    /**
+     * The `queues.producers[]` binding for {@link MAIL_QUEUE_NAME}, when the app queues mail: bound to the platform's mail
+     * queue, which the server polls and delivers through Resend.
+     */
+    mailQueue: string | undefined;
     /** `secrets_store_secrets[].binding`: the names `ctx.secrets` reads, bound over env vars of the same name. */
     storeSecrets: string[];
     /** Declared wrangler bindings the entry leaves unbound: a section key, or `durable_objects.NAME` for an external class. */
@@ -469,6 +488,41 @@ const requiredSecretNames = (secrets: unknown, configName: string): string[] => 
  * deploy runs it before codegen writes anything.
  * @param projectRoot Directory containing the wrangler config.
  */
+/** `queues` entries of one kind (`producers`, `consumers`), as records; anything else in the list is dropped. */
+const queueEntries = (queues: unknown, kind: "consumers" | "producers"): Record<string, unknown>[] => {
+    const entries = isRecord(queues) ? queues[kind] : undefined;
+
+    return Array.isArray(entries) ? entries.filter((entry): entry is Record<string, unknown> => isRecord(entry)) : [];
+};
+
+/** The binding of the app's {@link MAIL_QUEUE_NAME} producer, or `undefined` when the app queues no mail. */
+const mailQueueBinding = (queues: unknown, configName: string): string | undefined => {
+    const producer = queueEntries(queues, "producers").find((entry) => entry.queue === MAIL_QUEUE_NAME);
+
+    if (producer === undefined) {
+        return undefined;
+    }
+
+    if (typeof producer.binding !== "string" || !BINDING_NAME.test(producer.binding)) {
+        throw new Error(
+            `--target node binds the ${MAIL_QUEUE_NAME} queue producer by its "binding" name, and the one in ${configName} has ${producer.binding === undefined ? "none" : `${JSON.stringify(producer.binding)}, which is not a valid binding name`}`,
+        );
+    }
+
+    return producer.binding;
+};
+
+/**
+ * Whether `queues` declares nothing but mail: producers and consumers of {@link MAIL_QUEUE_NAME}, which the server composes.
+ * Any other queue still reports `queues` as unbound, since the container serves no app queue.
+ */
+const declaresOnlyMailQueue = (queues: unknown): boolean =>
+    isRecord(queues) &&
+    Object.entries(queues).every(
+        ([kind, list]) =>
+            (kind === "consumers" || kind === "producers") && Array.isArray(list) && list.every((entry) => isRecord(entry) && entry.queue === MAIL_QUEUE_NAME),
+    );
+
 const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
     const configPath = findWranglerFile(projectRoot);
 
@@ -534,6 +588,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
 
     const workerSecrets = requiredSecretNames(parsed.secrets, configName);
     const variables = declaredVariables(parsed.vars, configName);
+    const mailQueue = mailQueueBinding(parsed.queues, configName);
 
     const envSources = [
         { names: Object.keys(variables), source: "vars" },
@@ -541,6 +596,7 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         { names: storeSecrets, source: "secrets_store_secrets" },
         { names: hyperdrive, source: "hyperdrive" },
         { names: durableObjects.map((binding) => binding.name), source: "durable_objects.bindings" },
+        { names: mailQueue === undefined ? [] : [mailQueue], source: `the ${MAIL_QUEUE_NAME} queue producer` },
     ];
 
     refuseEnvCollisions(envSources, configName);
@@ -560,12 +616,25 @@ const readNodeDeployProject = (projectRoot: string): NodeDeployProject => {
         durableObjects,
         entry: resolve(projectRoot, parsed.main),
         hyperdrive: hyperdrive[0],
+        mailQueue,
         storeSecrets,
-        unbound: [...Object.keys(declared).filter((key) => !COMPOSED_OR_CONFIG_KEYS.has(key) && isDeclared(declared[key])), ...external],
+        unbound: [
+            ...Object.keys(declared).filter(
+                (key) =>
+                    !COMPOSED_OR_CONFIG_KEYS.has(key) &&
+                    isDeclared(declared[key]) &&
+                    !(key === "queues" && mailQueue !== undefined && declaresOnlyMailQueue(declared[key])),
+            ),
+            ...external,
+        ],
         vars: variables,
         workerSecrets,
     };
 };
+
+/** The mail variables the server reads that the app does not already declare as a var or a secret: required, when it queues mail. */
+const mailEnvNames = (project: NodeDeployProject): string[] =>
+    project.mailQueue === undefined ? [] : MAIL_ENV.filter((name) => !Object.hasOwn(project.vars, name) && !project.workerSecrets.includes(name));
 
 /** The environment the generated server reads, in the order the README lists it. */
 const nodeDeployEnv = (project: NodeDeployProject): NodeDeployEnvVariable[] => [
@@ -595,6 +664,16 @@ const nodeDeployEnv = (project: NodeDeployProject): NodeDeployEnvVariable[] => [
                   required: true,
               },
           ]),
+    ...mailEnvNames(project).map((name) => {
+        return {
+            description:
+                name === "MAIL_FROM"
+                    ? "The default sender of queued mail, e.g. `Acme <noreply@acme.app>`. The server refuses to start without it."
+                    : "Resend API key the server delivers queued mail with. The server refuses to start without it.",
+            name,
+            required: true,
+        };
+    }),
     ...project.storeSecrets.map((name) => {
         return { description: "Read through `ctx.secrets`; rejected when unset or empty.", name, required: true };
     }),
@@ -625,7 +704,9 @@ const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cron
     const config = {
         durableObjects: project.durableObjects,
         hyperdrive: project.hyperdrive,
-        requiredEnv: [...project.workerSecrets, ...(project.hyperdrive === undefined ? [] : ["DATABASE_URL"])],
+        mailEnv: mailEnvNames(project),
+        mailQueue: project.mailQueue,
+        requiredEnv: [...project.workerSecrets, ...(project.hyperdrive === undefined ? [] : ["DATABASE_URL"]), ...mailEnvNames(project)],
         workerSecrets: project.workerSecrets,
         storeSecrets: project.storeSecrets,
         vars: project.vars,
@@ -741,6 +822,7 @@ const env = { ${WORKER_ENV}: "production", ...CONFIG.vars };
 const declaredNames = new Set([
     ...Object.keys(CONFIG.vars),
     ...CONFIG.workerSecrets,
+    ...(CONFIG.mailEnv ?? []),
     ...RUNTIME_ENV,
     ...Object.keys(process.env).filter((name) => name.startsWith("LUNORA_")),
 ]);
@@ -813,8 +895,19 @@ for (const binding of CONFIG.durableObjects) {
     };
 
     if (binding.name === PRIMARY_BINDING) {
-        platform = createNodePlatform({ ...handlers, crons: LUNORA_CRONS, path: join(dataDirectory, "platform.sqlite3") });
+        platform = createNodePlatform({
+            ...handlers,
+            crons: LUNORA_CRONS,
+            // Beside platform.sqlite3, outside every shard directory, in the volume: queued mail survives a restart.
+            ...(CONFIG.mailQueue === undefined ? {} : { mail: { env, path: join(dataDirectory, "mail.sqlite3") } }),
+            path: join(dataDirectory, "platform.sqlite3"),
+        });
         env[binding.name] = createNodeShardNamespace(platform.directory);
+
+        // The app's MAIL_QUEUE producer, as on Cloudflare: \`mailer.queue()\` writes to the platform's durable mail queue.
+        if (CONFIG.mailQueue !== undefined) {
+            env[CONFIG.mailQueue] = platform.mail.queue;
+        }
     } else {
         const registry = createNodeShardRegistry(handlers);
 
@@ -889,6 +982,29 @@ for (const registry of registries) {
     registry.rearmPersistedAlarms();
 }
 
+// Queued mail is delivered by polling, as nothing else here consumes a queue. One poll at a time; one in flight when the
+// shutdown starts is waited for by the platform's drain, which covers mail.
+let mailPoll;
+
+const pollMail = () => {
+    if (stopping || platform?.mail === undefined || mailPoll !== undefined) {
+        return;
+    }
+
+    mailPoll = platform.mail
+        .poll()
+        .catch((error) => {
+            logError("polling the mail queue failed", error);
+        })
+        .finally(() => {
+            mailPoll = undefined;
+        });
+};
+
+const mailTimer = platform?.mail === undefined ? undefined : setInterval(pollMail, ${String(MAIL_POLL_INTERVAL_MS)});
+
+pollMail();
+
 const server = await createNodeHttpServer({
     fetch: async (request) => {
         if (stopping) {
@@ -919,6 +1035,8 @@ const shutdown = async (code) => {
     }
 
     stopping = true;
+    // No new mail poll from here; the platform drain waits for the one in flight.
+    clearInterval(mailTimer);
     console.log("lunora: shutting down, draining in-flight work");
 
     // Until the last step has run, any exit is an incomplete shutdown: if the event loop runs empty while a step still waits
@@ -1057,7 +1175,7 @@ const DOCKERIGNORE = `# Generated by \`lunora deploy --target node\`. Only what 
 !server.mjs
 `;
 
-const renderReadme = (env: ReadonlyArray<NodeDeployEnvVariable>): string => {
+const renderReadme = (env: ReadonlyArray<NodeDeployEnvVariable>, mailQueue: string | undefined): string => {
     const rows = env.map((variable) => `| \`${variable.name}\` | ${variable.required ? "yes" : "no"} | ${variable.description} |`);
 
     return `# Lunora Node container
@@ -1073,14 +1191,24 @@ Without Docker: \`npm install\` here, then \`node server.mjs\`.
 
 ## Data
 
-Every shard, the scheduler and the crons live in SQLite files under \`LUNORA_DATA_DIR\` (\`/data\` in the
-image, declared as a volume). Mount a persistent volume there; a container without one loses every row when
+Every shard, the scheduler, the crons and queued mail (\`mail.sqlite3\`, when the app queues mail) live in SQLite
+files under \`LUNORA_DATA_DIR\` (\`/data\` in the image, declared as a volume). Mount a persistent volume there; a container without one loses every row when
 it is removed. Run one container per volume: two processes on the same files both fire every cron.
 
 The image runs as its \`node\` user (uid 1000). A named volume inherits the image's \`/data\` ownership; a
 bind-mounted host directory must be writable by uid 1000, or the server fails at startup.
 
-## Shutdown
+${
+    mailQueue === undefined
+        ? ""
+        : `## Mail
+
+The app's \`${mailQueue}\` queue producer is bound to a durable mail queue in \`mail.sqlite3\`, which the server polls every
+${String(MAIL_POLL_INTERVAL_MS)} ms and delivers through Resend (\`RESEND_API_KEY\`, from \`MAIL_FROM\`). A failed send is retried and then
+parked, never dropped. A shutdown waits for a poll in flight before closing the database.
+
+`
+}## Shutdown
 
 On SIGTERM or SIGINT the server stops accepting connections, waits for the requests in flight at that moment,
 then waits for background work, alarms and cron runs before closing the databases and exiting. Event streams
@@ -1443,7 +1571,7 @@ const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promis
     await writeLockfile(directory, spawner);
     writeFileSync(join(directory, "Dockerfile"), renderDockerfile(), "utf8");
     writeFileSync(join(directory, ".dockerignore"), DOCKERIGNORE, "utf8");
-    writeFileSync(join(directory, "README.md"), renderReadme(env), "utf8");
+    writeFileSync(join(directory, "README.md"), renderReadme(env, project.mailQueue), "utf8");
 
     return {
         directory,

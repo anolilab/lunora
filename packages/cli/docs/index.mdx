@@ -882,9 +882,19 @@ it (a `createWorker` `backupCron` or `crons` job) does not fire; the deploy name
 any it finds. A project whose `@lunora/platform-node` predates deadline-bounded
 drains is refused, since every shutdown would fail on it. Wrangler `vars` are bundled as declared (a JSON object
 stays an object) and a set environment variable overrides one as a string.
-Every shard, the scheduler and the crons live in SQLite files under
+Every shard, the scheduler, the crons and queued mail live in SQLite files under
 `LUNORA_DATA_DIR`, so mount a persistent volume there (a bind mount must be
 writable by uid 1000) and run one container per volume.
+
+An app that queues mail (its wrangler config has a `queues.producers[]` entry
+for the `lunora-mail` queue, as the `mail` starter writes) gets that producer
+bound to `@lunora/platform-node`'s durable mail queue, in `mail.sqlite3` beside
+the shard directories. The server polls it every second and delivers through
+Resend, so it also reads `MAIL_FROM` and `RESEND_API_KEY` and refuses to start
+while either is unset (unless the app declares it as a var or secret). A failed
+send is retried and then parked, never dropped, and a shutdown waits for a poll
+in flight. The `queues` section is then composed, not reported unbound, as long
+as it declares only that queue.
 
 On SIGTERM or SIGINT the server stops accepting connections, waits for the
 responses in flight at that moment to be written (a request still arriving on an
