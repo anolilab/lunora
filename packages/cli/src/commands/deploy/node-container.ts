@@ -283,15 +283,16 @@ const durableObjectEntries = (value: unknown, configName: string): { className: 
  * Durable Objects), a later source would silently replace an earlier one, and the code reading it gets the wrong kind of value.
  */
 const refuseEnvCollisions = (sources: ReadonlyArray<readonly [string, ReadonlyArray<string>]>, configName: string): void => {
-    const owners = new Map<string, string[]>();
+    // Distinct sources per name: the same name listed twice in one source (secrets.required) puts one key on env, not two.
+    const owners = new Map<string, Set<string>>();
 
     for (const [source, names] of sources) {
         for (const name of names) {
-            owners.set(name, [...(owners.get(name) ?? []), source]);
+            owners.set(name, new Set([...(owners.get(name) ?? []), source]));
         }
     }
 
-    const collisions = [...owners].filter(([, from]) => from.length > 1).map(([name, from]) => `${name} (${from.join(" and ")})`);
+    const collisions = [...owners].filter(([, from]) => from.size > 1).map(([name, from]) => `${name} (${[...from].join(" and ")})`);
 
     if (collisions.length > 0) {
         throw new Error(
@@ -544,7 +545,7 @@ const projectSpecifier = (projectRoot: string, path: string): string => `./${rel
  * ones to be written, close the listener (ending event streams and WebSockets), drain the worker's `waitUntil` work, drain every shard (in-flight requests, alarms, cron deliveries
  * and their `waitUntil` work), then close the databases. Only names reach this file, never a secret's value.
  */
-const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cronsModule: string): string => {
+const renderServerEntry = (projectRoot: string, project: NodeDeployProject, cronsModule: string, workerModule: string): string => {
     const config = {
         durableObjects: project.durableObjects,
         hyperdrive: project.hyperdrive,
@@ -578,9 +579,10 @@ import {
     createNodeShardRegistry,
     createNodeShardState,
     DEFAULT_DRAIN_TIMEOUT_MS,
+    drainTogether,
 } from "@lunora/platform-node";
 
-import handler, { ${classImports} } from ${JSON.stringify(projectSpecifier(projectRoot, project.entry))};
+import handler, { ${classImports} } from ${JSON.stringify(projectSpecifier(projectRoot, workerModule))};
 import { LUNORA_CRONS } from ${JSON.stringify(projectSpecifier(projectRoot, cronsModule))};
 
 // A version guard, not a value this file uses: a platform-node without deadline-bounded drains has no such export, so the
@@ -744,17 +746,19 @@ const drainSet = async (set, { timeoutMs }) => {
             if (!(await Promise.race([Promise.all(set).then(() => true), expired]))) {
                 console.error("lunora: shutdown deadline passed with %d waitUntil task(s) still running", set.size);
 
-                return { pending: [...set].map(() => "waitUntil work"), timedOut: true };
+                return { failed: backgroundFailures.splice(0), pending: [...set].map(() => "waitUntil work"), timedOut: true };
             }
         }
 
-        return { pending: [], timedOut: false };
+        return { failed: backgroundFailures.splice(0), pending: [], timedOut: false };
     } finally {
         clearTimeout(timer);
     }
 };
 
 const background = new Set();
+// Background work that failed, each also logged where it happened: reported by the shutdown's drain so the exit code is 1.
+const backgroundFailures = [];
 const context = {
     passThroughOnException: () => undefined,
     waitUntil: (promise) => {
@@ -762,12 +766,21 @@ const context = {
             background,
             Promise.resolve(promise).catch((error) => {
                 logError("work handed to waitUntil failed", error);
+                backgroundFailures.push("a waitUntil task failed");
             }),
         );
     },
 };
 
 let stopping = false;
+
+// Before any traffic: a shard's stored alarm re-arms only when the shard is opened, so a restart would otherwise leave every
+// alarm on a shard nobody calls unfired.
+platform?.rearmPersistedAlarms();
+
+for (const registry of registries) {
+    registry.rearmPersistedAlarms();
+}
 
 const server = await createNodeHttpServer({
     fetch: async (request) => {
@@ -837,16 +850,17 @@ const shutdown = async (code) => {
     await step("waiting for in-flight requests", () => server.drain(remaining()));
     await step("closing the HTTP server", () => server.close());
     await step("draining waitUntil work", () => drainSet(background, remaining()));
-    await step("draining shards", () => Promise.all([platform?.drain(remaining()), ...registries.map((registry) => registry.drain(remaining()))]));
+    // Together, until every registry is idle in one pass: work on one can hand work to another after that one drained.
+    await step("draining shards", () => drainTogether([...(platform === undefined ? [] : [platform]), ...registries], remaining()));
     // Forced: the drains above have finished or reached their deadline, so a close handler still running now never settles, and
     // its shard's database must not stay open at exit. platform-node logs any shard it closes that way.
-    await step("closing shards", () => {
-        for (const registry of registries) {
-            registry.close({ force: true });
-        }
+    // Each close is its own step: one that throws (a database refusing to close) is logged and makes the exit 1, and the
+    // later closes still run, so one busy shard cannot leave the others' databases open.
+    for (const [index, registry] of registries.entries()) {
+        await step(\`closing shard registry \${String(index + 1)} of \${String(registries.length)}\`, () => registry.close({ force: true }));
+    }
 
-        platform?.close({ force: true });
-    });
+    await step("closing the platform", () => platform?.close({ force: true }));
 
     // The last steps can settle on microtasks alone, and Node reports an unhandled rejection only once the event loop turns:
     // one turn here lets a fatal error raised at the very end of the drain reach its handler and the exit code.
@@ -888,7 +902,8 @@ const publicUrl = process.env.LUNORA_ORIGIN_URL;
 if (publicUrl === undefined || publicUrl === "") {
     console.log("lunora: listening on %s", server.origin);
 } else {
-    console.log("lunora: listening on %s (public URL %s)", server.origin, publicUrl);
+    // The normalized origin, never the raw value: it can carry \`user:pass@\` or a query token, which do not belong in a log.
+    console.log("lunora: listening on %s (public URL %s)", server.origin, new URL(publicUrl).origin);
 }
 `;
 };
@@ -1107,30 +1122,63 @@ const deliveredCronSchedules = async (cronsModule: string): Promise<string[]> =>
 };
 
 /** Bundle the generated entry and the app into `server.mjs`. */
+/** The app's code bundled on its own, with wrangler's define and alias, when it has either; never shipped. */
+const WORKER_PASS_FILE = ".worker-pass.mjs";
+
+const SERVER_OPTIONS = {
+    // CommonJS dependencies bundled into ESM still call `require` for Node built-ins.
+    banner: { js: `import { createRequire as __lunoraCreateRequire } from "node:module";\nconst require = __lunoraCreateRequire(import.meta.url);` },
+    bundle: true,
+    format: "esm",
+    legalComments: "none",
+    logLevel: "silent",
+    platform: "node",
+    target: "node22",
+} as const;
+
+/**
+ * Bundle the generated entry and the app into `server.mjs`. With a wrangler define or alias, the app's own code goes through a
+ * first pass that applies them and leaves every package import in place, and the server is bundled around its output without
+ * them: a define such as `process.env` must rewrite the app, not the server's own environment checks or platform-node. Packages
+ * are still bundled once, in the second pass, so the app and the server share one copy of each. Unlike wrangler, the define and
+ * alias therefore reach the app's own files but not its dependencies.
+ */
 const bundleServer = async (
     esbuild: EsbuildApi,
     directory: string,
-    contents: string,
+    render: (workerModule: string) => string,
+    project: NodeDeployProject,
     projectRoot: string,
-    options: { alias: Record<string, string>; define: Record<string, string>; external: ReadonlyArray<string> },
+    external: ReadonlyArray<string>,
 ): Promise<void> => {
-    await esbuild.build({
-        // Wrangler's own build applies these, so the container bundle must too: a Worker constant or module alias that only
-        // reached Cloudflare's bundle would leave the Node server reading an undefined global or importing the wrong module.
-        alias: options.alias,
-        // CommonJS dependencies bundled into ESM still call `require` for Node built-ins.
-        banner: { js: `import { createRequire as __lunoraCreateRequire } from "node:module";\nconst require = __lunoraCreateRequire(import.meta.url);` },
-        bundle: true,
-        define: options.define,
-        external: [...options.external],
-        format: "esm",
-        legalComments: "none",
-        logLevel: "silent",
-        outfile: join(directory, "server.mjs"),
-        platform: "node",
-        stdin: { contents, loader: "js", resolveDir: projectRoot, sourcefile: "lunora-node-server.mjs" },
-        target: "node22",
-    });
+    const scoped = Object.keys(project.define).length > 0 || Object.keys(project.alias).length > 0;
+    const workerPass = join(directory, WORKER_PASS_FILE);
+
+    try {
+        if (scoped) {
+            await esbuild.build({
+                alias: project.alias,
+                bundle: true,
+                define: project.define,
+                entryPoints: [project.entry],
+                format: "esm",
+                logLevel: "silent",
+                outfile: workerPass,
+                packages: "external",
+                platform: "node",
+                target: "node22",
+            });
+        }
+
+        await esbuild.build({
+            ...SERVER_OPTIONS,
+            external: [...external],
+            outfile: join(directory, "server.mjs"),
+            stdin: { contents: render(scoped ? workerPass : project.entry), loader: "js", resolveDir: projectRoot, sourcefile: "lunora-node-server.mjs" },
+        });
+    } finally {
+        rmSync(workerPass, { force: true });
+    }
 };
 
 /**
@@ -1175,11 +1223,10 @@ const buildNodeContainer = async (projectRoot: string, spawner: Spawner): Promis
     );
 
     try {
-        await bundleServer(esbuild, directory, renderServerEntry(projectRoot, project, cronsModule), projectRoot, {
-            alias: project.alias,
-            define: project.define,
-            external: ["better-sqlite3", ...Object.keys(optional)],
-        });
+        await bundleServer(esbuild, directory, (workerModule) => renderServerEntry(projectRoot, project, cronsModule, workerModule), project, projectRoot, [
+            "better-sqlite3",
+            ...Object.keys(optional),
+        ]);
     } catch (error: unknown) {
         throw missingExportRefusal(error, project, projectRoot, realPath(dirname(platformNodeManifest))) ?? unresolvedOptionalRefusal(error) ?? error;
     }

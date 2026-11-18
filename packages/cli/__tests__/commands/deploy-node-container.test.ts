@@ -456,12 +456,14 @@ describe("lunora deploy --target node", () => {
         });
 
         it("force-closes the shards after its drain, so a close handler that never settles cannot keep a database open", () => {
-            expect.assertions(2);
+            expect.assertions(3);
 
             const bundle = readFileSync(join(artifact, "server.mjs"), "utf8");
 
             expect(bundle).toContain("registry.close({ force: true })");
             expect(bundle).toContain("platform?.close({ force: true })");
+            // Each close its own step, so one that throws cannot skip the ones after it.
+            expect(bundle).toContain('step("closing the platform"');
         });
 
         it("sends only what the Dockerfile copies to a builder", () => {
@@ -569,6 +571,37 @@ describe("lunora deploy --target node", () => {
             expect(run.stderr()).toContain("SESSION_SECRET");
         });
 
+        it("logs the public URL's origin only, never userinfo or a query token from LUNORA_ORIGIN_URL", async () => {
+            expect.assertions(2);
+
+            // Userinfo and a query token, set field by field: neither may reach the log.
+            const publicUrl = new URL("https://app.example/base?token=abc123");
+
+            publicUrl.username = "operator";
+            publicUrl.password = "hunter2";
+
+            const run = startServer(artifact, dataDirectory(), { ...RUN_ENV, HOST: "127.0.0.1", LUNORA_ORIGIN_URL: publicUrl.href });
+
+            try {
+                await run.listening;
+
+                expect(run.stdout()).toContain("(public URL https://app.example)");
+                expect(run.stdout()).not.toMatch(/hunter2|abc123|operator/u);
+            } finally {
+                run.child.kill("SIGTERM");
+                await run.exited;
+            }
+        });
+
+        it("re-arms persisted alarms before listening and drains its registries together", () => {
+            expect.assertions(2);
+
+            const bundle = readFileSync(join(artifact, "server.mjs"), "utf8");
+
+            expect(bundle).toContain("platform?.rearmPersistedAlarms();");
+            expect(bundle).toContain("drainTogether([...platform === void 0 ? [] : [platform], ...registries], remaining())");
+        });
+
         it("prints the public URL alongside the bind address", async () => {
             expect.assertions(1);
 
@@ -587,7 +620,7 @@ describe("lunora deploy --target node", () => {
         it(
             "logs a failed waitUntil with its stack and cause instead of dropping it",
             async () => {
-                expect.assertions(4);
+                expect.assertions(5);
 
                 const run = startServer(artifact, dataDirectory());
                 const origin = await run.listening;
@@ -596,7 +629,9 @@ describe("lunora deploy --target node", () => {
 
                 // Shutdown drains background work, so the failure is on stderr by the time the process has exited.
                 run.child.kill("SIGTERM");
-                await run.exited;
+
+                // A failed waitUntil is an unclean shutdown, so the exit code is 1.
+                await expect(run.exited).resolves.toBe(1);
 
                 expect(run.stderr()).toContain("lunora: work handed to waitUntil failed");
                 expect(run.stderr()).toMatch(/Error: background boom\n\s+at /u);
@@ -1218,6 +1253,50 @@ describe("lunora deploy --target node", () => {
 
             expect(bundle).toContain('"build-42"');
             expect(bundle).toContain("from-the-alias");
+        });
+
+        it("allows the same name twice within one source, which puts one key on env", async () => {
+            expect.assertions(1);
+
+            writeFixture(workdir, { wrangler: { secrets: { required: ["SESSION_SECRET", "SESSION_SECRET"] } } });
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+        });
+
+        it("keeps a wrangler define of process.env to the worker, so the server still reads the real environment", async () => {
+            expect.assertions(2);
+
+            writeFixture(workdir, { wrangler: { define: { "process.env": "{}" } } });
+
+            const worker = join(workdir, "src", "worker.ts");
+
+            writeFileSync(
+                worker,
+                readFileSync(worker, "utf8").replace(
+                    'case "/__fixture/env":',
+                    'case "/__fixture/process-env":\n                return Response.json({ keys: Object.keys(process.env).length });\n            case "/__fixture/env":',
+                ),
+                "utf8",
+            );
+
+            await expect(deploy(workdir)).resolves.toMatchObject({ code: 0 });
+
+            const artifact = join(workdir, NODE_DEPLOY_DIRECTORY);
+
+            mkdirSync(join(artifact, "node_modules"));
+            symlinkSync(BETTER_SQLITE3, join(artifact, "node_modules", "better-sqlite3"), "dir");
+
+            // The server's own check reads the real SESSION_SECRET and starts; the worker sees the defined, empty object.
+            const run = startServer(artifact, join(workdir, "data"));
+
+            try {
+                const origin = await run.listening;
+
+                await expect(fetch(`${origin}/__fixture/process-env`).then(async (response) => response.json())).resolves.toStrictEqual({ keys: 0 });
+            } finally {
+                run.child.kill("SIGTERM");
+                await run.exited;
+            }
         });
 
         it("refuses a secrets_store binding with the reserved LUNORA_ prefix, which could never start", async () => {
