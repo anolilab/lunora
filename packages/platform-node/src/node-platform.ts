@@ -222,6 +222,34 @@ const refuseNonDurableMailPath = (mailPath: string): void => {
 };
 
 /**
+ * Mail's polls as one drainable part of the platform drain: a poll in flight settles its rows
+ * through the database `close()` shuts, and work handed to `shard.waitUntil` can start a poll a
+ * pass never saw, which drainTogether's passes catch like any other part's late work.
+ */
+const mailDrainPart = (mail: NodeMailHost): Drainable => {
+    return {
+        drain: async (drainOptions) => {
+            const deadline = startDrainDeadline(drainOptions);
+
+            try {
+                if (await settlesBefore(mail.drain(), deadline)) {
+                    return { failed: [], pending: [], timedOut: false };
+                }
+
+                // eslint-disable-next-line no-console -- the drain gives up on these polls, so the log is the only record of them
+                console.error("[@lunora/platform-node] platform drain deadline passed with a mail poll still running");
+
+                return { failed: [], pending: ["a mail poll"], timedOut: true };
+            } finally {
+                deadline.cancel();
+            }
+        },
+        idle: () => mail.idle(),
+        pending: () => (mail.idle() ? [] : ["a mail poll"]),
+    };
+};
+
+/**
  * Refuse a mail file that is one the platform already opens: the shard's, the
  * `.global()` store's, or one the shard registry would list as a shard. Each
  * shares a write lock with mail, and the shard's is held across awaits by
@@ -786,14 +814,15 @@ export const createNodePlatform = <
             idle: () => pendingBackground() === 0 && pendingAlarms() === 0 && pendingDispatches().waits.length === 0,
             pending: hostPending,
         };
+        const parts: Drainable[] = [host, registry, ...(mail === undefined ? [] : [mailDrainPart(mail)])];
 
         return {
             capabilities: NODE_CAPABILITIES,
             close,
             directory,
             dispatch: (request) => dispatch(request),
-            idle: () => host.idle() && registry.idle(),
-            pending: () => [...host.pending(), ...registry.pending()],
+            idle: () => parts.every((part) => part.idle()),
+            pending: () => parts.flatMap((part) => part.pending()),
             // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
             // would let `close()` dispose a database a handler is still writing. Host work can start shard work after the
             // registry drained (a due job's delivery), which drainTogether's passes, failures and pending re-read account for.
@@ -807,16 +836,7 @@ export const createNodePlatform = <
                 suspendHostAlarms();
                 registry.suspendAlarms();
 
-                // Mail on both sides of the shards: a poll in flight settles its rows through the database
-                // `close()` shuts, and work handed to `shard.waitUntil` can start a poll the first
-                // snapshot never saw. Mail polls register no shard work, so one more pass is the last.
-                await mail?.drain();
-
-                const result = await drainTogether([host, registry], drainOptions);
-
-                await mail?.drain();
-
-                return result;
+                return drainTogether(parts, drainOptions);
             },
             globalTables,
             kv,

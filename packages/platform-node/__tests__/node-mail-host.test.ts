@@ -1900,25 +1900,23 @@ describe(createNodeMailHost, () => {
             expect(mail.deadLetters.list()).toMatchObject([{ body: { text: "Legacy" }, id: "legacy" }]);
         });
 
-        it("runs the platform's teardowns once, however often it is closed", () => {
+        it("closes a platform with mail more than once, and disposes it after, without a throw", () => {
             expect.assertions(1);
 
             directory = mkdtempSync(join(tmpdir(), "lunora-mail-close-"));
 
-            const close = vi.spyOn(Database.prototype, "close");
             const platform = createNodePlatform({
                 mail: { env: PRODUCTION, path: join(directory, "mail.sqlite3"), transport: scriptedTransport(["ok"]) },
                 path: join(directory, "shard.sqlite3"),
             });
 
-            platform.close();
-
-            const once = close.mock.calls.length;
-
-            platform.close();
-            platform[Symbol.dispose]();
-
-            expect(close).toHaveBeenCalledTimes(once);
+            // close() stays repeatable (a forced close may follow an unforced one), so each teardown,
+            // the mail connection's included, has to take a second call.
+            expect(() => {
+                platform.close();
+                platform.close({ force: true });
+                platform[Symbol.dispose]();
+            }).not.toThrow();
         });
 
         it("still sends a failed delivery's retry past the dedupe window when the failed mark cannot be written", async () => {

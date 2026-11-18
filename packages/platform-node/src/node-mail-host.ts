@@ -155,6 +155,9 @@ interface NodeMailHost {
     /** Wait for every `poll()` in flight. `createNodePlatform`'s `drain()` calls it before the database can close. */
     drain: () => Promise<void>;
 
+    /** Whether no `poll()` is in flight: what `createNodePlatform`'s `drain()` checks to end its passes. */
+    idle: () => boolean;
+
     /** `queue()` enqueues onto {@link NodeMailHost.queue}; `send()` delivers now through the same transport. */
     mailer: Mailer;
 
@@ -1111,6 +1114,7 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
         drain: async () => {
             await Promise.allSettled(inFlight);
         },
+        idle: () => inFlight.size === 0,
         mailer,
         poll: async (now) => {
             const parking = new Map<string, { attempts: number; reason: MailParkReason }>();
