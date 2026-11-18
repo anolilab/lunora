@@ -14,7 +14,7 @@ type DrainTimer = (ms: number, onExpire: () => void) => () => void;
 interface DrainOptions {
     /** Stop waiting after this many milliseconds. Defaults to {@link DEFAULT_DRAIN_TIMEOUT_MS}. */
     timeoutMs?: number;
-    /** The clock the deadline runs on. Defaults to an unref'd `setTimeout`, which never holds the process open by itself. */
+    /** The clock the deadline runs on. Defaults to `setTimeout`, which keeps the process alive until the drain settles or expires. */
     timer?: DrainTimer;
 }
 
@@ -29,10 +29,11 @@ interface DrainResult {
 /** Long enough for an ordinary request or background write to finish; short enough that a stuck one cannot stall a shutdown. */
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 
-const unrefTimer: DrainTimer = (ms, onExpire) => {
+// Referenced on purpose. A drain can be waiting on a promise with no I/O behind it (a shard's stalled `waitUntil`), and once
+// the HTTP sockets are gone nothing else holds the event loop open: an unref'd deadline let Node exit right there, before it
+// fired, with nothing logged and no database closed. The drain cancels it as soon as it settles, so it holds nothing longer.
+const deadlineTimer: DrainTimer = (ms, onExpire) => {
     const timeout = setTimeout(onExpire, ms);
-
-    timeout.unref();
 
     return () => {
         clearTimeout(timeout);
@@ -50,7 +51,7 @@ const startDrainDeadline = (options: DrainOptions = {}): DrainDeadline => {
     const expired = new Promise<void>((resolve) => {
         expire = resolve;
     });
-    const cancel = (options.timer ?? unrefTimer)(options.timeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS, () => {
+    const cancel = (options.timer ?? deadlineTimer)(options.timeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS, () => {
         expire();
     });
 

@@ -282,7 +282,11 @@ holds `BEGIN IMMEDIATE` open across the awaits of an async closure.
 
 What every `drain()` in this package takes and returns. `timeoutMs` bounds the
 drain (`DEFAULT_DRAIN_TIMEOUT_MS`, 30 s, when omitted), and `timer` replaces the
-clock it runs on, so a test can fire the deadline by hand. A `DrainResult`
+clock it runs on, so a test can fire the deadline by hand. The default timer is
+referenced while the drain runs: a drain waiting on a promise with no I/O behind
+it (a stalled shard `waitUntil`) keeps the process alive until the deadline
+fires, instead of letting it exit silently. `NodePlatform.drain()` runs its host
+and registry drains under that one deadline. A `DrainResult`
 reports `timedOut` and the `pending` work, one readable label each, still
 running when the deadline passed.
 
@@ -406,7 +410,8 @@ and scheduled-job deliveries included), no `waitUntil` work pending and no socke
 close handler running. Each pass re-reads every live shard, so work handed to a
 shard after its own drain finished, or a shard opened while draining, is seen;
 it returns only when a full pass finds nothing running, or when its deadline
-passes, logging what was left. Await it before `close()`, which does not wait.
+passes, logging one line per shard with how many requests, alarms and
+`waitUntil` tasks it still had (never the request or its payload). Await it before `close()`, which does not wait.
 
 ### `createNodeShardState`
 

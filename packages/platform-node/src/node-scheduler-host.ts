@@ -623,7 +623,7 @@ const createNodeSchedulerHost = (database: Database.Database, options: NodeSched
             // would otherwise be parked with nothing on record saying why. All this loop decides is whether any budget is
             // left.
             // eslint-disable-next-line no-console -- the retry is silent, so the log is the only trace of why the job failed
-            console.error(`[@lunora/platform-node] scheduled job ${row.function_path} (${id}) failed on attempt ${String(attempts)}`, error);
+            console.error("[@lunora/platform-node] scheduled job %s (%s) failed on attempt %d", row.function_path, id, attempts, error);
 
             // `closed` is checked too: `dispose()` cleared `jobTimers` and
             // may have run while this dispatch was in flight, and a re-arm after

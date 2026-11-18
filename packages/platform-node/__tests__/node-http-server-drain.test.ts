@@ -1,5 +1,6 @@
 import type { Socket } from "node:net";
 import { connect } from "node:net";
+import { format } from "node:util";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -21,6 +22,9 @@ const turn = async (): Promise<void> =>
     new Promise((resolve) => {
         setImmediate(resolve);
     });
+
+/** Each logged line as the console prints it: the format string with its arguments applied. */
+const printed = (spy: { mock: { calls: unknown[][] } }): string[] => spy.mock.calls.map((args) => format(...args));
 
 /** A deadline the test fires by hand: no clock runs in these tests. */
 const manualTimer = (): { fire: () => void; timer: DrainTimer } => {
@@ -264,7 +268,7 @@ describe("createNodeHttpServer drain", () => {
             fire();
 
             await expect(drained).resolves.toStrictEqual({ pending: ["GET /stuck"], timedOut: true });
-            expect(logged).toHaveBeenCalledWith(expect.stringContaining("GET /stuck"));
+            expect(printed(logged)).toContainEqual(expect.stringContaining("GET /stuck"));
         } finally {
             never.release();
             await server.close();
@@ -284,7 +288,7 @@ describe("createNodeHttpServer drain", () => {
         try {
             await fetch(`${server.origin}/reset?token=s3cret-value&sig=abc`);
 
-            const lines = logged.mock.calls.map(([message]) => String(message));
+            const lines = printed(logged);
 
             expect(lines).toContainEqual(expect.stringContaining("GET /reset;"));
             expect(lines.filter((line) => line.includes("s3cret-value") || line.includes("sig=abc"))).toStrictEqual([]);
@@ -293,8 +297,33 @@ describe("createNodeHttpServer drain", () => {
         }
     });
 
-    it("logs a fetch handler that throws, with the error object, before answering 500", async () => {
+    it("logs a path containing format directives as literal text", async () => {
         expect.assertions(2);
+
+        const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+        const failure = new Error("handler broke");
+        const server = await createNodeHttpServer({
+            fetch: () => {
+                throw failure;
+            },
+        });
+
+        try {
+            // A client-chosen path: as part of the format string, each directive would consume the next argument.
+            await fetch(`${server.origin}/a%s%s%o`);
+
+            const [line] = printed(logged);
+
+            expect(line).toContain("the fetch handler threw for GET /a%s%s%o; answered 500");
+            // The error is still printed whole after the message, not swallowed by a directive.
+            expect(line).toContain("Error: handler broke");
+        } finally {
+            await server.close();
+        }
+    });
+
+    it("logs a fetch handler that throws, with the error object, before answering 500", async () => {
+        expect.assertions(3);
 
         const logged = vi.spyOn(console, "error").mockImplementation(() => {});
         const failure = new Error("handler broke", { cause: new Error("root cause") });
@@ -308,7 +337,8 @@ describe("createNodeHttpServer drain", () => {
             const response = await fetch(`${server.origin}/boom`);
 
             expect(response.status).toBe(500);
-            expect(logged).toHaveBeenCalledWith(expect.stringContaining("GET /boom"), failure);
+            expect(printed(logged)).toContainEqual(expect.stringContaining("GET /boom"));
+            expect(logged.mock.calls[0]?.at(-1)).toBe(failure);
         } finally {
             await server.close();
         }

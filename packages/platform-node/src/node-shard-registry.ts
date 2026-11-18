@@ -147,6 +147,34 @@ const shardKeyForFile = (directory: string, entry: string): string => {
     return key;
 };
 
+/** What one shard still has running when a drain looks. */
+interface ShardWorkCounts {
+    alarms: number;
+    background: number;
+    closing: boolean;
+    requests: number;
+}
+
+const countOf = (amount: number, one: string, many: string): string => {
+    if (amount === 0) {
+        return "";
+    }
+
+    return `${String(amount)} ${amount === 1 ? one : many}`;
+};
+
+/** `shard <key>: 1 request in flight, 2 waitUntil tasks`: counts only, never a request or payload. */
+const describeShardWork = (key: string, pending: ShardWorkCounts): string => {
+    const parts = [
+        countOf(pending.requests, "request in flight", "requests in flight"),
+        countOf(pending.alarms, "alarm running", "alarms running"),
+        countOf(pending.background, "waitUntil task", "waitUntil tasks"),
+        pending.closing ? "a socket close handler running" : "",
+    ].filter((part) => part !== "");
+
+    return `shard ${key}: ${parts.join(", ")}`;
+};
+
 /** The contracts scoped to one shard key. */
 export interface NodeShard {
     /**
@@ -231,10 +259,13 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         { dispose: () => void; drain: () => Promise<void> | undefined; drainHost: () => Promise<void>; pendingBackground: () => number; shard: NodeShard }
     >();
 
-    /** `onFetch` and `onAlarm` calls still running, with a label for the drain's log, so {@link NodeShardRegistry.drain} can wait for them. */
-    const inFlight = new Map<Promise<unknown>, string>();
+    /**
+     * `onFetch` and `onAlarm` calls still running, with the shard and the kind of call, so {@link NodeShardRegistry.drain} can wait
+     * for them and say what it cut off. Never the request itself: its URL or body can carry a secret.
+     */
+    const inFlight = new Map<Promise<unknown>, { kind: "alarm" | "request"; shardKey: string }>();
 
-    const track = async <T>(label: string, work: () => Promise<T> | T): Promise<T> => {
+    const track = async <T>(call: { kind: "alarm" | "request"; shardKey: string }, work: () => Promise<T> | T): Promise<T> => {
         const running = Promise.resolve().then(work);
         // Tracking only: the caller still receives `running` and its rejection.
         const settled = running.then(
@@ -242,7 +273,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             () => undefined,
         );
 
-        inFlight.set(settled, label);
+        inFlight.set(settled, call);
 
         settled.finally(() => inFlight.delete(settled)).catch(() => undefined);
 
@@ -291,7 +322,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             host,
             pendingBackground,
         } = createNodeShardHost({
-            onAlarm: async () => track(`alarm on shard ${key}`, () => options.onAlarm?.(shard)),
+            onAlarm: async () => track({ kind: "alarm", shardKey: key }, () => options.onAlarm?.(shard)),
             path,
             shardKey: key,
         });
@@ -323,7 +354,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
                     return new Response(key);
                 }
 
-                return track(`request on shard ${key}`, () => onFetch(request, shard));
+                return track({ kind: "request", shardKey: key }, () => onFetch(request, shard));
             },
         };
     };
@@ -349,22 +380,40 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
             // What is still running, across every shard live now: re-read on each pass, so a shard opened during the last
             // pass, or one that gained background work after its own drain resolved, is seen.
             const pendingWork = (): { labels: string[]; waits: Promise<unknown>[] } => {
-                const labels = [...inFlight.values()];
+                const counts = new Map<string, ShardWorkCounts>();
+                const countsFor = (shardKey: string): ShardWorkCounts => {
+                    let entry = counts.get(shardKey);
+
+                    if (entry === undefined) {
+                        entry = { alarms: 0, background: 0, closing: false, requests: 0 };
+                        counts.set(shardKey, entry);
+                    }
+
+                    return entry;
+                };
                 const waits: Promise<unknown>[] = [...inFlight.keys()];
+
+                for (const call of inFlight.values()) {
+                    countsFor(call.shardKey)[call.kind === "alarm" ? "alarms" : "requests"] += 1;
+                }
 
                 for (const [key, entry] of live) {
                     const closing = entry.drain();
+                    const background = entry.pendingBackground();
 
                     if (closing !== undefined) {
-                        labels.push(`socket close handler on shard ${key}`);
+                        countsFor(key).closing = true;
                         waits.push(closing);
                     }
 
-                    if (entry.pendingBackground() > 0) {
-                        labels.push(`waitUntil work on shard ${key}`);
+                    if (background > 0) {
+                        countsFor(key).background = background;
                         waits.push(entry.drainHost());
                     }
                 }
+
+                // One line per shard: its key and how much of each kind of work is left, so a cut-off drain is attributable.
+                const labels = [...counts].map(([key, pending]) => describeShardWork(key, pending));
 
                 return { labels, waits };
             };
@@ -377,7 +426,7 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
                         const pending = pendingWork().labels;
 
                         // eslint-disable-next-line no-console -- the drain gives up on these, so the log is the only record of what was cut off
-                        console.error(`[@lunora/platform-node] shard drain deadline passed with work still running: ${pending.join(", ")}`);
+                        console.error("[@lunora/platform-node] shard drain deadline passed with work still running: %s", pending.join(", "));
 
                         return { pending, timedOut: true };
                     }

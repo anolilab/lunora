@@ -18,7 +18,7 @@ import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory,
 import { NODE_CAPABILITIES } from "@lunora/platform";
 
 import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
-import type { DrainOptions, DrainResult } from "./drain-deadline";
+import type { DrainOptions, DrainResult, DrainTimer } from "./drain-deadline";
 import { settlesBefore, startDrainDeadline } from "./drain-deadline";
 import { createNodeDispatchRoute, createShardInvoke } from "./node-dispatch-route";
 import type { NodeGlobalStore } from "./node-global-store";
@@ -442,9 +442,27 @@ export const createNodePlatform = <
             // The registry's shards are where the app's requests, alarms and cron deliveries run, so a drain that skipped them
             // would let `close()` dispose a database a handler is still writing.
             drain: async (drainOptions?: DrainOptions): Promise<DrainResult> => {
-                // Concurrent, each under the same timeout, so the whole drain stays within one deadline.
+                // One deadline for the whole drain. The registry gets a timer bound to it rather than the caller's: a second timer
+                // started from the same options would expire on its own schedule, and an injected timer that keeps one callback
+                // would drop the first deadline, leaving the host's wait unbounded.
                 const deadline = startDrainDeadline(drainOptions);
-                const [hostSettled, shards] = await Promise.all([settlesBefore(drain(), deadline), registry.drain(drainOptions)]);
+                const sharedTimer: DrainTimer = (_ms, onExpire) => {
+                    let armed = true;
+                    const forward = async (): Promise<void> => {
+                        await deadline.expired;
+
+                        if (armed) {
+                            onExpire();
+                        }
+                    };
+
+                    forward().catch(() => undefined);
+
+                    return () => {
+                        armed = false;
+                    };
+                };
+                const [hostSettled, shards] = await Promise.all([settlesBefore(drain(), deadline), registry.drain({ timer: sharedTimer })]);
 
                 deadline.cancel();
 

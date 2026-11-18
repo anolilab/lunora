@@ -435,7 +435,7 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
                 (response) => writeResponse(response, outgoing, settle),
                 (error: unknown) => {
                     // eslint-disable-next-line no-console -- the client only sees a 500, so the log is where the error, its stack and its cause surface
-                    console.error(`[@lunora/platform-node] the fetch handler threw for ${describeRequest(incoming)}; answered 500`, error);
+                    console.error("[@lunora/platform-node] the fetch handler threw for %s; answered 500", describeRequest(incoming), error);
 
                     if (!outgoing.headersSent) {
                         outgoing.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
@@ -557,7 +557,7 @@ export const createNodeHttpServer = async (options: NodeHttpServerOptions): Prom
             const pending = [...inFlight].filter(([response]) => responses.has(response)).map(([, label]) => label);
 
             // eslint-disable-next-line no-console -- the drain gives up on these, so the log is the only record of what was cut off
-            console.error(`[@lunora/platform-node] HTTP drain deadline passed with ${String(pending.length)} response(s) unfinished: ${pending.join(", ")}`);
+            console.error("[@lunora/platform-node] HTTP drain deadline passed with %d response(s) unfinished: %s", pending.length, pending.join(", "));
 
             return { pending, timedOut: true };
         },

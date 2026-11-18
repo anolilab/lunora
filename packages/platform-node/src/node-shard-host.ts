@@ -401,7 +401,7 @@ const createAlarms = (
             attempts = 0;
         })().catch((error: unknown) => {
             // eslint-disable-next-line no-console -- the alarm is retried silently, so the log is the only trace of why it failed
-            console.error(`[@lunora/platform-node] alarm handler on shard ${shardKey ?? "(unnamed)"} threw; retrying with backoff`, error);
+            console.error("[@lunora/platform-node] alarm handler on shard %s threw; retrying with backoff", shardKey ?? "(unnamed)", error);
             retryFailedDelivery();
         });
     };
@@ -832,7 +832,7 @@ const createNodeShardHost = (
                     // Background work that fails has no caller left to tell, so the log is the only place it surfaces;
                     // the error object carries its stack and cause.
                     // eslint-disable-next-line no-console -- background work has no caller left to tell, so the log is the only trace of its failure
-                    console.error(`[@lunora/platform-node] work handed to waitUntil on shard ${options.shardKey ?? "(unnamed)"} failed`, error);
+                    console.error("[@lunora/platform-node] work handed to waitUntil on shard %s failed", options.shardKey ?? "(unnamed)", error);
                 })
                 .finally(() => {
                     background.delete(tracked);

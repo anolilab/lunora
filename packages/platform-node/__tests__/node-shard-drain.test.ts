@@ -1,9 +1,22 @@
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { format } from "node:util";
+
 import { resolveShard } from "@lunora/platform";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { DrainTimer } from "../src/drain-deadline";
 import { createNodePlatform } from "../src/node-platform";
 import { createNodeShardRegistry } from "../src/node-shard-registry";
+
+/** Each logged line as the console prints it: the format string with its arguments applied. */
+const printed = (spy: { mock: { calls: unknown[][] } }): string[] => spy.mock.calls.map((args) => format(...args));
+
+/** This package's built entry, which the child-process test runs on plain Node. */
+const DIST_ENTRY = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.mjs");
 
 /** A promise the test settles by hand: work that is "in flight" until the test says otherwise. */
 const deferred = (): { promise: Promise<void>; release: () => void } => {
@@ -215,26 +228,106 @@ describe("shard drain passes", () => {
         }
     });
 
-    it("gives up at the deadline, naming what was still running", async () => {
-        expect.assertions(2);
+    it("gives up at the deadline, naming each shard and how much work it still had, never the work itself", async () => {
+        expect.assertions(3);
 
         const logged = vi.spyOn(console, "error").mockImplementation(() => {});
         const { fire, timer } = manualTimer();
         const never = deferred();
-        const registry = createNodeShardRegistry();
+        const registry = createNodeShardRegistry({
+            onFetch: async () => {
+                await never.promise;
+
+                return new Response("never");
+            },
+        });
 
         try {
             registry.shardFor("stuck").shard.waitUntil?.(never.promise);
+            registry.shardFor("stuck").shard.waitUntil?.(never.promise);
+            registry.directory
+                .getByName("busy")
+                .fetch(new Request("https://shard.internal/rpc?token=secret-token-value", { body: '{"card":"4242"}', method: "POST" }))
+                .catch(() => undefined);
 
             const drained = registry.drain({ timer });
 
             fire();
 
-            await expect(drained).resolves.toStrictEqual({ pending: ["waitUntil work on shard stuck"], timedOut: true });
-            expect(logged).toHaveBeenCalledWith(expect.stringContaining("waitUntil work on shard stuck"));
+            const result = await drained;
+
+            expect(result).toStrictEqual({ pending: ["shard busy: 1 request in flight", "shard stuck: 2 waitUntil tasks"], timedOut: true });
+            expect(printed(logged)).toContainEqual(expect.stringContaining("shard busy: 1 request in flight, shard stuck: 2 waitUntil tasks"));
+            expect(printed(logged).join("\n")).not.toMatch(/secret-token-value|4242/u);
         } finally {
             never.release();
             registry.close();
+        }
+    });
+
+    it("runs the whole platform drain under one deadline, so one firing ends both the host and the shard waits", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        // Keeps only the last callback it was given, as a simple injected clock does: a second deadline would replace the first.
+        const { fire, timer } = manualTimer();
+        const never = deferred();
+        const platform = createNodePlatform();
+
+        try {
+            platform.shard.waitUntil?.(never.promise);
+            resolveShard(platform.directory, "stuck")
+                .fetch(new Request("https://shard.internal/rpc"))
+                .catch(() => undefined);
+
+            const drained = platform.drain({ timer });
+
+            fire();
+
+            await expect(drained).resolves.toStrictEqual({ pending: ["waitUntil work on the platform host"], timedOut: true });
+        } finally {
+            never.release();
+            platform.close();
+        }
+    });
+
+    it("keeps the process alive until the deadline, so a stalled shard cannot end it silently", async () => {
+        expect.assertions(2);
+
+        // A child process, because only there can the event loop run empty: the stalled waitUntil has no I/O behind it, so the
+        // deadline's own timer is the one thing that can keep the process alive long enough to report.
+        const directory = mkdtempSync(join(tmpdir(), "lunora-drain-alive-"));
+        const script = join(directory, "drain.mjs");
+
+        writeFileSync(
+            script,
+            [
+                `import { createNodeShardRegistry } from ${JSON.stringify(pathToFileURL(DIST_ENTRY).href)};`,
+                "const registry = createNodeShardRegistry();",
+                'registry.shardFor("stalled").shard.waitUntil(new Promise(() => {}));',
+                "const result = await registry.drain({ timeoutMs: 0 });",
+                'console.log("RESULT", JSON.stringify(result));',
+            ].join("\n"),
+            "utf8",
+        );
+
+        try {
+            const child = spawn(process.execPath, [script], { stdio: ["ignore", "pipe", "pipe"] });
+            let stdout = "";
+
+            child.stdout.on("data", (chunk: Buffer) => {
+                stdout += chunk.toString("utf8");
+            });
+
+            const code = await new Promise<number | null>((resolve) => {
+                child.once("exit", resolve);
+            });
+
+            expect(code).toBe(0);
+            expect(stdout).toContain(`RESULT ${JSON.stringify({ pending: ["shard stalled: 1 waitUntil task"], timedOut: true })}`);
+        } finally {
+            rmSync(directory, { force: true, recursive: true });
         }
     });
 });
@@ -255,15 +348,16 @@ describe("background failures", () => {
             registry.shardFor("a").shard.waitUntil?.(Promise.reject(failure));
             await registry.drain();
 
-            expect(logged).toHaveBeenCalledWith(expect.stringContaining("waitUntil on shard a failed"), failure);
-            expect((logged.mock.calls[0]?.[1] as Error).cause).toStrictEqual(new Error("disk full"));
+            expect(printed(logged)).toContainEqual(expect.stringContaining("waitUntil on shard a failed"));
+            // The error object itself is the last argument, so the console prints its stack and cause.
+            expect((logged.mock.calls[0]?.at(-1) as Error).cause).toStrictEqual(new Error("disk full"));
         } finally {
             registry.close();
         }
     });
 
     it("logs a scheduled job whose delivery throws, naming the job, before it is retried", async () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         const failure = new Error("delivery refused");
         const reported = deferred();
@@ -282,7 +376,8 @@ describe("background failures", () => {
             await platform.scheduler.schedule("jobs:run", {}, { delayMs: 0, retry: { maxAttempts: 1 } });
             await reported.promise;
 
-            expect(logged).toHaveBeenCalledWith(expect.stringContaining("scheduled job jobs:run"), failure);
+            expect(printed(logged)).toContainEqual(expect.stringContaining("scheduled job jobs:run"));
+            expect(logged.mock.calls[0]?.at(-1)).toBe(failure);
         } finally {
             platform.close();
         }
