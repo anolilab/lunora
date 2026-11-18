@@ -578,6 +578,24 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         settleState();
     };
 
+    /**
+     * Dispose a shard now, returning the error when that fails. It leaves deferredClose only once a dispose succeeds. When work
+     * still holds it (an open statement iterator is what makes better-sqlite3 refuse the close), the dispose is tried again
+     * once that work settles, as a deferred one is, so the registry can still reach `closed`.
+     */
+    const disposeNow = (key: string, entry: LiveShard, busy: boolean): unknown => {
+        const error = disposeEntry(key, entry);
+
+        if (error === undefined) {
+            deferredClose.delete(key);
+        } else if (busy && !deferredClose.has(key)) {
+            deferredClose.add(key);
+            disposeWhenIdle(key, entry);
+        }
+
+        return error;
+    };
+
     /** Log what a close() forced and what failed, then throw the failures together so every shard was tried first. */
     const reportClose = (forced: ReadonlyArray<string>, failed: ReadonlyArray<{ error: unknown; key: string }>): void => {
         if (forced.length > 0) {
@@ -622,17 +640,14 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
 
                 if (waits.length === 0 || closeOptions?.force === true) {
                     // Forced (after a drain's deadline), a shard is disposed now: work that never settles must not keep its
-                    // database open at exit. It leaves deferredClose only once that succeeds; if it fails, a deferred dispose
-                    // still waiting for its work tries again when that settles.
+                    // database open at exit.
                     if (waits.length > 0) {
                         forced.push(key);
                     }
 
-                    const error = disposeEntry(key, entry);
+                    const error = disposeNow(key, entry, waits.length > 0);
 
-                    if (error === undefined) {
-                        deferredClose.delete(key);
-                    } else {
+                    if (error !== undefined) {
                         failed.push({ error, key });
                     }
                 } else if (!deferredClose.has(key)) {

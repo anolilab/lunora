@@ -1360,6 +1360,45 @@ describe("shard drain passes", () => {
         expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
     });
 
+    it("retries a forced dispose an open iterator refused once the request holding it settles, then reports closed", async () => {
+        expect.assertions(4);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const holding = deferred();
+        const gate = deferred();
+        const registry = createNodeShardRegistry({
+            onFetch: async (_request, shard) => {
+                // A streamed read keeps better-sqlite3's statement running, so the connection refuses to close under it.
+                const rows = shard.shard.sql.exec("SELECT 1 UNION ALL SELECT 2").raw?.()[Symbol.iterator]();
+
+                rows?.next();
+                holding.release();
+                await gate.promise;
+                rows?.return?.(undefined);
+
+                return new Response("served");
+            },
+        });
+        const shard = registry.shardFor("busy");
+        const response = registry.directory.getByName("busy").fetch(new Request("https://shard/"));
+
+        await holding.promise;
+
+        expect(() => {
+            registry.close({ force: true });
+        }).toThrow("1 shard(s) failed to close: busy");
+        expect(() => registry.shardFor("busy")).toThrow("the shard registry is closing");
+
+        gate.release();
+        await response;
+        await registry.drain();
+
+        // Retried once the request let go of its iterator: disposed, and nothing is left open.
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+        expect(() => registry.shardFor("busy")).toThrow("the shard registry is closed,");
+    });
+
     it("waits only for a shard's own requests when closing it", async () => {
         expect.assertions(3);
 
