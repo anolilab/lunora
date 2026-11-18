@@ -171,8 +171,10 @@ const trustedThroughDefault = (element: BindingElement, path: ContextPath, hops:
         return path;
     }
 
+    // Each hop through a default spends one, so a default naming itself (`const { userId = userId } = ctx.auth`) or a
+    // cycle of them (`{ a = b, b = a }`) runs out and stays untrusted instead of recursing forever.
     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- the element and expression resolvers recurse into each other
-    const fallbackPath = contextPathOf(fallback, "trust", hops);
+    const fallbackPath = hops > 0 ? contextPathOf(fallback, "trust", hops - 1) : undefined;
 
     return fallbackPath?.length === path.length && fallbackPath.every((segment, index) => segment === path[index]) ? path : undefined;
 };

@@ -747,6 +747,13 @@ describe("argument-taint", () => {
             expect(isScopedByIdentity(sinkArgument(read("args.victim ?? ctx.auth.userId")))).toBe(false);
         });
 
+        it("rejects, without crashing, an identity whose default names itself or a cycle", () => {
+            expect.assertions(2);
+
+            expect(isScopedByIdentity(sinkArgument(`const { userId = userId } = ctx.auth;\nSINK(\`\${userId}/\${args.name}\`);`))).toBe(false);
+            expect(isScopedByIdentity(sinkArgument(`const { a = b, b = a } = ctx.auth;\nSINK(\`\${a}/\${args.name}\`);`))).toBe(false);
+        });
+
         it("rejects an identity destructured with a default the caller can supply", () => {
             expect.assertions(2);
 

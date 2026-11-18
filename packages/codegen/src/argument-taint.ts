@@ -636,6 +636,37 @@ const sitsInUnpinningBranch = (node: TsNode): boolean => {
 };
 
 /**
+ * Whether `node`, a member of a query object, sits in an argument of a `ctx.db` read: every enclosing object, array
+ * and property up to the call belongs to the query. In any other call's argument (`mutate({ where: filter })`) the
+ * object is handed to code that can rewrite what it holds before the real read.
+ */
+const isInDatabaseReadArgument = (node: TsNode): boolean => {
+    let current = node;
+
+    for (let parent = current.getParent(); parent !== undefined; parent = current.getParent()) {
+        if (Node.isCallExpression(parent)) {
+            return parent.getArguments().includes(current) && isDatabaseReadCall(parent);
+        }
+
+        const isQueryPart =
+            Node.isObjectLiteralExpression(parent) ||
+            Node.isArrayLiteralExpression(parent) ||
+            Node.isPropertyAssignment(parent) ||
+            Node.isShorthandPropertyAssignment(parent);
+        // `valueWrapperOf` climbs only through parentheses, `!` and type assertions, which pass the object on unchanged.
+        const isWrapper = valueWrapperOf(current) !== current;
+
+        if (!isQueryPart && !isWrapper) {
+            return false;
+        }
+
+        current = parent;
+    }
+
+    return false;
+};
+
+/**
  * Whether `list` holds nothing but the caller's id and is the value of an `in` with no `NOT` or `OR` above it. A list
  * factored into a never-repointed local (`const ownerIds = [uid]`) is judged at every place the local is used.
  */
@@ -654,10 +685,74 @@ const isCallerOnlyInList = (list: TsNode): boolean => {
         placements.every((placement) => {
             const property = valueWrapperOf(placement).getParent();
 
-            return Node.isPropertyAssignment(property) && staticPropertyName(property.getNameNode()) === "in" && !sitsInUnpinningBranch(property);
+            return (
+                Node.isPropertyAssignment(property) &&
+                staticPropertyName(property.getNameNode()) === "in" &&
+                !sitsInUnpinningBranch(property) &&
+                isInDatabaseReadArgument(property)
+            );
         })
     );
 };
+
+const isAssignmentOperator = (kind: SyntaxKind): boolean => kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
+
+/**
+ * Whether `node` is written: the target of an assignment, including from inside a destructuring pattern
+ * (`({ a: row.ownerId } = x)`, `[row.ownerId] = x`), a `for…of` / `for…in` target, or the operand of
+ * `delete`, `++` or `--`.
+ */
+const isWriteTarget = (node: TsNode): boolean => {
+    let current = node;
+    let parent = current.getParent();
+
+    // Climb out of any pattern the node sits in as a target; a value position in an object literal climbs too, which is
+    // harmless: it only ends in a write when that literal is itself an assignment target.
+    while (
+        Node.isParenthesizedExpression(parent) ||
+        Node.isArrayLiteralExpression(parent) ||
+        Node.isObjectLiteralExpression(parent) ||
+        Node.isSpreadElement(parent) ||
+        Node.isSpreadAssignment(parent) ||
+        Node.isShorthandPropertyAssignment(parent) ||
+        (Node.isPropertyAssignment(parent) && parent.getNameNode() !== current)
+    ) {
+        current = parent;
+        parent = current.getParent();
+    }
+
+    if (Node.isBinaryExpression(parent)) {
+        return parent.getLeft() === current && isAssignmentOperator(parent.getOperatorToken().getKind());
+    }
+
+    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
+        return parent.getInitializer() === current;
+    }
+
+    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
+        const operator = parent.getOperatorToken();
+
+        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
+    }
+
+    return Node.isDeleteExpression(parent);
+};
+
+/**
+ * Whether `element` and every element enclosing it in its parameter pattern have no default, and nothing in the
+ * callback assigns it. Scanned here by symbol: `isReassignedBinding` takes a parameter pattern inside a `const x =
+ * q.filter(…)` initializer for a `const` binding.
+ */
+const isUndefaultedRowBinding = (element: BindingElement): boolean =>
+    !(element.getFirstAncestorByKind(SyntaxKind.Parameter)?.getParent() ?? element)
+        .getDescendantsOfKind(SyntaxKind.Identifier)
+        .some(
+            (identifier) =>
+                identifier !== element.getNameNode() && isWriteTarget(identifier) && declarationOf(identifier)?.compilerNode === element.compilerNode,
+        ) &&
+    [element, ...element.getAncestors().filter((ancestor) => Node.isBindingElement(ancestor))].every(
+        (binding) => Node.isBindingElement(binding) && binding.getInitializer() === undefined && binding.getDotDotDotToken() === undefined,
+    );
 
 /**
  * Whether `node` reads a field of the row a filter callback is handed (`m.userId` in `(m) => …`): only then does an
@@ -666,10 +761,19 @@ const isCallerOnlyInList = (list: TsNode): boolean => {
  */
 const isFilteredRowField = (node: TsNode, comparison: TsNode): boolean => {
     const field = unwrapExpression(node) ?? node;
-    const root = Node.isPropertyAccessExpression(field) || Node.isElementAccessExpression(field) ? memberAccessRootIdentifier(field) : undefined;
-    const declaration = root === undefined ? undefined : declarationOf(root);
-    const owner: TsNode | undefined = Node.isParameterDeclaration(declaration) ? declaration.getParent() : undefined;
+    const isAccess = Node.isPropertyAccessExpression(field) || Node.isElementAccessExpression(field);
+    const root = isAccess ? memberAccessRootIdentifier(field) : field;
+    const declaration = Node.isIdentifier(root) ? declarationOf(root) : undefined;
     const callback: TsNode | undefined = callbackOf(comparison);
+    let owner: TsNode | undefined;
+
+    // The row parameter itself is a field only through an access (`m.userId`); a name destructured from it
+    // (`({ userId }) => userId === uid`) is one when no default can replace it and nothing reassigns it.
+    if (Node.isParameterDeclaration(declaration) && isAccess) {
+        owner = declaration.getParent();
+    } else if (Node.isBindingElement(declaration) && isUndefaultedRowBinding(declaration)) {
+        owner = declaration.getFirstAncestorByKind(SyntaxKind.Parameter)?.getParent();
+    }
 
     return owner !== undefined && owner === callback;
 };
@@ -779,13 +883,18 @@ const isWholeFilterUse = (use: TsNode): boolean => {
     const parent = wrapped.getParent();
 
     if (Node.isPropertyAssignment(parent) || Node.isShorthandPropertyAssignment(parent)) {
-        return staticPropertyName(parent.getNameNode()) === "where" && !sitsInUnpinningBranch(parent);
+        return staticPropertyName(parent.getNameNode()) === "where" && !sitsInUnpinningBranch(parent) && isInDatabaseReadArgument(parent);
     }
 
     if (Node.isArrayLiteralExpression(parent)) {
         const branches = valueWrapperOf(parent).getParent();
 
-        return Node.isPropertyAssignment(branches) && staticPropertyName(branches.getNameNode()) === "AND" && !sitsInUnpinningBranch(branches);
+        return (
+            Node.isPropertyAssignment(branches) &&
+            staticPropertyName(branches.getNameNode()) === "AND" &&
+            !sitsInUnpinningBranch(branches) &&
+            isInDatabaseReadArgument(branches)
+        );
     }
 
     return Node.isCallExpression(parent) && parent.getArguments().includes(wrapped) && isDatabaseReadCall(parent);
@@ -1249,49 +1358,6 @@ const appFunctionOf = (callee: TsNode | undefined): FunctionNode | undefined => 
     const initializer = unwrapExpression(declaration.getInitializer());
 
     return Node.isArrowFunction(initializer) || (Node.isFunctionExpression(initializer) && !initializer.isGenerator()) ? initializer : undefined;
-};
-
-const isAssignmentOperator = (kind: SyntaxKind): boolean => kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
-
-/**
- * Whether `node` is written: the target of an assignment, including from inside a destructuring pattern
- * (`({ a: row.ownerId } = x)`, `[row.ownerId] = x`), a `for…of` / `for…in` target, or the operand of
- * `delete`, `++` or `--`.
- */
-const isWriteTarget = (node: TsNode): boolean => {
-    let current = node;
-    let parent = current.getParent();
-
-    // Climb out of any pattern the node sits in as a target; a value position in an object literal climbs too, which is
-    // harmless: it only ends in a write when that literal is itself an assignment target.
-    while (
-        Node.isParenthesizedExpression(parent) ||
-        Node.isArrayLiteralExpression(parent) ||
-        Node.isObjectLiteralExpression(parent) ||
-        Node.isSpreadElement(parent) ||
-        Node.isSpreadAssignment(parent) ||
-        Node.isShorthandPropertyAssignment(parent) ||
-        (Node.isPropertyAssignment(parent) && parent.getNameNode() !== current)
-    ) {
-        current = parent;
-        parent = current.getParent();
-    }
-
-    if (Node.isBinaryExpression(parent)) {
-        return parent.getLeft() === current && isAssignmentOperator(parent.getOperatorToken().getKind());
-    }
-
-    if (Node.isForOfStatement(parent) || Node.isForInStatement(parent)) {
-        return parent.getInitializer() === current;
-    }
-
-    if (Node.isPrefixUnaryExpression(parent) || Node.isPostfixUnaryExpression(parent)) {
-        const operator = parent.getOperatorToken();
-
-        return operator === SyntaxKind.PlusPlusToken || operator === SyntaxKind.MinusMinusToken;
-    }
-
-    return Node.isDeleteExpression(parent);
 };
 
 /**

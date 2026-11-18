@@ -939,6 +939,70 @@ requireMember = async () => {};`;
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
 
+    it.each([
+        ["a default naming itself", "const { userId = userId } = ctx.auth;", "userId"],
+        ["a cycle of defaults", "const { a = b, b = a } = ctx.auth;", "a"],
+    ])("reports, without crashing, an inline guard whose identity comes from %s", (_label, binding, name) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`${binding}\n    ${inlineGuard(`ctx.db.members.findFirst({ where: { userId: ${name}, channelId: message.channelId } })`)}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a named filter", "const filter = { userId: ctx.auth.userId };\n    mutate({ where: filter });"],
+        ["an in list", "const ownerIds = [ctx.auth.userId];\n    mutate({ in: ownerIds });"],
+    ])("reports an inline guard whose %s is also handed to another call", (_label, local) => {
+        expect.assertions(1);
+
+        const query = local.includes("ownerIds")
+            ? "ctx.db.members.findFirst({ where: { userId: { in: ownerIds }, channelId: message.channelId } })"
+            : "ctx.db.members.findFirst({ where: { AND: [filter, { channelId: message.channelId }] } })";
+
+        write("chat.ts", teamChat(`${local}\n    ${inlineGuard(query)}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        [
+            "named filter",
+            "const filter = { userId: ctx.auth.userId };",
+            "ctx.db.members.findFirst({ where: { AND: [filter, { channelId: message.channelId }] } })",
+        ],
+        ["in list", "const ownerIds = [ctx.auth.userId];", "ctx.db.members.findFirst({ where: { userId: { in: ownerIds }, channelId: message.channelId } })"],
+    ])("accepts an inline guard whose %s goes only to the read", (_label, local, query) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(`${local}\n    ${inlineGuard(query)}`));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["inline", "({ userId, channelId }) => userId === ctx.auth.userId && channelId === message.channelId"],
+        ["renamed", "({ userId: owner, channelId }) => ctx.auth.userId === owner && channelId === message.channelId"],
+    ])("accepts an inline guard whose filter destructures the row, %s", (_label, filter) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it.each([
+        ["a default", "({ userId = args.victim, channelId }) => userId === ctx.auth.userId && channelId === message.channelId"],
+        ["a reassignment", "({ userId, channelId }) => { userId = args.victim; return userId === ctx.auth.userId && channelId === message.channelId; }"],
+        ["an args comparison", "({ channelId }) => ctx.auth.userId === args.victim && channelId === message.channelId"],
+    ])("reports an inline guard whose destructured filter has %s", (_label, filter) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat(inlineGuard(`ctx.db.query("members").filter(${filter}).first()`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
     it("accepts an inline guard whose identity default is the identity itself", () => {
         expect.assertions(1);
 
