@@ -503,20 +503,23 @@ describe("lunora deploy --target node", () => {
             }
         });
 
-        it.each(["8s", "10_000", "", "-1"])("refuses to start when LUNORA_SHUTDOWN_TIMEOUT_MS is %j, instead of skipping the drain", async (value) => {
-            expect.assertions(2);
+        it.each(["8s", "10_000", "", "-1", "2147483648"])(
+            "refuses to start when LUNORA_SHUTDOWN_TIMEOUT_MS is %j, instead of skipping the drain",
+            async (value) => {
+                expect.assertions(2);
 
-            const run = startServer(artifact, dataDirectory(), { ...RUN_ENV, LUNORA_SHUTDOWN_TIMEOUT_MS: value });
-            const outcome = await Promise.race([run.listening.then(() => "listening"), run.exited.then((code) => `exit ${String(code)}`)]);
+                const run = startServer(artifact, dataDirectory(), { ...RUN_ENV, LUNORA_SHUTDOWN_TIMEOUT_MS: value });
+                const outcome = await Promise.race([run.listening.then(() => "listening"), run.exited.then((code) => `exit ${String(code)}`)]);
 
-            run.child.kill("SIGKILL");
-            await run.exited;
+                run.child.kill("SIGKILL");
+                await run.exited;
 
-            expect(outcome).toBe("exit 1");
-            expect(run.stderr()).toContain(
-                `LUNORA_SHUTDOWN_TIMEOUT_MS must be a whole number of milliseconds such as 8000, and it is ${JSON.stringify(value)}`,
-            );
-        });
+                expect(outcome).toBe("exit 1");
+                expect(run.stderr()).toContain(
+                    `LUNORA_SHUTDOWN_TIMEOUT_MS must be a whole number of milliseconds from 0 to 2147483647, such as 8000, and it is ${JSON.stringify(value)}`,
+                );
+            },
+        );
 
         it("refuses to start without a secrets.required variable, naming it", async () => {
             expect.assertions(2);

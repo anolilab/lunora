@@ -435,10 +435,14 @@ if (missing.length > 0) {
 const timeoutName = ${JSON.stringify(SHUTDOWN_TIMEOUT_VARIABLE)};
 const rawShutdownTimeout = process.env[timeoutName];
 
-if (rawShutdownTimeout !== undefined && !(/^\\d+$/u.test(rawShutdownTimeout) && Number.isSafeInteger(Number(rawShutdownTimeout)))) {
+// Node runs any timer delay above 2147483647 ms after 1 ms, so a larger value would cut the drain off at once.
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+if (rawShutdownTimeout !== undefined && !(/^\\d+$/u.test(rawShutdownTimeout) && Number(rawShutdownTimeout) <= MAX_TIMER_DELAY_MS)) {
     console.error(
-        "lunora: refusing to start, %s must be a whole number of milliseconds such as ${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)}, and it is %j",
+        "lunora: refusing to start, %s must be a whole number of milliseconds from 0 to %d, such as ${String(DEFAULT_SHUTDOWN_TIMEOUT_MS)}, and it is %j",
         timeoutName,
+        MAX_TIMER_DELAY_MS,
         rawShutdownTimeout,
     );
     process.exit(1);

@@ -870,7 +870,8 @@ open connection gets a 503 and `Connection: close`), closes the listener (ending
 event streams and WebSockets), then drains `waitUntil` work, alarms and cron runs
 before closing the databases. The whole drain shares one deadline,
 `LUNORA_SHUTDOWN_TIMEOUT_MS` (default 8000, under `docker stop`'s 10 s grace; a
-value that is not a whole number of milliseconds is refused at startup);
+value that is not a whole number of milliseconds from 0 to 2147483647, the
+longest delay a Node timer honours, is refused at startup);
 work still running when it passes is logged by name and the exit code is 1. A
 failed step is logged and the rest still run, and any fatal error during the
 shutdown also makes the exit code 1. A second signal exits at once. `waitUntil`

@@ -412,6 +412,18 @@ describe("shard drain passes", () => {
         }
     });
 
+    it.each([2_147_483_648, -1, 1.5, Number.NaN])("refuses a drain timeoutMs of %d, which Node would run after 1 ms or never", async (timeoutMs) => {
+        expect.assertions(1);
+
+        const registry = createNodeShardRegistry();
+
+        try {
+            await expect(registry.drain({ timeoutMs })).rejects.toThrow("a drain timeoutMs must be a whole number of milliseconds from 0 to 2147483647");
+        } finally {
+            registry.close();
+        }
+    });
+
     it("keeps the process alive until the deadline, so a stalled shard cannot end it silently", async () => {
         expect.assertions(2);
 

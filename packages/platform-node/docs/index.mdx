@@ -281,7 +281,9 @@ holds `BEGIN IMMEDIATE` open across the awaits of an async closure.
 **Type:** interfaces and a constant
 
 What every `drain()` in this package takes and returns. `timeoutMs` bounds the
-drain (`DEFAULT_DRAIN_TIMEOUT_MS`, 30 s, when omitted), and `timer` replaces the
+drain (`DEFAULT_DRAIN_TIMEOUT_MS`, 30 s, when omitted; a value that is not a
+whole number from 0 to 2147483647 ms throws a `RangeError`, since Node would run
+a longer timer after 1 ms), and `timer` replaces the
 clock it runs on, so a test can fire the deadline by hand. The default timer is
 referenced while the drain runs: a drain waiting on a promise with no I/O behind
 it (a stalled shard `waitUntil`) keeps the process alive until the deadline
