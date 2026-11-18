@@ -202,6 +202,9 @@ interface KeyClaims {
     /** Forget a content record `recordContent` just made, for an enqueue that then failed. */
     forgetContent: (key: string) => void;
 
+    /** Keep the key's content record at least as long as the sent record a successful send just wrote. */
+    keepContent: (key: string) => void;
+
     /**
      * Record the content a key is first queued with: `"conflict"` when the key
      * already names different content, `"recorded"` when this call created the
@@ -213,10 +216,21 @@ interface KeyClaims {
 
     /**
      * Take the key for this delivery of `messageId`: `"busy"` while another
-     * delivery holds it, `"conflict"` when the key names different content.
+     * delivery holds it, `"conflict"` when the key names different content, or
+     * the key's delivery number when taken.
      */
-    take: (key: string, fingerprint: string, messageId: string) => "busy" | "conflict" | "taken";
+    take: (key: string, fingerprint: string, messageId: string) => TakeOutcome;
 }
+
+/**
+ * A key's deliveries are numbered across every queue row that carries it, and
+ * that number, not the row's own `attempts`, is what `consumeQueuedSend` keys
+ * its attempt marks on. With row attempts, a second row of one key started over
+ * at 1: it skipped the late-redelivery check altogether, and its marks overwrote
+ * the first row's, so a definite failure there could hide an outcome-unknown one.
+ * Row attempts still drive the queue's retry budget.
+ */
+type TakeOutcome = { delivery: number; firstDeliveredAt: number; outcome: "taken" } | { outcome: "busy" } | { outcome: "conflict" };
 
 /**
  * Claims taken before a send, in one immediate transaction with the content
@@ -241,6 +255,13 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
     database.exec("CREATE INDEX IF NOT EXISTS _lunora_mail_claims_expires ON _lunora_mail_claims (expires_at)");
     database.exec("CREATE TABLE IF NOT EXISTS _lunora_mail_keys (key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, expires_at INTEGER NOT NULL)");
     database.exec("CREATE INDEX IF NOT EXISTS _lunora_mail_keys_expires ON _lunora_mail_keys (expires_at)");
+    // Outlives every attempt mark it numbered: each delivery refreshes it for the marks' 15 days.
+    // `first_at` is when the provider may first have seen the key: its dedupe window runs from
+    // there, not from the enqueue of whichever row carries the key now.
+    database.exec(
+        "CREATE TABLE IF NOT EXISTS _lunora_mail_deliveries (key TEXT PRIMARY KEY, delivery INTEGER NOT NULL, first_at INTEGER NOT NULL, expires_at INTEGER NOT NULL)",
+    );
+    database.exec("CREATE INDEX IF NOT EXISTS _lunora_mail_deliveries_expires ON _lunora_mail_deliveries (expires_at)");
 
     const claim = database.prepare<[string, string, number, number]>(
         `INSERT INTO _lunora_mail_claims (key, message_id, expires_at) VALUES (?, ?, ?)
@@ -257,12 +278,23 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
     const dropContent = database.prepare<[string]>("DELETE FROM _lunora_mail_keys WHERE key = ?");
     const pruneClaims = database.prepare<[number]>("DELETE FROM _lunora_mail_claims WHERE expires_at <= ?");
     const pruneContent = database.prepare<[number]>("DELETE FROM _lunora_mail_keys WHERE expires_at <= ?");
+    const pruneDeliveries = database.prepare<[number]>("DELETE FROM _lunora_mail_deliveries WHERE expires_at <= ?");
+    const nextDelivery = database.prepare<[string, number, number, number, number], { delivery: number; first_at: number }>(
+        `INSERT INTO _lunora_mail_deliveries (key, delivery, first_at, expires_at) VALUES (?, 1, ?, ?)
+         ON CONFLICT (key) DO UPDATE SET
+             delivery = CASE WHEN _lunora_mail_deliveries.expires_at <= ? THEN 1 ELSE _lunora_mail_deliveries.delivery + 1 END,
+             first_at = CASE WHEN _lunora_mail_deliveries.expires_at <= ? THEN excluded.first_at ELSE _lunora_mail_deliveries.first_at END,
+             expires_at = excluded.expires_at
+         RETURNING delivery, first_at`,
+    );
+    const extendContent = database.prepare<[number, string]>("UPDATE _lunora_mail_keys SET expires_at = max(expires_at, ?) WHERE key = ?");
     let prunedAt = Number.NEGATIVE_INFINITY;
 
     const pruneDue = (now: number): void => {
         if (now - prunedAt >= LEDGER_PRUNE_INTERVAL_MS) {
             pruneClaims.run(now);
             pruneContent.run(now);
+            pruneDeliveries.run(now);
             prunedAt = now;
         }
     };
@@ -283,7 +315,7 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
         return known === fingerprint ? "matches" : "conflict";
     });
 
-    const takeInTransaction = database.transaction((key: string, fingerprint: string, messageId: string): "busy" | "conflict" | "taken" => {
+    const takeInTransaction = database.transaction((key: string, fingerprint: string, messageId: string): TakeOutcome => {
         const now = clock();
 
         pruneDue(now);
@@ -291,23 +323,28 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
         const known = readContent.get(key, now)?.fingerprint;
 
         if (known !== undefined && known !== fingerprint) {
-            return "conflict";
+            return { outcome: "conflict" };
         }
 
         if (claim.run(key, messageId, now + MAIL_VISIBILITY_TIMEOUT_MS, now).changes === 0) {
-            return "busy";
+            return { outcome: "busy" };
         }
 
         if (known === undefined) {
             writeContent.run(key, fingerprint, now + MAIL_KEY_CONTENT_TTL_MS);
         }
 
-        return "taken";
+        const numbered = nextDelivery.get(key, now, now + MAIL_EVIDENCE_TTL_MS, now, now);
+
+        return { delivery: numbered?.delivery ?? 1, firstDeliveredAt: numbered?.first_at ?? now, outcome: "taken" };
     });
 
     return {
         forgetContent: (key) => {
             dropContent.run(key);
+        },
+        keepContent: (key) => {
+            extendContent.run(clock() + MAIL_KEY_CONTENT_TTL_MS, key);
         },
         recordContent: (key, fingerprint) => recordInTransaction.immediate(key, fingerprint),
         release: (key, messageId) => {
@@ -375,6 +412,65 @@ const idempotencyKeyOf = (body: unknown): string | undefined => {
 };
 
 /**
+ * Cloudflare Queues' ceiling on a message delay: "Messages can be delayed by up to
+ * 24 hours" (developers.cloudflare.com/queues/configuration/batching-retries/).
+ */
+const MAX_DELAY_SECONDS = 86_400;
+
+/**
+ * A delay as Cloudflare Queues takes one: a whole number of seconds from 0 to 24
+ * hours. Checked here because the queue host below clamps instead (a negative
+ * delay or NaN to 0, a fraction up, an oversized one to the ceiling), and a
+ * clamped delay is mail that goes out earlier than the caller asked.
+ */
+const assertValidDelay: (delaySeconds: unknown) => asserts delaySeconds is number | undefined = (delaySeconds) => {
+    if (delaySeconds === undefined) {
+        return;
+    }
+
+    if (typeof delaySeconds !== "number" || !Number.isInteger(delaySeconds) || delaySeconds < 0 || delaySeconds > MAX_DELAY_SECONDS) {
+        throw new LunoraError(
+            "VALIDATION_ERROR",
+            `@lunora/platform-node: \`delaySeconds\` must be a whole number of seconds from 0 to ${String(MAX_DELAY_SECONDS)} (24 hours), as on Cloudflare Queues, got ${typeof delaySeconds === "number" ? String(delaySeconds) : JSON.stringify(delaySeconds)}`,
+        );
+    }
+};
+
+/**
+ * Why the env selects capture, in its own words: `LUNORA_MAIL_CAPTURE` when it is
+ * set, otherwise the environment variables `shouldCaptureMail` read as dev.
+ */
+const captureTrigger = (env: MailEnv): string => {
+    const flag = env["LUNORA_MAIL_CAPTURE"];
+
+    if (typeof flag === "string" && flag !== "") {
+        return `LUNORA_MAIL_CAPTURE=${flag}`;
+    }
+
+    return ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"]
+        .flatMap((name) => (typeof env[name] === "string" && env[name] !== "" ? [`${name}=${env[name]}`] : []))
+        .join(", ");
+};
+
+/**
+ * Say, once and at startup, that mail will be captured rather than sent. The rule
+ * is `createMailerFromEnv`'s, the same as on Cloudflare, so `NODE_ENV=test`
+ * captures here too; but Node tooling sets `NODE_ENV` on its own, and on a plain
+ * Node env nothing records the capture, so it must not happen quietly.
+ */
+const announceCapture = (env: MailEnv): void => {
+    const recorded = env["SHARD"] !== undefined && typeof env["LUNORA_ADMIN_TOKEN"] === "string";
+    const fate = recorded
+        ? "recorded in the studio's Mail inbox"
+        : "DISCARDED, because there is no SHARD namespace and LUNORA_ADMIN_TOKEN on env to record it with";
+
+    // eslint-disable-next-line no-console -- the package has no logger; the process's stderr is the log
+    console.warn(
+        `[@lunora/platform-node] mail is captured, not sent (${captureTrigger(env)} selects dev capture): every send is ${fate}. Set LUNORA_MAIL_CAPTURE=0 to deliver.`,
+    );
+};
+
+/**
  * The mailer the consumer sends through. Refuses one that could only queue:
  * `createMailer` would build it, and every message would then fail at consume
  * time, be retried and parked, without one going out.
@@ -387,6 +483,8 @@ const buildMailer = (env: MailEnv, queue: QueueLike, transport: MailTransport | 
     }
 
     if (shouldCaptureMail(env)) {
+        announceCapture(env);
+
         return createMailerFromEnv(env, { queue, sendTimeoutMs: MAIL_SEND_TIMEOUT_MS });
     }
 
@@ -468,16 +566,39 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
     }
 
     const key = idempotencyKeyOf(message.body);
-    const claimed = key === undefined ? "taken" : consumer.claims.take(key, fingerprintOf(message.body), message.id);
+    // A body without a key is refused by `consumeQueuedSend` before any mark is written, so the row's count serves.
+    const claimed: TakeOutcome =
+        key === undefined
+            ? { delivery: message.attempts, firstDeliveredAt: message.timestamp.getTime(), outcome: "taken" }
+            : consumer.claims.take(key, fingerprintOf(message.body), message.id);
 
-    if (claimed === "conflict") {
+    if (claimed.outcome === "conflict") {
         refuse(message, "lunora.mail.idempotency_key_conflict", `idempotency key "${String(key)}" was already queued with different content`);
 
         return;
     }
 
-    if (claimed === "busy") {
+    if (claimed.outcome === "busy") {
         retryBusyKey(message, String(key));
+
+        return;
+    }
+
+    // The key's history, not this row's: an earlier row may have sent it. Its first delivery is
+    // when the provider may first have seen the key, so the dedupe window and the attempt
+    // marks' lifetime both run from whichever is earlier.
+    const sinceMs = Math.min(message.timestamp.getTime(), claimed.firstDeliveredAt);
+
+    if (claimed.delivery > 1 && consumer.clock() - sinceMs >= MAIL_EVIDENCE_TTL_MS) {
+        if (key !== undefined) {
+            consumer.claims.release(key, message.id);
+        }
+
+        refuse(
+            message,
+            "lunora.mail.send_evidence_expired",
+            "an earlier delivery of this key may have been sent, and its record in the sent ledger has expired",
+        );
 
         return;
     }
@@ -485,10 +606,18 @@ const deliver = async (consumer: MailConsumer, message: MessageBatchLike["messag
     // `consumeQueuedSend` ages the message against Date.now(), so its enqueue time is moved
     // by the gap between the two clocks: the dedupe window is then measured on the host clock,
     // the one every other timestamp here comes from.
-    const enqueuedAt = new Date(Date.now() - (consumer.clock() - message.timestamp.getTime()));
+    const enqueuedAt = new Date(Date.now() - (consumer.clock() - sinceMs));
 
     try {
-        await consumeQueuedSend(consumer.mailer, message.body, { attempts: message.attempts, enqueuedAt, sent: consumer.sent });
+        await consumeQueuedSend(consumer.mailer, message.body, { attempts: claimed.delivery, enqueuedAt, sent: consumer.sent });
+
+        // The sent record now lives 24 hours from this send, not from the enqueue: the content
+        // record has to as well, or a different message reusing the key in between would pass
+        // the content check and then be acked as already sent.
+        if (key !== undefined) {
+            consumer.claims.keepContent(key);
+        }
+
         message.ack();
     } catch (error) {
         settleFailure(message, error);
@@ -531,6 +660,11 @@ const consumeBatch = async (consumer: MailConsumer, batch: MessageBatchLike): Pr
  * `transport` or, without one, Resend (`RESEND_API_KEY`). In a dev environment
  * the mailer captures instead, exactly as `createMailerFromEnv` decides on
  * Cloudflare. Throws when `MAIL_FROM` is unset or nothing can deliver.
+ *
+ * Give it a connection nothing else opens a transaction on, ideally a file of
+ * its own, as `createNodePlatform({ mail: { path } })` does: on a shard host's
+ * connection, a poll during `shard.transaction()` writes inside it, and that
+ * transaction's rollback would undo the acks and sent records and resend.
  */
 const createNodeMailHost = (database: Database.Database, options: NodeMailHostOptions = {}): NodeMailHost => {
     const env: MailEnv = options.env ?? { ...process.env };
@@ -541,12 +675,14 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
 
             // Refused rather than dropped: a caller treating this like a Queue binding would
             // otherwise get an immediate send, and a non-JSON `contentType` a body the consumer refuses.
-            if (Object.keys(unsupported).length > 0 || (delaySeconds !== undefined && typeof delaySeconds !== "number")) {
+            if (Object.keys(unsupported).length > 0) {
                 throw new LunoraError(
                     "VALIDATION_ERROR",
-                    `@lunora/platform-node: the mail queue takes only a numeric \`delaySeconds\` option, got ${JSON.stringify(sendOptions)}`,
+                    `@lunora/platform-node: the mail queue takes only a \`delaySeconds\` option, got ${Object.keys(unsupported).join(", ")}`,
                 );
             }
+
+            assertValidDelay(delaySeconds);
 
             const key = idempotencyKeyOf(payload);
             // eslint-disable-next-line @typescript-eslint/no-use-before-define -- called only after construction returns, by which point `consumer` is assigned
@@ -647,5 +783,5 @@ const createNodeMailHost = (database: Database.Database, options: NodeMailHostOp
     };
 };
 
-export { createNodeMailHost, MAIL_QUEUE_NAME };
+export { createNodeMailHost };
 export type { NodeMailHost, NodeMailHostOptions };

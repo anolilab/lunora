@@ -3,13 +3,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { MailTransport, SendPayload } from "@lunora/mail";
-import { MailSendError } from "@lunora/mail";
+import { MailSendError, shouldCaptureMail } from "@lunora/mail";
 import { defineQueue } from "@lunora/queue";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createNodeMailHost } from "../src/node-mail-host";
 import { createNodePlatform } from "../src/node-platform";
+import { createNodeQueueHost } from "../src/node-queue-host";
 
 const PRODUCTION = { MAIL_FROM: "Acme <noreply@acme.test>", NODE_ENV: "production" };
 
@@ -229,15 +230,17 @@ describe(createNodeMailHost, () => {
         expect(() => createNodeMailHost(freshDatabase(), { env: { ...PRODUCTION, RESEND_API_KEY: "re_test" } })).not.toThrow();
     });
 
-    it("is composed by createNodePlatform({ mail }) over the shard's database", async () => {
-        expect.assertions(3);
+    it("is composed by createNodePlatform({ mail }) on a database file of its own", async () => {
+        expect.assertions(4);
 
         directory = mkdtempSync(join(tmpdir(), "lunora-mail-platform-"));
 
         const clock = startClock();
         const transport = scriptedTransport(["ok"]);
+        const shardPath = join(directory, "shard.sqlite3");
+        const mailPath = join(directory, "mail.sqlite3");
 
-        using platform = createNodePlatform({ mail: { env: PRODUCTION, now: clock.now, transport }, path: join(directory, "shard.sqlite3") });
+        using platform = createNodePlatform({ mail: { env: PRODUCTION, now: clock.now, path: mailPath, transport }, path: shardPath });
 
         using bare = createNodePlatform({ path: join(directory, "bare.sqlite3") });
 
@@ -247,23 +250,41 @@ describe(createNodeMailHost, () => {
 
         await expect(platform.mail?.poll()).resolves.toBe(1);
         expect(transport.sent.map((payload) => payload.subject)).toStrictEqual(["Invite"]);
+
+        const shardTables = new Database(shardPath, { readonly: true });
+
+        // Nothing of mail's lives in the shard's file, which its transactions hold.
+        expect(shardTables.prepare("SELECT name FROM sqlite_master WHERE name LIKE '_lunora_mail%'").all()).toStrictEqual([]);
+
+        shardTables.close();
     });
 
-    it("refuses an app queue under the mail queue's name, whose rows both hosts would claim", () => {
-        expect.assertions(1);
+    it("lets an app queue named lunora-mail coexist with mail, whose queue lives in its own file", async () => {
+        expect.assertions(2);
 
-        directory = mkdtempSync(join(tmpdir(), "lunora-mail-clash-"));
+        directory = mkdtempSync(join(tmpdir(), "lunora-mail-names-"));
 
-        const outbox = defineQueue({ handler: () => undefined, name: "lunora-mail" });
+        const outbox = defineQueue({ handler: () => undefined, maxBatchTimeout: 0, name: "lunora-mail" });
+        const batches: string[] = [];
+        const transport = scriptedTransport(["ok"]);
 
-        expect(() =>
-            createNodePlatform({
-                mail: { env: PRODUCTION, transport: scriptedTransport(["ok"]) },
-                onQueueBatch: () => undefined,
-                path: join(directory ?? "", "shard.sqlite3"),
-                queues: { outbox },
-            }),
-        ).toThrow(/"lunora-mail"/u);
+        using platform = createNodePlatform({
+            mail: { env: PRODUCTION, now: startClock().now, path: join(directory, "mail.sqlite3"), transport },
+            onQueueBatch: (batch) => {
+                batches.push(batch.queue);
+            },
+            path: join(directory, "shard.sqlite3"),
+            queues: { outbox },
+        });
+
+        await platform.queues?.bindings.outbox.send({ n: 1 });
+        await platform.mail?.mailer.queue({ subject: "Hi", text: "Hi", to: "ada@example.com" });
+        await platform.queues?.poll();
+        await platform.mail?.poll();
+
+        // Each host consumed only its own row.
+        expect(batches).toStrictEqual(["lunora-mail"]);
+        expect(transport.sent).toHaveLength(1);
     });
 
     describe("delivery semantics", () => {
@@ -352,7 +373,7 @@ describe(createNodeMailHost, () => {
             const jobs = defineQueue({ handler: () => undefined, maxBatchTimeout: 0, maxRetries: 0 });
 
             using platform = createNodePlatform({
-                mail: { env: PRODUCTION, transport: scriptedTransport(["ok"]) },
+                mail: { env: PRODUCTION, path: join(directory, "mail.sqlite3"), transport: scriptedTransport(["ok"]) },
                 onQueueBatch: () => {
                     throw new Error("job failed");
                 },
@@ -374,9 +395,12 @@ describe(createNodeMailHost, () => {
 
             directory = mkdtempSync(join(tmpdir(), "lunora-mail-drain-"));
 
-            const path = join(directory, "shard.sqlite3");
+            const mailPath = join(directory, "mail.sqlite3");
             const gate = blockingTransport();
-            const platform = createNodePlatform({ mail: { env: PRODUCTION, transport: gate.transport }, path });
+            const platform = createNodePlatform({
+                mail: { env: PRODUCTION, path: mailPath, transport: gate.transport },
+                path: join(directory, "shard.sqlite3"),
+            });
 
             await platform.mail?.mailer.queue({ subject: "Bye", text: "Shutting down", to: "ada@example.com" });
 
@@ -384,7 +408,7 @@ describe(createNodeMailHost, () => {
 
             await gate.entered;
 
-            const reader = new Database(path, { readonly: true });
+            const reader = new Database(mailPath, { readonly: true });
             let rowsWhenDrained: unknown;
             const drained = (async () => {
                 await platform.drain();
@@ -563,35 +587,36 @@ describe(createNodeMailHost, () => {
             expect(database.prepare("SELECT key FROM _lunora_mail_sent WHERE key = 'stale'").get()).toBeUndefined();
         });
 
-        it("keeps the app's queue host from resetting a parked mail send", async () => {
+        it("keeps an app queue host on the same connection from resetting a parked mail send", async () => {
             expect.assertions(2);
 
             vi.spyOn(console, "warn").mockImplementation(() => undefined);
             vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-            directory = mkdtempSync(join(tmpdir(), "lunora-mail-app-requeue-"));
-
-            const jobs = defineQueue({ handler: () => undefined, maxBatchTimeout: 0 });
-
-            using platform = createNodePlatform({
-                mail: { env: PRODUCTION, now: startClock().now, transport: scriptedTransport([new Error("connection refused")]) },
-                onQueueBatch: () => undefined,
-                path: join(directory, "shard.sqlite3"),
-                queues: { jobs },
+            // createNodeMailHost used on its own, sharing one connection with the app's queues.
+            const database = freshDatabase();
+            const app = createNodeQueueHost(database, {
+                onBatch: () => undefined,
+                queues: { jobs: defineQueue({ handler: () => undefined, maxBatchTimeout: 0 }) },
+            });
+            const mail = createNodeMailHost(database, {
+                env: PRODUCTION,
+                now: startClock().now,
+                transport: scriptedTransport([new Error("connection refused")]),
             });
 
-            await platform.mail?.mailer.queue({ subject: "Reset", text: "Link", to: "ada@example.com" });
+            await mail.mailer.queue({ subject: "Reset", text: "Link", to: "ada@example.com" });
 
             for (let delivery = 0; delivery < 4; delivery += 1) {
                 // eslint-disable-next-line no-await-in-loop -- each poll settles the previous delivery before the next is claimed
-                await platform.mail?.poll();
+                await mail.poll();
             }
 
-            const [parked] = platform.mail?.deadLetters.list() ?? [];
+            const [parked] = mail.deadLetters.list();
 
             // The app host would reset its attempts to 0, which skips the late-redelivery check.
-            expect(platform.queues?.deadLetters.requeue(parked?.id ?? "")).toBe(false);
-            expect(platform.mail?.deadLetters.list()).toMatchObject([{ attempts: 4 }]);
+            expect(app.deadLetters.requeue(parked?.id ?? "")).toBe(false);
+            expect(mail.deadLetters.list()).toMatchObject([{ attempts: 4 }]);
         });
     });
 
@@ -949,6 +974,181 @@ describe(createNodeMailHost, () => {
             await mail.poll();
 
             expect(transport.sent).toHaveLength(11);
+        });
+    });
+
+    describe("sixth review", () => {
+        it.each([
+            ["negative", -1],
+            ["NaN", Number.NaN],
+            ["Infinity", Number.POSITIVE_INFINITY],
+            ["fractional", 1.5],
+            ["past the 24-hour ceiling", 86_401],
+        ])("refuses a %s delaySeconds instead of delivering early", async (_label, delaySeconds) => {
+            expect.assertions(2);
+
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            await expect(mail.queue.send({ idempotencyKey: "later", subject: "Later", text: "Hi", to: "ada@example.com" }, { delaySeconds })).rejects.toThrow(
+                /whole number of seconds from 0 to 86400/u,
+            );
+
+            // Nothing was queued: not now, and not once any delay could have passed.
+            await mail.poll();
+            clock.advance(2 * 86_400_000);
+            await mail.poll();
+
+            expect(transport.sent).toStrictEqual([]);
+        });
+
+        it("accepts the full 24-hour delay and holds the send until then", async () => {
+            expect.assertions(2);
+
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.queue.send({ idempotencyKey: "tomorrow", subject: "Tomorrow", text: "Hi", to: "ada@example.com" }, { delaySeconds: 86_400 });
+            clock.advance(86_399_000);
+            await mail.poll();
+
+            expect(transport.sent).toStrictEqual([]);
+
+            clock.advance(1000);
+            await mail.poll();
+
+            expect(transport.sent).toHaveLength(1);
+        });
+
+        it("captures under NODE_ENV=test exactly as on Cloudflare, and says so at startup", async () => {
+            expect.assertions(4);
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+            const env = { MAIL_FROM: PRODUCTION.MAIL_FROM, NODE_ENV: "test" };
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env, now: startClock().now, transport });
+
+            // Cloudflare's own rule, the one createMailerFromEnv applies there.
+            expect(shouldCaptureMail(env)).toBe(true);
+            expect(warn.mock.calls[0]?.[0]).toMatch(/mail is captured, not sent \(NODE_ENV=test selects dev capture\).*DISCARDED/u);
+
+            await mail.mailer.queue({ subject: "Reset", text: "Link", to: "ada@example.com" });
+            await mail.poll();
+
+            expect(transport.sent).toStrictEqual([]);
+            expect(warn.mock.calls.filter(([line]) => String(line).includes("mail is captured, not sent"))).toHaveLength(1);
+        });
+
+        it("logs nothing about capture when it delivers", () => {
+            expect.assertions(1);
+
+            const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            createNodeMailHost(freshDatabase(), { env: PRODUCTION, transport: scriptedTransport(["ok"]) });
+
+            expect(warn).not.toHaveBeenCalled();
+        });
+    });
+
+    describe("coderabbit review", () => {
+        it("keeps a key's content record for as long as the send's sent record", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            const clock = startClock();
+            const transport = scriptedTransport([new Error("connection refused"), "ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+
+            await mail.mailer.queue({ idempotencyKey: "order-5", subject: "Order", text: "Shipped", to: "ada@example.com" });
+            await mail.poll();
+            // Sent on the retry at hour 22: the sent record lives to hour 46.
+            clock.advance(22 * 60 * 60 * 1000);
+            await mail.poll();
+            clock.advance(3 * 60 * 60 * 1000);
+
+            // Hour 25: past the enqueue-time record, inside the sent record. Reusing the key for
+            // other content would otherwise be accepted, then acked as already sent.
+            await expect(mail.mailer.queue({ idempotencyKey: "order-5", subject: "Order", text: "Cancelled", to: "ada@example.com" })).rejects.toThrow(
+                /already queued with different content/u,
+            );
+
+            expect(transport.sent.map((payload) => payload.text)).toStrictEqual(["Shipped", "Shipped"]);
+        });
+
+        it("judges a second row of a key by the key's delivery history, not the row's own attempts", async () => {
+            expect.assertions(2);
+
+            vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+            // Both clocks move together: Resend's window is wall-clock time.
+            vi.useFakeTimers({ toFake: ["Date"] });
+            vi.setSystemTime(new Date("2026-11-18T09:00:00Z"));
+
+            const unknown = new MailSendError({ message: "socket hang up", outcomeUnknown: true, retryable: false });
+            const transport = scriptedTransport([unknown, "ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, transport: { ...transport, dedupesOnIdempotencyKey: true } });
+            const reset = { idempotencyKey: "reset-ada", subject: "Reset", text: "Link", to: "ada@example.com" };
+
+            // The first row's only attempt may have landed.
+            await mail.mailer.queue(reset);
+            await mail.poll();
+
+            // A day later the same mail is queued again: a new row, attempts 1, enqueued just now.
+            vi.setSystemTime(Date.now() + 25 * 60 * 60 * 1000);
+            await mail.mailer.queue(reset);
+            await mail.poll();
+
+            // Resend dedupes the key for 24 h from its first send, so either row going out could be a second copy.
+            expect(transport.sent).toHaveLength(1);
+            expect(error.mock.calls.map(([line]) => logged(line).event)).toContain("lunora.mail.send_outcome_unknown");
+        });
+
+        it("keeps mail delivery out of a shard transaction that rolls back", async () => {
+            expect.assertions(2);
+
+            directory = mkdtempSync(join(tmpdir(), "lunora-mail-tx-"));
+
+            const transport = scriptedTransport(["ok"]);
+
+            using platform = createNodePlatform({
+                mail: { env: PRODUCTION, now: startClock().now, path: join(directory, "mail.sqlite3"), transport },
+                path: join(directory, "shard.sqlite3"),
+            });
+
+            await platform.mail?.mailer.queue({ idempotencyKey: "welcome-1", subject: "Welcome", text: "Hi", to: "ada@example.com" });
+
+            let release: () => void = () => undefined;
+            let began: () => void = () => undefined;
+            const held = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            const opened = new Promise<void>((resolve) => {
+                began = resolve;
+            });
+            // A shard mutation that awaits, then fails: its BEGIN is open while mail polls.
+            const mutation = platform.shard.transaction(async () => {
+                began();
+                await held;
+
+                throw new Error("mutation failed");
+            });
+
+            // The closure runs only once the host has issued BEGIN, so this is the open transaction.
+            await opened;
+            await platform.mail?.poll();
+            release();
+
+            await expect(mutation).rejects.toThrow("mutation failed");
+
+            // The ack and the sent record survived the rollback, so nothing goes out twice.
+            await platform.mail?.poll();
+
+            expect(transport.sent).toHaveLength(1);
         });
     });
 });

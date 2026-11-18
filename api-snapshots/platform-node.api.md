@@ -240,6 +240,14 @@ interface NodePlatformDispatchOptions {
 }
 ```
 
+### `NodePlatformMailOptions` (type)
+
+```ts
+type NodePlatformMailOptions = NodeMailHostOptions & {
+    path: string;
+};
+```
+
 ### `NodePlatformOptions` (type)
 
 ```ts
@@ -251,7 +259,7 @@ type NodePlatformOptions<Queues extends Record<string, {
     crons?: Readonly<Record<string, ReadonlyArray<NodeCronJob>>>;
     dispatch?: NodePlatformDispatchOptions;
     globalTablesPath?: string;
-    mail?: NodeMailHostOptions;
+    mail?: NodePlatformMailOptions;
     objectStorageDirectory?: string;
     onQueueBatch?: NodeQueueHostOptions<Queues>["onBatch"];
     queues?: Queues;

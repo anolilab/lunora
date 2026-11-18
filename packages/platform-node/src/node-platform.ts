@@ -16,8 +16,7 @@
 import { LunoraError } from "@lunora/errors";
 import type { PlatformCapabilities, R2BucketLike, SchedulerHost, ShardDirectory, ShardHost, ShardKvStore, SocketHost } from "@lunora/platform";
 import { NODE_CAPABILITIES } from "@lunora/platform";
-import { isQueueDefinition, queueDefaultName } from "@lunora/queue";
-import type Database from "better-sqlite3";
+import Database from "better-sqlite3";
 
 import { AGENT_RUN_OFF_DEFAULT_SHARD_MESSAGE, isAgentRunOffDefaultShard } from "../../../shared/scheduler-dispatch";
 import type { Drainable, DrainOptions, DrainResult } from "./drain-deadline";
@@ -27,7 +26,7 @@ import type { NodeGlobalStore } from "./node-global-store";
 import { createNodeGlobalStore } from "./node-global-store";
 import { createNodeShardKvStore } from "./node-kv-store";
 import type { NodeMailHost, NodeMailHostOptions } from "./node-mail-host";
-import { createNodeMailHost, MAIL_QUEUE_NAME } from "./node-mail-host";
+import { createNodeMailHost } from "./node-mail-host";
 import type { NodeQueueHost, NodeQueueHostOptions } from "./node-queue-host";
 import { createNodeQueueHost } from "./node-queue-host";
 import { createNodeR2Bucket } from "./node-r2-bucket";
@@ -87,30 +86,34 @@ const deliverableCrons = (crons: Readonly<Record<string, ReadonlyArray<NodeCronJ
 };
 
 /**
- * The mail host, refusing an app queue under the mail queue's name: both hosts claim rows by queue
- * name from the same table, so its messages would go to whichever host polled first.
+ * The mail host, on its own connection to its own file. Never the shard's:
+ * `shard.transaction()` holds a raw `BEGIN` on that connection across awaits, so
+ * a poll running meanwhile would claim, record and ack inside it, and the shard's
+ * rollback would undo the ack and the sent record and mail the message again. A
+ * second connection to the shard's file is not enough either: the open `BEGIN`
+ * holds the file's write lock, so every mail write would wait out the busy
+ * timeout on a blocked event loop. The `.global()` store is split off the same way.
  */
-const composeMail = (
-    database: Database.Database,
-    options: NodeMailHostOptions | undefined,
-    queues: Record<string, { isLunoraQueue: true }> | undefined,
-): NodeMailHost | undefined => {
+const composeMail = (options: NodePlatformMailOptions | undefined): { close: () => void; mail: NodeMailHost } | undefined => {
     if (options === undefined) {
         return undefined;
     }
 
-    const clash = Object.entries(queues ?? {}).find(
-        ([exportName, value]) => (isQueueDefinition(value) ? (value.name ?? queueDefaultName(exportName)) : undefined) === MAIL_QUEUE_NAME,
-    );
+    const { path, ...hostOptions } = options;
+    const database = new Database(path);
 
-    if (clash !== undefined) {
-        throw new LunoraError(
-            "VALIDATION_ERROR",
-            `@lunora/platform-node: queue "${clash[0]}" is named "${MAIL_QUEUE_NAME}", which \`mail\` already uses — rename it, or drop \`mail\` and consume it yourself`,
-        );
+    try {
+        return {
+            close: () => {
+                database.close();
+            },
+            mail: createNodeMailHost(database, hostOptions),
+        };
+    } catch (error) {
+        database.close();
+
+        throw error;
     }
-
-    return createNodeMailHost(database, options);
 };
 
 /**
@@ -297,6 +300,19 @@ export interface NodePlatform<
 }
 
 /**
+ * `createNodePlatform`'s `mail` option: the {@link NodeMailHostOptions} plus the
+ * database file the mail host keeps its queue, sent ledger and key records in.
+ *
+ * Its own file, never the shard's, and there is no default: a shard transaction
+ * holds the shard file across awaits, and mail written inside it would be rolled
+ * back with it (see `composeMail`). The same reason `globalTablesPath` has none.
+ */
+export type NodePlatformMailOptions = NodeMailHostOptions & {
+    /** The mail database file, for example `./.lunora/mail.sqlite3`. */
+    path: string;
+};
+
+/**
  * The secrets the dispatch route authenticates with. With neither, the route
  * refuses everything.
  *
@@ -357,10 +373,12 @@ export type NodePlatformOptions<
     /**
      * Deliver `@lunora/mail` sends: a durable `lunora-mail` queue drained
      * through the given `transport` or, without one, Resend (`RESEND_API_KEY`), exposed as
-     * `platform.mail`. Omit when the app sends no mail. Throws here, not on the
-     * first send, when `MAIL_FROM` is unset or nothing can deliver.
+     * `platform.mail`. Its queue, sent ledger and key records live in `path`, a
+     * database file of their own (see {@link NodePlatformMailOptions}). Omit when
+     * the app sends no mail. Throws here, not on the first send, when `MAIL_FROM`
+     * is unset or nothing can deliver.
      */
-    mail?: NodeMailHostOptions;
+    mail?: NodePlatformMailOptions;
 
     /**
      * Directory the object-storage bucket keeps its objects in, one file per
@@ -481,7 +499,13 @@ export const createNodePlatform = <
                       queues: options.queues,
                   });
 
-        const mail = composeMail(database, options.mail, options.queues);
+        const composedMail = composeMail(options.mail);
+
+        if (composedMail !== undefined) {
+            teardown.push(composedMail.close);
+        }
+
+        const mail = composedMail?.mail;
 
         const objectStorage = options.objectStorageDirectory === undefined ? undefined : createNodeR2Bucket({ directory: options.objectStorageDirectory });
 

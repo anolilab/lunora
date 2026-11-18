@@ -65,7 +65,7 @@ export { createNodeHyperdrive } from "./node-hyperdrive";
 export { createNodeShardKvStore } from "./node-kv-store";
 export type { NodeMailHost, NodeMailHostOptions } from "./node-mail-host";
 export { createNodeMailHost } from "./node-mail-host";
-export type { NodeCronJob, NodePlatform, NodePlatformDispatchOptions, NodePlatformOptions } from "./node-platform";
+export type { NodeCronJob, NodePlatform, NodePlatformDispatchOptions, NodePlatformMailOptions, NodePlatformOptions } from "./node-platform";
 export { createNodePlatform } from "./node-platform";
 export type { NodeProfileHandler, NodeProfileHandlerOptions } from "./node-profile-handler";
 export { createNodeProfileHandler } from "./node-profile-handler";

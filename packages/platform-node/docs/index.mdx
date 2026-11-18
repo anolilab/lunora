@@ -219,9 +219,12 @@ The options for `createNodePlatform`. The shard host reads `path`, `shardKey` an
 `onAlarm`, the scheduler reads `onDispatch`, and the shard registry reads
 `directory`, `onAlarm` and `onFetch`. `queues` requires `onQueueBatch`, which the
 platform calls for each assembled batch. `mail` takes the
-[`createNodeMailHost`](#createnodemailhost) options and builds it over the shard's
-database. It throws when `queues` declares a queue named `lunora-mail`, because both
-hosts would claim that queue's rows.
+[`createNodeMailHost`](#createnodemailhost) options plus a `path`, the database
+file the mail host keeps its queue, sent ledger and key records in (the
+`NodePlatformMailOptions` type). The file is its own, never the shard's, and
+there is no default. `shard.transaction()` holds the shard's file across awaits,
+so mail written on it during a mutation would be rolled back with it, and the
+ack and sent record lost would mail the message again.
 
 Run exactly one process with `crons`: it owns the declared set. Processes do
 not notify each other when a row changes, so a server only sees another
@@ -340,18 +343,29 @@ front of the database: the driver connects to it directly.
 
 **Type:** `(database: Database.Database, options?: NodeMailHostOptions) => NodeMailHost`
 
+Give it a connection nothing else opens a transaction on, ideally a file of its
+own, as `createNodePlatform({ mail: { path } })` does. On a shard host's
+connection, a poll during `shard.transaction()` writes inside it, and that
+transaction's rollback would undo the acks and sent records and resend.
+
 Queues and delivers `@lunora/mail` sends. It declares a `lunora-mail` queue on
 `createNodeQueueHost` and returns `{ queue, mailer, poll, drain, deadLetters }`.
 `mailer.queue()` writes a durable row, and so does a mailer you build in your own
 module with `createMailerFromEnv(env, { queue })`. `queue.send(body, { delaySeconds })`
-holds a send back, and any other option throws rather than being dropped. Each `poll()` sends at most one
+holds a send back. `delaySeconds` must be a whole number from 0 to 86,400 (24
+hours), as on Cloudflare Queues. Any other value, or any other option, throws
+rather than being clamped or dropped. Each `poll()` sends at most one
 batch of up to 10 due rows through `consumeQueuedSend`, so drain a backlog with
 further polls. The `transport` option, such as an SMTP client you
 wrap as a `MailTransport`, wins over `RESEND_API_KEY`, which is read only without
-one. A dev environment (`WORKER_ENV=development` or `LUNORA_MAIL_CAPTURE=1`)
-captures instead, the same rule `createMailerFromEnv` applies on Cloudflare. To
-see captured mail in the studio, put a `SHARD` namespace and `LUNORA_ADMIN_TOKEN`
-on `env`.
+one. Capture follows `createMailerFromEnv`'s rule, the same one Cloudflare applies:
+`LUNORA_MAIL_CAPTURE=1` forces it and `=0` forces delivery. Unset, mail is captured
+when every set value of `CF_ENV`, `ENVIRONMENT`, `NODE_ENV` and `WORKER_ENV` names
+a dev environment (`dev`, `development`, `local`, `localhost` or `test`). Node
+tooling often sets `NODE_ENV=test` by itself, so construction logs one warning
+whenever it captures, naming the variable that chose capture. To see captured mail
+in the studio, put a `SHARD` namespace and `LUNORA_ADMIN_TOKEN` on `env`. Without
+them, captured mail is discarded, and the warning says so.
 
 The `mail` registry starter (`lunora registry add mail`) does not run on Node: it
 imports `cloudflare:workers` and `cloudflare:email`. On Node, send through
@@ -377,6 +391,12 @@ Delivery is at-least-once, narrowed:
   before any record existed is checked at delivery, and refused there as the
   error `lunora.mail.idempotency_key_conflict`. Expired records and abandoned
   claims are pruned at most once a minute.
+- A key's deliveries are numbered across every row that carries it, and that
+  number, not a row's own attempt count, is what the attempt marks are keyed on.
+  The dedupe window runs from the key's first delivery. A second row queued for a
+  key after Resend's window is judged against the first row's attempts and refused
+  when one may have landed. Row attempts still set the retry budget. The content
+  record is kept at least as long as the sent record.
 - `_lunora_mail_sent`, in the same database, records each key once the transport
   confirms the send, and keeps it for 24 hours. It also keeps the attempt marks
   `consumeQueuedSend` writes, for 15 days. A second enqueue of a sent key is acked
