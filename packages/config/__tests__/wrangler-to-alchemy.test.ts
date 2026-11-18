@@ -217,6 +217,26 @@ describe("wranglerToAlchemy", () => {
         expect(unsupported).toStrictEqual([]);
     });
 
+    it("keeps request logs on for an observability block without a top-level switch, as wrangler does", () => {
+        expect.assertions(3);
+
+        expect(wranglerToAlchemy({ ...BASE, observability: {} }).source).toContain("observability: { enabled: true },");
+        expect(wranglerToAlchemy({ ...BASE, observability: { head_sampling_rate: 0.2 } }).source).toContain(
+            "observability: { enabled: true, headSamplingRate: 0.2 },",
+        );
+        expect(wranglerToAlchemy({ ...BASE, observability: { logs: { enabled: true } } }).source).toContain(
+            "observability: { enabled: true, logs: { enabled: true, invocationLogs: true } },",
+        );
+    });
+
+    it("leaves logs off when the block turns observability off without a logs override", () => {
+        expect.assertions(1);
+
+        const { source } = wranglerToAlchemy({ ...BASE, observability: { enabled: false, logs: { invocation_logs: false } } });
+
+        expect(source).toContain("observability: { enabled: false, logs: { enabled: false, invocationLogs: false } },");
+    });
+
     it("reports module rules and source-map upload, which the emitted worker does not carry", () => {
         expect.assertions(1);
 

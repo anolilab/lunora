@@ -57,6 +57,7 @@
  * that already has the namespace.
  */
 import type { WranglerObservability, WranglerObservabilityTraces, WranglerQueueConsumer } from "./wrangler-config";
+import { DEFAULT_OBSERVABILITY } from "./wrangler-config";
 
 /** A Durable Object binding as `wrangler.jsonc` spells it. */
 interface WranglerDurableObjectBinding {
@@ -433,8 +434,10 @@ const emitObservability = (observability: WranglerObservability | undefined, out
     }
 
     // The API requires `enabled` (and `invocationLogs` on logs); wrangler
-    // leaves them optional, so its defaults are written out.
-    const enabled = observability.enabled ?? false;
+    // leaves them optional. A present block without the switch is on, as
+    // the sampling resolver reads it, so `{}` or a sampling-only
+    // block keeps request logs instead of deploying them off.
+    const enabled = observability.enabled ?? DEFAULT_OBSERVABILITY.enabled;
     const { logs, traces } = observability;
 
     return objectLiteral({
