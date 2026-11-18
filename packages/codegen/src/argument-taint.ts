@@ -380,6 +380,19 @@ const valueWrapperOf = (node: TsNode): TsNode => {
     }
 };
 
+/** A function whose body can hold an identity guard: the handler itself, or a helper it calls. */
+type FunctionNode = ArrowFunction | FunctionDeclaration | FunctionExpression | MethodDeclaration;
+
+const isFunctionNode = (node: TsNode | undefined): node is FunctionNode =>
+    Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isFunctionDeclaration(node) || Node.isMethodDeclaration(node);
+
+/** The innermost function containing `node`, or `undefined` at module level. */
+const enclosingFunctionOf = (node: TsNode): FunctionNode | undefined => {
+    const ancestor = node.getFirstAncestor((candidate) => isFunctionNode(candidate));
+
+    return isFunctionNode(ancestor) ? ancestor : undefined;
+};
+
 /** The comparison operators besides equality: each yields a boolean whatever its operands. */
 const RELATIONAL_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
     SyntaxKind.GreaterThanEqualsToken,
@@ -390,31 +403,67 @@ const RELATIONAL_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
     SyntaxKind.LessThanToken,
 ]);
 
-/** Whether `node` always yields a boolean: a comparison, a negation, a boolean literal, or a `&&` of such operands. */
-const isBooleanOperand = (node: TsNode): boolean => {
+/**
+ * Whether `identifier` names a value no caller chose: a ctx surface, a fixed value, a platform global (`Date`), or a
+ * parameter of `callback`, the function passed as an argument that holds the predicate (`(m) => m.active && …` reads
+ * the row being filtered). The handler's `args` and a helper's own parameters are none of these.
+ */
+const isRootedIdentifier = (identifier: Identifier, callback: FunctionNode | undefined): boolean => {
+    if (contextTrustPathOf(identifier) !== undefined || isFixedValue(identifier)) {
+        return true;
+    }
+
+    const declaration = declarationOf(identifier);
+
+    if (declaration === undefined) {
+        return false;
+    }
+
+    if (declaration.getSourceFile().isDeclarationFile()) {
+        return true;
+    }
+
+    const parameter = Node.isParameterDeclaration(declaration) ? declaration : declaration.getFirstAncestorByKind(SyntaxKind.Parameter);
+
+    return callback !== undefined && parameter?.getParent().compilerNode === callback.compilerNode;
+};
+
+/**
+ * Whether `node`, an operand of a `&&` chain, is a required condition rather than a value the chain can yield to a
+ * caller: a comparison, a negation, a boolean literal, a `&&` of such operands, or an operand that reads only values no
+ * caller chose (`m.active`, `m.roles.includes("member")`). An operand reading `args` or a helper parameter
+ * (`args.victim`) can become the chain's value.
+ */
+const isRequiredOperand = (node: TsNode, callback: FunctionNode | undefined): boolean => {
     const value = unwrapExpression(node) ?? node;
 
-    if (Node.isPrefixUnaryExpression(value)) {
-        return value.getOperatorToken() === SyntaxKind.ExclamationToken;
+    if (Node.isPrefixUnaryExpression(value) && value.getOperatorToken() === SyntaxKind.ExclamationToken) {
+        return true;
     }
 
     if (Node.isBinaryExpression(value)) {
         const operator = value.getOperatorToken().getKind();
 
-        return (
-            EQUALITY_OPERATORS.has(operator) ||
-            RELATIONAL_OPERATORS.has(operator) ||
-            (operator === SyntaxKind.AmpersandAmpersandToken && isBooleanOperand(value.getLeft()) && isBooleanOperand(value.getRight()))
-        );
+        if (EQUALITY_OPERATORS.has(operator) || RELATIONAL_OPERATORS.has(operator)) {
+            return true;
+        }
+
+        if (operator === SyntaxKind.AmpersandAmpersandToken) {
+            return isRequiredOperand(value.getLeft(), callback) && isRequiredOperand(value.getRight(), callback);
+        }
     }
 
-    return Node.isTrueLiteral(value) || Node.isFalseLiteral(value);
+    if (Node.isTrueLiteral(value) || Node.isFalseLiteral(value)) {
+        return true;
+    }
+
+    return !referencesBinding(value, "args") && valueIdentifiersOf(value).every((identifier) => isRootedIdentifier(identifier, callback));
 };
 
 /**
- * Whether the whole `&&` chain `and` belongs to is a boolean predicate: every operand a comparison, a negation or
- * another such `&&`. Only then is a compared identity a required condition; `uid === args.guard && args.victim`
- * yields the caller's value once the caller passes their own id as the guard.
+ * Whether the whole `&&` chain `and` belongs to is a predicate: no operand can yield a caller-chosen value (see
+ * {@link isRequiredOperand}). Only then is a compared identity a required condition; `uid === args.guard &&
+ * args.victim` yields the caller's value once the caller passes their own id as the guard.
  */
 const isPredicateChain = (and: TsNode): boolean => {
     let top = and;
@@ -427,7 +476,11 @@ const isPredicateChain = (and: TsNode): boolean => {
         top = parent;
     }
 
-    return isBooleanOperand(top);
+    const enclosing = enclosingFunctionOf(top);
+    const holder = enclosing?.getParent();
+    const callback = enclosing !== undefined && Node.isCallExpression(holder) && holder.getArguments().includes(enclosing) ? enclosing : undefined;
+
+    return isRequiredOperand(top, callback);
 };
 
 /**
@@ -436,7 +489,7 @@ const isPredicateChain = (and: TsNode): boolean => {
  * {@link isAlternativeOf}: the identity on the left of `ctx.auth.userId ?? args.victim` is null for an anonymous
  * caller, who then reads the victim's row. A fixed fallback (`ctx.auth.userId ?? "anon"`) is no one's choice. A `&&`
  * is a required condition only in a boolean predicate (`m.userId === uid && m.channelId === id`, either order; see
- * {@link isPredicateChain}); a `&&` with any value operand (`uid && args.victim`) yields that value instead.
+ * {@link isPredicateChain}); a `&&` with a caller-chosen operand (`uid && args.victim`) yields that value instead.
  */
 const hasAlternativeWithin = (node: TsNode, within: TsNode): boolean => {
     for (let child = node, parent = node.getParent(); parent !== undefined && child !== within; child = parent, parent = parent.getParent()) {
@@ -860,19 +913,6 @@ const referencesScopedKeySource = (node: TsNode, wholeKey?: TsNode): boolean =>
         return !isOptionalReadOfNullableRow(read, call) && rowScopesKey(call, read, field, wholeKey);
     });
 
-/** A function whose body can hold an identity guard: the handler itself, or a helper it calls. */
-type FunctionNode = ArrowFunction | FunctionDeclaration | FunctionExpression | MethodDeclaration;
-
-const isFunctionNode = (node: TsNode | undefined): node is FunctionNode =>
-    Node.isArrowFunction(node) || Node.isFunctionExpression(node) || Node.isFunctionDeclaration(node) || Node.isMethodDeclaration(node);
-
-/** The innermost function containing `node`, or `undefined` at module level. */
-const enclosingFunctionOf = (node: TsNode): FunctionNode | undefined => {
-    const ancestor = node.getFirstAncestor((candidate) => isFunctionNode(candidate));
-
-    return isFunctionNode(ancestor) ? ancestor : undefined;
-};
-
 /** The `await` operand of `node` (both unwrapped), or `node` itself when it is not awaited. */
 const awaitedOperand = (node: TsNode | undefined): TsNode | undefined => {
     const unwrapped = unwrapExpression(node);
@@ -999,13 +1039,33 @@ const isWriteTarget = (node: TsNode): boolean => {
     return Node.isDeleteExpression(parent);
 };
 
-/** Whether `parameter` is assigned anywhere in `helper` (`channelId = "general"`, `({ ctx } = other)`), by symbol. */
-const isReassignedParameter = (parameter: ParameterDeclaration, helper: FunctionNode): boolean =>
+/**
+ * Whether `use` may run before `target` in `enclosing` has completed: it comes earlier in the source, sits in a nested
+ * function (which may be called at any time), or shares a loop with `target`, whose next pass runs it first again.
+ */
+const mayRunBefore = (use: TsNode, target: TsNode, enclosing: FunctionNode): boolean => {
+    if (use.getStart() < target.getEnd() || enclosingFunctionOf(use)?.compilerNode !== enclosing.compilerNode) {
+        return true;
+    }
+
+    return target
+        .getAncestors()
+        .some((ancestor) => Node.isIterationStatement(ancestor) && ancestor.getStart() <= use.getStart() && use.getEnd() <= ancestor.getEnd());
+};
+
+/**
+ * Whether `parameter` is assigned in `helper` (`channelId = "general"`, `({ ctx } = other)`), by symbol, where the write
+ * may run before `read` completes. A write after the enforcing read cannot change what it checked.
+ */
+const isReassignedBefore = (parameter: ParameterDeclaration, helper: FunctionNode, read: TsNode): boolean =>
     helper
         .getDescendantsOfKind(SyntaxKind.Identifier)
         .some(
             (identifier) =>
-                identifier.getText() === parameter.getName() && isWriteTarget(identifier) && declarationOf(identifier)?.compilerNode === parameter.compilerNode,
+                identifier.getText() === parameter.getName() &&
+                isWriteTarget(identifier) &&
+                declarationOf(identifier)?.compilerNode === parameter.compilerNode &&
+                mayRunBefore(identifier, read, helper),
         );
 
 /** A chain of calls and property reads, as a `db` read is written: every call in it, the names read along it, and its root. */
@@ -1182,8 +1242,10 @@ const keepsGuardedValues = (use: Identifier, guardedPaths: ReadonlyArray<RowPath
     const { node, path: chainPath } = accessChainFrom(use);
     const path = [...prefix, ...chainPath];
 
+    // Assigning the binding itself (`channelId = "general"` in a helper) rebinds a local; it writes nothing into the
+    // row. Whether that may run before the check is judged where the guard is found.
     if (isWriteTarget(node)) {
-        return !guardedPaths.some((guardedPath) => overlaps(path, guardedPath));
+        return chainPath.length === 0 || !guardedPaths.some((guardedPath) => overlaps(path, guardedPath));
     }
 
     // A method invoked on a holder (`row.save()`) runs with the holder as `this`; one on a guarded value itself cannot repoint it.
@@ -1343,21 +1405,21 @@ const isNullCheckExit = (statement: TsNode | undefined, declaration: VariableDec
     exitsBranch(statement.getThenStatement(), throwOnly);
 
 /**
- * Whether `helper`'s own body enforces the identity check of {@link helperGuardOf}: a top-level
+ * The statement of `helper`'s own body that enforces the identity check of {@link helperGuardOf}: a top-level
  * `const r = await P.db…` single-row read whose chain reads the caller's identity through `parameter` and
  * references a parameter that received the row. It is enforced by a later `if (!r)` / `if (r == null)` in
  * the same block whose branch throws, or by the read itself when it is a `…OrThrow` variant.
  */
-const helperEnforcesRead = (helper: FunctionNode, parameter: ParameterDeclaration, tiedParameters: ReadonlyArray<ParameterDeclaration>): boolean => {
+const enforcedReadOf = (helper: FunctionNode, parameter: ParameterDeclaration, tiedParameters: ReadonlyArray<ParameterDeclaration>): TsNode | undefined => {
     const body = helper.getBody();
 
     if (!Node.isBlock(body)) {
-        return false;
+        return undefined;
     }
 
     const statements = body.getStatements();
 
-    return statements.some((statement, index) => {
+    return statements.find((statement, index) => {
         const declaration = constDeclarationOf(statement);
         const initializer = unwrapExpression(declaration?.getInitializer());
         const chain = Node.isAwaitExpression(initializer) ? databaseChainOf(initializer.getExpression()) : undefined;
@@ -1434,7 +1496,7 @@ const readsOwnArguments = (helper: FunctionNode): boolean =>
 /**
  * The row paths a helper call guards, and its uses of the row, when it is an identity guard for the row;
  * `undefined` otherwise. It is one when the handler's ctx is its only ctx-valued argument, another argument
- * references the row, and the helper's body enforces the identity read of {@link helperEnforcesRead}. A helper that
+ * references the row, and the helper's body enforces the identity read of {@link enforcedReadOf}. A helper that
  * may return a Promise must be awaited. Whether the helper leaves the guarded values alone is judged by the caller,
  * which knows the key's path.
  */
@@ -1466,22 +1528,21 @@ const helperGuardOf = (call: CallExpression, row: VariableDeclaration, awaited: 
     const returnType = helper.getReturnType();
     const mayBePromise = helper.isAsync() || returnType.isAny() || returnType.isUnknown() || returnType.getText().includes("Promise");
 
-    // A default or a reassignment replaces what the call passed before the body reads it: a row field that is
-    // `undefined` takes `channelId = "general"`, and `ctx = other` checks someone else's identity.
-    const isReplaced = (candidate: ParameterDeclaration): boolean => candidate.hasInitializer() || isReassignedParameter(candidate, helper);
-
-    if (
-        tiedParameters.length === 0 ||
-        (!awaited && mayBePromise) ||
-        readsOwnArguments(helper) ||
-        [parameter, ...tiedParameters].some((candidate) => isReplaced(candidate))
-    ) {
+    if (tiedParameters.length === 0 || (!awaited && mayBePromise) || readsOwnArguments(helper)) {
         return undefined;
     }
 
-    return helperEnforcesRead(helper, parameter, tiedParameters)
-        ? { guardedPaths, helperArguments: tiedArguments.map(({ argument }) => argument), helperUses: tiedArguments.flatMap(({ uses }) => uses) }
-        : undefined;
+    const read = enforcedReadOf(helper, parameter, tiedParameters);
+
+    if (read === undefined) {
+        return undefined;
+    }
+
+    // A default or a reassignment that runs before the enforcing read replaces what the call passed: a row field that
+    // is `undefined` takes `channelId = "general"`, and `ctx = other` checks someone else's identity.
+    return [parameter, ...tiedParameters].some((candidate) => candidate.hasInitializer() || isReassignedBefore(candidate, helper, read))
+        ? undefined
+        : { guardedPaths, helperArguments: tiedArguments.map(({ argument }) => argument), helperUses: tiedArguments.flatMap(({ uses }) => uses) };
 };
 
 /**
@@ -1545,20 +1606,6 @@ const runsBeforeSinkUnconditionally = (statement: TsNode, enclosing: FunctionNod
  * escape. A read below another read stays, so a holder the guard both reads through and hands on is still one.
  */
 const guardedPathsOf = (keyPath: RowPath, reads: ReadonlyArray<RowPath>): RowPath[] => [keyPath, ...reads.filter((read) => !holds(keyPath, read))];
-
-/**
- * Whether `use` may run before the sink has read its key: it comes earlier in the source, sits in a nested function
- * (which may be called at any time), or shares a loop with the sink, whose next pass runs it before the sink again.
- */
-const mayRunBeforeSink = (use: TsNode, sinkCall: TsNode, enclosing: FunctionNode): boolean => {
-    if (use.getStart() < sinkCall.getEnd() || enclosingFunctionOf(use)?.compilerNode !== enclosing.compilerNode) {
-        return true;
-    }
-
-    return sinkCall
-        .getAncestors()
-        .some((ancestor) => Node.isIterationStatement(ancestor) && ancestor.getStart() <= use.getStart() && use.getEnd() <= ancestor.getEnd());
-};
 
 /** An identity guard found for the row: the row paths it read and, for a helper, the arguments that hand it the row and the helper's uses of them. */
 interface RowGuard {
@@ -2280,7 +2327,7 @@ export const isGuardedByIdentityCheck = (sinkCall: CallExpression, key: TsNode):
         return false;
     }
 
-    const rowUses = usesOfLocal(rowName).filter((use) => mayRunBeforeSink(use, sinkCall, enclosing));
+    const rowUses = usesOfLocal(rowName).filter((use) => mayRunBefore(use, sinkCall, enclosing));
 
     // A `const` row's fields stay writable: `row.key = args.key`, `row.channelId = args.channelId` or
     // `Object.assign(row, args)` replaces what a guard vouched for, in the handler or in the guard helper. Handing

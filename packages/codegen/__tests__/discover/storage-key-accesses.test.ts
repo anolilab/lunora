@@ -650,6 +650,8 @@ requireMember = async () => {};`;
     it.each([
         ["identity first", `(m) => m.userId === ctx.auth.userId && m.channelId === message.channelId`],
         ["identity second", `(m) => m.channelId === message.channelId && m.userId === ctx.auth.userId`],
+        ["a row field tested first", `(m) => m.active && m.userId === ctx.auth.userId && m.channelId === message.channelId`],
+        ["a row method called first", `(m) => m.roles.includes("member") && m.userId === ctx.auth.userId && m.channelId === message.channelId`],
     ])("accepts an inline guard whose filter requires the identity with &&, %s", (_label, filter) => {
         expect.assertions(1);
 
@@ -667,6 +669,8 @@ requireMember = async () => {};`;
     it.each([
         ["identity first", `(m) => m.userId === ctx.auth.userId && m.channelId === channelId`],
         ["identity second", `(m) => m.channelId === channelId && m.userId === ctx.auth.userId`],
+        ["a row field tested first", `(m) => m.active && m.userId === ctx.auth.userId && m.channelId === channelId`],
+        ["a row method called first", `(m) => m.roles.includes("member") && m.userId === ctx.auth.userId && m.channelId === channelId`],
     ])("accepts a helper guard whose filter requires the identity with &&, %s", (_label, filter) => {
         expect.assertions(1);
 
@@ -912,6 +916,35 @@ const requireMember = async (ctx, channelId) => {
         expect.assertions(1);
 
         write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, HELPER.replace("const userId", `${reassignment}\n    const userId`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
+    });
+
+    it.each([
+        ["a tied parameter", `channelId = "general";`],
+        ["the ctx parameter", "ctx = globalThis.adminContext;"],
+    ])("accepts a helper that reassigns %s only after its enforcing read", (_label, reassignment) => {
+        expect.assertions(1);
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, HELPER.replace(/\n\};$/u, `\n    ${reassignment}\n};`)));
+
+        expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(0);
+    });
+
+    it("reports a helper that reassigns ctx inside a loop that also holds its read", () => {
+        expect.assertions(1);
+
+        const helper = `const requireMember = async (ctx, channelId) => {
+    for (const attempt of [1, 2]) {
+        const row = await ctx.db.members.findFirst({ where: { userId: ctx.auth.userId, channelId } });
+        if (!row) {
+            throw new Error("FORBIDDEN");
+        }
+        ctx = globalThis.adminContext;
+    }
+};`;
+
+        write("chat.ts", teamChat("await requireMember(ctx, message.channelId);", SINK, helper));
 
         expect(discoverStorageKeyAccesses(project, join(workdir, "lunora"))).toHaveLength(1);
     });
