@@ -142,13 +142,22 @@ const exportTargets = (value: unknown): string[] => {
     return typeof root === "string" ? [root] : Object.values(root as Record<string, unknown>).flatMap((target) => exportTargets(target));
 };
 
+/** Whether `path` is an existing directory. */
+const isDirectory = (path: string): boolean => {
+    try {
+        return statSync(path).isDirectory();
+    } catch {
+        return false;
+    }
+};
+
 /**
- * The entrypoints a local package directory's `package.json` names (`main`,
- * `module`, and every `exports` target), each tried with the bundled extensions.
- * All of them, not the one a bundler's condition order picks, for the same
- * fail-closed reason as sibling files. Empty when the directory has none.
+ * The entry paths a local package directory's `package.json` names: `main`,
+ * `module`, and every `exports` target. Raw, relative to the directory; each is
+ * expanded by {@link runtimeCandidates} like any other path. Empty when the
+ * directory has no readable manifest.
  */
-const packageEntrypoints = (directory: string): string[] => {
+const packageEntries = (directory: string): string[] => {
     let manifest: Record<string, unknown>;
 
     try {
@@ -157,64 +166,80 @@ const packageEntrypoints = (directory: string): string[] => {
         return [];
     }
 
-    const declared = [manifest.main, manifest.module].filter((entry): entry is string => typeof entry === "string");
-
-    return [...declared, ...exportTargets(manifest.exports)].flatMap((entry) => {
-        const target = resolve(directory, entry);
-
-        return [target, ...BUNDLED_EXTENSIONS.map((extension) => target + extension)].filter((candidate) => isFile(candidate));
-    });
+    return [...[manifest.main, manifest.module].filter((entry): entry is string => typeof entry === "string"), ...exportTargets(manifest.exports)];
 };
+
+/** Whether `path` names a type declaration file, which is never bundled. */
+const isDeclaration = (path: string): boolean => DECLARATION_EXTENSIONS.some((extension) => path.endsWith(extension));
 
 /**
- * Every file a specifier's resolved base path may name: the exact path, a TypeScript source
- * written as its emitted extension, the path with each bundled extension, and a
- * directory's `index`. All of them, not the first that exists, so the answer does
- * not depend on matching the bundler's resolution order (esbuild tries `.tsx`
- * before `.ts`, for one). When two siblings share a base name, a `cloudflare:*`
- * import in either is reported: that fails closed, at the cost of a false refusal
- * when only the other one is bundled, which an explicit extension fixes. Empty
- * when nothing matches, which the build itself reports.
+ * Every file the bundler could load for a path, the one rule a relative import,
+ * an alias and a package entrypoint all go through, so no entry path can expand
+ * differently from another. That is the exact file; for a JavaScript extension
+ * (`.js`, `.mjs`, `.cjs`, `.jsx`), that file and the TypeScript sources it may be
+ * written for (`.ts`/`.tsx`, `.mts`, `.cts`); with no extension, the path with
+ * every runtime extension; for a directory, its `index.*` and every
+ * `package.json` entry fed back through this same rule (a `main: "./dist"` is a
+ * directory too). A declaration (`.d.ts`, `.d.mts`, `.d.cts`) stands for its
+ * implementation and is never returned itself.
+ *
+ * All of them, not the first that exists, so the answer does not depend on the
+ * bundler's resolution order (esbuild tries `.tsx` before `.ts`, for one). When
+ * two candidates share a base name, a `cloudflare:*` import in either is
+ * reported: that fails closed, at the cost of a false refusal when only the other
+ * one is bundled, which an explicit path fixes. `seen` makes a package entry that
+ * names its own directory terminate.
  */
-const candidatesFor = (base: string): string[] => {
-    const written = BUNDLED_EXTENSIONS.find((extension) => base.endsWith(extension));
-    const candidates = [
-        ...(written === undefined ? [] : [base, ...(SOURCE_FOR_EMITTED[written] ?? []).map((source) => base.slice(0, -written.length) + source)]),
-        ...BUNDLED_EXTENSIONS.map((extension) => base + extension),
-        ...BUNDLED_EXTENSIONS.map((extension) => join(base, `index${extension}`)),
-    ];
+const runtimeCandidates = (target: string, seen: Set<string> = new Set()): string[] => {
+    if (seen.has(target)) {
+        return [];
+    }
 
-    return [...new Set([...candidates.filter((candidate) => isFile(candidate)), ...packageEntrypoints(base)])];
+    seen.add(target);
+
+    const declaration = DECLARATION_EXTENSIONS.find((extension) => target.endsWith(extension));
+
+    if (declaration !== undefined) {
+        return runtimeCandidates(target.slice(0, -declaration.length), seen);
+    }
+
+    const written = BUNDLED_EXTENSIONS.find((extension) => target.endsWith(extension));
+    const files =
+        written === undefined
+            ? [target, ...BUNDLED_EXTENSIONS.map((extension) => target + extension)]
+            : [target, ...(SOURCE_FOR_EMITTED[written] ?? []).map((source) => target.slice(0, -written.length) + source)];
+    const found = files.filter((file) => isFile(file));
+
+    if (isDirectory(target)) {
+        found.push(...BUNDLED_EXTENSIONS.map((extension) => join(target, `index${extension}`)).filter((file) => isFile(file)));
+
+        for (const entry of packageEntries(target)) {
+            found.push(...runtimeCandidates(resolve(target, entry), seen));
+        }
+    }
+
+    return [...new Set(found)].filter((file) => !isDeclaration(file));
 };
 
-/** Every file a relative specifier may name, by {@link candidatesFor}. */
-const resolveRelative = (fromFile: string, specifier: string): string[] => candidatesFor(resolve(dirname(fromFile), specifier));
+/** Every file a relative specifier may name, by {@link runtimeCandidates}. */
+const resolveRelative = (fromFile: string, specifier: string): string[] => runtimeCandidates(resolve(dirname(fromFile), specifier));
 
 /**
  * The path an alias specifier named, recovered from the one file TypeScript
- * resolved it to, so it can be expanded like a relative specifier: the resolved
- * extension is stripped when the specifier had none (TypeScript picks `.ts` over
- * a `.tsx` sibling, the bundler may not), and a directory the specifier named is
- * restored when TypeScript answered with its `index` file.
+ * resolved it to, so {@link runtimeCandidates} can expand it as it expands a
+ * relative path. TypeScript's answer carries its own extension (`.ts` for
+ * `@shared/bridge.js`, or a declaration), so the file's stem is taken and given the
+ * extension the specifier wrote, or none when it wrote none; a directory the
+ * specifier named is restored when TypeScript answered with its `index` file.
  */
-const aliasBase = (resolvedFile: string, specifier: string): string => {
+const aliasTarget = (resolvedFile: string, specifier: string): string => {
+    const resolvedExtension = [...DECLARATION_EXTENSIONS, ...BUNDLED_EXTENSIONS].find((extension) => resolvedFile.endsWith(extension)) ?? "";
+    const stem = resolvedFile.slice(0, resolvedFile.length - resolvedExtension.length);
     const written = BUNDLED_EXTENSIONS.find((extension) => specifier.endsWith(extension));
-    const declaration = DECLARATION_EXTENSIONS.find((extension) => resolvedFile.endsWith(extension));
-
-    // TypeScript answers `@shared/bridge.js` with `bridge.d.ts` when it has one, but the bundle
-    // loads the implementation: back to the path the specifier named, so `bridge.js` is reached.
-    if (declaration !== undefined) {
-        const stem = resolvedFile.slice(0, -declaration.length);
-
-        return written === undefined ? stem : stem + written;
-    }
 
     if (written !== undefined) {
-        return resolvedFile;
+        return stem + written;
     }
-
-    const extension = BUNDLED_EXTENSIONS.find((candidate) => resolvedFile.endsWith(candidate)) ?? "";
-    const stem = resolvedFile.slice(0, resolvedFile.length - extension.length);
 
     return basename(stem) === "index" && !specifier.endsWith("index") ? dirname(stem) : stem;
 };
@@ -250,8 +275,8 @@ const resolveAlias = (project: Project, filePath: string, specifier: string): st
         return [];
     }
 
-    // Every file the named path may be, as for a relative import, plus the one TypeScript picked.
-    return [...new Set([resolved.resolvedFileName, ...candidatesFor(aliasBase(resolved.resolvedFileName, specifier))])];
+    // Every file the named path may be, by the same rule as a relative import.
+    return runtimeCandidates(aliasTarget(resolved.resolvedFileName, specifier));
 };
 
 /**

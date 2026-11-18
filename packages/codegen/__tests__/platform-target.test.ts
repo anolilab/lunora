@@ -1489,6 +1489,34 @@ describe("app-declared surfaces, gated end-to-end through runCodegen", () => {
             expect(cloudflareRefusals()[0]?.message).toContain("shared/bridge.js (cloudflare:workers)");
         });
 
+        it("follows an alias that names .js to the .js file, not only the .ts TypeScript resolves it to", () => {
+            expect.assertions(1);
+
+            // TypeScript answers `@shared/bridge.js` with bridge.ts; the bundle may load bridge.js.
+            writeFileSync(
+                join(workdir, "tsconfig.json"),
+                `${JSON.stringify({ compilerOptions: { module: "ESNext", moduleResolution: "bundler", paths: { "@shared/*": ["./shared/*"] }, target: "ES2022" } })}\n`,
+                "utf8",
+            );
+            mkdirSync(join(workdir, "shared"));
+            writeFileSync(join(workdir, "shared", "bridge.ts"), "export const binding = () => undefined;\n", "utf8");
+            writeFileSync(join(workdir, "shared", "bridge.js"), LOADS_ENV, "utf8");
+            write("send.ts", `import { binding } from "@shared/bridge.js";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("shared/bridge.js (cloudflare:workers)");
+        });
+
+        it("probes a package entry that names a directory for its index file", () => {
+            expect.assertions(1);
+
+            // `main: "./dist"` is a directory: the bundler loads dist/index.*.
+            writeNested("localpkg/package.json", `${JSON.stringify({ main: "./dist", name: "localpkg" })}\n`);
+            writeNested("localpkg/dist/index.tsx", LOADS_ENV);
+            write("send.ts", `import { binding } from "./localpkg";\n\nexport const use = () => binding();\n`);
+
+            expect(cloudflareRefusals()[0]?.message).toContain("lunora/localpkg/dist/index.tsx (cloudflare:workers)");
+        });
+
         it("never follows an import into _generated/, whose cloudflare:workers import is codegen's own", () => {
             expect.assertions(1);
 
