@@ -160,7 +160,8 @@ impl Shared {
         });
     }
 
-    /// Start the fleets the box ran before it stopped; the routing table then says which stay up.
+    /// Start the fleets the box ran before it stopped; the routing table then says which stay up. A failed fleet
+    /// stays down: its deploy never got healthy and nothing healthy was put back, so only a new deploy starts it.
     fn restore_fleets(&self) {
         if !self.starts_fleets {
             return;
@@ -168,7 +169,7 @@ impl Shared {
 
         let fleets: Vec<(String, FleetRecord)> = lock(&self.state).fleets.iter().map(|(alias, record)| (alias.clone(), record.clone())).collect();
 
-        for (alias, record) in fleets.into_iter().filter(|(_, record)| record.state != FleetState::Stopped) {
+        for (alias, record) in fleets.into_iter().filter(|(_, record)| matches!(record.state, FleetState::Running | FleetState::Starting)) {
             let launch = FleetLaunch { alias: alias.clone(), ports: FleetPorts { internal_port: record.internal_port, public_port: record.public_port } };
 
             if let Err(error) = self.supervisor.start_fleet(launch) {
@@ -531,4 +532,68 @@ pub fn status_text(config: &HostdConfig) -> String {
     }
 
     format!("{}\n", lines.join("\n"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn restores_only_the_fleets_that_were_up() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let config = super::super::config::parse_config(&serde_json::json!({
+            "boxId": "box_1",
+            "bucket": { "name": "b" },
+            "controlPlane": "https://cloud.example",
+            "credentialsFile": root.join("bucket.env"),
+            "dataDir": root.join("data"),
+            "hostname": "box-1.boxes.lunora.app",
+            "installDir": root.join("opt"),
+            "keyFile": root.join("box.key"),
+        }))
+        .unwrap();
+        let logger = Logger::silent();
+        let supervisor = Arc::new(Supervisor::new(super::super::supervisor::SupervisorOptions {
+            backoff: super::super::process::RESTART_BACKOFF,
+            config: config.clone(),
+            credentials: Arc::new(BTreeMap::new),
+            health_deadline: Duration::from_secs(1),
+            logger: logger.clone(),
+            on_stderr: None,
+        }));
+        let mut state = HostdState::new();
+
+        for (index, (alias, fleet_state)) in
+            [("failed", FleetState::Failed), ("running", FleetState::Running), ("starting", FleetState::Starting), ("stopped", FleetState::Stopped)]
+                .into_iter()
+                .enumerate()
+        {
+            let port = 9000 + u16::try_from(index).unwrap() * 2;
+
+            state
+                .fleets
+                .insert(alias.to_owned(), FleetRecord { deployment_id: None, internal_port: port, public_port: port + 1, state: fleet_state, updated_at: 0 });
+        }
+
+        let shared = Shared {
+            caddy: Arc::new(CaddyController::new(config.caddy.clone(), &config.data_dir, &config.hostname, logger.clone(), http::no_redirect_client())),
+            config,
+            edge_retrying: std::sync::atomic::AtomicBool::new(false),
+            logger,
+            routes: Mutex::new(Vec::new()),
+            starts_fleets: true,
+            state: Arc::new(Mutex::new(state)),
+            supervisor: Arc::clone(&supervisor),
+        };
+
+        shared.restore_fleets();
+
+        let mut started = supervisor.aliases();
+
+        started.sort();
+        assert_eq!(started, ["running", "starting"]);
+
+        supervisor.shutdown().await;
+    }
 }
