@@ -296,6 +296,57 @@ describe("lunora cloud", () => {
         expect(warnings).toStrictEqual([]);
     });
 
+    it("deploys: carries the wrangler vars in the manifest the release stores", async () => {
+        expect.assertions(1);
+
+        const deployFn = vi.fn<CloudCommandDeps["deployFn"]>(async () => {
+            return { status: "live" };
+        });
+
+        await runCloudCommand({
+            argument: ["deploy"],
+            bundlePath: "b",
+            cwd: "/x",
+            deps: deps({
+                deployFn,
+                readWrangler: () => {
+                    return { config: { name: "app", vars: { APP_BASE_URL: "https://app.example" } }, path: "/x/wrangler.jsonc" };
+                },
+            }),
+            logger: capturingLogger().logger,
+            project: "prj_1",
+        });
+
+        expect(deployFn.mock.calls[0]?.[0].manifest.vars).toStrictEqual({ APP_BASE_URL: "https://app.example" });
+    });
+
+    it("deploys: refuses a non-string var by name rather than rebinding it as text", async () => {
+        expect.assertions(3);
+
+        const deployFn = vi.fn<CloudCommandDeps["deployFn"]>(async () => {
+            return { status: "live" };
+        });
+        const { errors, logger } = capturingLogger();
+
+        const result = await runCloudCommand({
+            argument: ["deploy"],
+            bundlePath: "b",
+            cwd: "/x",
+            deps: deps({
+                deployFn,
+                readWrangler: () => {
+                    return { config: { name: "app", vars: { LIMIT: 3, NAME: "x" } }, path: "/x/wrangler.jsonc" };
+                },
+            }),
+            logger,
+            project: "prj_1",
+        });
+
+        expect(result.code).toBe(1);
+        expect(deployFn).not.toHaveBeenCalled();
+        expect(errors[0]).toMatch(/not strings: LIMIT\./);
+    });
+
     it("deploys: warns about unmodelled wrangler sections but still deploys", async () => {
         expect.assertions(3);
 

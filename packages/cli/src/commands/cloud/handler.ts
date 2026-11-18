@@ -120,7 +120,7 @@ const resolveAuth = (options: CloudCommandOptions, deps: CloudCommandDeps, logge
 
 /**
  * What the deploy request says about the Worker, derived from its wrangler
- * config: the binding manifest, the crons, and the static assets. Logs and
+ * config: the binding manifest, the vars, the crons, and the static assets. Logs and
  * returns `undefined` when the assets cannot be collected.
  */
 const deployPayload = (
@@ -137,12 +137,27 @@ const deployPayload = (
         );
     }
 
+    const configured = Object.entries(wrangler.config.vars ?? {});
+    const variables = configured.filter((entry): entry is [string, string] => typeof entry[1] === "string");
+    // Lunora Cloud binds a var as a string; Cloudflare would bind a number or object as JSON, so
+    // converting one would change what the Worker reads (`3` → `"3"`) without a word.
+    const refused = configured.filter(([, value]) => typeof value !== "string").map(([name]) => name);
+
+    if (refused.length > 0) {
+        logger.error(
+            `cloud deploy: Lunora Cloud deploys wrangler vars as plain text, and these are not strings: ${refused.join(", ")}. Quote them in the wrangler config, or move them to a secret.`,
+        );
+
+        return undefined;
+    }
+
     const payload: Pick<DeployToCloudOptions, "assets" | "cronSpecs" | "manifest"> = {
         cronSpecs: [...bindingManifest.crons],
         manifest: {
             bindings: [...bindingManifest.bindings],
             ...(bindingManifest.compatibilityDate === undefined ? {} : { compatibilityDate: bindingManifest.compatibilityDate }),
             ...(bindingManifest.compatibilityFlags === undefined ? {} : { compatibilityFlags: [...bindingManifest.compatibilityFlags] }),
+            ...(variables.length === 0 ? {} : { vars: Object.fromEntries(variables) }),
         },
     };
 
