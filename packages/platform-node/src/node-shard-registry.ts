@@ -198,6 +198,17 @@ const describeShardWork = (key: string, pending: ShardWorkCounts): string => {
     return `shard ${key}: ${parts.join(", ")}`;
 };
 
+/** A shard the registry holds open, with the handles its close and drain use. */
+interface LiveShard {
+    dispose: () => void;
+    drain: () => Promise<void> | undefined;
+    drainHost: () => Promise<void>;
+    pendingAlarms: () => number;
+    pendingBackground: () => number;
+    shard: NodeShard;
+    takeFailures: () => string[];
+}
+
 /** The contracts scoped to one shard key. */
 export interface NodeShard {
     /**
@@ -246,10 +257,12 @@ export interface NodeShardRegistryOptions {
 /** An in-process shard registry: placement, hosting, and the fan-out key set. */
 export interface NodeShardRegistry {
     /**
-     * Dispose every live shard. Safe to call more than once. A shard whose socket close handler is still running is disposed
-     * once it settles, unless `force` is set: then it is disposed now and named in a log line. Such a shard stays live until
-     * its dispose succeeds; a failure then is logged, reported by the next `drain()`, and retried by the next `close()`. A shutdown passes `force` after
-     * its drain has finished or reached its deadline, so a handler that never settles cannot keep a database open at exit.
+     * Dispose every live shard, and refuse new work from then on: `shardFor`, a stub's `fetch` and `rearmPersistedAlarms`
+     * throw once this is called, so nothing reopens a shard. Safe to call more than once. A shard that a request or a socket
+     * close handler is still using is disposed once that work settles, unless `force` is set: then it is disposed now and
+     * named in a log line. A shard whose dispose fails stays live; a failure after close() returned is logged and reported by
+     * the next `drain()`, and the next `close()` retries it. A shutdown passes `force` after its drain has finished or
+     * reached its deadline, so work that never settles cannot keep a database open at exit.
      */
     close: (options?: { force?: boolean }) => void;
     /** The `ShardDirectory` to hand the runtime. */
@@ -298,18 +311,19 @@ export interface NodeShardRegistry {
 
 /** Build the in-process shard registry. */
 export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}): NodeShardRegistry => {
-    const live = new Map<
-        string,
-        {
-            dispose: () => void;
-            drain: () => Promise<void> | undefined;
-            drainHost: () => Promise<void>;
-            pendingAlarms: () => number;
-            pendingBackground: () => number;
-            shard: NodeShard;
-            takeFailures: () => string[];
+    const live = new Map<string, LiveShard>();
+
+    /**
+     * `open` until close(); `closing` while a shard waits for the work using it; `closed` once every shard is disposed. Anything
+     * but `open` refuses new work: a request after close() would otherwise reopen a shard, or get one about to be disposed.
+     */
+    let state: "closed" | "closing" | "open" = "open";
+
+    const refuseUnlessOpen = (): void => {
+        if (state !== "open") {
+            throw new Error(`@lunora/platform-node: the shard registry is ${state}, so it opens no shard and takes no request`);
         }
-    >();
+    };
 
     /**
      * `onFetch` calls still running, with their shard, so {@link NodeShardRegistry.drain} can wait for them and say what it cut
@@ -357,6 +371,8 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
     }
 
     const shardFor = (key: string): NodeShard => {
+        refuseUnlessOpen();
+
         const existing = live.get(key);
 
         if (existing !== undefined) {
@@ -470,70 +486,107 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         return { labels, waits };
     };
 
+    /** What a shard's dispose must wait for: requests already holding it, and a socket close handler still running. */
+    const shardWaits = (key: string, entry: LiveShard): Promise<unknown>[] => {
+        const closing = entry.drain();
+
+        return [...[...inFlight].filter(([, call]) => call.shardKey === key).map(([settled]) => settled), ...(closing === undefined ? [] : [closing])];
+    };
+
+    /** Once nothing holds the registry's shards any more, it has nothing left to close. */
+    const settleState = (): void => {
+        if (state !== "open" && live.size === 0) {
+            state = "closed";
+        }
+    };
+
+    /** Dispose one shard. A shard whose dispose throws stays live, so a later close() tries it again; returns the error. */
+    const disposeEntry = (key: string, entry: LiveShard): unknown => {
+        try {
+            entry.dispose();
+        } catch (error: unknown) {
+            return error ?? new Error(`shard ${key} failed to close`);
+        }
+
+        live.delete(key);
+
+        return undefined;
+    };
+
+    const disposeWhenIdle = (key: string, entry: LiveShard): void => {
+        const waits = shardWaits(key, entry);
+
+        if (waits.length > 0) {
+            Promise.allSettled(waits)
+                .then(() => {
+                    // A forced close() since then already disposed it.
+                    if (deferredClose.has(key) && live.get(key) === entry) {
+                        disposeWhenIdle(key, entry);
+                    }
+
+                    return undefined;
+                })
+                .catch(() => undefined);
+
+            return;
+        }
+
+        deferredClose.delete(key);
+
+        const error = disposeEntry(key, entry);
+
+        if (error !== undefined) {
+            // eslint-disable-next-line no-console -- no caller is left to throw to, so the log carries the cause
+            console.error("[@lunora/platform-node] shard %s failed to close after the work using it settled", key, error);
+            lateCloseFailures.push(`shard ${key} failed to close after the work using it settled`);
+        }
+
+        settleState();
+    };
+
     return {
         close: (closeOptions) => {
+            if (state === "open") {
+                state = "closing";
+            }
+
             const forced: string[] = [];
             const failed: { error: unknown; key: string }[] = [];
 
-            // One shard failing to close must not leave the rest open: each is disposed on its own, and failures are reported
-            // together once every shard has been tried.
-            const dispose = (key: string, entry: { dispose: () => void }): void => {
-                try {
-                    entry.dispose();
-                } catch (error: unknown) {
-                    failed.push({ error, key });
-                }
-            };
-
             for (const [key, entry] of live) {
-                // A route's close handler may still be writing; the database is disposed only once it settles. Forced (after a
-                // drain's deadline) it is disposed now: a handler that never settles must not keep its database open at exit.
-                const pending = entry.drain();
+                const waits = shardWaits(key, entry);
 
-                if (pending === undefined) {
-                    dispose(key, entry);
-                } else if (closeOptions?.force === true) {
-                    forced.push(key);
-                    dispose(key, entry);
+                if (waits.length === 0 || closeOptions?.force === true) {
+                    // Forced (after a drain's deadline), a shard is disposed now: work that never settles must not keep its
+                    // database open at exit. It leaves deferredClose too, so its pending deferred dispose finds nothing to do.
+                    if (waits.length > 0) {
+                        forced.push(key);
+                    }
+
+                    deferredClose.delete(key);
+
+                    const error = disposeEntry(key, entry);
+
+                    if (error !== undefined) {
+                        failed.push({ error, key });
+                    }
                 } else if (!deferredClose.has(key)) {
-                    // Stays live until its dispose succeeds: a failure after this close() returned is logged and reported by
-                    // the next drain(), and the next close() retries it.
+                    // A request or close handler still using it: disposed once they settle. Until then it stays live, and a
+                    // dispose failing then is logged, reported by the next drain(), and retried by the next close().
                     deferredClose.add(key);
-                    pending
-                        .finally(() => {
-                            deferredClose.delete(key);
-
-                            // A forced close() since then already disposed it.
-                            if (live.get(key) !== entry) {
-                                return;
-                            }
-
-                            try {
-                                entry.dispose();
-                                live.delete(key);
-                            } catch (error: unknown) {
-                                // eslint-disable-next-line no-console -- no caller is left to throw to, so the log carries the cause
-                                console.error("[@lunora/platform-node] shard %s failed to close after its socket close handler settled", key, error);
-                                lateCloseFailures.push(`shard ${key} failed to close after its socket close handler settled`);
-                            }
-                        })
-                        .catch(() => undefined);
+                    disposeWhenIdle(key, entry);
                 }
             }
 
-            // A shard whose close failed stays live, so a later close() tries it again; dropping it would leave its database
-            // open with nothing left that could close it.
-            const failedKeys = new Set(failed.map(({ key }) => key));
-
-            for (const key of live.keys()) {
-                if (!failedKeys.has(key) && !deferredClose.has(key)) {
-                    live.delete(key);
-                }
-            }
+            settleState();
 
             if (forced.length > 0) {
-                // eslint-disable-next-line no-console -- these shards are closed under a running handler, so the log is the only record of it
-                console.error("[@lunora/platform-node] closed %d shard(s) with a socket close handler still running: %s", forced.length, forced.join(", "));
+                // eslint-disable-next-line no-console -- these shards are closed under running work, so the log is the only record of it
+                console.error(
+                    "[@lunora/platform-node] closed %d shard(s) with a request or socket close handler still running: %s",
+                    forced.length,
+                    forced.join(", "),
+                );
             }
 
             for (const { error, key } of failed) {
@@ -582,6 +635,8 @@ export const createNodeShardRegistry = (options: NodeShardRegistryOptions = {}):
         idle: () => pendingWork().waits.length === 0,
         pending: () => pendingWork().labels,
         rearmPersistedAlarms: () => {
+            refuseUnlessOpen();
+
             const { directory } = options;
 
             if (directory === undefined) {

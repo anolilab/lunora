@@ -788,7 +788,7 @@ describe("shard drain passes", () => {
             // Unforced, the database stays open for the handler; forced, it is closed now.
             expect(() => waitingShard.sockets.accept({}, undefined, [])).not.toThrow();
             expect(() => forcedShard.sockets.accept({}, undefined, [])).toThrow("platform closed");
-            expect(printed(logged)).toContainEqual(expect.stringContaining("closed 1 shard(s) with a socket close handler still running: stuck"));
+            expect(printed(logged)).toContainEqual(expect.stringContaining("closed 1 shard(s) with a request or socket close handler still running: stuck"));
         } finally {
             never.release();
         }
@@ -1070,11 +1070,106 @@ describe("shard drain passes", () => {
         handler.release();
 
         await expect(registry.drain()).resolves.toMatchObject({
-            failed: ["shard waiting failed to close after its socket close handler settled"],
+            failed: ["shard waiting failed to close after the work using it settled"],
         });
-        expect(printed(logged)).toContainEqual(expect.stringContaining("shard waiting failed to close after its socket close handler settled"));
+        expect(printed(logged)).toContainEqual(expect.stringContaining("shard waiting failed to close after the work using it settled"));
 
         registry.close();
+
+        expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+    });
+
+    it("refuses a request sent after close(), instead of reopening its shard", async () => {
+        expect.assertions(2);
+
+        const registry = createNodeShardRegistry({ onFetch: async () => new Response("served") });
+
+        await expect(registry.directory.getByName("a").fetch(new Request("https://shard/"))).resolves.toBeInstanceOf(Response);
+
+        registry.close();
+
+        await expect(registry.directory.getByName("a").fetch(new Request("https://shard/"))).rejects.toThrow(
+            "the shard registry is closed, so it opens no shard and takes no request",
+        );
+    });
+
+    it("hands out no shard after a forced close() that followed a pending unforced one", () => {
+        expect.assertions(3);
+
+        vi.spyOn(console, "error").mockImplementation(() => {});
+
+        const handler = deferred();
+        const registry = createNodeShardRegistry();
+        const shard = registry.shardFor("waiting");
+
+        shard.inbound.onClose(async () => handler.promise);
+        // The contract types the pair's ends as unknown; this host's server end is a NodeServerEnd.
+        (shard.sockets.newPair().server as NodeServerEnd).close(1000, "bye");
+
+        try {
+            registry.close();
+
+            expect(() => registry.shardFor("waiting")).toThrow("the shard registry is closing");
+
+            registry.close({ force: true });
+
+            // Disposed by the forced close, and the key is not served again.
+            expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
+            expect(() => registry.shardFor("waiting")).toThrow("the shard registry is closed");
+        } finally {
+            handler.release();
+        }
+    });
+
+    it("reopens no stored shard after shutdown, even one with a persisted alarm", async () => {
+        expect.assertions(2);
+
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+
+        const directory = mkdtempSync(join(tmpdir(), "lunora-closed-rearm-"));
+        const writer = createNodeShardRegistry({ directory });
+
+        await writer.shardFor("stored").shard.alarms.set(Date.now() + 1000);
+        writer.close();
+
+        // A second registry over the same files, as a server's non-primary registry is, shut down before it re-armed anything.
+        const registry = createNodeShardRegistry({ directory });
+
+        try {
+            registry.close({ force: true });
+
+            expect(() => registry.rearmPersistedAlarms()).toThrow("the shard registry is closed");
+            expect(registry.idle()).toBe(true);
+        } finally {
+            vi.useRealTimers();
+            rmSync(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("disposes a shard only after a request that started before close() settles", async () => {
+        expect.assertions(3);
+
+        const request = deferred();
+        const registry = createNodeShardRegistry({
+            onFetch: async () => {
+                await request.promise;
+
+                return new Response("served");
+            },
+        });
+        const shard = registry.shardFor("busy");
+        const response = registry.directory.getByName("busy").fetch(new Request("https://shard/"));
+
+        registry.close();
+
+        // The request still holds the shard, so its database stays open for it.
+        expect(() => shard.sockets.accept({}, undefined, [])).not.toThrow();
+
+        request.release();
+
+        await expect(response).resolves.toBeInstanceOf(Response);
+
+        await registry.drain();
 
         expect(() => shard.sockets.accept({}, undefined, [])).toThrow("platform closed");
     });
