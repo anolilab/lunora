@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { forwardWithEgress, MAX_EGRESS_REDIRECTS, MAX_REPLAY_BYTES } from "../src/egress/forward";
+import { forwardWithEgress, MAX_EGRESS_REDIRECTS, MAX_REPLAY_BYTES, outboundCf } from "../src/egress/forward";
 import type { EgressPolicy } from "../src/egress/policy";
 import { API, recordingUpstream, redirect, scriptedUpstream } from "./_helpers/egress";
 
@@ -288,5 +288,18 @@ describe(forwardWithEgress, () => {
 
         expect(response.status).toBe(200);
         expect(upstream.mock.calls.map(([request]) => request.url)).toStrictEqual(["https://evil.example.net/x", "https://elsewhere.example.org/y"]);
+    });
+});
+
+/** Node's `Request` carries no `cf`, so the walk's use of it is covered in `workerd/egress-cf.workerd.test.ts`. */
+describe(outboundCf, () => {
+    const CF = { cacheEverything: true, cacheTtl: 120, resolveOverride: "elsewhere.example.net" };
+
+    it("drops resolveOverride under an enforcing policy, so the allowlisted host is the one reached", () => {
+        expect(outboundCf(CF, true)).toStrictEqual({ cacheEverything: true, cacheTtl: 120 });
+    });
+
+    it("keeps every option without a policy, where there is no allowlist to step around", () => {
+        expect(outboundCf(CF, false)).toBe(CF);
     });
 });

@@ -193,6 +193,22 @@ const walk = async (hop: Hop, rules: WalkRules): Promise<Response> => {
 const unchanged: PrepareHop = (request) => Promise.resolve(request);
 
 /**
+ * The tenant's `cf` options as they may be sent. `resolveOverride` sends a request to another
+ * hostname than its URL's, so under an enforcing policy it would reach a host the allowlist never
+ * checked; it is dropped there. Every other option shapes caching or the response, not the
+ * destination, and is kept. Without an allowlist there is nothing to step around.
+ */
+export const outboundCf = (cf: RequestInit["cf"], enforcing: boolean): RequestInit["cf"] => {
+    if (!enforcing || cf === undefined || !("resolveOverride" in cf)) {
+        return cf;
+    }
+
+    const withoutOverride = ({ resolveOverride: _resolveOverride, ...rest }: typeof cf): Omit<typeof cf, "resolveOverride"> => rest;
+
+    return withoutOverride(cf);
+};
+
+/**
  * Read a body into memory if it ends within `limit` bytes; otherwise a stream
  * that yields what was read and then the rest, so nothing is lost and no more
  * than `limit` is ever held.
@@ -258,10 +274,13 @@ export const forwardWithEgress = async (
         return egressDenied(first);
     }
 
+    const tenantCf = (request as { cf?: RequestInit["cf"] }).cf;
+    const cf = outboundCf(tenantCf, enforcing);
+
     // The tenant asked to see redirects itself, or to fail on them. Check where a 3xx points
     // before it is returned, so it cannot be used to reach a denied host.
     if (request.redirect !== "follow") {
-        const response = await fetchImpl(await prepare(request));
+        const response = await fetchImpl(await prepare(cf === tenantCf ? request : new Request(request, { cf })));
 
         return deniedTarget(nextLocation(response, request.url), allowed) ?? response;
     }
@@ -272,7 +291,7 @@ export const forwardWithEgress = async (
     return walk(
         {
             body,
-            cf: (request as { cf?: RequestInit["cf"] }).cf,
+            cf,
             followed: 0,
             headers: new Headers(request.headers),
             method: request.method,
