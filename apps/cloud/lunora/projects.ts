@@ -16,6 +16,7 @@ import { internalQuery, mutation, query, v } from "./_generated/server";
 import { absentForNull } from "./absent";
 import { assertMember, assertRowInOrg } from "./authz";
 import { claimFirstFreeAlias, pendingTeardown, releaseIdleAliases } from "./deployment-aliases";
+import { servingDeployment } from "./deployments";
 import { queueCertificateReleases } from "./domains";
 import { assertWithinQuota } from "./entitlements";
 import { rateLimit } from "./guards";
@@ -537,8 +538,9 @@ export const setPreviewProtection = mutation
 export const verifyPreviewPassword = internalQuery
     .input({ password: boundedString(LIMITS.token), scriptName: boundedString(LIMITS.name) })
     .query(async ({ ctx: context, args: { password, scriptName } }): Promise<{ ok: boolean }> => {
-        const { page } = await context.db.deployments.findMany({ where: { scriptName } });
-        const deployment = page[0];
+        // The same resolution `planForScript` protects with: an alias's history holds every
+        // organization that ever held it, and only the current owner's password may open it.
+        const deployment = await servingDeployment(context, scriptName);
 
         if (!deployment?.projectId) {
             return { ok: false };
