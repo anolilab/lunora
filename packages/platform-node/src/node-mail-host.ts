@@ -359,13 +359,15 @@ const createKeyClaims = (database: Database.Database, clock: () => number): KeyC
     );
     const pruneClaims = database.prepare<[number]>("DELETE FROM _lunora_mail_claims WHERE expires_at <= ?");
     const pruneContent = database.prepare<[number]>("DELETE FROM _lunora_mail_keys WHERE expires_at <= ?");
-    // A key's delivery history outlives its own expiry for as long as any queued, retrying or
-    // parked row still carries the key: that row's sends are judged against it, and a history
-    // dropped under it would make a duplicate of an already-sent mail look like a first send.
-    // It resets only once it has expired with no other live row of the key left. Both
+    // A key's delivery history outlives its own expiry for as long as a queued, retrying or
+    // parked row that was queued BEFORE that expiry still carries the key: that row's sends are
+    // judged against it, and a history dropped under it would make a duplicate of an
+    // already-sent mail look like a first send. A row queued after the expiry is a new use of
+    // the key, so it neither keeps the old history alive nor blocks its reset: two fresh
+    // matching sends would otherwise inherit the expired history and both be refused. Both
     // statements read the queue table, which the queue host creates after these claims, so
     // they are prepared on first use.
-    const otherLiveRowOfKey = `EXISTS (SELECT 1 FROM _lunora_queue_messages WHERE queue = '${MAIL_QUEUE_NAME}' AND state IN ('pending', 'dead') AND ${ROW_KEY_SQL} = _lunora_mail_deliveries.key AND id <> @excluded)`;
+    const otherLiveRowOfKey = `EXISTS (SELECT 1 FROM _lunora_queue_messages WHERE queue = '${MAIL_QUEUE_NAME}' AND state IN ('pending', 'dead') AND ${ROW_KEY_SQL} = _lunora_mail_deliveries.key AND id <> @excluded AND enqueued_at < _lunora_mail_deliveries.expires_at)`;
     // Named parameters: better-sqlite3 binds anonymous `?` and `@name`, not numbered `?NNN`.
     let pruneDeliveriesStatement: Database.Statement<[{ excluded: string; now: number }]> | undefined;
     let nextDeliveryStatement: Database.Statement<[NextDeliveryParameters], { delivery: number; first_at: number }> | undefined;

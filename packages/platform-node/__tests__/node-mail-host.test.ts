@@ -1806,4 +1806,33 @@ describe(createNodeMailHost, () => {
             ).toThrow(/shard registry's directory/u);
         });
     });
+
+    describe("sixteenth review", () => {
+        it("delivers one of two fresh matching sends queued after the key's history expired", async () => {
+            expect.assertions(2);
+
+            const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+            const clock = startClock();
+            const transport = scriptedTransport(["ok"]);
+            const mail = createNodeMailHost(freshDatabase(), { env: PRODUCTION, now: clock.now, transport });
+            const digest = { idempotencyKey: "digest-q", subject: "Digest", text: "Quarter", to: "ada@example.com" };
+
+            await mail.mailer.queue(digest);
+            await mail.poll();
+            // Ten seconds before the key's 15-day history expires, another enqueue runs the prune,
+            // which keeps the history, still live. Pruning then waits a minute.
+            clock.advance(15 * 24 * 60 * 60 * 1000 - 10_000);
+            await mail.mailer.queue({ idempotencyKey: "other-1", subject: "Other", text: "x", to: "bob@example.com" });
+            // Twenty seconds on, the history has expired but is not yet pruned. Two fresh matching
+            // sends are queued after that expiry: a new use of the key, which must reset it.
+            clock.advance(20_000);
+            await mail.mailer.queue({ ...digest, text: "Next quarter" });
+            await mail.mailer.queue({ ...digest, text: "Next quarter" });
+            await mail.poll();
+
+            // One of the pair is sent; the other is its duplicate and is acked unsent.
+            expect(transport.sent.filter((payload) => payload.subject === "Digest").map((payload) => payload.text)).toStrictEqual(["Quarter", "Next quarter"]);
+            expect(error.mock.calls.map(([line]) => logged(line).event)).not.toContain("lunora.mail.send_evidence_expired");
+        });
+    });
 });

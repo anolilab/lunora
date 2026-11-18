@@ -429,9 +429,11 @@ Delivery is at-least-once, narrowed:
   refused and logged as `lunora.mail.send_evidence_expired`, whatever brought it
   back. The clock runs from that first attempt, not from the enqueue: a row first
   polled long after it was queued is a fresh first attempt, and its transient
-  failure is retried. A key's delivery history is kept for as long as any queued,
-  retrying or parked row still carries the key, and it resets only for a row
-  queued after it had already expired. So a duplicate of an already-sent mail,
+  failure is retried. A key's delivery history is kept for as long as a queued,
+  retrying or parked row queued before its expiry still carries the key, and it
+  resets for a row queued after it had expired. Rows queued after the expiry are
+  a new use of the key, so a fresh pair of matching sends delivers one and
+  dedupes the other. So a duplicate of an already-sent mail,
   left pending through a long gap, is refused rather than sent as a first send.
 - A failure after the provider accepted a send (updating the key's content record,
   or releasing its claim) is logged as its own error,
